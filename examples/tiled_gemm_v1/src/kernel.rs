@@ -8,8 +8,8 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice,
-    F32AccumulatorFragment, Index1D, Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment,
+    Index1D, Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
     gfx942_publish_lds_bf16_tile_pair_m16x16_v1, kernel, thread,
 };
 

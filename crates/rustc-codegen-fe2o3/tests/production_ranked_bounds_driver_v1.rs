@@ -102,7 +102,7 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         oob.stderr.contains("error[FE2O3-BOUNDS-001]")
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
-            && oob.stderr.contains(":65:20")
+            && oob.stderr.contains(":63:20")
             && oob.stderr.contains("kernel.index_constant 64")
             && oob
                 .stderr

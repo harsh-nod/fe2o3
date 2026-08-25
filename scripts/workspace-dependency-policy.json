@@ -18,6 +18,7 @@
         "fe2o3-contracts",
         "fe2o3-drm-uapi",
         "fe2o3-external-anchor-protocol",
+        "fe2o3-functional-proof",
         "fe2o3-host-api",
         "fe2o3-host-link-closure",
         "fe2o3-hsaco",
@@ -95,8 +96,7 @@
         "fe2o3-kir-sim",
         "fe2o3-kir-sim-trace",
         "fe2o3-service-host",
-        "fe2o3-worker-v2-bundle",
-        "fe2o3-worker-v3-authority"
+        "fe2o3-worker-v2-bundle"
       ]
     },
     {
@@ -141,6 +141,27 @@
     }
   ],
   "allowed_dependency_edges": [
+    {
+      "from": "fe2o3-lower-mir-kernel",
+      "to": "dialect-amdgcn",
+      "kinds": [
+        "dev"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "dialect-kernel",
+      "kinds": [
+        "normal"
+      ]
+    },
+    {
+      "from": "fe2o3-verifier",
+      "to": "fe2o3-pliron",
+      "kinds": [
+        "normal"
+      ]
+    },
     {
       "from": "cargo-fe2o3",
       "to": "fe2o3-scalar-gemm-v1",

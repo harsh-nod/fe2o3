@@ -926,6 +926,20 @@ std::string loadExactRowSoftmaxV1Body() {
   return (*Fixture)->getBuffer().str();
 }
 
+std::vector<uint8_t> loadProductionGeneralGemmV1CompilerInput() {
+  SmallString<256> FixturePath(__FILE__);
+  sys::path::remove_filename(FixturePath);
+  sys::path::append(FixturePath, "fixtures",
+                    "production-general-gemm-v1.ll");
+  auto Fixture = MemoryBuffer::getFile(FixturePath);
+  if (!Fixture)
+    fail((Twine("cannot read production general GEMM fixture: ") +
+          Fixture.getError().message())
+             .str());
+  StringRef Bytes = (*Fixture)->getBuffer();
+  return std::vector<uint8_t>(Bytes.bytes_begin(), Bytes.bytes_end());
+}
+
 std::vector<uint8_t> makeExactRowSoftmaxV1TextIr() {
   std::string Body = loadExactRowSoftmaxV1Body();
   std::array<uint8_t, 64> Descriptor{};
@@ -2577,6 +2591,137 @@ std::optional<std::vector<uint8_t>> testMeasuredOcmlPipeline() {
   return KernelLinked.LinkedOutput->Bytes;
 }
 
+void testProductionGeneralGemmV1Profile() {
+  const std::vector<std::string> Symbols = {"tiled_gemm_general_v1",
+                                             "tiled_gemm_general_v1.kd"};
+  auto MakeRequest = [&](std::vector<uint8_t> CompilerBytes) {
+    Request Result = makeV2Request(
+        makeInput(InputKind::LlvmTextIr, std::move(CompilerBytes)), {}, {}, {},
+        Symbols, 6);
+    Result.Target = "gfx942:xnack-";
+    Result.LinkOptions = {OptimizationLevel::O2, true, true};
+    return Result;
+  };
+  auto RequireInputFailure = [](ArrayRef<uint8_t> Bytes,
+                                StringRef Diagnostic) {
+    Error Failure =
+        validateProductionGeneralGemmV1CompilerInputForTesting(Bytes);
+    require(static_cast<bool>(Failure),
+            "hostile production general GEMM compiler input was accepted");
+    std::string Message = toString(std::move(Failure));
+    if (!StringRef(Message).contains(Diagnostic)) {
+      errs() << "unexpected production general GEMM diagnostic: " << Message
+             << '\n';
+      fail("production general GEMM input failed for the wrong reason");
+    }
+  };
+  auto Mutate = [](ArrayRef<uint8_t> Bytes, StringRef Expected,
+                   StringRef Replacement) {
+    StringRef Text(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+    std::string Mutated = replaceExactText(Text, Expected, Replacement);
+    return std::vector<uint8_t>(Mutated.begin(), Mutated.end());
+  };
+
+  std::vector<uint8_t> Compiler =
+      loadProductionGeneralGemmV1CompilerInput();
+  if (Error Failure =
+          validateProductionGeneralGemmV1CompilerInputForTesting(Compiler))
+    fail(toString(std::move(Failure)));
+  RequireInputFailure(
+      Mutate(Compiler, "%v828 = alloca i32, align 4, addrspace(5)",
+             "%v828 = alloca i64, align 8, addrspace(5)"),
+      "private allocation");
+  RequireInputFailure(
+      Mutate(Compiler, "load i16, ptr addrspace(1)",
+             "load volatile i16, ptr addrspace(1)"),
+      "load effect");
+  RequireInputFailure(
+      Mutate(Compiler, "!0 = !{i32 64, i32 1, i32 1}",
+             "!0 = !{i32 32, i32 1, i32 1}"),
+      "workgroup metadata");
+  RequireInputFailure(
+      Mutate(Compiler,
+             "module asm \".section .fe2o3.kd.v1,\\22\\22,@progbits\"",
+             "module asm \".section .fe2o3.kd.v2,\\22\\22,@progbits\""),
+      "missing its descriptor");
+
+  Request Exact = MakeRequest(Compiler);
+  Request WrongTarget = Exact;
+  WrongTarget.Target = "gfx942:xnack+";
+  requireFailure(WrongTarget, Stage::InputValidation);
+  Request WrongCodeObject = Exact;
+  WrongCodeObject.CodeObjectVersion = 5;
+  requireFailure(WrongCodeObject, Stage::InputValidation);
+  Request WrongOptions = Exact;
+  WrongOptions.LinkOptions.Optimization = OptimizationLevel::O1;
+  requireFailure(WrongOptions, Stage::InputValidation);
+
+  const std::set<std::string> ExpectedSymbols(Symbols.begin(), Symbols.end());
+  Response First = runSuccess(Exact, ExpectedSymbols);
+  require(First.LinkedOutput->Bytes.size() == 11016,
+          "production general GEMM HSACO size changed");
+  requireDiagnostic(
+      First,
+      "post_link.check=production_general_gemm_v1_profile status=ok ");
+  requireDiagnostic(First, "machine_instructions=647 calls=0 atomics=0 ");
+  requireDiagnostic(First, "global_loads=12 global_stores=4 mfma=1 ");
+  Response Replay = runSuccess(Exact, ExpectedSymbols);
+  require(First.LinkedOutput->Bytes == Replay.LinkedOutput->Bytes,
+          "production general GEMM HSACO is not reproducible");
+
+  std::vector<uint8_t> WrongDescriptor = First.LinkedOutput->Bytes;
+  mutateNamedSectionByte(WrongDescriptor, ".fe2o3.kd.v1");
+  requireInspectionFailure(WrongDescriptor, Exact,
+                           "reason=descriptor_section_identity");
+
+  std::vector<uint8_t> WrongCall = First.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> SwapPcCall = {0x02, 0x1e, 0x80,
+                                                        0xbe};
+  overwriteStaticSymbolPrefix(WrongCall, "tiled_gemm_general_v1", SwapPcCall);
+  requireInspectionFailure(WrongCall, Exact, "reason=machine_call");
+
+  std::vector<uint8_t> MissingGlobalLoad = First.LinkedOutput->Bytes;
+  static constexpr std::array<uint8_t, 4> GlobalLoadU16 = {0x00, 0x80, 0x48,
+                                                           0xdc};
+  static constexpr std::array<uint8_t, 4> SNopZero = {0x00, 0x00, 0x80, 0xbf};
+  auto Load = std::search(MissingGlobalLoad.begin(), MissingGlobalLoad.end(),
+                          GlobalLoadU16.begin(), GlobalLoadU16.end());
+  require(Load != MissingGlobalLoad.end(),
+          "production general GEMM HSACO has no global u16 load");
+  llvm::copy(SNopZero, Load);
+  requireInspectionFailure(MissingGlobalLoad, Exact,
+                           "reason=machine_effect_shape");
+
+  for (const auto &[Key, Expected, Replacement, Diagnostic] :
+       std::array<std::tuple<StringRef, uint64_t, uint64_t, StringRef>, 8>{
+           {{".reqd_workgroup_size", 64, 32,
+             "kernel_contract_reqd_workgroup_size"},
+            {".group_segment_fixed_size", 0, 1,
+             "kernel_contract_group_segment_fixed_size"},
+            {".private_segment_fixed_size", 0, 1,
+             "kernel_contract_private_segment_fixed_size"},
+            {".sgpr_count", 52, 53, "kernel_contract_register_counts"},
+            {".vgpr_count", 44, 45, "kernel_contract_register_counts"},
+            {".agpr_count", 0, 1, "kernel_contract_register_counts"},
+            {".sgpr_spill_count", 0, 1,
+             "kernel_contract_sgpr_spill_count"},
+            {".vgpr_spill_count", 0, 1,
+             "kernel_contract_vgpr_spill_count"}}}) {
+    std::vector<uint8_t> Mutated = First.LinkedOutput->Bytes;
+    replaceMetadataByte(Mutated, Key, Expected, Replacement);
+    requireInspectionFailure(Mutated, Exact, Diagnostic);
+  }
+  std::vector<uint8_t> WrongDynamicStack = First.LinkedOutput->Bytes;
+  replaceMetadataByte(WrongDynamicStack, ".uses_dynamic_stack", 0xc2, 0xc3);
+  requireInspectionFailure(WrongDynamicStack, Exact,
+                           "kernel_contract_uses_dynamic_stack");
+  std::vector<uint8_t> WrongArgumentName = First.LinkedOutput->Bytes;
+  replaceMetadataFieldText(WrongArgumentName, ".name", "arg0.data",
+                           "bad0.data");
+  requireInspectionFailure(WrongArgumentName, Exact,
+                           "kernel_contract_arg0_layout");
+}
+
 void testExactRowSoftmaxV1Profile() {
   const std::vector<std::string> Symbols = {"__ocml_exp_f32", "row_softmax_v1",
                                             "row_softmax_v1.kd"};
@@ -3875,12 +4020,18 @@ int main(int ArgumentCount, char **Arguments) {
     testExactRowSoftmaxV1Profile();
     return 0;
   }
+  if (ArgumentCount == 2 &&
+      StringRef(Arguments[1]) == "--production-general-gemm-only") {
+    testProductionGeneralGemmV1Profile();
+    return 0;
+  }
   require(ArgumentCount == 1 || ArgumentCount == 2 || ArgumentCount == 4 ||
               ArgumentCount == 5,
           "usage: fe2o3-worker-pipeline-tests "
           "[OUTPUT.hsaco [INPUT.bc INPUT.o [OCML_OUTPUT.hsaco]]]");
 
   testExactRowSoftmaxV1Profile();
+  testProductionGeneralGemmV1Profile();
   testExactPlironScalarAddV1Profile();
   fe2o3::worker::detail::enforceReusableLldResult({0, true});
   fe2o3::worker::detail::enforceReusableLldResult({1, true});
