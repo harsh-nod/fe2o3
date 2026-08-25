@@ -114,31 +114,27 @@ pub(crate) struct PreparedScalarGemmV1WorkerHandoffV1 {
     handoff: CompilerModuleHandoffV2,
 }
 
-/// Inert Worker V2 handoff prepared by the single production compiler
-/// pipeline. Its LLVM bytes already passed semantic, formal-memory, and exact
-/// gfx942 lowering stages; this value grants no publication authority.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct PreparedProductionV1WorkerHandoffV1 {
+/// Move-only handoff prepared by the single production compiler pipeline.
+/// It retains the exact LLVM identity and compiler descriptor embedded in the
+/// V2 module handoff, but grants no publication authority.
+pub(crate) struct PreparedProductionWorkerHandoff {
     llvm_ir_sha256: [u8; 32],
     handoff: CompilerModuleHandoffV2,
-}
-
-/// Move-only production worker preparation retaining the exact compiler
-/// descriptor source alongside the module handoff that embeds it.
-pub(crate) struct PreparedProductionLineageWorkerHandoffV3 {
-    worker_handoff: PreparedProductionV1WorkerHandoffV1,
     compiler_descriptor_source: CompilerDescriptorSourceV1,
 }
 
-impl PreparedProductionLineageWorkerHandoffV3 {
+impl PreparedProductionWorkerHandoff {
     pub(crate) fn into_validated_parts(
         self,
     ) -> Result<(CompilerModuleHandoffV2, CompilerDescriptorSourceV1), WorkerV2ProducerError> {
         let Self {
-            worker_handoff,
+            llvm_ir_sha256,
+            handoff,
             compiler_descriptor_source,
         } = self;
-        let handoff = validate_prepared_production_v1_worker_handoff(worker_handoff)?;
+        if Sha256::digest(handoff.module_bytes()).as_slice() != llvm_ir_sha256 {
+            return Err(WorkerV2ProducerError::MissingProductionBindings);
+        }
         Ok((handoff, compiler_descriptor_source))
     }
 }
@@ -299,15 +295,6 @@ impl PreparedRowSoftmaxV1WorkerHandoffV1 {
     pub(crate) const fn handoff(&self) -> &CompilerModuleHandoffV2 {
         &self.handoff
     }
-}
-
-fn validate_prepared_production_v1_worker_handoff(
-    prepared: PreparedProductionV1WorkerHandoffV1,
-) -> Result<CompilerModuleHandoffV2, WorkerV2ProducerError> {
-    if Sha256::digest(prepared.handoff.module_bytes()).as_slice() != prepared.llvm_ir_sha256 {
-        return Err(WorkerV2ProducerError::MissingProductionBindings);
-    }
-    Ok(prepared.handoff)
 }
 
 /// Consumes the exact scalar frontend handoff into the managed attempt's
@@ -784,9 +771,9 @@ fn module_asm_commitment_section(section: &str, bytes: &[u8]) -> String {
 /// derives the closed symbol manifest, binds the target/COV envelope, and
 /// constructs canonical coordination bytes. It performs no LLVM invocation,
 /// linking, artifact publication, load, or launch.
-pub(crate) fn prepare_production_v1_worker_handoff(
+pub(crate) fn prepare_production_worker_handoff(
     authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
-) -> Result<PreparedProductionLineageWorkerHandoffV3, WorkerV2ProducerError> {
+) -> Result<PreparedProductionWorkerHandoff, WorkerV2ProducerError> {
     let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
         .expect("fixed production target is valid");
@@ -821,11 +808,9 @@ pub(crate) fn prepare_production_v1_worker_handoff(
         compiler_module.llvm_ir().as_bytes(),
     )
     .map_err(WorkerV2ProducerError::Handoff)?;
-    Ok(PreparedProductionLineageWorkerHandoffV3 {
-        worker_handoff: PreparedProductionV1WorkerHandoffV1 {
-            llvm_ir_sha256,
-            handoff,
-        },
+    Ok(PreparedProductionWorkerHandoff {
+        llvm_ir_sha256,
+        handoff,
         compiler_descriptor_source: descriptor_source,
     })
 }

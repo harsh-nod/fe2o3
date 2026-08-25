@@ -257,7 +257,7 @@ struct PreparedProductionWorkerPublicationV1 {
     invocation: Box<AdmittedProtectedRustcInvocationV1>,
     semantic_lineage: crate::production_semantic_lineage_v3::PreparedProductionSemanticLineageV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
-    prepared: crate::worker_v2_producer::PreparedProductionLineageWorkerHandoffV3,
+    prepared: crate::worker_v2_producer::PreparedProductionWorkerHandoff,
 }
 
 impl AuthenticatedProductionGfx942ModuleV1 {
@@ -557,7 +557,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             compiler_ffi_envelope,
         };
         let prepared =
-            crate::worker_v2_producer::prepare_production_v1_worker_handoff(compiler_module)
+            crate::worker_v2_producer::prepare_production_worker_handoff(compiler_module)
                 .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
         let attempt = build_attempt.ok_or({
             ProductionPipelineErrorV1::WorkerHandoff(
@@ -1010,6 +1010,9 @@ mod tests {
             concat!("UnprotectedHandoff", "RequiresV1"),
             concat!("publish_worker_handoff", "_v3"),
             concat!("publish_prepared_production_v1", "_worker_handoff("),
+            concat!("PreparedProductionV1", "WorkerHandoffV1"),
+            concat!("PreparedProductionLineage", "WorkerHandoffV3"),
+            concat!("prepare_production_v1", "_worker_handoff"),
         ] {
             assert!(
                 !pipeline.contains(removed) && !worker.contains(removed),
