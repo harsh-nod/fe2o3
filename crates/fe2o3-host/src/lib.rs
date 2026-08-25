@@ -45,6 +45,7 @@ mod generated_workgroup_scoped_atomic_v1;
 mod generated_workgroup_sync_v1_lifecycle;
 #[cfg(test)]
 mod generated_workgroup_sync_v1_lifecycle_tests;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -346,6 +347,7 @@ pub use generated_workgroup_sync_v1_lifecycle::{
     WorkgroupSyncLoadErrorV1, WorkgroupSyncUnloadIdentityV1, join_workgroup_lds_reduction_v1,
     join_workgroup_scoped_atomic_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use gfx942_ocml::{
     GFX942_OCML_SIN_F32_CODE_OBJECT_VERSION_V1, GFX942_OCML_SIN_F32_DEVICE_ABI_V1,
     GFX942_OCML_SIN_F32_IMPORT_SYMBOL_V1, GFX942_OCML_SIN_F32_KERNEL_ABI_V1,
