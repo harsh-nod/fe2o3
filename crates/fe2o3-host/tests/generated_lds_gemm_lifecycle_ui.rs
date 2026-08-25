@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 #[test]
 fn exact_lds_gemm_lifecycle_authority_is_linear_private_and_quiescent() {
     let cases = trybuild::TestCases::new();

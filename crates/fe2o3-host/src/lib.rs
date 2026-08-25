@@ -10,7 +10,9 @@ mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_flash_attention_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_lds_gemm;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
@@ -226,9 +228,11 @@ pub use generated_flash_attention_v1::{
     GeneratedFlashAttentionV1HostAdapterErrorV1, GeneratedFlashAttentionV1HostAdapterV1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_lds_gemm::{
     GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_lds_gemm_lifecycle::{
     CompletedExactLdsGemmSlice1V1, ExactLdsGemmKernelResourceObservationV1,
     ExactLdsGemmSlice1DispatchErrorV1, ExactLdsGemmSlice1JoinErrorV1,
@@ -468,6 +472,7 @@ pub mod __generated {
         GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
         GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
         GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
+        GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
         GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
         GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
         GeneratedScalarGemmV1PreparedInvocation, GeneratedScalarGemmV1ReadDeviceSlice,
@@ -490,13 +495,11 @@ pub mod __generated {
         CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
         GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
         GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
-        GeneratedKernelProfileError, GeneratedLdsGemmSlice1HostAdapterErrorV1,
-        GeneratedLdsGemmSlice1HostAdapterV1, GeneratedMarkerBindingError,
-        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
-        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
-        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
-        GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        GeneratedKernelProfileError, GeneratedMarkerBindingError, GeneratedPackingComponentKindV1,
+        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
+        GeneratedSliceArgumentPairV1, GeneratedWorkerV3ArgumentBindingV1,
+        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
+        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
         ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
         validate_compiler_generated_semantic_witness_v1,
     };
