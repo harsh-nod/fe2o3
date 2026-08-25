@@ -1307,8 +1307,8 @@ pub(crate) mod tests {
         selected: SelectedNativeKernel<'fixture>,
         observed: ObservedContext,
         admission: ValidatedPublishedDirectLinkSelectionV1,
-        // Rust drops fields in declaration order. Keep the directory alive until the admission
-        // token has released every descriptor and publication lock it owns.
+        // Rust drops fields in declaration order. Keep the directory alive until the admission's
+        // current lease has released its retained publication descriptors.
         _publication_directory: TestPublicationDirectory,
     }
 
