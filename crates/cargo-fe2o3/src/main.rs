@@ -102,6 +102,8 @@ const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
 const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
+const BINDING_HOST_TEST_RUNNER_ARG: &str = "__fe2o3-binding-host-test-runner-v1";
+const BINDING_HOST_DISABLED_RUSTDOC: &str = "/__fe2o3_binding_host_rustdoc_disabled__";
 const CARGO_BINDING_WRAPPER_CHILD_FD: std::os::fd::RawFd = 191;
 const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
@@ -149,6 +151,7 @@ const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "RUSTC_WRAPPER",
     "CARGO_BUILD_RUSTC_WRAPPER",
     "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
 ];
 
 fn main() -> ExitCode {
@@ -170,6 +173,12 @@ fn main() -> ExitCode {
         .is_some_and(|argument| argument == INTERNAL_RUNNER_ARG)
     {
         return run_application_boundary_frontend(&raw_args[1..]);
+    }
+    if raw_args
+        .first()
+        .is_some_and(|argument| argument == BINDING_HOST_TEST_RUNNER_ARG)
+    {
+        return binding_host_test_runner(&raw_args[1..]);
     }
     if env::var_os(binding_check_wrapper::MODE_ENV_V1).is_some() {
         return match binding_check_wrapper::run(raw_args) {
@@ -198,7 +207,8 @@ fn main() -> ExitCode {
     match command.to_str() {
         Some("authority") => authority_release::command(&rest),
         Some("doctor") => doctor(),
-        Some("check") => binding_check_command(&rest),
+        Some("check") => binding_host_command(BindingHostMode::Check, &rest),
+        Some("test") => binding_host_command(BindingHostMode::Test, &rest),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
         #[cfg(feature = "qualification-oracles-test-only")]
@@ -318,25 +328,50 @@ fn clean_command(args: &[OsString]) -> ExitCode {
     }
 }
 
-fn binding_check_command(args: &[OsString]) -> ExitCode {
-    match binding_check_result(args) {
+/// Host checks and tests compile trusted workspace code without artifact or GPU authority. The
+/// test runner fixes tool selection and child custody; it is not a sandbox for hostile test code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BindingHostMode {
+    Check,
+    Test,
+}
+
+impl BindingHostMode {
+    const fn cargo_command(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Test => "test",
+        }
+    }
+
+    const fn executes_tests(self) -> bool {
+        matches!(self, Self::Test)
+    }
+}
+
+fn binding_host_command(mode: BindingHostMode, args: &[OsString]) -> ExitCode {
+    match binding_host_result(mode, args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("cargo fe2o3 check: {error}");
+            eprintln!("cargo fe2o3 {}: {error}", mode.cargo_command());
             ExitCode::FAILURE
         }
     }
 }
 
-fn binding_check_result(args: &[OsString]) -> Result<(), String> {
+fn binding_host_result(mode: BindingHostMode, args: &[OsString]) -> Result<(), String> {
     binding_check_wrapper::reject_prohibited_environment().map_err(|error| error.to_string())?;
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
+    if mode.executes_tests() {
+        reject_binding_test_invocation_config(args)?;
+        reject_ambient_cargo_test_runners()?;
+    }
     if selected_run_target(args)?.is_some() {
-        return Err(
-            "binding-only host check selects the pinned rustc host target; --target is not admitted"
-                .to_owned(),
-        );
+        return Err(format!(
+            "binding-only host {} selects the pinned rustc host target; --target is not admitted",
+            mode.cargo_command()
+        ));
     }
 
     let invocation_directory = env::current_dir()
@@ -347,6 +382,9 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
     reject_configured_compiler_selection(&project, args, &pinned_cargo, None, false)?;
     let pinned_rustc = pin_default_rustc(&project)?;
     let host_target = pinned_rustc_host_target(&pinned_rustc)?;
+    if mode.executes_tests() {
+        reject_configured_cargo_test_runners(&project, args, &pinned_cargo)?;
+    }
     let projection = example_manifest::pinned_workspace_binding_projection(
         project.workspace_root().display_path(),
         &pinned_cargo,
@@ -382,18 +420,30 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
         .unwrap_or(forwarded_args.len());
     forwarded_args.splice(
         separator..separator,
-        [OsString::from("--target"), OsString::from(host_target)],
+        [
+            OsString::from("--target"),
+            OsString::from(host_target.as_str()),
+        ],
     );
+    if mode.executes_tests() {
+        inject_binding_host_test_custody(&mut forwarded_args, &host_target, &workspace_wrapper)?;
+    }
     binding_check_wrapper::clear_prohibited_environment(cargo.as_command_mut());
     clear_inherited_cargo_unit_identity(cargo.as_command_mut());
     cargo
         .as_command_mut()
-        .arg("check")
+        .arg(mode.cargo_command())
         .args(&forwarded_args)
         .current_dir(project.invocation_dir().child_path())
         .env("RUSTC_WRAPPER", "")
         .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
+        .env(
+            "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+            format!("/proc/self/fd/{CARGO_BINDING_CHECK_WRAPPER_CHILD_FD}"),
+        )
+        .env("RUSTDOC", BINDING_HOST_DISABLED_RUSTDOC)
+        .env("CARGO_BUILD_RUSTDOC", BINDING_HOST_DISABLED_RUSTDOC)
         .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
         .env_remove("CARGO_PKG_NAME")
         .env_remove("CARGO_MANIFEST_DIR")
@@ -409,11 +459,29 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
     let status = cargo
         .status()
         .map_err(|error| format!("failed to run pinned Cargo: {error}"))?;
-    let post_spawn = aggregate_post_spawn_results(
+    // These before/after scans reject a persistent protected configuration change. They are
+    // deliberately not described as a TOCTOU-proof snapshot: Cargo configuration and test code
+    // are trusted on this authority-free path, while the fixed runner still closes its own child
+    // boundary.
+    let post_test_configuration = if mode.executes_tests() {
+        aggregate_post_spawn_results(
+            reject_configured_compiler_selection(&project, args, &pinned_cargo, None, false),
+            [(
+                "Cargo test runner configuration revalidation",
+                reject_configured_cargo_test_runners(&project, args, &pinned_cargo),
+            )],
+        )
+    } else {
+        Ok(())
+    };
+    aggregate_post_spawn_results(
         if status.success() {
             Ok(())
         } else {
-            Err(format!("pinned Cargo check failed with status {status}"))
+            Err(format!(
+                "pinned Cargo {} failed with status {status}",
+                mode.cargo_command()
+            ))
         },
         [
             ("Cargo project path revalidation", project.validate_paths()),
@@ -421,9 +489,274 @@ fn binding_check_result(args: &[OsString]) -> Result<(), String> {
                 "rustc toolchain lib-tree revalidation",
                 pinned_rustc.revalidate_lib_tree(),
             ),
+            (
+                "Cargo test configuration revalidation",
+                post_test_configuration,
+            ),
         ],
-    );
-    post_spawn
+    )
+}
+
+fn reject_binding_test_invocation_config(args: &[OsString]) -> Result<(), String> {
+    let cargo_args = args
+        .iter()
+        .take_while(|argument| *argument != "--")
+        .collect::<Vec<_>>();
+    if cargo_args
+        .iter()
+        .any(|argument| **argument == "--config" || os_bytes(argument).starts_with(b"--config="))
+    {
+        return Err(
+            "binding-only host test rejects caller-supplied --config before execution".to_owned(),
+        );
+    }
+    if cargo_args
+        .iter()
+        .any(|argument| os_bytes(argument).starts_with(b"-Z"))
+    {
+        return Err(
+            "binding-only host test rejects every caller-supplied Cargo -Z option before execution"
+                .to_owned(),
+        );
+    }
+    if cargo_args.iter().any(|argument| **argument == "--doc") {
+        return Err("binding-only host test does not admit rustdoc targets".to_owned());
+    }
+    if cargo_args.iter().any(|argument| **argument == "--no-run") {
+        return Err("binding-only host test must execute the selected host tests".to_owned());
+    }
+    if !cargo_args
+        .iter()
+        .any(|argument| **argument == "--all-targets")
+    {
+        return Err(
+            "binding-only host test requires exact --all-targets so rustdoc is never selected"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn inject_binding_host_test_custody(
+    args: &mut Vec<OsString>,
+    host_target: &str,
+    workspace_wrapper: &Path,
+) -> Result<(), String> {
+    // Config preflight is diagnostic, not an atomic snapshot. These highest-precedence entries
+    // stabilize the core compiler, runner, rustdoc, and executable loader-selection channels;
+    // workspace config/source, linker, network, build scripts, and tests remain trusted.
+    let wrapper = workspace_wrapper.to_str().ok_or_else(|| {
+        "binding-only host test requires a UTF-8 sealed wrapper descriptor path".to_owned()
+    })?;
+    let rustc = format!("/proc/self/fd/{RUSTC_CHILD_FD}");
+    let rustc_lib = format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}");
+    let host_target = binding_host_target_key(host_target)?;
+    let runner = serde_json::to_string(&[wrapper, BINDING_HOST_TEST_RUNNER_ARG])
+        .map_err(|error| format!("failed to encode the pinned host-test runner: {error}"))?;
+
+    let mut configs = vec![
+        format!("build.rustc={}", cargo_config_string(&rustc)?),
+        format!(
+            "build.rustc-workspace-wrapper={}",
+            cargo_config_string(wrapper)?
+        ),
+        format!("target.{host_target}.runner={runner}"),
+    ];
+    for (name, value) in [
+        ("RUSTC", rustc.as_str()),
+        ("CARGO_BUILD_RUSTC", rustc.as_str()),
+        ("RUSTC_WRAPPER", ""),
+        ("CARGO_BUILD_RUSTC_WRAPPER", ""),
+        ("RUSTC_WORKSPACE_WRAPPER", wrapper),
+        ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", wrapper),
+        ("RUSTDOC", BINDING_HOST_DISABLED_RUSTDOC),
+        ("CARGO_BUILD_RUSTDOC", BINDING_HOST_DISABLED_RUSTDOC),
+        ("LD_PRELOAD", ""),
+        ("LD_AUDIT", ""),
+        ("GLIBC_TUNABLES", ""),
+        ("LD_LIBRARY_PATH", rustc_lib.as_str()),
+    ] {
+        configs.extend(forced_cargo_environment(name, value)?);
+    }
+    for config in configs {
+        let insert_at = args
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap_or(args.len());
+        args.insert(insert_at, OsString::from("--config"));
+        args.insert(insert_at + 1, OsString::from(config));
+    }
+    Ok(())
+}
+
+fn binding_host_target_key(host_target: &str) -> Result<String, String> {
+    if host_target.is_empty()
+        || host_target.len() > 128
+        || !host_target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(format!(
+            "pinned rustc reported an unsupported host target {host_target:?}"
+        ));
+    }
+    cargo_config_string(host_target)
+}
+
+fn cargo_config_string(value: &str) -> Result<String, String> {
+    serde_json::to_string(value)
+        .map_err(|error| format!("failed to encode trusted Cargo configuration: {error}"))
+}
+
+fn forced_cargo_environment(name: &str, value: &str) -> Result<[String; 2], String> {
+    Ok([
+        format!("env.{name}.value={}", cargo_config_string(value)?),
+        format!("env.{name}.force=true"),
+    ])
+}
+
+fn binding_host_test_runner(args: &[OsString]) -> ExitCode {
+    match binding_host_test_runner_result(args) {
+        Ok(status) => ExitCode::from(binding_check_wrapper::exit_code(status)),
+        Err(error) => {
+            eprintln!("cargo-fe2o3 pinned host-test runner: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn binding_host_test_runner_result(args: &[OsString]) -> Result<std::process::ExitStatus, String> {
+    if env::var_os(binding_check_wrapper::MODE_ENV_V1).as_deref() != Some(OsStr::new("1")) {
+        return Err("missing exact binding-only wrapper custody marker".to_owned());
+    }
+    let (executable, test_args) = args
+        .split_first()
+        .ok_or_else(|| "Cargo supplied no host-test executable".to_owned())?;
+    if executable.is_empty() {
+        return Err("Cargo supplied an empty host-test executable".to_owned());
+    }
+    let source = pinned_executable::PinnedExecutable::open(Path::new(executable))
+        .map_err(|error| format!("failed to pin the Cargo host-test executable: {error}"))?;
+    // The retained, hashed original preserves Cargo's current_exe/$ORIGIN behavior. This trusted,
+    // non-authoritative test path makes no immutable-publication claim against a same-inode writer.
+    let mut command = source
+        .command()
+        .map_err(|error| format!("failed to prepare the pinned host-test executable: {error}"))?;
+    command.args(test_args);
+    for (name, _) in env::vars_os() {
+        if os_bytes(&name).starts_with(b"FE2O3_")
+            || is_cargo_target_runner_environment_name(&name)
+            || COMPILER_SELECTION_ENVIRONMENT
+                .iter()
+                .any(|candidate| name == *candidate)
+            || (is_dynamic_loader_environment_name(&name) && name != "LD_LIBRARY_PATH")
+            || matches!(
+                name.to_str(),
+                Some(
+                    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"
+                        | "CARGO_BUILD_RUSTDOC"
+                        | "RUSTDOC"
+                        | "RUSTDOCFLAGS"
+                        | "RUSTFLAGS"
+                        | "CARGO_ENCODED_RUSTFLAGS"
+                )
+            )
+        {
+            command.as_command_mut().env_remove(name);
+        }
+    }
+    // Cargo may add target-directory dylib paths to the CLI-forced rustc library path. Retaining
+    // only that forced/augmented runtime path preserves ordinary Cargo test dependencies; every
+    // other observed dynamic-loader variable is removed from the test child.
+    application_exec::configure_closed_descriptor_baseline(command.as_command_mut());
+    let status = command
+        .status()
+        .map_err(|error| format!("failed to execute the pinned host test: {error}"))?;
+    drop(command);
+    source
+        .command()
+        .map_err(|error| format!("host-test executable changed across execution: {error}"))?;
+    Ok(status)
+}
+
+fn is_cargo_target_runner_environment_name(name: &OsStr) -> bool {
+    let name = os_bytes(name);
+    name.starts_with(b"CARGO_TARGET_")
+        && name.ends_with(b"_RUNNER")
+        && name.len() > b"CARGO_TARGET__RUNNER".len()
+}
+
+fn reject_ambient_cargo_test_runners() -> Result<(), String> {
+    let mut runners = env::vars_os()
+        .map(|(name, _)| name)
+        .filter(|name| is_cargo_target_runner_environment_name(name))
+        .collect::<Vec<_>>();
+    runners.sort_by(|left, right| os_bytes(left).cmp(os_bytes(right)));
+    if let Some(name) = runners.first() {
+        return Err(format!(
+            "binding-only host test rejects ambient Cargo runner selection {name:?}"
+        ));
+    }
+    for name in ["RUSTDOC", "CARGO_BUILD_RUSTDOC", "RUSTDOCFLAGS"] {
+        if let Some(value) = env::var_os(name) {
+            return Err(format!(
+                "binding-only host test rejects ambient rustdoc selection {name}={value:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_configured_cargo_test_runners(
+    project: &project::CargoProject,
+    args: &[OsString],
+    pinned_cargo: &pinned_executable::PinnedExecutable,
+) -> Result<(), String> {
+    if let Some(value) = project.cargo_config_value(args, "target", pinned_cargo, None)? {
+        let serde_json::Value::Object(targets) = value else {
+            return Err(
+                "binding-only host test cannot inspect configured Cargo target table".to_owned(),
+            );
+        };
+        for (selector, configuration) in targets {
+            let serde_json::Value::Object(configuration) = configuration else {
+                return Err(format!(
+                    "binding-only host test cannot inspect configured target.{selector}"
+                ));
+            };
+            if let Some(runner) = configuration.get("runner") {
+                return Err(format!(
+                    "binding-only host test rejects configured target.{selector}.runner={runner}"
+                ));
+            }
+        }
+    }
+
+    if let Some(value) = project.cargo_config_value(args, "env", pinned_cargo, None)? {
+        let serde_json::Value::Object(configured) = value else {
+            return Err(
+                "binding-only host test cannot inspect configured Cargo env table".to_owned(),
+            );
+        };
+        for (name, value) in configured {
+            if is_cargo_target_runner_environment_name(OsStr::new(&name)) {
+                return Err(format!(
+                    "binding-only host test rejects configured runner environment env.{name}={value}"
+                ));
+            }
+            if name.as_bytes().starts_with(b"FE2O3_") {
+                return Err(format!(
+                    "binding-only host test rejects configured protected environment env.{name}={value}"
+                ));
+            }
+            if is_dynamic_loader_environment_name(OsStr::new(&name)) {
+                return Err(format!(
+                    "binding-only host test rejects configured dynamic-loader environment env.{name}={value}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn clear_inherited_cargo_unit_identity(command: &mut Command) {
@@ -3093,7 +3426,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check                check host targets with compiler-derived binding only\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check                check host targets with compiler-derived binding only\n  test --all-targets test trusted host code with binding only; no sandbox, GPU, or artifact authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
         qualification_help_lines(),
     );
 }
@@ -3109,14 +3442,16 @@ const fn qualification_help_lines() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
-        authority_sensitive_request_selected, clear_cargo_unit_identity_names,
-        configure_backend_qualification, configure_production_target_build_environment,
-        configure_simulation_build_environment, effective_qualification_oracle,
-        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        parse_rustup_tool_path, production_compilation_selected, qualification_help_lines,
-        reject_authority_rustup_proxy, reject_obsolete_codegen_pipeline, resolve_amd_gpu_target,
-        selected_run_target, validate_production_cargo_selection,
+        BindingHostMode, SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV,
+        aggregate_post_spawn_results, authority_sensitive_request_selected,
+        binding_host_target_key, clear_cargo_unit_identity_names, configure_backend_qualification,
+        configure_production_target_build_environment, configure_simulation_build_environment,
+        effective_qualification_oracle, inject_application_runner_config,
+        inject_binding_host_test_custody, is_cargo_target_runner_environment_name,
+        normalize_invocation, parse_rocminfo_target, parse_rustup_tool_path,
+        production_compilation_selected, qualification_help_lines, reject_authority_rustup_proxy,
+        reject_binding_test_invocation_config, reject_obsolete_codegen_pipeline,
+        resolve_amd_gpu_target, selected_run_target, validate_production_cargo_selection,
     };
     use crate::pinned_executable_test_directory::TestDirectory;
     use crate::project::PinnedDirectory;
@@ -3139,6 +3474,7 @@ mod tests {
             "authority",
             "doctor",
             "check",
+            "test",
             "build",
             "run",
             "simulate",
@@ -3159,6 +3495,120 @@ mod tests {
             assert_eq!(normalize_invocation(direct.clone()), direct);
             assert_eq!(normalize_invocation(cargo), direct);
         }
+    }
+
+    #[test]
+    fn binding_host_modes_select_only_the_exact_cargo_command() {
+        assert_eq!(BindingHostMode::Check.cargo_command(), "check");
+        assert!(!BindingHostMode::Check.executes_tests());
+        assert_eq!(BindingHostMode::Test.cargo_command(), "test");
+        assert!(BindingHostMode::Test.executes_tests());
+    }
+
+    #[test]
+    fn binding_host_test_requires_the_closed_cargo_argument_profile() {
+        for name in [
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+            "CARGO_TARGET_CFG_UNIX_RUNNER",
+            "CARGO_TARGET_A_RUNNER",
+        ] {
+            assert!(is_cargo_target_runner_environment_name(OsStr::new(name)));
+        }
+        for name in [
+            "CARGO_TARGET__RUNNER",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+            "FE2O3_CARGO_TARGET_X_RUNNER",
+        ] {
+            assert!(!is_cargo_target_runner_environment_name(OsStr::new(name)));
+        }
+
+        for args in [
+            vec![
+                OsString::from("--all-targets"),
+                OsString::from("--config=target.host.runner='hostile'"),
+            ],
+            vec![
+                OsString::from("--all-targets"),
+                OsString::from("--config"),
+                OsString::from("target.host.runner='hostile'"),
+            ],
+            vec![OsString::from("--all-targets"), OsString::from("-Z")],
+            vec![
+                OsString::from("--all-targets"),
+                OsString::from("-Zconfig-include=hostile.toml"),
+            ],
+            vec![OsString::from("--all-targets"), OsString::from("--doc")],
+            vec![OsString::from("--all-targets"), OsString::from("--no-run")],
+            vec![OsString::from("-p"), OsString::from("managed")],
+        ] {
+            assert!(reject_binding_test_invocation_config(&args).is_err());
+        }
+        assert!(
+            reject_binding_test_invocation_config(&[
+                OsString::from("--all-targets"),
+                OsString::from("--"),
+                OsString::from("--config=ordinary-test-argument"),
+                OsString::from("-Zordinary-test-argument"),
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn binding_host_test_custody_precedes_test_binary_arguments() {
+        let mut args = vec![
+            OsString::from("--all-targets"),
+            OsString::from("--"),
+            OsString::from("--ignored"),
+        ];
+        inject_binding_host_test_custody(
+            &mut args,
+            "x86_64-unknown-linux-gnu",
+            std::path::Path::new("/proc/self/fd/200"),
+        )
+        .unwrap();
+        let separator = args.iter().position(|argument| argument == "--").unwrap();
+        assert_eq!(args[separator + 1], "--ignored");
+        let cargo_side = &args[..separator];
+        assert!(cargo_side.windows(2).any(|pair| {
+            pair[0] == "--config"
+                && pair[1]
+                    .to_string_lossy()
+                    .starts_with("target.\"x86_64-unknown-linux-gnu\".runner=")
+        }));
+        for protected in [
+            "build.rustc=",
+            "build.rustc-workspace-wrapper=",
+            "env.RUSTDOC.value=",
+            "env.LD_PRELOAD.value=",
+            "env.LD_AUDIT.value=",
+            "env.GLIBC_TUNABLES.value=",
+            "env.LD_LIBRARY_PATH.value=",
+        ] {
+            assert!(
+                cargo_side
+                    .iter()
+                    .any(|argument| { argument.to_string_lossy().starts_with(protected) })
+            );
+        }
+    }
+
+    #[test]
+    fn binding_host_target_is_bounded_and_toml_quoted() {
+        assert_eq!(
+            binding_host_target_key("x86_64-unknown-linux-gnu").unwrap(),
+            "\"x86_64-unknown-linux-gnu\""
+        );
+        for hostile in [
+            "",
+            "host.target",
+            "host\".runner='hostile'",
+            "host\nrunner",
+            "host target",
+        ] {
+            assert!(binding_host_target_key(hostile).is_err(), "{hostile:?}");
+        }
+        assert!(binding_host_target_key(&"a".repeat(129)).is_err());
     }
 
     #[test]
