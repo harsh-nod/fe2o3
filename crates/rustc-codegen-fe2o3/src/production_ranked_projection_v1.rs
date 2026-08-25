@@ -8829,6 +8829,21 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             crate::encode_hex(&expression.canonical_transcript_sha256(*numerical_contract)),
             numerical_contract,
         ),
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract,
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+        } => format!(
+            "  kernel.collective_semantics <{contract:?}> {}, {}, {}, {}, {}\n",
+            ranked_value_text_v1(*view),
+            ranked_value_text_v1(*actual),
+            ranked_value_text_v1(*expected),
+            ranked_value_text_v1(*witness0),
+            ranked_value_text_v1(*witness1),
+        ),
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => format!(
             "  kernel.require_equivalent {}, {}\n",
             ranked_value_text_v1(*actual),
@@ -11540,6 +11555,7 @@ mod tests {
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
                 | ProductionRankedOperationV1::SemanticExpression { .. }
+                | ProductionRankedOperationV1::CollectiveSemantics { .. }
                 | ProductionRankedOperationV1::RequireEquivalent { .. }
                 | ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
