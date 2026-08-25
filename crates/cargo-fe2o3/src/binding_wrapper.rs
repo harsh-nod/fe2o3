@@ -2839,30 +2839,19 @@ struct RowSoftmaxReleaseContext {
     workload: Option<AdmittedRowSoftmaxV1WorkloadV1>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WorkerV2BindingSchema {
-    OrdinaryV1,
-    ProtectedV2,
-    ProductionV3,
-}
-
-impl WorkerV2BindingSchema {
-    const fn select(
-        compiler_closure: Option<CompilerClosureV2>,
-        production_v1: bool,
-    ) -> Result<Self, &'static str> {
-        match (compiler_closure, production_v1) {
-            (Some(_), true) => Ok(Self::ProductionV3),
-            (Some(_), false) => Ok(Self::ProtectedV2),
-            (None, false) => Ok(Self::OrdinaryV1),
-            (None, true) => Err(
+const fn require_production_compiler_closure(
+    compiler_closure: Option<CompilerClosureV2>,
+    production: bool,
+) -> Result<Option<CompilerClosureV2>, &'static str> {
+    if production {
+        match compiler_closure {
+            Some(compiler_closure) => Ok(Some(compiler_closure)),
+            None => Err(
                 "production-v1 requires protected V3 compiler-closure custody before route selection",
             ),
         }
-    }
-
-    const fn is_protected(self) -> bool {
-        matches!(self, Self::ProtectedV2 | Self::ProductionV3)
+    } else {
+        Ok(None)
     }
 }
 
@@ -2885,11 +2874,11 @@ enum ProtectedWorkerV2TransitionBlocker {
 }
 
 const fn protected_worker_v2_transition_blocker(
-    schema: WorkerV2BindingSchema,
+    protected_compiler_closure: bool,
     row_softmax: bool,
     in_rustc_execution: bool,
 ) -> Option<ProtectedWorkerV2TransitionBlocker> {
-    if !schema.is_protected() {
+    if !protected_compiler_closure {
         return None;
     }
     if row_softmax {
@@ -3117,8 +3106,8 @@ fn prepare_managed_attempt(
     let production_v1_worker = worker_v2
         .as_ref()
         .is_some_and(PreparedWorkerV2Config::is_production_compilation);
-    let worker_v2_binding_schema =
-        WorkerV2BindingSchema::select(protected_compiler_closure, production_v1_worker)
+    let production_compiler_closure =
+        require_production_compiler_closure(protected_compiler_closure, production_v1_worker)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
     let release_action = std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV);
     let row_softmax_provision =
@@ -3149,7 +3138,7 @@ fn prepare_managed_attempt(
         ));
     }
     let blocker = protected_worker_v2_transition_blocker(
-        worker_v2_binding_schema,
+        protected_compiler_closure.is_some(),
         row_softmax_release.is_some() || row_softmax_provision,
         worker_v2
             .as_ref()
@@ -3186,9 +3175,7 @@ fn prepare_managed_attempt(
                 }),
                 true,
             )
-        } else if worker_v2_binding_schema == WorkerV2BindingSchema::ProductionV3 {
-            let compiler_closure = protected_compiler_closure
-                .expect("production V3 schema retains its exact compiler closure");
+        } else if let Some(compiler_closure) = production_compiler_closure {
             let attempt = begin_build_attempt(output_dir, &producer, invocation, session)
                 .map_err(BindingWrapperError::Artifact)?;
             let recovered_envelope = match recover_worker_v3_load_envelope_v1(output_dir, attempt) {
@@ -3237,9 +3224,7 @@ fn prepare_managed_attempt(
                     }
                 }
             }
-        } else if worker_v2_binding_schema == WorkerV2BindingSchema::ProtectedV2 {
-            let compiler_closure = protected_compiler_closure
-                .expect("protected schema retains its exact compiler closure");
+        } else if let Some(compiler_closure) = protected_compiler_closure {
             let producer_binding = WorkerV2ProducerBindingV2::from_codegen(
                 compile.crate_name(),
                 Some(compile.source_path()),
@@ -5128,9 +5113,9 @@ mod tests {
         ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1,
         RustcInvocationV2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
         WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
-        WorkerV2BindingSchema, append_prepared_rustc_arguments, canonicalize_rustc_metadata,
-        classify_rustc_invocation_v2, complete_recovered_protected_worker_v2,
-        complete_recovered_worker_v2, configure_build_observation_environment,
+        append_prepared_rustc_arguments, canonicalize_rustc_metadata, classify_rustc_invocation_v2,
+        complete_recovered_protected_worker_v2, complete_recovered_worker_v2,
+        configure_build_observation_environment,
         configure_build_observation_environment_with_test_mutation,
         configure_qualification_route_marker, configure_worker_build_observation_environment,
         decode_managed_rustc_args, derive_build_attempt_input_with_config_identity, hex,
@@ -5143,10 +5128,10 @@ mod tests {
         protected_worker_v2_transition_blocker, publish_finish_and_clear,
         publish_finish_and_clear_protected, qualification_requires_compiler_closure_observation,
         qualification_selection_requires_protected_invocation, reject_authority_linker_arguments,
-        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
-        row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
-        scope_unmanaged_dependency_environment, selected_kernel_root,
-        worker_v3_readiness_is_absent,
+        reject_uninspectable_rustc_args, require_production_compiler_closure,
+        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
+        row_softmax_provider_observation_json, scope_unmanaged_dependency_environment,
+        selected_kernel_root, worker_v3_readiness_is_absent,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -8676,11 +8661,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_binding_selection_retains_the_v1_resume_schema_and_bytes() {
-        assert_eq!(
-            WorkerV2BindingSchema::select(None, false).unwrap(),
-            WorkerV2BindingSchema::OrdinaryV1
-        );
+    fn qualification_ordinary_binding_retains_the_v1_resume_schema_and_bytes() {
         let directory = test_artifact_directory("ordinary-v1");
         let producer = ProducerIdentity::from_codegen(
             "ordinary_v1",
@@ -8716,14 +8697,14 @@ mod tests {
     fn protected_binding_recovers_only_the_exact_v2_compiler_closure() {
         let closure = protected_test_closure(0x51);
         assert_eq!(
-            WorkerV2BindingSchema::select(Some(closure), false).unwrap(),
-            WorkerV2BindingSchema::ProtectedV2
+            require_production_compiler_closure(Some(closure), false).unwrap(),
+            None
         );
         assert_eq!(
-            WorkerV2BindingSchema::select(Some(closure), true).unwrap(),
-            WorkerV2BindingSchema::ProductionV3
+            require_production_compiler_closure(Some(closure), true).unwrap(),
+            Some(closure)
         );
-        assert!(WorkerV2BindingSchema::select(None, true).is_err());
+        assert!(require_production_compiler_closure(None, true).is_err());
         let directory = test_artifact_directory("protected-v2");
         let producer = ProducerIdentity::from_codegen(
             "protected_v2",
@@ -8826,22 +8807,30 @@ mod tests {
 
     #[test]
     fn protected_unavailable_transitions_exclude_the_required_envelope_route() {
-        let protected = WorkerV2BindingSchema::ProtectedV2;
         assert_eq!(
-            protected_worker_v2_transition_blocker(protected, true, false),
+            protected_worker_v2_transition_blocker(true, true, false),
             Some(ProtectedWorkerV2TransitionBlocker::RowSoftmax)
         );
         assert_eq!(
-            protected_worker_v2_transition_blocker(protected, false, true),
+            protected_worker_v2_transition_blocker(true, false, true),
             Some(ProtectedWorkerV2TransitionBlocker::InRustcExecution)
         );
         assert_eq!(
-            protected_worker_v2_transition_blocker(protected, false, false),
+            protected_worker_v2_transition_blocker(true, false, false),
             None
         );
         assert_eq!(
-            protected_worker_v2_transition_blocker(WorkerV2BindingSchema::OrdinaryV1, true, true,),
+            protected_worker_v2_transition_blocker(false, true, true),
             None
+        );
+    }
+
+    #[test]
+    fn production_binding_has_no_runtime_schema_selector() {
+        let source = include_str!("binding_wrapper.rs");
+        assert!(!source.contains(concat!("enum WorkerV2", "BindingSchema")));
+        assert!(
+            source.contains("else if let Some(compiler_closure) = production_compiler_closure")
         );
     }
 }
