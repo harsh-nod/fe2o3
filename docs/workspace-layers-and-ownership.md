@@ -44,6 +44,16 @@ dialect registration, production-route boundary, qualification feature, and rele
 are integration-owned files. Feature agents SHOULD NOT edit them. A dependency
 addition that changes `Cargo.lock` is a separate, integration-reviewed commit.
 
+Generic workspace checking separates ordinary Cargo targets from typed kernel
+sources whose compilation-unit binding is intentionally supplied by
+`cargo-fe2o3`. The checked Cargo target-source projection identifies those
+packages structurally; raw `cargo check --workspace --all-targets` excludes
+them, and `cargo fe2o3 check --all-targets -p ...` checks exactly the same
+package set with a host-only binding wrapper. That wrapper derives the normal
+crate-name/ordered-metadata binding but admits no codegen backend, artifact
+directory, publication action, worker, or GPU authority. It is not a compiler
+qualification or artifact-production route.
+
 ## Layers
 
 ### Canonical contracts

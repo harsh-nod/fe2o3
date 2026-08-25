@@ -203,11 +203,16 @@ run_format() {
 }
 
 run_check() {
-  local -a all_examples rustc_examples cargo_args
-  local -A rustc_example_set=()
+  local -a all_examples rustc_examples wrapper_managed_packages cargo_args
+  local -a managed_args loader_environment_removals
+  local -A rustc_example_set=() excluded_packages=()
   local package
-  load_example_packages all all_examples
-  load_example_packages rustc-check rustc_examples
+  prepare_cargo_fe2o3_driver generic-check
+  validate_cargo_fe2o3_driver
+  load_example_packages all all_examples "${CARGO_FE2O3_BINARY}"
+  load_example_packages rustc-check rustc_examples "${CARGO_FE2O3_BINARY}"
+  load_example_packages wrapper-managed wrapper_managed_packages \
+    "${CARGO_FE2O3_BINARY}"
   for package in "${rustc_examples[@]}"; do
     rustc_example_set["${package}"]=1
   done
@@ -221,13 +226,37 @@ run_check() {
   )
   for package in "${all_examples[@]}"; do
     if [[ -z "${rustc_example_set[${package}]+selected}" ]]; then
+      excluded_packages["${package}"]=1
+      cargo_args+=(--exclude "${package}")
+    fi
+  done
+  for package in "${wrapper_managed_packages[@]}"; do
+    if [[ -z "${excluded_packages[${package}]+excluded}" ]]; then
+      excluded_packages["${package}"]=1
       cargo_args+=(--exclude "${package}")
     fi
   done
 
   # `cargo check` does not link libamdhip64, so all host-facing examples are safe
-  # to validate on a generic runner.
+  # to validate on a generic runner. Sources whose typed kernel binding is owned by
+  # cargo-fe2o3 are excluded here and checked through the exact binding-only route.
   run_step workspace-check cargo "${cargo_args[@]}"
+
+  ((${#wrapper_managed_packages[@]} > 0)) || {
+    printf '%s\n' 'workspace contains no structurally detected wrapper-managed package' >&2
+    return 2
+  }
+  managed_args=(check --all-targets --locked)
+  for package in "${wrapper_managed_packages[@]}"; do
+    managed_args+=(-p "${package}")
+  done
+  load_dynamic_loader_environment_removals loader_environment_removals
+  run_step workspace-binding-check \
+    env "${loader_environment_removals[@]}" \
+    "${CARGO_FE2O3_BINARY}" "${managed_args[@]}"
+  run_step workspace-binding-check-boundary \
+    bash scripts/tests/binding-check-boundary.sh \
+    "${CARGO_FE2O3_BINARY}" "${wrapper_managed_packages[0]}"
 }
 
 run_cpu_tests() {

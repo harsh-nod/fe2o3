@@ -4,6 +4,7 @@ mod application_sandbox;
 mod application_supervisor;
 mod authority_release;
 mod authorized_kernel_closure;
+mod binding_check_wrapper;
 mod binding_wrapper;
 mod capability_broker;
 mod cargo_binding_trampoline;
@@ -103,6 +104,7 @@ const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const CARGO_BINDING_WRAPPER_CHILD_FD: std::os::fd::RawFd = 191;
 const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
 const BACKEND_BUILD_CHILD_FD: std::os::fd::RawFd = 196;
+const CARGO_BINDING_CHECK_WRAPPER_CHILD_FD: std::os::fd::RawFd = 200;
 const RUSTC_LIBRARY_CHILD_FD: std::os::fd::RawFd = 193;
 const RUSTC_CHILD_FD: std::os::fd::RawFd = 194;
 const RUSTC_INVOCATION_CHILD_FD: std::os::fd::RawFd =
@@ -119,6 +121,11 @@ const _: () = assert!(
 );
 const _: () = assert!(RUSTC_INVOCATION_CHILD_FD != ARTIFACT_CHILD_FD);
 const _: () = assert!(RUSTC_INVOCATION_CHILD_FD != BACKEND_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != RUSTC_LIBRARY_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != RUSTC_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != RUSTC_INVOCATION_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != ARTIFACT_CHILD_FD);
+const _: () = assert!(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD != BACKEND_CHILD_FD);
 
 const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
     "RUSTC",
@@ -148,6 +155,15 @@ fn main() -> ExitCode {
     {
         return run_application_boundary_frontend(&raw_args[1..]);
     }
+    if env::var_os(binding_check_wrapper::MODE_ENV_V1).is_some() {
+        return match binding_check_wrapper::run(raw_args) {
+            Ok(status) => ExitCode::from(binding_check_wrapper::exit_code(status)),
+            Err(error) => {
+                eprintln!("cargo-fe2o3 binding-check wrapper: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if env::var_os(BINDING_WRAPPER_MODE_ENV).is_some() {
         return match binding_wrapper::run(raw_args) {
             Ok(status) => ExitCode::from(binding_wrapper::exit_code(status)),
@@ -166,6 +182,7 @@ fn main() -> ExitCode {
     match command.to_str() {
         Some("authority") => authority_release::command(&rest),
         Some("doctor") => doctor(),
+        Some("check") => binding_check_command(&rest),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
         #[cfg(feature = "qualification-oracles-test-only")]
@@ -283,6 +300,102 @@ fn clean_command(args: &[OsString]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn binding_check_command(args: &[OsString]) -> ExitCode {
+    match binding_check_result(args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("cargo fe2o3 check: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn binding_check_result(args: &[OsString]) -> Result<(), String> {
+    binding_check_wrapper::reject_prohibited_environment().map_err(|error| error.to_string())?;
+    scrub_process_dynamic_loader_environment();
+    reject_preexisting_compiler_environment()?;
+    if selected_run_target(args)?.is_some() {
+        return Err(
+            "binding-only host check selects the pinned rustc host target; --target is not admitted"
+                .to_owned(),
+        );
+    }
+
+    let invocation_directory = env::current_dir()
+        .map_err(|error| format!("failed to resolve Cargo invocation directory: {error}"))?;
+    let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let pinned_cargo = pin_default_cargo(&cargo_declaration, &invocation_directory)?;
+    let project = project::CargoProject::discover(args, Some(&pinned_cargo), None, false)?;
+    reject_configured_compiler_selection(&project, args, &pinned_cargo, None, false)?;
+    let pinned_rustc = pin_default_rustc(&project)?;
+    let host_target = pinned_rustc_host_target(&pinned_rustc)?;
+
+    let wrapper_path = env::current_exe()
+        .map_err(|error| format!("failed to locate cargo-fe2o3 executable: {error}"))?;
+    let wrapper_source = pinned_executable::PinnedExecutable::open(&wrapper_path)
+        .map_err(|error| format!("failed to pin the binding-check wrapper: {error}"))?;
+    let wrapper = wrapper_source
+        .seal_executable_image()
+        .map_err(|error| format!("failed to seal the binding-check wrapper: {error}"))?;
+    let workspace_wrapper = wrapper
+        .fixed_child_path(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
+        .map_err(|error| format!("failed to retain the binding-check wrapper: {error}"))?;
+
+    project.validate_paths()?;
+    let mut cargo = pinned_cargo
+        .command()
+        .map_err(|error| format!("failed to prepare pinned Cargo executable: {error}"))?;
+    wrapper
+        .inherit_for_child_at(cargo.as_command_mut(), CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
+        .map_err(|error| format!("failed to inherit the binding-check wrapper: {error}"))?;
+    let mut forwarded_args = args.to_vec();
+    let separator = forwarded_args
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(forwarded_args.len());
+    forwarded_args.splice(
+        separator..separator,
+        [OsString::from("--target"), OsString::from(host_target)],
+    );
+    binding_check_wrapper::clear_prohibited_environment(cargo.as_command_mut());
+    cargo
+        .as_command_mut()
+        .arg("check")
+        .args(&forwarded_args)
+        .current_dir(project.invocation_dir().child_path())
+        .env("RUSTC_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", workspace_wrapper)
+        .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
+        .env(binding_check_wrapper::MODE_ENV_V1, "1")
+        .env("FE2O3_HIP_SYS_DISABLE", "1");
+    remove_dynamic_loader_environment(cargo.as_command_mut());
+    configure_pinned_rustc_child(cargo.as_command_mut(), &pinned_rustc)?;
+    cargo.as_command_mut().env(
+        "LD_LIBRARY_PATH",
+        format!("/proc/self/fd/{RUSTC_LIBRARY_CHILD_FD}"),
+    );
+
+    let status = cargo
+        .status()
+        .map_err(|error| format!("failed to run pinned Cargo: {error}"))?;
+    let post_spawn = aggregate_post_spawn_results(
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("pinned Cargo check failed with status {status}"))
+        },
+        [
+            ("Cargo project path revalidation", project.validate_paths()),
+            (
+                "rustc toolchain lib-tree revalidation",
+                pinned_rustc.revalidate_lib_tree(),
+            ),
+        ],
+    );
+    post_spawn
 }
 
 fn doctor() -> ExitCode {
@@ -531,14 +644,13 @@ fn cargo_with_backend_result(
     let invocation_directory = env::current_dir()
         .map_err(|error| format!("failed to resolve Cargo invocation directory: {error}"))?;
     let cargo_declaration = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let cargo_path = if requires_authorized_closure {
-        require_absolute_authority_tool_path(&cargo_declaration, "CARGO")?
+    let source_cargo = if requires_authorized_closure {
+        let cargo_path = require_absolute_authority_tool_path(&cargo_declaration, "CARGO")?;
+        pinned_executable::PinnedExecutable::open(&cargo_path)
+            .map_err(|error| format!("failed to pin authority Cargo executable: {error}"))?
     } else {
-        binding_wrapper::resolve_command_executable(&cargo_declaration, &invocation_directory)
-            .map_err(|error| format!("failed to resolve Cargo executable: {error}"))?
+        pin_default_cargo(&cargo_declaration, &invocation_directory)?
     };
-    let source_cargo = pinned_executable::PinnedExecutable::open(&cargo_path)
-        .map_err(|error| format!("failed to pin Cargo executable: {error}"))?;
     if let Some(expected) = authority_cargo_sha256
         && source_cargo.sha256() != &expected
     {
@@ -1632,6 +1744,34 @@ fn host_rustc_target() -> Result<String, String> {
         .ok_or_else(|| "rustc -vV output did not contain a host target".to_string())
 }
 
+fn pinned_rustc_host_target(rustc: &PinnedRustc) -> Result<String, String> {
+    let mut command = rustc
+        .executable
+        .command()
+        .map_err(|error| format!("failed to prepare pinned rustc query: {error}"))?;
+    command.as_command_mut().arg("-vV");
+    remove_dynamic_loader_environment(command.as_command_mut());
+    command
+        .as_command_mut()
+        .env("LD_LIBRARY_PATH", rustc.lib_tree_directory().child_path());
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to query pinned rustc host target: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "pinned rustc -vV failed with status {}",
+            output.status
+        ));
+    }
+    let output = String::from_utf8(output.stdout)
+        .map_err(|_| "pinned rustc -vV output was not UTF-8".to_owned())?;
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_string)
+        .ok_or_else(|| "pinned rustc -vV output did not contain a host target".to_owned())
+}
+
 fn run_application_boundary_frontend(args: &[OsString]) -> ExitCode {
     match application_supervisor::run_frontend(args) {
         Ok(status) => ExitCode::from(binding_wrapper::exit_code(status)),
@@ -2437,6 +2577,23 @@ fn pin_default_rustc(project: &project::CargoProject) -> Result<PinnedRustc, Str
     })
 }
 
+fn pin_default_cargo(
+    declaration: &OsStr,
+    invocation_directory: &Path,
+) -> Result<pinned_executable::PinnedExecutable, String> {
+    let resolved = binding_wrapper::resolve_command_executable(declaration, invocation_directory)
+        .map_err(|error| format!("failed to resolve Cargo executable: {error}"))?;
+    let canonical = std::fs::canonicalize(&resolved)
+        .map_err(|error| format!("failed to inspect Cargo executable: {error}"))?;
+    let cargo_path = if canonical.file_name() == Some(OsStr::new("rustup")) {
+        resolve_rustup_toolchain_tool(&canonical, invocation_directory, "cargo")?
+    } else {
+        canonical
+    };
+    pinned_executable::PinnedExecutable::open(&cargo_path)
+        .map_err(|error| format!("failed to pin Cargo executable: {error}"))
+}
+
 fn rustc_lib_tree_directory(rustc_path: &Path) -> Result<project::PinnedDirectory, String> {
     let executable_directory = rustc_path
         .parent()
@@ -2486,6 +2643,45 @@ fn resolve_rustup_toolchain_rustc(
     let path = PathBuf::from(os_string(path)?);
     if !path.is_absolute() {
         return Err("pinned rustup returned a relative rustc path".to_owned());
+    }
+    Ok(path)
+}
+
+fn resolve_rustup_toolchain_tool(
+    rustup_proxy: &Path,
+    invocation_directory: &Path,
+    tool: &str,
+) -> Result<PathBuf, String> {
+    let pinned = pinned_executable::PinnedExecutable::open(rustup_proxy)
+        .map_err(|error| format!("failed to pin rustup proxy: {error}"))?;
+    let mut command = pinned
+        .command()
+        .map_err(|error| format!("failed to prepare pinned rustup proxy: {error}"))?;
+    command
+        .as_command_mut()
+        .arg0("rustup")
+        .args(["which", tool])
+        .current_dir(invocation_directory);
+    remove_dynamic_loader_environment(command.as_command_mut());
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to resolve rustup toolchain {tool}: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "pinned rustup could not resolve the active {tool}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let mut path = output.stdout;
+    while matches!(path.last(), Some(b'\n' | b'\r')) {
+        path.pop();
+    }
+    if path.is_empty() || path.contains(&b'\n') || path.contains(&0) {
+        return Err(format!("pinned rustup returned a noncanonical {tool} path"));
+    }
+    let path = PathBuf::from(os_string(path)?);
+    if !path.is_absolute() {
+        return Err(format!("pinned rustup returned a relative {tool} path"));
     }
     Ok(path)
 }
@@ -2798,7 +2994,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check                check host targets with compiler-derived binding only\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
         qualification_help_lines(),
     );
 }
@@ -2840,6 +3036,7 @@ mod tests {
         for command in [
             "authority",
             "doctor",
+            "check",
             "build",
             "run",
             "simulate",

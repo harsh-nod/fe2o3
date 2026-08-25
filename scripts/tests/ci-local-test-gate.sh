@@ -181,10 +181,32 @@ run_step_with_timeout() {
   run_step "${name}" "$@"
 }
 
+prepare_cargo_fe2o3_driver() {
+  local step_prefix="$1"
+  local root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
+  if [[ ! -d "${root}" ]]; then
+    mkdir -m 700 -- "${root}"
+    printf '#!/usr/bin/env bash\nexit 0\n' >"${root}/cargo-fe2o3"
+    chmod 500 -- "${root}/cargo-fe2o3" "${root}"
+  fi
+  CARGO_FE2O3_DRIVER_ROOT="${root}"
+  CARGO_FE2O3_BINARY="${root}/cargo-fe2o3"
+  CARGO_FE2O3_SHA256="$(sha256sum -- "${CARGO_FE2O3_BINARY}")"
+  CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256%% *}"
+  run_step "${step_prefix}-cargo-fe2o3-bootstrap" \
+    cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 \
+    --message-format=json-render-diagnostics
+}
+
 load_example_packages() {
+  local lane="$1"
   local destination_name="$2"
   local -n destination="${destination_name}"
-  destination=()
+  if [[ "${lane}" == wrapper-managed ]]; then
+    destination=(fe2o3-managed-fixture)
+  else
+    destination=()
+  fi
 }
 
 step_command() {
@@ -380,7 +402,10 @@ for core_step in \
   mi300x-evidence-queue-tests \
   hosted-parity-ci-tests \
   format \
+  generic-check-cargo-fe2o3-bootstrap \
   workspace-check \
+  workspace-binding-check \
+  workspace-binding-check-boundary \
   backend-build \
   ci-local-test-gate \
   cpu-tests \
@@ -412,6 +437,18 @@ assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_CHECKER} --policy ${WORKSPACE_DEPENDENCY_POLICY}" \
   "$(step_command workspace-dependency-policy)" \
   'generic core did not enforce the workspace dependency policy'
+assert_equals \
+  'cargo check --workspace --all-targets --locked --exclude fe2o3-managed-fixture' \
+  "$(step_command workspace-check)" \
+  'raw workspace check did not exclude the structurally managed package'
+assert_equals \
+  "env ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 check --all-targets --locked -p fe2o3-managed-fixture" \
+  "$(step_command workspace-binding-check)" \
+  'managed check did not use the exact authority-free package projection'
+assert_equals \
+  "bash scripts/tests/binding-check-boundary.sh ${TIMEOUT_TEST_ROOT}/generic-check-driver/cargo-fe2o3 fe2o3-managed-fixture" \
+  "$(step_command workspace-binding-check-boundary)" \
+  'managed check omitted the backend/artifact/publication hostile boundary'
 for core_step in "${STEP_NAMES[@]}"; do
   if [[ "${core_step}" == rustc-codegen-test-* ]]; then
     printf 'generic core unexpectedly ran integration target: %s\n' "${core_step}" >&2

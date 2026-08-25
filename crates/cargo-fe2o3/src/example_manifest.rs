@@ -1,7 +1,9 @@
 use reserved_fe2o3_symbols::CrateBindingIdV1;
+use rustix::fs::{FileType, Mode, OFlags, fstat, open, openat};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use syn::parse::Parser;
@@ -11,6 +13,7 @@ use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta, Token, punctuated:
 const MANIFEST_PATH: &str = "examples/regression-manifest-v1.txt";
 const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v1";
 const MANIFEST_COLUMNS: &str = "package|rustc_check|rocm_compile|gpu_smoke|artifacts";
+const KERNEL_IR_QUALIFICATION_PACKAGES: [&str; 2] = ["fe2o3-fill", "fe2o3-vecadd"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Lane {
@@ -91,8 +94,34 @@ pub(crate) fn gpu_smoke_packages(workspace_root: &Path) -> Result<Vec<String>, S
 }
 
 fn command_result(args: &[String]) -> Result<Vec<String>, String> {
-    let workspace_root = crate::find_workspace_root()?;
-    let manifest = load(&workspace_root)?;
+    let artifact_inspection = matches!(args, [command, _, _] if command == "check-artifacts");
+    let workspace_root = if artifact_inspection {
+        find_manifest_root_without_cargo()?
+    } else {
+        crate::find_workspace_root()?
+    };
+    if let [command, packages @ ..] = args
+        && command == "check-wrapper-namespaces"
+        && !packages.is_empty()
+    {
+        validate_wrapper_derived_namespaces(&workspace_root, packages)?;
+        return Ok(vec![format!(
+            "managed wrapper namespaces: {} package(s)",
+            packages.len()
+        )]);
+    }
+    if matches!(args, [command, lane] if command == "list" && lane == "wrapper-managed") {
+        return workspace_binding_managed_packages(&workspace_root);
+    }
+    // Artifact inspection consumes the exact root admitted by its caller. It must not
+    // re-resolve Cargo or PATH after the build and accidentally inspect another target.
+    let manifest = if artifact_inspection {
+        let manifest = load_manifest_file(&workspace_root)?;
+        validate_kernel_ir_qualification_lanes(&manifest)?;
+        manifest
+    } else {
+        load(&workspace_root)?
+    };
 
     match args {
         [command] if command == "check" => {
@@ -115,7 +144,7 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
                 .map(|entry| entry.package.clone())
                 .collect())
         }
-        [command, package] if command == "check-artifacts" => {
+        [command, package, artifact_directory] if command == "check-artifacts" => {
             let entry = manifest
                 .entries
                 .iter()
@@ -127,12 +156,91 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
                 ));
             }
 
-            let artifact_dir = workspace_root.join("target/fe2o3");
+            let artifact_dir = PathBuf::from(artifact_directory);
+            if !artifact_dir.is_absolute() {
+                return Err(format!(
+                    "artifact directory must be absolute: {}",
+                    artifact_dir.display()
+                ));
+            }
+            let metadata = artifact_dir.symlink_metadata().map_err(|error| {
+                format!(
+                    "failed to inspect artifact directory {}: {error}",
+                    artifact_dir.display()
+                )
+            })?;
+            if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "artifact directory must be a non-symlink directory: {}",
+                    artifact_dir.display()
+                ));
+            }
+            let canonical = artifact_dir.canonicalize().map_err(|error| {
+                format!(
+                    "failed to canonicalize artifact directory {}: {error}",
+                    artifact_dir.display()
+                )
+            })?;
+            if canonical != artifact_dir {
+                return Err(format!(
+                    "artifact directory must already be canonical: {}",
+                    artifact_dir.display()
+                ));
+            }
+            let directory = open(
+                &artifact_dir,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to open artifact directory {}: {error}",
+                    artifact_dir.display()
+                )
+            })?;
+            let descriptor_stat = fstat(&directory).map_err(|error| {
+                format!(
+                    "failed to inspect opened artifact directory {}: {error}",
+                    artifact_dir.display()
+                )
+            })?;
+            let final_metadata = artifact_dir.symlink_metadata().map_err(|error| {
+                format!(
+                    "failed to re-inspect artifact directory {}: {error}",
+                    artifact_dir.display()
+                )
+            })?;
+            if FileType::from_raw_mode(descriptor_stat.st_mode) != FileType::Directory
+                || descriptor_stat.st_dev != metadata.dev()
+                || descriptor_stat.st_ino != metadata.ino()
+                || descriptor_stat.st_dev != final_metadata.dev()
+                || descriptor_stat.st_ino != final_metadata.ino()
+            {
+                return Err(format!(
+                    "artifact directory changed while it was admitted: {}",
+                    artifact_dir.display()
+                ));
+            }
             for artifact in &entry.artifacts {
                 let path = artifact_dir.join(artifact);
-                if !path.is_file() {
+                let artifact_file = openat(
+                    &directory,
+                    artifact,
+                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(|_| {
+                    format!(
+                        "expected artifact for package `{package}` was not produced as a regular non-symlink file: {}",
+                        path.display()
+                    )
+                })?;
+                let artifact_stat = fstat(&artifact_file).map_err(|error| {
+                    format!("failed to inspect artifact {}: {error}", path.display())
+                })?;
+                if FileType::from_raw_mode(artifact_stat.st_mode) != FileType::RegularFile {
                     return Err(format!(
-                        "expected artifact for package `{package}` was not produced: {}",
+                        "expected artifact for package `{package}` was not produced as a regular non-symlink file: {}",
                         path.display()
                     ));
                 }
@@ -143,22 +251,71 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
             )])
         }
         _ => Err(
-            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke>|check-artifacts <package>>"
+            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-wrapper-namespaces <package>...>"
                 .to_string(),
         ),
     }
 }
 
+fn find_manifest_root_without_cargo() -> Result<PathBuf, String> {
+    let current = env::current_dir()
+        .map_err(|error| format!("failed to resolve current directory: {error}"))?
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize current directory: {error}"))?;
+    current
+        .ancestors()
+        .find(|candidate| candidate.join(MANIFEST_PATH).is_file())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            format!(
+                "could not find {MANIFEST_PATH} from invocation directory {}",
+                current.display()
+            )
+        })
+}
+
 fn load(workspace_root: &Path) -> Result<Manifest, String> {
+    let manifest = load_manifest_file(workspace_root)?;
     let path = workspace_root.join(MANIFEST_PATH);
-    let contents = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    let manifest =
-        parse(&contents).map_err(|error| format!("invalid {}: {error}", path.display()))?;
     let workspace_examples = workspace_projection(workspace_root)?;
     validate_projection(&manifest, &workspace_examples)
         .map_err(|error| format!("invalid {}: {error}", path.display()))?;
+    validate_kernel_ir_qualification_lanes(&manifest)
+        .map_err(|error| format!("invalid {}: {error}", path.display()))?;
     Ok(manifest)
+}
+
+fn validate_kernel_ir_qualification_lanes(manifest: &Manifest) -> Result<(), String> {
+    let expected = KERNEL_IR_QUALIFICATION_PACKAGES
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let lanes: [(&str, fn(&Entry) -> bool); 2] = [
+        ("rocm_compile", |entry: &Entry| entry.rocm_compile),
+        ("gpu_smoke", |entry: &Entry| entry.gpu_smoke),
+    ];
+    for (lane, enabled) in lanes {
+        let actual = manifest
+            .entries
+            .iter()
+            .filter(|entry| enabled(entry))
+            .map(|entry| entry.package.as_str())
+            .collect::<BTreeSet<_>>();
+        if actual != expected {
+            return Err(format!(
+                "{lane} must select exactly the reviewed kernel-ir-v1 profiles [{}], found [{}]",
+                expected.iter().copied().collect::<Vec<_>>().join(","),
+                actual.iter().copied().collect::<Vec<_>>().join(",")
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn load_manifest_file(workspace_root: &Path) -> Result<Manifest, String> {
+    let path = workspace_root.join(MANIFEST_PATH);
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    parse(&contents).map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
 fn parse(contents: &str) -> Result<Manifest, String> {
@@ -310,22 +467,7 @@ fn is_safe_name_stem(name: &str) -> bool {
 }
 
 fn workspace_projection(workspace_root: &Path) -> Result<Vec<WorkspaceExample>, String> {
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut command = Command::new(cargo);
-    command
-        .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
-        .current_dir(workspace_root);
-    let output = crate::process_execution::capture_output(&mut command)
-        .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cargo metadata failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("failed to parse cargo metadata output: {error}"))?;
+    let metadata = cargo_metadata(workspace_root)?;
     let packages = metadata
         .get("packages")
         .and_then(serde_json::Value::as_array)
@@ -368,6 +510,186 @@ fn workspace_projection(workspace_root: &Path) -> Result<Vec<WorkspaceExample>, 
     Ok(projection)
 }
 
+fn validate_wrapper_derived_namespaces(
+    workspace_root: &Path,
+    package_names: &[String],
+) -> Result<(), String> {
+    let metadata = cargo_metadata(workspace_root)?;
+    let packages = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata did not contain a packages array".to_string())?;
+
+    let mut requested = package_names.iter().cloned().collect::<BTreeSet<_>>();
+    if requested.len() != package_names.len() {
+        return Err("managed-wrapper package list contains duplicates".to_string());
+    }
+    for package in packages {
+        let Some(name) = package.get("name").and_then(serde_json::Value::as_str) else {
+            return Err("cargo metadata package has no name".to_string());
+        };
+        if !requested.remove(name) {
+            continue;
+        }
+        let manifest = package
+            .get("manifest_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("cargo metadata package `{name}` has no manifest_path"))?;
+        let package_root = manifest
+            .parent()
+            .ok_or_else(|| format!("cargo metadata package `{name}` has no package root"))?;
+        let mut sources = Vec::new();
+        collect_rust_sources(&package_root.join("src"), &mut sources)?;
+        sources.sort();
+        for source in sources {
+            let contents = fs::read_to_string(&source)
+                .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
+            if source_has_explicit_kernel_namespace(&contents)
+                .map_err(|error| format!("failed to parse {}: {error}", source.display()))?
+            {
+                return Err(format!(
+                    "managed-wrapper package `{name}` retains an explicit kernel namespace in {}",
+                    source.display()
+                ));
+            }
+        }
+    }
+    if !requested.is_empty() {
+        return Err(format!(
+            "managed-wrapper packages are absent from Cargo metadata: {}",
+            requested.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn cargo_metadata(workspace_root: &Path) -> Result<serde_json::Value, String> {
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command
+        .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
+        .current_dir(workspace_root);
+    let output = crate::process_execution::capture_output(&mut command)
+        .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("failed to parse cargo metadata output: {error}"))
+}
+
+fn workspace_binding_managed_packages(workspace_root: &Path) -> Result<Vec<String>, String> {
+    let metadata = cargo_metadata(workspace_root)?;
+    let members = metadata
+        .get("workspace_members")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata did not contain workspace_members".to_owned())?
+        .iter()
+        .map(|member| {
+            member
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "cargo metadata workspace member was not a string".to_owned())
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let packages = metadata
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata did not contain a packages array".to_owned())?;
+    let mut managed = BTreeSet::new();
+    for package in packages {
+        let id = package
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "cargo metadata package has no id".to_owned())?;
+        if !members.contains(id) {
+            continue;
+        }
+        let Some(name) = package.get("name").and_then(serde_json::Value::as_str) else {
+            return Err("cargo metadata package has no name".to_string());
+        };
+        let manifest = package
+            .get("manifest_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("cargo metadata package `{name}` has no manifest_path"))?;
+        let package_root = manifest
+            .parent()
+            .ok_or_else(|| format!("cargo metadata package `{name}` has no package root"))?;
+        let sources = package_target_sources(package, package_root, name)?;
+        for source in sources {
+            let contents = fs::read_to_string(&source)
+                .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
+            if source_requires_wrapper_binding(&contents)
+                .map_err(|error| format!("failed to parse {}: {error}", source.display()))?
+            {
+                managed.insert(name.to_owned());
+                break;
+            }
+        }
+    }
+    Ok(managed.into_iter().collect())
+}
+
+fn package_target_sources(
+    package: &serde_json::Value,
+    package_root: &Path,
+    package_name: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let mut sources = BTreeSet::new();
+    let targets = package
+        .get("targets")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| format!("cargo metadata package `{package_name}` has no targets"))?;
+    for target in targets {
+        let source = target
+            .get("src_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                format!("cargo metadata target in package `{package_name}` has no src_path")
+            })?;
+        let metadata = fs::symlink_metadata(&source)
+            .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(format!(
+                "Cargo target source must be a regular non-symlink file: {}",
+                source.display()
+            ));
+        }
+        sources.insert(source.clone());
+
+        let source_root = package_root.join("src");
+        if source.starts_with(&source_root) && source_root.is_dir() {
+            let mut files = Vec::new();
+            collect_rust_sources(&source_root, &mut files)?;
+            sources.extend(files);
+            continue;
+        }
+        let module_directory = if matches!(
+            source.file_name().and_then(|name| name.to_str()),
+            Some("main.rs" | "lib.rs")
+        ) {
+            source.parent().map(Path::to_path_buf)
+        } else {
+            Some(source.with_extension(""))
+        };
+        if let Some(module_directory) = module_directory
+            && module_directory != package_root
+            && module_directory.is_dir()
+        {
+            let mut files = Vec::new();
+            collect_rust_sources(&module_directory, &mut files)?;
+            sources.extend(files);
+        }
+    }
+    Ok(sources.into_iter().collect())
+}
+
 fn source_artifacts(package_root: &Path) -> Result<Vec<String>, String> {
     let source_root = package_root.join("src");
     let mut source_files = Vec::new();
@@ -388,6 +710,15 @@ fn source_artifacts(package_root: &Path) -> Result<Vec<String>, String> {
 }
 
 fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let root_type = fs::symlink_metadata(directory)
+        .map_err(|error| format!("failed to inspect {}: {error}", directory.display()))?
+        .file_type();
+    if root_type.is_symlink() || !root_type.is_dir() {
+        return Err(format!(
+            "Rust source root must be a non-symlink directory: {}",
+            directory.display()
+        ));
+    }
     let mut entries = fs::read_dir(directory)
         .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
         .collect::<Result<Vec<_>, _>>()
@@ -418,6 +749,96 @@ fn collect_rust_sources(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()
 #[derive(Default)]
 struct SourceArtifactVisitor {
     artifacts: Vec<String>,
+}
+
+#[derive(Default)]
+struct ExplicitKernelNamespaceVisitor {
+    found: bool,
+}
+
+#[derive(Default)]
+struct WrapperBindingVisitor {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for ExplicitKernelNamespaceVisitor {
+    fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+        let Meta::List(list) = &attribute.meta else {
+            return;
+        };
+        if tokens_contain_namespace_assignment(list.tokens.clone()) {
+            self.found = true;
+        }
+        visit::visit_attribute(self, attribute);
+    }
+}
+
+fn tokens_contain_namespace_assignment(tokens: proc_macro2::TokenStream) -> bool {
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    for (index, token) in tokens.iter().enumerate() {
+        match token {
+            proc_macro2::TokenTree::Group(group)
+                if tokens_contain_namespace_assignment(group.stream()) =>
+            {
+                return true;
+            }
+            proc_macro2::TokenTree::Ident(ident)
+                if ident == "namespace"
+                    && matches!(
+                        tokens.get(index + 1),
+                        Some(proc_macro2::TokenTree::Punct(punct)) if punct.as_char() == '='
+                    ) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn tokens_require_wrapper_binding(tokens: proc_macro2::TokenStream) -> bool {
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    let typed = tokens
+        .iter()
+        .any(|token| matches!(token, proc_macro2::TokenTree::Ident(ident) if ident == "typed"));
+    let namespace = tokens.iter().enumerate().any(|(index, token)| {
+        matches!(token, proc_macro2::TokenTree::Ident(ident) if ident == "namespace")
+            && matches!(
+                tokens.get(index + 1),
+                Some(proc_macro2::TokenTree::Punct(punct)) if punct.as_char() == '='
+            )
+    });
+    (typed && !namespace)
+        || tokens.iter().any(|token| {
+            matches!(token, proc_macro2::TokenTree::Group(group) if tokens_require_wrapper_binding(group.stream()))
+        })
+}
+
+fn source_has_explicit_kernel_namespace(source: &str) -> Result<bool, syn::Error> {
+    let file = syn::parse_file(source)?;
+    let mut visitor = ExplicitKernelNamespaceVisitor::default();
+    visitor.visit_file(&file);
+    Ok(visitor.found)
+}
+
+impl<'ast> Visit<'ast> for WrapperBindingVisitor {
+    fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+        let Meta::List(list) = &attribute.meta else {
+            return;
+        };
+        if tokens_require_wrapper_binding(list.tokens.clone()) {
+            self.found = true;
+        }
+        visit::visit_attribute(self, attribute);
+    }
+}
+
+fn source_requires_wrapper_binding(source: &str) -> Result<bool, syn::Error> {
+    let file = syn::parse_file(source)?;
+    let mut visitor = WrapperBindingVisitor::default();
+    visitor.visit_file(&file);
+    Ok(visitor.found)
 }
 
 impl<'ast> Visit<'ast> for SourceArtifactVisitor {
@@ -523,7 +944,7 @@ fn validate_projection(
     }
     for (package, declared_entry) in declared {
         let current_entry = current[package];
-        if declared_entry.artifacts != current_entry.artifacts {
+        if declared_entry.rocm_compile && declared_entry.artifacts != current_entry.artifacts {
             return Err(format!(
                 "package `{package}` artifact drift: declared [{}], current [{}]",
                 declared_entry.artifacts.join(","),
@@ -538,10 +959,37 @@ fn validate_projection(
 #[cfg(test)]
 mod tests {
     use super::{
-        Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, WorkspaceExample, load, parse,
-        source_artifact_literals, validate_projection,
+        KERNEL_IR_QUALIFICATION_PACKAGES, Lane, MANIFEST_COLUMNS, MANIFEST_VERSION,
+        WorkspaceExample, collect_rust_sources, load, parse, source_artifact_literals,
+        source_has_explicit_kernel_namespace, source_requires_wrapper_binding, validate_projection,
     };
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_directory() -> TestDirectory {
+        loop {
+            let suffix = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "fe2o3-example-manifest-source-root-{}-{suffix}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&root) {
+                Ok(()) => return TestDirectory(root),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("failed to create isolated test root: {error}"),
+            }
+        }
+    }
 
     fn example_manifest(rows: &str) -> String {
         format!("{MANIFEST_VERSION}\n{MANIFEST_COLUMNS}\n{rows}")
@@ -566,6 +1014,73 @@ mod tests {
         assert!(manifest.entries[0].participates(Lane::RocmCompile));
         assert!(!manifest.entries[0].participates(Lane::GpuSmoke));
         assert!(manifest.entries[2].artifacts.is_empty());
+    }
+
+    #[test]
+    fn structurally_detects_explicit_kernel_namespaces() {
+        assert!(
+            source_has_explicit_kernel_namespace(
+                r#"#[kernel(typed, namespace = "0123456789abcdef")]
+pub fn alpha() {}"#,
+            )
+            .expect("valid source")
+        );
+        assert!(
+            source_has_explicit_kernel_namespace(
+                r#"#[k(typed, namespace = "0123456789abcdef")]
+pub fn aliased() {}"#,
+            )
+            .expect("valid alias source")
+        );
+        assert!(
+            source_has_explicit_kernel_namespace(
+                r#"#[cfg_attr(any(), kernel(typed, namespace = "0123456789abcdef"))]
+pub fn configured() {}"#,
+            )
+            .expect("valid cfg_attr source")
+        );
+        assert!(
+            !source_has_explicit_kernel_namespace(
+                r#"const TEXT: &str = "namespace = hostile";
+#[kernel(typed)]
+pub fn alpha() {}"#,
+            )
+            .expect("valid source")
+        );
+    }
+
+    #[test]
+    fn structurally_detects_sources_that_require_wrapper_bindings() {
+        for source in [
+            "#[kernel(typed)] pub fn direct() {}",
+            "#[renamed(typed)] pub fn alias() {}",
+            "#[cfg_attr(feature = \"gpu\", kernel(typed))] pub fn configured() {}",
+            "#[cfg_attr(feature = \"gpu\", kernel(typed), other(namespace = \"00\"))] pub fn nested() {}",
+        ] {
+            assert!(source_requires_wrapper_binding(source).expect("valid managed source"));
+        }
+        for source in [
+            "#[kernel(typed, namespace = \"0123456789abcdef\")] pub fn fallback() {}",
+            "#[cfg_attr(feature = \"gpu\", kernel(typed, namespace = \"00\"))] pub fn configured() {}",
+            "const TEXT: &str = \"typed kernel\";",
+        ] {
+            assert!(!source_requires_wrapper_binding(source).expect("valid ordinary source"));
+        }
+    }
+
+    #[test]
+    fn source_collection_rejects_a_symlink_root() {
+        let cleanup = test_directory();
+        let root = &cleanup.0;
+        let source = root.join("source");
+        std::fs::create_dir(&source).expect("create source root");
+        std::fs::write(source.join("lib.rs"), "pub fn ordinary() {}\n").expect("write source");
+        let alias = root.join("source-alias");
+        std::os::unix::fs::symlink(&source, &alias).expect("create source-root symlink");
+
+        let error = collect_rust_sources(&alias, &mut Vec::new())
+            .expect_err("symlink source root must fail closed");
+        assert!(error.contains("non-symlink directory"), "{error}");
     }
 
     #[test]
@@ -789,11 +1304,6 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             .canonicalize()
             .expect("canonical workspace root");
         let manifest = load(&workspace_root).expect("checked manifest validates");
-        let pipeline = manifest
-            .entries
-            .iter()
-            .find(|entry| entry.package == "fe2o3-pipeline")
-            .expect("pipeline entry");
         let scalar_gemm = manifest
             .entries
             .iter()
@@ -806,10 +1316,20 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             .expect("verus entry");
 
         assert_eq!(manifest.entries.len(), 26);
-        assert_eq!(
-            pipeline.artifacts,
-            ["bias_stage.hsaco", "scale_stage.hsaco"]
-        );
+        let rocm = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.rocm_compile)
+            .map(|entry| entry.package.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(rocm, KERNEL_IR_QUALIFICATION_PACKAGES);
+        let gpu = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.gpu_smoke)
+            .map(|entry| entry.package.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(gpu, KERNEL_IR_QUALIFICATION_PACKAGES);
         assert!(verus.rustc_check);
         assert!(!verus.rocm_compile);
         assert!(!verus.gpu_smoke);
