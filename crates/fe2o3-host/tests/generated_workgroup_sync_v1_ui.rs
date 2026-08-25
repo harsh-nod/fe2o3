@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 #[test]
 fn exact_workgroup_sync_authority_borrows_and_profiles_are_closed() {
     let cases = trybuild::TestCases::new();

@@ -33,8 +33,11 @@ mod generated_wave64_collectives_v1_lifecycle_tests;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_worker_v2_vecadd;
 mod generated_worker_v3_dispatch;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_lds_reduction_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_scoped_atomic_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_sync_v1_lifecycle;
 #[cfg(test)]
 mod generated_workgroup_sync_v1_lifecycle_tests;
@@ -198,6 +201,7 @@ pub use cooperative_launch::{
     CooperativeResidencyAdmission,
 };
 pub use fe2o3_core::{KernelParams, LaunchConfig};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use fe2o3_hsaco_finalize::WorkgroupSyncProfileKindV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -306,15 +310,18 @@ pub use generated_worker_v3_dispatch::{
     GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
     GeneratedWorkerV3PreparedInvocationV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_workgroup_lds_reduction_v1::{
     GeneratedWorkgroupLdsReductionV1HostAdapterErrorV1,
     GeneratedWorkgroupLdsReductionV1HostAdapterV1, WorkgroupLdsReductionBufferRoleV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_workgroup_scoped_atomic_v1::{
     GeneratedWorkgroupScopedAtomicV1HostAdapterErrorV1,
     GeneratedWorkgroupScopedAtomicV1HostAdapterV1, WorkgroupScopedAtomicBufferRoleV1,
     WorkgroupScopedAtomicEffectV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_workgroup_sync_v1_lifecycle::{
     CompletedWorkgroupLdsReductionV1, CompletedWorkgroupScopedAtomicV1,
     JoinedWorkgroupLdsReductionV1, JoinedWorkgroupScopedAtomicV1, LoadedWorkgroupLdsReductionV1,

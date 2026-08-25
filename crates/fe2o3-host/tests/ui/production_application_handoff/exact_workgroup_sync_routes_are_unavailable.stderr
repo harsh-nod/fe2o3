@@ -1,0 +1,24 @@
+error[E0432]: unresolved imports `fe2o3_host::join_workgroup_lds_reduction_v1`, `fe2o3_host::join_workgroup_scoped_atomic_v1`
+ --> tests/ui/production_application_handoff/exact_workgroup_sync_routes_are_unavailable.rs:1:18
+  |
+1 | use fe2o3_host::{join_workgroup_lds_reduction_v1, join_workgroup_scoped_atomic_v1};
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `join_workgroup_scoped_atomic_v1` in the root
+  |                  |
+  |                  no `join_workgroup_lds_reduction_v1` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+...
+  |     WorkgroupSyncLoadErrorV1, WorkgroupSyncUnloadIdentityV1, join_workgroup_lds_reduction_v1,
+  |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+...
+  |     join_workgroup_scoped_atomic_v1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
