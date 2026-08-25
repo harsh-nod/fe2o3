@@ -301,8 +301,9 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   edges, unsupported targets/pipelines, and untrusted call lookalikes fail
   closed;
 - host argument binding validates canonical scalar and slice identities,
-  retains allocation borrows in lifetime-branded packed values, and requires a
-  backend-issued semantic witness before general V3 authority can exist;
+  retains allocation borrows in lifetime-branded packed values, checks the
+  generated marker binding against the admitted Worker V3 descriptor before
+  verification, and checks the complete generated layout before dispatch;
 - checked shared and exclusive `DeviceBuffer` views preserve parent allocation
   and selected-region provenance, reject invalid ranges, and enforce exclusive
   parent borrowing;
@@ -316,9 +317,10 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   carry that exact region into packing and alias admission. UI tests retain the
   allocation borrow and reject writable use of an immutable view;
 - the witness wire contract, reserved symbols, parser, and rustc backend
-  host-object emitter are implemented. The genuine Worker V2 fixture emits,
-  links, and validates deterministic private witness accessors for both alpha
-  and zeta;
+  host-object emitter remain qualification-only. The genuine Worker V2 fixture
+  emits, links, and validates deterministic private witness accessors for both
+  alpha and zeta; production Worker V3 host compilation uses ordinary rustc and
+  emits no witness accessor dependency;
 - Worker V2 canonically finalizes descriptor-bearing COV6 before publication,
   preserves descriptor-free COV5 compatibility, and recovers exact raw and
   finalized publications across process crashes with legacy-marker migration;

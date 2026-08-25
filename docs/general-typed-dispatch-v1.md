@@ -72,7 +72,7 @@ LDS, asynchronous launch, or caller-constructed ABI descriptions.
 
 ```text
 macro-generated Rust expectation
-        + backend-issued semantic witness
+        + independently admitted compiler descriptor
         + authenticated artifact entry
         + exact finalized executable occurrence
         + observed context/device
@@ -128,10 +128,11 @@ of scope.
 The macro supplies an independent bounded lexical expectation for the kernel's
 logical ABI, physical components, effects, launch contract, kernel binding, and
 generated host-contract identity. Lexical matching is not semantic authority:
-the expectation must obtain a versioned, identity-bound witness from private
-backend-defined pointer/length accessors. Host validation rejects missing,
-malformed, substituted, wrong-profile, wrong-binding, wrong-contract, and
-trailing witness bytes before artifact admission can use the expectation.
+production Worker V3 compares the marker binding to the independently admitted
+compiler descriptor before verification, and compares the complete generated
+argument layout to that descriptor before dispatch. The reviewed verifier must
+bind the generated host-contract identity to the exact compiler handoff and
+final executable lineage.
 
 Rustc independently validates aliases and monomorphized layouts against
 semantic primitive types and genuine trusted `DisjointSlice<T, Index1D>`
@@ -142,12 +143,16 @@ both names and the complete semantic signature match. Renamed roots,
 logical/export disagreement, reordered arguments, or type lookalikes retain
 positional `argN` names and produce a different host contract identity.
 
-Worker V2 derives one bounded witness payload from each accepted V3 descriptor
-root, emits private binding-derived pointer/length accessors in host objects,
-and adds those objects to the host link. The alpha/zeta integration validates
-both linked witnesses and requires exactly both COV6 entries. The finalizer
-reconciles the descriptor's complete sizes (`296` for alpha and `312` for zeta)
-with metadata's explicit prefixes (`40` and `56`), while the LLVM worker
+Qualification-only Worker V2 derives one bounded witness payload from each
+accepted V3 descriptor root, emits private binding-derived pointer/length
+accessors in host objects, and adds those objects to its test link. Production
+Worker V3 emits no such host object. It rejects marker/descriptor binding
+substitution before verification and validates every generated argument field
+against the admitted descriptor before dispatch. The alpha/zeta qualification
+integration validates both linked witnesses and requires exactly both COV6
+entries. The finalizer reconciles the descriptor's complete sizes (`296` for
+alpha and `312` for zeta) with metadata's explicit prefixes (`40` and `56`),
+while the LLVM worker
 canonicalizes the optimized kernels to the complete 256-byte implicit block.
 The witness authenticates the compiler expectation only. It does not grant
 artifact currency, load, or launch authority. The exact vecadd V2 profile

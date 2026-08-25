@@ -475,12 +475,13 @@ explicit unsafe obligation.
 
 Bounded generated declarations, finalized descriptors, multi-entry artifacts,
 and typed preparation exist for reviewed profiles. The general rule remains:
-the generated declaration and finalized entry descriptor are the only safe
-route from Rust arguments to kernarg bytes. The generated declaration is
-trusted compiler output compiled into the host object. The serialized manifest
-is untrusted input until it matches that declaration and independent
-code-object inspection. A loader must never create a safe Rust signature by
-interpreting manifest bytes alone. The exact V1 accepted argument profiles,
+the macro-generated declaration and finalized entry descriptor are the only
+safe route from Rust arguments to kernarg bytes. Ordinary rustc compiles that
+declaration without a custom-backend host object. Worker V3 independently
+matches its binding and complete argument layout to the admitted compiler
+descriptor. The serialized manifest is untrusted input until that match and
+independent code-object inspection succeed. A loader must never create a safe
+Rust signature by interpreting manifest bytes alone. The exact V1 accepted argument profiles,
 authority transitions, rejection suite, and remaining exit gate are specified
 by the
 [general typed dispatch contract](general-typed-dispatch-v1.md).
@@ -619,10 +620,9 @@ general memory-safety, or race-freedom claim.
 - host async APIs so Rust lifetimes cover queued device execution;
 - build caching around complete source/proof/target/toolchain identities.
 
-The legacy recognizer and the structured compiler paths remain side by side
-until the structured path passes every current example and the relevant parity
-gates. Removal of a bootstrap path is a deliberate compatibility gate, not an
-early cleanup task.
+The production backend has one structured compiler route. Frozen wire versions
+and qualification-only oracles remain for compatibility and evidence, but they
+are not selectable production compiler implementations.
 
 ## Architectural Invariants
 

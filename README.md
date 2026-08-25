@@ -543,10 +543,11 @@ turn the foundations below into end-to-end features.
   context-scoped allocation ranges and rejects overlapping mutable or
   mutable/shared aliases. The exact generated vecadd adapter assembles these
   pieces behind its safe API. The general doc-hidden generated-code SPI still
-  exposes an unsafe compiler boundary for legacy profiles: backend/linker
-  association of a marker, complete ABI and effects, and executable semantics
-  must be correct before its sealed launch can be treated as safe. General V3
-  adds the separate fail-closed semantic-witness requirement described below.
+  exposes an unsafe compiler boundary for legacy profiles: association of a
+  marker, complete ABI and effects, and executable semantics must be correct
+  before its sealed launch can be treated as safe. Production Worker V3 checks
+  the generated marker binding against the independently admitted descriptor,
+  then checks the complete generated argument layout before dispatch.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -560,7 +561,8 @@ turn the foundations below into end-to-end features.
   `i64`/`u64`, `f32`/`f64`, shared slices, and genuine trusted
   `DisjointSlice<T, Index1D>` arguments. The macro emits an expectation-only V3
   registration while rustc independently reconstructs semantic types, layouts,
-  effects, physical ABI, and backend semantic witnesses. Exact single-source
+  effects, and physical ABI. The ordinary host build has no custom-backend
+  object or private semantic-witness symbol dependency. Exact single-source
   typed Rust kernels named `alpha` and `zeta` form the first General-V3 vertical
   slice. Their source roles and argument names are authenticated as part of the
   ABI identity rather than inferred positionally: alpha binds

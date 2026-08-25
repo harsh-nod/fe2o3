@@ -366,21 +366,17 @@ impl std::error::Error for CompilerGeneratedSemanticWitnessErrorV1 {}
 ///
 /// The associated constants are a frontend declaration of the expected host
 /// ABI, effects, launch, and kernel binding. They are not by themselves proof
-/// that rustc accepted those semantics. General typed V3 code must additionally
-/// return a backend-issued semantic witness. The trait deliberately carries no
-/// artifact bytes: Worker V2 admission supplies and authenticates one shared
-/// bundle separately.
+/// that rustc accepted those semantics. Production Worker V3 admission matches
+/// the binding and generated argument layout to the independently admitted
+/// compiler descriptor. The trait deliberately carries no artifact bytes.
 ///
 /// # Safety
 ///
 /// The profile and binding identity must describe `Self::FUNCTION` exactly,
 /// including the complete physical host ABI, memory effects, launch contract,
-/// and all behavior relevant to safe loading and dispatch. A general typed V3
-/// implementation emitted by the lexical macro must obtain its witness through
-/// the reserved backend accessors and validate it against both associated
-/// identities. Other implementations are an explicit unsafe trust boundary. A
-/// false implementation can authorize dispatch of native code under the wrong
-/// Rust signature or safety contract.
+/// and all behavior relevant to safe loading and dispatch. Implementations are
+/// an explicit unsafe trust boundary. A false implementation can authorize
+/// dispatch of native code under the wrong Rust signature or safety contract.
 #[doc(hidden)]
 pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
     /// Versioned host ABI and memory-effect profile expected by generated code.
@@ -389,12 +385,10 @@ pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
     /// Full backend-validated identity used by private host linker symbols.
     const KERNEL_BINDING_ID_V1: [u8; 32];
 
-    /// Obtains semantic authority for this exact expectation.
+    /// Obtains the legacy qualification witness for this exact expectation.
     ///
-    /// Embedded-artifact V2 contracts already carry a stronger backend trust
-    /// boundary and use this default. General typed V3 expectations fail closed
-    /// until their generated implementation overrides this method and validates
-    /// the backend-issued witness.
+    /// Production Worker V3 does not call this method. Qualification-only
+    /// Worker V2 paths retain it until those legacy tests are retired.
     fn semantic_witness_v1()
     -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
     {

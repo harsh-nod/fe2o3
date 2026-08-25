@@ -32,22 +32,21 @@ use fe2o3_host::{
         generated_shared_f32_argument_pair_fixture_v1,
     },
     CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-    CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-    GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1,
-    GeneratedWorkerV3PrepareErrorV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
-    HsaDispatchObservationV1, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    CompilerGeneratedKernelProfileV1, CompilerGeneratedWorkerV3ArgumentsV1,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
+    GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
+    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
+    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
     HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
     HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
     HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
     ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
-    ValidatedCompilerGeneratedSemanticWitnessV1, WorkerV3AuditorV1,
-    WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuditErrorV1,
-    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
-    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
-    admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
-    semantic_witness_from_backend_v1,
+    WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3VerificationAuditErrorV1, WorkerV3VerificationAuthenticationErrorV1,
+    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
+    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
+    audit_recovered_worker_v3_verification_v1,
 };
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
@@ -63,11 +62,6 @@ use fe2o3_worker_v3_authority::{
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
     ProductionScalarGemmWorkerV3RequestAuditorV1, ProductionScalarGemmWorkerV3VerifierErrorV1,
     ProductionScalarGemmWorkerV3VerifierV1,
-};
-use reserved_fe2o3_symbols::{
-    GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
-    GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
-    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -107,39 +101,12 @@ use scalar_gemm_marker_fixture::scalar_gemm_v1_gpu;
 #[path = "../../fe2o3-hsaco-finalize/tests/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
 
-const TEST_MARKER_BINDING: [u8; 32] = [0xb1; 32];
+const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
 const SCALAR_GEMM_MARKER_BINDING: [u8; 32] = [
     0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46, 0x0c, 0x3e,
     0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
 ];
-
-#[unsafe(export_name = "__fe2o3_semantic_witness_v1_789adedfdc3be1fb60518dd2c7460c3ef8e6b900527d1bcb2289baa1e014693e_ptr")]
-extern "C" fn scalar_gemm_semantic_witness_pointer_v1() -> *const u8 {
-    scalar_gemm_semantic_witness_v1().as_ptr()
-}
-
-#[unsafe(export_name = "__fe2o3_semantic_witness_v1_789adedfdc3be1fb60518dd2c7460c3ef8e6b900527d1bcb2289baa1e014693e_len")]
-extern "C" fn scalar_gemm_semantic_witness_length_v1() -> usize {
-    scalar_gemm_semantic_witness_v1().len()
-}
-
-fn scalar_gemm_semantic_witness_v1() -> &'static [u8] {
-    static WITNESS: OnceLock<Vec<u8>> = OnceLock::new();
-    WITNESS.get_or_init(|| {
-        assert_eq!(
-            scalar_gemm_v1_gpu::Marker::KERNEL_BINDING_ID_V1,
-            SCALAR_GEMM_MARKER_BINDING
-        );
-        let generated_host_contract_identity = match scalar_gemm_v1_gpu::Marker::PROFILE {
-            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                generated_host_contract_identity,
-            } => generated_host_contract_identity,
-            _ => panic!("Scalar GEMM marker no longer uses the general typed V3 profile"),
-        };
-        encode_semantic_witness_v1(SCALAR_GEMM_MARKER_BINDING, generated_host_contract_identity)
-    })
-}
 
 fn static_host_consumer_application_fixture() -> &'static Path {
     static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
@@ -194,25 +161,6 @@ fn lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn encode_semantic_witness_v1(
-    marker_binding: [u8; 32],
-    generated_host_contract: [u8; 32],
-) -> Vec<u8> {
-    let profile = TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3.as_bytes();
-    let length = GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1 + profile.len();
-    let mut bytes = Vec::with_capacity(length);
-    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1.to_le_bytes());
-    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1.to_le_bytes());
-    bytes.extend_from_slice(&GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1.to_le_bytes());
-    bytes.extend_from_slice(&(length as u32).to_le_bytes());
-    bytes.extend_from_slice(&marker_binding);
-    bytes.extend_from_slice(&generated_host_contract);
-    bytes.extend_from_slice(&(profile.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(profile);
-    assert_eq!(bytes.len(), length);
-    bytes
-}
-
 struct WorkerV3VecAddMarker;
 
 fn worker_v3_marker_function() {}
@@ -233,23 +181,6 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
             generated_host_contract_identity: TEST_HOST_CONTRACT,
         };
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
-
-    fn semantic_witness_v1()
-    -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
-    {
-        static WITNESS: OnceLock<Vec<u8>> = OnceLock::new();
-        let bytes = WITNESS
-            .get_or_init(|| encode_semantic_witness_v1(TEST_MARKER_BINDING, TEST_HOST_CONTRACT));
-        // SAFETY: `OnceLock` retains these immutable initialized bytes for the process lifetime.
-        unsafe {
-            semantic_witness_from_backend_v1(
-                bytes.as_ptr(),
-                bytes.len(),
-                TEST_MARKER_BINDING,
-                TEST_HOST_CONTRACT,
-            )
-        }
-    }
 }
 
 struct WorkerV3SubstitutedScalarMarker;
@@ -270,23 +201,6 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SubstitutedScalarMa
             generated_host_contract_identity: TEST_HOST_CONTRACT,
         };
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
-
-    fn semantic_witness_v1()
-    -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
-    {
-        static WITNESS: OnceLock<Vec<u8>> = OnceLock::new();
-        let bytes = WITNESS
-            .get_or_init(|| encode_semantic_witness_v1(TEST_MARKER_BINDING, TEST_HOST_CONTRACT));
-        // SAFETY: `OnceLock` retains these immutable initialized bytes for the process lifetime.
-        unsafe {
-            semantic_witness_from_backend_v1(
-                bytes.as_ptr(),
-                bytes.len(),
-                TEST_MARKER_BINDING,
-                TEST_HOST_CONTRACT,
-            )
-        }
-    }
 }
 
 struct WorkerV3VecAddArguments<'allocation> {
@@ -1245,7 +1159,7 @@ fn production_scalar_request_auditor_rejects_a_different_generated_kernel_profil
 }
 
 #[test]
-fn production_scalar_request_auditor_rejects_substituted_descriptor_identity() {
+fn worker_v3_gate_rejects_substituted_descriptor_identity_before_audit() {
     let fixture =
         worker_v3_fixture::published_scalar_gemm_worker_v3_fixture_with_substituted_descriptor_binding();
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
@@ -1264,15 +1178,13 @@ fn production_scalar_request_auditor_rejects_substituted_descriptor_identity() {
             &admitted,
             &mut auditor,
         ),
-        Err(WorkerV3VerificationAuditErrorV1::Auditor(
-            ProductionScalarGemmWorkerV3VerifierErrorV1::ScalarDescriptor(_)
-        ))
+        Err(WorkerV3VerificationAuditErrorV1::Marker("binding identity"))
     ));
     admitted.revalidate_currentness().unwrap();
 }
 
 #[test]
-fn production_scalar_request_auditor_rejects_substituted_marker_binding() {
+fn worker_v3_gate_rejects_substituted_marker_binding_before_audit() {
     let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
@@ -1290,9 +1202,7 @@ fn production_scalar_request_auditor_rejects_substituted_marker_binding() {
             &admitted,
             &mut auditor,
         ),
-        Err(WorkerV3VerificationAuditErrorV1::Auditor(
-            ProductionScalarGemmWorkerV3VerifierErrorV1::MarkerDescriptorBindingMismatch
-        ))
+        Err(WorkerV3VerificationAuditErrorV1::Marker("binding identity"))
     ));
     admitted.revalidate_currentness().unwrap();
 }
