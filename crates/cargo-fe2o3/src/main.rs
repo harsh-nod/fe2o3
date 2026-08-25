@@ -509,8 +509,7 @@ fn cargo_with_backend_result(
             == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
         || build_config
             .as_ref()
-            .and_then(build_config::PreparedBuildConfig::source_debug_profile)
-            .is_some();
+            .is_some_and(build_config::PreparedBuildConfig::requires_source_debug_profile);
     if requires_authorized_closure {
         require_protected_authority_launch(protected_release)?;
         reject_authority_environment_overrides(args)?;
@@ -1043,8 +1042,7 @@ fn run_cargo_with_backend_inner(
     let capability_profile = if context
         ._build_config
         .as_ref()
-        .and_then(build_config::PreparedBuildConfig::source_debug_profile)
-        .is_some()
+        .is_some_and(build_config::PreparedBuildConfig::requires_source_debug_profile)
     {
         capability_broker::CapabilityProfileV1::S09
     } else {
