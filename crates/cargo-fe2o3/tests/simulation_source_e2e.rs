@@ -36,6 +36,52 @@ fn workspace() -> PathBuf {
         .expect("canonical workspace")
 }
 
+#[test]
+fn source_fixture_leaves_the_namespace_to_the_managed_wrapper() {
+    let source = fs::read_to_string(
+        workspace().join("crates/cargo-fe2o3/tests/fixtures/simulation-source-fill/src/lib.rs"),
+    )
+    .expect("read simulation source fixture");
+    let syntax = syn::parse_file(&source).expect("parse simulation source fixture");
+    let kernel_attributes = syntax
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function) => Some(&function.attrs),
+            _ => None,
+        })
+        .flatten()
+        .filter(|attribute| attribute.path().is_ident("kernel"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kernel_attributes.len(),
+        1,
+        "simulation source fixture must contain exactly one kernel"
+    );
+    let arguments = kernel_attributes[0]
+        .meta
+        .require_list()
+        .expect("kernel attribute arguments");
+    let top_level_arguments = arguments
+        .tokens
+        .clone()
+        .into_iter()
+        .map(|token| token.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        top_level_arguments
+            .iter()
+            .any(|argument| argument == "typed"),
+        "simulation source fixture must retain the typed kernel contract"
+    );
+    assert!(
+        !top_level_arguments
+            .iter()
+            .any(|argument| argument == "namespace"),
+        "simulation source fixture must use the managed wrapper-derived namespace"
+    );
+}
+
 fn run_simulation(
     workspace: &Path,
     backend: &Path,

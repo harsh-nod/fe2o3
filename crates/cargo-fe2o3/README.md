@@ -127,7 +127,7 @@ snapshot. Unrelated host outputs remain available for normal Cargo reuse.
 
 `cargo fe2o3 simulate` runs the ordinary Cargo/source frontend through the
 generic verified MIR-to-KIR lowering and then executes the exact canonical KIR
-V6 bytes with the bounded CPU simulator:
+V7 bytes with the bounded CPU simulator:
 
 ```console
 cargo fe2o3 simulate \
