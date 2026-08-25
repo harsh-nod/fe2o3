@@ -1,7 +1,6 @@
-use crate::{
-    AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1, KernelId,
-    argument_alias::GeneratedArgumentBorrowV1,
-};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::{AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1};
+use crate::{KernelId, argument_alias::GeneratedArgumentBorrowV1};
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
     MAX_ABI_BYTES, Mutability, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
@@ -898,6 +897,7 @@ fn validate_generated_field_v1(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
     /// Validates compiler-generated packing metadata against this artifact's
     /// authenticated manifest ABI.
@@ -1734,6 +1734,7 @@ fn validate_field_order(fields: &[AbiField]) -> Result<(), GeneratedArgumentLayo
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn validate_argument_packing(
     kernel_id: KernelId,
     manifest: &AbiLayout,
@@ -2077,6 +2078,7 @@ const fn descriptor_scalar_to_rust_layout(value: ScalarTypeV1) -> RustScalarElem
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn first_field_mismatch(
     generated: &AbiField,
     manifest: &AbiField,

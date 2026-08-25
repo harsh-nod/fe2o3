@@ -3,24 +3,33 @@ use crate::{
     LoadedKernel, ObservedContext, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
 };
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_artifacts::{
-    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, ArtifactContainerV1,
-    BlockSize, Capability, CodeObjectIdentity, ContainerDecodeError, DeclaredRustLayoutIdentity,
-    DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Endianness, HostLaunchAbi,
-    HostLaunchAbiError, KernelSelectionError, LaunchContract, Mutability, Name, PayloadDigest,
-    PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
-    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
-    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, SelectedNativeKernel,
-    TargetIdentity, TypeIdentity, derive_generated_host_contract_identity_v1,
+    AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, ArtifactContainerV1,
+    ContainerDecodeError, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm,
+    KernelSelectionError, Mutability, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
+    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
+    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
+    ScalarType, TypeIdentity, derive_generated_host_contract_identity_v1,
     derive_generated_kernel_identity_v2,
 };
-use fe2o3_device::{DisjointSlice, Index1D, KernelMarkerV1};
+use fe2o3_artifacts::{
+    AbiLayout, BlockSize, Capability, CodeObjectIdentity, DigestBytes, Endianness, HostLaunchAbi,
+    HostLaunchAbiError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
+    TargetIdentity,
+};
+use fe2o3_device::KernelMarkerV1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_device::{DisjointSlice, Index1D};
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
 use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1,
-    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+    MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use reserved_fe2o3_symbols::{
+    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -30,7 +39,9 @@ const AMDGPU_TRIPLE: &str = "amdgcn-amd-amdhsa";
 /// Version of the exact artifact identity carried by the G3 host bridge.
 pub const ARTIFACT_KERNEL_IDENTITY_VERSION: u16 = 1;
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const TYPE_ID_DOMAIN: &[u8] = b"fe2o3.rust-type.v1\0";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const LAYOUT_ID_DOMAIN: &[u8] = b"fe2o3.rust-layout.v1\0";
 /// Exact, owned identity of one validated native-kernel selection.
 ///
@@ -564,6 +575,7 @@ fn parse_general_typed_v3_semantic_witness_v1(
 /// they are absent or that their complete semantics satisfy these obligations.
 /// A false implementation can make safe code load arbitrary native code.
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
     /// Versioned host ABI and memory-effect profile expected by generated code.
     const PROFILE: CompilerGeneratedKernelProfileV1;
@@ -579,6 +591,7 @@ pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
 // obligations and additionally authenticates exact embedded artifact bytes.
 // Forwarding those constants preserves the existing generated API while
 // allowing shared-bundle consumers to require only the narrower expectation.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 unsafe impl<K: CompilerGeneratedKernelContractV1> CompilerGeneratedKernelExpectationV1 for K {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
         <K as CompilerGeneratedKernelContractV1>::PROFILE;
@@ -615,11 +628,13 @@ pub enum CompilerGeneratedKernelProfileV1 {
 /// Fields are private so callers cannot replace the validated selection or its
 /// marker binding. Construct this token with [`Self::authenticate`].
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct AuthenticatedKernelArtifactV1<K: CompilerGeneratedKernelContractV1> {
     validated: ValidatedArtifactSelectionV1,
     binding: GeneratedKernelBindingV1<K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: CompilerGeneratedKernelContractV1> fmt::Debug for AuthenticatedKernelArtifactV1<K> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -629,6 +644,7 @@ impl<K: CompilerGeneratedKernelContractV1> fmt::Debug for AuthenticatedKernelArt
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
     /// Authenticates the exact artifact bytes embedded for `K` against one
     /// observed context.
@@ -703,6 +719,7 @@ impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
 /// Failure while authenticating a trusted backend's embedded artifact bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub enum GeneratedArtifactAuthenticationError {
     Decode(ContainerDecodeError),
     MatchingKernelNotFound,
@@ -713,6 +730,7 @@ pub enum GeneratedArtifactAuthenticationError {
     Marker(GeneratedMarkerBindingError),
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl fmt::Display for GeneratedArtifactAuthenticationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -730,6 +748,7 @@ impl fmt::Display for GeneratedArtifactAuthenticationError {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl std::error::Error for GeneratedArtifactAuthenticationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -775,6 +794,7 @@ impl fmt::Display for GeneratedKernelProfileError {
 
 impl std::error::Error for GeneratedKernelProfileError {}
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn validate_generated_profile(
     profile: CompilerGeneratedKernelProfileV1,
     kernel_binding: [u8; 32],
@@ -867,6 +887,7 @@ pub(crate) fn validate_generated_profile(
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_manifest_derived_scalar_slice_abi(
     abi: &AbiLayout,
 ) -> Result<(), GeneratedKernelProfileError> {
@@ -926,6 +947,7 @@ fn validate_manifest_derived_scalar_slice_abi(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const fn scalar_size_alignment(scalar: ScalarType) -> (u64, u32) {
     match scalar {
         ScalarType::I8 | ScalarType::U8 => (1, 1),
@@ -935,6 +957,7 @@ const fn scalar_size_alignment(scalar: ScalarType) -> (u64, u32) {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_typed_vecadd_rustc_layout_abi(
     abi: &AbiLayout,
 ) -> Result<(), GeneratedKernelProfileError> {
@@ -942,6 +965,7 @@ fn validate_typed_vecadd_rustc_layout_abi(
     validate_typed_vecadd_abi_with_identities(abi, type_identities)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfileError> {
     if abi.size() != 48
         || abi.alignment() != 8
@@ -962,6 +986,7 @@ fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfi
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_typed_vecadd_abi_with_identities(
     abi: &AbiLayout,
     type_identities: [TypeIdentity; 3],
@@ -1025,6 +1050,7 @@ fn validate_typed_vecadd_abi_with_identities(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn host_typed_vecadd_type_identities()
 -> Result<[TypeIdentity; 3], GeneratedKernelProfileError> {
     let pointer_size = u64::try_from(core::mem::size_of::<*const f32>())
@@ -1107,6 +1133,7 @@ pub(crate) fn host_typed_vecadd_type_identities()
     Ok([shared, shared, output])
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn rust_layout_component(
     offset: u64,
     size: u64,
@@ -1117,6 +1144,7 @@ fn rust_layout_component(
         .map_err(|_| GeneratedKernelProfileError::AbiMismatch)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn generated_type_identity(rust_type: &str, layout: &str) -> TypeIdentity {
     TypeIdentity::new(
         DeclaredRustTypeIdentity::from_untrusted_bytes(generated_profile_digest(
@@ -1130,6 +1158,7 @@ fn generated_type_identity(rust_type: &str, layout: &str) -> TypeIdentity {
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn generated_profile_digest(domain: &[u8], field: &[u8]) -> DigestBytes {
     let mut canonical = Vec::with_capacity(domain.len() + 8 + field.len());
     canonical.extend_from_slice(domain);

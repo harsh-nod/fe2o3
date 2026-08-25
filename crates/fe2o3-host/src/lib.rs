@@ -17,6 +17,7 @@ mod generated_moe_expert_v2;
 mod generated_moe_top2_v1;
 mod generated_row_softmax_v1;
 mod generated_scalar_gemm_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_vecadd;
 mod generated_wave64_collectives_v1;
 mod generated_wave64_collectives_v1_lifecycle;
@@ -170,13 +171,17 @@ pub use artifact_binding::{
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use artifact_binding::{
     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
+};
+#[doc(hidden)]
+pub use artifact_binding::{
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedSemanticWitnessErrorV1, GeneratedArtifactAuthenticationError,
-    GeneratedKernelBindingV1, GeneratedKernelProfileError, GeneratedMarkerBindingError,
-    ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-    validate_compiler_generated_semantic_witness_v1,
+    CompilerGeneratedSemanticWitnessErrorV1, GeneratedKernelProfileError,
+    GeneratedMarkerBindingError, ValidatedCompilerGeneratedSemanticWitnessV1,
+    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
 pub use cooperative_launch::{
     CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
@@ -255,6 +260,7 @@ pub use generated_scalar_gemm_v1::{
     GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_vecadd::{
     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
     GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
@@ -454,23 +460,27 @@ pub mod __generated {
         ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
         ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
     };
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub use crate::{
-        AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
-        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelExpectationV1,
+        AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedVecAddKernelV1,
+        GeneratedVecAddLoadError, GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1,
+        GeneratedVecAddProfileError,
+    };
+    pub use crate::{
+        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
         CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
         GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
-        GeneratedArtifactAuthenticationError, GeneratedDeviceScalarV1, GeneratedKernelBindingV1,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
         GeneratedKernelProfileError, GeneratedLdsGemmSlice1HostAdapterErrorV1,
         GeneratedLdsGemmSlice1HostAdapterV1, GeneratedMarkerBindingError,
         GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
         GeneratedReadWriteDeviceSlice, GeneratedScalarGemmV1ReadDeviceSlice,
         GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
-        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV3ArgumentBindingV1,
-        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
-        GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
+        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
+        GeneratedWriteDeviceSlice, LoadedKernelLoadError,
         ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
         validate_compiler_generated_semantic_witness_v1,
     };
@@ -490,6 +500,7 @@ pub mod __generated {
     /// `length` must not exceed `isize::MAX`, and the range must not wrap the
     /// address space. Only compiler-generated unsafe trait implementations may
     /// call this function with values returned by the trusted backend object.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub unsafe fn artifact_bytes_from_backend_v1(
         pointer: *const u8,
         length: usize,

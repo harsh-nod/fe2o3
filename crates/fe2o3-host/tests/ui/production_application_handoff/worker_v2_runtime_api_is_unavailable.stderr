@@ -1,14 +1,20 @@
-error[E0432]: unresolved imports `fe2o3_host::AdmittedFinalizedWorkerV2BundleV1`, `fe2o3_host::AuthenticatedWorkerV2ExecutableV1`, `fe2o3_host::CurrentRecoveredLaunchKernelMetadataV2`, `fe2o3_host::RecoveredWorkerV2PinnedDescriptorV1`
+error[E0432]: unresolved imports `fe2o3_host::AdmittedFinalizedWorkerV2BundleV1`, `fe2o3_host::AuthenticatedWorkerV2ExecutableV1`, `fe2o3_host::AuthenticatedKernelArtifactV1`, `fe2o3_host::CompilerGeneratedKernelContractV1`, `fe2o3_host::CurrentRecoveredLaunchKernelMetadataV2`, `fe2o3_host::GeneratedVecAddKernelV1`, `fe2o3_host::RecoveredWorkerV2PinnedDescriptorV1`
  --> tests/ui/production_application_handoff/worker_v2_runtime_api_is_unavailable.rs:2:5
   |
 2 |     AdmittedFinalizedWorkerV2BundleV1, AuthenticatedWorkerV2ExecutableV1,
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `AuthenticatedWorkerV2ExecutableV1` in the root
   |     |
   |     no `AdmittedFinalizedWorkerV2BundleV1` in the root
-3 |     CurrentRecoveredLaunchKernelMetadataV2, RecoveredWorkerV2PinnedDescriptorV1,
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `RecoveredWorkerV2PinnedDescriptorV1` in the root
+3 |     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `CompilerGeneratedKernelContractV1` in the root
+  |     |
+  |     no `AuthenticatedKernelArtifactV1` in the root
+4 |     CurrentRecoveredLaunchKernelMetadataV2, GeneratedVecAddKernelV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^ no `GeneratedVecAddKernelV1` in the root
   |     |
   |     no `CurrentRecoveredLaunchKernelMetadataV2` in the root
+5 |     RecoveredWorkerV2PinnedDescriptorV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `RecoveredWorkerV2PinnedDescriptorV1` in the root
   |
 note: found an item that was configured out
  --> src/lib.rs
@@ -31,9 +37,33 @@ note: found an item that was configured out
   |
   | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
   |          --------------------------------------------------- the item is gated here
+  | pub use artifact_binding::{
+  |     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use artifact_binding::{
+  |     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+  |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
   | pub use launch_kernel_v2_bridge::{
   |     CurrentRecoveredLaunchKernelMetadataV2, Gfx942DynamicLdsProjectionV2, Gfx942ImplicitAbiKindV2,
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use generated_vecadd::{
+  |     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
 note: found an item that was configured out
  --> src/lib.rs
   |
@@ -49,6 +79,11 @@ help: a similar name exists in the module
   |
 help: a similar name exists in the module
   |
-3 -     CurrentRecoveredLaunchKernelMetadataV2, RecoveredWorkerV2PinnedDescriptorV1,
-3 +     CurrentRecoveredLaunchKernelMetadataV2, RecoveredWorkerV3PinnedDescriptorV1,
+3 -     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
+3 +     AuthenticatedKernelArtifactV1, CompilerGeneratedKernelProfileV1,
+  |
+help: a similar name exists in the module
+  |
+5 -     RecoveredWorkerV2PinnedDescriptorV1,
+5 +     RecoveredWorkerV3PinnedDescriptorV1,
   |

@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 #[test]
 fn authenticated_generated_artifacts_require_unsafe_issuance_and_remain_sealed() {
     let tests = trybuild::TestCases::new();
