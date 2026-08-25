@@ -986,11 +986,20 @@ fn expand_kernel_with_imports(
     host_import: Option<&proc_macro2::TokenStream>,
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    if options.mode == KernelMode::Typed
-        && let Err(exact_error) = validate_typed_kernel_signature(&input)
-    {
-        if validate_general_typed_signature_shape_v1(&input, &options).is_err() {
-            return Err(exact_error);
+    if options.mode == KernelMode::Typed {
+        let exact_vecadd = validate_typed_kernel_signature(&input);
+        if options.qualification_worker_v2 && exact_vecadd.is_ok() {
+            return expand_legacy_kernel_with_imports(
+                input,
+                options,
+                device_import,
+                device_path,
+                host_import,
+                crate_binding,
+            );
+        }
+        if let Err(general_error) = validate_general_typed_signature_shape_v1(&input, &options) {
+            return Err(exact_vecadd.err().unwrap_or(general_error));
         }
         return expand_general_typed_kernel_with_imports(
             input,
@@ -5470,7 +5479,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_kernel_emits_guarded_embedded_artifact_contract() {
+    fn qualification_vecadd_emits_guarded_embedded_artifact_contract() {
         let input = parse_quote! {
             pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
                 let _ = (a, b, &mut c);
@@ -5490,7 +5499,7 @@ mod tests {
             input,
             KernelOptions {
                 mode: KernelMode::Typed,
-                qualification_worker_v2: false,
+                qualification_worker_v2: true,
                 explicit_namespace: None,
                 reference: Some("crate :: cpu_reference".to_owned()),
                 launch: None,
@@ -5621,10 +5630,9 @@ mod tests {
         .unwrap()
         .to_string();
         assert!(vecadd.contains("static __fe2o3_kernel_registration_vecadd"));
-        assert!(vecadd.contains("2u16 , 3u16"));
-        assert!(vecadd.contains("CrossCrateTypedKernelV1"));
+        assert!(vecadd.contains("3u16 , 4u16"));
+        assert!(vecadd.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
         assert!(vecadd.contains("unsafe impl :: gpu_device :: KernelMarkerV1"));
-        assert!(vecadd.contains("unsafe impl :: gpu_device :: CrossCrateTypedKernelV1"));
         assert!(!vecadd.contains("extern crate gpu_device as __fe2o3_kernel_device"));
         assert!(vecadd.contains("fn __fe2o3_host_kernel_v1_"));
         assert!(!vecadd.contains("pub mod vecadd_gpu"));
@@ -5633,20 +5641,31 @@ mod tests {
     }
 
     #[test]
-    fn exact_vecadd_dispatch_preserves_the_legacy_v2_token_stream() {
+    fn exact_vecadd_uses_v3_unless_the_v2_qualification_oracle_is_explicit() {
         let input: ItemFn = parse_quote! {
             pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
                 let _ = (a, b, &mut c);
             }
         };
-        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let production_options = parse_kernel_options(quote!(typed)).unwrap();
+        let qualification_options =
+            parse_kernel_options(quote!(typed, qualification_worker_v2)).unwrap();
         let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
         let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
         let crate_binding = derive_crate_binding_id_v1("fixture", ["legacy-token-golden"]);
 
+        let production = expand_kernel_with_imports(
+            input.clone(),
+            production_options,
+            &device_import,
+            None,
+            Some(&host_import),
+            Some(crate_binding),
+        )
+        .unwrap();
         let selected = expand_kernel_with_imports(
             input.clone(),
-            options.clone(),
+            qualification_options.clone(),
             &device_import,
             None,
             Some(&host_import),
@@ -5655,7 +5674,7 @@ mod tests {
         .unwrap();
         let legacy = expand_legacy_kernel_with_imports(
             input,
-            options,
+            qualification_options,
             &device_import,
             None,
             Some(&host_import),
@@ -5664,6 +5683,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.to_string(), legacy.to_string());
+        let production = production.to_string();
+        assert!(production.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(production.contains("prepare_worker_v3"));
+        assert!(production.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
+        assert!(!production.contains("CompilerGeneratedKernelContractV1"));
+        assert!(!production.contains("artifact_container_bytes"));
+        assert!(!production.contains("pub type Kernel"));
+        assert!(!production.contains("pub type Prepared"));
+
         let file: syn::File = syn::parse2(selected.clone()).unwrap();
         let registration = file
             .items

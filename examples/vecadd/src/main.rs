@@ -1,3 +1,4 @@
+#[cfg(feature = "qualification-embedded-vecadd-test-only")]
 use fe2o3_core::{DeviceBuffer, Event, GpuContext};
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
@@ -7,14 +8,35 @@ macro_rules! production_f32_add {
     ($lhs:expr, $rhs:expr) => {{ $lhs + $rhs }};
 }
 
-#[kernel(
-    typed,
-    namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+#[cfg_attr(
+    not(feature = "qualification-embedded-vecadd-test-only"),
+    kernel(
+        typed,
+        namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+    )
+)]
+#[cfg_attr(
+    feature = "qualification-embedded-vecadd-test-only",
+    kernel(
+        typed,
+        qualification_worker_v2,
+        namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+    )
 )]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     vecadd_kernel_body!(thread, (), production_f32_add, a, b, c);
 }
 
+#[cfg(not(feature = "qualification-embedded-vecadd-test-only"))]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "the production Worker V3 application verifier is not wired for fe2o3-vecadd",
+    )
+    .into())
+}
+
+#[cfg(feature = "qualification-embedded-vecadd-test-only")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     const DEFAULT_N: usize = 1024;
 
@@ -105,21 +127,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(feature = "qualification-embedded-vecadd-test-only")]
 fn percentile(sorted: &[f32], percentile: usize) -> f32 {
     sorted[(sorted.len() - 1) * percentile / 100]
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "qualification-embedded-vecadd-test-only")]
     use std::sync::Arc;
 
-    use fe2o3_core::{DeviceBuffer, GpuContext, Stream};
+    use fe2o3_core::DeviceBuffer;
+    #[cfg(feature = "qualification-embedded-vecadd-test-only")]
+    use fe2o3_core::{GpuContext, Stream};
 
     const KERNEL_SOURCE: &str = include_str!("main.rs");
     const SHARED_BODY: &str = include_str!("vecadd_body.rs");
 
+    #[cfg(not(feature = "qualification-embedded-vecadd-test-only"))]
     #[allow(dead_code)]
-    fn generated_public_api_typechecks<'loaded, 'allocation>(
+    fn generated_v3_arguments_typecheck<'allocation>(
+        observed: &fe2o3_host::ObservedContext,
+        a: &'allocation DeviceBuffer<f32>,
+        b: &'allocation DeviceBuffer<f32>,
+        c: &'allocation mut DeviceBuffer<f32>,
+    ) {
+        let a = fe2o3_host::__generated::GeneratedReadDeviceSlice::new(observed, a).unwrap();
+        let b = fe2o3_host::__generated::GeneratedReadDeviceSlice::new(observed, b).unwrap();
+        let c = fe2o3_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, c).unwrap();
+        let _arguments: super::vecadd_gpu::Arguments<'allocation> =
+            super::vecadd_gpu::Arguments::new(a, b, c);
+    }
+
+    #[cfg(feature = "qualification-embedded-vecadd-test-only")]
+    #[allow(dead_code)]
+    fn qualification_embedded_api_typechecks<'loaded, 'allocation>(
         context: &Arc<GpuContext>,
         kernel: &'loaded super::vecadd_gpu::Kernel,
         a: &'allocation DeviceBuffer<f32>,
@@ -145,16 +187,17 @@ mod tests {
     }
 
     #[test]
-    fn example_uses_only_the_generated_typed_launch_api() {
+    fn example_separates_production_v3_from_the_embedded_qualification_oracle() {
         let production_source = KERNEL_SOURCE
             .split("#[cfg(test)]")
             .next()
             .expect("example has production source");
 
         for required in [
-            "#[kernel(",
-            "typed,",
-            "namespace =",
+            "not(feature = \"qualification-embedded-vecadd-test-only\")",
+            "feature = \"qualification-embedded-vecadd-test-only\"",
+            "qualification_worker_v2",
+            "production Worker V3 application verifier",
             "vecadd_gpu::Kernel::load(&context)",
             ".prepare(&a_dev, &b_dev, &mut c_dev)",
             ".launch(&stream)",
@@ -168,7 +211,7 @@ mod tests {
             "load_module_from_file",
             "launch!",
             "LaunchConfig",
-            "unsafe",
+            "FE2O3_CODEGEN_PIPELINE",
         ] {
             assert!(
                 !production_source.contains(forbidden),

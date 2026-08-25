@@ -40,14 +40,7 @@ pub fn renamed_result(
     Ok(())
 }
 
-fn assert_contract<T: gpu_host::__generated::CompilerGeneratedKernelContractV1>() {}
 fn assert_expectation<T: gpu_host::__generated::CompilerGeneratedKernelExpectationV1>() {}
-
-fn assert_safe_aliases(
-    _kernel: Option<renamed_typed_gpu::Kernel>,
-    _prepared: Option<renamed_typed_gpu::Prepared<'static, 'static>>,
-) {
-}
 
 fn assert_general_arguments<'allocation>(
     observed: &gpu_host::__generated::ObservedContext,
@@ -59,6 +52,19 @@ fn assert_general_arguments<'allocation>(
         gpu_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, output).unwrap();
     let _arguments: renamed_general_gpu::Arguments<'allocation> =
         renamed_general_gpu::Arguments::new(2.0_f32, input, output);
+}
+
+fn assert_vecadd_arguments<'allocation>(
+    observed: &gpu_host::__generated::ObservedContext,
+    a: &'allocation gpu_host::__generated::DeviceBuffer<f32>,
+    b: &'allocation gpu_host::__generated::DeviceBuffer<f32>,
+    c: &'allocation mut gpu_host::__generated::DeviceBuffer<f32>,
+) {
+    let a = gpu_host::__generated::GeneratedReadDeviceSlice::new(observed, a).unwrap();
+    let b = gpu_host::__generated::GeneratedReadDeviceSlice::new(observed, b).unwrap();
+    let c = gpu_host::__generated::GeneratedReadWriteDeviceSlice::new(observed, c).unwrap();
+    let _arguments: renamed_typed_gpu::Arguments<'allocation> =
+        renamed_typed_gpu::Arguments::new(a, b, c);
 }
 
 fn assert_global_mut_argument<'allocation>(
@@ -75,24 +81,22 @@ fn assert_global_mut_argument<'allocation>(
 }
 
 fn main() {
-    assert_contract::<__fe2o3_kernel_marker_renamed_typed>();
+    assert_expectation::<renamed_typed_gpu::Marker>();
     assert_expectation::<renamed_general_gpu::Marker>();
     assert_expectation::<renamed_result_gpu::Marker>();
-    assert_safe_aliases(None, None);
+    let _ = assert_vecadd_arguments;
     let _ = assert_general_arguments;
     let _ = assert_global_mut_argument;
     assert_eq!(
-        <__fe2o3_kernel_marker_renamed_typed as gpu_host::__generated::CompilerGeneratedKernelContractV1>::PROFILE,
-        gpu_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2
-    );
-    assert_ne!(
-        <__fe2o3_kernel_marker_renamed_typed as gpu_host::__generated::CompilerGeneratedKernelContractV1>::KERNEL_BINDING_ID_V1,
-        [0; 32]
-    );
-    assert_eq!(
         <__fe2o3_kernel_marker_renamed_typed as gpu_device::KernelMarkerV1>::REGISTRATION.2,
-        2
+        4
     );
+    assert!(matches!(
+        <renamed_typed_gpu::Marker as gpu_host::__generated::CompilerGeneratedKernelExpectationV1>::PROFILE,
+        gpu_host::__generated::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+            generated_host_contract_identity
+        } if generated_host_contract_identity != [0; 32]
+    ));
     assert_eq!(
         <renamed_general_gpu::Marker as gpu_device::KernelMarkerV1>::REGISTRATION.1,
         3

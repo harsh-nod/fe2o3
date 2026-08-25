@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+qualification-embedded-vecadd-test-only = ["fe2o3-host/qualification-oracles-test-only"]
+
 [dependencies]
 fe2o3-core.workspace = true
 fe2o3-device.workspace = true
