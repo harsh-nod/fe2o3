@@ -107,6 +107,37 @@ fn exact_signed_receipt_imports_once_under_the_supplied_policy() {
 }
 
 #[test]
+fn mir_to_live_pliron_receipt_has_a_distinct_import_boundary() {
+    let signing = signer(89);
+    let toolchain = toolchain(10);
+    let policy = FunctionalRefinementImportPolicyV2::new(
+        signing.verifying_key().to_bytes(),
+        toolchain,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
+    )
+    .unwrap();
+    let wire = signed(
+        &signing,
+        policy.signer_identity(),
+        binding(),
+        toolchain,
+        FunctionalRefinementResultV2::Proved,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron,
+    );
+    let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+    let proof = importer
+        .import(
+            FunctionalRefinementImportExpectationV2::new(binding()),
+            &wire,
+        )
+        .unwrap();
+    assert_eq!(
+        proof.boundary(),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
+    );
+}
+
+#[test]
 fn caller_forged_proved_and_wrong_signer_are_rejected() {
     let signing = signer(91);
     let pinned = policy(&signing);

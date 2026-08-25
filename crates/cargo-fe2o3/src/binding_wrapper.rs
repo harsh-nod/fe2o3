@@ -4,12 +4,15 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::fs;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::fs::File;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use std::io::Read;
-use std::io::{Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::BorrowedFd;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use std::os::fd::{AsRawFd, IntoRawFd};
 use std::os::unix::fs::MetadataExt;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
@@ -64,9 +67,15 @@ use fe2o3_hsaco_finalize::{
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_descriptor::CodeObjectVersion;
+use fe2o3_process_identity::PinnedWorkingDirectoryV3;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_process_identity::{
-    LinuxObjectIdentityV3, ParentPreparedProcessConsistencyV3, PinnedWorkingDirectoryV3,
+    LinuxObjectIdentityV3, ParentPreparedProcessConsistencyV3,
     parent_prepared_process_consistency_digest_v3,
+};
+use fe2o3_runtime_protocol::{
+    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
+    recover_worker_v3_load_envelope_v1,
 };
 use fe2o3_rustc_invocation::{
     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcArgsErrorV2,
@@ -74,10 +83,6 @@ use fe2o3_rustc_invocation::{
     classify_rustc_invocation_v2, derive_cargo_metadata_build_observation_v2,
     is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
     ordered_rustc_codegen_metadata_v1,
-};
-use fe2o3_worker_v2_bundle::{
-    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
-    recover_worker_v3_load_envelope_v1,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_worker_v2_bundle::{WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2};
@@ -88,14 +93,14 @@ use sha2::{Digest, Sha256};
 
 use crate::build_config::{
     BuildCompileEnvironmentProfileV1, BuildConfigError, BuildConfigIdentity,
-    OBSOLETE_PRODUCTION_SELECTOR, PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV,
-    PreparedBuildConfig, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
-    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation, WorkerV2SourceDebugProfileV1,
-    production_compilation_selected,
+    PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV, PreparedProductionBuildConfig,
+    WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::build_config::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
+    OBSOLETE_PRODUCTION_SELECTOR, PreparedBuildConfig, WorkerV2BuildObservation,
+    WorkerV2SourceDebugProfileV1, production_compilation_selected,
 };
 use crate::capability_broker;
 use crate::inert_rustc_invocation_capture::{
@@ -174,6 +179,7 @@ const OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
 const MAX_BUILD_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const MAX_PROC_STAT_BYTES: usize = 4096;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const PROCESS_CONSISTENCY_EXPECTATION_FD_V3: std::os::fd::RawFd =
     fe2o3_process_identity::S09_PROCESS_CONSISTENCY_EXPECTATION_FD_V3;
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
@@ -232,6 +238,7 @@ pub(crate) enum BindingWrapperError {
     PreexistingCodegenBackend {
         argument_index: usize,
     },
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     AuthorityLinkerOverride {
         argument_index: usize,
     },
@@ -298,6 +305,7 @@ impl fmt::Display for BindingWrapperError {
                 formatter,
                 "managed rustc argv[{argument_index}] contains a preexisting codegen-backend selector"
             ),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::AuthorityLinkerOverride { argument_index } => write!(
                 formatter,
                 "authority rustc argv[{argument_index}] contains an unmanaged linker option"
@@ -373,9 +381,10 @@ impl Error for BindingWrapperError {
             | Self::ChildCapability(_)
             | Self::UninspectableRustcResponseFile { .. }
             | Self::PreexistingCodegenBackend { .. }
-            | Self::AuthorityLinkerOverride { .. }
             | Self::OptionTerminatorBeforeManagedArguments { .. }
             | Self::UnsupportedInvocation => None,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            Self::AuthorityLinkerOverride { .. } => None,
             Self::BuildObservation(_) => None,
         }
     }
@@ -432,18 +441,25 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             let metadata = ordered_rustc_codegen_metadata_v1(compile)?;
             let build_observation =
                 CompileBuildObservationV2::from_ordered_metadata(compile.crate_name(), &metadata)?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let build_config = PreparedBuildConfig::from_environment()
                 .map_err(BindingWrapperError::BuildConfiguration)?;
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            let build_config = PreparedProductionBuildConfig::from_environment()
+                .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(build_config.as_ref())?;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let capability_profile = if build_config
                 .as_ref()
-                .and_then(PreparedBuildConfig::source_debug_profile)
-                .is_some()
+                .is_some_and(PreparedBuildConfig::requires_source_debug_profile)
             {
                 capability_broker::CapabilityProfileV1::S09
             } else {
                 capability_broker::CapabilityProfileV1::Ordinary
             };
+            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            let capability_profile = capability_broker::CapabilityProfileV1::Ordinary;
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             if capability_profile == capability_broker::CapabilityProfileV1::S09
                 || std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
                     == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
@@ -500,8 +516,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         }
         _ => return Err(BindingWrapperError::UnsupportedInvocation),
     };
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let protected_kernel_root =
         managed_attempt.is_some() && selected_compilation_requires_protected_invocation();
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let protected_kernel_root = managed_attempt.is_some();
 
     if managed_attempt
         .as_ref()
@@ -541,12 +560,17 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else if protected_kernel_root {
                 capabilities.prepare_protected_command(command.as_command_mut())?;
             } else {
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 capabilities.prepare_qualification_command(
                     command.as_command_mut(),
                     qualification_requires_compiler_closure_observation(
                         std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref(),
                     ),
                 )?;
+                #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+                return Err(BindingWrapperError::BuildObservation(
+                    "production managed rustc invocation lost protected root admission".to_owned(),
+                ));
             }
         }
         configure_build_observation_environment(command.as_command_mut(), build_observation);
@@ -557,21 +581,24 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         } else {
             command.as_command_mut().env_remove(BUILD_ATTEMPT_ENV);
         }
-        match managed_attempt
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        if let Some(profile) = managed_attempt
             .as_ref()
             .and_then(ManagedAttempt::source_debug_profile)
         {
-            Some(profile) => {
-                command
-                    .as_command_mut()
-                    .env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
-            }
-            None => {
-                command
-                    .as_command_mut()
-                    .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
-            }
+            command
+                .as_command_mut()
+                .env(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, profile.env_value());
+        } else {
+            command
+                .as_command_mut()
+                .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
         }
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        command
+            .as_command_mut()
+            .env_remove(WORKER_V2_SOURCE_DEBUG_PROFILE_ENV);
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let mut worker_build_observation = match managed_attempt.as_ref() {
             Some(managed) if managed.source_debug_profile().is_some() => {
                 let pinned_cargo_image_sha256 = compiler_capabilities
@@ -604,10 +631,13 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 .env("PATH", "/usr/bin")
                 .env("TMPDIR", private_tmpdir);
         }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         configure_worker_build_observation_environment(
             command.as_command_mut(),
             worker_build_observation,
         );
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        clear_worker_build_observation_environment(command.as_command_mut());
         let complete_reviewed_environment = materialize_reviewed_child_environment(
             compile_environment_profile,
             command.as_command_mut(),
@@ -683,6 +713,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 Ok::<_, BindingWrapperError>(capability)
             })
             .transpose()?;
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let protected_source_tree_sha256 = if worker_build_observation.is_some() {
             let source = managed_attempt
                 .as_ref()
@@ -701,6 +732,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         } else {
             None
         };
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let mut prepared_consistency_expectation = if worker_build_observation.is_some() {
             Some(PreparedRustcConsistencyExpectation::attach(
                 command.as_command_mut(),
@@ -708,6 +740,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         } else {
             None
         };
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if let Some(observation) = worker_build_observation.as_mut() {
             observation.prepared_rustc_command_sha256 = prepared_rustc_command_sha256(
                 command.as_command(),
@@ -819,6 +852,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     Ok(status)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn selected_compilation_requires_protected_invocation() -> bool {
     qualification_selection_requires_protected_invocation(
         std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref(),
@@ -828,6 +862,7 @@ fn selected_compilation_requires_protected_invocation() -> bool {
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn qualification_selection_requires_protected_invocation(
     qualification_oracle: Option<&OsStr>,
     explicit_unprotected_qualification: bool,
@@ -838,6 +873,7 @@ fn qualification_selection_requires_protected_invocation(
             && !explicit_unprotected_qualification)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn qualification_requires_compiler_closure_observation(
     qualification_oracle: Option<&OsStr>,
 ) -> bool {
@@ -1069,6 +1105,7 @@ fn pin_parent_rustc_descriptor(
     Ok(pinned)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn configure_worker_build_observation_environment(
     command: &mut Command,
     observation: Option<WorkerV2BuildObservation<'_>>,
@@ -1111,16 +1148,20 @@ fn configure_worker_build_observation_environment(
             observation.observed_parent_start_time_ticks.to_string(),
         );
     } else {
-        command.env_remove(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2);
-        command.env_remove(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2);
-        command.env_remove(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2);
-        command.env_remove(OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2);
+        clear_worker_build_observation_environment(command);
     }
+}
+
+fn clear_worker_build_observation_environment(command: &mut Command) {
+    command.env_remove(WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2);
+    command.env_remove(WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
+    command.env_remove(WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2);
+    command.env_remove(LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2);
+    command.env_remove(CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
+    command.env_remove(DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_ENV_V2);
+    command.env_remove(PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2);
+    command.env_remove(OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2);
+    command.env_remove(OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2);
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1438,6 +1479,7 @@ fn materialize_reviewed_child_environment(
         Some(BuildCompileEnvironmentProfileV1::ProductionGfx942) => {
             materialize_closed_child_environment(command, inherited, None, "production").map(Some)
         }
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         Some(BuildCompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
             materialize_closed_child_environment(
                 command,
@@ -2168,6 +2210,7 @@ fn managed_reviewed_child_environment(name: &OsStr) -> bool {
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn prepared_rustc_command_sha256(
     command: &Command,
     configured_argv0: &OsStr,
@@ -2195,11 +2238,13 @@ fn prepared_rustc_command_sha256(
     })
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 struct PreparedRustcConsistencyExpectation {
     image: File,
     finalized: bool,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl PreparedRustcConsistencyExpectation {
     fn attach(command: &mut Command) -> Result<Self, BindingWrapperError> {
         let display = "S09 inert process-consistency expectation";
@@ -2420,6 +2465,7 @@ fn reject_uninspectable_rustc_args(argv: &[OsString]) -> Result<(), BindingWrapp
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn reject_authority_linker_arguments(argv: &[OsString]) -> Result<(), BindingWrapperError> {
     let mut index = 0;
     while index < argv.len() {
@@ -2473,6 +2519,7 @@ fn os_string(value: Vec<u8>) -> Result<OsString, ()> {
     String::from_utf8(value).map(OsString::from).map_err(|_| ())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_expected_build_config_identity(
     config: Option<&PreparedBuildConfig>,
 ) -> Result<(), BindingWrapperError> {
@@ -2536,6 +2583,50 @@ fn validate_expected_build_config_identity(
     Ok(())
 }
 
+#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+fn validate_expected_build_config_identity(
+    config: Option<&PreparedProductionBuildConfig>,
+) -> Result<(), BindingWrapperError> {
+    if std::env::var_os(WORKER_V2_EXPECTED_ID_ENV).is_some() {
+        return Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(format!(
+                "{WORKER_V2_EXPECTED_ID_ENV} is unavailable in a production cargo-fe2o3 build"
+            )),
+        ));
+    }
+    let expected = std::env::var_os(PRODUCTION_BUILD_EXPECTED_ID_ENV);
+    match (config, expected) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(
+                "production build configuration identity is present without a production build configuration"
+                    .to_owned(),
+            ),
+        )),
+        (Some(_), None) => Err(BindingWrapperError::BuildConfiguration(
+            BuildConfigError::Invalid(format!(
+                "production build configuration requires {PRODUCTION_BUILD_EXPECTED_ID_ENV}"
+            )),
+        )),
+        (Some(config), Some(expected)) => {
+            let expected = expected.to_str().ok_or_else(|| {
+                BindingWrapperError::BuildConfiguration(BuildConfigError::Invalid(format!(
+                    "{PRODUCTION_BUILD_EXPECTED_ID_ENV} must be lowercase hexadecimal"
+                )))
+            })?;
+            if config.identity().to_hex() != expected {
+                return Err(BindingWrapperError::BuildConfiguration(
+                    BuildConfigError::Invalid(
+                        "production build configuration inputs changed after Cargo generation preparation"
+                            .to_owned(),
+                    ),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 struct CompilerCapabilities {
     binding: capability_broker::CapabilityBindingV3,
     backend: PinnedCodegenBackend,
@@ -2543,6 +2634,7 @@ struct CompilerCapabilities {
     compiler_closure: Option<fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1>,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
     output_dir: PathBuf,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pinned_cargo_image_sha256: Option<[u8; 32]>,
 }
 
@@ -2603,6 +2695,7 @@ impl CompilerCapabilities {
             compiler_closure,
             invocation_authority,
             output_dir,
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             pinned_cargo_image_sha256,
         })
     }
@@ -2611,6 +2704,7 @@ impl CompilerCapabilities {
         &self.output_dir
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     const fn pinned_cargo_image_sha256(&self) -> Option<[u8; 32]> {
         self.pinned_cargo_image_sha256
     }
@@ -2705,6 +2799,7 @@ impl CompilerCapabilities {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn prepare_qualification_command(
         &self,
         command: &mut Command,
@@ -2805,6 +2900,7 @@ impl CompilerCapabilities {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn configure_qualification_route_marker(command: &mut Command, debug_build: bool) {
     if debug_build {
         command.env(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV, "1");
@@ -2870,6 +2966,7 @@ struct ManagedAttempt {
     output_dir: PathBuf,
     producer: ProducerIdentity,
     attempt: BuildAttempt,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     protected_source_path: Option<PathBuf>,
     compile_environment_profile: Option<BuildCompileEnvironmentProfileV1>,
     production_build: Option<ManagedProductionBuild>,
@@ -2942,6 +3039,7 @@ struct RowSoftmaxReleaseContext {
     workload: Option<AdmittedRowSoftmaxV1WorkloadV1>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const fn require_production_compiler_closure(
     compiler_closure: Option<CompilerClosureV2>,
     production: bool,
@@ -3029,7 +3127,7 @@ impl PreparedManagedWork {
 
 enum ManagedProductionBuild {
     Fresh {
-        config: Box<PreparedBuildConfig>,
+        config: Box<PreparedProductionBuildConfig>,
         compiler_closure: CompilerClosureV2,
     },
     Recovered {
@@ -3108,25 +3206,19 @@ impl ManagedAttempt {
         false
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        {
-            match &self.qualification_work {
-                Some(
-                    ManagedQualificationWork::InProcessGeneralGemm { config }
-                    | ManagedQualificationWork::FreshV1 { config, .. }
-                    | ManagedQualificationWork::FreshV2 { config, .. },
-                ) => config.source_debug_profile(),
-                Some(
-                    ManagedQualificationWork::RecoveryV1 { .. }
-                    | ManagedQualificationWork::RecoveryV2 { .. },
-                ) => None,
-                None => None,
-            }
-        }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        {
-            None
+        match &self.qualification_work {
+            Some(
+                ManagedQualificationWork::InProcessGeneralGemm { config }
+                | ManagedQualificationWork::FreshV1 { config, .. }
+                | ManagedQualificationWork::FreshV2 { config, .. },
+            ) => config.source_debug_profile(),
+            Some(
+                ManagedQualificationWork::RecoveryV1 { .. }
+                | ManagedQualificationWork::RecoveryV2 { .. },
+            ) => None,
+            None => None,
         }
     }
 
@@ -3165,17 +3257,16 @@ impl ManagedAttempt {
         }
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn protected_source_path(&self) -> Option<&Path> {
         self.protected_source_path.as_deref()
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn worker_build_observation(
         &self,
         pinned_cargo_image_sha256: [u8; 32],
     ) -> Result<Option<WorkerV2BuildObservation<'_>>, BindingWrapperError> {
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        let _ = pinned_cargo_image_sha256;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let config = match &self.qualification_work {
             Some(
                 ManagedQualificationWork::FreshV1 { config, .. }
@@ -3183,25 +3274,16 @@ impl ManagedAttempt {
             ) => config,
             _ => return Ok(None),
         };
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        return Ok(None);
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         if config.source_debug_profile().is_none() {
             return Ok(None);
         }
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let cargo_fe2o3_executable_sha256 =
             measure_build_executable("/proc/self/exe", "cargo-fe2o3 wrapper")?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let current_dir = std::env::current_dir().map_err(BindingWrapperError::CurrentDirectory)?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let declared_cargo_executable = resolve_declared_cargo_executable(&current_dir)?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let declared_cargo_executable_sha256 =
             measure_build_executable(&declared_cargo_executable, "declared CARGO executable")?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let observation = observe_pinned_cargo_image_and_parent(pinned_cargo_image_sha256)?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         Ok(Some(config.build_observation(
             [0; 32],
             cargo_fe2o3_executable_sha256,
@@ -3215,7 +3297,12 @@ impl ManagedAttempt {
 
 fn prepare_managed_attempt(
     compile: RustcCompileInvocationV2<'_>,
-    build_config: Option<PreparedBuildConfig>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))] build_config: Option<
+        PreparedBuildConfig,
+    >,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))] build_config: Option<
+        PreparedProductionBuildConfig,
+    >,
     current_dir: &std::path::Path,
     output_dir: &Path,
     managed_rustc_args: &[OsString],
@@ -3252,10 +3339,11 @@ fn prepare_managed_attempt(
     let compile_environment_profile = build_config.as_ref().and_then(|config| {
         config.compile_environment_profile(compile.crate_name(), compile.source_path(), current_dir)
     });
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let protected_source_path = build_config
         .as_ref()
-        .and_then(PreparedBuildConfig::source_debug_profile)
-        .map(|_| compile.source_path().to_path_buf());
+        .is_some_and(PreparedBuildConfig::requires_source_debug_profile)
+        .then(|| compile.source_path().to_path_buf());
     let session = managed_build_session()?;
     let producer =
         ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
@@ -3288,12 +3376,21 @@ fn prepare_managed_attempt(
         compiler_capabilities.compiler_closure_sha256(),
     );
     let protected_compiler_closure = compiler_capabilities.protected_compiler_closure()?;
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let production_build = build_config
         .as_ref()
         .is_some_and(PreparedBuildConfig::is_production_compilation);
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let production_compiler_closure =
         require_production_compiler_closure(protected_compiler_closure, production_build)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let production_compiler_closure = Some(protected_compiler_closure.ok_or_else(|| {
+        BindingWrapperError::BuildObservation(
+            "production requires protected V3 compiler-closure custody before preparation"
+                .to_owned(),
+        )
+    })?);
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let release_action = std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV);
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -3348,7 +3445,11 @@ fn prepare_managed_attempt(
         return Err(BindingWrapperError::BuildObservation(message.to_owned()));
     }
     let (attempt, prepared_work, began_attempt) = if let Some(config) = build_config {
-        if config.executes_worker_in_rustc() {
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        let executes_worker_in_rustc = config.executes_worker_in_rustc();
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let executes_worker_in_rustc = false;
+        if executes_worker_in_rustc {
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             {
                 let pair = config
@@ -3413,14 +3514,20 @@ fn prepare_managed_attempt(
                     ),
                     Err(WorkerV3HsacoPublicationErrorV1::Storage(
                         WorkerV3PublicationIntentErrorV1::NotFound,
-                    )) => (
-                        attempt,
-                        PreparedManagedWork::production(ManagedProductionBuild::Fresh {
-                            config: Box::new(config),
-                            compiler_closure,
-                        }),
-                        true,
-                    ),
+                    )) => {
+                        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                        let config = config
+                            .into_production()
+                            .map_err(BindingWrapperError::BuildConfiguration)?;
+                        (
+                            attempt,
+                            PreparedManagedWork::production(ManagedProductionBuild::Fresh {
+                                config: Box::new(config),
+                                compiler_closure,
+                            }),
+                            true,
+                        )
+                    }
                     Err(error) => {
                         return Err(BindingWrapperError::BuildObservation(format!(
                             "production V3 restart recovery failed closed: {error}"
@@ -3563,6 +3670,7 @@ fn prepare_managed_attempt(
         output_dir: output_dir.to_path_buf(),
         producer,
         attempt,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         protected_source_path,
         compile_environment_profile,
         production_build: prepared_work.production_build,
@@ -3992,16 +4100,10 @@ fn complete_fresh_worker_v2(
 
 fn complete_fresh_production_artifact(
     managed: &ManagedAttempt,
-    worker: &PreparedBuildConfig,
+    worker: &PreparedProductionBuildConfig,
     compiler_closure: CompilerClosureV2,
     parent_custody: &ParentRustcInvocationCustody,
 ) -> Result<(), CompletionFailure> {
-    if !worker.is_production_compilation() {
-        return Err(CompletionFailure::Uncommitted(
-            "strict V3 compiler intake accepts only the preselected production-v1 worker"
-                .to_owned(),
-        ));
-    }
     let intake = ProductionCompilerModuleHandoffIntake::new();
     let (consumed, preflight) = intake
         .consume_after_preflight(
@@ -5258,13 +5360,22 @@ fn success_exit_status() -> ExitStatus {
 
 fn derive_build_attempt_input(
     argv: &[OsString],
-    worker_v2: Option<&PreparedBuildConfig>,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))] worker_v2: Option<
+        &PreparedBuildConfig,
+    >,
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))] worker_v2: Option<
+        &PreparedProductionBuildConfig,
+    >,
     current_dir: &std::path::Path,
     compiler_closure_sha256: [u8; 32],
 ) -> BuildInvocation {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let identity = worker_v2.map(PreparedBuildConfig::identity);
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let identity = worker_v2.map(PreparedProductionBuildConfig::identity);
     derive_build_attempt_input_with_config_identity(
         argv,
-        worker_v2.map(PreparedBuildConfig::identity),
+        identity,
         current_dir,
         compiler_closure_sha256,
     )
@@ -5469,7 +5580,7 @@ mod tests {
         ContentIdentityV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
         ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
     };
-    use fe2o3_worker_v2_bundle::WorkerV3LoadEnvelopeErrorV1;
+    use fe2o3_runtime_protocol::WorkerV3LoadEnvelopeErrorV1;
     use fe2o3_worker_v2_bundle::{
         ExactRawHsacoV1, WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2,
     };

@@ -16,16 +16,24 @@
 //! execution.
 
 mod mir_pliron_semantic_contract_v1;
+mod parallel_reference_contract_v1;
 
 pub use mir_pliron_semantic_contract_v1::{
     HARD_MAX_SEMANTIC_COLLECTIVES_V1, HARD_MAX_SEMANTIC_DOMAINS_V1, HARD_MAX_SEMANTIC_LOOPS_V1,
-    HARD_MAX_SEMANTIC_OUTPUTS_V1, HARD_MAX_SEMANTIC_ROOTS_V1,
-    MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1, MirPlironSemanticContractErrorV1,
+    HARD_MAX_SEMANTIC_OUTPUTS_V1, HARD_MAX_SEMANTIC_ROOTS_V1, MirPlironSemanticContractErrorV1,
     MirPlironSemanticContractV1, SemanticCollectiveContractV1, SemanticCollectiveKindV1,
     SemanticCoverageBindingV1, SemanticEvaluationOrderV1, SemanticFiniteDomainV1,
     SemanticFiniteExtentV1, SemanticIeeeExceptionalValueV1, SemanticIeeeRoundingV1,
     SemanticLoopContractV1, SemanticLoopDirectionV1, SemanticNumericalPolicyV1,
     SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
+};
+pub use parallel_reference_contract_v1::{
+    COMPLETE_GPU_HIERARCHY_V1, HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1,
+    HARD_MAX_PARALLEL_CALL_SUMMARIES_V1, HARD_MAX_PARALLEL_OUTPUT_RELATIONS_V1,
+    HARD_MAX_RELATION_SUMMARIES_V1, ParallelCallKindV1, ParallelCallSummaryV1,
+    ParallelExecutionScopeV1, ParallelFoldOrderV1, ParallelHierarchyLevelV1,
+    ParallelNumericalPolicyV1, ParallelOutputRelationV1, ParallelReferenceContractErrorV1,
+    ParallelReferenceContractV1, ParallelScheduleRelationV1,
 };
 
 use std::{collections::BTreeSet, error::Error, fmt};
@@ -73,6 +81,7 @@ impl SafeReferenceKindV2 {
 pub enum FunctionalRefinementBoundaryV2 {
     SafeReferenceMirToKernelMir = 1,
     SafeReferenceSourceToKernelMir = 2,
+    SafeReferenceMirToLivePliron = 3,
 }
 
 impl FunctionalRefinementBoundaryV2 {
@@ -80,6 +89,7 @@ impl FunctionalRefinementBoundaryV2 {
         match value {
             1 => Ok(Self::SafeReferenceMirToKernelMir),
             2 => Ok(Self::SafeReferenceSourceToKernelMir),
+            3 => Ok(Self::SafeReferenceMirToLivePliron),
             value => Err(FunctionalRefinementImportErrorV2::UnknownBoundary(value)),
         }
     }

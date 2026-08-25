@@ -42,13 +42,19 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `RustcInvocationDescriptorV3` that preserves the exact V2 process and
   environment while adding the complete closure. Protected release and the
   broker-to-wrapper raw sealed closure transfer are implemented. The wrapper
-  constructs and seals V3 and installs it at fd 199 for rustc; backend
-  admission and live-process equality are not wired yet.
-- Closure-bound compiler-handoff V2 and Worker publication-intent V2 schemas
-  and APIs are implemented on shared V1/V2 engines. Protected production
-  producer/consumer call sites and restart-marker integration still use V1;
-  the V2 records do not yet establish end-to-end production provenance. V1
-  wire formats and APIs remain available for compatibility.
+  constructs and seals V3 and installs it at fd 199 for rustc; the backend
+  revalidates the exact process, target, role pins, and closure before
+  production publication.
+- Production has one unselected compilation transaction. Cargo owns it as
+  `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
+  restart states rather than pipeline variants. Legacy V1/V2 work state,
+  workload-specific paths, source-debug execution, and Worker V2 application
+  transfer compile only with `qualification-oracles-test-only`.
+- `fe2o3-runtime-protocol` owns the production load envelope, application
+  handoff, and sealed static-application identity. Feature-free `cargo-fe2o3`
+  and `fe2o3-host` do not depend on `fe2o3-worker-v2-bundle`; that crate is a
+  qualification-only compatibility boundary. V1/V2/V3 suffixes that remain on
+  records are frozen wire versions, not selectable compiler implementations.
 - Versioned artifact, descriptor, durable-publication, generated launch, HIP,
   and HSA layers exist. Safe generated dispatch is still profile-specific; an
   arbitrary manifest cannot manufacture a safe Rust signature or launch
@@ -67,20 +73,18 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact typed MIR/CFG graph for a return-only supported subset and rejects all
   other observed MIR semantics terminally.
 - The Pliron LLVM lane has a live graph-derived extractor, deterministic bounded
-  LLVM-assembly serializer, and inert Worker V2 request bridge.
+  LLVM-assembly serializer, and a workload-neutral production handoff. Its
+  Worker V2 request bridge is retained only as a qualification oracle.
   `pliron-llvm` v0.17.0 is used with
   `default-features = false` for its typed dialect only. The bridge binds the
   exact request but grants no object, link, publication, load, or launch
   authority.
-- The closed gfx942 General GEMM profile now retains target, module, global,
+- The closed gfx942 General GEMM profile retains target, module, global,
   function, CFG, instruction, type, and per-item policy on the live graph, with
   separately hashed bounded non-graph inputs for stage identities, device
-  libraries, origins, and obligations. Fresh owner-borrowing export is the sole
-  structural route into serialization and worker admission. The compiler
-  machine, prepared Worker V2 owner, finalized bytes, and post-link observation
-  remain move-only through finalization. The late graph, worker, and finalizer
-  axes are freshly derived from those retained owners and remain inert; the
-  existing final authority join does not consume them yet.
+  libraries, origins, and obligations. Its older Worker V2 realization is now
+  a differential qualification oracle while those bounded semantics migrate
+  through the workload-neutral production handoff.
 - The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
   exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
   `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated
@@ -203,8 +207,9 @@ The current implementation has a bounded realization of steps 1, 2, and 4 for
 one `gfx942` profile. An external Cargo fixture supplies two kernel roots and a
 shared helper. The frontend gives the helper one canonical source identity;
 Kernel IR lowering checks each internal call against the collected helper's
-declared signature; and the direct LLVM/LLD Worker V2 path emits one inspected,
-durably published HSACO. The canonical V1 artifact container then represents
+declared signature; and the direct upstream LLVM/LLD production transaction
+emits one inspected, durably published HSACO. The canonical V1 artifact
+container then represents
 two kernel entries over that one native payload, with an independently keyed
 proof binding for each entry.
 

@@ -19,8 +19,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1;
-use fe2o3_worker_v2_bundle::WorkerV3ApplicationHandoffProtocolErrorV1;
+use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
+use fe2o3_runtime_protocol::WorkerV3ApplicationHandoffProtocolErrorV1;
 
 /// A deliberately bounded read prevents a selected tool path from causing unbounded hashing work.
 pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
@@ -311,7 +311,7 @@ mod platform {
         seals: SealFlags,
         #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         identity: fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1,
-        identity_v3: fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1,
+        identity_v3: fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -829,7 +829,7 @@ mod platform {
                     }
                 })?;
             let identity_v3 =
-                fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(
+                fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(
                     &bytes,
                 )
                 .map_err(|source| {
@@ -952,7 +952,7 @@ mod platform {
 
         pub(crate) const fn identity_v3(
             &self,
-        ) -> fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1 {
+        ) -> fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1 {
             self.identity_v3
         }
 

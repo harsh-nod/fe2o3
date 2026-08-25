@@ -1,6 +1,7 @@
 //! Single admission boundary for protected rustc invocation capabilities.
 
 use std::env;
+#[cfg(feature = "qualification-oracles-test-only")]
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, Metadata};
@@ -17,6 +18,7 @@ use fe2o3_compiler_closure_capability::{
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
 use sha2::{Digest as _, Sha256};
 
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::qualification_selection::{CompilationRoute, RustcInvocationPolicy};
 
 const EXACT_PROTECTED_TARGET_V1: &str = "gfx942:xnack-";
@@ -24,6 +26,7 @@ const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_C
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
     "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1";
+#[cfg(feature = "qualification-oracles-test-only")]
 const NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_ENV_V1: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
 const RUNNING_RUSTC_PATH: &str = "/proc/self/exe";
@@ -210,6 +213,16 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
 
 impl std::error::Error for ProtectedRustcInvocationErrorV1 {}
 
+#[cfg(not(feature = "qualification-oracles-test-only"))]
+pub(crate) fn admit_for_production_codegen()
+-> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
+    admit_protected_v3_at(
+        RUSTC_INVOCATION_CHILD_FD_V1,
+        env::var_os(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1).is_some(),
+    )
+}
+
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn admit_for_codegen(
     route: CompilationRoute,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
@@ -243,6 +256,7 @@ pub(crate) fn admit_for_codegen(
     )
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn admit_for_codegen_at(
     route: CompilationRoute,
     explicit_unprotected_qualification: bool,
@@ -277,19 +291,25 @@ fn admit_for_codegen_at(
             return Ok(None);
         }
         RustcInvocationPolicy::ProtectedV3 => {
-            if qualification_backend_marker_present {
-                return Err(
-                    ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
-                        descriptor_present: false,
-                        compiler_closure_marker_present: false,
-                        backend_marker_present: false,
-                        qualification_backend_marker_present: true,
-                    },
-                );
-            }
+            return admit_protected_v3_at(child_fd, qualification_backend_marker_present);
         }
     }
+}
 
+fn admit_protected_v3_at(
+    child_fd: RawFd,
+    qualification_backend_marker_present: bool,
+) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
+    if qualification_backend_marker_present {
+        return Err(
+            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
+                descriptor_present: false,
+                compiler_closure_marker_present: false,
+                backend_marker_present: false,
+                qualification_backend_marker_present: true,
+            },
+        );
+    }
     let capability = retain_inherited_capability_at(child_fd)?;
     let observation = RustcProcessObservationV1::capture(capability.descriptor())?;
     validate_capability(capability, observation).map(Some)
@@ -336,6 +356,7 @@ fn reject_unexpected_rustc_signals_at(
     }
 }
 
+#[cfg(feature = "qualification-oracles-test-only")]
 fn explicit_unprotected_qualification_enabled() -> bool {
     cfg!(debug_assertions)
         && env::var_os(NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_ENV_V1).as_deref()

@@ -6,7 +6,7 @@ use fe2o3_host::{
     __hardware_test::application_handoff_observed_context_fixture_v1, KernelId,
     consume_inherited_worker_v3_application_handoff_v1,
 };
-use fe2o3_worker_v2_bundle::{
+use fe2o3_runtime_protocol::{
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,

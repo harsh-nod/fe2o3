@@ -51,13 +51,13 @@ use fe2o3_host::{
 };
 use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
+use fe2o3_runtime_protocol::{
+    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
+    recover_worker_v3_load_envelope_v1,
+};
 use fe2o3_verifier::{
     build_scalar_gemm_worker_v3_proof_input_v3, validate_compiler_proof_binding_association_v3,
     validate_scalar_gemm_compiler_kir_v3,
-};
-use fe2o3_worker_v2_bundle::{
-    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
-    recover_worker_v3_load_envelope_v1,
 };
 use fe2o3_worker_v3_authority::{
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,

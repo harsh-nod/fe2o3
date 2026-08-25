@@ -463,11 +463,77 @@ pub(crate) struct ProductionRankedSemanticProgramV1 {
 #[must_use = "dropping ranked verification abandons its production lineage"]
 pub(crate) struct AuthenticatedRankedVerificationV5 {
     middle_end_evidence: fe2o3_pliron::ProductionMiddleEndEvidenceV5,
+    functional: Option<AuthenticatedFunctionalVerificationV1>,
+}
+
+struct AuthenticatedFunctionalVerificationV1 {
+    semantics: fe2o3_pliron::ProductionReconciledMirPlironSemanticContractV1,
+    parallel_contract: fe2o3_functional_proof::ParallelReferenceContractV1,
+    parallel_report: fe2o3_pliron::ProductionParallelReferenceContractReportV1,
+    aggregate:
+        crate::production_mir_pliron_verus_join_v1::AuthenticatedMirPlironPerCompilationVerificationV1,
 }
 
 impl AuthenticatedRankedVerificationV5 {
     pub(crate) const fn middle_end_evidence(&self) -> &fe2o3_pliron::ProductionMiddleEndEvidenceV5 {
         &self.middle_end_evidence
+    }
+
+    pub(crate) const fn has_authenticated_functional_verification(&self) -> bool {
+        self.functional.is_some()
+    }
+
+    pub(crate) fn retained_functional_verification_is_coherent(&self) -> bool {
+        self.functional.as_ref().is_none_or(|functional| {
+            functional.aggregate.report().contract_identity()
+                == functional.semantics.contract().canonical_sha256()
+                && functional.parallel_report.contract_identity()
+                    == functional.parallel_contract.canonical_sha256()
+                && functional.parallel_contract.semantic_contract_identity()
+                    == functional.semantics.contract().canonical_sha256()
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ProductionRankedVerificationErrorV1 {
+    MiddleEndEvidence(fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5),
+    SemanticContract(fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1),
+    ParallelContract(fe2o3_pliron::ProductionParallelReferenceContractErrorV1),
+    AggregateVerus(crate::production_mir_pliron_verus_join_v1::ProductionMirPlironVerusJoinErrorV1),
+}
+
+impl fmt::Display for ProductionRankedVerificationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MiddleEndEvidence(error) => error.fmt(formatter),
+            Self::SemanticContract(error) => {
+                write!(
+                    formatter,
+                    "functional semantic-contract derivation failed: {error}"
+                )
+            }
+            Self::ParallelContract(error) => {
+                write!(
+                    formatter,
+                    "functional parallel-contract derivation failed: {error}"
+                )
+            }
+            Self::AggregateVerus(error) => {
+                write!(formatter, "functional aggregate proof failed: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProductionRankedVerificationErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MiddleEndEvidence(error) => Some(error),
+            Self::SemanticContract(error) => Some(error),
+            Self::ParallelContract(error) => Some(error),
+            Self::AggregateVerus(error) => Some(error),
+        }
     }
 }
 
@@ -514,17 +580,56 @@ impl ProductionRankedSemanticProgramV1 {
             ProductionRankedSemanticProjectionReceiptV1,
             AuthenticatedRankedVerificationV5,
         ),
-        fe2o3_pliron::ProductionMiddleEndEvidenceCodecErrorV5,
+        ProductionRankedVerificationErrorV1,
     > {
         let middle_end_evidence = fe2o3_pliron::ProductionMiddleEndEvidenceV5::try_new(
             self.receipt.semantic(),
             self.receipt.lowering(),
             self.receipt.ranked_ir(),
-        )?;
+        )
+        .map_err(ProductionRankedVerificationErrorV1::MiddleEndEvidence)?;
+        let functional = if self
+            .receipt
+            .lowering()
+            .has_retained_functional_refinement_receipts()
+        {
+            let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
+                self.receipt.lowering(),
+                &middle_end_evidence,
+            )
+            .map_err(ProductionRankedVerificationErrorV1::SemanticContract)?;
+            let (parallel_contract, parallel_report) =
+                fe2o3_pliron::derive_and_require_parallel_reference_contract_v1(
+                    self.receipt.lowering(),
+                    &middle_end_evidence,
+                    semantics.semantic_contract_report(),
+                    semantics.contract(),
+                )
+                .map_err(ProductionRankedVerificationErrorV1::ParallelContract)?;
+            let aggregate =
+                crate::production_mir_pliron_verus_join_v1::authenticate_mir_pliron_contract_per_compilation_v1(
+                    self.receipt.lowering(),
+                    &middle_end_evidence,
+                    semantics.contract(),
+                    semantics.semantic_contract_report(),
+                    &parallel_contract,
+                    parallel_report,
+                )
+                .map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
+            Some(AuthenticatedFunctionalVerificationV1 {
+                semantics,
+                parallel_contract,
+                parallel_report,
+                aggregate,
+            })
+        } else {
+            None
+        };
         Ok((
             self.receipt,
             AuthenticatedRankedVerificationV5 {
                 middle_end_evidence,
+                functional,
             },
         ))
     }
