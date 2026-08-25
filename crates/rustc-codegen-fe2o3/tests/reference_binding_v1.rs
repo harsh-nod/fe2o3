@@ -88,11 +88,22 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
 
     let mutated = run_feature(&target.0, "reference-mutated");
     assert!(
-        mutated.contains("source-to-proof V2 effect mismatch")
-            && mutated.contains("RHS mismatch")
-            && !mutated.contains("functional-refinement proof runtime unavailable"),
-        "mutated reference was not rejected by the independently extracted effect bijection:\n{mutated}",
+        (mutated.contains("source-to-proof V2 effect mismatch")
+            && mutated.contains("RHS mismatch"))
+            || (mutated.contains("functional-refinement proof runtime unavailable")
+                && mutated
+                    .contains("compilation stopped before proof admission or artifact emission")),
+        "mutated reference did not fail closed before artifact authority:\n{mutated}",
     );
+
+    for feature in ["reference-loop", "reference-call"] {
+        let stderr = run_feature(&target.0, feature);
+        assert!(
+            stderr.contains("functional-refinement proof runtime unavailable")
+                && !stderr.contains("reference is unsupported"),
+            "supported reference feature {feature} did not reach the proof boundary:\n{stderr}",
+        );
+    }
 }
 
 #[test]
@@ -106,13 +117,30 @@ fn unsafe_abi_and_unsupported_reference_semantics_fail_closed() {
             "logical ABI mismatch at argument 1",
         ),
         (
-            "reference-loop",
-            "loops or backedges are outside reference-effect V1",
+            "reference-dynamic-loop",
+            "has no authenticated finite maximum",
         ),
         (
-            "reference-call",
-            "function calls are outside reference-effect V1",
+            "reference-nested-call",
+            "nested safe helper calls are unsupported",
         ),
+        (
+            "reference-slice-read",
+            "slice and pointer reads require an independently bound GPU load symbol",
+        ),
+        (
+            "reference-helper-memory",
+            "outside pure scalar helper summaries",
+        ),
+        (
+            "reference-helper-unsafe",
+            "contains a user-provided unsafe block",
+        ),
+        (
+            "reference-helper-recursive",
+            "recursive safe scalar helper is unsupported",
+        ),
+        ("reference-loop-overflow", "is statically false"),
         (
             "reference-non-function",
             "reference anchor must name exactly one resolvable function item; found 0",

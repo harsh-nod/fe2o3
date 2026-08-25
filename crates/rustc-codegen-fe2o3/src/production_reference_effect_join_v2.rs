@@ -1339,6 +1339,7 @@ mod tests {
             }]
             .into_boxed_slice(),
             blocks: Box::default(),
+            loop_summaries: Box::default(),
             observable_output_effects: Box::default(),
         }
     }
