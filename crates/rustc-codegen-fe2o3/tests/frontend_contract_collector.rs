@@ -125,7 +125,7 @@ fn compile_with_backend(
         .arg("-o")
         .arg(output.path.join(format!("lib{crate_name}.rlib")))
         .env("FE2O3_TARGET", "gfx942")
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_HSACO_DIR", artifact_dir)
         .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", guard_directory)

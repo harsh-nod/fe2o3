@@ -30,7 +30,7 @@ fn backend_build(workspace: &Path, target: &str) -> Output {
             "fe2o3-half-math-compiler-fixture",
         ])
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .output()
         .expect("run half/math compiler fixture")
 }

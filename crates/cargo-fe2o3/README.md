@@ -35,13 +35,16 @@ process cannot continue when their respective admitted parent dies.
 
 Release starts from a cleared environment. The complete allowlist is `CARGO`;
 the backend, Cargo, binding-trampoline, rustc-path, rustc, and rustc-runtime
-`FE2O3_AUTHORITY_*_V1` inputs; `FE2O3_BACKEND`,
-`FE2O3_CODEGEN_PIPELINE`, `FE2O3_TARGET`, optional
+`FE2O3_AUTHORITY_*_V1` inputs; `FE2O3_BACKEND`, `FE2O3_TARGET`, optional
 `FE2O3_WORKER_V2_CONFIG_V2`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
 Aliases, extra variables or descriptors, loader variables, rustup/tool
 selectors, noncanonical paths, changed backing objects, replayed attempts, and
 closure/runtime-tree drift fail closed. Tool digests are operator-provisioned
 inputs and are remeasured; no machine-specific digest is compiled in.
+
+Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` is rejected, and
+`FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production test
+oracles such as simulation and migration equivalence checks.
 
 `cargo fe2o3 authority release probe` exercises this exact launcher/handoff
 boundary and exits before Cargo, artifact generation, HSA loading, or GPU
@@ -258,7 +261,7 @@ removal is available; symlinked or substituted selected paths fail closed.
 
 ## Narrow Worker V2 handoff flow
 
-`FE2O3_CODEGEN_PIPELINE=kernel-ir-worker-v2` requires
+`FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-worker-v2` requires
 `FE2O3_WORKER_V2_CONFIG_V2` to name an absolute path to a strict V2 JSON
 manifest. The manifest is an explicit operator policy input, not compiler
 attestation. It must be compact canonical JSON with sorted object keys and

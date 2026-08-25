@@ -1,6 +1,6 @@
 # Collected scalar control flow V2
 
-`FE2O3_CODEGEN_PIPELINE=collected-executable-scalar-control-flow-v2` is an
+`FE2O3_QUALIFICATION_ORACLE_V1=collected-executable-scalar-control-flow-v2` is an
 admission-only compiler frontend slice. It recognizes the checked-in
 `tests/fixtures/executable-scalar-control-flow-v1.rs` program on the exact
 `gfx942:xnack-` target and then stops before executable lowering.

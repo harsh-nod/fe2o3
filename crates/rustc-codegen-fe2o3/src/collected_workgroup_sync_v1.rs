@@ -511,7 +511,8 @@ pub(crate) fn quarantine_scoped_atomic_general_contract(
     logical_name: &str,
     export_name: &str,
 ) -> bool {
-    std::env::var("FE2O3_CODEGEN_PIPELINE").as_deref() == Ok(COLLECTED_SCOPED_ATOMIC_PIPELINE_V1)
+    std::env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
+        == Ok(COLLECTED_SCOPED_ATOMIC_PIPELINE_V1)
         && logical_name == SCOPED_ATOMIC_V1_KERNEL_ID
         && export_name == SCOPED_ATOMIC_V1_KERNEL_ID
 }
@@ -538,7 +539,7 @@ pub(crate) fn classify_exact_workgroup_sync_compiler_intrinsic(
 ) -> Option<WorkgroupSyncCompilerIntrinsicV1> {
     use WorkgroupSyncCompilerIntrinsicV1 as Intrinsic;
 
-    let pipeline = std::env::var("FE2O3_CODEGEN_PIPELINE");
+    let pipeline = std::env::var("FE2O3_QUALIFICATION_ORACLE_V1");
     if !matches!(
         pipeline.as_deref(),
         Ok(COLLECTED_LDS_REDUCTION_PIPELINE_V1) | Ok(COLLECTED_SCOPED_ATOMIC_PIPELINE_V1)

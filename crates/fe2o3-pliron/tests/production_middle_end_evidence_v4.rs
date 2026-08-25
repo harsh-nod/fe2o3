@@ -9,7 +9,10 @@ use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
     FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2,
-    FunctionalRefinementSubjectsV2, SafeReferenceKindV2, UnsignedFunctionalRefinementReceiptV2,
+    FunctionalRefinementSubjectsV2, MirPlironSemanticContractV1, SafeReferenceKindV2,
+    SemanticFiniteDomainV1, SemanticFiniteExtentV1, SemanticLoopContractV1,
+    SemanticLoopDirectionV1, SemanticNumericalPolicyV1, SemanticOutputContractV1,
+    SemanticScalarTypeV1, SemanticTypedRootV1, UnsignedFunctionalRefinementReceiptV2,
     VerusToolchainIdentityV2,
 };
 use fe2o3_mir_model::semantic_mir_v1::*;
@@ -29,7 +32,10 @@ use fe2o3_pliron::{
     ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
     ProductionSessionLimitsV1, ShellLimits, compile_ranked_kernel_for_lowering_v1,
     compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
-    require_total_output_refinement_v2,
+    production_effect_contract_identity_v1, production_loop_transition_identity_v1,
+    production_loop_variant_identity_v1, production_ranked_value_identity_v1,
+    require_mir_pliron_semantic_contract_v1, require_total_output_refinement_v2,
+    verify_ranked_kernel_against_safe_reference_mir_v1,
 };
 use fe2o3_proof_contracts::DigestV1;
 
@@ -459,6 +465,193 @@ fn total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
     .unwrap()
 }
 
+fn loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let scalar_u64 = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 64,
+    };
+    let scalar_bool = ProductionSemanticScalarTypeV2::Bool;
+    let contract = ProductionEffectRefinementContractV2::new(
+        73,
+        ProductionGpuWriteSiteV2::new(3, 0),
+        ProductionReferenceOutputSiteV2::new(0, 0, 0),
+        local(0),
+        vec![local(1)],
+        vec![local(5)],
+        vec![local(5)],
+        local(4),
+        local(4),
+        local(4),
+        local(4),
+        local(2),
+        local(3),
+    )
+    .unwrap();
+    let skeleton = ProductionRankedKernelV1::new(
+        "loop_total_output_refinement",
+        0,
+        vec![
+            ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 9,
+                        global_extents: [1, 1, 1],
+                        workgroup_extents: [1, 1, 1],
+                        subgroup_size: 1,
+                        full_physical_workgroups: true,
+                    },
+                    ProductionRankedOperationV1::ViewInSpace {
+                        result: ProductionRankedValueIdV1::new(0),
+                        element_width: 32,
+                        writable: true,
+                        shape: vec![1],
+                        dynamic_extents: vec![],
+                        allocation_origin: 9,
+                        noalias_class: 9,
+                        memory_space: MemorySpaceAttr::Global,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(1),
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(2),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u32,
+                            bits: 7,
+                        },
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(3),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u32,
+                            bits: 7,
+                        },
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(4),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_bool,
+                            bits: 1,
+                        },
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(5),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u64,
+                            bits: 0,
+                        },
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(6),
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(7),
+                        value: 4,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(8),
+                        value: 1,
+                    },
+                    ProductionRankedOperationV1::OwnershipContract {
+                        view: local(0),
+                        coverage: OwnershipCoverageAttr::TotalView,
+                        partition: OwnershipPartitionAttr::ExactSets,
+                    },
+                ],
+                ProductionRankedTerminatorV1::BranchArgs {
+                    arguments: vec![local(6)],
+                    target: 1,
+                },
+            ),
+            ProductionRankedBlockV1::with_index_arguments(
+                1,
+                vec![],
+                ProductionRankedTerminatorV1::IndexLessThanArgs {
+                    lhs: ProductionRankedValueV1::BlockArgument {
+                        block: 1,
+                        argument: 0,
+                    },
+                    rhs: local(7),
+                    true_arguments: vec![ProductionRankedValueV1::BlockArgument {
+                        block: 1,
+                        argument: 0,
+                    }],
+                    false_arguments: vec![],
+                    true_block: 2,
+                    false_block: 3,
+                },
+            ),
+            ProductionRankedBlockV1::with_index_arguments(
+                1,
+                vec![],
+                ProductionRankedTerminatorV1::BranchArgsAdd {
+                    value: ProductionRankedValueV1::BlockArgument {
+                        block: 2,
+                        argument: 0,
+                    },
+                    step: local(8),
+                    target: 1,
+                },
+            ),
+            ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ValueAccess {
+                        kind: AccessKindAttr::Write,
+                        view: local(0),
+                        indices: vec![local(1)],
+                        value: local(2),
+                    },
+                    ProductionRankedOperationV1::RequestEffectRefinement {
+                        contract,
+                        subjects: functional_subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            ),
+        ],
+    )
+    .unwrap();
+    let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+        &skeleton.blocks()[3].operations()[1]
+    else {
+        unreachable!()
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        &skeleton,
+        3,
+        1,
+        contract,
+        functional_subjects(),
+    )
+    .unwrap();
+    let (proof, imported, policy) = imported_reference(obligation);
+    let bound = skeleton
+        .bind_functional_refinement_request_v2(3, 1, proof)
+        .unwrap();
+    compile_ranked_kernel_for_lowering_v2(
+        ProductionConstructionV1::ranked_kernel("loop_total_output_refinement", bound).unwrap(),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap()
+}
+
 #[test]
 fn live_v5_evidence_uses_the_eight_pass_pipeline_without_vacuous_coverage_claims() {
     let input = ranked_input(7);
@@ -513,6 +706,288 @@ fn live_v5_and_aggregate_gate_prove_one_total_typed_output_at_the_mir_boundary()
     assert!(!report.grants_source_to_mir_authority());
     assert!(!report.grants_lowering_or_machine_code_authority());
     assert!(!report.grants_artifact_load_launch_or_hardware_authority());
+}
+
+fn semantic_contract_for_total_output(
+    input: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    view: ProductionRankedValueV1,
+    boolean_scalar: SemanticScalarTypeV1,
+) -> MirPlironSemanticContractV1 {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let domain = proof_digest(61);
+    let typed_root = |operation: usize, value, scalar| {
+        let ProductionRankedOperationV1::SemanticExpression {
+            expression,
+            numerical_contract,
+            ..
+        } = &input.kernel().blocks()[0].operations()[operation]
+        else {
+            unreachable!()
+        };
+        SemanticTypedRootV1::new(
+            production_ranked_value_identity_v1(value),
+            DigestV1::from_untrusted_bytes(
+                expression.canonical_transcript_sha256(*numerical_contract),
+            ),
+            domain,
+            scalar,
+            SemanticNumericalPolicyV1::ExactBitVector,
+        )
+        .unwrap()
+    };
+    MirPlironSemanticContractV1::new(
+        functional_subjects().safe_reference_mir_hash(),
+        functional_subjects().kernel_mir_hash(),
+        DigestV1::from_untrusted_bytes(*evidence.identity().sha256()),
+        vec![SemanticFiniteDomainV1::new(domain, vec![SemanticFiniteExtentV1::Static(1)]).unwrap()],
+        vec![
+            typed_root(3, local(2), SemanticScalarTypeV1::Unsigned(32)),
+            typed_root(4, local(3), SemanticScalarTypeV1::Unsigned(32)),
+            typed_root(5, local(4), boolean_scalar),
+            typed_root(6, local(5), SemanticScalarTypeV1::Unsigned(64)),
+        ],
+        vec![],
+        vec![],
+        vec![
+            SemanticOutputContractV1::new(
+                production_effect_contract_identity_v1(73),
+                production_ranked_value_identity_v1(view),
+                domain,
+                production_ranked_value_identity_v1(local(2)),
+                production_ranked_value_identity_v1(local(3)),
+                [local(5), local(5), local(4), local(4), local(4), local(4)]
+                    .into_iter()
+                    .map(production_ranked_value_identity_v1)
+                    .collect(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn semantic_contract_for_loop_total_output(
+    input: &ProductionRankedKernelLoweringInputV1,
+    evidence: &ProductionMiddleEndEvidenceV5,
+    wrong_transition: bool,
+    loop_extent: SemanticFiniteExtentV1,
+) -> MirPlironSemanticContractV1 {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let output_domain = proof_digest(61);
+    let loop_domain = proof_digest(62);
+    let typed_root = |operation: usize, value, scalar| {
+        let ProductionRankedOperationV1::SemanticExpression {
+            expression,
+            numerical_contract,
+            ..
+        } = &input.kernel().blocks()[0].operations()[operation]
+        else {
+            unreachable!()
+        };
+        SemanticTypedRootV1::new(
+            production_ranked_value_identity_v1(value),
+            DigestV1::from_untrusted_bytes(
+                expression.canonical_transcript_sha256(*numerical_contract),
+            ),
+            output_domain,
+            scalar,
+            SemanticNumericalPolicyV1::ExactBitVector,
+        )
+        .unwrap()
+    };
+    let induction = production_ranked_value_identity_v1(ProductionRankedValueV1::BlockArgument {
+        block: 1,
+        argument: 0,
+    });
+    let lower = production_ranked_value_identity_v1(local(6));
+    let upper = production_ranked_value_identity_v1(local(7));
+    let step = production_ranked_value_identity_v1(local(8));
+    let live_transition = production_loop_transition_identity_v1(input, 1, 2, 3).unwrap();
+    let transition = if wrong_transition {
+        proof_digest(99)
+    } else {
+        live_transition
+    };
+    let variant = production_loop_variant_identity_v1(
+        1,
+        2,
+        3,
+        induction,
+        lower,
+        upper,
+        step,
+        transition,
+        SemanticLoopDirectionV1::Increasing,
+    );
+    MirPlironSemanticContractV1::new(
+        functional_subjects().safe_reference_mir_hash(),
+        functional_subjects().kernel_mir_hash(),
+        DigestV1::from_untrusted_bytes(*evidence.identity().sha256()),
+        vec![
+            SemanticFiniteDomainV1::new(output_domain, vec![SemanticFiniteExtentV1::Static(1)])
+                .unwrap(),
+            SemanticFiniteDomainV1::new(loop_domain, vec![loop_extent]).unwrap(),
+        ],
+        vec![
+            typed_root(3, local(2), SemanticScalarTypeV1::Unsigned(32)),
+            typed_root(4, local(3), SemanticScalarTypeV1::Unsigned(32)),
+            typed_root(5, local(4), SemanticScalarTypeV1::Boolean),
+            typed_root(6, local(5), SemanticScalarTypeV1::Unsigned(64)),
+        ],
+        vec![
+            SemanticLoopContractV1::new(
+                proof_digest(70),
+                1,
+                2,
+                3,
+                loop_domain,
+                induction,
+                lower,
+                upper,
+                step,
+                transition,
+                variant,
+                SemanticLoopDirectionV1::Increasing,
+                loop_extent.inclusive_upper_bound(),
+            )
+            .unwrap(),
+        ],
+        vec![],
+        vec![
+            SemanticOutputContractV1::new(
+                production_effect_contract_identity_v1(73),
+                production_ranked_value_identity_v1(local(0)),
+                output_domain,
+                production_ranked_value_identity_v1(local(2)),
+                production_ranked_value_identity_v1(local(3)),
+                [local(5), local(5), local(4), local(4), local(4), local(4)]
+                    .into_iter()
+                    .map(production_ranked_value_identity_v1)
+                    .collect(),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn exact_mir_pliron_contract_joins_live_typed_effect_evidence() {
+    let input = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let contract = semantic_contract_for_total_output(
+        &input,
+        &evidence,
+        ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+        SemanticScalarTypeV1::Boolean,
+    );
+    let verified =
+        verify_ranked_kernel_against_safe_reference_mir_v1(input, evidence, &contract).unwrap();
+    let report = verified.semantic_contract_report();
+    assert_eq!(report.typed_roots(), 4);
+    assert_eq!(report.total_outputs(), 1);
+    assert_eq!(report.finite_collectives(), 0);
+    assert!(report.binds_safe_reference_mir_to_live_pliron());
+    assert!(!report.proves_the_compiler_implementation_sound());
+    assert!(!report.grants_llvm_or_later_authority());
+    assert!(verified.establishes_total_output_refinement_at_mir_pliron_boundary());
+    assert!(verified.compiler_projection_and_pass_soundness_remain_trusted());
+    assert!(!verified.grants_llvm_or_later_authority());
+}
+
+#[test]
+fn semantic_contract_rejects_view_and_typed_root_substitution() {
+    let input = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let wrong_view = semantic_contract_for_total_output(
+        &input,
+        &evidence,
+        ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1)),
+        SemanticScalarTypeV1::Boolean,
+    );
+    assert!(matches!(
+        require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &wrong_view),
+        Err(fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::OutputMismatch { index: 0 })
+    ));
+
+    let wrong_type = semantic_contract_for_total_output(
+        &input,
+        &evidence,
+        ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+        SemanticScalarTypeV1::Unsigned(32),
+    );
+    assert!(matches!(
+        require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &wrong_type),
+        Err(fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::TypedRootMismatch)
+    ));
+}
+
+#[test]
+fn canonical_cfg_loop_is_bound_and_a_transition_substitution_is_rejected() {
+    let input = loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let contract = semantic_contract_for_loop_total_output(
+        &input,
+        &evidence,
+        false,
+        SemanticFiniteExtentV1::Static(4),
+    );
+    let verified =
+        verify_ranked_kernel_against_safe_reference_mir_v1(input, evidence, &contract).unwrap();
+    assert_eq!(verified.semantic_contract_report().bounded_loops(), 1);
+
+    let input = loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let wrong = semantic_contract_for_loop_total_output(
+        &input,
+        &evidence,
+        true,
+        SemanticFiniteExtentV1::Static(4),
+    );
+    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    assert!(matches!(
+        require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &wrong),
+        Err(
+            fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::LoopValueMismatch {
+                header: 1,
+                latch: 2,
+            }
+        )
+    ));
+}
+
+#[test]
+fn dynamic_loop_rejects_an_unproved_narrow_bound() {
+    let input = loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let contract = semantic_contract_for_loop_total_output(
+        &input,
+        &evidence,
+        false,
+        SemanticFiniteExtentV1::Dynamic {
+            symbol: 17,
+            inclusive_upper_bound: 4,
+        },
+    );
+    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let error =
+        require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &contract).unwrap_err();
+    assert!(matches!(
+        error,
+        fe2o3_pliron::ProductionMirPlironSemanticContractErrorV1::DynamicLoopBoundUnproved {
+            header: 1,
+            latch: 2,
+            inclusive_upper_bound: 4,
+        }
+    ));
+    assert!(error.to_string().contains("no production range receipt"));
 }
 
 #[derive(Debug)]

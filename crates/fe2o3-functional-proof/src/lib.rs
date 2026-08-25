@@ -15,6 +15,19 @@
 //! LLVM/ISA correspondence, artifact integrity, loading, launch, runtime behavior, or hardware
 //! execution.
 
+mod mir_pliron_semantic_contract_v1;
+
+pub use mir_pliron_semantic_contract_v1::{
+    HARD_MAX_SEMANTIC_COLLECTIVES_V1, HARD_MAX_SEMANTIC_DOMAINS_V1, HARD_MAX_SEMANTIC_LOOPS_V1,
+    HARD_MAX_SEMANTIC_OUTPUTS_V1, HARD_MAX_SEMANTIC_ROOTS_V1,
+    MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1, MirPlironSemanticContractErrorV1,
+    MirPlironSemanticContractV1, SemanticCollectiveContractV1, SemanticCollectiveKindV1,
+    SemanticCoverageBindingV1, SemanticEvaluationOrderV1, SemanticFiniteDomainV1,
+    SemanticFiniteExtentV1, SemanticIeeeExceptionalValueV1, SemanticIeeeRoundingV1,
+    SemanticLoopContractV1, SemanticLoopDirectionV1, SemanticNumericalPolicyV1,
+    SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
+};
+
 use std::{collections::BTreeSet, error::Error, fmt};
 
 use ed25519_dalek::{Signature, VerifyingKey};

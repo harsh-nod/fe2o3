@@ -42,7 +42,7 @@ sorted child environment.
 
 For S09, the wrapper rejects credential-like inherited variables, admits only
 the required inherited `CARGO_MANIFEST_DIR`, fixed
-`FE2O3_CODEGEN_PIPELINE=kernel-ir-worker-v2`, and fixed
+`FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-worker-v2`, and fixed
 `FE2O3_TARGET=gfx942:xnack-` inputs, applies the closed managed environment,
 then calls `env_clear()` and installs that exact environment. The parent puts
 the prepared consistency digest in an exact sealed 32-byte expectation at the

@@ -317,7 +317,7 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
         ])
         .arg(target.join("cargo-target"))
         .env("FE2O3_BACKEND", &backend)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config)
         .output()

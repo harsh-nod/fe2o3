@@ -313,9 +313,9 @@ target lowering, and host execution into explicit ownership boundaries:
 - Compiler composition: `fe2o3-compiler-driver` routes one explicit
   `PlironShadow` or `PlironV1` request to one configured backend and never
   falls back to a second route. Shadow is inspect-only and `PlironV1` is the
-  only candidate-producing compiler API route. The working codegen paths and
-  `FE2O3_CODEGEN_PIPELINE` selection remain owned by the existing integration
-  crate.
+  only candidate-producing compiler API route. The production rustc backend
+  has no selector. Temporary non-publishing migration oracles are isolated
+  behind `FE2O3_QUALIFICATION_ORACLE_V1` in the integration crate.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
   Kernel IR sequence for structure, control flow, bounds obligations, race
   freedom, barrier convergence, and workgroup-memory initialization/reuse.
@@ -440,21 +440,17 @@ Safe ownership of resources used by asynchronous copies is documented in
   resources through either synchronous `Prepared::launch` or non-escapable
   `Prepared::launch_scoped`. The vecadd example uses only this generated API; it
   contains no artifact pathname, raw parameter pack, or unsafe user launch.
-- The default `legacy-v1` AMDGPU emitter supports the repository's `f32`/`f64`
-  elementwise examples. It recognizes scalar float arguments and literals,
-  read-only slice loads, `DisjointSlice<T>` or indexed mutable-slice stores,
-  `+`, `-`, `*`, `/`, unary negation, read-before-write, and the documented
-  constant/affine one-dimensional index forms. Its record-derived access and
-  expression sketches retain `DisjointSlice::get_mut` and `get_mut_at`
-  references through option projection into the final dereference, including
-  read-before-write expressions.
-- Setting `FE2O3_CODEGEN_PIPELINE=kernel-ir-v1` routes the exact `fill` or
+- Production compilation is the only unselected compiler route and never
+  falls back to a workload-specific implementation. Historical emitters and
+  exact workload paths remain only as migration evidence until equivalent
+  production coverage permits their deletion.
+- Setting `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` exercises the exact `fill` or
   three-slice `vecadd` kernel through imported MIR, canonical target-neutral
   kernel IR, verification, exact-shape legalization, G1 AMDGPU lowering, and
-  the normal transactional LLVM/object/HSACO publication path. The selector,
+  the qualification artifact transaction. The oracle,
   ABI, witness dataflow, bounds control flow, and accepted kernel shapes are
   fail closed: invalid values and unsupported kernels remove stale generation
-  artifacts and never fall back to `legacy-v1`.
+  artifacts and never fall back or acquire production publication authority.
 - The HIP runtime provides contexts, streams, device buffers, pinned host
   buffers, events, synchronous transfers, event-backed borrowed and owned
   asynchronous transfers, module loading, and kernel launch.
@@ -1034,9 +1030,13 @@ To build or run one package directly:
 ```bash
 cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
-FE2O3_CODEGEN_PIPELINE=kernel-ir-v1 \
+FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1 \
   cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
 ```
+
+The first two commands enter the sole production route. The third is an
+explicit non-production qualification run. `FE2O3_CODEGEN_PIPELINE` is no
+longer accepted.
 
 The smoke command reads the same manifest and runs every GPU-selected example:
 

@@ -4,8 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest as _, Sha256};
 
-const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
-
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -108,7 +106,6 @@ fn cargo_fe2o3(
     let mut process = Command::new(executable);
     process
         .current_dir(workspace)
-        .env(PIPELINE_ENV, "production-v1")
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_WORKER_V2_CONFIG_V2", worker_config)
         .env("CARGO_TARGET_DIR", isolated_target)

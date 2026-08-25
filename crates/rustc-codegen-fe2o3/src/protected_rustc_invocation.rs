@@ -16,7 +16,7 @@ use fe2o3_compiler_closure_capability::{
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
 use sha2::{Digest as _, Sha256};
 
-use crate::pipeline_selection::{CodegenPipeline, RustcInvocationPolicyV1};
+use crate::qualification_selection::{CompilationRoute, RustcInvocationPolicy};
 
 const EXACT_PROTECTED_TARGET_V1: &str = "gfx942:xnack-";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
@@ -205,7 +205,7 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
 impl std::error::Error for ProtectedRustcInvocationErrorV1 {}
 
 pub(crate) fn admit_for_codegen(
-    pipeline: CodegenPipeline,
+    route: CompilationRoute,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
     let explicit_unprotected_qualification = explicit_unprotected_qualification_enabled();
     let compiler_closure_marker_present =
@@ -213,9 +213,9 @@ pub(crate) fn admit_for_codegen(
     let backend_marker_present = env::var_os(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2).is_some();
     let qualification_backend_marker_present =
         env::var_os(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1).is_some();
-    let qualification_observations_authenticated = if pipeline
+    let qualification_observations_authenticated = if route
         .rustc_invocation_policy(explicit_unprotected_qualification)
-        == RustcInvocationPolicyV1::QualificationObserved
+        == RustcInvocationPolicy::QualificationObserved
         && compiler_closure_marker_present
         && qualification_backend_marker_present
     {
@@ -224,7 +224,7 @@ pub(crate) fn admit_for_codegen(
         false
     };
     admit_for_codegen_at(
-        pipeline,
+        route,
         explicit_unprotected_qualification,
         RUSTC_INVOCATION_CHILD_FD_V1,
         compiler_closure_marker_present,
@@ -235,7 +235,7 @@ pub(crate) fn admit_for_codegen(
 }
 
 fn admit_for_codegen_at(
-    pipeline: CodegenPipeline,
+    route: CompilationRoute,
     explicit_unprotected_qualification: bool,
     child_fd: RawFd,
     compiler_closure_marker_present: bool,
@@ -243,8 +243,8 @@ fn admit_for_codegen_at(
     qualification_backend_marker_present: bool,
     qualification_observations_authenticated: bool,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
-    match pipeline.rustc_invocation_policy(explicit_unprotected_qualification) {
-        RustcInvocationPolicyV1::Unmanaged => {
+    match route.rustc_invocation_policy(explicit_unprotected_qualification) {
+        RustcInvocationPolicy::Unmanaged => {
             reject_unexpected_rustc_signals_at(
                 child_fd,
                 compiler_closure_marker_present,
@@ -253,7 +253,7 @@ fn admit_for_codegen_at(
             )?;
             return Ok(None);
         }
-        RustcInvocationPolicyV1::QualificationObserved => {
+        RustcInvocationPolicy::QualificationObserved => {
             reject_unexpected_rustc_signals_at(child_fd, false, backend_marker_present, false)?;
             if !compiler_closure_marker_present || !qualification_backend_marker_present {
                 return Err(ProtectedRustcInvocationErrorV1::QualificationObservationsMissing);
@@ -265,7 +265,7 @@ fn admit_for_codegen_at(
             }
             return Ok(None);
         }
-        RustcInvocationPolicyV1::ProtectedV3 => {
+        RustcInvocationPolicy::ProtectedV3 => {
             if qualification_backend_marker_present {
                 return Err(
                     ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {

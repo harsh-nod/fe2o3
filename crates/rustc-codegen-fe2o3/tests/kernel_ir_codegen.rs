@@ -11,7 +11,7 @@ use serde::Deserialize;
 mod s09_identity_v2;
 use s09_identity_v2::{decode_hsaco_identity_claims_v2, identity_section_v2};
 
-const PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
+const PIPELINE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
 const LLVM_DWARFDUMP_ENV: &str = "FE2O3_LLVM_DWARFDUMP";
 const PROVIDER_SYMBOL: &str = "external_device_add_v1";
@@ -964,9 +964,9 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     let invalid_stderr = String::from_utf8_lossy(&invalid.stderr);
     assert!(!invalid.status.success(), "invalid selector was accepted");
     assert!(
-        invalid_stderr.contains(
-            "FE2O3_CODEGEN_PIPELINE must be unset (selecting `production-v1`) or exactly"
-        ) && invalid_stderr.contains("found \"kernel-ir\""),
+        invalid_stderr
+            .contains("FE2O3_QUALIFICATION_ORACLE_V1 must be unset for production compilation")
+            && invalid_stderr.contains("found \"kernel-ir\""),
         "missing strict selector diagnostic:\n{invalid_stderr}"
     );
     assert!(!invalid_stderr.contains("emitted vecadd"));
@@ -1097,7 +1097,7 @@ fn worker_v2_real_source_publishes_inspected_gfx942_hsaco() {
         .arg(directory.0.join("host.o"))
         .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
         .env("FE2O3_BUILD_SESSION_V1", "77".repeat(16))
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_HSACO_DIR", directory.0.join("artifacts"))
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")
@@ -1173,7 +1173,7 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
         .arg(&target)
         .arg("--offline")
         .env("FE2O3_BACKEND", &backend)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
@@ -1277,7 +1277,7 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
         ])
         .arg(&target)
         .env("FE2O3_BACKEND", &backend)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
@@ -1363,7 +1363,7 @@ fn worker_v2_s09_feature_collects_and_links_only_alpha() {
         ])
         .arg(&target)
         .env("FE2O3_BACKEND", &backend)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
         .output()
@@ -1440,7 +1440,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
         ])
         .arg(&target)
         .env("FE2O3_BACKEND", &backend)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0)
         .env("RUSTFLAGS", remap)
@@ -1705,7 +1705,7 @@ fn worker_v2_real_source_links_an_external_bitcode_provider() {
         .arg(directory.0.join("host.o"))
         .env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")
         .env("FE2O3_BUILD_SESSION_V1", "88".repeat(16))
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_HSACO_DIR", directory.0.join("artifacts"))
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_VERBOSE", "1")

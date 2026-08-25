@@ -68,7 +68,7 @@ fn backend_build(workspace: &Path, target: &str) -> Output {
             "gfx942_wave_lds_v1",
         ])
         .env("FE2O3_TARGET", target)
-        .env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2")
         .env("FE2O3_WORKER_V2_CONFIG_V2", &config.0);
     command
         .output()

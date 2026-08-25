@@ -14,6 +14,10 @@ use fe2o3_rustc_invocation::{
     VerificationModeV1, encode_descriptor_v1, encode_descriptor_v2,
 };
 
+use crate::qualification_selection::{
+    CompilationRoute, QualificationOracle, QualificationSelection,
+};
+
 use super::*;
 
 const TEST_CHILD_FD: RawFd = 711;
@@ -117,27 +121,38 @@ fn validate(
     )
 }
 
+fn qualification_route(oracle: QualificationOracle) -> CompilationRoute {
+    QualificationSelection::ExplicitQualification(oracle)
+        .resolve()
+        .expect("qualification route must resolve")
+}
+
 #[test]
 fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
-    for pipeline in CodegenPipeline::ALL {
+    assert_eq!(
+        CompilationRoute::Production.rustc_invocation_policy(true),
+        RustcInvocationPolicy::ProtectedV3,
+    );
+    assert_eq!(
+        CompilationRoute::Production.rustc_invocation_policy(false),
+        RustcInvocationPolicy::ProtectedV3,
+    );
+    for oracle in QualificationOracle::ALL {
+        let route = qualification_route(oracle);
         assert_eq!(
-            pipeline.rustc_invocation_policy(true),
-            if pipeline == CodegenPipeline::ProductionV1 {
-                RustcInvocationPolicyV1::ProtectedV3
-            } else {
-                RustcInvocationPolicyV1::QualificationObserved
-            }
+            route.rustc_invocation_policy(true),
+            RustcInvocationPolicy::QualificationObserved,
         );
         assert_eq!(
-            pipeline.rustc_invocation_policy(false),
-            match pipeline {
-                CodegenPipeline::ProductionV1 | CodegenPipeline::CollectedRowSoftmaxV1 => {
-                    RustcInvocationPolicyV1::ProtectedV3
+            route.rustc_invocation_policy(false),
+            match oracle {
+                QualificationOracle::CollectedRowSoftmaxV1 => {
+                    RustcInvocationPolicy::ProtectedV3
                 }
-                CodegenPipeline::SimulationV1 => {
-                    RustcInvocationPolicyV1::QualificationObserved
+                QualificationOracle::SimulationV1 => {
+                    RustcInvocationPolicy::QualificationObserved
                 }
-                _ => RustcInvocationPolicyV1::Unmanaged,
+                _ => RustcInvocationPolicy::Unmanaged,
             }
         );
     }
@@ -149,14 +164,15 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
     let descriptor_bytes =
         fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
 
-    for pipeline in CodegenPipeline::ALL {
-        if pipeline.rustc_invocation_policy(false) != RustcInvocationPolicyV1::Unmanaged {
+    for oracle in QualificationOracle::ALL {
+        let route = qualification_route(oracle);
+        if route.rustc_invocation_policy(false) != RustcInvocationPolicy::Unmanaged {
             continue;
         }
         let descriptor = sealed_image(&descriptor_bytes);
         install_inherited(&descriptor, TEST_CHILD_FD);
         assert!(matches!(
-            admit_for_codegen_at(pipeline, false, TEST_CHILD_FD, false, false, false, false),
+            admit_for_codegen_at(route, false, TEST_CHILD_FD, false, false, false, false),
             Err(
                 ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
                     descriptor_present: true,
@@ -182,7 +198,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
     ] {
         assert!(matches!(
             admit_for_codegen_at(
-                CodegenPipeline::KernelIrV1,
+                qualification_route(QualificationOracle::KernelIrV1),
                 false,
                 TEST_CHILD_FD,
                 compiler_closure_marker_present,
@@ -203,7 +219,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
 
     assert!(
         admit_for_codegen_at(
-            CodegenPipeline::KernelIrV1,
+            qualification_route(QualificationOracle::KernelIrV1),
             false,
             TEST_CHILD_FD,
             false,
@@ -222,20 +238,20 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     let descriptor_bytes =
         fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
 
-    for pipeline in CodegenPipeline::ALL {
-        if pipeline.rustc_invocation_policy(true) != RustcInvocationPolicyV1::QualificationObserved
-        {
+    for oracle in QualificationOracle::ALL {
+        let route = qualification_route(oracle);
+        if route.rustc_invocation_policy(true) != RustcInvocationPolicy::QualificationObserved {
             continue;
         }
         assert!(
-            admit_for_codegen_at(pipeline, true, TEST_CHILD_FD, true, false, true, true,)
+            admit_for_codegen_at(route, true, TEST_CHILD_FD, true, false, true, true,)
                 .unwrap()
                 .is_none()
         );
     }
     assert!(
         admit_for_codegen_at(
-            CodegenPipeline::SimulationV1,
+            qualification_route(QualificationOracle::SimulationV1),
             false,
             TEST_CHILD_FD,
             true,
@@ -252,7 +268,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     {
         assert!(matches!(
             admit_for_codegen_at(
-                CodegenPipeline::KernelIrV1,
+                qualification_route(QualificationOracle::KernelIrV1),
                 true,
                 TEST_CHILD_FD,
                 compiler_closure_marker_present,
@@ -265,7 +281,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     }
     assert!(matches!(
         admit_for_codegen_at(
-            CodegenPipeline::KernelIrV1,
+            qualification_route(QualificationOracle::KernelIrV1),
             true,
             TEST_CHILD_FD,
             true,
@@ -277,7 +293,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     ));
     assert!(matches!(
         admit_for_codegen_at(
-            CodegenPipeline::KernelIrV1,
+            qualification_route(QualificationOracle::KernelIrV1),
             true,
             TEST_CHILD_FD,
             true,
@@ -299,7 +315,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     install_inherited(&descriptor, TEST_CHILD_FD);
     assert!(matches!(
         admit_for_codegen_at(
-            CodegenPipeline::KernelIrV1,
+            qualification_route(QualificationOracle::KernelIrV1),
             true,
             TEST_CHILD_FD,
             true,
@@ -321,7 +337,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
 
     assert!(matches!(
         admit_for_codegen_at(
-            CodegenPipeline::ProductionV1,
+            CompilationRoute::Production,
             false,
             TEST_CHILD_FD,
             true,
@@ -344,12 +360,13 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
 fn zero_kernel_protected_selection_cannot_downgrade_or_leave_an_inherited_fd() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     assert_eq!(
-        CodegenPipeline::ProductionV1.rustc_invocation_policy(false),
-        RustcInvocationPolicyV1::ProtectedV3,
+        CompilationRoute::Production.rustc_invocation_policy(false),
+        RustcInvocationPolicy::ProtectedV3,
     );
     assert_eq!(
-        CodegenPipeline::CollectedRowSoftmaxV1.rustc_invocation_policy(false),
-        RustcInvocationPolicyV1::ProtectedV3,
+        qualification_route(QualificationOracle::CollectedRowSoftmaxV1)
+            .rustc_invocation_policy(false),
+        RustcInvocationPolicy::ProtectedV3,
     );
 
     let valid = RustcInvocationCapabilityV1::create(baseline_descriptor())

@@ -212,7 +212,7 @@ fn protected_command(action: &str, target_dir: &Path, target: &str) -> Command {
         )
         .env("FE2O3_BACKEND", &backend)
         .env("FE2O3_AUTHORITY_BACKEND_SHA256_V1", file_sha256(&backend))
-        .env("FE2O3_CODEGEN_PIPELINE", "collected-row-softmax-v1")
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
         .env("FE2O3_TARGET", target)
         .env("LANG", "C")
         .env("LC_ALL", "C")

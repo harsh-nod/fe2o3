@@ -452,7 +452,7 @@ pub(crate) fn collect_qualification_device_functions<'tcx>(
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
     target: &crate::AmdGpuTarget,
-    pipeline: crate::pipeline_selection::QualificationPipelineV1,
+    pipeline: crate::qualification_selection::SelectedQualificationOracle,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
     let extended_helper_edges = pipeline.requires_extended_collector_edges();
     collect_device_functions_for_purpose(
@@ -4933,14 +4933,14 @@ mod tests {
             .split_once("pub(crate) fn collect_authenticated_kernel_closure_v1")
             .unwrap()
             .0;
-        for forbidden in ["std::env", "CODEGEN_PIPELINE_ENV", "FE2O3_TARGET"] {
+        for forbidden in ["std::env", "QUALIFICATION_ORACLE_ENV", "FE2O3_TARGET"] {
             assert!(
                 !qualification.contains(forbidden),
                 "qualification collection entry contains hidden input {forbidden:?}"
             );
         }
         assert!(qualification.contains("target: &crate::AmdGpuTarget"));
-        assert!(qualification.contains("QualificationPipelineV1"));
+        assert!(qualification.contains("SelectedQualificationOracle"));
     }
 
     #[test]
@@ -4953,7 +4953,7 @@ mod tests {
             .split_once("fn collect_device_functions_for_purpose")
             .unwrap()
             .0;
-        for forbidden in ["std::env", "CODEGEN_PIPELINE_ENV", "FE2O3_TARGET"] {
+        for forbidden in ["std::env", "QUALIFICATION_ORACLE_ENV", "FE2O3_TARGET"] {
             assert!(
                 !production.contains(forbidden),
                 "production collection entry contains hidden input {forbidden:?}"

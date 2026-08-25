@@ -81,14 +81,12 @@ use crate::project::PinnedDirectory;
 use crate::protected_compiler_handoff_v3::{
     ParentRustcInvocationCustody, ProtectedCompilerModuleHandoffIntake,
 };
-#[cfg(test)]
-use crate::worker_v2::PRODUCTION_V1_PIPELINE;
 use crate::worker_v2::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
-    PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
-    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
+    OBSOLETE_PRODUCTION_SELECTOR, PreparedWorkerV2Config, WORKER_V2_CONFIG_ENV,
+    WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, WorkerV2BuildObservation,
     WorkerV2CompileEnvironmentProfileV1, WorkerV2ConfigError, WorkerV2ConfigIdentity,
-    WorkerV2SourceDebugProfileV1, production_pipeline_selected,
+    WorkerV2SourceDebugProfileV1, production_compilation_selected,
 };
 use crate::worker_v2_artifact_container::{
     assemble_recovered_worker_v2_load_envelope_v1, assemble_recovered_worker_v2_load_envelope_v2,
@@ -118,6 +116,7 @@ const NON_PRODUCTION_REPRODUCTION_RECORD_ENV: &str =
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
+const QUALIFICATION_RELEASE_ACTION_ENV: &str = "FE2O3_PROTECTED_RELEASE_ACTION_V1";
 const ROW_SOFTMAX_V1_PROVISION_VALUE: &str = "row-softmax-v1-provision";
 const ROW_SOFTMAX_V1_RUN_VALUE: &str = "row-softmax-v1-run";
 const ROW_SOFTMAX_V1_PROVISION_PREFIX: &str = "FE2O3_ROW_SOFTMAX_V1_PROVIDER_OBSERVATION=";
@@ -408,7 +407,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 capability_broker::CapabilityProfileV1::Ordinary
             };
             if capability_profile == capability_broker::CapabilityProfileV1::S09
-                || std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+                || std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
                     == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
             {
                 reject_authority_linker_arguments(compile.argv())?;
@@ -461,7 +460,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         _ => return Err(BindingWrapperError::UnsupportedInvocation),
     };
     let protected_kernel_root =
-        managed_attempt.is_some() && selected_pipeline_requires_protected_invocation();
+        managed_attempt.is_some() && selected_compilation_requires_protected_invocation();
 
     if managed_attempt
         .as_ref()
@@ -504,7 +503,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 capabilities.prepare_qualification_command(
                     command.as_command_mut(),
                     qualification_requires_compiler_closure_observation(
-                        std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref(),
+                        std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref(),
                     ),
                 )?;
             }
@@ -685,7 +684,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 .expect("S09 process-consistency expectation exists")
                 .finalize(observation.prepared_rustc_command_sha256)?;
         }
-        if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        if std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
             == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
             && let Some(managed) = managed_attempt.as_ref()
         {
@@ -778,26 +777,29 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     Ok(status)
 }
 
-fn selected_pipeline_requires_protected_invocation() -> bool {
-    pipeline_requires_protected_invocation(
-        std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref(),
+fn selected_compilation_requires_protected_invocation() -> bool {
+    qualification_selection_requires_protected_invocation(
+        std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref(),
         cfg!(debug_assertions)
             && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
                 == Some(OsStr::new("1")),
     )
 }
 
-fn pipeline_requires_protected_invocation(
-    pipeline: Option<&OsStr>,
+fn qualification_selection_requires_protected_invocation(
+    qualification_oracle: Option<&OsStr>,
     explicit_unprotected_qualification: bool,
 ) -> bool {
-    production_pipeline_selected(pipeline)
-        || (pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+    production_compilation_selected(qualification_oracle)
+        || qualification_oracle == Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR))
+        || (qualification_oracle == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
             && !explicit_unprotected_qualification)
 }
 
-fn qualification_requires_compiler_closure_observation(pipeline: Option<&OsStr>) -> bool {
-    pipeline == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
+fn qualification_requires_compiler_closure_observation(
+    qualification_oracle: Option<&OsStr>,
+) -> bool {
+    qualification_oracle == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
 }
 
 fn selected_kernel_root(
@@ -856,7 +858,7 @@ fn configure_build_observation_environment_with_test_mutation(
 }
 
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
-    let authority_sensitive = std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+    let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
         || std::env::var_os(crate::worker_v2::WORKER_V2_CONFIG_ENV).is_some();
     let unprotected_validation = cfg!(debug_assertions)
@@ -1330,30 +1332,34 @@ struct CompleteReviewedChildEnvironmentV2 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FixedS09InheritedInputV2 {
+enum FixedReviewedInheritedInputV2 {
     CargoManifestDir,
-    CodegenPipeline,
+    QualificationOracle,
     Target,
 }
 
-impl FixedS09InheritedInputV2 {
-    const ALL: [Self; 3] = [Self::CargoManifestDir, Self::CodegenPipeline, Self::Target];
+impl FixedReviewedInheritedInputV2 {
+    const ALL: [Self; 3] = [
+        Self::CargoManifestDir,
+        Self::QualificationOracle,
+        Self::Target,
+    ];
 
     const fn name(self) -> &'static str {
         match self {
             Self::CargoManifestDir => "CARGO_MANIFEST_DIR",
-            Self::CodegenPipeline => "FE2O3_CODEGEN_PIPELINE",
+            Self::QualificationOracle => "FE2O3_QUALIFICATION_ORACLE_V1",
             Self::Target => "FE2O3_TARGET",
         }
     }
 
-    fn accepts(self, value: &OsStr) -> bool {
+    fn accepts(self, value: &OsStr, qualification_oracle: Option<&OsStr>) -> bool {
         match self {
             Self::CargoManifestDir => {
                 let path = Path::new(value);
                 path.is_absolute() && os_bytes(value).len() <= 4096
             }
-            Self::CodegenPipeline => value == "kernel-ir-worker-v2",
+            Self::QualificationOracle => qualification_oracle == Some(value),
             Self::Target => value == "gfx942:xnack-",
         }
     }
@@ -1378,8 +1384,17 @@ fn materialize_reviewed_child_environment(
     general_gemm_pins: Option<GeneralGemmChildPinsV1<'_>>,
 ) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
     match profile {
+        Some(WorkerV2CompileEnvironmentProfileV1::ProductionGfx942) => {
+            materialize_closed_child_environment(command, inherited, None, "production").map(Some)
+        }
         Some(WorkerV2CompileEnvironmentProfileV1::S09AlphaGfx942O0) => {
-            materialize_s09_child_environment(command, inherited).map(Some)
+            materialize_closed_child_environment(
+                command,
+                inherited,
+                Some(OsStr::new("kernel-ir-worker-v2")),
+                "S09",
+            )
+            .map(Some)
         }
         Some(WorkerV2CompileEnvironmentProfileV1::ScalarGemmV1Gfx942) => {
             materialize_scalar_gemm_v1_child_environment(command, inherited).map(Some)
@@ -1414,7 +1429,7 @@ fn materialize_row_softmax_v1_child_environment(
 ) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for name in inherited.keys() {
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "row-softmax child environment rejects inherited variable {name:?}"
             )));
@@ -1433,9 +1448,9 @@ fn materialize_row_softmax_v1_child_environment(
             "row-softmax child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
         ));
     }
-    if required("FE2O3_CODEGEN_PIPELINE")? != ROW_SOFTMAX_V1_PIPELINE {
+    if required("FE2O3_QUALIFICATION_ORACLE_V1")? != ROW_SOFTMAX_V1_PIPELINE {
         return Err(BindingWrapperError::BuildObservation(
-            "row-softmax child environment has changed FE2O3_CODEGEN_PIPELINE".to_owned(),
+            "row-softmax child environment has changed FE2O3_QUALIFICATION_ORACLE_V1".to_owned(),
         ));
     }
     if required(TARGET_ENV)? != "gfx942:xnack-" {
@@ -1446,7 +1461,7 @@ fn materialize_row_softmax_v1_child_environment(
     let mut final_environment = BTreeMap::from([
         (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
         (
-            OsString::from("FE2O3_CODEGEN_PIPELINE"),
+            OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
             OsString::from(ROW_SOFTMAX_V1_PIPELINE),
         ),
         (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
@@ -1486,7 +1501,7 @@ fn materialize_row_softmax_v1_child_environment(
             }
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "row-softmax command has unreviewed explicit environment mutation {name:?}"
             )));
@@ -1521,30 +1536,37 @@ fn materialize_row_softmax_v1_child_environment(
     })
 }
 
-fn materialize_s09_child_environment(
+fn materialize_closed_child_environment(
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    qualification_oracle: Option<&OsStr>,
+    profile: &str,
 ) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for name in inherited.keys() {
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
-                "S09 child environment rejects inherited variable {name:?}"
+                "{profile} child environment rejects inherited variable {name:?}"
             )));
         }
     }
 
     let mut final_environment = BTreeMap::new();
-    for input in FixedS09InheritedInputV2::ALL {
+    for input in FixedReviewedInheritedInputV2::ALL {
+        if input == FixedReviewedInheritedInputV2::QualificationOracle
+            && qualification_oracle.is_none()
+        {
+            continue;
+        }
         let name = input.name();
         let value = inherited.get(OsStr::new(name)).ok_or_else(|| {
             BindingWrapperError::BuildObservation(format!(
-                "S09 fixed environment is missing required {name}"
+                "{profile} fixed environment is missing required {name}"
             ))
         })?;
-        if !input.accepts(value) {
+        if !input.accepts(value, qualification_oracle) {
             return Err(BindingWrapperError::BuildObservation(format!(
-                "S09 fixed environment has invalid {name}"
+                "{profile} fixed environment has invalid {name}"
             )));
         }
         final_environment.insert(OsString::from(name), value.clone());
@@ -1557,9 +1579,9 @@ fn materialize_s09_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
-                "S09 command has unreviewed explicit environment mutation {name:?}"
+                "{profile} command has unreviewed explicit environment mutation {name:?}"
             )));
         }
         match value {
@@ -1594,7 +1616,7 @@ fn materialize_scalar_gemm_v1_child_environment(
                 "scalar GEMM child environment variable {name_text} has a non-UTF-8 value"
             )));
         }
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "scalar GEMM child environment rejects inherited variable {name_text}"
             )));
@@ -1619,9 +1641,9 @@ fn materialize_scalar_gemm_v1_child_environment(
             "scalar GEMM child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
         ));
     }
-    if required("FE2O3_CODEGEN_PIPELINE")? != SCALAR_GEMM_V1_PIPELINE {
+    if required("FE2O3_QUALIFICATION_ORACLE_V1")? != SCALAR_GEMM_V1_PIPELINE {
         return Err(BindingWrapperError::BuildObservation(
-            "scalar GEMM child environment has changed FE2O3_CODEGEN_PIPELINE".to_owned(),
+            "scalar GEMM child environment has changed FE2O3_QUALIFICATION_ORACLE_V1".to_owned(),
         ));
     }
     if required(TARGET_ENV)? != "gfx942:xnack-" {
@@ -1641,7 +1663,7 @@ fn materialize_scalar_gemm_v1_child_environment(
     let mut final_environment = BTreeMap::from([
         (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
         (
-            OsString::from("FE2O3_CODEGEN_PIPELINE"),
+            OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
             OsString::from(SCALAR_GEMM_V1_PIPELINE),
         ),
         (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
@@ -1658,7 +1680,7 @@ fn materialize_scalar_gemm_v1_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "scalar GEMM command has unreviewed explicit environment mutation {name:?}"
             )));
@@ -1702,7 +1724,7 @@ fn materialize_general_gemm_v1_child_environment(
                 "general GEMM child environment variable {name_text} has a non-UTF-8 value"
             )));
         }
-        if rejected_s09_inherited_environment(name) {
+        if rejected_reviewed_inherited_environment(name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "general GEMM child environment rejects inherited variable {name_text}"
             )));
@@ -1727,9 +1749,9 @@ fn materialize_general_gemm_v1_child_environment(
             "general GEMM child environment has invalid CARGO_MANIFEST_DIR".to_owned(),
         ));
     }
-    if required("FE2O3_CODEGEN_PIPELINE")? != crate::worker_v2::GENERAL_GEMM_V1_PIPELINE {
+    if required("FE2O3_QUALIFICATION_ORACLE_V1")? != crate::worker_v2::GENERAL_GEMM_V1_PIPELINE {
         return Err(BindingWrapperError::BuildObservation(
-            "general GEMM child environment has changed FE2O3_CODEGEN_PIPELINE".to_owned(),
+            "general GEMM child environment has changed FE2O3_QUALIFICATION_ORACLE_V1".to_owned(),
         ));
     }
     if required(TARGET_ENV)? != "gfx942:xnack-" {
@@ -1780,7 +1802,7 @@ fn materialize_general_gemm_v1_child_environment(
     let mut final_environment = BTreeMap::from([
         (OsString::from("CARGO_MANIFEST_DIR"), manifest_dir.clone()),
         (
-            OsString::from("FE2O3_CODEGEN_PIPELINE"),
+            OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
             OsString::from(crate::worker_v2::GENERAL_GEMM_V1_PIPELINE),
         ),
         (OsString::from(TARGET_ENV), OsString::from("gfx942:xnack-")),
@@ -1813,7 +1835,7 @@ fn materialize_general_gemm_v1_child_environment(
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
-        if !managed_s09_child_environment(&name) {
+        if !managed_reviewed_child_environment(&name) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "general GEMM command has unreviewed explicit environment mutation {name:?}"
             )));
@@ -1867,7 +1889,7 @@ fn apply_managed_loader_environment(
 fn reviewed_scalar_inherited_environment(name: &OsStr) -> bool {
     matches!(
         os_bytes(name),
-        b"FE2O3_CODEGEN_PIPELINE"
+        b"FE2O3_QUALIFICATION_ORACLE_V1"
             | b"FE2O3_TARGET"
             | b"FE2O3_VERIFY_KERNEL_IR"
             | b"FE2O3_BACKEND"
@@ -2027,9 +2049,10 @@ fn require_canonical_sha256_environment(
     Ok(())
 }
 
-fn rejected_s09_inherited_environment(name: &OsStr) -> bool {
+fn rejected_reviewed_inherited_environment(name: &OsStr) -> bool {
     let bytes = os_bytes(name);
     bytes == b"RUSTC_BOOTSTRAP"
+        || bytes == b"FE2O3_CODEGEN_PIPELINE"
         || crate::is_dynamic_loader_environment_name(name)
         || credential_like_environment_name(bytes)
 }
@@ -2053,7 +2076,7 @@ fn credential_like_environment_name(name: &[u8]) -> bool {
     })
 }
 
-fn managed_s09_child_environment(name: &OsStr) -> bool {
+fn managed_reviewed_child_environment(name: &OsStr) -> bool {
     matches!(
         os_bytes(name),
         b"LANG"
@@ -2435,7 +2458,7 @@ impl CompilerCapabilities {
                 "capability broker omitted invocation authority".to_owned(),
             )
         })?;
-        let invocation_authority = if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        let invocation_authority = if std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
             == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
         {
             Some(invocation_authority)
@@ -2527,11 +2550,11 @@ impl CompilerCapabilities {
         &self,
         attempt: BuildAttempt,
     ) -> Result<PathBuf, BindingWrapperError> {
-        let component = format!(".fe2o3-s09-tmp-{}", attempt.to_env_value());
+        let component = format!(".fe2o3-rustc-tmp-{}", attempt.to_env_value());
         let mode = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR;
         rustix::fs::mkdirat(self.artifact.file(), &component, mode).map_err(|error| {
             BindingWrapperError::BuildObservation(format!(
-                "cannot create private S09 compiler temporary directory: {error}"
+                "cannot create private reviewed rustc temporary directory: {error}"
             ))
         })?;
         let directory = rustix::fs::openat(
@@ -2545,12 +2568,12 @@ impl CompilerCapabilities {
         )
         .map_err(|error| {
             BindingWrapperError::BuildObservation(format!(
-                "cannot pin private S09 compiler temporary directory: {error}"
+                "cannot pin private reviewed rustc temporary directory: {error}"
             ))
         })?;
         rustix::fs::fchmod(&directory, mode).map_err(|error| {
             BindingWrapperError::BuildObservation(format!(
-                "cannot make S09 compiler temporary directory private: {error}"
+                "cannot make reviewed rustc temporary directory private: {error}"
             ))
         })?;
         Ok(PathBuf::from(format!(
@@ -2698,7 +2721,8 @@ fn scope_unmanaged_dependency_environment(command: &mut Command) {
     // Production is the compiler default, so an unselected dependency needs an
     // explicit non-authoritative route rather than an absent selector. This route
     // can diagnose forged kernel providers but cannot publish artifacts.
-    command.env("FE2O3_CODEGEN_PIPELINE", "kernel-ir-v1");
+    command.env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1");
+    command.env_remove("FE2O3_CODEGEN_PIPELINE");
     for name in [
         HSACO_DIR_ENV,
         CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
@@ -2707,7 +2731,7 @@ fn scope_unmanaged_dependency_environment(command: &mut Command) {
         crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV,
         WORKER_V2_CONFIG_ENV,
         WORKER_V2_EXPECTED_ID_ENV,
-        crate::PROTECTED_RELEASE_ACTION_ENV,
+        QUALIFICATION_RELEASE_ACTION_ENV,
     ] {
         command.env_remove(name);
     }
@@ -2845,7 +2869,8 @@ fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV1) -> bool {
     matches!(
         error,
         WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
-            fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
+            fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::AttemptState
+                | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingClaim
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingReceipt
         )
@@ -3046,7 +3071,8 @@ fn prepare_managed_attempt(
         )
         .map_err(BindingWrapperError::BuildObservation)?
     };
-    let compile_environment_profile = if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+    let compile_environment_profile = if std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1")
+        .as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
     {
         Some(WorkerV2CompileEnvironmentProfileV1::RowSoftmaxV1Gfx942)
@@ -3067,7 +3093,7 @@ fn prepare_managed_attempt(
     let producer =
         ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
             .map_err(BindingWrapperError::Artifact)?;
-    let invocation = if std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+    let invocation = if std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE))
     {
         let mut effective_argv =
@@ -3089,11 +3115,11 @@ fn prepare_managed_attempt(
     let protected_compiler_closure = compiler_capabilities.protected_compiler_closure()?;
     let production_v1_worker = worker_v2
         .as_ref()
-        .is_some_and(PreparedWorkerV2Config::is_production_v1);
+        .is_some_and(PreparedWorkerV2Config::is_production_compilation);
     let worker_v2_binding_schema =
         WorkerV2BindingSchema::select(protected_compiler_closure, production_v1_worker)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
-    let release_action = std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV);
+    let release_action = std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV);
     let row_softmax_provision =
         release_action.as_deref() == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE));
     let row_softmax_release = worker_v2
@@ -3456,7 +3482,7 @@ fn complete_managed_attempt_inner(
 
 fn simulation_mode_selected() -> bool {
     std::env::var_os(crate::SIMULATION_MODE_ENV).as_deref() == Some(OsStr::new("1"))
-        && std::env::var_os("FE2O3_CODEGEN_PIPELINE").as_deref()
+        && std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
             == Some(OsStr::new("simulation-v1"))
         && std::env::var(crate::SIMULATION_ATTEMPT_ENV)
             .ok()
@@ -3511,7 +3537,7 @@ fn complete_simulation_attempt(managed: &ManagedAttempt) -> Result<(), Completio
 }
 
 fn row_softmax_provisioning_requested() -> bool {
-    std::env::var_os(crate::PROTECTED_RELEASE_ACTION_ENV).as_deref()
+    std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV).as_deref()
         == Some(OsStr::new(ROW_SOFTMAX_V1_PROVISION_VALUE))
 }
 
@@ -3687,7 +3713,7 @@ fn complete_fresh_worker_v2(
     let canonical_response = evidence.authorized().response().canonical_bytes().to_vec();
     let raw_output = evidence.output_bytes().to_vec();
     let worker_v2_request_identity = *evidence.authorized_request_identity();
-    let inspected = if worker_v2.is_production_v1() {
+    let inspected = if worker_v2.is_production_compilation() {
         inspect_production_v1_worker_v2_raw_hsaco_v1(evidence)
     } else {
         inspect_worker_v2_raw_hsaco_v1(evidence)
@@ -3721,7 +3747,7 @@ fn complete_fresh_production_worker_v3(
     compiler_closure: CompilerClosureV2,
     parent_custody: &ParentRustcInvocationCustody,
 ) -> Result<(), CompletionFailure> {
-    if !worker.is_production_v1() {
+    if !worker.is_production_compilation() {
         return Err(CompletionFailure::Uncommitted(
             "strict V3 compiler intake accepts only the preselected production-v1 worker"
                 .to_owned(),
@@ -3904,7 +3930,7 @@ fn complete_fresh_protected_worker_v2(
             "closure-bound reproducible Worker V2 execution failed: {error}"
         ))
     })?;
-    let inspected = if worker_v2.is_production_v1() {
+    let inspected = if worker_v2.is_production_compilation() {
         inspect_protected_production_v1_worker_v2_raw_hsaco_v1(evidence)
     } else {
         inspect_protected_worker_v2_raw_hsaco_v1(evidence)
@@ -5091,10 +5117,10 @@ mod tests {
         GeneralGemmChildPinsV1, LLVM_BUILD_IDENTITY_OBSERVATION_ENV_V2, LinuxObjectIdentityV3,
         ManagedAttempt, ManagedAttemptRevocationGuard,
         OBSERVED_PARENT_PID_BUILD_OBSERVATION_ENV_V2,
-        OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2,
-        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PRODUCTION_V1_PIPELINE,
-        PreparedRustcConsistencyExpectation, ProtectedWorkerV2TransitionBlocker,
-        QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
+        OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2, OBSOLETE_PRODUCTION_SELECTOR,
+        PINNED_CARGO_IMAGE_BUILD_OBSERVATION_ENV_V2, PreparedRustcConsistencyExpectation,
+        ProtectedWorkerV2TransitionBlocker, QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1,
+        QUALIFICATION_RELEASE_ACTION_ENV, ROW_SOFTMAX_EFFECTIVE_RUSTC_ARGV_DOMAIN_V1,
         ROW_SOFTMAX_V1_PIPELINE, ROW_SOFTMAX_V1_RUN_VALUE, RustcCodegenMetadataErrorV1,
         RustcInvocationV2, WORKER_BUILD_IDENTITY_OBSERVATION_ENV_V2,
         WORKER_CONFIG_BUILD_OBSERVATION_ENV_V2, WORKER_EXECUTABLE_BUILD_OBSERVATION_ENV_V2,
@@ -5104,18 +5130,19 @@ mod tests {
         configure_build_observation_environment_with_test_mutation,
         configure_qualification_route_marker, configure_worker_build_observation_environment,
         decode_managed_rustc_args, derive_build_attempt_input_with_config_identity, hex,
-        is_cargo_stdin_probe, materialize_general_gemm_v1_child_environment,
-        materialize_reviewed_child_environment, materialize_row_softmax_v1_child_environment,
-        materialize_s09_child_environment, materialize_scalar_gemm_v1_child_environment,
+        is_cargo_stdin_probe, materialize_closed_child_environment,
+        materialize_general_gemm_v1_child_environment, materialize_reviewed_child_environment,
+        materialize_row_softmax_v1_child_environment, materialize_scalar_gemm_v1_child_environment,
         measure_build_executable, observe_pinned_cargo_image_and_parent,
-        ordered_rustc_codegen_metadata_v1, os_bytes, pipeline_requires_protected_invocation,
-        pre_spawn_failure, prepare_managed_attempt, prepared_rustc_command_sha256,
-        process_start_time_ticks, protected_worker_v2_transition_blocker, publish_finish_and_clear,
+        ordered_rustc_codegen_metadata_v1, os_bytes, pre_spawn_failure, prepare_managed_attempt,
+        prepared_rustc_command_sha256, process_start_time_ticks,
+        protected_worker_v2_transition_blocker, publish_finish_and_clear,
         publish_finish_and_clear_protected, qualification_requires_compiler_closure_observation,
-        reject_authority_linker_arguments, reject_uninspectable_rustc_args,
-        resolve_command_executable_with_path, row_softmax_effective_rustc_argv_identity,
-        row_softmax_provider_observation_json, scope_unmanaged_dependency_environment,
-        selected_kernel_root, worker_v3_readiness_is_absent,
+        qualification_selection_requires_protected_invocation, reject_authority_linker_arguments,
+        reject_uninspectable_rustc_args, resolve_command_executable_with_path,
+        row_softmax_effective_rustc_argv_identity, row_softmax_provider_observation_json,
+        scope_unmanaged_dependency_environment, selected_kernel_root,
+        worker_v3_readiness_is_absent,
     };
     use crate::inert_rustc_invocation_capture::InertRustcInvocationCaptureV2;
     use crate::pinned_codegen_backend::PinnedCodegenBackend;
@@ -5990,11 +6017,13 @@ mod tests {
                 .env("TMPDIR", "/proc/self/fd/197/private")
                 .env("FE2O3_BUILD_ATTEMPT_V1", "attempt")
                 .env_remove("FE2O3_HSACO_DIR");
-            let complete_environment = materialize_s09_child_environment(
+            let complete_environment = materialize_closed_child_environment(
                 &mut command,
                 inherited
                     .iter()
                     .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+                Some(OsStr::new("kernel-ir-worker-v2")),
+                "S09",
             )
             .unwrap();
             let digest = prepared_rustc_command_sha256(
@@ -6012,7 +6041,7 @@ mod tests {
 
         let inherited = [
             ("CARGO_MANIFEST_DIR", "/workspace"),
-            ("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2"),
+            ("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2"),
             ("FE2O3_TARGET", "gfx942:xnack-"),
             ("CARGO_PKG_NAME", "unit"),
             ("CUSTOM_BUILD_INPUT", "first"),
@@ -6044,7 +6073,7 @@ mod tests {
             [
                 "CARGO_MANIFEST_DIR",
                 "FE2O3_BUILD_ATTEMPT_V1",
-                "FE2O3_CODEGEN_PIPELINE",
+                "FE2O3_QUALIFICATION_ORACLE_V1",
                 "FE2O3_TARGET",
                 "LANG",
                 "PATH",
@@ -6093,16 +6122,18 @@ mod tests {
 
     #[test]
     fn protected_invocation_authority_is_scoped_to_production_routes() {
-        assert!(pipeline_requires_protected_invocation(
-            Some(OsStr::new(PRODUCTION_V1_PIPELINE)),
+        assert!(qualification_selection_requires_protected_invocation(
+            Some(OsStr::new(OBSOLETE_PRODUCTION_SELECTOR)),
             false,
         ));
-        assert!(pipeline_requires_protected_invocation(None, false));
-        assert!(pipeline_requires_protected_invocation(
+        assert!(qualification_selection_requires_protected_invocation(
+            None, false
+        ));
+        assert!(qualification_selection_requires_protected_invocation(
             Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)),
             false,
         ));
-        assert!(!pipeline_requires_protected_invocation(
+        assert!(!qualification_selection_requires_protected_invocation(
             Some(OsStr::new(ROW_SOFTMAX_V1_PIPELINE)),
             true,
         ));
@@ -6111,7 +6142,9 @@ mod tests {
             Some(OsStr::new("kernel-ir-worker-v2")),
             Some(OsStr::new("collected-general-gemm-v1")),
         ] {
-            assert!(!pipeline_requires_protected_invocation(pipeline, false));
+            assert!(!qualification_selection_requires_protected_invocation(
+                pipeline, false
+            ));
             assert!(!qualification_requires_compiler_closure_observation(
                 pipeline
             ));
@@ -6138,6 +6171,7 @@ mod tests {
         let mut command = Command::new("/proc/self/fd/194");
         for (name, value) in [
             ("FE2O3_CODEGEN_PIPELINE", "production-v1"),
+            ("FE2O3_QUALIFICATION_ORACLE_V1", "production-v1"),
             ("FE2O3_HSACO_DIR", "/proc/self/fd/197"),
             ("FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2", "44"),
             ("FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1", "45"),
@@ -6161,10 +6195,11 @@ mod tests {
             .get_envs()
             .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(
-            overrides.get(OsStr::new("FE2O3_CODEGEN_PIPELINE")),
+            overrides.get(OsStr::new("FE2O3_QUALIFICATION_ORACLE_V1")),
             Some(&Some(OsStr::new("kernel-ir-v1")))
         );
         for name in [
+            "FE2O3_CODEGEN_PIPELINE",
             "FE2O3_HSACO_DIR",
             "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2",
             "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1",
@@ -6205,7 +6240,7 @@ mod tests {
             );
         let inherited = [
             ("CARGO_MANIFEST_DIR", "/workspace"),
-            ("FE2O3_CODEGEN_PIPELINE", "kernel-ir-worker-v2"),
+            ("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-worker-v2"),
             ("FE2O3_TARGET", "gfx942:xnack-"),
         ]
         .map(|(name, value)| (OsString::from(name), OsString::from(value)));
@@ -6269,7 +6304,7 @@ mod tests {
     fn scalar_environment() -> Vec<(OsString, OsString)> {
         [
             ("CARGO_MANIFEST_DIR", "/workspace/scalar"),
-            ("FE2O3_CODEGEN_PIPELINE", "collected-scalar-gemm-v1"),
+            ("FE2O3_QUALIFICATION_ORACLE_V1", "collected-scalar-gemm-v1"),
             ("FE2O3_TARGET", "gfx942:xnack-"),
             ("FE2O3_VERIFY_KERNEL_IR", "1"),
             ("FE2O3_BACKEND", "/outer/backend.so"),
@@ -6317,7 +6352,7 @@ mod tests {
         [
             ("CARGO_MANIFEST_DIR", "/workspace/general"),
             (
-                "FE2O3_CODEGEN_PIPELINE",
+                "FE2O3_QUALIFICATION_ORACLE_V1",
                 crate::worker_v2::GENERAL_GEMM_V1_PIPELINE,
             ),
             ("FE2O3_TARGET", "gfx942:xnack-"),
@@ -6554,7 +6589,7 @@ mod tests {
             .collect::<std::collections::BTreeMap<_, _>>();
 
         assert_eq!(
-            effective.get(OsStr::new("FE2O3_CODEGEN_PIPELINE")),
+            effective.get(OsStr::new("FE2O3_QUALIFICATION_ORACLE_V1")),
             Some(&OsStr::new("collected-scalar-gemm-v1"))
         );
         assert_eq!(
@@ -6752,6 +6787,7 @@ mod tests {
             "DYLD_INSERT_LIBRARIES",
             "GLIBC_TUNABLES",
             "RUSTC_BOOTSTRAP",
+            "FE2O3_CODEGEN_PIPELINE",
             "PRIVATE_TOKEN",
             "AWS_SECRET_ACCESS_KEY",
         ] {
@@ -6766,7 +6802,7 @@ mod tests {
                     OsString::from("/workspace"),
                 ),
                 (
-                    OsString::from("FE2O3_CODEGEN_PIPELINE"),
+                    OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
                     OsString::from("kernel-ir-worker-v2"),
                 ),
                 (
@@ -6775,7 +6811,13 @@ mod tests {
                 ),
             ];
             inherited.push((OsString::from(name), OsString::from("forbidden")));
-            let error = materialize_s09_child_environment(&mut command, inherited).unwrap_err();
+            let error = materialize_closed_child_environment(
+                &mut command,
+                inherited,
+                Some(OsStr::new("kernel-ir-worker-v2")),
+                "S09",
+            )
+            .unwrap_err();
             assert!(error.to_string().contains(name));
         }
     }
@@ -6789,7 +6831,7 @@ mod tests {
                     OsString::from("/workspace/row"),
                 ),
                 (
-                    OsString::from("FE2O3_CODEGEN_PIPELINE"),
+                    OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
                     OsString::from(ROW_SOFTMAX_V1_PIPELINE),
                 ),
                 (
@@ -6954,7 +6996,7 @@ mod tests {
             .env("LANG", "C.UTF-8")
             .env("TMPDIR", "/proc/self/fd/197/private")
             .env("CUSTOM_ENV_MACRO_INPUT", "unsupported");
-        let error = materialize_s09_child_environment(
+        let error = materialize_closed_child_environment(
             &mut command,
             [
                 (
@@ -6962,7 +7004,7 @@ mod tests {
                     OsString::from("/workspace"),
                 ),
                 (
-                    OsString::from("FE2O3_CODEGEN_PIPELINE"),
+                    OsString::from("FE2O3_QUALIFICATION_ORACLE_V1"),
                     OsString::from("kernel-ir-worker-v2"),
                 ),
                 (
@@ -6970,6 +7012,8 @@ mod tests {
                     OsString::from("gfx942:xnack-"),
                 ),
             ],
+            Some(OsStr::new("kernel-ir-worker-v2")),
+            "S09",
         )
         .unwrap_err();
         assert!(error.to_string().contains("CUSTOM_ENV_MACRO_INPUT"));
@@ -8483,16 +8527,13 @@ mod tests {
             .current_dir(&workspace)
             .env(FAIL_CLOSED_CHILD_CASE_ENV, case.label())
             .env(FAIL_CLOSED_CHILD_ARTIFACT_ENV, &artifacts)
-            .env("FE2O3_CODEGEN_PIPELINE", case.pipeline())
+            .env("FE2O3_QUALIFICATION_ORACLE_V1", case.pipeline())
             .env("FE2O3_WORKER_V2_CONFIG_V2", &manifest)
             .env("FE2O3_BUILD_SESSION_V1", "e1".repeat(16));
         if matches!(case, FailClosedCase::RowSoftmax) {
-            command.env(
-                crate::PROTECTED_RELEASE_ACTION_ENV,
-                ROW_SOFTMAX_V1_RUN_VALUE,
-            );
+            command.env(QUALIFICATION_RELEASE_ACTION_ENV, ROW_SOFTMAX_V1_RUN_VALUE);
         } else {
-            command.env_remove(crate::PROTECTED_RELEASE_ACTION_ENV);
+            command.env_remove(QUALIFICATION_RELEASE_ACTION_ENV);
         }
         let status = crate::process_execution::status(&mut command).unwrap();
         assert!(status.success());
@@ -8729,6 +8770,11 @@ mod tests {
 
     #[test]
     fn production_v3_readiness_recovery_distinguishes_absence_from_corruption() {
+        assert!(worker_v3_readiness_is_absent(
+            &WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
+                fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::AttemptState,
+            ),
+        ));
         assert!(worker_v3_readiness_is_absent(
             &WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
                 fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope,
