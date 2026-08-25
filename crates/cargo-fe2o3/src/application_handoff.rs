@@ -22,12 +22,10 @@ use fe2o3_artifact_transaction::reacquire_current_hsaco_publication_lease_v1;
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
-use fe2o3_worker_v2_bundle::{
-    MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
-    WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1, WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1,
-    WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
-    WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-    WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+use fe2o3_runtime_protocol::{
+    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
+    WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
     WorkerV3ApplicationHandoffAckV1, WorkerV3ApplicationHandoffChallengeV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
@@ -58,11 +56,13 @@ pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 pub(crate) const RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION: &str = "3-test-scheduler-tolerant";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
+const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
+const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
+const RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1: &[u8] = b".envelope";
 pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
-const ENVELOPE_PREFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes();
-const ENVELOPE_SUFFIX: &[u8] = WORKER_V2_LOAD_ENVELOPE_NAME_SUFFIX_V1.as_bytes();
-const ENVELOPE_NAME_BYTES: usize = ENVELOPE_PREFIX.len() + 64 + ENVELOPE_SUFFIX.len();
+const RETIRED_WORKER_V2_ENVELOPE_NAME_BYTES_V1: usize =
+    RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.len() + 64 + RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1.len();
 const V3_ENVELOPE_PREFIX: &[u8] = b".fe2o3-worker-v3-load-readiness-v1-";
 const V3_ENVELOPE_SUFFIX: &[u8] = b".envelope";
 const V3_ENVELOPE_NAME_BYTES: usize = V3_ENVELOPE_PREFIX.len() + 64 + V3_ENVELOPE_SUFFIX.len();
@@ -1746,12 +1746,12 @@ fn collect_envelope_names(
         total_entries = total_entries.checked_add(1).ok_or_else(|| {
             "artifact directory entry count overflowed its scan bound".to_string()
         })?;
-        if total_entries > MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+        if total_entries > MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 {
             return Err(format!(
-                "artifact directory exceeds {MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
+                "artifact directory exceeds {MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
             ));
         }
-        let canonical = if bytes.starts_with(ENVELOPE_PREFIX) {
+        let canonical = if bytes.starts_with(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1) {
             if !is_canonical_v2_envelope_name(bytes) {
                 return Err("malformed Worker V2 envelope publication name".to_string());
             }
@@ -1784,10 +1784,11 @@ fn collect_envelope_names(
 }
 
 fn is_canonical_v2_envelope_name(bytes: &[u8]) -> bool {
-    bytes.len() == ENVELOPE_NAME_BYTES
-        && bytes.starts_with(ENVELOPE_PREFIX)
-        && bytes.ends_with(ENVELOPE_SUFFIX)
-        && bytes[ENVELOPE_PREFIX.len()..ENVELOPE_PREFIX.len() + 64]
+    bytes.len() == RETIRED_WORKER_V2_ENVELOPE_NAME_BYTES_V1
+        && bytes.starts_with(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1)
+        && bytes.ends_with(RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1)
+        && bytes[RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.len()
+            ..RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.len() + 64]
             .iter()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
@@ -2011,10 +2012,10 @@ mod tests {
 
     fn canonical_envelope_name(fill: u8) -> Vec<u8> {
         assert!(fill.is_ascii_hexdigit() && !fill.is_ascii_uppercase());
-        let mut name = Vec::with_capacity(ENVELOPE_NAME_BYTES);
-        name.extend_from_slice(ENVELOPE_PREFIX);
+        let mut name = Vec::with_capacity(RETIRED_WORKER_V2_ENVELOPE_NAME_BYTES_V1);
+        name.extend_from_slice(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1);
         name.extend(std::iter::repeat_n(fill, 64));
-        name.extend_from_slice(ENVELOPE_SUFFIX);
+        name.extend_from_slice(RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1);
         name
     }
 
@@ -2033,7 +2034,7 @@ mod tests {
         let names = collect_envelope_names(|visit| {
             visit(b".")?;
             visit(b"..")?;
-            for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+            for _ in 0..MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 {
                 visited += 1;
                 visit(b"unrelated")?;
             }
@@ -2041,7 +2042,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(visited, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1);
+        assert_eq!(visited, MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1);
         assert!(names.is_empty());
     }
 
@@ -2051,7 +2052,7 @@ mod tests {
         let error = collect_envelope_names(|visit| {
             visit(b".")?;
             visit(b"..")?;
-            for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 + 100 {
+            for _ in 0..MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 + 100 {
                 visited += 1;
                 visit(b"unrelated")?;
             }
@@ -2059,11 +2060,11 @@ mod tests {
         })
         .unwrap_err();
 
-        assert_eq!(visited, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 + 1);
+        assert_eq!(visited, MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 + 1);
         assert_eq!(
             error,
             format!(
-                "artifact directory exceeds {MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
+                "artifact directory exceeds {MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1} visible entries"
             )
         );
     }
@@ -2073,7 +2074,7 @@ mod tests {
         let first = canonical_envelope_name(b'0');
         let last = canonical_envelope_name(b'f');
         let names = collect_envelope_names(|visit| {
-            for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 - 3 {
+            for _ in 0..MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 - 3 {
                 visit(b"unrelated")?;
             }
             visit(&last)?;

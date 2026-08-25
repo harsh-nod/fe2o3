@@ -316,6 +316,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-kir-sim-cli",
  "fe2o3-process-identity",
+ "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
  "fe2o3-scalar-gemm-v1",
  "fe2o3-verifier",
@@ -969,6 +970,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
  "fe2o3-worker-v2-bundle",
  "libc",
@@ -1506,6 +1508,16 @@ name = "fe2o3-runtime-model"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-runtime-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco-finalize",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-rustc-front"
 version = "0.1.0"
 dependencies = [
@@ -1706,6 +1718,7 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
+ "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
  "rmpv",
  "sha2 0.11.0",

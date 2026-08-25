@@ -179,7 +179,7 @@ struct DynamicEntry {
     value: u64,
 }
 
-pub(crate) fn sealed_static_application_identity_v1(
+pub fn sealed_static_application_identity_v1(
     bytes: &[u8],
 ) -> Result<[u8; 32], SealedStaticApplicationErrorV1> {
     validate_sealed_static_elf_v1(bytes)?;

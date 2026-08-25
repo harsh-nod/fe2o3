@@ -1,9 +1,10 @@
-//! Cooperative-process Cargo-to-application handoff for canonical Worker V2 and V3 evidence.
+//! Cooperative-process Cargo-to-application handoff for production Worker V3 evidence.
 //!
 //! This module is an inert foundation, not a same-process security boundary. The application must
 //! consume the inherited handoff before threads, signal handlers, descendants, or unrelated FD
 //! mutation can race it. A malicious application in the same process can bypass these cooperative
 //! assumptions and must instead be isolated from authority by a separate broker.
+//! Worker V2 support is compiled only for qualification oracles and tests.
 
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::recovered_worker_v2_admission::{
@@ -15,12 +16,8 @@ use crate::{
     RecoveredWorkerV3PinnedDescriptorV1, admit_recovered_worker_v3_descriptor_v1,
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
-use fe2o3_worker_v2_bundle::{
-    ApplicationHandoffProtocolErrorV1, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1,
+use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
-    WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1,
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
@@ -34,10 +31,10 @@ use fe2o3_worker_v2_bundle::{
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_worker_v2_bundle::{
-    CompilerTransactionEvidenceCapsuleV2, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffCommitmentV1,
-    WorkerV2ApplicationHandoffExpectationV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
-    worker_v2_load_envelope_name_v1,
+    ApplicationHandoffProtocolErrorV1, CompilerTransactionEvidenceCapsuleV2,
+    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WorkerV2ApplicationHandoffChallengeV1,
+    WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationHandoffExpectationV1,
+    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1, worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
 use std::error::Error;
@@ -52,6 +49,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const MAX_APPLICATION_EXECUTABLE_BYTES_V1: u64 = 1 << 30;
+const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
+const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v2-load-envelope-v1-";
+const WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1: &str = "FE2O3_APPLICATION_ENVELOPE_FD_V1";
+const WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1: &str = "FE2O3_APPLICATION_ARTIFACT_DIR_FD_V1";
+const WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1: &str =
+    "FE2O3_APPLICATION_ENVELOPE_COMMITMENT_V1";
+const WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1: &str = "FE2O3_APPLICATION_HANDOFF_ACK_FD_V1";
+const WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1: &str =
+    "FE2O3_APPLICATION_HANDOFF_CHALLENGE_V1";
 const ACK_DEADLINE_V1: Duration = Duration::from_secs(5);
 const WORKER_V3_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v3-load-readiness-v1-";
 const WORKER_V3_ENVELOPE_SUFFIX_V1: &str = ".envelope";
@@ -1199,7 +1205,7 @@ fn require_worker_v3_envelope_link(
         let entry = entry.map_err(|error| descriptor_io("artifact directory entry", error))?;
         let name = entry.file_name();
         let name_bytes = name.as_bytes();
-        if name_bytes.starts_with(WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes()) {
+        if name_bytes.starts_with(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.as_bytes()) {
             return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema);
         }
         let metadata = entry
@@ -1252,7 +1258,7 @@ fn reject_worker_v2_envelope_coexistence(
         if entry
             .file_name()
             .as_bytes()
-            .starts_with(WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes())
+            .starts_with(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.as_bytes())
         {
             return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema);
         }
@@ -1265,7 +1271,7 @@ fn count_handoff_artifact_entry(
 ) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
     *entries = entries
         .checked_add(1)
-        .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
+        .filter(|entries| *entries <= MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1)
         .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)?;
     Ok(())
 }
@@ -1451,10 +1457,10 @@ mod static_identity_tests {
     #[test]
     fn child_handoff_scan_accepts_exact_entry_bound_and_rejects_limit_plus_one() {
         let mut entries = 0_usize;
-        for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+        for _ in 0..MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 {
             count_handoff_artifact_entry(&mut entries).unwrap();
         }
-        assert_eq!(entries, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1);
+        assert_eq!(entries, MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1);
         assert!(matches!(
             count_handoff_artifact_entry(&mut entries),
             Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)
@@ -1586,13 +1592,15 @@ pub enum WorkerV2ApplicationDescriptorHandoffErrorV1 {
     EnvelopeNotLinked,
     MixedEnvelopeSchema,
     EnvelopeChanged,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     Decode(fe2o3_worker_v2_bundle::EnvelopeDecodeError),
     NonCanonicalEnvelope,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     Protocol(ApplicationHandoffProtocolErrorV1),
     UnsafeApplicationExecutable,
     ApplicationExecutable(io::Error),
     ApplicationExecutableChanged,
-    InvalidStaticApplication(fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1),
+    InvalidStaticApplication(fe2o3_runtime_protocol::SealedStaticApplicationErrorV1),
     CommitmentMismatch,
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     Recovery(RecoveredWorkerV2AdmissionError),
@@ -1648,12 +1656,14 @@ impl fmt::Display for WorkerV2ApplicationDescriptorHandoffErrorV1 {
                 formatter.write_str("Worker V2 and Worker V3 application envelopes coexist")
             }
             Self::EnvelopeChanged => formatter.write_str("inherited Worker V2 envelope changed"),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Decode(error) => {
                 write!(formatter, "invalid inherited Worker V2 envelope: {error}")
             }
             Self::NonCanonicalEnvelope => {
                 formatter.write_str("inherited Worker V2 envelope is not canonical")
             }
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Protocol(error) => write!(
                 formatter,
                 "invalid application handoff protocol value: {error}"
@@ -1706,7 +1716,9 @@ impl Error for WorkerV2ApplicationDescriptorHandoffErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::DescriptorIo { error, .. } | Self::ApplicationExecutable(error) => Some(error),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Decode(error) => Some(error),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Protocol(error) => Some(error),
             Self::InvalidStaticApplication(error) => Some(error),
             #[cfg(any(test, feature = "qualification-oracles-test-only"))]

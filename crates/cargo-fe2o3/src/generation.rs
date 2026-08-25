@@ -1,7 +1,6 @@
 use crate::build_config::BuildConfigIdentity;
 use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 use cap_primitives::fs::{read_base_dir, remove_open_dir_all};
-use fe2o3_worker_v2_bundle::MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1;
 use rustix::fs::{AtFlags, FileType, FlockOperation};
 use rustix::fs::{Mode, OFlags, fchmod, flock, fstat, fsync, openat, renameat, statat, unlinkat};
 use sha2::{Digest, Sha256};
@@ -22,7 +21,7 @@ const MARKER_MAGIC: &[u8; 28] = b"fe2o3-codegen-generation-v1\0";
 const MARKER_BYTES: usize = MARKER_MAGIC.len() + 32 + 16 + 32 + 8;
 const GENERATION_SEMANTIC_IDENTITY_DOMAIN_V5: &[u8] = b"fe2o3-cargo-codegen-semantics-v5";
 const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
-const MAX_SNAPSHOT_ENTRIES: u64 = MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 as u64;
+const MAX_SNAPSHOT_ENTRIES: u64 = 4_096;
 const MAX_SNAPSHOT_DEPTH: usize = 64;
 const MAX_SNAPSHOT_WORK: u64 = MAX_SNAPSHOT_BYTES + 16 * 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
@@ -533,7 +532,7 @@ struct SnapshotLimits {
 
 impl SnapshotLimits {
     const PRODUCTION: Self = Self {
-        directory_entries: MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1,
+        directory_entries: MAX_SNAPSHOT_ENTRIES as usize,
         entries: MAX_SNAPSHOT_ENTRIES,
         bytes: MAX_SNAPSHOT_BYTES,
         work: MAX_SNAPSHOT_WORK,
@@ -968,7 +967,7 @@ mod tests {
     #[test]
     fn snapshot_accepts_exact_real_entry_limit_and_rejects_limit_plus_one() {
         let directory = TestDirectory::new();
-        for index in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+        for index in 0..MAX_SNAPSHOT_ENTRIES as usize {
             fs::write(directory.0.join(format!("entry-{index:04}")), []).unwrap();
         }
         let (_, entries) = snapshot(&directory.pinned()).unwrap();
@@ -1098,7 +1097,7 @@ mod tests {
         let (directory, semantic) = committed_generation();
         let artifact = directory.0.join("fe2o3");
         let existing_entries = 3;
-        for index in 0..=MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 - existing_entries {
+        for index in 0..=MAX_SNAPSHOT_ENTRIES as usize - existing_entries {
             fs::write(artifact.join(format!("filler-{index:04}")), []).unwrap();
         }
 

@@ -68,16 +68,16 @@ use fe2o3_process_identity::{
     LinuxObjectIdentityV3, ParentPreparedProcessConsistencyV3, PinnedWorkingDirectoryV3,
     parent_prepared_process_consistency_digest_v3,
 };
+use fe2o3_runtime_protocol::{
+    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
+    recover_worker_v3_load_envelope_v1,
+};
 use fe2o3_rustc_invocation::{
     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcArgsErrorV2,
     RustcCodegenMetadataErrorV1, RustcCompileInvocationV2, RustcInvocationV2,
     classify_rustc_invocation_v2, derive_cargo_metadata_build_observation_v2,
     is_rustc_codegen_backend_selector_v2, is_rustc_option_terminator_v2,
     ordered_rustc_codegen_metadata_v1,
-};
-use fe2o3_worker_v2_bundle::{
-    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
-    recover_worker_v3_load_envelope_v1,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_worker_v2_bundle::{WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2};
@@ -5469,7 +5469,7 @@ mod tests {
         ContentIdentityV1, ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT,
         ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
     };
-    use fe2o3_worker_v2_bundle::WorkerV3LoadEnvelopeErrorV1;
+    use fe2o3_runtime_protocol::WorkerV3LoadEnvelopeErrorV1;
     use fe2o3_worker_v2_bundle::{
         ExactRawHsacoV1, WorkerV2EnvelopeInputsV1, WorkerV2ProducerBindingV2,
     };

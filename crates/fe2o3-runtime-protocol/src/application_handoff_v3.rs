@@ -1,4 +1,4 @@
-//! Schema-independent, authority-free application handoff values for a future V3 envelope.
+//! Schema-independent, authority-free application handoff values for the production envelope.
 //!
 //! This module identifies exact opaque envelope bytes but does not decode an envelope or claim
 //! that those bytes are valid, current, published, loadable, or launchable. Application and input
@@ -54,7 +54,7 @@ const APPLICATION_ACK_CHECKSUM_DOMAIN_V1: &[u8] =
 const APPLICATION_DESCRIPTOR_OCCURRENCE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKER-V3/APPLICATION-DESCRIPTOR-OCCURRENCE/V1\0";
 
-/// Wire version used only by the side-by-side application handoff V3 protocol.
+/// Frozen wire version for the production application handoff protocol.
 pub const WORKER_V3_APPLICATION_HANDOFF_VERSION_V1: u16 = 1;
 /// Inherited read-only V3 envelope descriptor installed by the Cargo supervisor.
 pub const WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1: &str = "FE2O3_APPLICATION_V3_ENVELOPE_FD_V1";
@@ -1918,8 +1918,6 @@ mod tests {
             WorkerV3ApplicationHandoffAckV1::decode_canonical(legacy_v1_prefix),
             Err(WorkerV3ApplicationHandoffProtocolErrorV1::BadMagic { .. })
         ));
-        assert!(crate::WorkerV2ApplicationHandoffAckV1::decode_canonical(&wires[3]).is_err());
-
         let mut wrong_version = wires[3].clone();
         wrong_version[8..10].copy_from_slice(&2_u16.to_le_bytes());
         assert_eq!(

@@ -24,7 +24,7 @@ use fe2o3_hsaco_finalize::{
 };
 use sha2::{Digest, Sha256};
 
-/// Magic for the strict side-by-side Worker V3 load-envelope V1 wire.
+/// Magic for the strict production Worker V3 load-envelope V1 wire.
 pub const WORKER_V3_LOAD_ENVELOPE_MAGIC_V1: [u8; 8] = *b"F3LDENV1";
 /// The only Worker V3 load-envelope schema accepted by this module.
 pub const WORKER_V3_LOAD_ENVELOPE_VERSION_V1: u16 = 1;
@@ -300,7 +300,7 @@ impl From<WorkerV3LoadReadinessErrorV1> for WorkerV3LoadEnvelopeErrorV1 {
 /// This type cannot be cloned and cannot be reconstructed from serialized evidence.
 ///
 /// ```compile_fail
-/// use fe2o3_worker_v2_bundle::WorkerV3LoadEnvelopeV1;
+/// use fe2o3_runtime_protocol::WorkerV3LoadEnvelopeV1;
 /// fn duplicate(value: WorkerV3LoadEnvelopeV1) {
 ///     let _copy = value.clone();
 /// }
@@ -1440,11 +1440,12 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        WORKER_V2_LOAD_ENVELOPE_MAGIC, WORKER_V2_LOAD_ENVELOPE_MAGIC_V2,
-        WORKER_V2_LOAD_ENVELOPE_VERSION, WORKER_V2_LOAD_ENVELOPE_VERSION_V2,
-    };
     use fe2o3_artifact_transaction::WorkerV3ExternalProviderPayloadsV1;
+
+    const WORKER_V2_LOAD_ENVELOPE_MAGIC: [u8; 8] = *b"FE2W2B1\0";
+    const WORKER_V2_LOAD_ENVELOPE_VERSION: u16 = 1;
+    const WORKER_V2_LOAD_ENVELOPE_MAGIC_V2: [u8; 8] = *b"FE2W2B2\0";
+    const WORKER_V2_LOAD_ENVELOPE_VERSION_V2: u16 = 2;
 
     fn framed(
         record: &[u8],

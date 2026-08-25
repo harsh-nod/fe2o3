@@ -364,11 +364,13 @@ target lowering, and host execution into explicit ownership boundaries:
 - Artifact, build, proof, and evidence boundaries remain in
   `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`,
-  `fe2o3-worker-v2-bundle`, `fe2o3-build-authority`,
+  `fe2o3-runtime-protocol`, `fe2o3-build-authority`,
   `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
   `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`,
   `fe2o3-protected-publisher`, `fe2o3-verifier`, and
-  `fe2o3-differential`.
+  `fe2o3-differential`. `fe2o3-worker-v2-bundle` remains only for
+  qualification-oracle and compatibility tests; it is absent from the normal
+  feature-free dependency graphs of `cargo-fe2o3` and `fe2o3-host`.
 
 The machine-checked layer policy forbids dependencies that invert these
 ownership directions. The production-directed GPU finalizer continues to use

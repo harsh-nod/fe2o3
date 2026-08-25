@@ -2,10 +2,10 @@ use core::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::static_application::{
+use crate::{WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1};
+use fe2o3_runtime_protocol::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,
 };
-use crate::{WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1};
 
 const COMMITMENT_DOMAIN: &[u8] = b"FE2O3/APPLICATION-WORKER-V2-HANDOFF/V1\0";
 const ACK_MAGIC: &[u8] = b"FE2O3-WORKER-V2-APPLICATION-ACK\0";

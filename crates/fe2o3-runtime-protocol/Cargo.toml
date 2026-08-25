@@ -1,0 +1,18 @@
+[package]
+name = "fe2o3-runtime-protocol"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Production load-envelope and application-handoff protocols for fe2o3."
+publish = false
+
+[lib]
+name = "fe2o3_runtime_protocol"
+
+[dependencies]
+fe2o3-artifact-transaction.workspace = true
+fe2o3-compiler-ffi.workspace = true
+fe2o3-hsaco-finalize.workspace = true
+sha2.workspace = true
