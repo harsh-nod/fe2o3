@@ -306,9 +306,9 @@ assert_codegen_test_driver_once() {
   assert_step_count rustc-codegen-driver-bootstrap 1 \
     'codegen tests did not build the shared test driver exactly once'
   assert_equals \
-    "env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE} --bin ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
+    "env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE} --features ${CARGO_FE2O3_QUALIFICATION_FEATURE} --bin ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
     "$(step_command rustc-codegen-driver-bootstrap)" \
-    'codegen test driver bootstrap is not bounded or production-profiled'
+    'codegen test driver bootstrap is not bounded and qualification-enabled'
 }
 
 assert_all_codegen_targets_once() {

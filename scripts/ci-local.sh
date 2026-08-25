@@ -768,6 +768,7 @@ run_rustc_codegen_test_driver() {
   run_step rustc-codegen-driver-bootstrap \
     env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 \
       cargo build --locked -p "${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
+        --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}" \
         --bin "${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}"
 }
 
