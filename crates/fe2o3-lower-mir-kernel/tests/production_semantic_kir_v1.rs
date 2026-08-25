@@ -53,6 +53,14 @@ fn scalar_type(tag: u8, scalar: SemanticScalarTypeV1) -> SemanticTypeDeclV1 {
             SemanticBackendPrimitiveV1::integer(false, 32, 4),
             u32::MAX.into(),
         ),
+        SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits: 64,
+        } => (
+            8,
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            u64::MAX.into(),
+        ),
         _ => panic!("unsupported test scalar"),
     };
     SemanticTypeDeclV1::new(
@@ -411,6 +419,258 @@ fn return_local() -> SemanticLocalDeclV1 {
     )
 }
 
+fn indexed_slice_borrow_owner() -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let slice_ty = SemanticTypeIdV1::from_index(2);
+    let slice_ref_ty = SemanticTypeIdV1::from_index(3);
+    let element_ref_ty = SemanticTypeIdV1::from_index(4);
+    let usize_ty = SemanticTypeIdV1::from_index(5);
+    let data_pointer = SemanticBackendScalarV1::initialized(
+        SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+        SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+    );
+    let slice_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(65)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(65)),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            4,
+            SemanticFieldsShapeV1::array(4, 0),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(false),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Slice { element: u32_ty },
+    );
+    let slice_ref_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(66)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(66)),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(16),
+            8,
+            SemanticBackendReprV1::scalar_pair(
+                data_pointer,
+                SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 64, 8),
+                    SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                ),
+            ),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                slice_ty,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::SliceLength,
+            )
+            .unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(
+                SemanticAbiPointeeInfoV1::new(
+                    SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                    0,
+                    4,
+                )
+                .unwrap(),
+            ),
+            None,
+        ),
+    );
+    let element_ref_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(67)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(67)),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(data_pointer),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                u32_ty,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    );
+    let source = SemanticPlaceV1::new(
+        SemanticLocalIdV1::from_index(1),
+        vec![
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, slice_ty).unwrap(),
+            SemanticProjectionV1::new(
+                SemanticProjectionKindV1::Index(SemanticLocalIdV1::from_index(2)),
+                u32_ty,
+            )
+            .unwrap(),
+        ],
+        u32_ty,
+    )
+    .unwrap();
+    let statement = SemanticStatementV1::new(
+        SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            local_place(3, element_ref_ty),
+            SemanticRvalueV1::new(
+                element_ref_ty,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: source,
+                },
+            ),
+        )),
+    );
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(69)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        2,
+        vec![
+            SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                slice_ref_ty,
+                SemanticAbiPassModeV1::Pair {
+                    first: SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(
+                            true,
+                            Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                            true,
+                            true,
+                            false,
+                            true,
+                        ),
+                        SemanticAbiExtensionV1::None,
+                        0,
+                        Some(4),
+                    )
+                    .unwrap(),
+                    second: SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                        SemanticAbiExtensionV1::None,
+                        0,
+                        None,
+                    )
+                    .unwrap(),
+                },
+            )),
+            SemanticAbiArgumentV1::source(SemanticAbiValueV1::new(
+                usize_ty,
+                SemanticAbiPassModeV1::Direct(
+                    SemanticAbiValueAttributesV1::new(
+                        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                        SemanticAbiExtensionV1::None,
+                        0,
+                        None,
+                    )
+                    .unwrap(),
+                ),
+            )),
+        ],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let locals = vec![
+        return_local(),
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(70)),
+            slice_ref_ty,
+            SemanticLocalRoleV1::Argument(0),
+            SemanticSourceProvenanceV1::unavailable(),
+        ),
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(71)),
+            usize_ty,
+            SemanticLocalRoleV1::Argument(1),
+            SemanticSourceProvenanceV1::unavailable(),
+        ),
+        SemanticLocalDeclV1::new(
+            SemanticLocalIdentityV1::from_sha256(bytes(72)),
+            element_ref_ty,
+            SemanticLocalRoleV1::Temporary,
+            SemanticSourceProvenanceV1::unavailable(),
+        ),
+    ];
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let contract = SemanticKernelSourceContractV1::new(
+        Some(SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap()),
+        None,
+        None,
+    )
+    .unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(69)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(69)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(69)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(69)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(69)),
+        SemanticSourceProvenanceV1::unavailable(),
+        abi,
+        locals,
+        SemanticBlockIdV1::from_index(0),
+        vec![block(73, vec![statement], SemanticTerminatorKindV1::Return)],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"semantic_indexed_slice_borrow_test".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(74)),
+        contract,
+    ));
+    let admitted = InertSemanticMirRequestV1::new(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![
+            unit_type(),
+            scalar_type(
+                64,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            slice_type,
+            slice_ref_type,
+            element_ref_type,
+            scalar_type(
+                68,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 64,
+                },
+            ),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+        .unwrap()
+}
+
 fn terminator_emission_owner() -> ProductionSemanticMirOwnerV1 {
     let bool_ty = SemanticTypeIdV1::from_index(1);
     let target = SemanticControlFlowEdgeV1::new(
@@ -584,6 +844,202 @@ fn direct_enum_constant_owner() -> ProductionSemanticMirOwnerV1 {
             SemanticTerminatorKindV1::Return,
         )],
         b"semantic_direct_enum_constant_test",
+    )
+}
+
+fn promoted_enum_payload_owner(
+    extract_before_variant_switch: bool,
+    replace_after_discriminant: bool,
+) -> ProductionSemanticMirOwnerV1 {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let u32_ty = SemanticTypeIdV1::from_index(1);
+    let bool_ty = SemanticTypeIdV1::from_index(2);
+    let enum_ty = SemanticTypeIdV1::from_index(3);
+    let primitive = SemanticBackendPrimitiveV1::integer(false, 32, 4);
+    let scalar = SemanticBackendScalarV1::initialized(
+        primitive,
+        SemanticScalarValidityRangeV1::new(0, u128::from(u32::MAX)),
+    );
+    let variant_layout = |index| {
+        SemanticEnumVariantLayoutV1::from_rustc(
+            index,
+            8,
+            4,
+            SemanticFieldsShapeV1::arbitrary(vec![4], vec![0]).unwrap(),
+            SemanticBackendReprV1::memory(true),
+            None,
+            false,
+            None,
+            4,
+            0,
+            SemanticAggregateLayoutV1::new(vec![4], vec![]).unwrap(),
+        )
+        .unwrap()
+    };
+    let enum_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(94)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(94)),
+        SemanticTypeLayoutV1::enum_layout(
+            8,
+            4,
+            SemanticEnumLayoutV1::new(
+                vec![variant_layout(0), variant_layout(1)],
+                SemanticEnumEncodingV1::Direct(SemanticDirectEnumEncodingV1::new(0, 0, scalar)),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Enum {
+            discriminant: u32_ty,
+            variants: vec![
+                SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap()),
+                SemanticEnumVariantV1::new(1, SemanticAggregateTypeV1::new(vec![u32_ty]).unwrap()),
+            ]
+            .into_boxed_slice(),
+        },
+    );
+    let assign = |destination: SemanticPlaceV1, ty, value| {
+        SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                destination,
+                SemanticRvalueV1::new(ty, value),
+            )),
+        )
+    };
+    let edge =
+        |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
+    let variant = |index, value| {
+        SemanticRvalueKindV1::Aggregate(
+            SemanticAggregateRvalueV1::new(
+                SemanticAggregateKindV1::EnumVariant(index),
+                vec![scalar_constant(u32_ty, value, 4)],
+            )
+            .unwrap(),
+        )
+    };
+    let field_place = |variant| {
+        SemanticPlaceV1::new(
+            SemanticLocalIdV1::from_index(1),
+            vec![
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Downcast(variant), enum_ty)
+                    .unwrap(),
+                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), u32_ty).unwrap(),
+            ],
+            u32_ty,
+        )
+        .unwrap()
+    };
+    let mut join_statements = Vec::new();
+    if extract_before_variant_switch {
+        join_statements.push(assign(
+            local_place(3, u32_ty),
+            u32_ty,
+            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field_place(0))),
+        ));
+    }
+    join_statements.push(assign(
+        local_place(2, u32_ty),
+        u32_ty,
+        SemanticRvalueKindV1::Discriminant(local_place(1, enum_ty)),
+    ));
+    if replace_after_discriminant {
+        join_statements.push(assign(local_place(1, enum_ty), enum_ty, variant(1, 11)));
+    }
+    let blocks = vec![
+        block(
+            95,
+            vec![],
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: scalar_constant(bool_ty, 1, 1),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        1,
+                        edge(SemanticEdgeRoleV1::SwitchValue, 1),
+                    )],
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                )
+                .unwrap(),
+            },
+        ),
+        block(
+            96,
+            vec![assign(local_place(1, enum_ty), enum_ty, variant(0, 7))],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+        ),
+        block(
+            97,
+            vec![assign(local_place(1, enum_ty), enum_ty, variant(1, 9))],
+            SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 3)),
+        ),
+        block(
+            98,
+            join_statements,
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: SemanticOperandV1::Copy(local_place(2, u32_ty)),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![
+                        SemanticSwitchTargetV1::new(0, edge(SemanticEdgeRoleV1::SwitchValue, 4)),
+                        SemanticSwitchTargetV1::new(1, edge(SemanticEdgeRoleV1::SwitchValue, 5)),
+                    ],
+                    edge(SemanticEdgeRoleV1::SwitchOtherwise, 6),
+                )
+                .unwrap(),
+            },
+        ),
+        block(
+            99,
+            vec![assign(
+                local_place(3, u32_ty),
+                u32_ty,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field_place(0))),
+            )],
+            SemanticTerminatorKindV1::Return,
+        ),
+        block(
+            100,
+            vec![assign(
+                local_place(4, u32_ty),
+                u32_ty,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(field_place(1))),
+            )],
+            SemanticTerminatorKindV1::Return,
+        ),
+        block(101, vec![], SemanticTerminatorKindV1::Unreachable),
+    ];
+    let locals = [unit, enum_ty, u32_ty, u32_ty, u32_ty]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(102 + index as u8)),
+                ty,
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                SemanticSourceProvenanceV1::unavailable(),
+            )
+        })
+        .collect();
+    owner_from_parts(
+        vec![
+            unit_type(),
+            scalar_type(
+                92,
+                SemanticScalarTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+            ),
+            scalar_type(93, SemanticScalarTypeV1::Bool),
+            enum_type,
+        ],
+        locals,
+        0,
+        blocks,
+        b"semantic_promoted_enum_payload_test",
     )
 }
 
@@ -771,6 +1227,34 @@ fn mutable_scalar_loop_uses_block_parameters_and_backedge_arguments() {
 }
 
 #[test]
+fn optimized_indexed_slice_borrow_lowers_to_an_element_address() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        indexed_slice_borrow_owner(),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+    let operations = &lowered.module().functions[0].body.as_ref().unwrap().blocks[0].operations;
+    assert!(
+        operations
+            .iter()
+            .any(|operation| matches!(operation.kind, OperationKind::SliceData { .. }))
+    );
+    assert!(
+        operations
+            .iter()
+            .any(|operation| matches!(operation.kind, OperationKind::GetElementPointer { .. }))
+    );
+    assert!(
+        !operations
+            .iter()
+            .any(|operation| matches!(operation.kind, OperationKind::Load { .. }))
+    );
+}
+
+#[test]
 fn terminator_emission_has_its_own_exact_operation_span() {
     let lowered = ProductionSemanticKirOwnerV1::try_lower(
         terminator_emission_owner(),
@@ -808,6 +1292,99 @@ fn exact_rust_enum_bytes_lower_to_payload_and_logical_discriminant() {
     assert!(matches!(
         operations[1].kind,
         fe2o3_kernel_ir::OperationKind::Constant(fe2o3_kernel_ir::Constant::U32(1))
+    ));
+}
+
+#[test]
+fn promoted_enum_payloads_use_private_storage_and_variant_dominance() {
+    let lowered = ProductionSemanticKirOwnerV1::try_lower(
+        promoted_enum_payload_owner(false, false),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    lowered.verify_equivalence().unwrap();
+    verify_module(lowered.module()).unwrap();
+
+    let body = lowered.module().functions[0].body.as_ref().unwrap();
+    let entry = body
+        .blocks
+        .iter()
+        .find(|block| block.id == BlockId(0))
+        .unwrap();
+    assert_eq!(
+        entry
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation.kind, OperationKind::Alloca { .. }))
+            .count(),
+        2
+    );
+    for block in [1, 2] {
+        let block = body
+            .blocks
+            .iter()
+            .find(|candidate| candidate.id == BlockId(block))
+            .unwrap();
+        assert!(
+            block
+                .operations
+                .iter()
+                .any(|operation| matches!(operation.kind, OperationKind::Store { .. }))
+        );
+    }
+    for block in [4, 5] {
+        let block = body
+            .blocks
+            .iter()
+            .find(|candidate| candidate.id == BlockId(block))
+            .unwrap();
+        assert!(
+            block
+                .operations
+                .iter()
+                .any(|operation| matches!(operation.kind, OperationKind::Load { .. }))
+        );
+    }
+    assert!(
+        lowered
+            .correspondence()
+            .synthetic_operation_spans()
+            .iter()
+            .all(|span| span.rule() == SemanticKirSyntheticOperationRuleV1::EnumPayloadStorage)
+    );
+}
+
+#[test]
+fn promoted_enum_payload_extraction_before_the_variant_edge_fails_closed() {
+    let result = ProductionSemanticKirOwnerV1::try_lower(
+        promoted_enum_payload_owner(true, false),
+        ProductionSemanticKirLimitsV1::default(),
+    );
+    assert!(matches!(
+        result,
+        Err(ProductionSemanticKirErrorV1::EnumPayloadUnavailable {
+            block: 3,
+            local: 1,
+            variant: 0,
+            field: 0,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn promoted_enum_reassignment_invalidates_a_stale_discriminant_edge() {
+    let result = ProductionSemanticKirOwnerV1::try_lower(
+        promoted_enum_payload_owner(false, true),
+        ProductionSemanticKirLimitsV1::default(),
+    );
+    assert!(matches!(
+        result,
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            block: Some(4),
+            detail: "enum downcast does not match its known variant",
+            ..
+        })
     ));
 }
 

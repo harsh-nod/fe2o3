@@ -1,6 +1,10 @@
 //! Inert, bounded V3 lineage evidence derived from live production owners.
 
-use std::{error::Error, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use fe2o3_kernel_ir::{
     FORMAL_MEMORY_OBLIGATION_POLICY_V1, FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V1,
@@ -812,31 +816,51 @@ fn exact_correspondence_from_owner(
     owner: &ProductionSemanticKirOwnerV1,
 ) -> Result<(u32, Vec<MirToKirBlockCorrespondenceEvidenceV3>), ProductionLineageEvidenceErrorV3> {
     let semantic = owner.semantic().semantic();
+    let covered_functions = owner
+        .correspondence()
+        .blocks()
+        .iter()
+        .map(|record| record.semantic_function().index())
+        .collect::<BTreeSet<_>>();
     enforce_count(
         "correspondence functions",
-        semantic.functions().len(),
+        covered_functions.len(),
         MAX_MIR_TO_KIR_CORRESPONDENCE_FUNCTIONS_V3,
     )?;
-    if semantic.functions().is_empty()
-        || owner.module().functions.len() != semantic.functions().len()
-    {
+    let target_functions = owner
+        .module()
+        .functions
+        .iter()
+        .filter(|function| function.body.is_some())
+        .collect::<Vec<_>>();
+    if covered_functions.is_empty() || target_functions.len() != covered_functions.len() {
         return Err(ProductionLineageEvidenceErrorV3::InvalidCorrespondence(
-            "semantic and Kernel IR function coverage differs",
+            "retained semantic and defined Kernel IR function coverage differs",
         ));
     }
-    let function_count = u32::try_from(semantic.functions().len()).map_err(|_| {
+    let target_by_semantic_function = covered_functions
+        .iter()
+        .copied()
+        .zip(target_functions)
+        .collect::<BTreeMap<_, _>>();
+    let function_count = u32::try_from(covered_functions.len()).map_err(|_| {
         ProductionLineageEvidenceErrorV3::Overflow {
             field: "correspondence function count",
         }
     })?;
-    let expected_blocks = semantic
-        .functions()
+    let expected_blocks = covered_functions
         .iter()
         .try_fold(0_usize, |total, function| {
-            total.checked_add(function.blocks().len())
-        })
-        .ok_or(ProductionLineageEvidenceErrorV3::Overflow {
-            field: "correspondence block count",
+            let function = semantic.functions().get(*function as usize).ok_or(
+                ProductionLineageEvidenceErrorV3::InvalidCorrespondence(
+                    "covered semantic function locator is absent",
+                ),
+            )?;
+            total.checked_add(function.blocks().len()).ok_or(
+                ProductionLineageEvidenceErrorV3::Overflow {
+                    field: "correspondence block count",
+                },
+            )
         })?;
     enforce_count(
         "correspondence blocks",
@@ -880,7 +904,11 @@ fn exact_correspondence_from_owner(
                 "source statement count differs from exact semantic MIR",
             ));
         }
-        let target_function = &owner.module().functions[record.semantic_function as usize];
+        let target_function = target_by_semantic_function
+            .get(&record.semantic_function)
+            .ok_or(ProductionLineageEvidenceErrorV3::InvalidCorrespondence(
+                "corresponding Kernel IR function is absent",
+            ))?;
         let Some(body) = target_function.body.as_ref() else {
             return Err(ProductionLineageEvidenceErrorV3::InvalidCorrespondence(
                 "corresponding Kernel IR function has no body",
@@ -904,7 +932,15 @@ fn validate_canonical_correspondence(
     blocks: &[MirToKirBlockCorrespondenceEvidenceV3],
 ) -> Result<(), ProductionLineageEvidenceErrorV3> {
     let mut cursor = 0_usize;
-    for function in 0..function_count {
+    let mut previous_function = None;
+    let mut covered_function_count = 0_u32;
+    while let Some(first) = blocks.get(cursor) {
+        let function = first.semantic_function;
+        if previous_function.is_some_and(|previous| previous >= function) {
+            return Err(ProductionLineageEvidenceErrorV3::InvalidCorrespondence(
+                "semantic function locators are not in strictly increasing canonical order",
+            ));
+        }
         let mut block = 0_u32;
         while let Some(record) = blocks.get(cursor) {
             if record.semantic_function != function {
@@ -932,10 +968,16 @@ fn validate_canonical_correspondence(
                 "every covered semantic function must contain a block",
             ));
         }
+        previous_function = Some(function);
+        covered_function_count = covered_function_count.checked_add(1).ok_or(
+            ProductionLineageEvidenceErrorV3::Overflow {
+                field: "covered semantic function count",
+            },
+        )?;
     }
-    if cursor != blocks.len() {
+    if cursor != blocks.len() || covered_function_count != function_count {
         return Err(ProductionLineageEvidenceErrorV3::InvalidCorrespondence(
-            "semantic function locators are not contiguous canonical indices",
+            "covered semantic function count differs from canonical records",
         ));
     }
     Ok(())
@@ -1813,6 +1855,33 @@ mod tests {
         );
         assert_ne!(spliced.identity(), original.identity());
         assert!(!spliced.grants_authority());
+    }
+
+    #[test]
+    fn correspondence_codec_counts_covered_functions_without_requiring_dense_semantic_ids() {
+        let blocks = vec![
+            MirToKirBlockCorrespondenceEvidenceV3 {
+                semantic_function: 7,
+                semantic_block: 0,
+                kernel_ir_block: 0,
+                source_statement_count: 3,
+            },
+            MirToKirBlockCorrespondenceEvidenceV3 {
+                semantic_function: 42,
+                semantic_block: 0,
+                kernel_ir_block: 0,
+                source_statement_count: 5,
+            },
+        ];
+        let encoded = encode_correspondence(bytes(1), bytes(2), 2, &blocks).unwrap();
+        let decoded = InertCanonicalMirToKirCorrespondenceEvidenceV3::decode(&encoded).unwrap();
+
+        assert_eq!(decoded.function_count(), 2);
+        assert_eq!(decoded.blocks(), blocks);
+        assert!(matches!(
+            encode_correspondence(bytes(1), bytes(2), 1, &blocks),
+            Err(ProductionLineageEvidenceErrorV3::InvalidCorrespondence(_))
+        ));
     }
 
     #[test]
