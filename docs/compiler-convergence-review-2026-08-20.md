@@ -1,5 +1,15 @@
 # Compiler convergence review, 2026-08-20
 
+> Historical review: the critical importer and route findings below describe
+> the 2026-08-20 baseline. The production backend now has one unselected
+> transaction from authenticated gfx942 rustc collection through semantic MIR,
+> the owner-held middle end, target-neutral Kernel IR, formal-memory admission,
+> gfx942 LLVM handoff, and strict Worker V3 publication. Feature-free builds use
+> a dedicated production handoff module and do not compile the Worker V2,
+> scalar-MIR V2, S09, or semantic-type V2 oracle modules. Current remaining work
+> is application-side verifier/effect admission and migration followed by
+> deletion of the qualification oracles.
+
 ## Scope
 
 This review covers the compiler-facing workspace from rustc collection through

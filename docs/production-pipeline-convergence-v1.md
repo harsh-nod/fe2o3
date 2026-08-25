@@ -57,7 +57,7 @@ and backend digests.
 | Compiler module handoff | Production has one mandatory protected-custody path and one V3 publication/consumption transaction. The ordinary publication branch and runtime schema selector are deleted. | Keep V1/V2 consumers confined to explicit qualification code until their oracles retire. |
 | Worker publication restart | `ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states. It performs strict V3 preflight, one-shot consumption, direct LLVM/LLD execution, independent inspection, durable publication, and load-readiness recovery. | Join generated host interfaces and runtime authorization to the recovered production artifact. |
 | Application handoff | Production admits only the canonical Worker V3 load envelope. Cargo pins the sealed static application and V3 identity, binds the envelope, artifact directory, and ACK descriptors into a fresh occurrence, validates the challenge-bound ACK, and retains the current-publication lease through application exit. Feature-free `fe2o3-host` builds export only the V3 consumer and V3 admission/load/dispatch types. | Authenticate the carried compiler/proof/effect evidence and grant checked HSA load and launch authority without opening another route. |
-| Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`. Cargo V1/V2 work state, restart modules, workload parsers, V2 intake, and the V2 application protocol require the same package-local feature. Host V2 application recovery, bundle admission, prerequisite authentication, HSA loading, launch metadata, workload-specific generated adapters, and the embedded vecadd artifact API require its package-local qualification feature as well. General typed macro expansion, including exact vecadd, emits only Worker V3 host code unless an oracle fixture explicitly requests `qualification_worker_v2`. These routes are absent from feature-free builds, where managed work is directly `ManagedProductionBuild` and application transfer is V3-only. Host-only dependency units use rustc's built-in LLVM backend and receive no fe2o3 route selector, managed compiler arguments, backend descriptor, or artifact custody. | Complete the Worker V3 application verifier/dispatch join, migrate differential coverage, and then delete each qualification oracle. |
+| Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`. The feature-free backend compiles a dedicated workload-neutral `production_worker_handoff`; the legacy Worker V2 producer, S09 identity model, scalar MIR V2 model, and semantic type V2 adapter are absent from its module graph. Cargo V1/V2 work state, restart modules, workload parsers, V2 intake, and the V2 application protocol require the same package-local feature. Host V2 application recovery, bundle admission, prerequisite authentication, HSA loading, launch metadata, workload-specific generated adapters, and the embedded vecadd artifact API require its package-local qualification feature as well. General typed macro expansion, including exact vecadd, emits only Worker V3 host code unless an oracle fixture explicitly requests `qualification_worker_v2`. These routes are absent from feature-free builds, where managed work is directly `ManagedProductionBuild` and application transfer is V3-only. Host-only dependency units use rustc's built-in LLVM backend and receive no fe2o3 route selector, managed compiler arguments, backend descriptor, or artifact custody. | Complete the Worker V3 application verifier/dispatch join, migrate differential coverage, and then delete each qualification oracle. |
 
 The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
@@ -263,9 +263,10 @@ device compatibility.
 
 ## Selector retirement
 
-Production will use one selector backed by the existing `PlironV1` compiler
-contract. The rustc backend may expose the user-facing name `production-v1`,
-but that name identifies the single transaction, not a workload.
+Production has no selector. An unset qualification-oracle environment enters
+the sole production transaction; `production-v1` is rejected if supplied as
+either an obsolete pipeline value or an oracle name. Versioned `V1`/`V2`/`V3`
+suffixes identify frozen records and protocols, not selectable implementations.
 
 Migration follows these rules:
 
