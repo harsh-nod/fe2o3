@@ -32,13 +32,12 @@ use fe2o3_host::{
         application_handoff_observed_context_fixture_v1,
         generated_shared_f32_argument_pair_fixture_v1,
     },
-    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedSemanticWitnessErrorV1, CompilerGeneratedWorkerV3ArgumentsV1,
-    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
-    GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
-    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
-    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
+    CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
+    CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+    GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1,
+    GeneratedWorkerV3PrepareErrorV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
+    HsaDispatchObservationV1, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
     HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
     HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
     HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
@@ -1083,20 +1082,15 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
     let observed = ObservedContext::observe(&context).unwrap();
     let admitted =
         admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
-    let authenticated =
-        AuthenticatedWorkerV3ExecutableV1::<scalar_gemm_v1_gpu::Marker>::authenticate(
-            admitted,
-            &mut ReviewedTestWorkerV3Verifier {
-                substitute_finalized: false,
-            },
-        )
-        .unwrap();
     let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone()).unwrap();
-    let mut loaded = authenticated
-        .authorize_hsa_load(adapter)
-        .unwrap()
-        .load()
-        .unwrap();
+    let mut loaded = load_admitted_worker_v3_application_v1::<scalar_gemm_v1_gpu::Marker, _, _>(
+        admitted,
+        &mut ReviewedTestWorkerV3Verifier {
+            substitute_finalized: false,
+        },
+        adapter,
+    )
+    .unwrap();
 
     let stream = context.default_stream();
     let a_host = (0..usize::try_from(M * K).unwrap())
