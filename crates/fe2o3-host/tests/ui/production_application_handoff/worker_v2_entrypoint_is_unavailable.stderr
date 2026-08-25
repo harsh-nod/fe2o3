@@ -1,0 +1,19 @@
+error[E0432]: unresolved import `fe2o3_host::consume_inherited_worker_v2_application_handoff_v1`
+ --> tests/ui/production_application_handoff/worker_v2_entrypoint_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_host::consume_inherited_worker_v2_application_handoff_v1;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `consume_inherited_worker_v2_application_handoff_v1` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  |     any(test, feature = "qualification-oracles-test-only")
+  |        --------------------------------------------------- the item is gated here
+  | ))]
+  | pub use application_descriptor_handoff::consume_inherited_worker_v2_application_handoff_v1;
+  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: a similar name exists in the module
+  |
+1 - use fe2o3_host::consume_inherited_worker_v2_application_handoff_v1;
+1 + use fe2o3_host::consume_inherited_worker_v3_application_handoff_v1;
+  |

@@ -628,6 +628,12 @@ exercised as explicit qualification routes independently of the sole
 production transaction. Generated HSACO inspection uses a strict
 qualification-specific metadata profile.
 
+The host crate enforces the same split. Its feature-free build exposes only the
+Worker V3 application entrypoint, while
+`qualification-oracles-test-only` restores the Worker V2 consumer for legacy
+fixtures. `production_application_handoff_ui` is the compile-fail guard for
+that public API boundary.
+
 ## Guard tests
 
 The native-Linux and WSL device-node selection logic has a host-only test:

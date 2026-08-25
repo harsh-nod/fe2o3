@@ -316,6 +316,11 @@ compiled only for qualification-oracle and test builds. The V3 transfer carries
 inert descriptor custody; it does not itself authenticate prerequisites or grant
 HSA load or launch authority.
 
+The same boundary is enforced by `fe2o3-host`: feature-free builds export only
+the Worker V3 application consumer. Cargo's legacy HSA fixture enables the
+host-local `qualification-oracles-test-only` feature explicitly when it needs
+the V2 consumer as a differential oracle.
+
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only
 with `qualification-oracles-test-only`; they are absent from the normal binary

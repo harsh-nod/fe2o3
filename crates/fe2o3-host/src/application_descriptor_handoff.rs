@@ -5,16 +5,17 @@
 //! mutation can race it. A malicious application in the same process can bypass these cooperative
 //! assumptions and must instead be isolated from authority by a separate broker.
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::RecoveredWorkerV2PinnedDescriptorV1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_v1;
 use crate::{
-    KernelId, ObservedContext, RecoveredWorkerV2AdmissionError,
-    RecoveredWorkerV2PinnedDescriptorV1, RecoveredWorkerV3AdmissionErrorV1,
+    KernelId, ObservedContext, RecoveredWorkerV2AdmissionError, RecoveredWorkerV3AdmissionErrorV1,
     RecoveredWorkerV3PinnedDescriptorV1, admit_recovered_worker_v3_descriptor_v1,
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
 use fe2o3_worker_v2_bundle::{
-    ApplicationHandoffProtocolErrorV1, CompilerTransactionEvidenceCapsuleV2,
-    MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
+    ApplicationHandoffProtocolErrorV1, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1,
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
     WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
@@ -24,13 +25,17 @@ use fe2o3_worker_v2_bundle::{
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
-    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffCommitmentV1,
-    WorkerV2ApplicationHandoffExpectationV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
+    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
     WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationHandoffProtocolErrorV1,
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
     WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeIdentityV1,
     WorkerV3LoadEnvelopeWireV1, recover_worker_v3_load_envelope_v1,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_worker_v2_bundle::{
+    CompilerTransactionEvidenceCapsuleV2, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
+    WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
     worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
@@ -119,6 +124,7 @@ impl EnvelopeSnapshotV1 {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 struct InspectedEnvelopeV1 {
     snapshot: EnvelopeSnapshotV1,
     exact_bytes: Box<[u8]>,
@@ -230,6 +236,7 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
 /// allowing any unrelated close, duplicate, flag change, or mutation of handoff FDs. Rust cannot
 /// synchronize environment or descriptor-table mutation with foreign code, signal handlers, or
 /// independently managed threads. A hostile same-process caller violates this contract.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub unsafe fn consume_inherited_worker_v2_application_handoff_v1(
     compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
     kernel_id: KernelId,
@@ -448,6 +455,7 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
 /// ACK contains no secret and grants no recovery, load, or launch authority; only the returned
 /// non-forgeable descriptor carries the revalidated lease into later host transitions.
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
     envelope: OwnedFd,
     artifact_directory: OwnedFd,
@@ -599,6 +607,7 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     Ok(recovered.retain_application_descriptors(retained))
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_application_commitment(
     expected: WorkerV2ApplicationHandoffCommitmentV1,
     supplied: WorkerV2ApplicationHandoffCommitmentV1,
@@ -679,6 +688,7 @@ fn close_environment_handoff_descriptors(environment: &InheritedHandoffEnvironme
     ]);
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn environment_text(
     name: &'static str,
     value: Option<&OsStr>,
@@ -692,6 +702,7 @@ fn environment_text(
     Ok(value)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn environment_fd(
     name: &'static str,
     value: Option<&OsStr>,
@@ -1010,6 +1021,7 @@ fn validate_directory(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn inspect_envelope(
     directory: &File,
     envelope: &File,
@@ -1280,6 +1292,7 @@ fn read_exact_at(
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn current_application_identity()
 -> Result<WorkerV2ApplicationIdentityV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
     let exact = current_application_exact_bytes()?;
@@ -1445,6 +1458,7 @@ mod static_identity_tests {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn emit_acknowledgment(
     acknowledgment: &File,
     ack: fe2o3_worker_v2_bundle::WorkerV2ApplicationHandoffAckV1,

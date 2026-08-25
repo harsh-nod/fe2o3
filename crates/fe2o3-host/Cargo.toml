@@ -9,6 +9,7 @@ description = "Host-side launch helpers for fe2o3."
 
 [features]
 hardware-test-hooks = ["dep:rmpv", "fe2o3-artifact-transaction/test-hooks"]
+qualification-oracles-test-only = []
 
 [dependencies]
 fe2o3-amd-target.workspace = true

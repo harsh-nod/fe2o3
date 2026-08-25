@@ -10,27 +10,36 @@ use crate::{
     GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedScalarGemmV1PrepareError,
     GeneratedScalarGemmV1PreparedInvocation, HsaExecutableLoadError, HsaGeneratedDispatchError,
     HsaLaunchGeometryV1, HsaLoadAuthorizationError, LoadedHsaExecutableV1,
-    MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext, PhysicalMetadataValueV1,
-    PublishedKernelPhysicalLayoutV1, ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1,
+    MissingFinalizedWorkerV2LoadPrerequisiteV1, ObservedContext, PublishedKernelPhysicalLayoutV1,
+    ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1,
     WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
     WorkerV2TypedKernelSelectionError,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_artifact_transaction::{
-    DurableCurrentLinkPublicationLeaseV1, DurableCurrentLinkPublicationTokenV1,
-    DurableLinkPublicationError, DurablePublishedClaimReacquisitionErrorV1,
-    PublishedLinkArtifactV1, reacquire_current_hsaco_publication_lease_v1,
+    DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v1,
+};
+use fe2o3_artifact_transaction::{
+    DurableCurrentLinkPublicationTokenV1, DurableLinkPublicationError,
+    DurablePublishedClaimReacquisitionErrorV1, PublishedLinkArtifactV1,
 };
 use fe2o3_hsaco::{CodeObjectVersion, KernelDescriptorBinding};
-use fe2o3_hsaco_finalize::{FinalizationError, finalize_unfinalized, verify_finalized};
-use fe2o3_kernel_descriptor::{
-    CodeObjectVersion as DescriptorCodeObjectVersion, KernelDescriptorV1, KernelId,
-};
-use fe2o3_worker_v2_bundle::{
-    CompilerTransactionEvidenceCapsuleV2, EnvelopeDecodeError, WorkerV2LoadEnvelopeV1,
-};
+use fe2o3_hsaco_finalize::FinalizationError;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_hsaco_finalize::{finalize_unfinalized, verify_finalized};
+use fe2o3_kernel_descriptor::KernelDescriptorV1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_kernel_descriptor::{CodeObjectVersion as DescriptorCodeObjectVersion, KernelId};
+use fe2o3_worker_v2_bundle::EnvelopeDecodeError;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_worker_v2_bundle::{CompilerTransactionEvidenceCapsuleV2, WorkerV2LoadEnvelopeV1};
 use std::error::Error;
 use std::fmt;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::path::Path;
+
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::PhysicalMetadataValueV1;
 
 /// Read-only host descriptor recovered from one canonical Worker V2 envelope.
 ///
@@ -70,6 +79,7 @@ impl fmt::Debug for RecoveredWorkerV2PinnedDescriptorV1 {
 
 impl RecoveredWorkerV2PinnedDescriptorV1 {
     /// Decodes and admits one exact envelope against its durable output directory.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn recover(
         output_dir: &Path,
         envelope_bytes: &[u8],
@@ -109,7 +119,10 @@ impl RecoveredWorkerV2PinnedDescriptorV1 {
         })
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(
+        target_os = "linux",
+        any(test, feature = "qualification-oracles-test-only")
+    ))]
     pub(crate) fn retain_application_descriptors(
         mut self,
         descriptors: RetainedWorkerV2ApplicationDescriptorsV1,
@@ -695,6 +708,7 @@ pub enum RecoveredWorkerV2SynchronousHsaUnloadError<AdapterError> {
     Unload(crate::HsaExecutableUnloadError<AdapterError>),
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_raw_final_lineage(
     envelope: &WorkerV2LoadEnvelopeV1,
     current_lease: &DurableCurrentLinkPublicationLeaseV1,
@@ -717,6 +731,7 @@ fn validate_raw_final_lineage(
 }
 
 /// Recovers one read-only descriptor without exposing the envelope's HSACO bytes.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn recover_worker_v2_load_envelope_v1(
     output_dir: &Path,
     envelope_bytes: &[u8],
@@ -733,6 +748,7 @@ pub(crate) fn recover_worker_v2_load_envelope_v1(
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn select_descriptor(
     envelope: &WorkerV2LoadEnvelopeV1,
     kernel_id: KernelId,
@@ -752,6 +768,7 @@ fn select_descriptor(
     Ok(descriptor.clone())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_descriptor_against_physical(
     descriptor: &KernelDescriptorV1,
     descriptor_version: DescriptorCodeObjectVersion,
@@ -824,6 +841,7 @@ fn validate_descriptor_against_physical(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const fn descriptor_code_object_version(version: CodeObjectVersion) -> DescriptorCodeObjectVersion {
     match version {
         CodeObjectVersion::V4 => DescriptorCodeObjectVersion::V4,

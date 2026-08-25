@@ -13,18 +13,22 @@ use fe2o3_artifact_transaction::{
     DurableLinkPublicationError, PackageIdentityV1, PublishedLinkArtifactV1,
 };
 use fe2o3_artifacts::{
-    ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm, DigestBytes,
-    DirectLinkBindingSourceV1, DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
+    ArtifactContainerV1, DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM, DigestAlgorithm,
+    DirectLinkBundleIndexIdentityV1, DirectLinkContainerIdentityV1,
     DirectLinkFinalizationIdentityV1, DirectLinkFinalizedPayloadIdentityV1,
     DirectLinkLinkedOutputIdentityV1, PayloadDigest, ProofRecordV1, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_artifacts::{DigestBytes, DirectLinkBindingSourceV1};
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernelBindings, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::PreparedWorkerV2HsacoPublicationV1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_descriptor::KernelId;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_worker_v2_bundle::{CompilerTransactionEvidenceCapsuleV2, WorkerV2LoadEnvelopeV1};
 use fe2o3_worker_v2_bundle::{
-    CompilerTransactionEvidenceCapsuleV2, CompilerTransactionEvidenceIdentityV2,
-    WorkerV2LoadEnvelopeIdentityV1, WorkerV2LoadEnvelopeV1,
+    CompilerTransactionEvidenceIdentityV2, WorkerV2LoadEnvelopeIdentityV1,
 };
 use std::fmt;
 use std::marker::PhantomData;
@@ -166,6 +170,7 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
 
 enum RetainedWorkerV2PreparationV1 {
     Production(Box<PreparedWorkerV2HsacoPublicationV1>),
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     Recovered(Box<WorkerV2LoadEnvelopeV1>),
     #[cfg(any(test, feature = "hardware-test-hooks"))]
     Test {
@@ -178,6 +183,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn attempt(&self) -> BuildAttempt {
         match self {
             Self::Production(prepared) => prepared.attempt(),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Recovered(envelope) => envelope.published_claim().plan().attempt(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { attempt, .. } => *attempt,
@@ -187,6 +193,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn exact_bytes(&self) -> &[u8] {
         match self {
             Self::Production(prepared) => prepared.exact_bytes(),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Recovered(envelope) => envelope.raw_hsaco().bytes(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { exact_bytes, .. } => exact_bytes,
@@ -247,6 +254,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
         ))
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn admit_recovered(
         envelope: WorkerV2LoadEnvelopeV1,
         compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
@@ -552,6 +560,7 @@ struct AdmissionParts {
     selected_kernel_index: usize,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_compiler_transaction_lineage(
     envelope: &WorkerV2LoadEnvelopeV1,
     compiler_transaction: &CompilerTransactionEvidenceCapsuleV2,

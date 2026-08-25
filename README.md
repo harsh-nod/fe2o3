@@ -650,6 +650,9 @@ turn the foundations below into end-to-end features.
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
   the challenge-bound ACK and retains the current-publication lease through
   application exit. Worker V2 application transfer is qualification-only.
+  Feature-free `fe2o3-host` builds export only the Worker V3 application
+  consumer; the V2 consumer and its envelope-recovery constructor require the
+  host crate's `qualification-oracles-test-only` feature.
   Production prerequisite authentication, authorized HSA loading, and launch
   remain open.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
