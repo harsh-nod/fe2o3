@@ -19,13 +19,17 @@ use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
-    ProductionPlironSessionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
-    ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1, ProductionRankedKernelV1,
-    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
-    ProductionRankedValueV1, ProductionReferenceOutputSiteV2, ProductionReferenceProofV1,
-    ProductionReferenceProofV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v1, compile_ranked_kernel_for_lowering_v2,
-    normalized_effect_refinement_hash_for_kernel_v2,
+    ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
+    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionPlironSessionV1,
+    ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2,
+    ProductionRankedKernelErrorV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionReferenceOutputSiteV2, ProductionReferenceProofV1, ProductionReferenceProofV2,
+    ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
+    ProductionSemanticExpressionErrorV2, ProductionSemanticExpressionV2,
+    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
@@ -928,6 +932,246 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
 }
 
 #[test]
+fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
+    let scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let expression = ProductionSemanticExpressionV2::Binary {
+        operation: ProductionSemanticBinaryOpV2::Add,
+        scalar,
+        overflow: ProductionOverflowContractV2::Wrapping,
+        lhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 9, scalar }),
+        rhs: Box::new(ProductionSemanticExpressionV2::Constant { scalar, bits: 4 }),
+    };
+    let actual = ProductionRankedValueIdV1::new(0);
+    let expected = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "typed_authenticated_reference",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: actual,
+                    expression: expression.clone(),
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: expected,
+                    expression,
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                    subjects: functional_subjects(4),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let obligation = normalized_functional_refinement_formula_hash_for_kernel_v2(
+        &kernel,
+        0,
+        2,
+        local(actual),
+        local(expected),
+        functional_subjects(4),
+    )
+    .unwrap();
+    let (proof, imported, policy) = imported_reference(
+        functional_binding(4, obligation),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let bound = kernel
+        .bind_functional_refinement_request_v2(0, 2, proof)
+        .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(bound),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap();
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(
+        input.semantic_report().proved_reference_obligation_count(),
+        1
+    );
+    assert_eq!(input.semantic_report().typed_root_commitments().len(), 2);
+    let summary = fe2o3_pliron::typed_semantic_obligation_summary_v2(input.kernel()).unwrap();
+    assert!(summary.is_non_vacuous());
+    assert_eq!(summary.expression_roots, 2);
+    assert_eq!(summary.exact_bitvector_operator_congruence_roots, 2);
+    let reconciliation = fe2o3_pliron::typed_semantic_commitment_reconciliation_v2(&input).unwrap();
+    assert!(reconciliation.is_exact());
+    assert_eq!(reconciliation.recipe_expression_roots(), 2);
+    assert_eq!(reconciliation.pliron_commitment_roots(), 2);
+    assert_ne!(*reconciliation.ordered_commitments_sha256(), [0; 32]);
+    assert!(!reconciliation.grants_arithmetic_interpretation_authority());
+    assert!(!reconciliation.grants_target_value_authority());
+}
+
+#[test]
+fn production_materializes_the_complete_closed_typed_ssa_schema() {
+    let u32_scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let f32_scalar = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+    let f64_scalar = ProductionSemanticScalarTypeV2::Float { bits: 64 };
+    let condition = ProductionSemanticExpressionV2::Compare {
+        operation: ProductionSemanticComparisonV2::Equal,
+        operand_scalar: u32_scalar,
+        lhs: Box::new(ProductionSemanticExpressionV2::Constant {
+            scalar: u32_scalar,
+            bits: 1,
+        }),
+        rhs: Box::new(ProductionSemanticExpressionV2::Constant {
+            scalar: u32_scalar,
+            bits: 1,
+        }),
+    };
+    let selected = ProductionSemanticExpressionV2::Select {
+        scalar: f32_scalar,
+        condition: Box::new(condition),
+        when_true: Box::new(ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar: f32_scalar,
+            overflow: ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: f32_scalar,
+                bits: 1.0_f32.to_bits().into(),
+            }),
+            rhs: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: f32_scalar,
+                bits: 2.0_f32.to_bits().into(),
+            }),
+        }),
+        when_false: Box::new(ProductionSemanticExpressionV2::Unary {
+            operation: ProductionSemanticUnaryOpV2::Negate,
+            scalar: f32_scalar,
+            operand: Box::new(ProductionSemanticExpressionV2::Constant {
+                scalar: f32_scalar,
+                bits: 3.0_f32.to_bits().into(),
+            }),
+        }),
+    };
+    let expression = ProductionSemanticExpressionV2::Cast {
+        kind: ProductionSemanticCastV2::FloatToFloat,
+        source: f32_scalar,
+        target: f64_scalar,
+        operand: Box::new(selected),
+    };
+    let contract = ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+        rounding: ProductionIeeeRoundingModeV2::NearestTiesToEven,
+        exceptional_values: ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+    };
+    let actual = ProductionRankedValueIdV1::new(0);
+    let expected = ProductionRankedValueIdV1::new(1);
+    let kernel = ProductionRankedKernelV1::new(
+        "complete_typed_ssa_schema",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: actual,
+                    expression: expression.clone(),
+                    numerical_contract: contract,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: expected,
+                    expression,
+                    numerical_contract: contract,
+                },
+                ProductionRankedOperationV1::RequireEquivalent {
+                    actual: local(actual),
+                    expected: local(expected),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let input = compile_ranked_kernel_for_lowering_v1(
+        construction(kernel),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap();
+    assert!(input.all_mandatory_reports_are_clean());
+    assert_eq!(input.semantic_report().typed_root_commitments().len(), 2);
+}
+
+#[test]
+fn undefined_typed_expressions_are_rejected_before_external_receipt_import() {
+    let scalar = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let symbol = || ProductionSemanticExpressionV2::Symbol { symbol: 9, scalar };
+    let constant = |bits| ProductionSemanticExpressionV2::Constant { scalar, bits };
+    let (proof, _imported, _policy) = imported_reference(
+        functional_binding(4, proof_digest(44)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    for expression in [
+        ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar,
+            overflow: ProductionOverflowContractV2::Checked,
+            lhs: Box::new(symbol()),
+            rhs: Box::new(constant(1)),
+        },
+        ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Divide,
+            scalar,
+            overflow: ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(symbol()),
+            rhs: Box::new(symbol()),
+        },
+    ] {
+        let actual = ProductionRankedValueIdV1::new(0);
+        let expected = ProductionRankedValueIdV1::new(1);
+        let error = ProductionRankedKernelV1::new(
+            "external_receipt_cannot_bypass_definedness",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: actual,
+                        expression,
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: expected,
+                        expression: constant(0),
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
+                        actual: local(actual),
+                        expected: local(expected),
+                        proof,
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                ProductionSemanticExpressionErrorV2::IncompleteDomain,
+            ),
+        );
+    }
+}
+
+#[test]
 fn functional_refinement_transcript_binds_control_dependencies() {
     let actual = ProductionRankedValueIdV1::new(0);
     let expected = ProductionRankedValueIdV1::new(1);
@@ -1500,7 +1744,7 @@ fn hierarchy_owned_output_kernel(has_holes: bool) -> ProductionRankedKernelV1 {
         },
         ProductionRankedOperationV1::OwnershipContract {
             view: local(VIEW),
-            coverage: OwnershipCoverageAttr::ExactView,
+            coverage: OwnershipCoverageAttr::TotalView,
             partition: if has_holes {
                 OwnershipPartitionAttr::ExactSets
             } else {
@@ -1553,6 +1797,45 @@ fn production_pipeline_enforces_complete_gpu_hierarchy_ownership() {
     .expect("complete disjoint hierarchy ownership");
     assert!(input.ownership_report().is_clean());
     assert!(!input.ownership_report().regions().is_empty());
+    assert!(
+        input
+            .ownership_report()
+            .all_total_view_contracts_are_proved()
+    );
+    assert_eq!(
+        input
+            .ownership_report()
+            .coverage_summary()
+            .total_view_declared(),
+        1
+    );
+}
+
+#[test]
+fn v2_lowering_input_retains_non_vacuous_total_output_coverage() {
+    let (_, _, policy) = imported_reference(
+        functional_binding(4, proof_digest(5)),
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    );
+    let input = compile_ranked_kernel_for_lowering_v2(
+        construction(hierarchy_owned_output_kernel(false)),
+        ProductionSessionLimitsV1::default(),
+        vec![],
+        policy,
+    )
+    .expect("V2 mandatory pipeline retains total-output coverage");
+    assert!(
+        input
+            .ownership_report()
+            .all_total_view_contracts_are_proved()
+    );
+    assert_eq!(
+        input
+            .ownership_report()
+            .coverage_summary()
+            .total_view_proved(),
+        1
+    );
 }
 
 #[test]

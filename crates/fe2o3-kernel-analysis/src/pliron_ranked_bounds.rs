@@ -17,8 +17,12 @@ use dialect_kernel::{
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, InvocationIndexOp,
     MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp, SemanticSymbolOp,
-    TensorLayoutOp, TrapOp, ranked_view_type,
+    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
+    SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp, TrapOp,
+    ranked_view_type,
 };
 use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
 use pliron::{
@@ -292,6 +296,11 @@ enum RankedOperationKind {
     SemanticSymbol,
     SemanticConstant,
     SemanticBinary,
+    SemanticExpressionCommitment,
+    FiniteFoldContract,
+    FiniteRecurrenceContract,
+    PermutationGatherContract,
+    TypedSemantic,
     RequireEquivalent,
     ProofObligation,
     ProofEvidence,
@@ -378,8 +387,39 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::SemanticConstant)
     } else if operation.downcast_ref::<SemanticBinaryOp>().is_some() {
         Some(RankedOperationKind::SemanticBinary)
+    } else if operation
+        .downcast_ref::<SemanticExpressionCommitmentOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::SemanticExpressionCommitment)
+    } else if operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
+        || operation
+            .downcast_ref::<SemanticTypedConstantOp>()
+            .is_some()
+        || operation.downcast_ref::<SemanticTypedUnaryOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedBinaryOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedCompareOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedSelectOp>().is_some()
+        || operation.downcast_ref::<SemanticTypedCastOp>().is_some()
+        || operation
+            .downcast_ref::<SemanticTypedExpressionRootOp>()
+            .is_some()
+    {
+        Some(RankedOperationKind::TypedSemantic)
     } else if operation.downcast_ref::<RequireEquivalentOp>().is_some() {
         Some(RankedOperationKind::RequireEquivalent)
+    } else if operation.downcast_ref::<RequireFiniteFoldOp>().is_some() {
+        Some(RankedOperationKind::FiniteFoldContract)
+    } else if operation
+        .downcast_ref::<RequireFiniteRecurrenceOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::FiniteRecurrenceContract)
+    } else if operation
+        .downcast_ref::<RequirePermutationGatherOp>()
+        .is_some()
+    {
+        Some(RankedOperationKind::PermutationGatherContract)
     } else if operation.downcast_ref::<ObligationOp>().is_some() {
         Some(RankedOperationKind::ProofObligation)
     } else if operation.downcast_ref::<EvidenceRefOp>().is_some() {

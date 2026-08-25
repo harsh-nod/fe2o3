@@ -43,7 +43,7 @@ use COMGR. Pliron pointers, arena identities, printer text, and diagnostics
 are never used as canonical fe2o3 identities.
 
 The shell bounds registration count before collecting caller input, each
-dialect hook to 64 typed registration actions, pass-plan count, names, and
+dialect hook to 128 typed registration actions, pass-plan count, names, and
 diagnostics. A registration service accepts only types, attributes, and
 operations owned by its assigned dialect namespace. Its private context and
 dialect fields cannot be extracted or retained by safe callers. Operation

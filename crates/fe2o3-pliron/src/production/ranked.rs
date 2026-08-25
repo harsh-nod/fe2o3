@@ -21,11 +21,19 @@ use dialect_kernel::{
     BranchArgsOp, BranchOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT,
     DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexUnknownOp, InvocationIndexOp, MAX_DETERMINISTIC_JOIN_INPUTS_V1,
-    MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr,
-    OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
-    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr, SemanticBinaryOp,
-    SemanticConstantOp, SemanticSymbolOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
+    IndexType, IndexUnknownOp, InvocationIndexOp, MAX_COLLECTIVE_SEMANTIC_STEPS_V1,
+    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp,
+    OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
+    SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
+    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr,
+    SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
+    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
+    SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
+    TensorLayoutOp, TrapOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
@@ -48,10 +56,18 @@ use pliron::{
     },
     context::Ptr,
     identifier::Identifier,
+    linked_list::ContainsLinkedList,
     op::Op,
     operation::Operation,
     r#type::TypeHandle,
     value::Value,
+};
+
+use super::{
+    ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
+    ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionSemanticBinaryOpV2,
+    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
+    ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
 };
 
 use super::{
@@ -65,6 +81,111 @@ use crate::{
 };
 
 pub const HARD_MAX_PRODUCTION_RANKED_ARGUMENTS: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ProductionCollectiveSemanticKindV1 {
+    FiniteFold,
+    FiniteRecurrence,
+    PermutationGather,
+}
+
+/// Closed finite semantic contract retained by the production ranked recipe.
+///
+/// This metadata does not prove a GPU implementation. The mandatory semantic
+/// pass additionally requires an exact coverage theorem and an independently
+/// authenticated MIR functional-refinement equality over the contract values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionCollectiveSemanticContractV1 {
+    kind: ProductionCollectiveSemanticKindV1,
+    contract_identity: [u64; 4],
+    source_domain_identity: [u64; 4],
+    target_domain_identity: [u64; 4],
+    domain_bound: u64,
+    step_bound: u64,
+    order: SemanticEvaluationOrderAttr,
+    numerical_contract: ProductionNumericalContractV2,
+    coverage: SemanticCoverageBindingAttr,
+}
+
+impl ProductionCollectiveSemanticContractV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        kind: ProductionCollectiveSemanticKindV1,
+        contract_identity: [u64; 4],
+        source_domain_identity: [u64; 4],
+        target_domain_identity: [u64; 4],
+        domain_bound: u64,
+        step_bound: u64,
+        order: SemanticEvaluationOrderAttr,
+        numerical_contract: ProductionNumericalContractV2,
+        coverage: SemanticCoverageBindingAttr,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let identities = [
+            contract_identity,
+            source_domain_identity,
+            target_domain_identity,
+        ];
+        if identities.contains(&[0; 4])
+            || contract_identity == source_domain_identity
+            || contract_identity == target_domain_identity
+            || domain_bound == 0
+            || domain_bound > MAX_COLLECTIVE_SEMANTIC_STEPS_V1
+            || step_bound == 0
+            || step_bound > domain_bound
+            || !numerical_contract.is_supported()
+            || matches!(kind, ProductionCollectiveSemanticKindV1::PermutationGather)
+                && source_domain_identity == target_domain_identity
+            || !matches!(kind, ProductionCollectiveSemanticKindV1::PermutationGather)
+                && source_domain_identity != target_domain_identity
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract);
+        }
+        Ok(Self {
+            kind,
+            contract_identity,
+            source_domain_identity,
+            target_domain_identity,
+            domain_bound,
+            step_bound,
+            order,
+            numerical_contract,
+            coverage,
+        })
+    }
+
+    pub const fn kind(&self) -> ProductionCollectiveSemanticKindV1 {
+        self.kind
+    }
+    pub const fn contract_identity(&self) -> [u64; 4] {
+        self.contract_identity
+    }
+    pub const fn source_domain_identity(&self) -> [u64; 4] {
+        self.source_domain_identity
+    }
+    pub const fn target_domain_identity(&self) -> [u64; 4] {
+        self.target_domain_identity
+    }
+    pub const fn domain_bound(&self) -> u64 {
+        self.domain_bound
+    }
+    pub const fn step_bound(&self) -> u64 {
+        self.step_bound
+    }
+    pub const fn order(&self) -> SemanticEvaluationOrderAttr {
+        self.order
+    }
+    pub const fn numerical_contract(&self) -> ProductionNumericalContractV2 {
+        self.numerical_contract
+    }
+    pub const fn coverage(&self) -> SemanticCoverageBindingAttr {
+        self.coverage
+    }
+
+    /// Contract metadata alone never proves an implementation or final value.
+    pub const fn grants_gpu_implementation_refinement_authority(&self) -> bool {
+        false
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProductionRankedValueIdV1(u32);
@@ -625,6 +746,8 @@ fn ownership_coverage_tag(coverage: OwnershipCoverageAttr) -> u8 {
     match coverage {
         OwnershipCoverageAttr::ExactView => 1,
         OwnershipCoverageAttr::ExactEffectDomain => 2,
+        OwnershipCoverageAttr::TotalView => 3,
+        OwnershipCoverageAttr::CollectiveContributions => 4,
     }
 }
 fn ownership_partition_tag(partition: OwnershipPartitionAttr) -> u8 {
@@ -910,6 +1033,24 @@ pub enum ProductionRankedOperationV1 {
         lhs: ProductionRankedValueV1,
         rhs: ProductionRankedValueV1,
     },
+    /// One closed, typed expression independently projected from source MIR.
+    SemanticExpression {
+        result: ProductionRankedValueIdV1,
+        expression: ProductionSemanticExpressionV2,
+        numerical_contract: ProductionNumericalContractV2,
+    },
+    /// One finite fold, recurrence, or permutation/gather contract.
+    ///
+    /// Witness 0 is the identity/initial value/mapping and witness 1 is the
+    /// operator/transition/inverse mapping according to `contract.kind()`.
+    CollectiveSemantics {
+        contract: ProductionCollectiveSemanticContractV1,
+        view: ProductionRankedValueV1,
+        actual: ProductionRankedValueV1,
+        expected: ProductionRankedValueV1,
+        witness0: ProductionRankedValueV1,
+        witness1: ProductionRankedValueV1,
+    },
     RequireEquivalent {
         actual: ProductionRankedValueV1,
         expected: ProductionRankedValueV1,
@@ -1149,25 +1290,40 @@ impl ProductionRankedKernelV1 {
                 actual: self.blocks.len(),
             });
         }
+        for expression in self.blocks.iter().flat_map(|block| {
+            block
+                .operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
+                        Some(expression)
+                    }
+                    _ => None,
+                })
+        }) {
+            expression
+                .validate()
+                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+        }
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
             let materialized = block
                 .operations
                 .iter()
                 .try_fold(0_usize, |count, operation| {
-                    count.checked_add(
-                        if matches!(
+                    count.checked_add(match operation {
+                        ProductionRankedOperationV1::SemanticExpression { expression, .. } => {
+                            expression.validate().ok()?.nodes.checked_add(1)?
+                        }
+                        _ if matches!(
                             operation,
                             ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-                        ) {
-                            3
-                        } else {
-                            1
-                        },
-                    )
+                        ) => 3,
+                        _ => 1,
+                    })
                 })?;
             total
                 .checked_add(materialized.checked_add(1)?)?
@@ -1346,6 +1502,8 @@ pub enum ProductionRankedKernelErrorV1 {
     InvalidExecutionLayout,
     InvalidAllocationContract,
     InvalidReferenceContract,
+    InvalidSemanticExpression(ProductionSemanticExpressionErrorV2),
+    InvalidCollectiveSemanticContract,
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -1379,6 +1537,205 @@ pub enum ProductionRankedKernelErrorV1 {
     Materialization(&'static str),
 }
 
+/// Positive, non-vacuous accounting for typed semantic proof obligations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProductionTypedSemanticObligationSummaryV2 {
+    pub expression_roots: usize,
+    pub expression_nodes: usize,
+    pub arithmetic_operations: usize,
+    pub comparisons: usize,
+    pub selects: usize,
+    pub casts: usize,
+    pub checked_operations: usize,
+    pub statically_discharged_domain_roots: usize,
+    pub exact_bitvector_operator_congruence_roots: usize,
+    /// MIR/KIR operator-identity and congruence only. Never target-value authority.
+    pub exact_ieee_operator_congruence_roots: usize,
+}
+
+impl ProductionTypedSemanticObligationSummaryV2 {
+    pub const fn is_non_vacuous(self) -> bool {
+        self.expression_roots != 0 && self.expression_nodes != 0
+    }
+
+    pub const fn grants_target_ieee_value_authority(self) -> bool {
+        false
+    }
+}
+
+pub fn typed_semantic_obligation_summary_v2(
+    kernel: &ProductionRankedKernelV1,
+) -> Result<ProductionTypedSemanticObligationSummaryV2, ProductionRankedKernelErrorV1> {
+    let mut summary = ProductionTypedSemanticObligationSummaryV2::default();
+    for operation in kernel.blocks().iter().flat_map(|block| block.operations()) {
+        let ProductionRankedOperationV1::SemanticExpression {
+            expression,
+            numerical_contract,
+            ..
+        } = operation
+        else {
+            continue;
+        };
+        let stats = expression
+            .validate()
+            .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+        expression
+            .validate_static_domains()
+            .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+        if !numerical_contract.is_supported() || !numerical_contract.admits_expression(expression) {
+            return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
+            ));
+        }
+        summary.expression_roots += 1;
+        summary.expression_nodes += stats.nodes;
+        summary.arithmetic_operations += stats.arithmetic_operations;
+        summary.comparisons += stats.comparisons;
+        summary.selects += stats.selects;
+        summary.casts += stats.casts;
+        summary.checked_operations += stats.checked_operations;
+        summary.statically_discharged_domain_roots += 1;
+        match numerical_contract {
+            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+                summary.exact_bitvector_operator_congruence_roots += 1;
+            }
+            ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. } => {
+                summary.exact_ieee_operator_congruence_roots += 1;
+            }
+            ProductionNumericalContractV2::Relaxed
+            | ProductionNumericalContractV2::ErrorBounded { .. } => {
+                unreachable!("unsupported numerical contracts were rejected above")
+            }
+        }
+    }
+    Ok(summary)
+}
+
+/// Exact reconciliation between retained typed recipes and live PLIRON typed roots.
+///
+/// The mandatory semantic pass reconstructs the closed typed SSA trees and validates
+/// every root policy and commitment. This record establishes that materialization
+/// retained the same ordered canonical transcript digests. It does not grant
+/// target-value or lowering authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionTypedSemanticCommitmentReconciliationV2 {
+    recipe_expression_roots: usize,
+    pliron_commitment_roots: usize,
+    ordered_commitments_sha256: [u8; 32],
+}
+
+impl ProductionTypedSemanticCommitmentReconciliationV2 {
+    pub const fn recipe_expression_roots(self) -> usize {
+        self.recipe_expression_roots
+    }
+
+    pub const fn pliron_commitment_roots(self) -> usize {
+        self.pliron_commitment_roots
+    }
+
+    pub const fn ordered_commitments_sha256(&self) -> &[u8; 32] {
+        &self.ordered_commitments_sha256
+    }
+
+    pub const fn is_exact(self) -> bool {
+        self.recipe_expression_roots == self.pliron_commitment_roots
+    }
+
+    pub const fn grants_arithmetic_interpretation_authority(self) -> bool {
+        false
+    }
+
+    pub const fn grants_target_value_authority(self) -> bool {
+        false
+    }
+}
+
+/// Reconciles every retained typed expression with the corresponding operation
+/// in the owner-held PLIRON graph, in deterministic block/operation order.
+pub fn typed_semantic_commitment_reconciliation_v2(
+    input: &ProductionRankedKernelLoweringInputV1,
+) -> Result<ProductionTypedSemanticCommitmentReconciliationV2, ProductionRankedKernelErrorV1> {
+    const DOMAIN: &[u8] = b"FE2O3/TYPED-SEMANTIC-COMMITMENT-RECONCILIATION/V2\0";
+
+    let expected = input
+        .kernel
+        .blocks
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::SemanticExpression {
+                expression,
+                numerical_contract,
+                ..
+            } => Some(expression.canonical_transcript_sha256(*numerical_contract)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let context = &input._session.inner.context;
+    let root_pointer = input
+        ._session
+        .inner
+        .operations
+        .get(&input._root.operation.identity)
+        .copied()
+        .ok_or(ProductionRankedKernelErrorV1::Materialization(
+            "live ranked root is absent during typed commitment reconciliation",
+        ))?;
+    let module = ModuleOp::from_operation(root_pointer);
+    let module_operations = module
+        .get_body(context, 0)
+        .deref(context)
+        .iter(context)
+        .collect::<Vec<_>>();
+    let [function_pointer] = module_operations.as_slice() else {
+        return Err(ProductionRankedKernelErrorV1::Materialization(
+            "live ranked module shape changed during typed commitment reconciliation",
+        ));
+    };
+    let function = Operation::get_op::<FuncOp>(*function_pointer, context).ok_or(
+        ProductionRankedKernelErrorV1::Materialization(
+            "live ranked function is absent during typed commitment reconciliation",
+        ),
+    )?;
+    let mut actual = Vec::new();
+    for block in function.get_region(context).deref(context).iter(context) {
+        for operation in block.deref(context).iter(context) {
+            let Some(root) = Operation::get_op::<SemanticTypedExpressionRootOp>(operation, context)
+            else {
+                continue;
+            };
+            let words =
+                root.commitment(context)
+                    .ok_or(ProductionRankedKernelErrorV1::Materialization(
+                        "live typed semantic root has no canonical commitment",
+                    ))?;
+            let mut digest = [0_u8; 32];
+            for (chunk, word) in digest.chunks_exact_mut(8).zip(words) {
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            actual.push(digest);
+        }
+    }
+    if actual != expected {
+        return Err(ProductionRankedKernelErrorV1::Materialization(
+            "retained typed semantic recipes do not match live PLIRON root commitments",
+        ));
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(DOMAIN);
+    digest.update((expected.len() as u64).to_le_bytes());
+    for commitment in &expected {
+        digest.update(commitment);
+    }
+    Ok(ProductionTypedSemanticCommitmentReconciliationV2 {
+        recipe_expression_roots: expected.len(),
+        pliron_commitment_roots: actual.len(),
+        ordered_commitments_sha256: digest.finalize().into(),
+    })
+}
+
 impl fmt::Display for ProductionRankedKernelErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1407,6 +1764,13 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             ),
             Self::InvalidReferenceContract => formatter.write_str(
                 "functional-reference proof identities must be nonzero and pairwise distinct",
+            ),
+            Self::InvalidSemanticExpression(error) => write!(
+                formatter,
+                "invalid typed semantic expression: {error}"
+            ),
+            Self::InvalidCollectiveSemanticContract => formatter.write_str(
+                "finite collective semantic contract is malformed, unsupported, or unbounded",
             ),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
@@ -1480,7 +1844,14 @@ impl Error for ProductionRankedKernelErrorV1 {
 enum RecipeValueKindV1 {
     Index,
     Semantic,
-    View { rank: usize, writable: bool },
+    TypedSemantic {
+        scalar: super::ProductionSemanticScalarTypeV2,
+        numerical_contract: ProductionNumericalContractV2,
+    },
+    View {
+        rank: usize,
+        writable: bool,
+    },
 }
 
 fn require_value(
@@ -1529,7 +1900,9 @@ fn require_view(
 ) -> Result<(usize, bool), ProductionRankedKernelErrorV1> {
     match require_value(value, argument_count, locals)? {
         RecipeValueKindV1::View { rank, writable } => Ok((rank, writable)),
-        RecipeValueKindV1::Index | RecipeValueKindV1::Semantic => {
+        RecipeValueKindV1::Index
+        | RecipeValueKindV1::Semantic
+        | RecipeValueKindV1::TypedSemantic { .. } => {
             Err(ProductionRankedKernelErrorV1::ExpectedView(value))
         }
     }
@@ -1542,11 +1915,31 @@ fn require_semantic(
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     if matches!(
         require_value(value, argument_count, locals)?,
-        RecipeValueKindV1::Semantic
+        RecipeValueKindV1::Semantic | RecipeValueKindV1::TypedSemantic { .. }
     ) {
         Ok(())
     } else {
         Err(ProductionRankedKernelErrorV1::ExpectedSemantic(value))
+    }
+}
+
+fn require_typed_semantic(
+    value: ProductionRankedValueV1,
+    argument_count: usize,
+    locals: &[RecipeValueKindV1],
+) -> Result<
+    (
+        super::ProductionSemanticScalarTypeV2,
+        ProductionNumericalContractV2,
+    ),
+    ProductionRankedKernelErrorV1,
+> {
+    match require_value(value, argument_count, locals)? {
+        RecipeValueKindV1::TypedSemantic {
+            scalar,
+            numerical_contract,
+        } => Ok((scalar, numerical_contract)),
+        _ => Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract),
     }
 }
 
@@ -1794,6 +2187,77 @@ fn validate_operation(
             require_semantic(*rhs, argument_count, locals)?;
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
+        ProductionRankedOperationV1::SemanticExpression {
+            result,
+            expression,
+            numerical_contract,
+        } => {
+            expression
+                .validate()
+                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            expression
+                .validate_static_domains()
+                .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            if !numerical_contract.is_supported()
+                || !numerical_contract.admits_expression(expression)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                    ProductionSemanticExpressionErrorV2::UnsupportedNumericalContract,
+                ));
+            }
+            Ok(Some((
+                *result,
+                RecipeValueKindV1::TypedSemantic {
+                    scalar: expression.scalar(),
+                    numerical_contract: *numerical_contract,
+                },
+            )))
+        }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract,
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+        } => {
+            let (_, writable) = require_view(*view, argument_count, locals)?;
+            if !writable {
+                return Err(ProductionRankedKernelErrorV1::WriteThroughReadOnlyView);
+            }
+            let actual_type = require_typed_semantic(*actual, argument_count, locals)?;
+            let expected_type = require_typed_semantic(*expected, argument_count, locals)?;
+            let witness0_type = require_typed_semantic(*witness0, argument_count, locals)?;
+            let witness1_type = require_typed_semantic(*witness1, argument_count, locals)?;
+            if actual_type != expected_type
+                || actual_type.1 != contract.numerical_contract()
+                || !contract.numerical_contract().admits_scalar(actual_type.0)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract);
+            }
+            match contract.kind() {
+                ProductionCollectiveSemanticKindV1::FiniteFold
+                | ProductionCollectiveSemanticKindV1::FiniteRecurrence => {
+                    if witness0_type != actual_type || witness1_type != actual_type {
+                        return Err(
+                            ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract,
+                        );
+                    }
+                }
+                ProductionCollectiveSemanticKindV1::PermutationGather => {
+                    if witness0_type != witness1_type
+                        || !witness0_type.0.is_integer()
+                        || witness0_type.1
+                            != ProductionNumericalContractV2::ExactBitVectorOperatorCongruence
+                    {
+                        return Err(
+                            ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract,
+                        );
+                    }
+                }
+            }
+            Ok(None)
+        }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
         | ProductionRankedOperationV1::RequireReferenceEquivalent {
             actual, expected, ..
@@ -1975,6 +2439,18 @@ fn validate_block_argument_values_v1(
             validate(*actual)?;
             validate(*expected)?;
         }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+            ..
+        } => {
+            for value in [view, actual, expected, witness0, witness1] {
+                validate(*value)?;
+            }
+        }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, .. }
         | ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } => {
             validate(contract.view())?;
@@ -2006,6 +2482,7 @@ fn validate_block_argument_values_v1(
         | ProductionRankedOperationV1::AllocationEffect { .. }
         | ProductionRankedOperationV1::SemanticSymbol { .. }
         | ProductionRankedOperationV1::SemanticConstant { .. } => {}
+        ProductionRankedOperationV1::SemanticExpression { .. } => {}
     }
     Ok(())
 }
@@ -2555,7 +3032,16 @@ impl ProductionPlironSessionV1 {
         let function = record
             .ranked_function
             .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?;
+        let expected_typed_roots = expected_typed_root_commitments(
+            record
+                .ranked_kernel
+                .as_ref()
+                .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
+        );
         let report = self.run_production_pipeline_guarded(function)?;
+        if report.semantics().typed_root_commitments() != expected_typed_roots {
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
         let record = self
             .constructed_roots
             .get_mut(&stage.identity)
@@ -2589,7 +3075,7 @@ impl ProductionPlironSessionV1 {
             self.poisoned = true;
             return Err(ProductionSessionErrorV1::Operation(error));
         }
-        let (expected_root, function, expected_report) = {
+        let (expected_root, function, expected_report, expected_typed_roots) = {
             let record = self
                 .constructed_roots
                 .get(&stage.identity)
@@ -2598,6 +3084,12 @@ impl ProductionPlironSessionV1 {
                 record.identity,
                 record.ranked_function,
                 record.production_pipeline_report.clone(),
+                expected_typed_root_commitments(
+                    record
+                        .ranked_kernel
+                        .as_ref()
+                        .ok_or(ProductionSessionErrorV1::WrongConstructionKind)?,
+                ),
             )
         };
         if root.stage != stage.identity
@@ -2614,6 +3106,10 @@ impl ProductionPlironSessionV1 {
                 return Err(ProductionSessionErrorV1::RankedGraphChanged);
             }
         };
+        if revalidated.semantics().typed_root_commitments() != expected_typed_roots {
+            self.poisoned = true;
+            return Err(ProductionSessionErrorV1::RankedGraphChanged);
+        }
         if expected_report.as_ref() != Some(&revalidated) {
             self.poisoned = true;
             return Err(ProductionSessionErrorV1::RankedGraphChanged);
@@ -3063,6 +3559,103 @@ fn materialize_operation(
             );
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::SemanticExpression {
+            result,
+            expression,
+            numerical_contract,
+        } => {
+            let digest = expression.canonical_transcript_sha256(*numerical_contract);
+            let expression = materialize_typed_semantic_expression(context, block, expression)?;
+            let (policy, rounding, exceptional_values) =
+                typed_numerical_contract(*numerical_contract)?;
+            let op = SemanticTypedExpressionRootOp::new(
+                context,
+                expression,
+                policy,
+                rounding,
+                exceptional_values,
+                digest_words_v2(digest),
+            );
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract,
+            view,
+            actual,
+            expected,
+            witness0,
+            witness1,
+        } => {
+            let view = resolve_value(*view, arguments, locals, block_arguments)?;
+            let actual = resolve_value(*actual, arguments, locals, block_arguments)?;
+            let expected = resolve_value(*expected, arguments, locals, block_arguments)?;
+            let witness0 = resolve_value(*witness0, arguments, locals, block_arguments)?;
+            let witness1 = resolve_value(*witness1, arguments, locals, block_arguments)?;
+            let contract_identity =
+                dialect_kernel::SemanticExpressionCommitmentAttr::new(contract.contract_identity());
+            let source_domain_identity = dialect_kernel::SemanticExpressionCommitmentAttr::new(
+                contract.source_domain_identity(),
+            );
+            let numerical_policy = semantic_numerical_policy_v1(contract.numerical_contract())?;
+            let op = match contract.kind() {
+                ProductionCollectiveSemanticKindV1::FiniteFold => RequireFiniteFoldOp::new(
+                    context,
+                    view,
+                    actual,
+                    expected,
+                    witness0,
+                    witness1,
+                    contract_identity,
+                    source_domain_identity,
+                    contract.domain_bound(),
+                    contract.step_bound(),
+                    contract.order(),
+                    numerical_policy,
+                    contract.coverage(),
+                )
+                .get_operation(),
+                ProductionCollectiveSemanticKindV1::FiniteRecurrence => {
+                    RequireFiniteRecurrenceOp::new(
+                        context,
+                        view,
+                        actual,
+                        expected,
+                        witness0,
+                        witness1,
+                        contract_identity,
+                        source_domain_identity,
+                        contract.domain_bound(),
+                        contract.step_bound(),
+                        contract.order(),
+                        numerical_policy,
+                        contract.coverage(),
+                    )
+                    .get_operation()
+                }
+                ProductionCollectiveSemanticKindV1::PermutationGather => {
+                    RequirePermutationGatherOp::new(
+                        context,
+                        view,
+                        actual,
+                        expected,
+                        witness0,
+                        witness1,
+                        contract_identity,
+                        source_domain_identity,
+                        dialect_kernel::SemanticExpressionCommitmentAttr::new(
+                            contract.target_domain_identity(),
+                        ),
+                        contract.domain_bound(),
+                        contract.step_bound(),
+                        contract.order(),
+                        numerical_policy,
+                        contract.coverage(),
+                    )
+                    .get_operation()
+                }
+            };
+            (op, None)
+        }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected } => {
             let op = RequireEquivalentOp::new(
                 context,
@@ -3237,6 +3830,21 @@ fn materialize_operation(
     Ok(())
 }
 
+fn semantic_numerical_policy_v1(
+    contract: ProductionNumericalContractV2,
+) -> Result<SemanticNumericalPolicyAttr, ProductionRankedKernelErrorV1> {
+    match contract {
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+            Ok(SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence)
+        }
+        ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding: super::ProductionIeeeRoundingModeV2::NearestTiesToEven,
+            exceptional_values: super::ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+        } => Ok(SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits),
+        _ => Err(ProductionRankedKernelErrorV1::InvalidCollectiveSemanticContract),
+    }
+}
+
 fn digest_as_proof_id(digest: DigestV1) -> [u64; 4] {
     let bytes = digest.as_bytes();
     std::array::from_fn(|index| {
@@ -3246,6 +3854,247 @@ fn digest_as_proof_id(digest: DigestV1) -> [u64; 4] {
                 .expect("digest quarters have fixed width"),
         )
     })
+}
+
+fn expected_typed_root_commitments(kernel: &ProductionRankedKernelV1) -> Vec<[u64; 4]> {
+    kernel
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::SemanticExpression {
+                expression,
+                numerical_contract,
+                ..
+            } => Some(digest_words_v2(
+                expression.canonical_transcript_sha256(*numerical_contract),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn typed_scalar(
+    scalar: ProductionSemanticScalarTypeV2,
+) -> Result<SemanticTypedScalarV1, ProductionRankedKernelErrorV1> {
+    let (kind, bits) = match scalar {
+        ProductionSemanticScalarTypeV2::Bool => (SemanticScalarKindAttr::Bool, 1),
+        ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits,
+        } => (SemanticScalarKindAttr::UnsignedInteger, bits),
+        ProductionSemanticScalarTypeV2::Integer { signed: true, bits } => {
+            (SemanticScalarKindAttr::SignedInteger, bits)
+        }
+        ProductionSemanticScalarTypeV2::Float { bits } => (SemanticScalarKindAttr::Float, bits),
+    };
+    SemanticTypedScalarV1::new(kind, bits).ok_or(ProductionRankedKernelErrorV1::Materialization(
+        "validated typed semantic scalar failed PLIRON materialization",
+    ))
+}
+
+fn typed_numerical_contract(
+    contract: ProductionNumericalContractV2,
+) -> Result<
+    (
+        SemanticNumericalPolicyAttr,
+        SemanticIeeeRoundingAttr,
+        SemanticExceptionalValueAttr,
+    ),
+    ProductionRankedKernelErrorV1,
+> {
+    match contract {
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => Ok((
+            SemanticNumericalPolicyAttr::ExactBitVectorOperatorCongruence,
+            SemanticIeeeRoundingAttr::NearestTiesToEven,
+            SemanticExceptionalValueAttr::PreserveExactBits,
+        )),
+        ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding,
+            exceptional_values,
+        } => Ok((
+            SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits,
+            match rounding {
+                ProductionIeeeRoundingModeV2::NearestTiesToEven => {
+                    SemanticIeeeRoundingAttr::NearestTiesToEven
+                }
+                ProductionIeeeRoundingModeV2::TowardZero => SemanticIeeeRoundingAttr::TowardZero,
+                ProductionIeeeRoundingModeV2::TowardPositive => {
+                    SemanticIeeeRoundingAttr::TowardPositive
+                }
+                ProductionIeeeRoundingModeV2::TowardNegative => {
+                    SemanticIeeeRoundingAttr::TowardNegative
+                }
+            },
+            match exceptional_values {
+                ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits => {
+                    SemanticExceptionalValueAttr::PreserveExactBits
+                }
+                ProductionIeeeExceptionalValuePolicyV2::CanonicalNan => {
+                    SemanticExceptionalValueAttr::CanonicalNan
+                }
+            },
+        )),
+        ProductionNumericalContractV2::Relaxed
+        | ProductionNumericalContractV2::ErrorBounded { .. } => {
+            Err(ProductionRankedKernelErrorV1::Materialization(
+                "unsupported numerical contract reached PLIRON materialization",
+            ))
+        }
+    }
+}
+
+fn materialize_typed_semantic_expression(
+    context: &mut pliron::context::Context,
+    block: Ptr<BasicBlock>,
+    expression: &ProductionSemanticExpressionV2,
+) -> Result<Value, ProductionRankedKernelErrorV1> {
+    let operation = match expression {
+        ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
+            SemanticTypedSymbolOp::new(context, *symbol, typed_scalar(*scalar)?).get_operation()
+        }
+        ProductionSemanticExpressionV2::Constant { scalar, bits } => {
+            SemanticTypedConstantOp::new(context, *bits, typed_scalar(*scalar)?).get_operation()
+        }
+        ProductionSemanticExpressionV2::Unary {
+            operation,
+            scalar,
+            operand,
+        } => {
+            let operand = materialize_typed_semantic_expression(context, block, operand)?;
+            SemanticTypedUnaryOp::new(
+                context,
+                match operation {
+                    ProductionSemanticUnaryOpV2::Not => SemanticTypedUnaryKindAttr::Not,
+                    ProductionSemanticUnaryOpV2::Negate => SemanticTypedUnaryKindAttr::Negate,
+                },
+                typed_scalar(*scalar)?,
+                operand,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Binary {
+            operation,
+            scalar,
+            overflow,
+            lhs,
+            rhs,
+        } => {
+            let lhs = materialize_typed_semantic_expression(context, block, lhs)?;
+            let rhs = materialize_typed_semantic_expression(context, block, rhs)?;
+            SemanticTypedBinaryOp::new(
+                context,
+                match operation {
+                    ProductionSemanticBinaryOpV2::Add => SemanticTypedBinaryKindAttr::Add,
+                    ProductionSemanticBinaryOpV2::Subtract => SemanticTypedBinaryKindAttr::Subtract,
+                    ProductionSemanticBinaryOpV2::Multiply => SemanticTypedBinaryKindAttr::Multiply,
+                    ProductionSemanticBinaryOpV2::Divide => SemanticTypedBinaryKindAttr::Divide,
+                    ProductionSemanticBinaryOpV2::Remainder => {
+                        SemanticTypedBinaryKindAttr::Remainder
+                    }
+                    ProductionSemanticBinaryOpV2::BitXor => SemanticTypedBinaryKindAttr::BitXor,
+                    ProductionSemanticBinaryOpV2::BitAnd => SemanticTypedBinaryKindAttr::BitAnd,
+                    ProductionSemanticBinaryOpV2::BitOr => SemanticTypedBinaryKindAttr::BitOr,
+                    ProductionSemanticBinaryOpV2::ShiftLeft => {
+                        SemanticTypedBinaryKindAttr::ShiftLeft
+                    }
+                    ProductionSemanticBinaryOpV2::ShiftRight => {
+                        SemanticTypedBinaryKindAttr::ShiftRight
+                    }
+                },
+                match overflow {
+                    ProductionOverflowContractV2::Wrapping => SemanticOverflowAttr::Wrapping,
+                    ProductionOverflowContractV2::Checked => SemanticOverflowAttr::Checked,
+                },
+                typed_scalar(*scalar)?,
+                lhs,
+                rhs,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Compare {
+            operation,
+            operand_scalar,
+            lhs,
+            rhs,
+        } => {
+            let lhs = materialize_typed_semantic_expression(context, block, lhs)?;
+            let rhs = materialize_typed_semantic_expression(context, block, rhs)?;
+            SemanticTypedCompareOp::new(
+                context,
+                match operation {
+                    ProductionSemanticComparisonV2::Equal => SemanticTypedCompareKindAttr::Equal,
+                    ProductionSemanticComparisonV2::LessThan => {
+                        SemanticTypedCompareKindAttr::LessThan
+                    }
+                    ProductionSemanticComparisonV2::LessOrEqual => {
+                        SemanticTypedCompareKindAttr::LessOrEqual
+                    }
+                    ProductionSemanticComparisonV2::NotEqual => {
+                        SemanticTypedCompareKindAttr::NotEqual
+                    }
+                    ProductionSemanticComparisonV2::GreaterOrEqual => {
+                        SemanticTypedCompareKindAttr::GreaterOrEqual
+                    }
+                    ProductionSemanticComparisonV2::GreaterThan => {
+                        SemanticTypedCompareKindAttr::GreaterThan
+                    }
+                },
+                typed_scalar(*operand_scalar)?,
+                lhs,
+                rhs,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Select {
+            scalar,
+            condition,
+            when_true,
+            when_false,
+        } => {
+            let condition = materialize_typed_semantic_expression(context, block, condition)?;
+            let when_true = materialize_typed_semantic_expression(context, block, when_true)?;
+            let when_false = materialize_typed_semantic_expression(context, block, when_false)?;
+            SemanticTypedSelectOp::new(
+                context,
+                typed_scalar(*scalar)?,
+                condition,
+                when_true,
+                when_false,
+            )
+            .get_operation()
+        }
+        ProductionSemanticExpressionV2::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => {
+            let operand = materialize_typed_semantic_expression(context, block, operand)?;
+            SemanticTypedCastOp::new(
+                context,
+                match kind {
+                    ProductionSemanticCastV2::Integer => SemanticTypedCastKindAttr::Integer,
+                    ProductionSemanticCastV2::IntegerToFloat => {
+                        SemanticTypedCastKindAttr::IntegerToFloat
+                    }
+                    ProductionSemanticCastV2::FloatToFloat => {
+                        SemanticTypedCastKindAttr::FloatToFloat
+                    }
+                    ProductionSemanticCastV2::FloatToIntegerSaturating => {
+                        SemanticTypedCastKindAttr::FloatToIntegerSaturating
+                    }
+                },
+                typed_scalar(*source)?,
+                typed_scalar(*target)?,
+                operand,
+            )
+            .get_operation()
+        }
+    };
+    let result = operation.deref(context).get_result(0);
+    operation.insert_at_back(block, context);
+    Ok(result)
 }
 
 fn authenticated_proof_ids(
@@ -3285,6 +4134,14 @@ fn authenticated_proof_ids(
         return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
     }
     Ok(identities)
+}
+
+fn digest_words_v2(digest: [u8; 32]) -> [u64; 4] {
+    let mut words = [0_u64; 4];
+    for (word, bytes) in words.iter_mut().zip(digest.chunks_exact(8)) {
+        *word = u64::from_le_bytes(bytes.try_into().expect("eight-byte digest chunk"));
+    }
+    words
 }
 
 fn materialize_terminator(

@@ -637,7 +637,7 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
 
     let expressions = match SemanticExpressionTableV1::from_function(context, function) {
         Ok(expressions) => expressions,
-        Err(()) => {
+        Err(_) => {
             return one(
                 contracts.len(),
                 PlironEffectRefinementFindingV1::ResourceLimitExceeded {

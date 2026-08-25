@@ -303,7 +303,7 @@ fn generate_ranked_functional_refinement_proof_v2(
     Ok((binding, source))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum SemanticDefinitionV2 {
     Symbol(u32),
     Constant(i128),
@@ -312,13 +312,18 @@ enum SemanticDefinitionV2 {
         ProductionRankedValueV1,
         ProductionRankedValueV1,
     ),
+    TypedExpression(
+        fe2o3_pliron::ProductionSemanticExpressionV2,
+        fe2o3_pliron::ProductionNumericalContractV2,
+    ),
 }
 
 impl SemanticDefinitionV2 {
-    fn dependencies(self) -> [Option<ProductionRankedValueV1>; 2] {
+    fn dependencies(&self) -> [Option<ProductionRankedValueV1>; 2] {
         match self {
             Self::Symbol(_) | Self::Constant(_) => [None, None],
-            Self::Binary(_, lhs, rhs) => [Some(lhs), Some(rhs)],
+            Self::Binary(_, lhs, rhs) => [Some(*lhs), Some(*rhs)],
+            Self::TypedExpression(_, _) => [None, None],
         }
     }
 }
@@ -335,6 +340,8 @@ impl SemanticFormulaProgramV2 {
         pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
     ) -> Result<Self, FunctionalRefinementVerusExecutionErrorV2> {
         let mut definitions = BTreeMap::new();
+        let mut retained_expression_nodes = 0_usize;
+        let mut retained_expression_edges = 0_usize;
         for operation in kernel.blocks().iter().flat_map(|block| block.operations()) {
             let definition = match operation {
                 ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
@@ -349,6 +356,40 @@ impl SemanticFormulaProgramV2 {
                     lhs,
                     rhs,
                 } => Some((*result, SemanticDefinitionV2::Binary(*kind, *lhs, *rhs))),
+                ProductionRankedOperationV1::SemanticExpression {
+                    result,
+                    expression,
+                    numerical_contract,
+                } => {
+                    let stats = expression.validate().map_err(|_| invalid_ranked_recipe())?;
+                    if !numerical_contract.is_supported()
+                        || !numerical_contract.admits_expression(expression)
+                    {
+                        return Err(invalid_ranked_recipe());
+                    }
+                    expression.validate_static_domains().map_err(|error| {
+                        if error
+                            == fe2o3_pliron::ProductionSemanticExpressionErrorV2::IncompleteDomain
+                        {
+                            incomplete_semantic_domain()
+                        } else {
+                            invalid_ranked_recipe()
+                        }
+                    })?;
+                    retained_expression_nodes = retained_expression_nodes
+                        .checked_add(stats.nodes)
+                        .ok_or_else(formula_resource_limit)?;
+                    retained_expression_edges = retained_expression_edges
+                        .checked_add(stats.nodes.saturating_sub(1))
+                        .ok_or_else(formula_resource_limit)?;
+                    Some((
+                        *result,
+                        SemanticDefinitionV2::TypedExpression(
+                            expression.clone(),
+                            *numerical_contract,
+                        ),
+                    ))
+                }
                 _ => None,
             };
             if let Some((identity, definition)) = definition {
@@ -359,6 +400,13 @@ impl SemanticFormulaProgramV2 {
                     return Err(invalid_ranked_recipe());
                 }
             }
+        }
+        if retained_expression_nodes
+            .checked_add(definitions.len())
+            .is_none_or(|nodes| nodes > MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2)
+            || retained_expression_edges > MAX_FUNCTIONAL_REFINEMENT_FORMULA_EDGES_V2
+        {
+            return Err(formula_resource_limit());
         }
 
         let mut state = BTreeMap::<ProductionRankedValueIdV1, u8>::new();
@@ -381,9 +429,10 @@ impl SemanticFormulaProgramV2 {
                     return Err(formula_resource_limit());
                 }
                 if expanded {
-                    let definition = *definitions
+                    let definition = definitions
                         .get(&identity)
-                        .ok_or_else(invalid_ranked_recipe)?;
+                        .ok_or_else(invalid_ranked_recipe)?
+                        .clone();
                     let mut depth = 1_usize;
                     for dependency in definition.dependencies().into_iter().flatten() {
                         let ProductionRankedValueV1::Local(dependency) = dependency else {
@@ -401,8 +450,15 @@ impl SemanticFormulaProgramV2 {
                     if depth > MAX_FUNCTIONAL_REFINEMENT_FORMULA_DEPTH_V2 {
                         return Err(formula_resource_limit());
                     }
-                    if let SemanticDefinitionV2::Symbol(symbol) = definition {
-                        symbols.insert(symbol);
+                    match &definition {
+                        SemanticDefinitionV2::Symbol(symbol) => {
+                            symbols.insert(*symbol);
+                        }
+                        SemanticDefinitionV2::TypedExpression(expression, _) => {
+                            expression.symbols(&mut symbols);
+                        }
+                        SemanticDefinitionV2::Constant(_)
+                        | SemanticDefinitionV2::Binary(_, _, _) => {}
                     }
                     depths.insert(identity, depth);
                     state.insert(identity, 2);
@@ -417,9 +473,10 @@ impl SemanticFormulaProgramV2 {
                 if state.len() >= MAX_FUNCTIONAL_REFINEMENT_FORMULA_NODES_V2 {
                     return Err(formula_resource_limit());
                 }
-                let definition = *definitions
+                let definition = definitions
                     .get(&identity)
-                    .ok_or_else(invalid_ranked_recipe)?;
+                    .ok_or_else(invalid_ranked_recipe)?
+                    .clone();
                 state.insert(identity, 1);
                 stack.push((identity, true));
                 let dependencies = definition.dependencies();
@@ -452,7 +509,7 @@ impl SemanticFormulaProgramV2 {
         let mut source = BoundedVerusSourceV2::default();
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n    proof fn fe2o3_functional_refinement_v2("
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;\n\n    proof fn fe2o3_functional_refinement_v2("
         )
         .map_err(|_| generated_source_limit())?;
         for (index, symbol) in self.symbols.iter().enumerate() {
@@ -470,7 +527,7 @@ impl SemanticFormulaProgramV2 {
             let definition = self
                 .definitions
                 .get(identity)
-                .copied()
+                .cloned()
                 .ok_or_else(invalid_ranked_recipe)?;
             match definition {
                 SemanticDefinitionV2::Symbol(symbol) => {
@@ -497,6 +554,25 @@ impl SemanticFormulaProgramV2 {
                         rhs.get()
                     )
                 }
+                SemanticDefinitionV2::TypedExpression(expression, numerical_contract) => {
+                    let rendered = match numerical_contract {
+                        fe2o3_pliron::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+                            render_bitvector_expression_v2(&expression)?
+                        }
+                        fe2o3_pliron::ProductionNumericalContractV2::ExactIeee754OperatorCongruence { .. } => {
+                            format!(
+                                "fe2o3_ieee_operator_congruence_v2({}, {}, 0, 0)",
+                                numerical_contract_tag_v2(numerical_contract),
+                                render_ieee_congruence_expression_v2(&expression)?,
+                            )
+                        }
+                        fe2o3_pliron::ProductionNumericalContractV2::Relaxed
+                        | fe2o3_pliron::ProductionNumericalContractV2::ErrorBounded { .. } => {
+                            return Err(invalid_ranked_recipe());
+                        }
+                    };
+                    writeln!(source, "        let v{}: int = {rendered};", identity.get())
+                }
             }
             .map_err(|_| generated_source_limit())?;
         }
@@ -518,6 +594,377 @@ impl SemanticFormulaProgramV2 {
             .write_str("    }\n}\n\nfn main() {}\n")
             .map_err(|_| generated_source_limit())?;
         Ok(source.into_string())
+    }
+}
+
+const BITVECTOR_SEMANTICS_V2: &str = r#"
+    pub open spec fn fe2o3_pow2_v2(exponent: nat) -> nat
+        decreases exponent,
+    {
+        if exponent == 0 {
+            1
+        } else {
+            2 * fe2o3_pow2_v2((exponent - 1) as nat)
+        }
+    }
+
+    pub open spec fn fe2o3_bv_modulus_v2(width: nat) -> int {
+        if width == 1 { 2 }
+        else if width == 8 { 256 }
+        else if width == 16 { 65536 }
+        else if width == 32 { 4294967296 }
+        else if width == 64 { 18446744073709551616 }
+        else { fe2o3_pow2_v2(width) as int }
+    }
+
+    pub open spec fn fe2o3_bv_norm_v2(value: int, width: nat) -> int {
+        value % fe2o3_bv_modulus_v2(width)
+    }
+
+    pub open spec fn fe2o3_bv_signed_v2(value: int, width: nat) -> int
+        recommends width > 0,
+    {
+        let normalized = fe2o3_bv_norm_v2(value, width);
+        let sign = fe2o3_bv_modulus_v2(width) / 2;
+        if normalized >= sign {
+            normalized - fe2o3_bv_modulus_v2(width)
+        } else {
+            normalized
+        }
+    }
+
+    pub open spec fn fe2o3_signed_div_v2(lhs: int, rhs: int) -> int
+        recommends rhs != 0,
+    {
+        if lhs < 0 {
+            if rhs < 0 { (-lhs) / (-rhs) } else { -((-lhs) / rhs) }
+        } else if rhs < 0 {
+            -(lhs / (-rhs))
+        } else {
+            lhs / rhs
+        }
+    }
+
+    pub open spec fn fe2o3_signed_rem_v2(lhs: int, rhs: int) -> int
+        recommends rhs != 0,
+    {
+        lhs - fe2o3_signed_div_v2(lhs, rhs) * rhs
+    }
+
+    pub open spec fn fe2o3_bit_v2(value: int, bit: nat) -> int {
+        (value / (fe2o3_pow2_v2(bit) as int)) % 2
+    }
+
+    pub open spec fn fe2o3_bitwise_v2(kind: nat, lhs: int, rhs: int, width: nat) -> int
+        decreases width,
+    {
+        if width == 0 {
+            0
+        } else {
+            let bit = (width - 1) as nat;
+            let lhs_set = fe2o3_bit_v2(lhs, bit) == 1;
+            let rhs_set = fe2o3_bit_v2(rhs, bit) == 1;
+            let result_set =
+                if kind == 0 { lhs_set != rhs_set }
+                else if kind == 1 { lhs_set && rhs_set }
+                else { lhs_set || rhs_set };
+            fe2o3_bitwise_v2(kind, lhs, rhs, bit)
+                + if result_set { fe2o3_pow2_v2(bit) as int } else { 0 }
+        }
+    }
+
+    pub open spec fn fe2o3_shift_left_v2(value: int, shift: nat, width: nat) -> int {
+        if shift >= width {
+            0
+        } else {
+            fe2o3_bv_norm_v2(value * fe2o3_pow2_v2(shift) as int, width)
+        }
+    }
+
+    pub open spec fn fe2o3_shift_right_v2(
+        value: int,
+        shift: nat,
+        width: nat,
+        signed: bool,
+    ) -> int {
+        if shift >= width {
+            0
+        } else {
+            let normalized = fe2o3_bv_norm_v2(value, width);
+            let logical = normalized / (fe2o3_pow2_v2(shift) as int);
+            if signed && fe2o3_bv_signed_v2(value, width) < 0 {
+                logical + (fe2o3_pow2_v2(width) - fe2o3_pow2_v2((width - shift) as nat)) as int
+            } else {
+                logical
+            }
+        }
+    }
+"#;
+
+fn render_bitvector_expression_v2(
+    expression: &fe2o3_pliron::ProductionSemanticExpressionV2,
+) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+    use fe2o3_pliron::{
+        ProductionSemanticBinaryOpV2 as Binary, ProductionSemanticCastV2 as Cast,
+        ProductionSemanticComparisonV2 as Comparison, ProductionSemanticExpressionV2 as Expression,
+        ProductionSemanticScalarTypeV2 as Scalar, ProductionSemanticUnaryOpV2 as Unary,
+    };
+
+    let width = u64::from(expression.scalar().bit_width());
+    let rendered = match expression {
+        Expression::Symbol { symbol, .. } => {
+            format!("fe2o3_bv_norm_v2(s{symbol}, {width})")
+        }
+        Expression::Constant { bits, .. } => {
+            format!("fe2o3_bv_norm_v2({bits}, {width})")
+        }
+        Expression::Unary {
+            operation,
+            scalar,
+            operand,
+        } => {
+            let operand = render_bitvector_expression_v2(operand)?;
+            match operation {
+                Unary::Not if *scalar == Scalar::Bool => {
+                    format!("if {operand} == 0 {{ 1 }} else {{ 0 }}")
+                }
+                Unary::Not => format!("(fe2o3_bv_modulus_v2({width}) - 1) - {operand}"),
+                Unary::Negate => format!("fe2o3_bv_norm_v2(-({operand}), {width})"),
+            }
+        }
+        Expression::Binary {
+            operation,
+            scalar,
+            lhs,
+            rhs,
+            ..
+        } => {
+            let lhs = render_bitvector_expression_v2(lhs)?;
+            let rhs = render_bitvector_expression_v2(rhs)?;
+            let signed = matches!(scalar, Scalar::Integer { signed: true, .. });
+            match operation {
+                Binary::Add => {
+                    format!("fe2o3_bv_norm_v2(({lhs}) + ({rhs}), {width})")
+                }
+                Binary::Subtract => {
+                    format!("fe2o3_bv_norm_v2(({lhs}) - ({rhs}), {width})")
+                }
+                Binary::Multiply => {
+                    format!("fe2o3_bv_norm_v2(({lhs}) * ({rhs}), {width})")
+                }
+                Binary::Divide if signed => format!(
+                    "fe2o3_bv_norm_v2(fe2o3_signed_div_v2(fe2o3_bv_signed_v2({lhs}, {width}), fe2o3_bv_signed_v2({rhs}, {width})), {width})"
+                ),
+                Binary::Divide => format!("({lhs}) / ({rhs})"),
+                Binary::Remainder if signed => format!(
+                    "fe2o3_bv_norm_v2(fe2o3_signed_rem_v2(fe2o3_bv_signed_v2({lhs}, {width}), fe2o3_bv_signed_v2({rhs}, {width})), {width})"
+                ),
+                Binary::Remainder => format!("({lhs}) % ({rhs})"),
+                Binary::BitXor => {
+                    format!("fe2o3_bitwise_v2(0, {lhs}, {rhs}, {width})")
+                }
+                Binary::BitAnd => {
+                    format!("fe2o3_bitwise_v2(1, {lhs}, {rhs}, {width})")
+                }
+                Binary::BitOr => {
+                    format!("fe2o3_bitwise_v2(2, {lhs}, {rhs}, {width})")
+                }
+                Binary::ShiftLeft => format!(
+                    "fe2o3_shift_left_v2({lhs}, fe2o3_bv_norm_v2({rhs}, {width}) as nat, {width})"
+                ),
+                Binary::ShiftRight => format!(
+                    "fe2o3_shift_right_v2({lhs}, fe2o3_bv_norm_v2({rhs}, {width}) as nat, {width}, {signed})"
+                ),
+            }
+        }
+        Expression::Compare {
+            operation,
+            operand_scalar,
+            lhs,
+            rhs,
+        } => {
+            let lhs = render_bitvector_expression_v2(lhs)?;
+            let rhs = render_bitvector_expression_v2(rhs)?;
+            let signed = matches!(operand_scalar, Scalar::Integer { signed: true, .. });
+            let operand_width = u64::from(operand_scalar.bit_width());
+            let (lhs, rhs) = if signed {
+                (
+                    format!("fe2o3_bv_signed_v2({lhs}, {operand_width})"),
+                    format!("fe2o3_bv_signed_v2({rhs}, {operand_width})"),
+                )
+            } else {
+                (lhs, rhs)
+            };
+            let operator = match operation {
+                Comparison::Equal => "==",
+                Comparison::LessThan => "<",
+                Comparison::LessOrEqual => "<=",
+                Comparison::NotEqual => "!=",
+                Comparison::GreaterOrEqual => ">=",
+                Comparison::GreaterThan => ">",
+            };
+            format!("if ({lhs}) {operator} ({rhs}) {{ 1 }} else {{ 0 }}")
+        }
+        Expression::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => format!(
+            "if {} != 0 {{ {} }} else {{ {} }}",
+            render_bitvector_expression_v2(condition)?,
+            render_bitvector_expression_v2(when_true)?,
+            render_bitvector_expression_v2(when_false)?,
+        ),
+        Expression::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => {
+            if *kind != Cast::Integer {
+                return Err(invalid_ranked_recipe());
+            }
+            let operand = render_bitvector_expression_v2(operand)?;
+            let source_width = u64::from(source.bit_width());
+            let target_width = u64::from(target.bit_width());
+            if *target == Scalar::Bool {
+                format!("if {operand} == 0 {{ 0 }} else {{ 1 }}")
+            } else if matches!(source, Scalar::Integer { signed: true, .. })
+                && target_width > source_width
+            {
+                format!(
+                    "fe2o3_bv_norm_v2(fe2o3_bv_signed_v2({operand}, {source_width}), {target_width})"
+                )
+            } else {
+                format!("fe2o3_bv_norm_v2({operand}, {target_width})")
+            }
+        }
+    };
+    if rendered.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+        return Err(generated_source_limit());
+    }
+    Ok(rendered)
+}
+
+fn render_ieee_congruence_expression_v2(
+    expression: &fe2o3_pliron::ProductionSemanticExpressionV2,
+) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+    use fe2o3_pliron::ProductionSemanticExpressionV2 as Expression;
+    let scalar = scalar_tag_v2(expression.scalar());
+    let rendered = match expression {
+        Expression::Symbol { symbol, .. } => {
+            format!(
+                "fe2o3_ieee_operator_congruence_v2({}, s{symbol}, 0, 0)",
+                semantic_operation_tag_v2(1, 0, scalar, 0)
+            )
+        }
+        Expression::Constant { bits, .. } => {
+            format!(
+                "fe2o3_ieee_operator_congruence_v2({}, {bits}, 0, 0)",
+                semantic_operation_tag_v2(2, 0, scalar, 0)
+            )
+        }
+        Expression::Unary {
+            operation, operand, ..
+        } => format!(
+            "fe2o3_ieee_operator_congruence_v2({}, {}, 0, 0)",
+            semantic_operation_tag_v2(3, *operation as u64, scalar, 0),
+            render_ieee_congruence_expression_v2(operand)?,
+        ),
+        Expression::Binary {
+            operation,
+            overflow,
+            lhs,
+            rhs,
+            ..
+        } => format!(
+            "fe2o3_ieee_operator_congruence_v2({}, {}, {}, 0)",
+            semantic_operation_tag_v2(4, *operation as u64, scalar, *overflow as u64),
+            render_ieee_congruence_expression_v2(lhs)?,
+            render_ieee_congruence_expression_v2(rhs)?,
+        ),
+        Expression::Compare {
+            operation,
+            lhs,
+            rhs,
+            ..
+        } => format!(
+            "fe2o3_ieee_operator_congruence_v2({}, {}, {}, 0)",
+            semantic_operation_tag_v2(5, *operation as u64, scalar, 0),
+            render_ieee_congruence_expression_v2(lhs)?,
+            render_ieee_congruence_expression_v2(rhs)?,
+        ),
+        Expression::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => format!(
+            "fe2o3_ieee_operator_congruence_v2({}, {}, {}, {})",
+            semantic_operation_tag_v2(6, 0, scalar, 0),
+            render_ieee_congruence_expression_v2(condition)?,
+            render_ieee_congruence_expression_v2(when_true)?,
+            render_ieee_congruence_expression_v2(when_false)?,
+        ),
+        Expression::Cast {
+            kind,
+            source,
+            target,
+            operand,
+        } => format!(
+            "fe2o3_ieee_operator_congruence_v2({}, {}, 0, 0)",
+            semantic_operation_tag_v2(
+                7,
+                *kind as u64,
+                scalar_tag_v2(*source),
+                scalar_tag_v2(*target),
+            ),
+            render_ieee_congruence_expression_v2(operand)?,
+        ),
+    };
+    if rendered.len() > crate::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3 {
+        return Err(generated_source_limit());
+    }
+    Ok(rendered)
+}
+
+fn semantic_operation_tag_v2(category: u64, operation: u64, scalar: u64, auxiliary: u64) -> u64 {
+    debug_assert!(category < 10);
+    debug_assert!(operation < 1_000);
+    debug_assert!(scalar < 1_000_000);
+    debug_assert!(auxiliary < 1_000_000);
+    category * 1_000_000_000_000_000
+        + operation * 1_000_000_000_000
+        + scalar * 1_000_000
+        + auxiliary
+}
+
+fn scalar_tag_v2(scalar: fe2o3_pliron::ProductionSemanticScalarTypeV2) -> u64 {
+    match scalar {
+        fe2o3_pliron::ProductionSemanticScalarTypeV2::Bool => 1,
+        fe2o3_pliron::ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
+            100 + u64::from(signed) * 1_000 + u64::from(bits)
+        }
+        fe2o3_pliron::ProductionSemanticScalarTypeV2::Float { bits } => 10_000 + u64::from(bits),
+    }
+}
+
+fn numerical_contract_tag_v2(contract: fe2o3_pliron::ProductionNumericalContractV2) -> u64 {
+    match contract {
+        fe2o3_pliron::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+            semantic_operation_tag_v2(9, 0, 0, 0)
+        }
+        fe2o3_pliron::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding,
+            exceptional_values,
+        } => semantic_operation_tag_v2(9, 1, rounding as u64, exceptional_values as u64),
+        fe2o3_pliron::ProductionNumericalContractV2::Relaxed => {
+            semantic_operation_tag_v2(9, 2, 0, 0)
+        }
+        fe2o3_pliron::ProductionNumericalContractV2::ErrorBounded { .. } => {
+            semantic_operation_tag_v2(9, 3, 0, 0)
+        }
     }
 }
 
@@ -567,6 +1014,16 @@ fn invalid_ranked_recipe() -> FunctionalRefinementVerusExecutionErrorV2 {
     FunctionalRefinementVerusExecutionErrorV2::new(
         FunctionalRefinementVerusExecutionErrorKindV2::InvalidRankedProofRecipe,
     )
+}
+
+fn incomplete_semantic_domain() -> FunctionalRefinementVerusExecutionErrorV2 {
+    FunctionalRefinementVerusExecutionErrorV2 {
+        kind: FunctionalRefinementVerusExecutionErrorKindV2::IncompleteSemanticDomain,
+        detail: Some(
+            "checked overflow, division/remainder, signed negation, or shift definedness needs an authenticated dynamic guard or stronger range proof"
+                .to_owned(),
+        ),
+    }
 }
 
 fn validate_proved_output(
@@ -643,6 +1100,7 @@ fn put_blob(digest: &mut Sha256, bytes: &[u8]) {
 pub enum FunctionalRefinementVerusExecutionErrorKindV2 {
     InvalidTimeout,
     InvalidRankedProofRecipe,
+    IncompleteSemanticDomain,
     GeneratedSource,
     Runtime,
     UnexpectedProofResult,
@@ -702,7 +1160,9 @@ mod tests {
     use dialect_kernel::SemanticBinaryKindAttr;
     use fe2o3_functional_proof::SafeReferenceKindV2;
     use fe2o3_pliron::{
-        ProductionRankedBlockV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
+        ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionRankedBlockV1,
+        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionSemanticBinaryOpV2,
+        ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
     };
 
     fn output(
@@ -815,6 +1275,96 @@ mod tests {
         )
     }
 
+    fn typed_expression_kernel(
+        expected_operation: ProductionSemanticBinaryOpV2,
+    ) -> ProductionRankedKernelV1 {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let expression = |operation| ProductionSemanticExpressionV2::Binary {
+            operation,
+            scalar,
+            overflow: ProductionOverflowContractV2::Wrapping,
+            lhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 7, scalar }),
+            rhs: Box::new(ProductionSemanticExpressionV2::Constant { scalar, bits: 9 }),
+        };
+        let actual = ProductionRankedValueIdV1::new(0);
+        let expected = ProductionRankedValueIdV1::new(1);
+        let local = ProductionRankedValueV1::Local;
+        ProductionRankedKernelV1::new(
+            "typed_expression_generator",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: actual,
+                        expression: expression(ProductionSemanticBinaryOpV2::Add),
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: expected,
+                        expression: expression(expected_operation),
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                        actual: local(actual),
+                        expected: local(expected),
+                        subjects: subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    }
+
+    fn wrapping_bitvector_kernel(expected_bits: u64) -> ProductionRankedKernelV1 {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 8,
+        };
+        let constant = |bits| ProductionSemanticExpressionV2::Constant { scalar, bits };
+        let actual = ProductionRankedValueIdV1::new(0);
+        let expected = ProductionRankedValueIdV1::new(1);
+        let local = ProductionRankedValueV1::Local;
+        ProductionRankedKernelV1::new(
+            "wrapping_bitvector_semantics",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: actual,
+                        expression: ProductionSemanticExpressionV2::Binary {
+                            operation: ProductionSemanticBinaryOpV2::Add,
+                            scalar,
+                            overflow: ProductionOverflowContractV2::Wrapping,
+                            lhs: Box::new(constant(255)),
+                            rhs: Box::new(constant(1)),
+                        },
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: expected,
+                        expression: constant(expected_bits),
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                        actual: local(actual),
+                        expected: local(expected),
+                        subjects: subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap()
+    }
+
     #[test]
     fn only_exact_nonzero_verified_success_is_proved() {
         validate_proved_output(&output(
@@ -867,6 +1417,250 @@ mod tests {
         assert_ne!(
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
+        );
+    }
+
+    #[test]
+    fn typed_expression_generator_traverses_transcripts_and_binds_mutations() {
+        let positive = typed_expression_kernel(ProductionSemanticBinaryOpV2::Add);
+        let summary = fe2o3_pliron::typed_semantic_obligation_summary_v2(&positive).unwrap();
+        assert!(summary.is_non_vacuous());
+        assert_eq!(summary.expression_roots, 2);
+        assert_eq!(summary.checked_operations, 0);
+        assert_eq!(summary.statically_discharged_domain_roots, 2);
+        assert_eq!(summary.exact_bitvector_operator_congruence_roots, 2);
+        assert!(!summary.grants_target_ieee_value_authority());
+        let (positive_binding, positive_source) =
+            generate_ranked_functional_refinement_proof_v2(&positive, 0, 2, subjects()).unwrap();
+        let source = std::str::from_utf8(positive_source.source()).unwrap();
+        assert!(source.contains("open spec fn fe2o3_bv_norm_v2"));
+        assert!(source.contains("uninterp spec fn fe2o3_ieee_operator_congruence_v2"));
+        assert!(!source.contains("fe2o3_semantic_op_v2"));
+        assert!(source.contains("s7: int"));
+        assert!(source.contains("fe2o3_bv_norm_v2"));
+        assert!(source.contains("assert(v0 == v1);"));
+
+        let mutated = typed_expression_kernel(ProductionSemanticBinaryOpV2::Subtract);
+        let (mutated_binding, mutated_source) =
+            generate_ranked_functional_refinement_proof_v2(&mutated, 0, 2, subjects()).unwrap();
+        assert_ne!(positive_source.source(), mutated_source.source());
+        assert_ne!(
+            positive_binding.normalized_obligation_effect_ir_hash(),
+            mutated_binding.normalized_obligation_effect_ir_hash(),
+        );
+    }
+
+    #[test]
+    fn bitvector_generator_interprets_wrapping_arithmetic_instead_of_tagging_it() {
+        let positive = wrapping_bitvector_kernel(0);
+        let (positive_binding, positive_source) =
+            generate_ranked_functional_refinement_proof_v2(&positive, 0, 2, subjects()).unwrap();
+        let source = std::str::from_utf8(positive_source.source()).unwrap();
+        assert!(source.contains("fe2o3_bv_norm_v2"));
+        assert!(source.contains(
+            "fe2o3_bv_norm_v2((fe2o3_bv_norm_v2(255, 8)) + (fe2o3_bv_norm_v2(1, 8)), 8)"
+        ));
+        assert!(!source.contains("fe2o3_semantic_op_v2"));
+
+        let hostile = wrapping_bitvector_kernel(1);
+        let (hostile_binding, hostile_source) =
+            generate_ranked_functional_refinement_proof_v2(&hostile, 0, 2, subjects()).unwrap();
+        assert_ne!(positive_source.source(), hostile_source.source());
+        assert_ne!(
+            positive_binding.normalized_obligation_effect_ir_hash(),
+            hostile_binding.normalized_obligation_effect_ir_hash(),
+        );
+    }
+
+    #[test]
+    fn bitvector_renderer_covers_the_closed_integer_and_boolean_operator_set() {
+        use fe2o3_pliron::{
+            ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticUnaryOpV2,
+        };
+
+        let u8_scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 8,
+        };
+        let i8_scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: true,
+            bits: 8,
+        };
+        let constant = |scalar, bits| ProductionSemanticExpressionV2::Constant { scalar, bits };
+        let binary = |operation, scalar, lhs, rhs| {
+            let rhs_scalar = if matches!(
+                operation,
+                ProductionSemanticBinaryOpV2::ShiftLeft | ProductionSemanticBinaryOpV2::ShiftRight
+            ) {
+                u8_scalar
+            } else {
+                scalar
+            };
+            ProductionSemanticExpressionV2::Binary {
+                operation,
+                scalar,
+                overflow: ProductionOverflowContractV2::Wrapping,
+                lhs: Box::new(constant(scalar, lhs)),
+                rhs: Box::new(constant(rhs_scalar, rhs)),
+            }
+        };
+        for (operation, scalar, lhs, rhs, marker) in [
+            (ProductionSemanticBinaryOpV2::Add, u8_scalar, 7, 3, " + "),
+            (
+                ProductionSemanticBinaryOpV2::Subtract,
+                u8_scalar,
+                7,
+                3,
+                " - ",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::Multiply,
+                u8_scalar,
+                7,
+                3,
+                " * ",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::Divide,
+                i8_scalar,
+                249,
+                3,
+                "fe2o3_signed_div_v2",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::Remainder,
+                i8_scalar,
+                249,
+                3,
+                "fe2o3_signed_rem_v2",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::BitXor,
+                u8_scalar,
+                0xaa,
+                0x0f,
+                "fe2o3_bitwise_v2(0",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::BitAnd,
+                u8_scalar,
+                0xaa,
+                0x0f,
+                "fe2o3_bitwise_v2(1",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::BitOr,
+                u8_scalar,
+                0xaa,
+                0x0f,
+                "fe2o3_bitwise_v2(2",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::ShiftLeft,
+                u8_scalar,
+                3,
+                2,
+                "fe2o3_shift_left_v2",
+            ),
+            (
+                ProductionSemanticBinaryOpV2::ShiftRight,
+                i8_scalar,
+                248,
+                2,
+                "fe2o3_shift_right_v2",
+            ),
+        ] {
+            let expression = binary(operation, scalar, lhs, rhs);
+            expression.validate().unwrap();
+            expression.validate_static_domains().unwrap();
+            let rendered = render_bitvector_expression_v2(&expression).unwrap();
+            assert!(rendered.contains(marker), "{operation:?}: {rendered}");
+            assert!(!rendered.contains("ieee_operator_congruence"));
+        }
+
+        let signed = constant(i8_scalar, 255);
+        let unary = ProductionSemanticExpressionV2::Unary {
+            operation: ProductionSemanticUnaryOpV2::Negate,
+            scalar: i8_scalar,
+            operand: Box::new(signed.clone()),
+        };
+        assert!(
+            render_bitvector_expression_v2(&unary)
+                .unwrap()
+                .contains("fe2o3_bv_norm_v2(-")
+        );
+        let comparison = ProductionSemanticExpressionV2::Compare {
+            operation: ProductionSemanticComparisonV2::LessThan,
+            operand_scalar: i8_scalar,
+            lhs: Box::new(signed.clone()),
+            rhs: Box::new(constant(i8_scalar, 1)),
+        };
+        assert!(
+            render_bitvector_expression_v2(&comparison)
+                .unwrap()
+                .contains("fe2o3_bv_signed_v2")
+        );
+        let cast = ProductionSemanticExpressionV2::Cast {
+            kind: ProductionSemanticCastV2::Integer,
+            source: i8_scalar,
+            target: ProductionSemanticScalarTypeV2::Integer {
+                signed: true,
+                bits: 32,
+            },
+            operand: Box::new(signed),
+        };
+        assert!(
+            render_bitvector_expression_v2(&cast)
+                .unwrap()
+                .contains("fe2o3_bv_signed_v2")
+        );
+    }
+
+    #[test]
+    fn dynamic_checked_overflow_fails_closed_at_ranked_admission() {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let expression = ProductionSemanticExpressionV2::Binary {
+            operation: ProductionSemanticBinaryOpV2::Add,
+            scalar,
+            overflow: ProductionOverflowContractV2::Checked,
+            lhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 1, scalar }),
+            rhs: Box::new(ProductionSemanticExpressionV2::Symbol { symbol: 2, scalar }),
+        };
+        let error = ProductionRankedKernelV1::new(
+            "dynamic_checked_domain",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(0),
+                        expression: expression.clone(),
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(1),
+                        expression,
+                        numerical_contract:
+                            ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                    },
+                    ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+                        actual: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
+                        expected: ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(1)),
+                        subjects: subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            fe2o3_pliron::ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                fe2o3_pliron::ProductionSemanticExpressionErrorV2::IncompleteDomain,
+            ),
         );
     }
 

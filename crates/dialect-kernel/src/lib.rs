@@ -25,12 +25,21 @@ mod registration;
 
 pub use registration::dialect_registration;
 
+mod collective_semantics;
 mod general_gemm;
 
+pub use collective_semantics::{
+    CollectiveSemanticContractError, MAX_COLLECTIVE_SEMANTIC_STEPS_V1, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, SemanticCoverageBindingAttr,
+    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticNumericalPolicyAttr,
+    SemanticStepBoundAttr,
+};
 pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};
 
 mod ranked_memory;
 mod semantic_contract;
+mod semantic_typed_contract;
+mod semantic_typed_expression;
 mod tensor_layout;
 
 pub use ranked_memory::{
@@ -47,8 +56,21 @@ pub use ranked_memory::{
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
-    SemanticConstantOp, SemanticContractError, SemanticScalarType, SemanticSymbolAttr,
-    SemanticSymbolOp,
+    SemanticConstantOp, SemanticContractError, SemanticExpressionCommitmentAttr,
+    SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
+};
+pub use semantic_typed_contract::{
+    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticOverflowAttr,
+    SemanticScalarKindAttr, SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp,
+    SemanticTypedCastKindAttr, SemanticTypedCastOp, SemanticTypedCompareKindAttr,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedScalarV1, SemanticTypedSelectOp, SemanticTypedSymbolOp,
+    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
+};
+pub use semantic_typed_expression::{
+    MAX_SEMANTIC_TYPED_EXPRESSION_DEPTH_V1, MAX_SEMANTIC_TYPED_EXPRESSION_NODES_V1,
+    SemanticNumericalContractV1, SemanticTypedExpressionErrorV1, SemanticTypedExpressionStatsV1,
+    SemanticTypedExpressionV1,
 };
 pub use tensor_layout::{
     TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutDialectError,
@@ -377,6 +399,15 @@ pub fn register_dialect(
     RankedViewType::register(context);
     IndexType::register(context);
     SemanticScalarType::register(context);
+    <SemanticScalarKindAttr as Attribute>::register::<SemanticScalarKindAttr>(context);
+    <SemanticTypedUnaryKindAttr as Attribute>::register::<SemanticTypedUnaryKindAttr>(context);
+    <SemanticTypedBinaryKindAttr as Attribute>::register::<SemanticTypedBinaryKindAttr>(context);
+    <SemanticOverflowAttr as Attribute>::register::<SemanticOverflowAttr>(context);
+    <SemanticTypedCompareKindAttr as Attribute>::register::<SemanticTypedCompareKindAttr>(context);
+    <SemanticTypedCastKindAttr as Attribute>::register::<SemanticTypedCastKindAttr>(context);
+    <SemanticNumericalPolicyAttr as Attribute>::register::<SemanticNumericalPolicyAttr>(context);
+    <SemanticIeeeRoundingAttr as Attribute>::register::<SemanticIeeeRoundingAttr>(context);
+    <SemanticExceptionalValueAttr as Attribute>::register::<SemanticExceptionalValueAttr>(context);
     <IndexValueAttr as Attribute>::register::<IndexValueAttr>(context);
     <DimensionAttr as Attribute>::register::<DimensionAttr>(context);
     <AccessKindAttr as Attribute>::register::<AccessKindAttr>(context);
@@ -385,6 +416,8 @@ pub fn register_dialect(
     <MemorySpaceAttr as Attribute>::register::<MemorySpaceAttr>(context);
     <AllocationOriginAttr as Attribute>::register::<AllocationOriginAttr>(context);
     <NoAliasClassAttr as Attribute>::register::<NoAliasClassAttr>(context);
+    <OwnershipCoverageAttr as Attribute>::register::<OwnershipCoverageAttr>(context);
+    <OwnershipPartitionAttr as Attribute>::register::<OwnershipPartitionAttr>(context);
     <InvocationDimensionAttr as Attribute>::register::<InvocationDimensionAttr>(context);
     <LaunchExtentAttr as Attribute>::register::<LaunchExtentAttr>(context);
     <AnalysisSplitControlCountAttr as Attribute>::register::<AnalysisSplitControlCountAttr>(
@@ -393,7 +426,14 @@ pub fn register_dialect(
     <IndexBinaryKindAttr as Attribute>::register::<IndexBinaryKindAttr>(context);
     <SemanticSymbolAttr as Attribute>::register::<SemanticSymbolAttr>(context);
     <SemanticConstantAttr as Attribute>::register::<SemanticConstantAttr>(context);
+    <SemanticExpressionCommitmentAttr as Attribute>::register::<SemanticExpressionCommitmentAttr>(
+        context,
+    );
     <SemanticBinaryKindAttr as Attribute>::register::<SemanticBinaryKindAttr>(context);
+    <SemanticDomainBoundAttr as Attribute>::register::<SemanticDomainBoundAttr>(context);
+    <SemanticStepBoundAttr as Attribute>::register::<SemanticStepBoundAttr>(context);
+    <SemanticEvaluationOrderAttr as Attribute>::register::<SemanticEvaluationOrderAttr>(context);
+    <SemanticCoverageBindingAttr as Attribute>::register::<SemanticCoverageBindingAttr>(context);
     AlgorithmOp::register(context);
     GeneralGemmOp::register(context);
     RankedViewOp::register(context);
@@ -406,6 +446,8 @@ pub fn register_dialect(
     CheckedRowStripedIndex2DOp::register(context);
     DimensionOp::register(context);
     RankedAccessOp::register(context);
+    OwnershipContractOp::register(context);
+    AllocationEffectOp::register(context);
     IndexLessThanBranchOp::register(context);
     IndexLessThanBranchArgsOp::register(context);
     IndexEqualBranchOp::register(context);
@@ -417,8 +459,20 @@ pub fn register_dialect(
     TrapOp::register(context);
     SemanticSymbolOp::register(context);
     SemanticConstantOp::register(context);
+    SemanticExpressionCommitmentOp::register(context);
     SemanticBinaryOp::register(context);
+    SemanticTypedSymbolOp::register(context);
+    SemanticTypedConstantOp::register(context);
+    SemanticTypedUnaryOp::register(context);
+    SemanticTypedBinaryOp::register(context);
+    SemanticTypedCompareOp::register(context);
+    SemanticTypedSelectOp::register(context);
+    SemanticTypedCastOp::register(context);
+    SemanticTypedExpressionRootOp::register(context);
     RequireEquivalentOp::register(context);
+    RequireFiniteFoldOp::register(context);
+    RequireFiniteRecurrenceOp::register(context);
+    RequirePermutationGatherOp::register(context);
     TensorConvergenceAttr::register(context);
     TensorInstructionAttr::register(context);
     TensorFragmentAttr::register(context);

@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `ProductionMiddleEndEvidenceV5: Copy` is not satisfied
+ --> tests/ui/middle_end_evidence_v5_not_copy.rs:6:21
+  |
+6 |     requires_copy::<ProductionMiddleEndEvidenceV5>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Copy` is not implemented for `ProductionMiddleEndEvidenceV5`
+  |
+note: required by a bound in `requires_copy`
+ --> tests/ui/middle_end_evidence_v5_not_copy.rs:3:21
+  |
+3 | fn requires_copy<T: Copy>() {}
+  |                     ^^^^ required by this bound in `requires_copy`

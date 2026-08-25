@@ -1,9 +1,10 @@
 use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
 use dialect_kernel::{
-    AccessKindAttr, BranchOp, DIALECT_NAME, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexConstantOp, IndexLessThanBranchOp, IndexType, IndexUnknownOp, InvocationIndexOp,
-    MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
-    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
+    DIALECT_NAME, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexLessThanBranchOp, IndexType, IndexUnknownOp, InvocationIndexOp, MemorySpaceAttr,
+    OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp,
+    RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOverlapClassV1, HierarchicalOwnershipFindingV1, HierarchicalOwnershipLevelV1,
@@ -73,14 +74,25 @@ fn view(
     dynamic_extents: Vec<Value>,
     memory_space: MemorySpaceAttr,
 ) -> RankedViewOp {
+    view_with_allocation(context, shape, dynamic_extents, memory_space, 17, 17)
+}
+
+fn view_with_allocation(
+    context: &mut Context,
+    shape: Vec<u64>,
+    dynamic_extents: Vec<Value>,
+    memory_space: MemorySpaceAttr,
+    allocation_origin: u64,
+    noalias_class: u64,
+) -> RankedViewOp {
     let ty = RankedViewType::new(context, 32, true, shape).unwrap();
     RankedViewOp::new_in_space_with_allocation_contract(
         context,
         ty,
         dynamic_extents,
         memory_space,
-        17,
-        17,
+        allocation_origin,
+        noalias_class,
     )
     .unwrap()
 }
@@ -93,8 +105,28 @@ fn contract(
     OwnershipContractOp::new(context, view, OwnershipCoverageAttr::ExactView, partition).unwrap()
 }
 
+fn coverage_contract(
+    context: &mut Context,
+    view: Value,
+    coverage: OwnershipCoverageAttr,
+) -> OwnershipContractOp {
+    OwnershipContractOp::new(context, view, coverage, OwnershipPartitionAttr::ExactSets).unwrap()
+}
+
 fn write(context: &mut Context, view: Value, indices: Vec<Value>) -> RankedAccessOp {
     RankedAccessOp::new(context, AccessKindAttr::Write, view, indices).unwrap()
+}
+
+fn contribution(context: &mut Context, view: Value, indices: Vec<Value>) -> RankedAccessOp {
+    RankedAccessOp::new_atomic(
+        context,
+        AccessKindAttr::AtomicReadModifyWrite,
+        AtomicOrderingAttr::AcquireRelease,
+        AtomicScopeAttr::Device,
+        view,
+        indices,
+    )
+    .unwrap()
 }
 
 fn static_1d(
@@ -107,12 +139,38 @@ fn static_1d(
     modulus: Option<u64>,
     partition: OwnershipPartitionAttr,
 ) -> FuncOp {
+    static_1d_with_coverage(
+        context,
+        name,
+        launch,
+        workgroup,
+        subgroup,
+        extent,
+        modulus,
+        OwnershipCoverageAttr::ExactView,
+        partition,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn static_1d_with_coverage(
+    context: &mut Context,
+    name: &str,
+    launch: u64,
+    workgroup: u64,
+    subgroup: u64,
+    extent: u64,
+    modulus: Option<u64>,
+    coverage: OwnershipCoverageAttr,
+    partition: OwnershipPartitionAttr,
+) -> FuncOp {
     let (function, _) = function(context, name, 0);
     let entry = function.get_entry_block(context);
     let execution = layout(context, [launch, 1, 1], [workgroup, 1, 1], subgroup);
     let invocation = InvocationIndexOp::new(context, 0, launch);
     let output = view(context, vec![extent], vec![], MemorySpaceAttr::Global);
-    let ownership = contract(context, output.result(context), partition);
+    let ownership =
+        OwnershipContractOp::new(context, output.result(context), coverage, partition).unwrap();
     append(context, entry, &execution);
     append(context, entry, &invocation);
     append(context, entry, &output);
@@ -135,6 +193,66 @@ fn static_1d(
     let ret = ReturnOp::new(context);
     append(context, entry, &store);
     append(context, entry, &ret);
+    function
+}
+
+fn collective_1d(
+    context: &mut Context,
+    name: &str,
+    contribution_count: usize,
+    guarded_participants: Option<u64>,
+    atomic: bool,
+) -> FuncOp {
+    let (function, _) = function(context, name, 0);
+    let entry = function.get_entry_block(context);
+    let body = guarded_participants.map(|_| block(context, &function, "contribute"));
+    let exit = guarded_participants.map(|_| block(context, &function, "exit"));
+    let execution = layout(context, [4, 1, 1], [4, 1, 1], 2);
+    let invocation = InvocationIndexOp::new(context, 0, 4);
+    let zero = IndexConstantOp::new(context, 0);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::CollectiveContributions,
+    );
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        zero.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let target = body.unwrap_or(entry);
+    for _ in 0..contribution_count {
+        let access = if atomic {
+            contribution(context, output.result(context), vec![zero.result(context)])
+        } else {
+            write(context, output.result(context), vec![zero.result(context)])
+        };
+        append(context, target, &access);
+    }
+    if let (Some(limit), Some(body), Some(exit)) = (guarded_participants, body, exit) {
+        let limit = IndexConstantOp::new(context, limit);
+        let guard = IndexLessThanBranchOp::new(
+            context,
+            invocation.result(context),
+            limit.result(context),
+            body,
+            exit,
+        );
+        append(context, entry, &limit);
+        append(context, entry, &guard);
+        let branch = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        append(context, body, &branch);
+        append(context, exit, &ret);
+    } else {
+        let ret = ReturnOp::new(context);
+        append(context, entry, &ret);
+    }
     function
 }
 
@@ -609,6 +727,287 @@ fn exact_effect_domain_rejects_missing_guard_collision_and_duplicate_site() {
 }
 
 #[test]
+fn total_view_proves_multidimensional_surjectivity_and_guarded_tail_finality() {
+    let context = &mut setup();
+    let (total_2d, _) = function(context, "total_2d", 0);
+    let entry = total_2d.get_entry_block(context);
+    let execution = layout(context, [3, 2, 1], [3, 1, 1], 1);
+    let x = InvocationIndexOp::new(context, 0, 3);
+    let y = InvocationIndexOp::new(context, 1, 2);
+    let output = view(context, vec![3, 2], vec![], MemorySpaceAttr::Global);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let store = write(
+        context,
+        output.result(context),
+        vec![x.result(context), y.result(context)],
+    );
+    for operation in [
+        execution.get_operation(),
+        x.get_operation(),
+        y.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        store.get_operation(),
+        ReturnOp::new(context).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &total_2d);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert!(report.all_total_view_contracts_are_proved());
+    assert!(!report.all_collective_contribution_contracts_are_proved());
+    assert_eq!(report.coverage_summary().total_view_declared(), 1);
+    assert_eq!(report.coverage_summary().total_view_proved(), 1);
+    assert!(
+        report
+            .regions()
+            .iter()
+            .all(|region| region.coverage() == OwnershipCoverageAttr::TotalView)
+    );
+    assert_eq!(
+        report
+            .regions()
+            .iter()
+            .find(|region| matches!(region.identity(), HierarchicalRegionIdentityV1::Grid(41)))
+            .unwrap()
+            .element_count(),
+        6,
+    );
+
+    let context = &mut setup();
+    let (tail, _) = function(context, "total_guarded_tail", 0);
+    let entry = tail.get_entry_block(context);
+    let body = block(context, &tail, "write");
+    let exit = block(context, &tail, "exit");
+    let execution = layout(context, [8, 1, 1], [4, 1, 1], 2);
+    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let seven = IndexConstantOp::new(context, 7);
+    let output = view(
+        context,
+        vec![0],
+        vec![seven.result(context)],
+        MemorySpaceAttr::Global,
+    );
+    let dimension = DimensionOp::new(context, output.result(context), 0).unwrap();
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        dimension.result(context),
+        body,
+        exit,
+    );
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        seven.get_operation(),
+        output.get_operation(),
+        dimension.get_operation(),
+        ownership.get_operation(),
+        guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let store = write(
+        context,
+        output.result(context),
+        vec![invocation.result(context)],
+    );
+    let branch = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, body, &store);
+    append(context, body, &branch);
+    append(context, exit, &ret);
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &tail);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert_eq!(
+        report
+            .regions()
+            .iter()
+            .find(|region| matches!(region.identity(), HierarchicalRegionIdentityV1::Grid(41)))
+            .unwrap()
+            .element_count(),
+        7,
+    );
+}
+
+#[test]
+fn total_view_rejects_holes_overwrites_and_unmodeled_global_writes_with_witnesses() {
+    let context = &mut setup();
+    let hole = static_1d_with_coverage(
+        context,
+        "total_hole",
+        8,
+        4,
+        2,
+        9,
+        None,
+        OwnershipCoverageAttr::TotalView,
+        OwnershipPartitionAttr::ExactSets,
+    );
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &hole).findings(),
+        [HierarchicalOwnershipFindingV1::CoverageHole { coordinate, .. }]
+            if coordinate == &[8]
+    ));
+
+    let context = &mut setup();
+    let (overwrite, _) = function(context, "total_overwrite", 0);
+    let entry = overwrite.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let invocation = InvocationIndexOp::new(context, 0, 1);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        ReturnOp::new(context).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &overwrite);
+    assert!(matches!(
+        report.findings(),
+        [HierarchicalOwnershipFindingV1::OutputOverwritten {
+            coordinate,
+            first,
+            overwrite,
+            ..
+        }] if coordinate == &[0]
+            && first.invocation() == [0, 0, 0]
+            && overwrite.invocation() == [0, 0, 0]
+    ));
+    assert!(
+        report.findings()[0]
+            .to_string()
+            .contains("one final observable write")
+    );
+
+    let context = &mut setup();
+    let (extra, _) = function(context, "total_extra_write", 0);
+    let entry = extra.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let invocation = InvocationIndexOp::new(context, 0, 1);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let output_contract = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let extra_type = RankedViewType::new(context, 32, true, vec![1]).unwrap();
+    let extra_view = RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        extra_type,
+        vec![],
+        MemorySpaceAttr::Global,
+        18,
+        18,
+    )
+    .unwrap();
+    for operation in [
+        execution.get_operation(),
+        invocation.get_operation(),
+        output.get_operation(),
+        extra_view.get_operation(),
+        output_contract.get_operation(),
+        write(
+            context,
+            output.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        write(
+            context,
+            extra_view.result(context),
+            vec![invocation.result(context)],
+        )
+        .get_operation(),
+        ReturnOp::new(context).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &extra);
+    assert!(matches!(
+        report.findings(),
+        [HierarchicalOwnershipFindingV1::UnmodeledObservableWrite { location, .. }]
+            if location.operation() == 6
+    ));
+}
+
+#[test]
+fn collective_contribution_contract_proves_exact_participation_and_rejects_failures() {
+    let context = &mut setup();
+    let complete = collective_1d(context, "collective_complete", 1, None, true);
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &complete);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert!(report.all_collective_contribution_contracts_are_proved());
+    assert!(!report.all_total_view_contracts_are_proved());
+    assert_eq!(
+        report
+            .coverage_summary()
+            .collective_contributions_declared(),
+        1
+    );
+    assert_eq!(
+        report.coverage_summary().collective_contributions_proved(),
+        1
+    );
+
+    let context = &mut setup();
+    let missing = collective_1d(context, "collective_missing", 1, Some(3), true);
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &missing).findings(),
+        [HierarchicalOwnershipFindingV1::MissingContribution { invocation, .. }]
+            if invocation.invocation() == [3, 0, 0]
+                && invocation.workgroup() == 0
+                && invocation.subgroup() == 1
+                && invocation.lane() == 1
+    ));
+
+    let context = &mut setup();
+    let duplicate = collective_1d(context, "collective_duplicate", 2, None, true);
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &duplicate).findings(),
+        [HierarchicalOwnershipFindingV1::DuplicateContribution { invocation, .. }]
+            if invocation.invocation() == [0, 0, 0]
+    ));
+
+    let context = &mut setup();
+    let non_atomic = collective_1d(context, "collective_non_atomic", 1, None, false);
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &non_atomic).findings(),
+        [HierarchicalOwnershipFindingV1::NonAtomicContribution { owner, .. }]
+            if owner.invocation() == [0, 0, 0]
+    ));
+}
+
+#[test]
 fn runtime_only_dynamic_extent_is_incomplete_not_fabricated() {
     let context = &mut setup();
     let (function, arguments) = function(context, "runtime_dynamic_extent", 1);
@@ -753,6 +1152,8 @@ fn absent_contract_is_a_clean_opt_out_without_running_hierarchy_analysis() {
     let report = run_pliron_hierarchical_ownership_check_v1(context, &function);
     assert!(report.is_clean());
     assert!(report.regions().is_empty());
+    assert!(!report.all_total_view_contracts_are_proved());
+    assert!(!report.all_collective_contribution_contracts_are_proved());
 }
 
 #[test]
@@ -823,5 +1224,242 @@ fn hierarchy_contract_without_execution_layout_is_incomplete() {
     assert!(matches!(
         report.findings(),
         [HierarchicalOwnershipFindingV1::ExecutionLayoutIncomplete { .. }]
+    ));
+}
+
+#[test]
+fn total_view_rejects_unknown_launch_out_of_range_and_duplicate_writers() {
+    let context = &mut setup();
+    let (dynamic_launch, _) = function(context, "total_dynamic_launch", 0);
+    let entry = dynamic_launch.get_entry_block(context);
+    let execution = layout(context, [0, 1, 1], [4, 1, 1], 2);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let ret = ReturnOp::new(context);
+    for operation in [
+        execution.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &dynamic_launch);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [HierarchicalOwnershipFindingV1::TraceIncomplete { detail }]
+            if detail.contains("launch dimension 0 is dynamic")
+    ));
+    assert_eq!(report.coverage_summary().total_view_declared(), 1);
+    assert_eq!(report.coverage_summary().total_view_proved(), 0);
+
+    let context = &mut setup();
+    let out_of_range = static_1d_with_coverage(
+        context,
+        "total_out_of_range",
+        2,
+        2,
+        2,
+        1,
+        None,
+        OwnershipCoverageAttr::TotalView,
+        OwnershipPartitionAttr::ExactSets,
+    );
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &out_of_range).findings(),
+        [HierarchicalOwnershipFindingV1::OutOfRange {
+            coordinate,
+            owner,
+            ..
+        }] if coordinate == &[1] && owner.invocation() == &[1, 0, 0]
+    ));
+
+    let context = &mut setup();
+    let duplicate = static_1d_with_coverage(
+        context,
+        "total_duplicate_writers",
+        2,
+        2,
+        2,
+        1,
+        Some(1),
+        OwnershipCoverageAttr::TotalView,
+        OwnershipPartitionAttr::ExactSets,
+    );
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &duplicate).findings(),
+        [HierarchicalOwnershipFindingV1::OverlappingOwners {
+            coordinate,
+            first,
+            second,
+            ..
+        }] if coordinate == &[0]
+            && first.invocation() == &[0, 0, 0]
+            && second.invocation() == &[1, 0, 0]
+    ));
+}
+
+#[test]
+fn total_view_requires_normal_completion_and_disjoint_output_allocations() {
+    let context = &mut setup();
+    let (trapping, _) = function(context, "total_trap_after_write", 0);
+    let entry = trapping.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let zero = IndexConstantOp::new(context, 0);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let store = write(context, output.result(context), vec![zero.result(context)]);
+    let trap = TrapOp::new(context);
+    for operation in [
+        execution.get_operation(),
+        zero.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        store.get_operation(),
+        trap.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &trapping).findings(),
+        [HierarchicalOwnershipFindingV1::AbnormalCompletion {
+            invocation,
+            location,
+            ..
+        }] if invocation.invocation() == &[0, 0, 0] && location.operation() == 5
+    ));
+
+    let context = &mut setup();
+    let (aliasing, _) = function(context, "total_may_alias_outputs", 0);
+    let entry = aliasing.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let zero = IndexConstantOp::new(context, 0);
+    let first = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let second = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let first_contract = coverage_contract(
+        context,
+        first.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let second_contract = coverage_contract(
+        context,
+        second.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let first_write = write(context, first.result(context), vec![zero.result(context)]);
+    let second_write = write(context, second.result(context), vec![zero.result(context)]);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        execution.get_operation(),
+        zero.get_operation(),
+        first.get_operation(),
+        second.get_operation(),
+        first_contract.get_operation(),
+        second_contract.get_operation(),
+        first_write.get_operation(),
+        second_write.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &aliasing).findings(),
+        [HierarchicalOwnershipFindingV1::MayAliasObservableWrite {
+            contracted_noalias_class: 17,
+            alias_noalias_class: 17,
+            ..
+        }]
+    ));
+
+    let context = &mut setup();
+    let (disjoint, _) = function(context, "total_disjoint_outputs", 0);
+    let entry = disjoint.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let zero = IndexConstantOp::new(context, 0);
+    let first = view_with_allocation(context, vec![1], vec![], MemorySpaceAttr::Global, 17, 17);
+    let second = view_with_allocation(context, vec![1], vec![], MemorySpaceAttr::Global, 18, 18);
+    let first_contract = coverage_contract(
+        context,
+        first.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let second_contract = coverage_contract(
+        context,
+        second.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let first_write = write(context, first.result(context), vec![zero.result(context)]);
+    let second_write = write(context, second.result(context), vec![zero.result(context)]);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        execution.get_operation(),
+        zero.get_operation(),
+        first.get_operation(),
+        second.get_operation(),
+        first_contract.get_operation(),
+        second_contract.get_operation(),
+        first_write.get_operation(),
+        second_write.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    let report = run_pliron_hierarchical_ownership_check_v1(context, &disjoint);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert_eq!(report.coverage_summary().total_view_declared(), 2);
+    assert_eq!(report.coverage_summary().total_view_proved(), 2);
+}
+
+#[test]
+fn total_view_inventories_whole_allocation_global_writes() {
+    let context = &mut setup();
+    let (function, _) = function(context, "total_allocation_write", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, [1, 1, 1], [1, 1, 1], 1);
+    let zero = IndexConstantOp::new(context, 0);
+    let output = view(context, vec![1], vec![], MemorySpaceAttr::Global);
+    let ownership = coverage_contract(
+        context,
+        output.result(context),
+        OwnershipCoverageAttr::TotalView,
+    );
+    let store = write(context, output.result(context), vec![zero.result(context)]);
+    let allocation_effect = AllocationEffectOp::new(
+        context,
+        AccessKindAttr::Read,
+        MemorySpaceAttr::Global,
+        17,
+        17,
+    )
+    .unwrap();
+    allocation_effect.set_attr_kernel_allocation_effect_access_kind(context, AccessKindAttr::Write);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        execution.get_operation(),
+        zero.get_operation(),
+        output.get_operation(),
+        ownership.get_operation(),
+        store.get_operation(),
+        allocation_effect.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    assert!(matches!(
+        run_pliron_hierarchical_ownership_check_v1(context, &function).findings(),
+        [HierarchicalOwnershipFindingV1::UnmodeledObservableAllocationWrite {
+            allocation_origin: 17,
+            noalias_class: 17,
+            location,
+        }] if location.operation() == 5
     ));
 }

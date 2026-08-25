@@ -1,25 +1,108 @@
 use std::ops::Range;
 
-use dialect_kernel::AccessKindAttr;
+use dialect_kernel::{
+    AccessKindAttr, MemorySpaceAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
+};
 use dialect_mir::pliron::MirProductionPlironLimitsV1;
+use ed25519_dalek::{Signer, SigningKey};
+use fe2o3_functional_proof::{
+    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
+    FunctionalRefinementImportExpectationV2, FunctionalRefinementImportPolicyV2,
+    FunctionalRefinementReceiptImporterV2, FunctionalRefinementResultV2,
+    FunctionalRefinementSubjectsV2, SafeReferenceKindV2, UnsignedFunctionalRefinementReceiptV2,
+    VerusToolchainIdentityV2,
+};
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
-    InertProductionMiddleEndEvidenceV4, MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
-    MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4, PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4,
-    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
-    ProductionConstructionV1, ProductionMiddleEndAssuranceV4,
-    ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidencePassV4,
-    ProductionMiddleEndEvidenceV4, ProductionRankedBlockV1, ProductionRankedKernelLoweringInputV1,
-    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
-    ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSemanticMirLimitsV1,
-    ProductionSemanticMirOwnerV1, ProductionSessionLimitsV1, ShellLimits,
-    compile_ranked_kernel_for_lowering_v1,
+    InertProductionMiddleEndEvidenceV4, InertProductionMiddleEndEvidenceV5,
+    MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4, MAX_PRODUCTION_MIDDLE_END_RANKED_IR_BYTES_V4,
+    PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4, PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4,
+    PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
+    ProductionConstructionV1, ProductionEffectRefinementContractV2,
+    ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
+    ProductionMiddleEndAssuranceV4, ProductionMiddleEndEvidenceCodecErrorV4,
+    ProductionMiddleEndEvidencePassV4, ProductionMiddleEndEvidenceV4,
+    ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2, ProductionRankedBlockV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSemanticExpressionV2,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
+    ProductionSessionLimitsV1, ShellLimits, compile_ranked_kernel_for_lowering_v1,
+    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
+    require_total_output_refinement_v2,
 };
+use fe2o3_proof_contracts::DigestV1;
 
 const RANKED_IR: &str = "func @static_copy {\n  kernel.return\n}\n";
 
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
+}
+
+fn proof_digest(tag: u8) -> DigestV1 {
+    DigestV1::from_untrusted_bytes(bytes(tag))
+}
+
+fn functional_subjects() -> FunctionalRefinementSubjectsV2 {
+    FunctionalRefinementSubjectsV2::new(
+        SafeReferenceKindV2::Mir,
+        proof_digest(31),
+        DigestV1::ZERO,
+        proof_digest(32),
+        proof_digest(33),
+        proof_digest(34),
+    )
+    .unwrap()
+}
+
+fn imported_reference(
+    obligation: DigestV1,
+) -> (
+    ProductionReferenceProofV2,
+    fe2o3_functional_proof::ImportedFunctionalRefinementProofV2,
+    ProductionFunctionalRefinementTrustPolicyV2,
+) {
+    let signing = SigningKey::from_bytes(&[91; 32]);
+    let toolchain = VerusToolchainIdentityV2::new(
+        proof_digest(40),
+        proof_digest(41),
+        proof_digest(42),
+        proof_digest(43),
+        proof_digest(44),
+    )
+    .unwrap();
+    let binding =
+        FunctionalRefinementBindingV2::from_subjects(functional_subjects(), obligation).unwrap();
+    let import_policy = FunctionalRefinementImportPolicyV2::new(
+        signing.verifying_key().to_bytes(),
+        toolchain,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    )
+    .unwrap();
+    let signer_identity = import_policy.signer_identity();
+    let unsigned = UnsignedFunctionalRefinementReceiptV2::from_verified_execution_join(
+        signer_identity,
+        binding,
+        toolchain,
+        proof_digest(45),
+        FunctionalRefinementResultV2::Proved,
+        FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+    )
+    .unwrap();
+    let wire = unsigned
+        .clone()
+        .attach_signature(signing.sign(unsigned.signing_bytes()).to_bytes());
+    let mut importer = FunctionalRefinementReceiptImporterV2::new(import_policy, 1).unwrap();
+    let imported = importer
+        .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
+        .unwrap();
+    let production_policy =
+        ProductionFunctionalRefinementTrustPolicyV2::new([signer_identity], toolchain).unwrap();
+    (
+        ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
+        imported,
+        production_policy,
+    )
 }
 
 fn unit_type() -> SemanticTypeDeclV1 {
@@ -186,6 +269,250 @@ fn ranked_input_with_domain(
 fn evidence(index: u64, ranked_ir: &str) -> ProductionMiddleEndEvidenceV4 {
     ProductionMiddleEndEvidenceV4::try_new(&semantic_owner(), &ranked_input(index), ranked_ir)
         .unwrap()
+}
+
+fn total_coverage_ranked_input() -> ProductionRankedKernelLoweringInputV1 {
+    let view = ProductionRankedValueIdV1::new(0);
+    let coordinate = ProductionRankedValueIdV1::new(1);
+    let local = |value| ProductionRankedValueV1::Local(value);
+    let kernel = ProductionRankedKernelV1::new(
+        "total_coverage_evidence",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 3,
+                    global_extents: [4, 1, 1],
+                    workgroup_extents: [4, 1, 1],
+                    subgroup_size: 4,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: view,
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![4],
+                    dynamic_extents: vec![],
+                    allocation_origin: 1,
+                    noalias_class: 1,
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::OwnershipContract {
+                    view: local(view),
+                    coverage: OwnershipCoverageAttr::TotalView,
+                    partition: OwnershipPartitionAttr::DenseRectangles,
+                },
+                ProductionRankedOperationV1::InvocationIndex {
+                    result: coordinate,
+                    dimension: 0,
+                    launch_extent: 4,
+                },
+                ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: local(view),
+                    indices: vec![local(coordinate)],
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    compile_ranked_kernel_for_lowering_v1(
+        ProductionConstructionV1::ranked_kernel("total_coverage_evidence", kernel).unwrap(),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 32,
+    };
+    let scalar_u64 = ProductionSemanticScalarTypeV2::Integer {
+        signed: false,
+        bits: 64,
+    };
+    let scalar_bool = ProductionSemanticScalarTypeV2::Bool;
+    let contract = ProductionEffectRefinementContractV2::new(
+        73,
+        ProductionGpuWriteSiteV2::new(0, 8),
+        ProductionReferenceOutputSiteV2::new(0, 0, 0),
+        local(0),
+        vec![local(1)],
+        vec![local(5)],
+        vec![local(5)],
+        local(4),
+        local(4),
+        local(4),
+        local(4),
+        local(2),
+        local(3),
+    )
+    .unwrap();
+    let skeleton = ProductionRankedKernelV1::new(
+        "total_output_refinement",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 9,
+                    global_extents: [1, 1, 1],
+                    workgroup_extents: [1, 1, 1],
+                    subgroup_size: 1,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::ViewInSpace {
+                    result: ProductionRankedValueIdV1::new(0),
+                    element_width: 32,
+                    writable: true,
+                    shape: vec![1],
+                    dynamic_extents: vec![],
+                    allocation_origin: 9,
+                    noalias_class: 9,
+                    memory_space: MemorySpaceAttr::Global,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: ProductionRankedValueIdV1::new(1),
+                    value: 0,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(2),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_u32,
+                        bits: 7,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(3),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_u32,
+                        bits: 7,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(4),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_bool,
+                        bits: 1,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::SemanticExpression {
+                    result: ProductionRankedValueIdV1::new(5),
+                    expression: ProductionSemanticExpressionV2::Constant {
+                        scalar: scalar_u64,
+                        bits: 0,
+                    },
+                    numerical_contract:
+                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+                },
+                ProductionRankedOperationV1::OwnershipContract {
+                    view: local(0),
+                    coverage: OwnershipCoverageAttr::TotalView,
+                    partition: OwnershipPartitionAttr::ExactSets,
+                },
+                ProductionRankedOperationV1::ValueAccess {
+                    kind: AccessKindAttr::Write,
+                    view: local(0),
+                    indices: vec![local(1)],
+                    value: local(2),
+                },
+                ProductionRankedOperationV1::RequestEffectRefinement {
+                    contract,
+                    subjects: functional_subjects(),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap();
+    let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+        &skeleton.blocks()[0].operations()[9]
+    else {
+        unreachable!()
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        &skeleton,
+        0,
+        9,
+        contract,
+        functional_subjects(),
+    )
+    .unwrap();
+    let (proof, imported, policy) = imported_reference(obligation);
+    let bound = skeleton
+        .bind_functional_refinement_request_v2(0, 9, proof)
+        .unwrap();
+    compile_ranked_kernel_for_lowering_v2(
+        ProductionConstructionV1::ranked_kernel("total_output_refinement", bound).unwrap(),
+        ProductionSessionLimitsV1::default(),
+        vec![imported],
+        policy,
+    )
+    .unwrap()
+}
+
+#[test]
+fn live_v5_evidence_uses_the_eight_pass_pipeline_without_vacuous_coverage_claims() {
+    let input = ranked_input(7);
+    let live =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let decoded = InertProductionMiddleEndEvidenceV5::decode(live.canonical_bytes()).unwrap();
+    assert_eq!(
+        decoded.pass_successes().map(|success| success.pass()),
+        PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5
+    );
+    assert!(
+        !decoded
+            .coverage_summary()
+            .has_non_vacuous_total_view_proof()
+    );
+    assert!(
+        !decoded
+            .coverage_summary()
+            .has_non_vacuous_collective_contribution_proof()
+    );
+    assert_eq!(decoded.typed_semantic_summary().expression_roots, 0);
+    assert!(decoded.typed_semantic_reconciliation().is_exact());
+    assert!(!decoded.claims_full_arithmetic_correctness());
+    assert!(!decoded.grants_target_value_authority());
+}
+
+#[test]
+fn live_v5_evidence_binds_non_vacuous_total_view_counts() {
+    let input = total_coverage_ranked_input();
+    let live =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let coverage = live.coverage_summary();
+    assert_eq!(coverage.total_view_declared(), 1);
+    assert_eq!(coverage.total_view_proved(), 1);
+    assert!(coverage.has_non_vacuous_total_view_proof());
+    assert!(!coverage.has_non_vacuous_collective_contribution_proof());
+    assert!(!live.claims_verus_verification());
+    assert!(!live.claims_full_arithmetic_correctness());
+}
+
+#[test]
+fn live_v5_and_aggregate_gate_prove_one_total_typed_output_at_the_mir_boundary() {
+    let input = total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let report = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    assert_eq!(report.total_view_contracts(), 1);
+    assert_eq!(report.effect_contracts(), 1);
+    assert_eq!(report.typed_expression_roots(), 4);
+    assert_eq!(report.retained_receipts(), 1);
+    assert!(report.proves_total_output_refinement_at_mir_boundary());
+    assert!(!report.grants_source_to_mir_authority());
+    assert!(!report.grants_lowering_or_machine_code_authority());
+    assert!(!report.grants_artifact_load_launch_or_hardware_authority());
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
 // EXPECT: REJECT
 // CHECK: error[FE2O3-EFFECT-008]
-// CHECK: has no exact effect-refinement contract
+// CHECK: every observable global write must participate in the reference-effect bijection
 builtin.func @effect_refinement_unmodeled_write: builtin.function <() -> ()>
 {
   ^entry_block1v1():

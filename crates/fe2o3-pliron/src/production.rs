@@ -22,12 +22,18 @@ use super::{
 };
 
 mod middle_end_evidence_v4;
+mod middle_end_evidence_v5;
 mod ranked;
+mod semantic_expression_v2;
 mod semantic_mir;
+mod total_output_refinement_v2;
 
 pub use middle_end_evidence_v4::*;
+pub use middle_end_evidence_v5::*;
 pub use ranked::*;
+pub use semantic_expression_v2::*;
 pub use semantic_mir::*;
+pub use total_output_refinement_v2::*;
 
 /// Hard cap for construction recipes registered during one production session.
 pub const HARD_MAX_PRODUCTION_CONSTRUCTIONS: usize = 4_096;

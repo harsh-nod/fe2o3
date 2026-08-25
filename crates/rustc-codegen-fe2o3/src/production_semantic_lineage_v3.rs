@@ -30,7 +30,7 @@ use fe2o3_rustc_invocation::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV4;
+use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5;
 use crate::production_target_lineage_v3::{
     AmdgpuLoweringTranscriptInputsV3, AmdgpuLoweringTranscriptV3, DataLayoutTranscriptInputsV3,
     DataLayoutTranscriptV3, ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
@@ -66,7 +66,7 @@ impl PreparedProductionSemanticLineageV3 {
         rustc_identity_inventory: &crate::collector::AuthenticatedRustcIdentityInventoryV3,
         rustc_preflight_plan: &crate::collector::AuthenticatedRustcPreflightPlanV3,
         rustc_target: &crate::production_target_v1::AuthenticatedProductionTargetV1,
-        ranked_verification: &AuthenticatedRankedVerificationV4,
+        ranked_verification: &AuthenticatedRankedVerificationV5,
         admitted: &ProductionFormalMemoryOwnerV1,
         target_module: &Module,
         pre_descriptor_llvm: &str,

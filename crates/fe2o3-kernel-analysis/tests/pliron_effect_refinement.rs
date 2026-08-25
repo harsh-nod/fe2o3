@@ -153,6 +153,29 @@ fn effect_function(
     orphan: bool,
     unmodeled_write: bool,
 ) -> FuncOp {
+    effect_function_with_coverage(
+        context,
+        case,
+        ownership,
+        proof_evidence,
+        extent,
+        orphan,
+        unmodeled_write,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn effect_function_with_coverage(
+    context: &mut Context,
+    case: FormulaCase,
+    ownership: bool,
+    proof_evidence: bool,
+    extent: ExtentCase,
+    orphan: bool,
+    unmodeled_write: bool,
+    coverage_override: Option<OwnershipCoverageAttr>,
+) -> FuncOp {
     let argument_types: Vec<TypeHandle> = if matches!(extent, ExtentCase::RuntimeDynamic) {
         vec![IndexType::get(context).into()]
     } else {
@@ -212,11 +235,11 @@ fn effect_function(
         let contract = OwnershipContractOp::new(
             context,
             view.result(context),
-            if guarded {
+            coverage_override.unwrap_or(if guarded {
                 OwnershipCoverageAttr::ExactEffectDomain
             } else {
                 OwnershipCoverageAttr::ExactView
-            },
+            }),
             OwnershipPartitionAttr::ExactSets,
         )
         .unwrap();
@@ -336,6 +359,24 @@ fn normalized_effects_prove_every_coordinate_across_the_hierarchy() {
     assert_eq!(report.proved_contract_count(), 1);
     assert!(report.all_declared_effects_are_proved());
     assert!(!report.grants_compiler_refinement_authority());
+}
+
+#[test]
+fn total_output_coverage_composes_with_per_coordinate_effect_refinement() {
+    let context = &mut setup();
+    let function = effect_function_with_coverage(
+        context,
+        FormulaCase::Equivalent,
+        true,
+        true,
+        ExtentCase::Static,
+        false,
+        false,
+        Some(OwnershipCoverageAttr::TotalView),
+    );
+    let report = run_pliron_effect_refinement_check_v1(context, &function);
+    assert!(report.is_clean(), "{:#?}", report.findings());
+    assert!(report.all_declared_effects_are_proved());
 }
 
 #[test]
