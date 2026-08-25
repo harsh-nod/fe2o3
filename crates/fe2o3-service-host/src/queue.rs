@@ -27,7 +27,8 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r11-v1\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r12-v1\n",
+    "source.compute_aql_session_sha256=df88a755060c1e28fdf975ef8f0d124f4d70babf8d0f0cc02f1a6b13273eaa83\n",
     "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
@@ -36,7 +37,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
-    "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle\n",
+    "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,lower-owner-reclaims-authoritative-model-foundation-after-every-live-allocation-lifecycle-mutation\n",
     "release=return-attached-or-exact-ordered-detached-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
@@ -46,7 +47,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "5737f2957299c1313a17120e5eda68725ff3ee9ae730d1d168650db9f8f3a007";
+    "14d5de802053c648b834cf816eff38f578c00e265d35e712ca89c38d44c86044";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -1534,6 +1535,12 @@ mod tests {
 
     #[test]
     fn queue_manifest_hash_is_frozen() {
+        assert!(
+            SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1.contains(&alloc::format!(
+                "source.compute_aql_session_sha256={}\n",
+                fe2o3_kfd::GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1
+            ))
+        );
         let mut actual = String::new();
         for byte in Sha256::digest(SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1) {
             write!(&mut actual, "{byte:02x}").unwrap();

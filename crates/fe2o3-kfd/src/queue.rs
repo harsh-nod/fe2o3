@@ -74,8 +74,8 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r16-v1\n",
-    "compute_session_sha256=c8419fbffe7ce8ab6b80003100c87ae737b60d8912b84bc162b51541d356406a\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r17-v1\n",
+    "compute_session_sha256=df88a755060c1e28fdf975ef8f0d124f4d70babf8d0f0cc02f1a6b13273eaa83\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
@@ -83,7 +83,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
     "failure=linux-errno-must-map-indeterminate,malformed-output-global-poison,post-call-projection-failure-global-poison\n",
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
-    "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,whole-slice-doorbell-mmap\n",
+    "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,live-allocation-lifecycle-mutation-foundation-loan-and-reclaim,whole-slice-doorbell-mmap\n",
     "creation=every-error-from-userptr-control-allocation-attempt-through-live-session-return-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination\n",
     "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
     "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion\n",
@@ -96,7 +96,7 @@ pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "2734f467cce01bc717c5e0292cab6ba1083f5ff9e6d3e6d2c364468d736da8bb";
+    "897747d27c924650b9410e46e428949c874210f33df8fd1a53d7d1617e10d98c";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

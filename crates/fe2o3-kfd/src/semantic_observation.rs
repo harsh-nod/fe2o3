@@ -23,9 +23,9 @@ const ZERO_SCOPE: [u8; 32] = [0; 32];
 /// Its digest identifies this schema. It does not authenticate KFD, the
 /// kernel, firmware, hardware, or any dispatch.
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-direct-kfd-semantic-observation-r1-v1\n",
+    "profile=fe2o3-direct-kfd-semantic-observation-r2-v1\n",
     "source.device_admission_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "source.queue_session_sha256=ab7327bd54f0af7940550d0610b1c75d1fd097f9780653a34e24fa559205ac5b\n",
+    "source.queue_session_sha256=df88a755060c1e28fdf975ef8f0d124f4d70babf8d0f0cc02f1a6b13273eaa83\n",
     "input=detached-device-binding-optional,detached-live-queue,detached-destroyed-queue-optional\n",
     "bounds=fixed-size,no-input-read,no-variable-allocation,no-device-enumeration\n",
     "identity=sha256-domain-separated-canonical-little-endian,caller-supplied-nonzero-scope,opaque-correlation-not-authentication-or-secrecy\n",
@@ -39,7 +39,7 @@ pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1`].
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_SHA256_V1: &str =
-    "1bbd67f0a26f461a6c97b979e11b06ff45642ce4f71b7c7d868fba56ef628c48";
+    "32bf15275447cecb8d5d6857709ba2ed71604328b6494dc111238dc64ab1a24b";
 
 /// A caller-controlled correlation scope for one observation domain.
 ///
@@ -683,6 +683,9 @@ mod tests {
 
     #[test]
     fn manifest_digest_matches() {
+        assert!(KFD_SEMANTIC_OBSERVATION_MANIFEST_V1.contains(&format!(
+            "source.queue_session_sha256={GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1}\n"
+        )));
         let digest = Sha256::digest(KFD_SEMANTIC_OBSERVATION_MANIFEST_V1.as_bytes());
         assert_eq!(
             format!("{:?}", KfdOpaqueIdentityV1(digest.into())),
