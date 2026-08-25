@@ -18,9 +18,9 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use fe2o3_worker_v2_bundle::{
-    SealedStaticApplicationErrorV1, WorkerV3ApplicationHandoffProtocolErrorV1,
-};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1;
+use fe2o3_worker_v2_bundle::WorkerV3ApplicationHandoffProtocolErrorV1;
 
 /// A deliberately bounded read prevents a selected tool path from causing unbounded hashing work.
 pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
@@ -85,6 +85,7 @@ pub(crate) enum PinExecutableError {
     SnapshotSealsChanged {
         path: PathBuf,
     },
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     UnsealedApplicationRuntime {
         path: PathBuf,
         source: SealedStaticApplicationErrorV1,
@@ -181,6 +182,7 @@ impl fmt::Display for PinExecutableError {
                 "sealed executable snapshot has missing or unexpected seals for {}",
                 path.display()
             ),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::UnsealedApplicationRuntime { path, source } => write!(
                 formatter,
                 "application {} does not satisfy the sealed-static runtime profile: {source}",
@@ -203,6 +205,7 @@ impl Error for PinExecutableError {
             | Self::Read { source, .. }
             | Self::Rewind { source, .. }
             | Self::ExecutionStrategy { source, .. } => Some(source),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::UnsealedApplicationRuntime { source, .. } => Some(source),
             Self::InvalidV3ApplicationIdentity { source, .. } => Some(source),
             Self::UnsupportedPlatform
@@ -306,6 +309,7 @@ mod platform {
         execution_path: PathBuf,
         snapshot: ObjectSnapshot,
         seals: SealFlags,
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         identity: fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1,
         identity_v3: fe2o3_worker_v2_bundle::WorkerV3ApplicationIdentityV1,
     }
@@ -813,6 +817,7 @@ mod platform {
                     path: self.display_path.clone(),
                 });
             }
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             let identity =
                 fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(
                     &bytes,
@@ -863,6 +868,7 @@ mod platform {
                 execution_path,
                 snapshot,
                 seals,
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 identity,
                 identity_v3,
             })
@@ -937,6 +943,7 @@ mod platform {
     }
 
     impl SealedStaticApplication {
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         pub(crate) const fn identity(
             &self,
         ) -> fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1 {

@@ -1725,17 +1725,19 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
 
     let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?;
     if expects_envelope && handoff.is_none() {
-        return Err("Cargo runner expected a canonical Worker V2 envelope, but none exists".into());
+        return Err(
+            "Cargo runner expected a canonical production envelope, but none exists".into(),
+        );
     }
     if !expects_envelope && handoff.is_some() {
         return Err(
-            "Cargo runner did not expect a Worker V2 envelope for this application build".into(),
+            "Cargo runner did not expect a production envelope for this application build".into(),
         );
     }
     if let Some(mut handoff) = handoff {
         if !original_runner.is_empty() {
             return Err(
-                "Worker V2 application descriptor handoff does not permit an intermediate Cargo runner"
+                "production application descriptor handoff does not permit an intermediate Cargo runner"
                     .to_string(),
             );
         }
@@ -1749,15 +1751,23 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         let sealed_application = pinned_application
             .seal_static_application()
             .map_err(|error| format!("failed to seal application runtime image: {error}"))?;
-        let application_identity = sealed_application.identity();
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        let application_identity_v2 = sealed_application.identity();
         let mut child = sealed_application
             .command()
             .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
         child.args(&args[application_index + 1..]);
         scrub_application_environment(child.as_command_mut());
+        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
         let pending_ack = handoff.configure_child_with_timeouts(
             child.as_command_mut(),
-            application_identity,
+            application_identity_v2,
+            sealed_application.identity_v3(),
+            application_timeouts,
+        )?;
+        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        let pending_ack = handoff.configure_child_with_timeouts(
+            child.as_command_mut(),
             sealed_application.identity_v3(),
             application_timeouts,
         )?;
@@ -1839,8 +1849,8 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
 }
 
 fn scrub_application_environment(child: &mut Command) {
-    // The application boundary has no ambient-environment allowlist. A typed Worker V2 handoff
-    // adds only its five explicit values after this reset.
+    // The application boundary has no ambient-environment allowlist. The typed production
+    // handoff adds only its explicit descriptor protocol values after this reset.
     child.env_clear();
 }
 
