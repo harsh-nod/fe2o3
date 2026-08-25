@@ -68,7 +68,10 @@ Qualification-enabled tests retain their multi-profile parser, but production
 manifest cases call the same dedicated production parser used by the release
 binary. The release path always uses the production expected-identity namespace
 and ordinary compiler-capability profile; route-dependent identity and S09
-selection logic is compiled only into the qualification harness.
+selection logic is compiled only into the qualification harness. The
+feature-free binding wrapper admits every managed kernel root through protected
+rustc and requires compiler-closure custody directly; it does not compile the
+qualification-oracle predicates or qualification command preparation path.
 
 The feature-free rustc backend likewise does not compile
 `QualificationSelection`, `CompilationRoute`, or `RustcInvocationPolicy`.

@@ -93,14 +93,14 @@ use sha2::{Digest, Sha256};
 
 use crate::build_config::{
     BuildCompileEnvironmentProfileV1, BuildConfigError, BuildConfigIdentity,
-    OBSOLETE_PRODUCTION_SELECTOR, PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV,
-    PreparedProductionBuildConfig, WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV,
-    WORKER_V2_SOURCE_DEBUG_PROFILE_ENV, production_compilation_selected,
+    PRODUCTION_BUILD_CONFIG_ENV, PRODUCTION_BUILD_EXPECTED_ID_ENV, PreparedProductionBuildConfig,
+    WORKER_V2_CONFIG_ENV, WORKER_V2_EXPECTED_ID_ENV, WORKER_V2_SOURCE_DEBUG_PROFILE_ENV,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use crate::build_config::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV, GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV,
-    PreparedBuildConfig, WorkerV2BuildObservation, WorkerV2SourceDebugProfileV1,
+    OBSOLETE_PRODUCTION_SELECTOR, PreparedBuildConfig, WorkerV2BuildObservation,
+    WorkerV2SourceDebugProfileV1, production_compilation_selected,
 };
 use crate::capability_broker;
 use crate::inert_rustc_invocation_capture::{
@@ -516,8 +516,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         }
         _ => return Err(BindingWrapperError::UnsupportedInvocation),
     };
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let protected_kernel_root =
         managed_attempt.is_some() && selected_compilation_requires_protected_invocation();
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let protected_kernel_root = managed_attempt.is_some();
 
     if managed_attempt
         .as_ref()
@@ -557,12 +560,17 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             } else if protected_kernel_root {
                 capabilities.prepare_protected_command(command.as_command_mut())?;
             } else {
+                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
                 capabilities.prepare_qualification_command(
                     command.as_command_mut(),
                     qualification_requires_compiler_closure_observation(
                         std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref(),
                     ),
                 )?;
+                #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+                return Err(BindingWrapperError::BuildObservation(
+                    "production managed rustc invocation lost protected root admission".to_owned(),
+                ));
             }
         }
         configure_build_observation_environment(command.as_command_mut(), build_observation);
@@ -844,6 +852,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     Ok(status)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn selected_compilation_requires_protected_invocation() -> bool {
     qualification_selection_requires_protected_invocation(
         std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref(),
@@ -853,6 +862,7 @@ fn selected_compilation_requires_protected_invocation() -> bool {
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn qualification_selection_requires_protected_invocation(
     qualification_oracle: Option<&OsStr>,
     explicit_unprotected_qualification: bool,
@@ -863,6 +873,7 @@ fn qualification_selection_requires_protected_invocation(
             && !explicit_unprotected_qualification)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn qualification_requires_compiler_closure_observation(
     qualification_oracle: Option<&OsStr>,
 ) -> bool {
@@ -2788,6 +2799,7 @@ impl CompilerCapabilities {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     fn prepare_qualification_command(
         &self,
         command: &mut Command,
@@ -2888,6 +2900,7 @@ impl CompilerCapabilities {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn configure_qualification_route_marker(command: &mut Command, debug_build: bool) {
     if debug_build {
         command.env(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV, "1");
@@ -3026,6 +3039,7 @@ struct RowSoftmaxReleaseContext {
     workload: Option<AdmittedRowSoftmaxV1WorkloadV1>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const fn require_production_compiler_closure(
     compiler_closure: Option<CompilerClosureV2>,
     production: bool,
@@ -3366,11 +3380,17 @@ fn prepare_managed_attempt(
     let production_build = build_config
         .as_ref()
         .is_some_and(PreparedBuildConfig::is_production_compilation);
-    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-    let production_build = build_config.is_some();
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let production_compiler_closure =
         require_production_compiler_closure(protected_compiler_closure, production_build)
             .map_err(|error| BindingWrapperError::BuildObservation(error.to_owned()))?;
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let production_compiler_closure = Some(protected_compiler_closure.ok_or_else(|| {
+        BindingWrapperError::BuildObservation(
+            "production requires protected V3 compiler-closure custody before preparation"
+                .to_owned(),
+        )
+    })?);
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let release_action = std::env::var_os(QUALIFICATION_RELEASE_ACTION_ENV);
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]

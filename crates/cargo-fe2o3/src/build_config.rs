@@ -5,6 +5,7 @@
 //! a differential oracle over the same bounded file and link-input helpers.
 
 use std::error::Error;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use std::ffi::OsStr;
 use std::fmt;
 #[cfg(test)]
@@ -77,6 +78,7 @@ pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const PRODUCTION_CONFIG_PROFILE_ID_V1: &str = "production-v1";
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const OBSOLETE_PRODUCTION_SELECTOR: &str = PRODUCTION_CONFIG_PROFILE_ID_V1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
@@ -344,6 +346,7 @@ impl BuildConfigProfile {
 }
 
 /// Matches the backend's closed route rule: only unset means production.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn production_compilation_selected(profile: Option<&OsStr>) -> bool {
     profile.is_none()
 }
