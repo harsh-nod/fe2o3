@@ -47,6 +47,17 @@ freshly computed reports are clean. ExactView is not shorthand for dynamic
 whole-buffer coverage: runtime-only dynamic ownership remains Incomplete unless
 the graph contains enough static or dominating facts to prove it.
 
+For Boolean and 8/16/32/64-bit integer expressions, the generated Verus program
+interprets the closed scalar language: wrapping and statically discharged
+checked arithmetic, signed/unsigned division and remainder, bitwise operators,
+signed/unsigned shifts and comparisons, selects, and Rust integer casts. The
+proof therefore establishes equality of the interpreted MIR bitvector values,
+not merely equality of operator tags. Operation definedness is checked before
+receipt admission. Floating-point expressions still use a separately tagged
+uninterpreted operator-congruence model; their receipt proves typed MIR
+operator identity under the declared rounding/exception policy, not IEEE value
+equivalence or target-instruction conformance.
+
 The distributed path returns an unsigned canonical receipt to a configured
 signer. The local path creates an ephemeral compiler-owned Ed25519 trust root,
 executes the same generated proof, signs and strictly imports it in-process, and
@@ -71,16 +82,21 @@ silently substituted.
 
 ## Remaining boundaries
 
-The compiler frontend must derive the reference output location/formula and GPU
-write location/formula from the same-session monomorphized MIR projection. This
-layer binds and checks that compiler-owned projection; accepting caller-selected
-locations would merely attest the caller's statement. It does not establish
-Rust source-to-MIR correctness or prove the projection algorithm itself.
+The compiler frontend derives one reference output location/formula and one GPU
+write location/formula from same-session monomorphized MIR projections. It
+rejects ambiguous definitions, unsupported unchecked operations, loads, calls,
+loops, multiple bindings/writes, and expression chains beyond the fixed depth
+budget. This layer binds and checks that compiler-owned projection; it does not
+establish Rust source-to-MIR correctness or prove the projection algorithm
+itself.
 
-The current formula generator is intentionally bounded and acyclic. Calls and
-loops are not admitted, and only the implemented integer Add/Multiply
-normalization is supported. Each proved effect establishes partial correctness
-for that effect. Total functional correctness additionally requires a clean
-exact-coverage ownership result for every output effect. Later compiler stages
-must preserve the imported evidence lineage without treating it as
-source-to-ISA, artifact, load, launch, runtime, or hardware proof.
+The current formula generator is intentionally bounded and acyclic. Each proved
+effect establishes partial correctness for that one effect. Total output
+refinement additionally requires a non-vacuous clean total-view ownership
+result, an effect proof for every observable output write, and a serialized
+record that retains those exact pass summaries. Loops, reads, reductions,
+recurrences, permutations, MFMA semantics, and multiple output effects require
+their dedicated generic contracts before complete workload semantics can be
+claimed. Later compiler stages must preserve the imported evidence lineage
+without treating it as source-to-ISA, artifact, load, launch, runtime, or
+hardware proof.
