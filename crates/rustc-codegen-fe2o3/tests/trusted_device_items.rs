@@ -28,7 +28,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     (
         "fe2o3-trusted-item-lookalike-thread",
         "lookalike_thread",
-        "missing `thread::index_1d` call",
+        "UnsupportedType: device definition return type `fe2o3_device::ThreadIndex` is not supported",
     ),
     (
         "fe2o3-trusted-item-external-spoof",
@@ -43,7 +43,7 @@ const REJECTED_CASES: &[(&str, &str, &str)] = &[
     (
         "fe2o3-typed-alias-spoof",
         "typed_alias_spoof",
-        "argument 1 must be exactly `&[f32]`",
+        "disagrees with explicit #[kernel(typed)] namespace",
     ),
 ];
 
