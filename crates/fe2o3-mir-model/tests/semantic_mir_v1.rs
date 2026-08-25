@@ -3150,6 +3150,54 @@ fn aggregate_offsets_padding_and_sized_state_are_structured_and_canonical() {
 }
 
 #[test]
+fn str_layout_is_unsized_lossless_and_canonical() {
+    let str_type = SemanticTypeDeclV1::new(
+        type_identity(2),
+        layout_identity(2),
+        SemanticTypeLayoutV1::with_exact_rustc_layout(
+            0,
+            1,
+            SemanticFieldsShapeV1::array(1, 0),
+            SemanticRustcVariantsV1::Single { index: 0 },
+            SemanticBackendReprV1::memory(false),
+            None,
+            false,
+            None,
+            1,
+            0,
+            SemanticTypeLayoutDetailsV1::None,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Opaque,
+    )
+    .with_rust_type_kind(SemanticRustTypeKindV1::Str);
+    let admitted = request_with_structured_abi(
+        vec![u32_type(1), str_type],
+        vec![],
+        direct_value(SemanticTypeIdV1::from_index(0)),
+    )
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
+    let decoded = AdmittedInertSemanticMirV1::decode_canonical(
+        admitted.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        decoded.types()[1].shape(),
+        SemanticTypeShapeV1::Opaque
+    ));
+    assert_eq!(
+        decoded.types()[1].rust_type_kind(),
+        SemanticRustTypeKindV1::Str
+    );
+    assert_eq!(decoded.types()[1].layout().rustc_size_bytes(), 0);
+    assert_eq!(decoded.types()[1].layout().size_bytes(), None);
+    assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+}
+
+#[test]
 fn explicit_padding_is_checked_without_inventing_padding_from_field_gaps() {
     let u32_id = SemanticTypeIdV1::from_index(0);
     let aggregate = |padding| {
@@ -3404,6 +3452,91 @@ fn shared_scalar_enum_decoder_handles_result_like_niches() {
     );
 }
 
+#[test]
+fn shared_scalar_enum_decoder_handles_pointer_backed_niches() {
+    let discriminant = SemanticTypeIdV1::from_index(0);
+    let unit = SemanticTypeIdV1::from_index(1);
+    let pointer = SemanticTypeIdV1::from_index(2);
+    let primitive = SemanticBackendPrimitiveV1::pointer(0, 8, 8);
+    let pointer_niche = SemanticLayoutNicheV1::new(
+        0,
+        primitive,
+        SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+    )
+    .unwrap();
+    let variants = vec![
+        SemanticEnumVariantV1::new(0, SemanticAggregateTypeV1::new(vec![]).unwrap()),
+        SemanticEnumVariantV1::new(1, SemanticAggregateTypeV1::new(vec![pointer]).unwrap()),
+    ];
+    let layouts = vec![
+        enum_variant_layout(
+            0,
+            8,
+            8,
+            SemanticAggregateLayoutV1::new(vec![], vec![]).unwrap(),
+            false,
+        ),
+        enum_variant_layout_with_niche_and_seed(
+            1,
+            8,
+            8,
+            SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+            Some(pointer_niche),
+            false,
+            102,
+        ),
+    ];
+    let encoding = SemanticNicheEnumEncodingV1::new(
+        0,
+        SemanticNicheSourceV1::new(vec![SemanticNichePathComponentV1::Field(0)], 0).unwrap(),
+        pointer_niche,
+        SemanticBackendScalarV1::initialized(primitive, SemanticScalarValidityRangeV1::new(1, 0)),
+        1,
+        0,
+        0,
+        0,
+    )
+    .unwrap();
+    let option = SemanticTypeDeclV1::new(
+        type_identity(4),
+        layout_identity(4),
+        SemanticTypeLayoutV1::enum_layout_with_backend_repr(
+            8,
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                primitive,
+                SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+            )),
+            false,
+            SemanticEnumLayoutV1::new(layouts, SemanticEnumEncodingV1::Niche(encoding)).unwrap(),
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::enum_type(discriminant, variants).unwrap(),
+    );
+    let types = vec![
+        u32_type(1),
+        unit_type(2),
+        pointer_kind_type(
+            3,
+            unit,
+            SemanticPointerKindV1::Reference,
+            SemanticMutabilityV1::Immutable,
+            0,
+        ),
+        option,
+    ];
+    let option = SemanticTypeIdV1::from_index(3);
+
+    assert_eq!(
+        semantic_scalar_enum_variant_v1(&types, option, SemanticScalarValueV1::new(0, 8).unwrap()),
+        Some(0),
+    );
+    assert_eq!(
+        semantic_scalar_enum_variant_v1(&types, option, SemanticScalarValueV1::new(1, 8).unwrap()),
+        Some(1),
+    );
+}
+
 fn direct_result_like_types() -> Vec<SemanticTypeDeclV1> {
     let discriminant = SemanticTypeIdV1::from_index(0);
     let unit = SemanticTypeIdV1::from_index(1);
@@ -3471,6 +3604,7 @@ fn shared_direct_enum_decoder_retains_payload_variants() {
 fn transparent_result_wrapper_request(
     swap_arguments: bool,
     wrapper_computes: bool,
+    reachable_helper: bool,
 ) -> InertSemanticMirRequestV1 {
     let discriminant = SemanticTypeIdV1::from_index(0);
     let unit = SemanticTypeIdV1::from_index(1);
@@ -3571,42 +3705,108 @@ fn transparent_result_wrapper_request(
             block(2, vec![], SemanticTerminatorKindV1::Return),
         ],
     );
+    let helper_terminator = if reachable_helper {
+        SemanticTerminatorKindV1::Call(
+            SemanticDirectCallV1::new(
+                SemanticFunctionIdV1::from_index(2),
+                vec![argument(1), argument(2)],
+                Some(SemanticCallDestinationV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(3), vec![], discriminant)
+                        .unwrap(),
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::CallReturn,
+                        SemanticBlockIdV1::from_index(1),
+                    ),
+                )),
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap(),
+        )
+    } else {
+        SemanticTerminatorKindV1::Return
+    };
+    let mut helper_locals = vec![
+        local(6, result, SemanticLocalRoleV1::Return),
+        local(7, discriminant, SemanticLocalRoleV1::Argument(0)),
+        local(8, discriminant, SemanticLocalRoleV1::Argument(1)),
+    ];
+    if reachable_helper {
+        helper_locals.push(local(9, discriminant, SemanticLocalRoleV1::Temporary));
+    }
+    let mut helper_blocks = vec![block(
+        3,
+        vec![SemanticStatementV1::new(
+            SemanticSourceProvenanceV1::unavailable(),
+            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], result).unwrap(),
+                SemanticRvalueV1::new(
+                    result,
+                    SemanticRvalueKindV1::aggregate(
+                        SemanticAggregateKindV1::EnumVariant(0),
+                        vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            unit,
+                            SemanticConstantValueV1::ZeroSized,
+                        ))],
+                    )
+                    .unwrap(),
+                ),
+            )),
+        )],
+        helper_terminator,
+    )];
+    if reachable_helper {
+        helper_blocks.push(block(4, vec![], SemanticTerminatorKindV1::Return));
+    }
     let helper = function(
         2,
         function_abi(2, result, result_mode()),
-        vec![
-            local(6, result, SemanticLocalRoleV1::Return),
-            local(7, discriminant, SemanticLocalRoleV1::Argument(0)),
-            local(8, discriminant, SemanticLocalRoleV1::Argument(1)),
-        ],
-        vec![block(
+        helper_locals,
+        helper_blocks,
+    );
+    let mut functions = vec![wrapper, helper];
+    if reachable_helper {
+        functions.push(function(
             3,
-            vec![SemanticStatementV1::new(
-                SemanticSourceProvenanceV1::unavailable(),
-                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], result).unwrap(),
-                    SemanticRvalueV1::new(
-                        result,
-                        SemanticRvalueKindV1::aggregate(
-                            SemanticAggregateKindV1::EnumVariant(0),
-                            vec![SemanticOperandV1::Constant(SemanticConstantV1::new(
-                                unit,
-                                SemanticConstantValueV1::ZeroSized,
-                            ))],
+            function_abi(3, discriminant, direct()),
+            vec![
+                local(10, discriminant, SemanticLocalRoleV1::Return),
+                local(11, discriminant, SemanticLocalRoleV1::Argument(0)),
+                local(12, discriminant, SemanticLocalRoleV1::Argument(1)),
+            ],
+            vec![block(
+                5,
+                vec![SemanticStatementV1::new(
+                    SemanticSourceProvenanceV1::unavailable(),
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        SemanticPlaceV1::new(
+                            SemanticLocalIdV1::from_index(0),
+                            vec![],
+                            discriminant,
                         )
                         .unwrap(),
-                    ),
-                )),
+                        SemanticRvalueV1::new(
+                            discriminant,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Constant(
+                                SemanticConstantV1::new(
+                                    discriminant,
+                                    SemanticConstantValueV1::Scalar(
+                                        SemanticScalarValueV1::new(0, 4).unwrap(),
+                                    ),
+                                ),
+                            )),
+                        ),
+                    )),
+                )],
+                SemanticTerminatorKindV1::Return,
             )],
-            SemanticTerminatorKindV1::Return,
-        )],
-    );
-    request(direct_result_like_types(), vec![], vec![wrapper, helper])
+        ));
+    }
+    request(direct_result_like_types(), vec![], functions)
 }
 
 #[test]
 fn transparent_result_wrapper_requires_exact_forwarding_and_no_computation() {
-    let admitted = transparent_result_wrapper_request(false, false)
+    let admitted = transparent_result_wrapper_request(false, false, false)
         .admit(SemanticMirLimitsV1::default())
         .unwrap();
     let selection = admitted.select_kernel_body_v1().unwrap();
@@ -3614,12 +3814,20 @@ fn transparent_result_wrapper_requires_exact_forwarding_and_no_computation() {
     assert_eq!(selection.body().index(), 1);
     assert!(selection.has_transparent_result_wrapper());
 
-    let swapped = transparent_result_wrapper_request(true, false)
+    let with_reachable_helper = transparent_result_wrapper_request(false, false, true)
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    assert_eq!(
+        with_reachable_helper.select_kernel_body_v1(),
+        Some(selection)
+    );
+
+    let swapped = transparent_result_wrapper_request(true, false, false)
         .admit(SemanticMirLimitsV1::default())
         .unwrap();
     assert_eq!(swapped.select_kernel_body_v1(), None);
 
-    let computing = transparent_result_wrapper_request(false, true)
+    let computing = transparent_result_wrapper_request(false, true, false)
         .admit(SemanticMirLimitsV1::default())
         .unwrap();
     assert_eq!(computing.select_kernel_body_v1(), None);
