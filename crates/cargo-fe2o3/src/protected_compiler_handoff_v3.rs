@@ -117,14 +117,14 @@ impl Error for ParentRustcInvocationCustodyError {}
 /// downstream worker execution never reconstructs or drops its transaction
 /// identity. This remains inert and grants no compiler or runtime authority.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct ParentConsumedCompilerModuleHandoffV3 {
+pub(crate) struct ParentConsumedProductionHandoff {
     receipt: CompilerModuleHandoffReceiptV3,
     consumed: ConsumedCompilerModuleHandoffV3,
     compiler_closure: CompilerClosureV2,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-impl ParentConsumedCompilerModuleHandoffV3 {
+impl ParentConsumedProductionHandoff {
     pub(crate) const fn receipt(&self) -> CompilerModuleHandoffReceiptV3 {
         self.receipt
     }
@@ -170,8 +170,7 @@ impl ProductionCompilerModuleHandoffIntake {
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         parent_custody: &ParentRustcInvocationCustody,
-    ) -> Result<ParentConsumedCompilerModuleHandoffV3, ProductionCompilerModuleHandoffIntakeError>
-    {
+    ) -> Result<ParentConsumedProductionHandoff, ProductionCompilerModuleHandoffIntakeError> {
         self.consume_after_preflight(output_dir, producer, attempt, parent_custody, |_, _, _| {
             Ok(())
         })
@@ -190,10 +189,8 @@ impl ProductionCompilerModuleHandoffIntake {
             CompilerModuleHandoffReceiptV3,
             CompilerClosureV2,
         ) -> Result<T, ProtectedFirstBuildWorkerV3Error>,
-    ) -> Result<
-        (ParentConsumedCompilerModuleHandoffV3, T),
-        ProductionCompilerModuleHandoffIntakeError,
-    > {
+    ) -> Result<(ParentConsumedProductionHandoff, T), ProductionCompilerModuleHandoffIntakeError>
+    {
         parent_custody
             .revalidate()
             .map_err(ProductionCompilerModuleHandoffIntakeError::ParentCustody)?;
@@ -233,7 +230,7 @@ impl ProductionCompilerModuleHandoffIntake {
             return Err(ProductionCompilerModuleHandoffIntakeError::TransportBindingMismatch);
         }
         debug_assert!(!consumed.grants_compiler_authority());
-        let consumed = ParentConsumedCompilerModuleHandoffV3 {
+        let consumed = ParentConsumedProductionHandoff {
             receipt,
             consumed,
             compiler_closure,

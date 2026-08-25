@@ -14,7 +14,7 @@ use std::time::Duration;
 use crate::production_release::{
     ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
 };
-use crate::protected_compiler_handoff_v3::ParentConsumedCompilerModuleHandoffV3;
+use crate::protected_compiler_handoff_v3::ParentConsumedProductionHandoff;
 use fe2o3_artifact_transaction::{
     CompilerModuleHandoffReceiptV3, ConsumedCompilerModuleHandoffV1,
     ConsumedCompilerModuleHandoffV2,
@@ -641,9 +641,9 @@ impl PreparedWorkerV2Config {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn execute_protected_v3(
+    pub(crate) fn execute_production(
         &self,
-        parent_consumed: ParentConsumedCompilerModuleHandoffV3,
+        parent_consumed: ParentConsumedProductionHandoff,
     ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
         let (receipt, consumed, expected_compiler_closure) = parent_consumed.into_parts();
         execute_protected_reproducible_first_build_worker_v3(
@@ -658,7 +658,7 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    pub(crate) fn preflight_protected_v3(
+    pub(crate) fn preflight_production(
         &self,
         handoff: &InertSemanticCompilerModuleHandoffV3,
         receipt: CompilerModuleHandoffReceiptV3,
@@ -677,9 +677,9 @@ impl PreparedWorkerV2Config {
         )
     }
 
-    pub(crate) fn execute_preflighted_protected_v3(
+    pub(crate) fn execute_preflighted_production(
         &self,
-        parent_consumed: ParentConsumedCompilerModuleHandoffV3,
+        parent_consumed: ParentConsumedProductionHandoff,
         preflight: PreparedProtectedFirstBuildWorkerV3PreflightV1,
     ) -> Result<InertProtectedFirstBuildWorkerV3EvidenceV1, ProtectedFirstBuildWorkerV3Error> {
         let (_, consumed, _) = parent_consumed.into_parts();
@@ -1734,11 +1734,11 @@ mod tests {
     fn protected_v3_execute_path_retains_parent_receipt_and_native_evidence() {
         let _execute: fn(
             &PreparedWorkerV2Config,
-            ParentConsumedCompilerModuleHandoffV3,
+            ParentConsumedProductionHandoff,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::execute_protected_v3;
+        > = PreparedWorkerV2Config::execute_production;
 
         let _preflight: fn(
             &PreparedWorkerV2Config,
@@ -1748,16 +1748,16 @@ mod tests {
         ) -> Result<
             PreparedProtectedFirstBuildWorkerV3PreflightV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::preflight_protected_v3;
+        > = PreparedWorkerV2Config::preflight_production;
 
         let _execute_preflighted: fn(
             &PreparedWorkerV2Config,
-            ParentConsumedCompilerModuleHandoffV3,
+            ParentConsumedProductionHandoff,
             PreparedProtectedFirstBuildWorkerV3PreflightV1,
         ) -> Result<
             InertProtectedFirstBuildWorkerV3EvidenceV1,
             ProtectedFirstBuildWorkerV3Error,
-        > = PreparedWorkerV2Config::execute_preflighted_protected_v3;
+        > = PreparedWorkerV2Config::execute_preflighted_production;
     }
 
     fn row_softmax_manifest(directory: &TestDirectory) -> PathBuf {

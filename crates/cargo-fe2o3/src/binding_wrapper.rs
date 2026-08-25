@@ -3436,7 +3436,7 @@ fn complete_managed_production_build(
         ManagedProductionBuild::Fresh {
             config,
             compiler_closure,
-        } => complete_fresh_production_worker_v3(
+        } => complete_fresh_production_artifact(
             managed,
             &config,
             compiler_closure,
@@ -3450,9 +3450,9 @@ fn complete_managed_production_build(
         ManagedProductionBuild::Recovered {
             recovered,
             compiler_closure,
-        } => complete_recovered_production_worker_v3(managed, *recovered, compiler_closure),
+        } => complete_recovered_production_artifact(managed, *recovered, compiler_closure),
         ManagedProductionBuild::Ready { envelope } => {
-            complete_ready_production_worker_v3(managed, *envelope)
+            complete_ready_production_artifact(managed, *envelope)
         }
     }
 }
@@ -3768,7 +3768,7 @@ fn complete_fresh_worker_v2(
     publish_finish_and_clear(managed, resume, persisted.publication, persisted.intent)
 }
 
-fn complete_fresh_production_worker_v3(
+fn complete_fresh_production_artifact(
     managed: &ManagedAttempt,
     worker: &PreparedWorkerV2Config,
     compiler_closure: CompilerClosureV2,
@@ -3795,7 +3795,7 @@ fn complete_fresh_production_worker_v3(
                         },
                     );
                 }
-                worker.preflight_protected_v3(handoff, receipt, observed_closure)
+                worker.preflight_production(handoff, receipt, observed_closure)
             },
         )
         .map_err(|error| {
@@ -3804,7 +3804,7 @@ fn complete_fresh_production_worker_v3(
             ))
         })?;
     let evidence = worker
-        .execute_preflighted_protected_v3(consumed, preflight)
+        .execute_preflighted_production(consumed, preflight)
         .map_err(|error| {
             CompletionFailure::Uncommitted(format!(
                 "strict V3 reproducible worker execution failed: {error}"
@@ -3838,10 +3838,10 @@ fn complete_fresh_production_worker_v3(
             "strict V3 durable publication persistence failed: {error}"
         ))
     })?;
-    complete_recovered_production_worker_v3(managed, recovered, compiler_closure)
+    complete_recovered_production_artifact(managed, recovered, compiler_closure)
 }
 
-fn complete_recovered_production_worker_v3(
+fn complete_recovered_production_artifact(
     managed: &ManagedAttempt,
     recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
     compiler_closure: CompilerClosureV2,
@@ -3857,10 +3857,10 @@ fn complete_recovered_production_worker_v3(
             "strict V3 finalized-HSACO publication failed: {error}"
         ))
     })?;
-    complete_published_production_worker_v3(managed, published)
+    complete_published_production_artifact(managed, published)
 }
 
-fn complete_published_production_worker_v3(
+fn complete_published_production_artifact(
     managed: &ManagedAttempt,
     published: PublishedProtectedWorkerV3HsacoV1,
 ) -> Result<(), CompletionFailure> {
@@ -3897,7 +3897,7 @@ fn complete_published_production_worker_v3(
     })
 }
 
-fn complete_ready_production_worker_v3(
+fn complete_ready_production_artifact(
     managed: &ManagedAttempt,
     envelope: RecoveredWorkerV3LoadEnvelopeV1,
 ) -> Result<(), CompletionFailure> {
