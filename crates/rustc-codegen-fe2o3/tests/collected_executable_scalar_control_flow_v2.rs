@@ -3517,8 +3517,9 @@ fn build_and_pin_broker(
     command
         .current_dir(workspace)
         .args(["build", "--locked", "-p", "cargo-fe2o3"]);
+    configure_qualification_build(&mut command, None);
     if handoff_observation {
-        command.args(["--features", "compiler-handoff-observation-test-only"]);
+        configure_qualification_build(&mut command, Some("compiler-handoff-observation-test-only"));
     }
     command
         .args(["--bin", "cargo-fe2o3"])
@@ -3549,8 +3550,12 @@ fn build_and_pin_broker(
     backend_command
         .current_dir(workspace)
         .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"]);
+    configure_qualification_build(&mut backend_command, None);
     if handoff_observation {
-        backend_command.args(["--features", "row-softmax-metadata-mutation-test-only"]);
+        configure_qualification_build(
+            &mut backend_command,
+            Some("row-softmax-metadata-mutation-test-only"),
+        );
     }
     backend_command
         .env("CARGO_TARGET_DIR", cargo_target)
@@ -3579,6 +3584,38 @@ fn build_and_pin_broker(
         String::from_utf8_lossy(&backend.stderr),
     );
     broker
+}
+
+fn configure_qualification_build(command: &mut Command, extra_feature: Option<&str>) {
+    command.args(["--features", "qualification-oracles-test-only"]);
+    if let Some(feature) = extra_feature {
+        command.args(["--features", feature]);
+    }
+}
+
+#[test]
+fn private_broker_builds_are_explicitly_qualification_enabled() {
+    let mut base = Command::new("cargo");
+    configure_qualification_build(&mut base, None);
+    assert_eq!(
+        base.get_args().collect::<Vec<_>>(),
+        ["--features", "qualification-oracles-test-only"]
+    );
+
+    let mut observation = Command::new("cargo");
+    configure_qualification_build(
+        &mut observation,
+        Some("compiler-handoff-observation-test-only"),
+    );
+    assert_eq!(
+        observation.get_args().collect::<Vec<_>>(),
+        [
+            "--features",
+            "qualification-oracles-test-only",
+            "--features",
+            "compiler-handoff-observation-test-only",
+        ]
+    );
 }
 
 fn build_and_pin_handoff_broker(
