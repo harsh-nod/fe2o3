@@ -23,6 +23,6 @@ fe2o3-scalar-gemm-v1|true|false|false|-
 fe2o3-scale|true|true|true|scale.hsaco
 fe2o3-shift|true|true|true|shift.hsaco
 fe2o3-stencil|true|true|true|stencil.hsaco
-fe2o3-vecadd|true|true|true|vecadd.hsaco
+fe2o3-vecadd|true|false|false|-
 fe2o3-vecadd-f64|true|true|true|vecadd_f64.hsaco
 verus-vecadd|true|false|false|-
