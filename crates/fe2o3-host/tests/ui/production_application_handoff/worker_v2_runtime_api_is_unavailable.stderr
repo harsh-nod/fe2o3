@@ -1,0 +1,54 @@
+error[E0432]: unresolved imports `fe2o3_host::AdmittedFinalizedWorkerV2BundleV1`, `fe2o3_host::AuthenticatedWorkerV2ExecutableV1`, `fe2o3_host::CurrentRecoveredLaunchKernelMetadataV2`, `fe2o3_host::RecoveredWorkerV2PinnedDescriptorV1`
+ --> tests/ui/production_application_handoff/worker_v2_runtime_api_is_unavailable.rs:2:5
+  |
+2 |     AdmittedFinalizedWorkerV2BundleV1, AuthenticatedWorkerV2ExecutableV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `AuthenticatedWorkerV2ExecutableV1` in the root
+  |     |
+  |     no `AdmittedFinalizedWorkerV2BundleV1` in the root
+3 |     CurrentRecoveredLaunchKernelMetadataV2, RecoveredWorkerV2PinnedDescriptorV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `RecoveredWorkerV2PinnedDescriptorV1` in the root
+  |     |
+  |     no `CurrentRecoveredLaunchKernelMetadataV2` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use worker_v2_bundle_admission::{
+  |     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use hsa_executable_lifecycle::{
+  |     AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, HsaDispatchError,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use launch_kernel_v2_bridge::{
+  |     CurrentRecoveredLaunchKernelMetadataV2, Gfx942DynamicLdsProjectionV2, Gfx942ImplicitAbiKindV2,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use recovered_worker_v2_admission::{
+  |     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
+  |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: a similar name exists in the module
+  |
+2 -     AdmittedFinalizedWorkerV2BundleV1, AuthenticatedWorkerV2ExecutableV1,
+2 +     AdmittedFinalizedWorkerV2BundleV1, AuthenticatedWorkerV3ExecutableV1,
+  |
+help: a similar name exists in the module
+  |
+3 -     CurrentRecoveredLaunchKernelMetadataV2, RecoveredWorkerV2PinnedDescriptorV1,
+3 +     CurrentRecoveredLaunchKernelMetadataV2, RecoveredWorkerV3PinnedDescriptorV1,
+  |

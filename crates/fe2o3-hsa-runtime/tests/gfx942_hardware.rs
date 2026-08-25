@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 use fe2o3_amd_target::FeatureState;
 use fe2o3_artifacts::DigestAlgorithm;
 use fe2o3_core::{DeviceBuffer, GpuContext};

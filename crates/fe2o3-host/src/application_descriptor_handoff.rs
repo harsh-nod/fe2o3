@@ -6,11 +6,12 @@
 //! assumptions and must instead be isolated from authority by a separate broker.
 
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use crate::RecoveredWorkerV2PinnedDescriptorV1;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_v1;
+use crate::recovered_worker_v2_admission::{
+    RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
+    recover_worker_v2_load_envelope_v1,
+};
 use crate::{
-    KernelId, ObservedContext, RecoveredWorkerV2AdmissionError, RecoveredWorkerV3AdmissionErrorV1,
+    KernelId, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
     RecoveredWorkerV3PinnedDescriptorV1, admit_recovered_worker_v3_descriptor_v1,
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
@@ -25,7 +26,6 @@ use fe2o3_worker_v2_bundle::{
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
-    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
     WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationHandoffProtocolErrorV1,
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
@@ -35,7 +35,8 @@ use fe2o3_worker_v2_bundle::{
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_worker_v2_bundle::{
     CompilerTransactionEvidenceCapsuleV2, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
+    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffCommitmentV1,
+    WorkerV2ApplicationHandoffExpectationV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
     worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
@@ -140,6 +141,7 @@ struct InspectedWorkerV3EnvelopeV1 {
 }
 
 /// Exact inherited descriptors retained through recovered load and synchronous dispatch.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct RetainedWorkerV2ApplicationDescriptorsV1 {
     directory: File,
     envelope: File,
@@ -151,6 +153,7 @@ pub(crate) struct RetainedWorkerV2ApplicationDescriptorsV1 {
     challenge: WorkerV2ApplicationHandoffChallengeV1,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl fmt::Debug for RetainedWorkerV2ApplicationDescriptorsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -164,6 +167,7 @@ impl fmt::Debug for RetainedWorkerV2ApplicationDescriptorsV1 {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl RetainedWorkerV2ApplicationDescriptorsV1 {
     pub(crate) fn revalidate(&self) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
         validate_directory(&self.directory, self.directory_snapshot)?;
@@ -1590,7 +1594,9 @@ pub enum WorkerV2ApplicationDescriptorHandoffErrorV1 {
     ApplicationExecutableChanged,
     InvalidStaticApplication(fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1),
     CommitmentMismatch,
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     Recovery(RecoveredWorkerV2AdmissionError),
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     RecoveryCurrentness(crate::FinalizedWorkerV2BundleAdmissionError),
     UnsafeAcknowledgment,
     AcknowledgmentTimeout,
@@ -1670,10 +1676,12 @@ impl fmt::Display for WorkerV2ApplicationDescriptorHandoffErrorV1 {
             Self::CommitmentMismatch => formatter.write_str(
                 "application handoff commitment does not bind the envelope and current executable",
             ),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Recovery(error) => write!(
                 formatter,
                 "failed to recover inherited Worker V2 envelope: {error}"
             ),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::RecoveryCurrentness(error) => write!(
                 formatter,
                 "inherited Worker V2 publication is not current: {error}"
@@ -1701,7 +1709,9 @@ impl Error for WorkerV2ApplicationDescriptorHandoffErrorV1 {
             Self::Decode(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::InvalidStaticApplication(error) => Some(error),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::Recovery(error) => Some(error),
+            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
             Self::RecoveryCurrentness(error) => Some(error),
             _ => None,
         }

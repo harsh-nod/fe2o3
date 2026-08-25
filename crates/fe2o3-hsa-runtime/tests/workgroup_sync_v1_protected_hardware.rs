@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+#![cfg(feature = "qualification-oracles-test-only")]
 
 use std::{
     env, fs,

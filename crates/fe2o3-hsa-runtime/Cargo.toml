@@ -5,10 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Reviewed direct-HSA runtime adapter for fe2o3 Worker V2."
+description = "Reviewed direct-HSA runtime adapter for fe2o3 production Worker V3 and qualification Worker V2."
 
 [features]
 hardware-test-hooks = ["fe2o3-host/hardware-test-hooks"]
+qualification-oracles-test-only = ["fe2o3-host/qualification-oracles-test-only"]
 
 [dependencies]
 fe2o3-amd-target.workspace = true

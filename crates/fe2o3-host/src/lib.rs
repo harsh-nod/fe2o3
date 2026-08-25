@@ -4,6 +4,7 @@ mod argument_alias;
 mod artifact_binding;
 mod cooperative_launch;
 mod flash_attention_v1_lifecycle;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 mod generated_flash_attention_v1;
@@ -21,6 +22,7 @@ mod generated_wave64_collectives_v1;
 mod generated_wave64_collectives_v1_lifecycle;
 #[cfg(test)]
 mod generated_wave64_collectives_v1_lifecycle_tests;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_worker_v2_vecadd;
 mod generated_worker_v3_dispatch;
 mod generated_workgroup_lds_reduction_v1;
@@ -30,6 +32,7 @@ mod generated_workgroup_sync_v1_lifecycle;
 mod generated_workgroup_sync_v1_lifecycle_tests;
 mod gfx942_ocml;
 mod hsa_executable_lifecycle;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod launch_kernel_v2_bridge;
 mod loaded_kernel;
 mod moe_expert_v1_denial;
@@ -40,16 +43,19 @@ mod prepared_launch;
 mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
 mod published_hsaco_inspection;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod recovered_worker_v2_admission;
 mod recovered_worker_v3_admission;
 mod row_softmax_protected_admission;
 mod tile_interop;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_bundle_admission;
 mod worker_v3_verification_admission;
 
 #[cfg(feature = "hardware-test-hooks")]
 #[doc(hidden)]
 pub mod __hardware_test {
+    #[cfg(feature = "qualification-oracles-test-only")]
     use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
     use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
@@ -58,12 +64,14 @@ pub mod __hardware_test {
         ObservedContext,
     };
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub use crate::worker_v2_bundle_admission::tests::{
         TestDirectory, TestPublicationTurnover,
         admitted_alpha_zeta_cov6_hardware_for_lifecycle_test, admitted_hardware_for_lifecycle_test,
         begin_test_publication_turnover,
     };
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub fn acquire_retained_currentness_token<K>(
         authenticated: &crate::AuthenticatedWorkerV2ExecutableV1<K>,
     ) -> Result<DurableCurrentLinkPublicationTokenV1, crate::FinalizedWorkerV2BundleAdmissionError>
@@ -73,6 +81,7 @@ pub mod __hardware_test {
         authenticated.acquire_retained_currentness_token()
     }
 
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub fn load_with_retained_currentness<K, A>(
         authorized: crate::AuthorizedHsaLoadV1<K, A>,
         current: &DurableCurrentLinkPublicationTokenV1,
@@ -135,11 +144,15 @@ pub mod __hardware_test {
     target_os = "linux",
     any(test, feature = "qualification-oracles-test-only")
 ))]
+pub use application_descriptor_handoff::WorkerV2ApplicationDescriptorHandoffErrorV1;
+#[cfg(all(
+    target_os = "linux",
+    any(test, feature = "qualification-oracles-test-only")
+))]
 pub use application_descriptor_handoff::consume_inherited_worker_v2_application_handoff_v1;
 #[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
-    WorkerV2ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
-    consume_inherited_worker_v3_application_handoff_v1,
+    WorkerV3ApplicationDescriptorHandoffErrorV1, consume_inherited_worker_v3_application_handoff_v1,
 };
 pub use argument_alias::{
     AliasAdmissionError, AllocationIdentity, AllocationProvenance, ArgumentAccess,
@@ -179,6 +192,7 @@ pub use flash_attention_v1_lifecycle::{
     ReviewedFlashAttentionV1RuntimeAdapterV1, UnloadedFlashAttentionV1, join_flash_attention_v1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_alpha_zeta_cov6::{
     AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
     CompilerGeneratedAlphaZetaCov6ArgumentsV1, GeneratedAlphaZetaCov6ArgumentBindingV1,
@@ -228,13 +242,17 @@ pub use generated_row_softmax_v1::{
     ProtectedRowSoftmaxV1BufferRoleV1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_scalar_gemm_v1::{
     CompilerGeneratedScalarGemmV1Arguments, GeneratedScalarGemmV1ArgumentBinding,
     GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
     GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
-    GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
     ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
     ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
+};
+#[doc(hidden)]
+pub use generated_scalar_gemm_v1::{
+    GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
 };
 #[doc(hidden)]
 pub use generated_vecadd::{
@@ -253,6 +271,7 @@ pub use generated_wave64_collectives_v1_lifecycle::{
     Wave64CollectivesLoadErrorV1, Wave64CollectivesUnloadIdentityV1, join_wave64_collectives_v1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_worker_v2_vecadd::{
     GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
     GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
@@ -291,25 +310,28 @@ pub use gfx942_ocml::{
     GFX942_OCML_SIN_F32_WORKGROUP_SIZE_V1, Gfx942OcmlArtifactIdentityV1, Gfx942OcmlSinErrorV1,
     Gfx942OcmlSinF32KernelV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use hsa_executable_lifecycle::{
-    AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, AuthorizedWorkerV3HsaLoadV1,
-    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaCompletedDispatchV1,
-    HsaCompletedWorkerV3DispatchV1, HsaDispatchError, HsaDispatchObservationV1,
-    HsaEnvironmentMismatch, HsaEnvironmentObservationV1, HsaExecutableLoadError,
-    HsaExecutableObjectIdentityV1, HsaExecutableUnloadError, HsaGeneratedDispatchError,
-    HsaImplicitKernargInitializationObservationV1, HsaKernelLaunchAuthorizationV1,
+    AuthenticatedWorkerV2ExecutableV1, AuthorizedHsaLoadV1, HsaDispatchError,
+    HsaExecutableLoadError, HsaGeneratedDispatchError, HsaKernelLaunchAuthorizationV1,
+    HsaLoadAuthorizationError, InertLoadedWorkerV2KernelSelectionV1, LoadedHsaExecutableV1,
+    WorkerV2ExecutableAuthenticationError, WorkerV2PrerequisiteAuthenticatorV1,
+    WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError, WorkerV2PrerequisiteRequestV1,
+    WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1, WorkerV2SafetyPropertyV1,
+};
+pub use hsa_executable_lifecycle::{
+    AuthorizedWorkerV3HsaLoadV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
+    HsaCompletedDispatchV1, HsaCompletedWorkerV3DispatchV1, HsaDispatchObservationV1,
+    HsaEnvironmentMismatch, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaExecutableUnloadError, HsaImplicitKernargInitializationObservationV1,
     HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchAuthorizationError,
-    HsaLaunchGeometryV1, HsaLoadAuthorizationError, HsaObservationError,
-    HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
-    InertLoadedWorkerV2KernelSelectionV1, LoadedHsaExecutableV1, LoadedWorkerV3HsaExecutableV1,
-    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
-    UnloadedHsaExecutableV1, WorkerV2ExecutableAuthenticationError,
-    WorkerV2PrerequisiteAuthenticatorV1, WorkerV2PrerequisiteDecisionV1, WorkerV2PrerequisiteError,
-    WorkerV2PrerequisiteRequestV1, WorkerV2RequiredProfileError, WorkerV2SafetyPropertiesV1,
-    WorkerV2SafetyPropertyV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3HsaExecutableLoadErrorV1,
-    WorkerV3HsaLoadAuthorizationErrorV1,
+    HsaLaunchGeometryV1, HsaObservationError, HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1,
+    HsaUnloadObservationV1, LoadedWorkerV3HsaExecutableV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1, WorkerV3GeneratedDispatchErrorV1,
+    WorkerV3HsaExecutableLoadErrorV1, WorkerV3HsaLoadAuthorizationErrorV1,
 };
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use launch_kernel_v2_bridge::{
     CurrentRecoveredLaunchKernelMetadataV2, Gfx942DynamicLdsProjectionV2, Gfx942ImplicitAbiKindV2,
     Gfx942ImplicitAbiParameterV2, Gfx942OccupancyMetadataStatusV2,
@@ -369,6 +391,7 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalArgumentLayoutV1, PublishedPhysicalHiddenArgumentLayoutV1,
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use recovered_worker_v2_admission::{
     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
     RecoveredWorkerV2SynchronousHsaDispatchError, RecoveredWorkerV2SynchronousHsaHandoffError,
@@ -395,6 +418,7 @@ pub use tile_interop::{
     Gfx942Xor4Bf16TileAllocationV1, Gfx942Xor4Bf16TileLeaseV1,
 };
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use worker_v2_bundle_admission::{
     AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,
     CurrentFinalizedWorkerV2BundleAdmissionV1, FinalizedWorkerV2BundleAdmissionError,
@@ -414,36 +438,39 @@ pub use worker_v3_verification_admission::{
 /// not an application extension point.
 #[doc(hidden)]
 pub mod __generated {
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub use crate::{
         AlphaZetaCov6DispatchIdentityV1, AlphaZetaCov6KernelRoleV1, AlphaZetaCov6ProfileError,
-        AuthenticatedKernelArtifactV1, CompilerGeneratedAlphaZetaCov6ArgumentsV1,
-        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1,
-        CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-        CompilerGeneratedScalarGemmV1Arguments, CompilerGeneratedSemanticWitnessErrorV1,
-        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
+        CompilerGeneratedAlphaZetaCov6ArgumentsV1, CompilerGeneratedScalarGemmV1Arguments,
         GeneratedAlphaZetaCov6ArgumentBindingV1, GeneratedAlphaZetaCov6ArgumentError,
         GeneratedAlphaZetaCov6CompletionV1, GeneratedAlphaZetaCov6GeometryError,
         GeneratedAlphaZetaCov6PhysicalKernargError, GeneratedAlphaZetaCov6PrepareError,
         GeneratedAlphaZetaCov6PrepareResultV1, GeneratedAlphaZetaCov6PreparedInvocationV1,
+        GeneratedScalarGemmV1ArgumentBinding, GeneratedScalarGemmV1Completion,
+        GeneratedScalarGemmV1PrepareError, GeneratedScalarGemmV1PrepareResult,
+        GeneratedScalarGemmV1PreparedInvocation, GeneratedWorkerV2VecAddBindError,
+        GeneratedWorkerV2VecAddCompletionV1, GeneratedWorkerV2VecAddExecutorV1,
+        GeneratedWorkerV2VecAddPrepareError, GeneratedWorkerV2VecAddPreparedV1,
+        ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
+        ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
+    };
+    pub use crate::{
+        AuthenticatedKernelArtifactV1, CompilerGeneratedArgumentLayoutV1,
+        CompilerGeneratedKernelContractV1, CompilerGeneratedKernelExpectationV1,
+        CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
+        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedAdmittedLaunch,
         GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
         GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1,
         GeneratedArtifactAuthenticationError, GeneratedDeviceScalarV1, GeneratedKernelBindingV1,
         GeneratedKernelProfileError, GeneratedLdsGemmSlice1HostAdapterErrorV1,
         GeneratedLdsGemmSlice1HostAdapterV1, GeneratedMarkerBindingError,
         GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
-        GeneratedReadWriteDeviceSlice, GeneratedScalarGemmV1ArgumentBinding,
-        GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
-        GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
-        GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
-        GeneratedSliceArgumentPairV1, GeneratedVecAddKernelV1, GeneratedVecAddLoadError,
-        GeneratedVecAddPrepareError, GeneratedVecAddPreparedV1, GeneratedVecAddProfileError,
-        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
-        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
-        GeneratedWorkerV2VecAddPreparedV1, GeneratedWorkerV3ArgumentBindingV1,
+        GeneratedReadWriteDeviceSlice, GeneratedScalarGemmV1ReadDeviceSlice,
+        GeneratedScalarGemmV1ReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
+        GeneratedVecAddPreparedV1, GeneratedVecAddProfileError, GeneratedWorkerV3ArgumentBindingV1,
         GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
         GeneratedWorkerV3PreparedInvocationV1, GeneratedWriteDeviceSlice, LoadedKernelLoadError,
-        ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
-        ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
         ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
         validate_compiler_generated_semantic_witness_v1,
     };

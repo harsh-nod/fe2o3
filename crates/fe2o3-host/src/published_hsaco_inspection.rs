@@ -863,6 +863,7 @@ fn validate_inspection(
 }
 
 /// Reuses the strict physical inspection policy for another provenance-preserving host bridge.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn inspect_payload_against_artifact_identity(
     exact_payload_bytes: &[u8],
     identity: &ArtifactKernelIdentityV1,

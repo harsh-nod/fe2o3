@@ -17,6 +17,7 @@ legacy-hsa-runtime = [
     "dep:fe2o3-core",
     "dep:fe2o3-hsa-runtime",
     "dep:fe2o3-host",
+    "fe2o3-hsa-runtime/qualification-oracles-test-only",
     "fe2o3-host/qualification-oracles-test-only",
 ]
 worker-v2-host-consumer-fixture = ["legacy-hsa-runtime", "fe2o3-host/hardware-test-hooks"]

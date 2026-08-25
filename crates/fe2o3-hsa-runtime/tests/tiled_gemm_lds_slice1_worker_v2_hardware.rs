@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 //! Protected MI300X evidence for the exact LDS GEMM Slice1 Worker V2 route.
 //!
 //! `fe2o3-hsa-runtime` intentionally does not depend directly on the compiler

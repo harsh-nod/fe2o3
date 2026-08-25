@@ -479,6 +479,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
         })
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn device_pointer(&self) -> *const () {
         self.pointer.as_raw().cast_const().cast()
     }
@@ -546,6 +547,7 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
         self.len == 0
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn device_pointer(&self) -> *const () {
         self.pointer.as_raw().cast_const().cast()
     }

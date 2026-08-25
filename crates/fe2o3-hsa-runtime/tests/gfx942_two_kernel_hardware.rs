@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 use std::fmt;
 
 #[cfg(feature = "hardware-test-hooks")]

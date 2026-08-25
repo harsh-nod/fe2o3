@@ -1,22 +1,31 @@
-use crate::generated_argument_plan::{
-    validate_argument_packing, validate_worker_v3_argument_packing,
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::generated_argument_plan::validate_argument_packing;
+use crate::generated_argument_plan::validate_worker_v3_argument_packing;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::worker_v2_bundle_admission::{
+    AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1,
+    FinalizedWorkerV2BundleAdmissionError, WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
+    WorkerV2TypedKernelSelectionError,
+};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::{
+    ArtifactKernelIdentityV1, CompilerGeneratedSemanticWitnessErrorV1, PhysicalMetadataValueV1,
+    PublishedKernelPhysicalLayoutV1, PublishedPhysicalLaunchLayoutV1,
+    validate_compiler_generated_semantic_witness_v1,
 };
 use crate::{
-    AdmittedFinalizedWorkerV2BundleV1, AdmittedWorkerV2TypedKernelV1, ArtifactKernelIdentityV1,
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedSemanticWitnessErrorV1, DeviceIdentity,
-    FinalizedWorkerV2BundleAdmissionError, GeneratedArgumentPackingError,
-    GeneratedArgumentPackingPlanV1, PhysicalMetadataValueV1, PublishedKernelPhysicalLayoutV1,
-    PublishedPhysicalLaunchLayoutV1, RecoveredWorkerV3AdmissionErrorV1,
-    WorkerV2FullLineagePrerequisiteChallengeIdentityV2, WorkerV2TypedKernelSelectionError,
-    validate_compiler_generated_semantic_witness_v1,
+    CompilerGeneratedKernelExpectationV1, DeviceIdentity, GeneratedArgumentPackingError,
+    GeneratedArgumentPackingPlanV1, RecoveredWorkerV3AdmissionErrorV1,
 };
 use fe2o3_amd_target::{AmdTargetId, FeatureState};
 use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
-use fe2o3_artifacts::{
-    AbiLayout, BlockSize, DigestAlgorithm, DigestBytes, LaunchContract, PayloadDigest,
-};
-use fe2o3_hsaco::{CodeObjectVersion, InspectedKernel};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_artifacts::{AbiLayout, BlockSize, LaunchContract};
+use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_hsaco::CodeObjectVersion;
+use fe2o3_hsaco::InspectedKernel;
 use fe2o3_kernel_descriptor::{BlockSizeV1, KernelDescriptorV1, KernelId};
 use std::fmt;
 use std::marker::PhantomData;
@@ -27,6 +36,7 @@ const HSA_MINIMUM_KERNARG_ALIGNMENT: u64 = 16;
 const MAX_HSA_IDENTITY_TEXT_BYTES: usize = 256;
 
 /// Safety properties an authenticated compiler/Verus chain must establish.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerV2SafetyPropertyV1 {
@@ -38,6 +48,7 @@ pub enum WorkerV2SafetyPropertyV1 {
     LaunchValidity,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl WorkerV2SafetyPropertyV1 {
     const fn bit(self) -> u8 {
         match self {
@@ -56,9 +67,11 @@ impl WorkerV2SafetyPropertyV1 {
 /// Constructing this descriptive value grants no authority. The lifecycle
 /// transition accepts it only as the result of an unsafe authenticator and
 /// requires every property in [`Self::required`].
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerV2SafetyPropertiesV1(u8);
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl WorkerV2SafetyPropertiesV1 {
     const KNOWN_BITS: u8 = (1 << 6) - 1;
 
@@ -89,6 +102,7 @@ impl WorkerV2SafetyPropertiesV1 {
 /// not authority. Only the private lifecycle transition can promote a decision,
 /// and that transition obtains it through an unsafe authenticator and compares
 /// every executable field against the admitted Worker V2 bundle.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkerV2PrerequisiteDecisionV1 {
     challenge_identity: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
@@ -110,6 +124,7 @@ pub struct WorkerV2PrerequisiteDecisionV1 {
     safety_properties: WorkerV2SafetyPropertiesV1,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl WorkerV2PrerequisiteDecisionV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -186,6 +201,7 @@ impl WorkerV2PrerequisiteDecisionV1 {
 }
 
 /// Exact challenge presented to a reviewed compiler/Verus authenticator.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct WorkerV2PrerequisiteRequestV1<'admission, K> {
     challenge_identity: WorkerV2FullLineagePrerequisiteChallengeIdentityV2,
     artifact_identity: &'admission ArtifactKernelIdentityV1,
@@ -196,6 +212,7 @@ pub struct WorkerV2PrerequisiteRequestV1<'admission, K> {
     _marker: PhantomData<fn() -> K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> WorkerV2PrerequisiteRequestV1<'_, K> {
     pub const fn challenge_identity(&self) -> &WorkerV2FullLineagePrerequisiteChallengeIdentityV2 {
         &self.challenge_identity
@@ -222,6 +239,7 @@ impl<K> WorkerV2PrerequisiteRequestV1<'_, K> {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteRequestV1<'_, K> {
     pub const fn marker_logical_name(&self) -> &'static str {
         K::LOGICAL_NAME
@@ -245,6 +263,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV2PrerequisiteRequestV1<'_, 
 /// the request, and establish that `K` is the exact Rust marker whose complete
 /// ABI and executable memory effects are represented. A false implementation
 /// can authorize native code loading and dispatch from safe generated code.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub unsafe trait WorkerV2PrerequisiteAuthenticatorV1<K: CompilerGeneratedKernelExpectationV1> {
     type Error;
 
@@ -264,12 +283,14 @@ pub unsafe trait WorkerV2PrerequisiteAuthenticatorV1<K: CompilerGeneratedKernelE
 ///
 /// This state is neither `Clone` nor `Copy` and still grants no load authority;
 /// it must first be paired with a reviewed HSA environment adapter.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct AuthenticatedWorkerV2ExecutableV1<K> {
     admission: AdmittedFinalizedWorkerV2BundleV1,
     prerequisites: WorkerV2PrerequisiteDecisionV1,
     _marker: PhantomData<fn() -> K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> fmt::Debug for AuthenticatedWorkerV2ExecutableV1<K> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -280,6 +301,7 @@ impl<K> fmt::Debug for AuthenticatedWorkerV2ExecutableV1<K> {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<K> {
     pub fn authenticate<A: WorkerV2PrerequisiteAuthenticatorV1<K>>(
         admission: AdmittedFinalizedWorkerV2BundleV1,
@@ -354,6 +376,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV2ExecutableV1<
 }
 
 /// Failure while authenticating compiler/Verus and Rust marker prerequisites.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV2ExecutableAuthenticationError<E> {
@@ -367,6 +390,7 @@ pub enum WorkerV2ExecutableAuthenticationError<E> {
 }
 
 /// Required gfx942/COV6 profile mismatch.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerV2RequiredProfileError {
@@ -375,6 +399,7 @@ pub enum WorkerV2RequiredProfileError {
 }
 
 /// Mismatch in a reviewed prerequisite decision.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WorkerV2PrerequisiteError {
@@ -383,6 +408,7 @@ pub enum WorkerV2PrerequisiteError {
     MissingSafetyProperty(WorkerV2SafetyPropertyV1),
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_required_profile(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
 ) -> Result<(), WorkerV2RequiredProfileError> {
@@ -403,6 +429,7 @@ fn is_required_artifact_target(target: AmdTargetId) -> bool {
     target.processor() == REQUIRED_TARGET && target.xnack() == Some(FeatureState::Disabled)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_prerequisites<K: CompilerGeneratedKernelExpectationV1>(
     request: &WorkerV2PrerequisiteRequestV1<'_, K>,
     actual: &WorkerV2PrerequisiteDecisionV1,
@@ -476,6 +503,7 @@ fn validate_prerequisites<K: CompilerGeneratedKernelExpectationV1>(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn require_authenticated_digest(
     digest: PayloadDigest,
     field: &'static str,
@@ -1148,12 +1176,14 @@ impl HsaImplicitKernargInitializationObservationV1 {
 /// Environment-authenticated permission to load one exact finalized code object.
 ///
 /// This state owns the reviewed adapter and is intentionally linear.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct AuthorizedHsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV2ExecutableV1<K>,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> AuthorizedHsaLoadV1<K, A> {
     pub const fn grants_load_authority(&self) -> bool {
         true
@@ -1705,6 +1735,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> Drop for LoadedWorkerV3HsaEx
 /// Failure while binding an authenticated executable to an HSA environment.
 #[derive(Debug)]
 #[non_exhaustive]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub enum HsaLoadAuthorizationError<E> {
     Adapter(E),
     Environment(HsaEnvironmentMismatch),
@@ -1720,6 +1751,7 @@ pub enum HsaEnvironmentMismatch {
     PhysicalDevice,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_environment(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
     environment: &HsaEnvironmentObservationV1,
@@ -1762,6 +1794,7 @@ fn validate_environment_facts(
 /// Failure while loading or resolving an HSA executable.
 #[derive(Debug)]
 #[non_exhaustive]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub enum HsaExecutableLoadError<E> {
     CurrentPublication(FinalizedWorkerV2BundleAdmissionError),
     ExactBytesChanged,
@@ -1805,6 +1838,7 @@ fn validate_load_observation(
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_kernel_resolution(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
     executable: HsaExecutableObjectIdentityV1,
@@ -1861,6 +1895,7 @@ fn validate_kernel_resolution_fields(
 /// Dropping without explicit unload invokes the reviewed adapter; an ambiguous
 /// drop-time unload aborts the process rather than continuing after releasing
 /// the evidence while native state may remain live.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct LoadedHsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV2ExecutableV1<K>,
     adapter: A,
@@ -1872,6 +1907,7 @@ pub struct LoadedHsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> 
     authenticated_kernels: Vec<CachedWorkerV2KernelAuthenticationV2>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 #[derive(Clone, Debug)]
 struct CachedWorkerV2KernelAuthenticationV2 {
     artifact_identity: ArtifactKernelIdentityV1,
@@ -1879,6 +1915,7 @@ struct CachedWorkerV2KernelAuthenticationV2 {
     prerequisites: WorkerV2PrerequisiteDecisionV1,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug for LoadedHsaExecutableV1<K, A> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1894,6 +1931,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug for LoadedHsaExec
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> {
     pub const fn grants_load_authority(&self) -> bool {
         false
@@ -2102,11 +2140,13 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
 /// loaded executable remains borrowed, and this value is intentionally neither
 /// `Clone` nor `Copy`.
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct InertLoadedWorkerV2KernelSelectionV1<'loaded, K> {
     selected: AdmittedWorkerV2TypedKernelV1<'loaded, K>,
     executable_object: HsaExecutableObjectIdentityV1,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> fmt::Debug for InertLoadedWorkerV2KernelSelectionV1<'_, K> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2117,6 +2157,7 @@ impl<K> fmt::Debug for InertLoadedWorkerV2KernelSelectionV1<'_, K> {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         self.selected.artifact_identity()
@@ -2154,6 +2195,7 @@ impl<K> InertLoadedWorkerV2KernelSelectionV1<'_, K> {
 /// reviewed adapter, then returns a token that borrows that object for as long
 /// as the resolved kernel handle remains live.
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     artifact_identity: ArtifactKernelIdentityV1,
     physical_kernel: PublishedKernelPhysicalLayoutV1,
@@ -2166,6 +2208,7 @@ pub struct AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     _marker: PhantomData<fn() -> K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> fmt::Debug for AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2176,6 +2219,7 @@ impl<K> fmt::Debug for AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedLoadedWorkerV2KernelSelectionV1<K> {
     pub const fn requires_prerequisite_authentication(&self) -> bool {
         false
@@ -2260,6 +2304,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedLoadedWorkerV2KernelS
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_authenticated_selection_against_loaded<K, P, A>(
     selected: &AuthenticatedLoadedWorkerV2KernelSelectionV1<K>,
     loaded: &LoadedHsaExecutableV1<P, A>,
@@ -2305,6 +2350,7 @@ where
     Ok(())
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_selected_kernel_resolution(
     identity: &ArtifactKernelIdentityV1,
     physical: &PublishedKernelPhysicalLayoutV1,
@@ -2353,6 +2399,7 @@ fn validate_selected_kernel_resolution(
 /// together. Only the unsafe compiler-generated SPI can consume this token;
 /// no method exposes either native handle or reusable launch authority.
 #[doc(hidden)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct ResolvedLoadedWorkerV2KernelSelectionV1<
     'loaded,
     P,
@@ -2369,6 +2416,7 @@ pub struct ResolvedLoadedWorkerV2KernelSelectionV1<
     _marker: PhantomData<fn() -> K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug
     for ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, K, A>
 {
@@ -2381,6 +2429,7 @@ impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1> fmt::Debug
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1>
     ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, K, A>
 {
@@ -2438,6 +2487,7 @@ impl<P, K, A: ReviewedHsaExecutableLifecycleAdapterV1>
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<P, K, A: ReviewedHsaImplicitKernargAdapterV1>
     ResolvedLoadedWorkerV2KernelSelectionV1<'_, P, K, A>
 {
@@ -2586,6 +2636,7 @@ impl<P, K, A: ReviewedHsaImplicitKernargAdapterV1>
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_selected_dispatch_state<P, A: ReviewedHsaExecutableLifecycleAdapterV1>(
     identity: &ArtifactKernelIdentityV1,
     physical: &PublishedKernelPhysicalLayoutV1,
@@ -2629,6 +2680,7 @@ fn validate_selected_dispatch_state<P, A: ReviewedHsaExecutableLifecycleAdapterV
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> Drop for LoadedHsaExecutableV1<K, A> {
     fn drop(&mut self) {
         self.kernel.take();
@@ -2647,11 +2699,13 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> Drop for LoadedHsaExecutable
 /// dispatch remains unsafe because generated code must bind concrete kernarg
 /// pointers, allocation lifetimes, and alias admission to the authenticated
 /// Rust effect contract.
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct HsaKernelLaunchAuthorizationV1<'loaded, K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     loaded: &'loaded mut LoadedHsaExecutableV1<K, A>,
     geometry: HsaLaunchGeometryV1,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> HsaKernelLaunchAuthorizationV1<'_, K, A> {
     pub const fn grants_launch_authority(&self) -> bool {
         true
@@ -2726,6 +2780,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> HsaKernelLaunchAuthorization
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'_, K, A> {
     pub(crate) fn launch_generated_with_implicit_kernarg(
         self,
@@ -2813,6 +2868,7 @@ impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'
 /// Failure while completing a generated typed kernarg and dispatching it.
 #[derive(Debug)]
 #[non_exhaustive]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub enum HsaGeneratedDispatchError<E> {
     KernargSize,
     KernargAlignment,
@@ -2825,6 +2881,7 @@ pub enum HsaGeneratedDispatchError<E> {
     DispatchObservationMismatch(&'static str),
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2858,6 +2915,7 @@ impl<E: fmt::Display> fmt::Display for HsaGeneratedDispatchError<E> {
     }
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<E: std::error::Error + 'static> std::error::Error for HsaGeneratedDispatchError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -2936,6 +2994,7 @@ pub enum HsaLaunchAuthorizationError {
     DynamicSharedMemoryNotRepresented,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 fn validate_launch_geometry(
     admission: &AdmittedFinalizedWorkerV2BundleV1,
     geometry: HsaLaunchGeometryV1,
@@ -2947,6 +3006,7 @@ fn validate_launch_geometry(
     )
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn validate_launch_geometry_contract(
     source: &LaunchContract,
     physical: &PublishedPhysicalLaunchLayoutV1,
@@ -3094,6 +3154,7 @@ fn product(dimensions: [u32; 3]) -> Result<u64, HsaLaunchAuthorizationError> {
 /// Failure while dispatching through a reviewed HSA adapter.
 #[derive(Debug)]
 #[non_exhaustive]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub enum HsaDispatchError<E> {
     KernargSize,
     KernargAlignment,
@@ -3141,12 +3202,14 @@ pub struct HsaCompletedDispatchV1 {
 /// This value is descriptive. It contains no executable, kernel, queue, or
 /// allocation authority and cannot be used to dispatch again.
 #[derive(Debug)]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub struct HsaCompletedSelectedWorkerV2DispatchV1<K> {
     artifact_identity: ArtifactKernelIdentityV1,
     completed: HsaCompletedDispatchV1,
     _marker: PhantomData<fn() -> K>,
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 impl<K> HsaCompletedSelectedWorkerV2DispatchV1<K> {
     pub const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         &self.artifact_identity

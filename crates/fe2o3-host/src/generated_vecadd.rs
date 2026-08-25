@@ -1,13 +1,17 @@
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use crate::CompilerGeneratedArgumentLayoutV1;
 use crate::{
     AliasAdmissionError, ArtifactKernelIdentityV1, AuthenticatedKernelArtifactV1,
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelContractV1, GeneratedAdmittedLaunch,
+    CompilerGeneratedKernelContractV1, GeneratedAdmittedLaunch,
     GeneratedArtifactAuthenticationError, GeneratedReadDeviceSlice, GeneratedWriteDeviceSlice,
     LoadedKernel, LoadedKernelLoadError, LoadedKernelMatchError, LoadedLaunchError,
     ObservedContext, PrepareLaunchError, RegionError, UntrustedLaunchRequest,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_artifacts::{AbiField, Name};
 use fe2o3_artifacts::{
-    AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    LaunchContract, Mutability, Name, PointerWidth,
+    AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
+    LaunchContract, Mutability, PointerWidth,
 };
 use fe2o3_core::{
     BorrowedDeviceOperation, DeviceBuffer, Error as CoreError, GpuContext, KernelParams, Stream,
@@ -505,6 +509,7 @@ pub(crate) fn checked_vecadd_grid(
     Ok(length.div_ceil(VECADD_BLOCK_SIZE))
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn generated_vecadd_argument_layout_v2()
 -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedVecAddProfileError> {
     let abi = generated_vecadd_abi_v2()?;
@@ -517,6 +522,7 @@ pub(crate) fn generated_vecadd_argument_layout_v2()
     .map_err(|_| GeneratedVecAddProfileError::HostRustLayout)
 }
 
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn generated_vecadd_abi_v2() -> Result<AbiLayout, GeneratedVecAddProfileError> {
     let type_identities = crate::artifact_binding::host_typed_vecadd_type_identities()
         .map_err(|_| GeneratedVecAddProfileError::HostRustLayout)?;
