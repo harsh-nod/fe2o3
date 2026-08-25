@@ -16,8 +16,11 @@ mod generated_lds_gemm;
 mod generated_lds_gemm_lifecycle;
 #[cfg(test)]
 mod generated_lds_gemm_lifecycle_tests;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_expert_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_expert_v2;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_top2_v1;
 mod generated_row_softmax_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -46,9 +49,13 @@ mod hsa_executable_lifecycle;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod launch_kernel_v2_bridge;
 mod loaded_kernel;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_expert_v1_denial;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_routing_expert_bridge_v1;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_routing_expert_bridge_v2;
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod moe_top2_v1_lifecycle;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
@@ -246,15 +253,18 @@ pub use generated_lds_gemm_lifecycle::{
     LoadedExactLdsGemmSlice1V1, ReviewedExactLdsGemmRuntimeAdapterV1, UnloadedExactLdsGemmSlice1V1,
     join_exact_lds_gemm_slice1_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_expert_v1::{
     GeneratedMoeExpertV1HostAdapterErrorV1, GeneratedMoeExpertV1HostAdapterV1,
     MoeExpertCompactCopyV1, MoeExpertCompactPackPlanErrorV1, MoeExpertCompactPackPlanV1,
     MoeExpertV1BufferAccessV1, MoeExpertV1BufferRoleV1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_expert_v2::{
     GeneratedMoeExpertV2HostAdapterErrorV2, GeneratedMoeExpertV2HostAdapterV2,
     MoeExpertV2BufferAccessV2, MoeExpertV2BufferRoleV2,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_top2_v1::{
     GeneratedMoeTop2V1HostAdapterErrorV1, GeneratedMoeTop2V1HostAdapterV1, MoeTop2V1BufferAccessV1,
     MoeTop2V1BufferRoleV1,
@@ -376,13 +386,16 @@ pub use loaded_kernel::{
     LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
     LoadedPreparedLaunch,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_expert_v1_denial::{MoeExpertExecutionDeniedV1, deny_moe_expert_execution_v1};
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_routing_expert_bridge_v1::{
     CheckedMoeHostObservedRoutingOutputV1, MoeHostObservedRoutingExpertBridgeV1,
     MoeRoutingExpertBridgeUploadErrorV1, MoeRoutingOutputCandidateV1,
     MoeRoutingOutputConsistencyErrorV1, check_host_observed_moe_routing_output_v1,
     upload_checked_moe_routing_expert_bridge_v1,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_routing_expert_bridge_v2::{
     CheckedMoeCompletedRoutingExpertInputsV2, CheckedMoeCompletedRoutingReadbackV2,
     MoeCompletedRoutingExpertBridgeV2, MoeCompletedRoutingExpertUploadErrorV2,
@@ -392,6 +405,7 @@ pub use moe_routing_expert_bridge_v2::{
     MoeRoutingOutputCandidateV2, bind_completed_moe_routing_expert_inputs_v2,
     check_completed_moe_routing_readback_v2, upload_completed_moe_routing_expert_bridge_v2,
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use moe_top2_v1_lifecycle::{
     CompletedMoeTop2V1, JoinedMoeTop2V1, LoadedMoeTop2V1, MoeTop2V1DispatchErrorV1,
     MoeTop2V1JoinErrorV1, MoeTop2V1KernelResourceObservationV1, MoeTop2V1LoadErrorV1,

@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_host::{
     GeneratedMoeExpertV1HostAdapterV1, MoeRoutingOutputCandidateV1, ObservedContext,
