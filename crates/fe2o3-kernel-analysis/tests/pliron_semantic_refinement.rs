@@ -455,7 +455,7 @@ fn structurally_different_association_is_not_silently_reassociated() {
 }
 
 #[test]
-fn exact_proved_mir_reference_is_joined_to_semantic_equality() {
+fn exact_policy_checked_mir_reference_is_joined_to_semantic_equality() {
     let context = &mut setup();
     let function = function(context, "reference_ok", 0);
     let entry = function.get_entry_block(context);
@@ -487,7 +487,7 @@ fn exact_proved_mir_reference_is_joined_to_semantic_equality() {
         actual.result(context),
         expected.result(context),
         PropertyAttr::FunctionalRefinement,
-        EvidenceStatusAttr::Proved,
+        EvidenceStatusAttr::Checked,
         CoveredBoundaryAttr::Mir,
     );
     let ret = ReturnOp::new(context);
@@ -502,7 +502,7 @@ fn exact_proved_mir_reference_is_joined_to_semantic_equality() {
 }
 
 #[test]
-fn proved_reference_rejects_a_semantic_mismatch() {
+fn policy_checked_reference_rejects_a_semantic_mismatch() {
     let context = &mut setup();
     let function = function(context, "reference_mismatch", 0);
     let entry = function.get_entry_block(context);
@@ -516,7 +516,7 @@ fn proved_reference_rejects_a_semantic_mismatch() {
         actual.result(context),
         expected.result(context),
         PropertyAttr::FunctionalRefinement,
-        EvidenceStatusAttr::Proved,
+        EvidenceStatusAttr::Checked,
         CoveredBoundaryAttr::Mir,
     );
     let ret = ReturnOp::new(context);
@@ -564,17 +564,17 @@ fn reference_without_evidence_fails_closed() {
 }
 
 #[test]
-fn non_proved_or_wrong_boundary_evidence_is_incomplete() {
+fn forged_proved_or_wrong_boundary_evidence_is_incomplete() {
     for (name, status, boundary, expected) in [
         (
-            "checked_only",
-            EvidenceStatusAttr::Checked,
+            "forged_proved",
+            EvidenceStatusAttr::Proved,
             CoveredBoundaryAttr::Mir,
-            "requires exact Proved evidence",
+            "requires exact Checked evidence",
         ),
         (
             "wrong_boundary",
-            EvidenceStatusAttr::Proved,
+            EvidenceStatusAttr::Checked,
             CoveredBoundaryAttr::Source,
             "must cover the exact MIR boundary",
         ),
@@ -614,7 +614,7 @@ fn wrong_property_and_duplicate_evidence_are_rejected() {
         value.result(context),
         value.result(context),
         PropertyAttr::Bounds,
-        EvidenceStatusAttr::Proved,
+        EvidenceStatusAttr::Checked,
         CoveredBoundaryAttr::Mir,
     );
     let ret = ReturnOp::new(context);
@@ -635,7 +635,7 @@ fn wrong_property_and_duplicate_evidence_are_rejected() {
         value.result(context),
         value.result(context),
         PropertyAttr::FunctionalRefinement,
-        EvidenceStatusAttr::Proved,
+        EvidenceStatusAttr::Checked,
         CoveredBoundaryAttr::Mir,
     );
     let duplicate = EvidenceRefOp::new(
@@ -643,7 +643,7 @@ fn wrong_property_and_duplicate_evidence_are_rejected() {
         proof_id(40),
         proof_id(1),
         PropertyAttr::FunctionalRefinement,
-        EvidenceStatusAttr::Proved,
+        EvidenceStatusAttr::Checked,
         CoveredBoundaryAttr::Mir,
     );
     append(context, entry, &duplicate);

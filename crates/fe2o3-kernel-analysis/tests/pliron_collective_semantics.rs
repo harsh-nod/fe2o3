@@ -144,7 +144,7 @@ fn fold_report(
             proof_id(71),
             proof_id(41),
             PropertyAttr::FunctionalRefinement,
-            EvidenceStatusAttr::Proved,
+            EvidenceStatusAttr::Checked,
             CoveredBoundaryAttr::Mir,
         );
         let refinement = RequireRefinementOp::new(

@@ -899,11 +899,11 @@ fn validate_proof(
         });
         return false;
     }
-    if record.3 != Some(EvidenceStatusAttr::Proved) || record.4 != Some(CoveredBoundaryAttr::Mir) {
+    if record.3 != Some(EvidenceStatusAttr::Checked) || record.4 != Some(CoveredBoundaryAttr::Mir) {
         findings.push(PlironEffectRefinementFindingV1::ReferenceProofIncomplete {
             obligation: contract.obligation,
             location: contract.location,
-            reason: "effect refinement V1 requires Proved evidence at the exact MIR boundary",
+            reason: "effect refinement V1 requires policy-checked staging at the exact MIR boundary",
         });
         return false;
     }

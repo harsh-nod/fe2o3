@@ -1863,7 +1863,7 @@ mod tests {
     }
 
     #[test]
-    fn tensor_boundary_reports_live_and_proved_site_counts() {
+    fn tensor_boundary_reports_live_and_policy_checked_site_counts() {
         let error =
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: 1,
@@ -1872,7 +1872,7 @@ mod tests {
         assert!(error.is_incomplete());
         assert_eq!(
             error.to_string(),
-            "error[FE2O3-PARALLEL-013]: cooperative tensor functional refinement is incomplete: 1 live tensor site(s), but 0 exact result-component/output receipt binding(s)"
+            "error[FE2O3-PARALLEL-013]: cooperative tensor functional refinement is incomplete: 1 live tensor site(s), but 0 exact policy-checked result-component/output receipt binding(s)"
         );
     }
 }

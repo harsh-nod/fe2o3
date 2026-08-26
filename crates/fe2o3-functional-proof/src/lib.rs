@@ -35,18 +35,24 @@ pub use parallel_reference_contract_v1::{
     ParallelScheduleRelationV1,
 };
 
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{error::Error, fmt};
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 use ed25519_dalek::{Signature, VerifyingKey};
 use fe2o3_proof_contracts::DigestV1;
+#[cfg(any(test, feature = "internal-proof-staging"))]
 use sha2::{Digest, Sha256};
+#[cfg(any(test, feature = "internal-proof-staging"))]
+use std::collections::BTreeSet;
 
 pub const FUNCTIONAL_REFINEMENT_RECEIPT_VERSION_V2: u16 = 2;
 pub const FUNCTIONAL_REFINEMENT_RECEIPT_MAGIC_V2: [u8; 8] = *b"F2FRPV2\0";
 pub const FUNCTIONAL_REFINEMENT_SIGNATURE_BYTES_V2: usize = 64;
 pub const HARD_MAX_IMPORTED_FUNCTIONAL_REFINEMENT_RECEIPTS_V2: usize = 4_096;
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 const SIGNER_DOMAIN_V2: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/SIGNER/V2\0";
+#[cfg(any(test, feature = "internal-proof-staging"))]
 const RECEIPT_IDENTITY_DOMAIN_V2: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/RECEIPT/V2\0";
 const HEADER_BYTES_V2: usize = 8 + 2 + 1 + 1;
 const DIGEST_FIELD_COUNT_V2: usize = 14;
@@ -63,6 +69,7 @@ pub enum SafeReferenceKindV2 {
 }
 
 impl SafeReferenceKindV2 {
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     fn decode(value: u8) -> Result<Self, FunctionalRefinementImportErrorV2> {
         match value {
             1 => Ok(Self::SourceAndMir),
@@ -84,6 +91,7 @@ pub enum FunctionalRefinementBoundaryV2 {
 }
 
 impl FunctionalRefinementBoundaryV2 {
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     fn decode(value: u8) -> Result<Self, FunctionalRefinementImportErrorV2> {
         match value {
             1 => Ok(Self::SafeReferenceMirToKernelMir),
@@ -104,6 +112,7 @@ pub enum FunctionalRefinementResultV2 {
 }
 
 impl FunctionalRefinementResultV2 {
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     fn decode(value: u8) -> Result<Self, FunctionalRefinementImportErrorV2> {
         match value {
             1 => Ok(Self::Proved),
@@ -351,6 +360,7 @@ impl FunctionalRefinementBindingV2 {
 /// Constructing this policy does not make it a compiler trust root. Compiler production must
 /// obtain its policy from private compiler configuration and retain that custody separately.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "internal-proof-staging"))]
 pub struct FunctionalRefinementImportPolicyV2 {
     verifying_key: VerifyingKey,
     signer_identity: DigestV1,
@@ -358,8 +368,8 @@ pub struct FunctionalRefinementImportPolicyV2 {
     boundary: FunctionalRefinementBoundaryV2,
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 impl FunctionalRefinementImportPolicyV2 {
-    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn new(
         verifying_key: [u8; 32],
         toolchain: VerusToolchainIdentityV2,
@@ -399,12 +409,13 @@ impl FunctionalRefinementImportPolicyV2 {
 /// private verifier-owned successful-execution join, and a compiler must independently retain
 /// rustc custody before admitting the resulting receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "internal-proof-staging"))]
 pub struct UnsignedFunctionalRefinementReceiptV2 {
     message: [u8; SIGNED_MESSAGE_BYTES_V2],
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 impl UnsignedFunctionalRefinementReceiptV2 {
-    #[cfg(any(test, feature = "internal-proof-staging"))]
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
     pub fn from_verified_execution_join(
@@ -448,13 +459,11 @@ impl UnsignedFunctionalRefinementReceiptV2 {
         })
     }
 
-    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub const fn signing_bytes(&self) -> &[u8; SIGNED_MESSAGE_BYTES_V2] {
         &self.message
     }
 
     /// Attaches untrusted signature bytes. Only the strict importer authenticates them.
-    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn attach_signature(
         self,
         signature: [u8; FUNCTIONAL_REFINEMENT_SIGNATURE_BYTES_V2],
@@ -468,10 +477,12 @@ impl UnsignedFunctionalRefinementReceiptV2 {
 
 /// Caller-supplied expected inputs against which one signed receipt is imported.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "internal-proof-staging"))]
 pub struct FunctionalRefinementImportExpectationV2 {
     binding: FunctionalRefinementBindingV2,
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 impl FunctionalRefinementImportExpectationV2 {
     pub const fn new(binding: FunctionalRefinementBindingV2) -> Self {
         Self { binding }
@@ -551,14 +562,15 @@ impl ImportedFunctionalRefinementProofV2 {
 }
 
 /// Bounded stateful importer. Successful receipt identities cannot be imported twice.
+#[cfg(any(test, feature = "internal-proof-staging"))]
 pub struct FunctionalRefinementReceiptImporterV2 {
     policy: FunctionalRefinementImportPolicyV2,
     max_receipts: usize,
     imported: BTreeSet<FunctionalRefinementReceiptIdentityV2>,
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 impl FunctionalRefinementReceiptImporterV2 {
-    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn new(
         policy: FunctionalRefinementImportPolicyV2,
         max_receipts: usize,
@@ -576,7 +588,6 @@ impl FunctionalRefinementReceiptImporterV2 {
         })
     }
 
-    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn import(
         &mut self,
         expectation: FunctionalRefinementImportExpectationV2,
@@ -649,6 +660,7 @@ impl FunctionalRefinementReceiptImporterV2 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(any(test, feature = "internal-proof-staging"))]
 struct DecodedReceiptV2 {
     signer_identity: DigestV1,
     binding: FunctionalRefinementBindingV2,
@@ -759,6 +771,7 @@ impl fmt::Display for FunctionalRefinementImportErrorV2 {
 
 impl Error for FunctionalRefinementImportErrorV2 {}
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 fn decode_message(
     message: &[u8; SIGNED_MESSAGE_BYTES_V2],
 ) -> Result<DecodedReceiptV2, FunctionalRefinementImportErrorV2> {
@@ -812,6 +825,7 @@ fn decode_message(
     })
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 fn binding_mismatch(
     actual: FunctionalRefinementBindingV2,
     expected: FunctionalRefinementBindingV2,
@@ -844,16 +858,19 @@ fn require_digest(
     }
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 fn signer_identity(verifying_key: &[u8; 32]) -> DigestV1 {
     domain_digest(SIGNER_DOMAIN_V2, verifying_key)
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 fn receipt_identity(
     message: &[u8; SIGNED_MESSAGE_BYTES_V2],
 ) -> FunctionalRefinementReceiptIdentityV2 {
     FunctionalRefinementReceiptIdentityV2(domain_digest(RECEIPT_IDENTITY_DOMAIN_V2, message))
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 fn domain_digest(domain: &[u8], bytes: &[u8]) -> DigestV1 {
     let mut digest = Sha256::new();
     digest.update((domain.len() as u64).to_le_bytes());
@@ -863,11 +880,13 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> DigestV1 {
     DigestV1::from_untrusted_bytes(digest.finalize().into())
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 struct WireWriterV2 {
     bytes: [u8; SIGNED_MESSAGE_BYTES_V2],
     offset: usize,
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 impl WireWriterV2 {
     fn new() -> Self {
         Self {
@@ -896,11 +915,13 @@ impl WireWriterV2 {
     }
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 struct WireReaderV2<'a> {
     bytes: &'a [u8; SIGNED_MESSAGE_BYTES_V2],
     offset: usize,
 }
 
+#[cfg(any(test, feature = "internal-proof-staging"))]
 impl<'a> WireReaderV2<'a> {
     fn new(bytes: &'a [u8; SIGNED_MESSAGE_BYTES_V2]) -> Self {
         Self { bytes, offset: 0 }

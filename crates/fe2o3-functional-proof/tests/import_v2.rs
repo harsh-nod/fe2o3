@@ -1,3 +1,5 @@
+#![cfg(feature = "internal-proof-staging")]
+
 use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,

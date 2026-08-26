@@ -2114,7 +2114,11 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
         require_parallel_reference_contract_v1(&input, &evidence, semantics, &contract, &wrong)
             .unwrap_err();
     assert!(error.is_incomplete());
-    assert!(error.to_string().contains("no retained authenticated"));
+    assert!(
+        error
+            .to_string()
+            .contains("no retained policy-checked staging record")
+    );
 }
 
 #[test]

@@ -10,16 +10,19 @@
 use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_functional_proof::{
-    FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
-    FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
-    ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2,
+    FunctionalRefinementBindingV2, FunctionalRefinementReceiptIdentityV2,
+    FunctionalRefinementSubjectsV2, VerusToolchainIdentityV2,
 };
+#[cfg(feature = "internal-proof-staging")]
+use fe2o3_functional_proof::{FunctionalRefinementBoundaryV2, ImportedFunctionalRefinementProofV2};
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(feature = "internal-proof-staging")]
+use super::ProductionRefinementStagingPolicyV2;
 use super::{
     ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueV1,
-    ProductionRefinementStagingPolicyV2, production_ranked_value_identity_v1,
+    production_ranked_value_identity_v1,
 };
 
 const NONCANONICAL_LOOP_OBLIGATION_DOMAIN_V1: &[u8] = b"FE2O3/NONCANONICAL-LOOP/OBLIGATION/V1\0";

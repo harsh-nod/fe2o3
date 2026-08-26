@@ -1,8 +1,8 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
 // EXPECT: REJECT
 // CHECK: error[FE2O3-SEMANTIC-003]
-// CHECK: requires exact Proved evidence
-builtin.func @reference_refinement_checked_only: builtin.function <() -> ()>
+// CHECK: must cover the exact MIR boundary
+builtin.func @reference_refinement_wrong_boundary: builtin.function <() -> ()>
 {
   ^entry_block1v1():
     v0 = kernel.semantic_symbol () [] [kernel_semantic_symbol: kernel.semantic_symbol 0]: <() -> (kernel.semantic_scalar )>;

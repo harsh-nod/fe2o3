@@ -1,8 +1,10 @@
+#[cfg(feature = "internal-proof-staging")]
+use fe2o3_functional_proof::ImportedFunctionalRefinementProofV2;
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
     HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1, HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1,
-    ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2,
+    VerusToolchainIdentityV2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -151,10 +153,12 @@ impl ProductionCooperativeTensorBindingV1 {
     }
 }
 
+#[cfg(feature = "internal-proof-staging")]
+use super::HARD_MAX_PRODUCTION_CONSTRUCTIONS;
 use super::{
-    ConstructedGraphStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS, KernelChecksVerifiedGraphStageV1,
-    ProductionConstructionKindV1, ProductionConstructionV1, ProductionPlironSessionV1,
-    ProductionRootHandleV1, ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
+    ConstructedGraphStageV1, KernelChecksVerifiedGraphStageV1, ProductionConstructionKindV1,
+    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
+    ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
 };
 use crate::{
     ContextBuildError, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, NameError, NameKind, OperationHandle,
@@ -1422,13 +1426,14 @@ pub struct ProductionPolicyCheckedRefinementStagingV2 {
 /// The policy is deliberately not a compiler trust root. Its constructor is exposed
 /// only to the workspace verifier and hostile tests through `internal-proof-staging`.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(feature = "internal-proof-staging")]
 pub struct ProductionRefinementStagingPolicyV2 {
     signer_identities: BTreeSet<DigestV1>,
     toolchain: VerusToolchainIdentityV2,
 }
 
+#[cfg(feature = "internal-proof-staging")]
 impl ProductionRefinementStagingPolicyV2 {
-    #[cfg(feature = "internal-proof-staging")]
     pub fn new(
         signer_identities: impl IntoIterator<Item = DigestV1>,
         toolchain: VerusToolchainIdentityV2,
@@ -1456,6 +1461,7 @@ impl ProductionRefinementStagingPolicyV2 {
 }
 
 impl ProductionPolicyCheckedRefinementStagingV2 {
+    #[cfg(feature = "internal-proof-staging")]
     fn from_imported(proof: ImportedFunctionalRefinementProofV2) -> Self {
         Self {
             receipt_identity: proof.receipt_identity(),
@@ -5626,6 +5632,7 @@ impl Error for ProductionRankedCompileErrorV2 {
     }
 }
 
+#[cfg(feature = "internal-proof-staging")]
 fn admit_functional_refinement_v2(
     construction: &mut ProductionConstructionV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
