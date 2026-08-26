@@ -39,7 +39,6 @@ pub struct ProductionParallelReferenceContractReportV1 {
     permutation_relations: u64,
     fold_relations: u64,
     bounded_recurrences: u64,
-    call_summaries: u64,
     error_bounded_relations: u64,
 }
 
@@ -67,9 +66,6 @@ impl ProductionParallelReferenceContractReportV1 {
     }
     pub const fn bounded_recurrences(self) -> u64 {
         self.bounded_recurrences
-    }
-    pub const fn call_summaries(self) -> u64 {
-        self.call_summaries
     }
     pub const fn error_bounded_relations(self) -> u64 {
         self.error_bounded_relations
@@ -145,13 +141,6 @@ pub enum ProductionParallelReferenceContractErrorV1 {
         index: usize,
         component: &'static str,
     },
-    CallSummaryDerivationIncomplete {
-        index: usize,
-        kind: &'static str,
-    },
-    CallSummaryMismatch {
-        index: usize,
-    },
     TensorFunctionalRefinementIncomplete {
         live_sites: usize,
         outputs: usize,
@@ -175,7 +164,6 @@ impl ProductionParallelReferenceContractErrorV1 {
                 | Self::ScheduleRelationIncomplete { .. }
                 | Self::DynamicBoundProofIncomplete { .. }
                 | Self::NumericalProofIncomplete { .. }
-                | Self::CallSummaryDerivationIncomplete { .. }
                 | Self::TensorFunctionalRefinementIncomplete { .. }
         )
     }
@@ -203,8 +191,6 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::NumericalSiteAmbiguous { site, outputs } => write!(formatter, "error[FE2O3-PARALLEL-024]: numerical refinement site {site} ambiguously matches {outputs} logical outputs"),
             Self::DuplicateNumericalSite { index } => write!(formatter, "error[FE2O3-PARALLEL-025]: logical output {index} has more than one numerical refinement site"),
             Self::NumericalCoverageIncomplete { index, component } => write!(formatter, "error[FE2O3-PARALLEL-026]: numerical refinement for logical output {index} is not total: {component} must be the canonical typed constant true"),
-            Self::CallSummaryDerivationIncomplete { index, kind } => write!(formatter, "error[FE2O3-PARALLEL-011]: compiler cannot independently derive {kind} call summary {index} from the current ranked IR; declaration-only summaries are not evidence"),
-            Self::CallSummaryMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-012]: helper or intrinsic summary {index} differs from live typed roots, scope, callsite, or authenticated proof"),
             Self::TensorFunctionalRefinementIncomplete { live_sites, outputs } => write!(formatter, "error[FE2O3-PARALLEL-013]: functional refinement is incomplete for {live_sites} live cooperative tensor site(s) and {outputs} logical output(s): typed SSA def-use and claim-specific tensor arithmetic receipts are not implemented"),
             Self::CounterOverflow => formatter.write_str("error[FE2O3-PARALLEL-015]: parallel relation count cannot be represented in the production report"),
             Self::ContractConstruction(error) => write!(formatter, "error[FE2O3-PARALLEL-017]: compiler-derived parallel contract was invalid: {error}"),
@@ -428,7 +414,6 @@ pub fn derive_and_require_parallel_reference_contract_v1(
                 schedule,
                 numerical_policy,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
-                vec![],
                 proof,
             )
             .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?,
@@ -438,7 +423,6 @@ pub fn derive_and_require_parallel_reference_contract_v1(
         semantic_contract.canonical_sha256(),
         output_product_identity,
         relations,
-        vec![],
     )
     .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?;
     let report = require_parallel_reference_contract_v1(
@@ -1035,12 +1019,6 @@ pub fn require_parallel_reference_contract_v1(
                 counts.recurrence += 1;
             }
         }
-        if !relation.call_summaries().is_empty() {
-            return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index });
-        }
-    }
-    if !expected.call_summaries().is_empty() {
-        return Err(ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index: 0 });
     }
     if counts.error_bounded != numerical.site_count() {
         return Err(
@@ -1060,7 +1038,6 @@ pub fn require_parallel_reference_contract_v1(
         permutation_relations: count(counts.permutation)?,
         fold_relations: count(counts.fold)?,
         bounded_recurrences: count(counts.recurrence)?,
-        call_summaries: 0,
         error_bounded_relations: count(counts.error_bounded)?,
     })
 }
@@ -1485,10 +1462,6 @@ mod tests {
             },
             ProductionParallelReferenceContractErrorV1::DynamicBoundProofIncomplete { index: 4 },
             ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index: 5 },
-            ProductionParallelReferenceContractErrorV1::CallSummaryDerivationIncomplete {
-                index: 6,
-                kind: "safe Rust helper",
-            },
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: 1,
                 outputs: 2,
@@ -1527,7 +1500,6 @@ mod tests {
                 index: 0,
                 component: "domain",
             },
-            ProductionParallelReferenceContractErrorV1::CallSummaryMismatch { index: 0 },
         ] {
             assert!(!error.is_incomplete(), "{error}");
         }

@@ -359,6 +359,79 @@ fn generate_ranked_functional_refinement_proof_v2(
     Ok((binding, source))
 }
 
+/// Compiler-derived exact effect formula replayed inside the aggregate proof.
+pub(crate) struct RankedEffectFormulaReplayV2 {
+    lemma: String,
+    symbols: Vec<u32>,
+}
+
+impl RankedEffectFormulaReplayV2 {
+    pub(crate) fn lemma(&self) -> &str {
+        &self.lemma
+    }
+
+    pub(crate) fn symbols(&self) -> &[u32] {
+        &self.symbols
+    }
+}
+
+/// Rebuilds the exact formula proved by one admitted effect receipt. The
+/// aggregate proof uses this instead of treating the receipt digest as an
+/// axiom or accepting the desired relation as a premise.
+pub(crate) fn generate_ranked_effect_formula_replay_v2(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    lemma_name: &str,
+) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
+    let operation = kernel
+        .blocks()
+        .get(block_index)
+        .and_then(|block| block.operations().get(operation_index))
+        .ok_or_else(invalid_ranked_recipe)?;
+    let ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } = operation else {
+        return Err(invalid_ranked_recipe());
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        kernel,
+        block_index,
+        operation_index,
+        contract,
+        proof.binding().subjects(),
+    )
+    .map_err(|_| invalid_ranked_recipe())?;
+    if obligation != proof.binding().normalized_obligation_effect_ir_hash() {
+        return Err(invalid_ranked_recipe());
+    }
+    let mut pairs = contract
+        .gpu_coordinates()
+        .iter()
+        .copied()
+        .zip(contract.reference_coordinates().iter().copied())
+        .collect::<Vec<_>>();
+    pairs.extend([
+        (contract.gpu_domain(), contract.reference_domain()),
+        (
+            contract.gpu_precondition(),
+            contract.reference_precondition(),
+        ),
+        (contract.gpu_value(), contract.reference_value()),
+    ]);
+    let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
+    Ok(RankedEffectFormulaReplayV2 {
+        lemma: program.render_lemma(&pairs, lemma_name)?,
+        symbols: program.symbols.iter().copied().collect(),
+    })
+}
+
+pub(crate) const fn ranked_effect_formula_replay_prelude_v2() -> &'static str {
+    BITVECTOR_SEMANTICS_V2
+}
+
+pub(crate) const fn ranked_effect_ieee_congruence_declaration_v2() -> &'static str {
+    IEEE_CONGRUENCE_DECLARATION_V2
+}
+
 #[derive(Clone)]
 enum SemanticDefinitionV2 {
     Symbol(u32),
@@ -404,6 +477,9 @@ impl SemanticFormulaProgramV2 {
                     Some((*result, SemanticDefinitionV2::Symbol(*symbol)))
                 }
                 ProductionRankedOperationV1::SemanticConstant { result, value } => {
+                    Some((*result, SemanticDefinitionV2::Constant(i128::from(*value))))
+                }
+                ProductionRankedOperationV1::IndexConstant { result, value } => {
                     Some((*result, SemanticDefinitionV2::Constant(i128::from(*value))))
                 }
                 ProductionRankedOperationV1::SemanticBinary {
@@ -565,9 +641,33 @@ impl SemanticFormulaProgramV2 {
         let mut source = BoundedVerusSourceV2::default();
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;\n\n    proof fn fe2o3_functional_refinement_v2("
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{IEEE_CONGRUENCE_DECLARATION_V2}\n"
         )
         .map_err(|_| generated_source_limit())?;
+        self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
+        source
+            .write_str("}\n\nfn main() {}\n")
+            .map_err(|_| generated_source_limit())?;
+        Ok(source.into_string())
+    }
+
+    fn render_lemma(
+        &self,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+        lemma_name: &str,
+    ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+        let mut source = BoundedVerusSourceV2::default();
+        self.write_lemma(&mut source, pairs, lemma_name)?;
+        Ok(source.into_string())
+    }
+
+    fn write_lemma(
+        &self,
+        source: &mut BoundedVerusSourceV2,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+        lemma_name: &str,
+    ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
+        write!(source, "    proof fn {lemma_name}(").map_err(|_| generated_source_limit())?;
         for (index, symbol) in self.symbols.iter().enumerate() {
             if index != 0 {
                 source
@@ -647,9 +747,9 @@ impl SemanticFormulaProgramV2 {
             .map_err(|_| generated_source_limit())?;
         }
         source
-            .write_str("    }\n}\n\nfn main() {}\n")
+            .write_str("    }\n\n")
             .map_err(|_| generated_source_limit())?;
-        Ok(source.into_string())
+        Ok(())
     }
 }
 
@@ -755,6 +855,13 @@ const BITVECTOR_SEMANTICS_V2: &str = r#"
             }
         }
     }
+"#;
+
+const IEEE_CONGRUENCE_DECLARATION_V2: &str = r#"
+    // This symbol models congruence of identical compiler-side operator DAG
+    // applications only. It grants no IEEE real-value, lowering, or target
+    // instruction semantics.
+    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
 "#;
 
 fn render_bitvector_expression_v2(

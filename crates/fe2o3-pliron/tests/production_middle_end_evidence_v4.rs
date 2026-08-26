@@ -1958,7 +1958,6 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
         ParallelScheduleRelationV1::PointwiseBijection,
         ParallelNumericalPolicyV1::ExactBitVector,
         COMPLETE_GPU_HIERARCHY_V1.to_vec(),
-        vec![],
         proof_digest(92),
     )
     .unwrap();
@@ -1966,7 +1965,6 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
         contract.canonical_sha256(),
         derived.output_product_identity(),
         vec![wrong],
-        vec![],
     )
     .unwrap();
     let error =
@@ -2137,7 +2135,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
         parallel.semantic_contract_identity(),
         parallel.output_product_identity(),
         vec![parallel.relations()[0].clone()],
-        vec![],
     )
     .unwrap();
     assert!(matches!(
@@ -2163,7 +2160,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             relation.schedule(),
             relation.numerical_policy(),
             relation.hierarchy().to_vec(),
-            relation.call_summaries().to_vec(),
             authenticated_proof,
         )
         .unwrap()
@@ -2178,7 +2174,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             parallel.semantic_contract_identity(),
             parallel.output_product_identity(),
             vec![parallel.relations()[0].clone(), duplicate_view],
-            vec![],
         ),
         Err(fe2o3_functional_proof::ParallelReferenceContractErrorV1::DuplicateIdentity)
     );
@@ -2198,7 +2193,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
                 parallel.relations()[0].authenticated_proof(),
             ),
         ],
-        vec![],
     )
     .unwrap();
     assert!(matches!(
@@ -2221,7 +2215,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             relation.schedule(),
             relation.numerical_policy(),
             relation.hierarchy().to_vec(),
-            relation.call_summaries().to_vec(),
             relation.authenticated_proof(),
         )
         .unwrap()
@@ -2241,7 +2234,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
                 parallel.relations()[0].frame_identity(),
             ),
         ],
-        vec![],
     )
     .unwrap();
     assert_eq!(
@@ -2263,7 +2255,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
         parallel.semantic_contract_identity(),
         proof_digest(99),
         parallel.relations().to_vec(),
-        vec![],
     )
     .unwrap();
     assert_eq!(
@@ -2281,7 +2272,6 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
         parallel.semantic_contract_identity(),
         parallel.output_product_identity(),
         parallel.relations().iter().rev().cloned().collect(),
-        vec![],
     )
     .unwrap();
     assert_eq!(
