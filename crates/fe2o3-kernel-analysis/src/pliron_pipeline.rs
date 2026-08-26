@@ -727,11 +727,13 @@ mod tests {
                 execution_layout: 1,
                 exact_trace: 1,
                 tensor_layout_dataflow: 1,
+                memory_order: 0,
+                simt_protocol: 1,
             }
         );
         assert_eq!(
             analyses.cached_entries(),
-            super::super::pliron_analysis_manager::MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1
+            super::super::pliron_analysis_manager::MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1 - 1
         );
     }
 

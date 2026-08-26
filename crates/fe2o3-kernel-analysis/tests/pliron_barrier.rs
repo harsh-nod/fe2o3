@@ -4,12 +4,13 @@ use dialect_gpu::{
 };
 use dialect_kernel::{
     BranchOp, DIALECT_NAME, IndexConstantOp, IndexLessThanBranchOp, InvocationIndexOp, ReturnOp,
-    TrapOp, register_dialect,
+    TensorConvergenceAttr, TensorLayoutOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, PlironBarrierFindingV1,
+    KernelCheckPassKindV1, PlironBarrierFindingV1, PlironSimtProtocolIssueV1,
     require_pliron_barrier_convergence_before_lowering_v1, run_pliron_barrier_convergence_check_v1,
 };
+use fe2o3_kernel_ir::TensorLayoutContractV1;
 use pliron::{
     basic_block::BasicBlock,
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp, types::FunctionType},
@@ -488,4 +489,117 @@ fn partial_workgroups_are_rejected_per_axis_not_by_linear_volume() {
             ));
         }
     }
+}
+
+#[test]
+fn uniform_two_phase_tensor_protocol_is_derived_from_all_lane_paths() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "uniform_tensor_protocol", 64, 64);
+    let entry = function.get_entry_block(context);
+    let first = TensorLayoutOp::new(
+        context,
+        &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+    );
+    let second = TensorLayoutOp::new(
+        context,
+        &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &ret);
+
+    assert!(run_pliron_barrier_convergence_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn tensor_active_lane_claim_cannot_certify_the_executed_mask() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "false_tensor_mask_claim", 64, 64);
+    let entry = function.get_entry_block(context);
+    let tensor = TensorLayoutOp::new(
+        context,
+        &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        TensorConvergenceAttr::UniformSubgroup,
+        32,
+    );
+    let ret = ReturnOp::new(context);
+    append(context, entry, &tensor);
+    append(context, entry, &ret);
+
+    let report = run_pliron_barrier_convergence_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironBarrierFindingV1::SimtProtocolViolation { issue }]
+            if matches!(
+                issue.as_ref(),
+                PlironSimtProtocolIssueV1::ClaimedActiveMaskMismatch {
+                    claimed_active_lanes: 32,
+                    actual_active_lanes: 64,
+                    ..
+                }
+            )
+    ));
+    assert!(
+        report.findings()[0]
+            .to_string()
+            .contains("FE2O3-PROTOCOL-003")
+    );
+}
+
+#[test]
+fn lanes_executing_different_tensor_sites_report_a_phase_counterexample() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "tensor_phase_mismatch", 64, 64);
+    let entry = function.get_entry_block(context);
+    let left = block(context, &function, "left_tensor");
+    let right = block(context, &function, "right_tensor");
+    let exit = block(context, &function, "exit");
+    let invocation = InvocationIndexOp::new(context, 0, 64);
+    let cutoff = IndexConstantOp::new(context, 32);
+    let choose = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        cutoff.result(context),
+        left,
+        right,
+    );
+    let left_tensor = TensorLayoutOp::new(
+        context,
+        &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+    );
+    let right_tensor = TensorLayoutOp::new(
+        context,
+        &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+    );
+    let left_exit = BranchOp::new(context, exit);
+    let right_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &invocation);
+    append(context, entry, &cutoff);
+    append(context, entry, &choose);
+    append(context, left, &left_tensor);
+    append(context, left, &left_exit);
+    append(context, right, &right_tensor);
+    append(context, right, &right_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_barrier_convergence_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironBarrierFindingV1::SimtProtocolViolation { issue }]
+            if matches!(issue.as_ref(), PlironSimtProtocolIssueV1::PhaseMismatch { .. })
+    ));
+    let diagnostic = report.findings()[0].to_string();
+    assert!(diagnostic.contains("FE2O3-PROTOCOL-001"));
+    assert!(diagnostic.contains("block 1 op 0"));
+    assert!(diagnostic.contains("block 2 op 0"));
 }

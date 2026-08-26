@@ -416,6 +416,48 @@ fn unknown_lds_alias_views_without_relative_offsets_fail_closed() {
 }
 
 #[test]
+fn alias_class_with_incompatible_ranked_signatures_fails_closed() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "incompatible_alias_signatures", 2, 2);
+    let entry = function.get_entry_block(context);
+    let narrow = view_with_contract(context, vec![4], 901, 71);
+    let wide = view_with_contract(context, vec![8], 901, 71);
+    let zero = IndexConstantOp::new(context, 0);
+    let first = access(
+        context,
+        AccessKindAttr::Write,
+        &narrow,
+        zero.result(context),
+    );
+    let second = access(context, AccessKindAttr::Write, &wide, zero.result(context));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &narrow);
+    append(context, entry, &wide);
+    append(context, entry, &zero);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &ret);
+
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("incompatible element widths or rank/shapes")
+    ));
+}
+
+#[test]
+fn distinct_writable_origins_in_one_alias_class_never_share_versions() {
+    let report = cross_view_lds_alias_report(911, 81, 912, 81);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("distinct allocation origins")
+                && detail.contains("relative base offsets")
+    ));
+}
+
+#[test]
 fn workgroup_barrier_starts_a_new_race_epoch() {
     let context = &mut setup();
     let function = function(context, "reuse_epoch");

@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt};
 use dialect_gpu::{AddressSpaceAttr, BarrierOp, ExecutionDomainAttr, HierarchyAttr};
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp, TrapOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, ReturnOp, TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -20,6 +20,7 @@ use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1, PlironTraceLocationV1,
 };
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
+use crate::pliron_simt_protocol::{PlironProtocolEventV1, PlironSimtProtocolIssueV1};
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,10 +39,13 @@ pub enum PlironBarrierFindingV1 {
         first_trace: Vec<(usize, usize)>,
         second_trace: Vec<(usize, usize)>,
     },
+    SimtProtocolViolation {
+        issue: Box<PlironSimtProtocolIssueV1>,
+    },
 }
 
 impl PlironBarrierFindingV1 {
-    pub const fn status(&self) -> KernelCheckStatusV1 {
+    pub fn status(&self) -> KernelCheckStatusV1 {
         match self {
             Self::DivergentBarrierTrace { .. } | Self::DivergentBarrierPaths { .. } => {
                 KernelCheckStatusV1::Rejected
@@ -49,6 +53,14 @@ impl PlironBarrierFindingV1 {
             Self::BoundsPrerequisiteRejected | Self::AnalysisIncomplete { .. } => {
                 KernelCheckStatusV1::Incomplete
             }
+            Self::SimtProtocolViolation { issue } => match issue.as_ref() {
+                PlironSimtProtocolIssueV1::ResourceLimitExceeded => KernelCheckStatusV1::Incomplete,
+                PlironSimtProtocolIssueV1::PhaseMismatch { .. }
+                | PlironSimtProtocolIssueV1::PartialTensorParticipation { .. }
+                | PlironSimtProtocolIssueV1::ClaimedActiveMaskMismatch { .. } => {
+                    KernelCheckStatusV1::Rejected
+                }
+            },
         }
     }
 }
@@ -83,6 +95,7 @@ impl fmt::Display for PlironBarrierFindingV1 {
                 describe_trace(first_trace),
                 describe_trace(second_trace),
             ),
+            Self::SimtProtocolViolation { issue } => format_protocol_issue(formatter, issue),
         }
     }
 }
@@ -164,21 +177,34 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironBarrierReportV1 {
-    if !function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .any(|block| {
-            block.deref(context).iter(context).any(|operation| {
-                Operation::get_op_dyn(operation, context)
-                    .downcast_ref::<BarrierOp>()
-                    .is_some()
-            })
-        })
-    {
+    let mut has_barrier = false;
+    let mut has_tensor = false;
+    for block in function.get_region(context).deref(context).iter(context) {
+        for operation in block.deref(context).iter(context) {
+            let operation = Operation::get_op_dyn(operation, context);
+            has_barrier |= operation.downcast_ref::<BarrierOp>().is_some();
+            has_tensor |= operation.downcast_ref::<TensorLayoutOp>().is_some();
+        }
+    }
+    if !has_barrier && !has_tensor {
         return PlironBarrierReportV1 { findings: vec![] };
     }
-    analyses.prepare_exact_trace(context, function);
+    analyses.prepare_simt_protocol(context, function);
+    if let Ok(protocol) = analyses.simt_protocol()
+        && let Some(issue) = protocol.issues().first()
+    {
+        return report(PlironBarrierFindingV1::SimtProtocolViolation {
+            issue: Box::new(issue.clone()),
+        });
+    }
+    // The existing all-path barrier proof can still decide some dynamic or
+    // cyclic cases for which exact active-mask tracing is unavailable.
+    if !has_barrier {
+        // Tensor-layout analysis retains the static convergence proof when an
+        // exact active-mask trace is unavailable. This stage only adds a
+        // counterexample when the exact SIMT trace succeeds.
+        return PlironBarrierReportV1 { findings: vec![] };
+    }
     let trace_failure = match analyses.exact_trace() {
         Ok(traces) => {
             if traces.is_empty() {
@@ -186,8 +212,8 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
                     detail: "the launch domain is empty".to_owned(),
                 });
             }
-            if let Some(finding) = divergent_scope_trace(&traces, HierarchyAttr::Workgroup)
-                .or_else(|| divergent_scope_trace(&traces, HierarchyAttr::Subgroup))
+            if let Some(finding) = divergent_scope_trace(traces, HierarchyAttr::Workgroup)
+                .or_else(|| divergent_scope_trace(traces, HierarchyAttr::Subgroup))
             {
                 return report(finding);
             }
@@ -235,6 +261,72 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
                 ),
             })
         }
+    }
+}
+
+fn describe_protocol_sequence(sequence: &[PlironProtocolEventV1]) -> String {
+    if sequence.is_empty() {
+        return "no collective events".to_owned();
+    }
+    sequence
+        .iter()
+        .map(|event| {
+            format!(
+                "{:?}@block {} op {}",
+                event.kind(),
+                event.location().block(),
+                event.location().operation(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ")
+}
+
+fn format_protocol_issue(
+    formatter: &mut fmt::Formatter<'_>,
+    issue: &PlironSimtProtocolIssueV1,
+) -> fmt::Result {
+    match issue {
+        PlironSimtProtocolIssueV1::PhaseMismatch {
+            grid,
+            workgroup,
+            subgroup,
+            first_invocation,
+            first,
+            second_invocation,
+            second,
+        } => write!(
+            formatter,
+            "error[FE2O3-PROTOCOL-001]: collective phase mismatch in grid {grid} workgroup {workgroup} subgroup {subgroup}; invocation {first_invocation:?} executes {}, while invocation {second_invocation:?} executes {}; failed proof: all active lanes must execute the same tensor/barrier protocol in the same order; help: reconverge control flow before the collective and keep collective phases in one uniform sequence",
+            describe_protocol_sequence(first),
+            describe_protocol_sequence(second),
+        ),
+        PlironSimtProtocolIssueV1::PartialTensorParticipation {
+            grid,
+            workgroup,
+            subgroup,
+            location,
+            expected_lanes,
+            actual_lanes,
+        } => write!(
+            formatter,
+            "error[FE2O3-PROTOCOL-002]: tensor collective at block {} op {} in grid {grid} workgroup {workgroup} subgroup {subgroup} requires {expected_lanes} active lanes, but the actual CFG paths reach it with lanes {actual_lanes:?}; failed proof: the physical subgroup participates as one active mask; help: move the tensor instruction after subgroup reconvergence and predicate its inputs instead of the collective",
+            location.block(),
+            location.operation(),
+        ),
+        PlironSimtProtocolIssueV1::ClaimedActiveMaskMismatch {
+            location,
+            claimed_active_lanes,
+            actual_active_lanes,
+        } => write!(
+            formatter,
+            "error[FE2O3-PROTOCOL-003]: tensor collective at block {} op {} claims {claimed_active_lanes} active lanes, but CFG-derived execution has {actual_active_lanes}; failed proof: retained participation metadata matches the executed active mask; help: derive the tensor site after reconvergence and regenerate its compiler-owned participation metadata",
+            location.block(),
+            location.operation(),
+        ),
+        PlironSimtProtocolIssueV1::ResourceLimitExceeded => formatter.write_str(
+            "error[FE2O3-PROTOCOL-004]: SIMT protocol analysis exceeded its bounded issue limit",
+        ),
     }
 }
 
@@ -492,6 +584,7 @@ fn barrier_trace(
                 location,
                 execution_scope,
                 address_space,
+                ..
             } if *execution_scope == scope => Some((*location, *address_space)),
             PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
