@@ -294,13 +294,13 @@ fn real_worker_path() -> &'static Path {
             let output = directory.join("fe2o3-broker-durable-host-link-worker");
             let source = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../fe2o3-host-link-closure/tests/fixtures/host_link_worker.c");
-            let result = Command::new("cc")
+            let mut command = Command::new("cc");
+            command
                 .args(["-std=c11", "-O2", "-static", "-Wall", "-Wextra", "-Werror"])
                 .arg(&source)
                 .arg("-o")
-                .arg(&output)
-                .output()
-                .unwrap();
+                .arg(&output);
+            let result = crate::test_process_execution::capture_output(&mut command).unwrap();
             assert!(
                 result.status.success(),
                 "failed to compile static host-link worker fixture: {}",
@@ -1965,16 +1965,16 @@ fn sigkill_restart_recovers_from_the_retained_root() {
     let observation_path = ready.with_extension("observation");
     let test_name =
         "durable_session_consume::tests::sigkill_restart_recovers_from_the_retained_root";
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .arg("--exact")
         .arg(test_name)
         .arg("--nocapture")
         .env(CHILD_ENV, "1")
         .env(READY_ENV, &ready)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::null());
+    let mut child = crate::test_process_execution::spawn(&mut command).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while (!ready.exists() || !observation_path.exists()) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));

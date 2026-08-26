@@ -882,13 +882,13 @@ mod tests {
             "unload-executable",
             "unload-reader",
         ] {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
                 .arg("--exact")
                 .arg("lifecycle::tests::ambiguous_executable_cleanup_is_terminal")
                 .arg("--nocapture")
-                .env(CHILD, case)
-                .status()
-                .unwrap();
+                .env(CHILD, case);
+            let status = crate::test_process_execution::status(&mut command).unwrap();
             assert_eq!(status.signal(), Some(6), "cleanup case {case}: {status}");
         }
     }

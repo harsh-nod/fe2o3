@@ -2597,7 +2597,8 @@ fn main() {
             )
             .expect("write invocation peer helper source");
             let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
-            let output = Command::new(rustc)
+            let mut command = Command::new(rustc);
+            command
                 .arg("--crate-name=fe2o3_invocation_peer_fixture")
                 .arg("--edition=2024")
                 .arg("-Copt-level=s")
@@ -2605,8 +2606,8 @@ fn main() {
                 .arg("-Cstrip=symbols")
                 .arg(&source)
                 .arg("-o")
-                .arg(&executable)
-                .output()
+                .arg(&executable);
+            let output = crate::process_execution::capture_output(&mut command)
                 .expect("compile invocation peer helper");
             assert!(
                 output.status.success(),
@@ -2629,12 +2630,13 @@ fn main() {
             listener
                 .set_nonblocking(true)
                 .expect("make invocation peer listener nonblocking");
-            let mut child = Command::new(&executable)
+            let mut command = Command::new(&executable);
+            command
                 .arg(&socket_name)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+                .stderr(Stdio::null());
+            let mut child = crate::process_execution::spawn(&mut command)
                 .expect("spawn invocation peer helper");
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut stream = loop {

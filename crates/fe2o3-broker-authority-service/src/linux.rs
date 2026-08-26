@@ -1559,7 +1559,9 @@ mod tests {
     }
 
     fn sleeping_child() -> Child {
-        Command::new("/bin/sleep").arg("30").spawn().unwrap()
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        crate::test_process_execution::spawn(&mut command).unwrap()
     }
 
     fn terminate_child(child: &mut Child) {
@@ -1896,7 +1898,8 @@ mod tests {
 
     #[test]
     fn already_exited_pidfd_fails_without_reaping_child() {
-        let mut child = Command::new("/bin/true").spawn().unwrap();
+        let mut command = Command::new("/bin/true");
+        let mut child = crate::test_process_execution::spawn(&mut command).unwrap();
         let pidfd = pidfd_for(child.id());
         wait_for_pidfd_exit(&pidfd);
         let error =
@@ -2167,7 +2170,8 @@ mod tests {
         let pidfd_target = fs::read_link(format!("/proc/self/fd/{pidfd}"))
             .unwrap()
             .into_os_string();
-        let status = Command::new("/bin/sh")
+        let mut command = Command::new("/bin/sh");
+        command
             .arg("-c")
             .arg(
                 r#"
@@ -2182,9 +2186,8 @@ pidfd=$(readlink "/proc/self/fd/$PIDFD" 2>/dev/null || :)
             .env("PEER_FD", peer_fd.to_string())
             .env("PEER_TARGET", peer_target)
             .env("PIDFD", pidfd.to_string())
-            .env("PIDFD_TARGET", pidfd_target)
-            .status()
-            .unwrap();
+            .env("PIDFD_TARGET", pidfd_target);
+        let status = crate::test_process_execution::status(&mut command).unwrap();
         assert!(status.success());
     }
 
@@ -2292,7 +2295,8 @@ pidfd=$(readlink "/proc/self/fd/$PIDFD" 2>/dev/null || :)
         let (control, child_control) = seqpacket();
         set_close_on_exec(&child_control, false);
         let child_control_fd = child_control.as_raw_fd();
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("linux::tests::same_uid_live_client_helper")
             .arg("--ignored")
@@ -2300,9 +2304,8 @@ pidfd=$(readlink "/proc/self/fd/$PIDFD" 2>/dev/null || :)
             .env(
                 "FE2O3_BROKER_SAME_UID_CONTROL_FD",
                 child_control_fd.to_string(),
-            )
-            .spawn()
-            .unwrap();
+            );
+        let mut child = crate::test_process_execution::spawn(&mut command).unwrap();
         drop(child_control);
         let retained_peer = receive_descriptor(control.as_raw_fd()).unwrap();
         let expected = process_identity(child.id());
@@ -2323,16 +2326,16 @@ pidfd=$(readlink "/proc/self/fd/$PIDFD" 2>/dev/null || :)
         let (control, child_control) = seqpacket();
         set_close_on_exec(&child_control, false);
         let child_control_fd = child_control.as_raw_fd();
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("linux::tests::same_uid_live_client_helper")
             .arg("--ignored")
             .env(
                 "FE2O3_BROKER_SAME_UID_CONTROL_FD",
                 child_control_fd.to_string(),
-            )
-            .spawn()
-            .unwrap();
+            );
+        let mut child = crate::test_process_execution::spawn(&mut command).unwrap();
         drop(child_control);
         let retained_peer = receive_descriptor(control.as_raw_fd()).unwrap();
         let live_client = live_identity(current_process_identity());
@@ -2385,14 +2388,14 @@ pidfd=$(readlink "/proc/self/fd/$PIDFD" 2>/dev/null || :)
         let (control, child_control) = seqpacket();
         set_close_on_exec(&child_control, false);
         let child_control_fd = child_control.as_raw_fd();
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("linux::tests::privileged_distinct_uid_client_helper")
             .arg("--ignored")
             .arg("--nocapture")
-            .env("FE2O3_BROKER_TEST_CONTROL_FD", child_control_fd.to_string())
-            .spawn()
-            .unwrap();
+            .env("FE2O3_BROKER_TEST_CONTROL_FD", child_control_fd.to_string());
+        let mut child = crate::test_process_execution::spawn(&mut command).unwrap();
         drop(child_control);
         let retained_peer = receive_descriptor(control.as_raw_fd()).unwrap();
         let expected_client =

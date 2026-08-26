@@ -1,3 +1,6 @@
+#[path = "support/process.rs"]
+mod test_process;
+
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
@@ -762,7 +765,8 @@ fn durable_marker_resumes_after_identity_owner_process_is_lost() {
         let successor = begin(&output_dir, &owner, 200);
         assert!(successor.generation() > attempt.generation());
 
-        let child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args([
                 "--exact",
                 "marker_only_retirement_crash_helper",
@@ -772,9 +776,8 @@ fn durable_marker_resumes_after_identity_owner_process_is_lost() {
             .env(RETIREMENT_CRASH_ATTEMPT, attempt.to_env_value())
             .env(RETIREMENT_CRASH_BOUNDARY, "SyncRetiringName")
             .env(RETIREMENT_CRASH_IDENTITY, &identity_path)
-            .env(RETIREMENT_CRASH_PRODUCER_SEED, owner_seed.to_string())
-            .output()
-            .unwrap();
+            .env(RETIREMENT_CRASH_PRODUCER_SEED, owner_seed.to_string());
+        let child = test_process::capture_output(&mut command).unwrap();
         assert_eq!(
             child.status.code(),
             Some(86),
@@ -838,7 +841,8 @@ fn marker_only_resume_cleans_quarantined_attachment_and_terminal_marker() {
             let successor = begin(&output_dir, &owner, 201_u8.wrapping_add(index as u8));
             assert!(successor.generation() > attempt.generation());
 
-            let child = Command::new(std::env::current_exe().unwrap())
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
                 .args([
                     "--exact",
                     "marker_only_retirement_crash_helper",
@@ -848,9 +852,8 @@ fn marker_only_resume_cleans_quarantined_attachment_and_terminal_marker() {
                 .env(RETIREMENT_CRASH_ATTEMPT, attempt.to_env_value())
                 .env(RETIREMENT_CRASH_BOUNDARY, format!("{boundary:?}"))
                 .env(RETIREMENT_CRASH_IDENTITY, &identity_path)
-                .env(RETIREMENT_CRASH_PRODUCER_SEED, owner_seed.to_string())
-                .output()
-                .unwrap();
+                .env(RETIREMENT_CRASH_PRODUCER_SEED, owner_seed.to_string());
+            let child = test_process::capture_output(&mut command).unwrap();
             assert_eq!(
                 child.status.code(),
                 Some(86),

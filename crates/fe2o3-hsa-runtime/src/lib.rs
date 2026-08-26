@@ -13,6 +13,16 @@ mod moe_top2_resource_observation;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod row_softmax_resource_observation;
 mod sys;
+#[cfg(test)]
+mod test_process_execution {
+    use std::io;
+    use std::process::{Command, ExitStatus};
+
+    pub(super) fn status(command: &mut Command) -> io::Result<ExitStatus> {
+        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn())
+            .and_then(|mut child| child.wait())
+    }
+}
 #[cfg(feature = "qualification-oracles-test-only")]
 mod wave64_collectives_resource_observation;
 #[cfg(feature = "qualification-oracles-test-only")]

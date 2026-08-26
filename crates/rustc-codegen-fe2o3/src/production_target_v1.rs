@@ -335,10 +335,9 @@ mod tests {
             "#,
         )
         .unwrap();
-        let sysroot = Command::new("rustc")
-            .args(["--print", "sysroot"])
-            .output()
-            .unwrap();
+        let mut command = Command::new("rustc");
+        command.args(["--print", "sysroot"]);
+        let sysroot = crate::process_execution::capture_output(&mut command).unwrap();
         assert!(sysroot.status.success());
         let args = vec![
             "rustc".to_owned(),

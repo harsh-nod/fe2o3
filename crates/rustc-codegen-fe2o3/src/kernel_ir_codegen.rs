@@ -4387,9 +4387,9 @@ mod tests {
             return;
         };
         require_row_softmax_layout_probe(release_gate, true);
-        let output = std::process::Command::new(&probe)
-            .output()
-            .unwrap_or_else(|error| {
+        let mut command = std::process::Command::new(&probe);
+        let output =
+            crate::process_execution::capture_output(&mut command).unwrap_or_else(|error| {
                 panic!("execute configured upstream LLVM layout probe: {error}")
             });
         assert!(

@@ -3600,9 +3600,9 @@ pub extern "C" fn k() {}
 
     fn captures() -> CaptureCallbacks {
         let fixture = FixtureFiles::create();
-        let sysroot = Command::new("rustc")
-            .args(["--print", "sysroot"])
-            .output()
+        let mut command = Command::new("rustc");
+        command.args(["--print", "sysroot"]);
+        let sysroot = crate::process_execution::capture_output(&mut command)
             .expect("query pinned rustc sysroot");
         assert!(sysroot.status.success());
         let sysroot = String::from_utf8(sysroot.stdout).unwrap();
@@ -3629,9 +3629,9 @@ pub extern "C" fn k() {}
 
     fn amdgcn_target_profile(case: &str, codegen_args: &[&str]) -> SemanticLayoutTargetV1 {
         let fixture = AmdgcnProbeFiles::create(case);
-        let sysroot = Command::new("rustc")
-            .args(["--print", "sysroot"])
-            .output()
+        let mut command = Command::new("rustc");
+        command.args(["--print", "sysroot"]);
+        let sysroot = crate::process_execution::capture_output(&mut command)
             .expect("query pinned rustc sysroot");
         assert!(sysroot.status.success());
         let sysroot = String::from_utf8(sysroot.stdout).unwrap();
@@ -4309,7 +4309,8 @@ typedef struct { float narrow; double wide; unsigned long long integer; } Wide;
 __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
 "#;
         for clang in ["/opt/rocm/llvm/bin/clang", "/usr/bin/clang-18"] {
-            let mut child = Command::new(clang)
+            let mut command = Command::new(clang);
+            command
                 .args([
                     "-x",
                     "c",
@@ -4323,8 +4324,8 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
                 ])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
+                .stderr(Stdio::piped());
+            let mut child = crate::process_execution::spawn(&mut command)
                 .unwrap_or_else(|error| panic!("start {clang}: {error}"));
             child
                 .stdin
@@ -4365,7 +4366,8 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
 
         let directory = TestTempDir::create("fe2o3-gfx942-layout-probe");
         let object = directory.path().join("probe.o");
-        let mut child = Command::new("/opt/rocm/llvm/bin/clang")
+        let mut command = Command::new("/opt/rocm/llvm/bin/clang");
+        command
             .args([
                 "-x",
                 "c",
@@ -4379,8 +4381,8 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
             .arg(&object)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut child = crate::process_execution::spawn(&mut command)
             .expect("start ROCm clang code-object probe");
         child
             .stdin
@@ -4394,10 +4396,9 @@ __attribute__((amdgpu_kernel)) void layout_probe(Root *out) { out[0].tail = 7; }
             "{}",
             String::from_utf8_lossy(&compile.stderr)
         );
-        let readelf = Command::new("/opt/rocm/llvm/bin/llvm-readelf")
-            .args(["--file-header", "--notes"])
-            .arg(&object)
-            .output()
+        let mut command = Command::new("/opt/rocm/llvm/bin/llvm-readelf");
+        command.args(["--file-header", "--notes"]).arg(&object);
+        let readelf = crate::process_execution::capture_output(&mut command)
             .expect("inspect gfx942 code object");
         assert!(readelf.status.success());
         let inspection = String::from_utf8(readelf.stdout).unwrap();

@@ -1,3 +1,6 @@
+#[path = "support/process.rs"]
+mod test_process;
+
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, CanonicalLinkRequestIdentityV1,
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
@@ -1159,14 +1162,14 @@ fn recursive_current_token_child() {
 
 #[test]
 fn recursive_current_token_returns_busy_before_timeout() {
-    let child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", "recursive_current_token_child"])
         .env("FE2O3_RECURSIVE_CURRENT_TOKEN_CHILD", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::null());
+    let child = test_process::spawn(&mut command).unwrap();
     assert!(wait_for_child(child, Duration::from_secs(5)).success());
 }
 
@@ -1253,16 +1256,16 @@ fn process_current_token_contention_returns_busy() {
     let lease = publish(&output, plan(1, 0x7e, 0xde, bytes), bytes)
         .unwrap()
         .into_current_lease();
-    let child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", "process_current_token_contender_child"])
         .env("FE2O3_PROCESS_CONTENDER_OUTPUT", &output)
         .env("FE2O3_PROCESS_CONTENDER_READY", &ready)
         .env("FE2O3_PROCESS_CONTENDER_GO", &go)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::null());
+    let child = test_process::spawn(&mut command).unwrap();
     wait_for_path(&ready, Duration::from_secs(5));
     let current = acquire_current_token_after_fork_handoff(&lease);
     fs::write(&go, b"go").unwrap();

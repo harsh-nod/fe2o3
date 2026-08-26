@@ -7271,10 +7271,10 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
     }
 
     fn rustc_sysroot() -> String {
-        let output = Command::new("rustc")
-            .args(["--print", "sysroot"])
-            .output()
-            .expect("query rustc sysroot");
+        let mut command = Command::new("rustc");
+        command.args(["--print", "sysroot"]);
+        let output =
+            crate::process_execution::capture_output(&mut command).expect("query rustc sysroot");
         assert!(output.status.success());
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
