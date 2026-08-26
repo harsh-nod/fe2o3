@@ -150,19 +150,24 @@ driver route or persistent-service model.
   `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
   `vecadd-f64` examples load their HSACO files from `FE2O3_HSACO_DIR`, which is
   set by `cargo-fe2o3 build/run`.
-- `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
-  invoking Cargo so device sidecars are regenerated predictably.
-- `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
+- Qualification artifact generation is selected by an explicit closed manifest
+  route. The current `kernel-ir-v1` route covers only `fe2o3-fill`; protected
+  production builds enter through `cargo fe2o3 authority release`.
+- The selector-free manifest-wide `cargo-fe2o3 smoke` command is retired. The
+  checked-in manifest remains source inventory, host-check policy, and bounded
+  artifact-qualification policy rather than a claim that every example has a
+  production code-generation route.
 - Generated HSACO files are validated with `llvm-readobj --notes` when available
   to confirm AMDGPU format, target metadata, and kernel name metadata.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
   variable is not set.
-- End-to-end `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`,
+- At the earlier elementwise-backend checkpoint, end-to-end `vecadd`,
+  `add-inplace`, `copy`, `downsample`, `fill`,
   `gather-odd`, `scale`, `shift`, `previous`, `stencil`, `saxpy`,
   `raw-add-index`, `raw-const-minus`, `raw-parenthesized-sub`,
   `raw-disjoint-inplace-shift`, `raw-disjoint-shift`, `raw-gather`,
   `raw-neighbors`, `raw-output-shift`, `axpy-inplace`, `negate`, `normalize`,
-  `pipeline`, and `vecadd-f64` have run successfully on `gfx1201` using TheRock
+  `pipeline`, and `vecadd-f64` ran successfully on `gfx1201` using TheRock
   ROCm `7.13.0a20260509`.
 
 ## Remaining Compiler Milestones

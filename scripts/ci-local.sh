@@ -71,6 +71,9 @@ readonly -a ROCM_QUALIFICATION_TEST_PACKAGES=(
   fe2o3-host
   fe2o3-pliron-scalar-add-v1
 )
+readonly -a ROCM_ARTIFACT_QUALIFICATION_ROUTES=(
+  kernel-ir-v1
+)
 readonly CPU_TEST_PACKAGES=(
   dialect-amdgcn
   dialect-autotune
@@ -152,8 +155,8 @@ Commands:
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
   verus           Run positive and negative Verus proof fixtures; requires Verus
-  rocm-compile    Compile every example to host code and HSACO; requires ROCm
-  hardware-smoke  Build and run every example; requires an AMD GPU and opt-in
+  rocm-compile    Run bounded ROCm artifact qualification; requires ROCm
+  hardware-smoke  Run guarded hardware checks; requires an AMD GPU and opt-in
   s09-debug-hardware  Run exact gfx942 direct-link and ROCgdb evidence; explicit opt-in
 EOF
 }
@@ -1021,16 +1024,45 @@ run_generic() {
 }
 
 run_rocm_compile() {
+  # Qualification never consumes a production Worker V2 configuration. Clear
+  # it before preparing or executing any child in this lane.
+  unset FE2O3_WORKER_V2_CONFIG_V2
   export FE2O3_TARGET="${FE2O3_TARGET:-gfx1100}"
-  local -a example_packages loader_environment_removals
-  local package
+  local -a example_packages loader_environment_removals route_packages
+  local -a routed_example_packages=()
+  local -A qualification_oracles=()
+  local -A route_package_lists=()
+  local package qualification_oracle route
 
   prepare_cargo_fe2o3_driver rocm qualification
   prepare_cargo_fe2o3_qualification_target
   load_dynamic_loader_environment_removals loader_environment_removals
   validate_cargo_fe2o3_driver
   load_example_packages \
-    rocm-compile example_packages "${CARGO_FE2O3_BINARY}"
+    artifact-qualification example_packages "${CARGO_FE2O3_BINARY}"
+  for route in "${ROCM_ARTIFACT_QUALIFICATION_ROUTES[@]}"; do
+    case "${route}" in
+      kernel-ir-v1) qualification_oracle=kernel-ir-v1 ;;
+      *)
+        printf 'unsupported ROCm artifact qualification route: %s\n' \
+          "${route}" >&2
+        return 2
+        ;;
+    esac
+    load_example_packages \
+      "artifact-${route}" route_packages "${CARGO_FE2O3_BINARY}"
+    qualification_oracles["${route}"]="${qualification_oracle}"
+    route_package_lists["${route}"]="${route_packages[*]}"
+    routed_example_packages+=("${route_packages[@]}")
+  done
+  mapfile -t routed_example_packages < <(
+    printf '%s\n' "${routed_example_packages[@]}" | LC_ALL=C sort -u
+  )
+  if [[ "${example_packages[*]}" != "${routed_example_packages[*]}" ]]; then
+    printf '%s\n' \
+      'ROCm artifact qualification routes do not exactly cover the manifest projection' >&2
+    return 2
+  fi
   validate_managed_wrapper_source_namespaces \
     "${example_packages[@]}" \
     "${ROCM_TRUSTED_DEVICE_ITEM_PACKAGES[@]}"
@@ -1097,23 +1129,27 @@ run_rocm_compile() {
       opt_in_vecadd_publishes_exact_g1_without_gpu -- \
       --ignored --exact
 
-  local package
-  for package in "${example_packages[@]}"; do
-    # cargo-fe2o3 rotates its device-artifact generation when codegen
-    # semantics change. Rebuild each example so Cargo cannot reuse a host
-    # package fingerprint that predates the new generation.
-    run_step "rocm-clean-${package}" \
-      cargo clean -p "${package}"
-    validate_cargo_fe2o3_driver
-    run_step "rocm-build-${package}" \
-      env "${loader_environment_removals[@]}" \
-        "${CARGO_FE2O3_BINARY}" build -p "${package}"
-    validate_cargo_fe2o3_driver
-    run_step "rocm-artifacts-${package}" \
-      env "${loader_environment_removals[@]}" \
-        "${CARGO_FE2O3_BINARY}" \
-        examples check-artifacts "${package}" \
-        "${CARGO_TARGET_DIRECTORY}/fe2o3"
+  for route in "${ROCM_ARTIFACT_QUALIFICATION_ROUTES[@]}"; do
+    qualification_oracle="${qualification_oracles[${route}]}"
+    IFS=' ' read -r -a route_packages <<<"${route_package_lists[${route}]}"
+    for package in "${route_packages[@]}"; do
+      # The generation is route-bound, but Cargo's host fingerprint is not.
+      # Force the selected package through the closed qualification route.
+      run_step "rocm-clean-${route}-${package}" \
+        cargo clean -p "${package}"
+      validate_cargo_fe2o3_driver
+      run_step "rocm-build-${route}-${package}" \
+        env "${loader_environment_removals[@]}" \
+          -u FE2O3_WORKER_V2_CONFIG_V2 \
+          FE2O3_QUALIFICATION_ORACLE_V1="${qualification_oracle}" \
+          "${CARGO_FE2O3_BINARY}" build -p "${package}"
+      validate_cargo_fe2o3_driver
+      run_step "rocm-artifacts-${route}-${package}" \
+        env "${loader_environment_removals[@]}" \
+          "${CARGO_FE2O3_BINARY}" \
+          examples check-artifacts "${package}" \
+          "${CARGO_TARGET_DIRECTORY}/fe2o3"
+    done
   done
 }
 
@@ -1220,9 +1256,6 @@ run_hardware_smoke() {
       opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- \
       --ignored --exact
   validate_cargo_fe2o3_driver
-  run_step hardware-smoke \
-    env "${loader_environment_removals[@]}" \
-      "${CARGO_FE2O3_BINARY}" smoke
   local test_wavefront
   test_wavefront="$(wavefront_for_target "${FE2O3_TARGET}")"
   run_step hardware-hsaco-inspection env \

@@ -13,17 +13,18 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
-The generic lane validates `examples/regression-manifest-v1.txt` against Cargo
+The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest
-is the authoritative package selection for ordinary Rust checks, ROCm
-compilation, and GPU smoke. `verus-vecadd` remains ordinary-rustc-only and is
-never selected for ROCm compilation or GPU execution.
+separates source-artifact inventory from explicit qualification authority. It
+does not select production or GPU execution. `verus-vecadd` remains
+ordinary-rustc-only and has no artifact qualification route.
 
 CPU example tests are the exact manifest subset with `rustc_check=true` and
-`rocm_compile=false`. The `cpu-test-raw` and `cpu-test-wrapper-managed` queries
-partition that subset using the structural source projection: ordinary packages
-run with raw Cargo, while every package containing a namespace-free typed
-kernel runs through the feature-free binding wrapper using exactly:
+`artifact_qualification=none`. The `cpu-test-raw` and
+`cpu-test-wrapper-managed` queries partition that subset using the structural
+source projection: ordinary packages run with raw Cargo, while every package
+containing a namespace-free typed kernel runs through the feature-free binding
+wrapper using exactly:
 
 ```text
 cargo fe2o3 test --locked --all-targets -p <wrapper-managed-package>
@@ -628,7 +629,7 @@ HSACO, HIP, or GPU execution refines that model.
 
 ## ROCm compile coverage
 
-Set an explicit LLVM target and compile every supported example:
+Set an explicit LLVM target and run the bounded artifact-qualification gates:
 
 ```text
 FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
@@ -657,9 +658,11 @@ The lane also compiles and inspects the hardened G1 fill code object, compiles
 the real three-slice vecadd through `kernel-ir-v1`, validates its exact ABI and
 bounds-control-flow LLVM shape, and checks that invalid selectors or
 unsupported inputs fail without fallback and remove stale artifacts.
-After each example build, the lane requires every artifact declared by the
-manifest. The pipeline example declares both `scale_stage.hsaco` and
-`bias_stage.hsaco`.
+The route-aware manifest then compiles only entries selected for an exact
+qualification oracle; currently that projection is exactly `fe2o3-fill` on
+`kernel-ir-v1`. Other source-referenced HSACO names remain structurally checked
+inventory, not current compilation promises. Selector-free builds are protected
+production requests and are never substituted for qualification.
 
 ## Hardware smoke
 
@@ -679,14 +682,15 @@ FE2O3_TARGET=gfx1151 \
 scripts/ci-local.sh hardware-smoke
 ```
 
-The smoke suite builds and runs all supported examples. Each example copies its
-result back to the host and checks it against a CPU-computed expected value. It
-also runs both `fe2o3-fill` and `fe2o3-vecadd` through a backend built with
+The hardware lane no longer invokes the retired manifest-wide smoke runner.
+It runs focused hardware tests, including both `fe2o3-fill` and `fe2o3-vecadd`
+through a backend built with
 `qualification-oracles-test-only` and selected by
 `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1`, so the integrated verified-IR paths are
 exercised as explicit qualification routes independently of the sole
 production transaction. Generated HSACO inspection uses a strict
-qualification-specific metadata profile.
+qualification-specific metadata profile. This legacy lane is not direct-KFD
+dispatch evidence and does not authorize a new runtime dependency.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated

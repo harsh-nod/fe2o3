@@ -57,8 +57,10 @@ publication action, worker, or GPU authority; it is not compiler qualification
 or artifact production.
 
 Generic CPU testing partitions the manifest entries with `rustc_check=true` and
-`rocm_compile=false` by that same structural projection. Ordinary entries use
-raw Cargo. Managed entries use the feature-free
+`artifact_qualification=none` by that same structural projection. Artifact
+qualification is a separate, closed route classification and does not erase
+the source-artifact inventory. Ordinary entries use raw Cargo. Managed entries
+use the feature-free
 `cargo fe2o3 test --locked --all-targets -p <package>` path; `--all-targets` is
 required, while caller `--target`, `--config`, Cargo-side `-Z`, `--doc`,
 `--no-run`, and ambient compiler, rustdoc, protected fe2o3, and runner selections

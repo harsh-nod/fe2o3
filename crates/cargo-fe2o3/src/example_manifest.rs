@@ -14,9 +14,9 @@ use syn::parse::Parser;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, ExprMethodCall, ItemFn, Lit, Meta, Token, punctuated::Punctuated};
 
-const MANIFEST_PATH: &str = "examples/regression-manifest-v1.txt";
-const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v1";
-const MANIFEST_COLUMNS: &str = "package|rustc_check|rocm_compile|gpu_smoke|artifacts";
+const MANIFEST_PATH: &str = "examples/regression-manifest-v2.txt";
+const MANIFEST_VERSION: &str = "fe2o3-example-regressions-v2";
+const MANIFEST_COLUMNS: &str = "package|rustc_check|artifact_qualification|source_artifacts";
 const MAX_PACKAGE_SOURCE_DEPTH: usize = 64;
 const MAX_PACKAGE_SOURCE_ENTRIES: usize = 65_536;
 const MAX_PACKAGE_SOURCE_FILES: usize = 16_384;
@@ -39,8 +39,8 @@ const MAX_CARGO_METADATA_STDERR_BYTES: usize = 1024 * 1024;
 enum Lane {
     All,
     RustcCheck,
-    RocmCompile,
-    GpuSmoke,
+    ArtifactQualification,
+    KernelIrV1,
 }
 
 impl Lane {
@@ -48,12 +48,34 @@ impl Lane {
         match value {
             "all" => Ok(Self::All),
             "rustc-check" => Ok(Self::RustcCheck),
-            "rocm-compile" => Ok(Self::RocmCompile),
-            "gpu-smoke" => Ok(Self::GpuSmoke),
+            "artifact-qualification" => Ok(Self::ArtifactQualification),
+            "artifact-kernel-ir-v1" => Ok(Self::KernelIrV1),
             _ => Err(format!(
-                "unknown example lane `{value}`; expected all, rustc-check, rocm-compile, or gpu-smoke"
+                "unknown example lane `{value}`; expected all, rustc-check, artifact-qualification, or artifact-kernel-ir-v1"
             )),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArtifactQualification {
+    None,
+    KernelIrV1,
+}
+
+impl ArtifactQualification {
+    fn parse(value: &str, line: usize) -> Result<Self, String> {
+        match value {
+            "none" => Ok(Self::None),
+            "kernel-ir-v1" => Ok(Self::KernelIrV1),
+            _ => Err(format!(
+                "line {line}: artifact_qualification must be exactly `none` or `kernel-ir-v1`"
+            )),
+        }
+    }
+
+    const fn produces_artifacts(self) -> bool {
+        !matches!(self, Self::None)
     }
 }
 
@@ -61,8 +83,7 @@ impl Lane {
 struct Entry {
     package: String,
     rustc_check: bool,
-    rocm_compile: bool,
-    gpu_smoke: bool,
+    artifact_qualification: ArtifactQualification,
     artifacts: Vec<String>,
 }
 
@@ -71,8 +92,8 @@ impl Entry {
         match lane {
             Lane::All => true,
             Lane::RustcCheck => self.rustc_check,
-            Lane::RocmCompile => self.rocm_compile,
-            Lane::GpuSmoke => self.gpu_smoke,
+            Lane::ArtifactQualification => self.artifact_qualification.produces_artifacts(),
+            Lane::KernelIrV1 => self.artifact_qualification == ArtifactQualification::KernelIrV1,
         }
     }
 }
@@ -117,16 +138,6 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-pub(crate) fn gpu_smoke_packages(workspace_root: &Path) -> Result<Vec<String>, String> {
-    let manifest = load(workspace_root)?;
-    Ok(manifest
-        .entries
-        .iter()
-        .filter(|entry| entry.gpu_smoke)
-        .map(|entry| entry.package.clone())
-        .collect())
 }
 
 fn command_result(args: &[String]) -> Result<Vec<String>, String> {
@@ -258,9 +269,9 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
                 .iter()
                 .find(|entry| entry.package == *package)
                 .ok_or_else(|| format!("package `{package}` is not in {MANIFEST_PATH}"))?;
-            if !entry.rocm_compile {
+            if !entry.artifact_qualification.produces_artifacts() {
                 return Err(format!(
-                    "package `{package}` does not participate in ROCm compilation"
+                    "package `{package}` has no artifact qualification route"
                 ));
             }
 
@@ -359,7 +370,7 @@ fn command_result(args: &[String]) -> Result<Vec<String>, String> {
             )])
         }
         _ => Err(
-            "usage: cargo fe2o3 examples <check|list <all|rustc-check|rocm-compile|gpu-smoke|wrapper-managed|cpu-test-raw|cpu-test-wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-cpu-test-partition <raw-package>... -- <wrapper-managed-package>...|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
+            "usage: cargo fe2o3 examples <check|list <all|rustc-check|artifact-qualification|artifact-kernel-ir-v1|wrapper-managed|cpu-test-raw|cpu-test-wrapper-managed>|check-artifacts <package> <absolute-artifact-directory>|check-cpu-test-partition <raw-package>... -- <wrapper-managed-package>...|check-wrapper-managed <package>...|check-wrapper-namespaces <package>...>"
                 .to_string(),
         ),
     }
@@ -392,7 +403,7 @@ fn cpu_test_partitions(
     let eligible = manifest
         .entries
         .iter()
-        .filter(|entry| entry.rustc_check && !entry.rocm_compile)
+        .filter(|entry| entry.rustc_check && !entry.artifact_qualification.produces_artifacts())
         .map(|entry| entry.package.as_str())
         .collect::<BTreeSet<_>>();
     let raw = eligible
@@ -475,16 +486,10 @@ fn parse(contents: &str) -> Result<Manifest, String> {
             return Err(format!("line {line_number}: blank lines are not permitted"));
         }
         let fields = line.split('|').collect::<Vec<_>>();
-        let [
-            package,
-            rustc_check,
-            rocm_compile,
-            gpu_smoke,
-            artifact_field,
-        ] = fields.as_slice()
+        let [package, rustc_check, artifact_qualification, artifact_field] = fields.as_slice()
         else {
             return Err(format!(
-                "line {line_number}: expected exactly five pipe-delimited fields"
+                "line {line_number}: expected exactly four pipe-delimited fields"
             ));
         };
 
@@ -503,8 +508,8 @@ fn parse(contents: &str) -> Result<Manifest, String> {
         previous_package = Some((*package).to_string());
 
         let rustc_check = parse_bool(rustc_check, line_number, "rustc_check")?;
-        let rocm_compile = parse_bool(rocm_compile, line_number, "rocm_compile")?;
-        let gpu_smoke = parse_bool(gpu_smoke, line_number, "gpu_smoke")?;
+        let artifact_qualification =
+            ArtifactQualification::parse(artifact_qualification, line_number)?;
         let entry_artifacts = if *artifact_field == "-" {
             Vec::new()
         } else {
@@ -529,22 +534,16 @@ fn parse(contents: &str) -> Result<Manifest, String> {
             parsed
         };
 
-        if gpu_smoke && !rocm_compile {
+        if artifact_qualification.produces_artifacts() && entry_artifacts.is_empty() {
             return Err(format!(
-                "line {line_number}: gpu_smoke requires rocm_compile"
-            ));
-        }
-        if rocm_compile == entry_artifacts.is_empty() {
-            return Err(format!(
-                "line {line_number}: rocm_compile must have one or more artifacts, and CPU-only entries must use `-`"
+                "line {line_number}: artifact qualification requires one or more source artifacts"
             ));
         }
 
         entries.push(Entry {
             package: package.to_string(),
             rustc_check,
-            rocm_compile,
-            gpu_smoke,
+            artifact_qualification,
             artifacts: entry_artifacts,
         });
     }
@@ -2500,7 +2499,7 @@ fn validate_projection(
 #[cfg(test)]
 mod tests {
     use super::{
-        Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, MAX_PACKAGE_SOURCE_DEPTH,
+        ArtifactQualification, Lane, MANIFEST_COLUMNS, MANIFEST_VERSION, MAX_PACKAGE_SOURCE_DEPTH,
         MAX_PACKAGE_SOURCE_FILE_BYTES, MAX_PACKAGE_SOURCE_MODULE_EDGES,
         MAX_PACKAGE_SOURCE_TOKEN_DEPTH, PackageSourceScanState, SourceObjectSnapshot,
         WorkspaceExample, canonical_contained_path, collect_rust_sources, cpu_test_partitions,
@@ -2578,9 +2577,9 @@ mod tests {
     #[test]
     fn parses_strict_example_manifest_and_lane_projection() {
         let manifest = parse(&example_manifest(
-            "fe2o3-alpha|true|true|false|alpha.hsaco\n\
-             fe2o3-pipeline|true|true|true|bias_stage.hsaco,scale_stage.hsaco\n\
-             verus-vecadd|true|false|false|-\n",
+            "fe2o3-alpha|true|kernel-ir-v1|alpha.hsaco\n\
+             fe2o3-pipeline|true|none|bias_stage.hsaco,scale_stage.hsaco\n\
+             verus-vecadd|true|none|-\n",
         ))
         .expect("valid manifest");
 
@@ -2591,18 +2590,19 @@ mod tests {
         );
         assert!(manifest.entries[0].participates(Lane::RustcCheck));
         assert!(manifest.entries[0].participates(Lane::All));
-        assert!(manifest.entries[0].participates(Lane::RocmCompile));
-        assert!(!manifest.entries[0].participates(Lane::GpuSmoke));
+        assert!(manifest.entries[0].participates(Lane::ArtifactQualification));
+        assert!(manifest.entries[0].participates(Lane::KernelIrV1));
+        assert!(!manifest.entries[1].participates(Lane::ArtifactQualification));
         assert!(manifest.entries[2].artifacts.is_empty());
     }
 
     #[test]
     fn cpu_test_partition_is_sorted_disjoint_and_exhaustive() {
         let manifest = parse(&example_manifest(
-            "fe2o3-managed|true|false|false|-\n\
-             fe2o3-raw|true|false|false|-\n\
-             fe2o3-rocm|true|true|false|rocm.hsaco\n\
-             fe2o3-unchecked|false|false|false|-\n",
+            "fe2o3-managed|true|none|-\n\
+             fe2o3-raw|true|none|-\n\
+             fe2o3-rocm|true|kernel-ir-v1|rocm.hsaco\n\
+             fe2o3-unchecked|false|none|-\n",
         ))
         .expect("valid manifest");
         let managed = vec![
@@ -3393,29 +3393,29 @@ pub fn alpha() {}"#,
     fn rejects_malformed_manifest_structure_and_fields() {
         let cases = [
             (
-                "wrong-version\npackage|rustc_check|rocm_compile|gpu_smoke|artifacts\na|true|false|false|-\n".to_string(),
+                "wrong-version\npackage|rustc_check|artifact_qualification|source_artifacts\na|true|none|-\n".to_string(),
                 "first line",
             ),
             (
-                format!("{MANIFEST_VERSION}\npackage|unknown\na|true|false|false|-\n"),
+                format!("{MANIFEST_VERSION}\npackage|unknown\na|true|none|-\n"),
                 "second line",
             ),
-            (example_manifest("a|true|false|false|-"), "end with a newline"),
+            (example_manifest("a|true|none|-"), "end with a newline"),
             (example_manifest("\n"), "blank lines"),
             (
-                example_manifest("a|true|false|false|-|extra\n"),
-                "exactly five",
+                example_manifest("a|true|none|-|extra\n"),
+                "exactly four",
             ),
             (
-                example_manifest("a|yes|false|false|-\n"),
+                example_manifest("a|yes|none|-\n"),
                 "rustc_check must be exactly",
             ),
             (
-                example_manifest("b|true|false|false|-\na|true|false|false|-\n"),
+                example_manifest("b|true|none|-\na|true|none|-\n"),
                 "sorted lexicographically",
             ),
             (
-                example_manifest("a|true|false|false|-\na|true|false|false|-\n"),
+                example_manifest("a|true|none|-\na|true|none|-\n"),
                 "duplicate package",
             ),
             (example_manifest(""), "at least one package"),
@@ -3433,25 +3433,30 @@ pub fn alpha() {}"#,
     #[test]
     fn rejects_unsafe_names_duplicates_and_inconsistent_lanes() {
         let cases = [
-            ("-package|true|false|false|-\n", "unsafe package name"),
-            ("a|true|true|true|../escape.hsaco\n", "unsafe artifact name"),
-            ("a|true|true|true|alpha.o\n", "expected a .hsaco basename"),
+            ("-package|true|none|-\n", "unsafe package name"),
             (
-                "a|true|true|true|same.hsaco\nb|true|true|true|same.hsaco\n",
+                "a|true|kernel-ir-v1|../escape.hsaco\n",
+                "unsafe artifact name",
+            ),
+            (
+                "a|true|kernel-ir-v1|alpha.o\n",
+                "expected a .hsaco basename",
+            ),
+            (
+                "a|true|kernel-ir-v1|same.hsaco\nb|true|kernel-ir-v1|same.hsaco\n",
                 "duplicate artifact",
             ),
             (
-                "a|true|true|true|zeta.hsaco,alpha.hsaco\n",
+                "a|true|kernel-ir-v1|zeta.hsaco,alpha.hsaco\n",
                 "artifacts must be sorted lexicographically",
             ),
-            ("a|true|false|true|-\n", "gpu_smoke requires rocm_compile"),
             (
-                "a|true|true|false|-\n",
-                "rocm_compile must have one or more artifacts",
+                "a|true|unknown|alpha.hsaco\n",
+                "artifact_qualification must be exactly",
             ),
             (
-                "a|true|false|false|alpha.hsaco\n",
-                "CPU-only entries must use `-`",
+                "a|true|kernel-ir-v1|-\n",
+                "artifact qualification requires one or more source artifacts",
             ),
         ];
 
@@ -3542,8 +3547,8 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
     #[test]
     fn validates_manifest_against_workspace_projection() {
         let manifest = parse(&example_manifest(
-            "fe2o3-alpha|true|true|true|alpha.hsaco\n\
-             verus-vecadd|true|false|false|-\n",
+            "fe2o3-alpha|true|kernel-ir-v1|alpha.hsaco\n\
+             verus-vecadd|true|none|-\n",
         ))
         .expect("valid manifest");
         let workspace = [
@@ -3563,7 +3568,7 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
     #[test]
     fn rejects_missing_extra_and_drifted_workspace_projection() {
         let manifest = parse(&example_manifest(
-            "fe2o3-alpha|true|true|true|alpha.hsaco\n",
+            "fe2o3-alpha|true|kernel-ir-v1|alpha.hsaco\n",
         ))
         .expect("valid manifest");
         let cases = [
@@ -3620,6 +3625,11 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             .iter()
             .find(|entry| entry.package == "fe2o3-scalar-gemm-v1")
             .expect("scalar GEMM entry");
+        let fill = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.package == "fe2o3-fill")
+            .expect("fill entry");
         let verus = manifest
             .entries
             .iter()
@@ -3628,16 +3638,32 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
 
         assert_eq!(manifest.entries.len(), 26);
         assert_eq!(
+            manifest
+                .entries
+                .iter()
+                .filter(|entry| entry.artifact_qualification.produces_artifacts())
+                .map(|entry| entry.package.as_str())
+                .collect::<Vec<_>>(),
+            ["fe2o3-fill"]
+        );
+        assert_eq!(
             pipeline.artifacts,
             ["bias_stage.hsaco", "scale_stage.hsaco"]
         );
+        assert_eq!(pipeline.artifact_qualification, ArtifactQualification::None);
+        assert_eq!(
+            fill.artifact_qualification,
+            ArtifactQualification::KernelIrV1
+        );
+        assert_eq!(fill.artifacts, ["fill.hsaco"]);
         assert!(verus.rustc_check);
-        assert!(!verus.rocm_compile);
-        assert!(!verus.gpu_smoke);
+        assert_eq!(verus.artifact_qualification, ArtifactQualification::None);
         assert!(verus.artifacts.is_empty());
         assert!(scalar_gemm.rustc_check);
-        assert!(!scalar_gemm.rocm_compile);
-        assert!(!scalar_gemm.gpu_smoke);
+        assert_eq!(
+            scalar_gemm.artifact_qualification,
+            ArtifactQualification::None
+        );
         assert!(scalar_gemm.artifacts.is_empty());
     }
 }

@@ -840,7 +840,13 @@ load_example_packages() {
   local -n destination="${destination_name}"
   destination=(fe2o3-fill)
 }
+export FE2O3_WORKER_V2_CONFIG_V2="${TIMEOUT_TEST_ROOT}/hostile-worker-v2-config.json"
 run_rocm_compile
+if [[ -v FE2O3_WORKER_V2_CONFIG_V2 ]]; then
+  printf '%s\n' \
+    'ROCm qualification retained an ambient production Worker V2 configuration' >&2
+  exit 1
+fi
 assert_equals \
   'fe2o3-typed-alias-spoof' \
   "${ROCM_EXPLICIT_NAMESPACE_FALLBACK_PACKAGES[*]}" \
@@ -873,6 +879,10 @@ assert_equals \
   'fe2o3-host fe2o3-pliron-scalar-add-v1' \
   "${ROCM_QUALIFICATION_TEST_PACKAGES[*]}" \
   'ROCm qualification test package set changed without review'
+assert_equals \
+  'kernel-ir-v1' \
+  "${ROCM_ARTIFACT_QUALIFICATION_ROUTES[*]}" \
+  'ROCm artifact qualification route set changed without review'
 qualification_target="${TIMEOUT_TEST_ROOT}/external-target/fe2o3-qualification-tests-${BASHPID}"
 assert_equals \
   "${qualification_target}" \
@@ -894,20 +904,51 @@ assert_equals \
   'ROCm compile did not provide the direct driver contract to kernel-IR tests'
 assert_equals \
   'cargo clean -p fe2o3-fill' \
-  "$(step_command rocm-clean-fe2o3-fill)" \
+  "$(step_command rocm-clean-kernel-ir-v1-fe2o3-fill)" \
   'ROCm compile did not invalidate the example host fingerprint'
 assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 build -p fe2o3-fill" \
-  "$(step_command rocm-build-fe2o3-fill)" \
-  'ROCm compile did not invoke the resolved driver directly for example build'
+  "env -u FE2O3_WORKER_V2_CONFIG_V2 FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1 ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 build -p fe2o3-fill" \
+  "$(step_command rocm-build-kernel-ir-v1-fe2o3-fill)" \
+  'ROCm compile did not bind the example build to the closed qualification route'
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 examples check-artifacts fe2o3-fill ${TIMEOUT_TEST_ROOT}/external-target/fe2o3" \
-  "$(step_command rocm-artifacts-fe2o3-fill)" \
+  "$(step_command rocm-artifacts-kernel-ir-v1-fe2o3-fill)" \
   'ROCm compile did not invoke the resolved driver directly for artifact inspection'
 assert_equals \
-  'rocm-clean-fe2o3-fill rocm-build-fe2o3-fill rocm-artifacts-fe2o3-fill' \
-  "$(printf '%s\n' "${STEP_NAMES[@]}" | rg '^rocm-(clean|build|artifacts)-fe2o3-fill$' | paste -sd ' ' -)" \
+  'rocm-clean-kernel-ir-v1-fe2o3-fill rocm-build-kernel-ir-v1-fe2o3-fill rocm-artifacts-kernel-ir-v1-fe2o3-fill' \
+  "$(printf '%s\n' "${STEP_NAMES[@]}" | rg '^rocm-(clean|build|artifacts)-kernel-ir-v1-fe2o3-fill$' | paste -sd ' ' -)" \
   'ROCm compile did not clean, build, and inspect the example in order'
+assert_step_count rocm-build-fe2o3-fill 0 \
+  'ROCm compile retained the selector-free production example command'
+
+STEP_NAMES=()
+STEP_COMMANDS=()
+load_example_packages() {
+  local lane="$1"
+  local destination_name="$2"
+  local -n destination="${destination_name}"
+  case "${lane}" in
+    artifact-qualification)
+      destination=(fe2o3-fill fe2o3-unrouted)
+      ;;
+    *)
+      destination=(fe2o3-fill)
+      ;;
+  esac
+}
+set +e
+run_rocm_compile \
+  >"${TIMEOUT_TEST_ROOT}/rocm-route-mismatch.out" \
+  2>"${TIMEOUT_TEST_ROOT}/rocm-route-mismatch.err"
+route_mismatch_status=$?
+set -e
+assert_equals \
+  '2' \
+  "${route_mismatch_status}" \
+  'ROCm compile accepted an incomplete artifact qualification route union'
+rg -F \
+  'ROCm artifact qualification routes do not exactly cover the manifest projection' \
+  "${TIMEOUT_TEST_ROOT}/rocm-route-mismatch.err" >/dev/null
 
 STEP_NAMES=()
 STEP_COMMANDS=()
@@ -932,10 +973,8 @@ assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/hardware-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test kernel_ir_codegen opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- --ignored --exact" \
   "$(step_command hardware-kernel-ir-vecadd)" \
   'hardware smoke did not provide the direct driver contract to nested tests'
-assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/hardware-driver/cargo-fe2o3 smoke" \
-  "$(step_command hardware-smoke)" \
-  'hardware smoke did not invoke the qualification driver directly'
+assert_step_count hardware-smoke 0 \
+  'hardware smoke retained the selector-free manifest runner'
 unset FE2O3_ALLOW_GPU_SMOKE FE2O3_TARGET
 
 STEP_NAMES=()

@@ -233,8 +233,8 @@ fn literal_cli_computes_disjoint_exhaustive_cpu_test_partitions() {
     );
     write(
         &workspace.0,
-        "examples/regression-manifest-v1.txt",
-        "fe2o3-example-regressions-v1\npackage|rustc_check|rocm_compile|gpu_smoke|artifacts\nignored|false|false|false|-\nmanaged|true|false|false|-\nraw-a|true|false|false|-\nraw-b|true|false|false|-\nrocm|true|true|false|rocm_kernel.hsaco\n",
+        "examples/regression-manifest-v2.txt",
+        "fe2o3-example-regressions-v2\npackage|rustc_check|artifact_qualification|source_artifacts\nignored|false|none|-\nmanaged|true|none|-\nraw-a|true|none|-\nraw-b|true|none|-\nrocm|true|kernel-ir-v1|rocm_kernel.hsaco\n",
     );
     for (package, source) in [
         ("ignored", "pub fn ignored() {}\n"),
@@ -276,6 +276,45 @@ fn literal_cli_computes_disjoint_exhaustive_cpu_test_partitions() {
     assert_eq!(list("cpu-test-raw"), "raw-a\nraw-b\n");
     assert_eq!(list("cpu-test-wrapper-managed"), "managed\n");
     assert_eq!(list("rustc-check"), "managed\nraw-a\nraw-b\nrocm\n");
+    assert_eq!(list("artifact-qualification"), "rocm\n");
+    assert_eq!(list("artifact-kernel-ir-v1"), "rocm\n");
+
+    let output = workspace
+        .command(binary)
+        .args([
+            "examples",
+            "check-artifacts",
+            "managed",
+            workspace.0.to_str().expect("UTF-8 fixture path"),
+        ])
+        .env("CARGO", cargo())
+        .output()
+        .expect("reject artifact inspection without a qualification route");
+    assert!(
+        !output.status.success(),
+        "unqualified artifacts were accepted"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("has no artifact qualification route"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = workspace
+        .command(binary)
+        .arg("smoke")
+        .env("CARGO", cargo())
+        .output()
+        .expect("reject retired manifest smoke command");
+    assert!(
+        !output.status.success(),
+        "retired smoke command was accepted"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("usage: cargo fe2o3"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let check = |packages: &[&str]| {
         workspace

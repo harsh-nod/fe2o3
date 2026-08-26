@@ -672,8 +672,11 @@ turn the foundations below into end-to-end features.
   rustc. This protects the measured bytes from pathname substitution; it is not
   a sandbox for hostile build scripts or procedural macros, which remain
   trusted inputs.
-- `examples/regression-manifest-v1.txt` is the authoritative package/artifact
-  inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
+- `examples/regression-manifest-v2.txt` is the authoritative package/source-artifact
+  inventory for ordinary checks and explicit artifact qualification. The route is
+  data, never inferred from a package name; only `fe2o3-fill` currently selects the
+  bounded `kernel-ir-v1` oracle. The manifest grants no production or GPU-execution
+  authority.
 - The Verus vecadd, fill, active-wave, LDS, and exact gfx942 wave/LDS
   harnesses prove bounded source-model properties under documented
   assumptions. The exact control,
@@ -985,14 +988,15 @@ Validate the authoritative example manifest and list a lane:
 
 ```bash
 cargo run --locked -p cargo-fe2o3 -- examples check
-cargo run --quiet --locked -p cargo-fe2o3 -- examples list rocm-compile
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list artifact-qualification
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list artifact-kernel-ir-v1
 cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-raw
 cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-wrapper-managed
 cargo fe2o3 test --locked --all-targets -p fe2o3-vecadd
 ```
 
 The two CPU-test queries form a sorted, disjoint, exhaustive partition of
-manifest packages selected for Rust checks but not ROCm compilation. The
+manifest packages selected for Rust checks but not artifact qualification. The
 partition is computed from the exact structural wrapper-managed projection, so
 generic CI runs namespace-free typed-kernel tests through the mandatory
 `cargo fe2o3 test --all-targets` host path and leaves ordinary packages on raw
@@ -1093,8 +1097,6 @@ back to the embedded V2 artifact. The third command is an isolated
 non-production qualification test. `FE2O3_CODEGEN_PIPELINE` is no longer
 accepted, and a production backend rejects `FE2O3_QUALIFICATION_ORACLE_V1`.
 
-The smoke command reads the same manifest and runs every GPU-selected example:
-
-```bash
-cargo run --locked -p cargo-fe2o3 -- smoke
-```
+The retired manifest smoke command is not a production or direct-KFD path and
+is no longer exposed. Hardware execution must enter an explicit runtime-owned
+gate; artifact qualification never implies load or dispatch authority.

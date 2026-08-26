@@ -1,6 +1,7 @@
 # cargo-fe2o3
 
-`cargo-fe2o3` coordinates the current fe2o3 build and smoke-test workflows.
+`cargo-fe2o3` coordinates fe2o3 build, qualification, inspection, debugging,
+and deterministic CPU-simulation workflows.
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 

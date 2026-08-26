@@ -468,12 +468,16 @@ Acceptance:
 
 ### M5: First End-To-End Launch
 
-Status: MVP implemented for the current elementwise examples.
+Status: historical elementwise MVP checkpoint. The current protected-production
+and explicit qualification contracts supersede the direct commands recorded in
+this section.
 
 - `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
 - `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts first
   so the backend reruns and refreshes sidecar HSACO files.
-- `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
+- The manifest-wide `cargo-fe2o3 smoke` command used at this checkpoint is now
+  retired; current artifact generation uses explicit closed qualification
+  routes or protected authority release.
 - If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
   `rocminfo`.
 - The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
@@ -512,7 +516,8 @@ Acceptance:
   `cargo fe2o3 run -p fe2o3-axpy-inplace`, `cargo fe2o3 run -p fe2o3-negate`,
   `cargo fe2o3 run -p fe2o3-normalize`, `cargo fe2o3 run -p fe2o3-pipeline`,
   and `cargo fe2o3 run -p fe2o3-vecadd-f64` print success on an AMD GPU.
-- `cargo fe2o3 smoke` runs the same set successfully on an AMD GPU.
+- Historical acceptance used `cargo fe2o3 smoke` for this set. That command is
+  not part of the current CLI and is not current qualification evidence.
 
 ### M6: Usability And Coverage
 

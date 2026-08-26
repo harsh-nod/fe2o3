@@ -213,7 +213,6 @@ fn main() -> ExitCode {
         Some("run") => cargo_with_backend("run", &rest),
         #[cfg(feature = "qualification-oracles-test-only")]
         Some("simulate") => simulate_command(&rest),
-        Some("smoke") => with_utf8_args(&rest, smoke),
         Some("examples") => with_utf8_args(&rest, example_manifest::command),
         Some("clean") => clean_command(&rest),
         Some("inspect") => with_utf8_args(&rest, |args| report(inspect::command(args))),
@@ -1097,38 +1096,6 @@ fn cargo_with_protected_release(
             ExitCode::FAILURE
         }
     }
-}
-
-fn smoke(args: &[String]) -> ExitCode {
-    if !args.is_empty() {
-        eprintln!("cargo fe2o3 smoke does not accept additional arguments");
-        return ExitCode::FAILURE;
-    }
-
-    let workspace_root = match find_workspace_root() {
-        Ok(path) => path,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let packages = match example_manifest::gpu_smoke_packages(&workspace_root) {
-        Ok(packages) => packages,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    for package in packages {
-        eprintln!("cargo fe2o3 smoke: running {package}");
-        let args = [OsString::from("-p"), OsString::from(package)];
-        if let Err(error) = cargo_with_backend_result("run", &args, None, None) {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    }
-
-    ExitCode::SUCCESS
 }
 
 fn cargo_with_backend_result(
@@ -3587,7 +3554,7 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check                check host targets with compiler-derived binding only\n  test --all-targets run trusted binding-only host tests; no sandbox, artifact/GPU authority, or performance prediction\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  check                check host targets with compiler-derived binding only\n  test --all-targets run trusted binding-only host tests; no sandbox, artifact/GPU authority, or performance prediction\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
         qualification_help_lines(),
     );
 }
@@ -3639,7 +3606,6 @@ mod tests {
             "build",
             "run",
             "simulate",
-            "smoke",
             "examples",
             "clean",
             "inspect",
