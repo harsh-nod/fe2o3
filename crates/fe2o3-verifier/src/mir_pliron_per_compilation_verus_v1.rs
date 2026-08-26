@@ -1,7 +1,7 @@
 //! Per-compilation Verus join for the exact MIR-to-live-PLIRON contract.
 //!
 //! This workload-neutral module consumes the move-only structural verifier
-//! result, derives subjects from retained authenticated effect receipts,
+//! result, derives subjects from retained policy-checked effect staging records,
 //! regenerates each supported role-bound ranked effect formula, executes those
 //! formulas in the retained runtime, and imports the signed result. Receipts
 //! remain authenticated binding inputs, never logical axioms. PLIRON performs
@@ -54,7 +54,7 @@ pub struct ProductionMirPlironPerCompilationVerusReportV1 {
     toolchain: VerusToolchainIdentityV2,
     execution_identity: DigestV1,
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
-    retained_refinement_receipts: u64,
+    retained_policy_checked_staging: u64,
 }
 
 impl ProductionMirPlironPerCompilationVerusReportV1 {
@@ -85,8 +85,8 @@ impl ProductionMirPlironPerCompilationVerusReportV1 {
     pub const fn receipt_identity(self) -> FunctionalRefinementReceiptIdentityV2 {
         self.receipt_identity
     }
-    pub const fn retained_refinement_receipts(self) -> u64 {
-        self.retained_refinement_receipts
+    pub const fn retained_policy_checked_staging(self) -> u64 {
+        self.retained_policy_checked_staging
     }
     pub const fn has_authenticated_per_compilation_verus_execution(self) -> bool {
         true
@@ -111,7 +111,7 @@ impl ProductionMirPlironPerCompilationVerusReportV1 {
     pub const fn generated_identity_comments_are_binding_inputs_not_verus_premises(self) -> bool {
         true
     }
-    pub const fn retained_refinement_receipts_are_authenticated_binding_inputs(self) -> bool {
+    pub const fn retained_policy_checked_staging_is_binding_input(self) -> bool {
         true
     }
     pub const fn grants_llvm_or_later_authority(self) -> bool {
@@ -176,9 +176,9 @@ pub enum ProductionMirPlironPerCompilationVerusErrorV1 {
     ParallelContract(ProductionParallelReferenceContractErrorV1),
     ParallelReportMismatch,
     StructuralReportMismatch,
-    MissingRetainedEffectReceipt,
+    MissingRetainedEffectStaging,
     InconsistentRetainedSubjects,
-    WrongRetainedBoundary,
+    WrongRetainedStagingBoundary,
     CounterOverflow,
     GeneratedSource(String),
     UnsupportedFormulaReplayRole { output: usize, role: &'static str },
@@ -206,13 +206,13 @@ impl fmt::Display for ProductionMirPlironPerCompilationVerusErrorV1 {
             Self::StructuralReportMismatch => formatter.write_str(
                 "per-compilation MIR/PLIRON report differs from the report recomputed over the borrowed live graph",
             ),
-            Self::MissingRetainedEffectReceipt => formatter.write_str(
-                "per-compilation MIR/PLIRON proof requires at least one retained authenticated effect receipt",
+            Self::MissingRetainedEffectStaging => formatter.write_str(
+                "per-compilation MIR/PLIRON proof requires at least one retained policy-checked effect staging record",
             ),
             Self::InconsistentRetainedSubjects => formatter.write_str(
                 "retained effect receipts do not identify one exact safe-reference MIR and kernel MIR subject pair",
             ),
-            Self::WrongRetainedBoundary => formatter.write_str(
+            Self::WrongRetainedStagingBoundary => formatter.write_str(
                 "retained effect receipt does not cover safe-reference MIR to kernel MIR",
             ),
             Self::CounterOverflow => formatter.write_str(
@@ -361,7 +361,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
     {
         return Err(ProductionMirPlironPerCompilationVerusErrorV1::InconsistentRetainedSubjects);
     }
-    let retained_refinement_receipts =
+    let retained_policy_checked_staging =
         u64::try_from(ranked.retained_policy_checked_refinement_staging().len())
             .map_err(|_| ProductionMirPlironPerCompilationVerusErrorV1::CounterOverflow)?;
     let aggregate = ProductionMirPlironPerCompilationVerusReportV1 {
@@ -374,7 +374,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
         toolchain: imported.toolchain(),
         execution_identity: imported.execution_identity(),
         receipt_identity: imported.receipt_identity(),
-        retained_refinement_receipts,
+        retained_policy_checked_staging,
     };
     Ok((aggregate, policy))
 }
@@ -386,14 +386,14 @@ fn derive_compiler_subjects(
     let receipts = ranked.retained_policy_checked_refinement_staging();
     let first = receipts
         .first()
-        .ok_or(ProductionMirPlironPerCompilationVerusErrorV1::MissingRetainedEffectReceipt)?;
+        .ok_or(ProductionMirPlironPerCompilationVerusErrorV1::MissingRetainedEffectStaging)?;
     let subjects = first.binding().subjects();
     if first.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir
         || receipts.iter().any(|receipt| {
             receipt.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir
         })
     {
-        return Err(ProductionMirPlironPerCompilationVerusErrorV1::WrongRetainedBoundary);
+        return Err(ProductionMirPlironPerCompilationVerusErrorV1::WrongRetainedStagingBoundary);
     }
     if subjects.safe_reference_mir_hash() != contract.safe_reference_mir()
         || subjects.kernel_mir_hash() != contract.kernel_mir()

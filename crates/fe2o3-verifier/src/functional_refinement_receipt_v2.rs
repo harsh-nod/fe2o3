@@ -183,7 +183,8 @@ pub fn prepare_ranked_functional_refinement_receipt_v2(
     Ok(PreparedFunctionalRefinementReceiptV2 { binding, unsigned })
 }
 
-/// Local compilation path with an ephemeral compiler-owned trust root.
+/// Local compilation path with an ephemeral policy used only for staging.
+/// The returned policy grants no proof or compiler authority.
 pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
