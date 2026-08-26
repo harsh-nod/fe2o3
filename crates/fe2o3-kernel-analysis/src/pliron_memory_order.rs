@@ -204,6 +204,13 @@ struct EffectV1 {
     access: AccessKindAttr,
 }
 
+#[derive(Clone)]
+struct ReleaseAtomicV1 {
+    invocation: Vec<u64>,
+    event: usize,
+    scope: AtomicScopeAttr,
+}
+
 #[derive(Default)]
 struct EpochAddressStateV1 {
     effects: Vec<EffectV1>,
@@ -262,24 +269,7 @@ fn analyze_workgroup(
     let mut cursors = vec![0_usize; traces.len()];
     let mut epoch = 0_usize;
     let mut published = HashMap::<PlironMemoryAddressV1, Vec<PublishedVersionV1>>::new();
-    let has_release_atomic = traces.iter().any(|trace| {
-        trace.events.iter().any(|event| {
-            matches!(
-                event,
-                PlironTraceEventV1::Memory {
-                    access,
-                    atomic_ordering: Some(
-                        AtomicOrderingAttr::Release
-                            | AtomicOrderingAttr::AcquireRelease
-                            | AtomicOrderingAttr::SequentiallyConsistent
-                    ),
-                    atomic_scope: Some(scope),
-                    ..
-                } if access.is_atomic() && access.writes_memory()
-                    && scope.rank() >= AtomicScopeAttr::Workgroup.rank()
-            )
-        })
-    });
+    let release_atomics = collect_release_atomics(traces, unknown_alias);
 
     loop {
         let mut epoch_states = HashMap::<PlironMemoryAddressV1, EpochAddressStateV1>::new();
@@ -347,9 +337,12 @@ fn analyze_workgroup(
                             && !local_versions[trace_index].contains_key(&address)
                             && !published.contains_key(&address)
                         {
-                            let issue = if has_release_atomic
-                                && has_prior_acquire(trace, cursors[trace_index])
-                            {
+                            let issue = if has_plausible_atomic_publication(
+                                trace,
+                                cursors[trace_index],
+                                unknown_alias,
+                                &release_atomics,
+                            ) {
                                 PlironMemoryOrderIssueV1::AtomicReadFromUnresolved {
                                     invocation: trace.invocation.clone(),
                                     location,
@@ -480,24 +473,101 @@ fn effects_conflict(first: AccessKindAttr, second: AccessKindAttr) -> bool {
     !(first.is_atomic() && second.is_atomic())
 }
 
-fn has_prior_acquire(trace: &PlironInvocationTraceV1, cursor: usize) -> bool {
-    trace.events[..cursor.saturating_sub(1)]
-        .iter()
-        .any(|event| {
-            matches!(
-                event,
-                PlironTraceEventV1::Memory {
-                    access,
-                    atomic_ordering: Some(
-                        AtomicOrderingAttr::Acquire
-                            | AtomicOrderingAttr::AcquireRelease
-                            | AtomicOrderingAttr::SequentiallyConsistent
+fn collect_release_atomics(
+    traces: &[&PlironInvocationTraceV1],
+    unknown_alias: bool,
+) -> HashMap<PlironMemoryAddressV1, Vec<ReleaseAtomicV1>> {
+    let mut releases = HashMap::<PlironMemoryAddressV1, Vec<ReleaseAtomicV1>>::new();
+    for trace in traces {
+        for (event_index, event) in trace.events.iter().enumerate() {
+            let PlironTraceEventV1::Memory {
+                memory_space: MemorySpaceAttr::Workgroup,
+                access,
+                atomic_ordering:
+                    Some(
+                        AtomicOrderingAttr::Release
+                        | AtomicOrderingAttr::AcquireRelease
+                        | AtomicOrderingAttr::SequentiallyConsistent,
                     ),
-                    atomic_scope: Some(scope),
-                    ..
-                } if access.is_atomic() && access.reads_memory()
-                    && scope.rank() >= AtomicScopeAttr::Workgroup.rank()
-            )
+                atomic_scope: Some(scope),
+                indices,
+                noalias_class,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if !access.is_atomic()
+                || !access.writes_memory()
+                || scope.rank() < AtomicScopeAttr::Workgroup.rank()
+            {
+                continue;
+            }
+            let Some(indices) = indices.iter().copied().collect::<Option<Vec<_>>>() else {
+                continue;
+            };
+            releases
+                .entry(PlironMemoryAddressV1 {
+                    allocation_class: if unknown_alias { 0 } else { *noalias_class },
+                    indices,
+                })
+                .or_default()
+                .push(ReleaseAtomicV1 {
+                    invocation: trace.invocation.clone(),
+                    event: event_index,
+                    scope: *scope,
+                });
+        }
+    }
+    releases
+}
+
+fn has_plausible_atomic_publication(
+    trace: &PlironInvocationTraceV1,
+    cursor: usize,
+    unknown_alias: bool,
+    releases: &HashMap<PlironMemoryAddressV1, Vec<ReleaseAtomicV1>>,
+) -> bool {
+    trace.events[..cursor]
+        .iter()
+        .enumerate()
+        .any(|(acquire_event, event)| {
+            let PlironTraceEventV1::Memory {
+                memory_space: MemorySpaceAttr::Workgroup,
+                access,
+                atomic_ordering:
+                    Some(
+                        AtomicOrderingAttr::Acquire
+                        | AtomicOrderingAttr::AcquireRelease
+                        | AtomicOrderingAttr::SequentiallyConsistent,
+                    ),
+                atomic_scope: Some(acquire_scope),
+                indices,
+                noalias_class,
+                ..
+            } = event
+            else {
+                return false;
+            };
+            if !access.is_atomic()
+                || !access.reads_memory()
+                || acquire_scope.rank() < AtomicScopeAttr::Workgroup.rank()
+            {
+                return false;
+            }
+            let Some(indices) = indices.iter().copied().collect::<Option<Vec<_>>>() else {
+                return false;
+            };
+            let address = PlironMemoryAddressV1 {
+                allocation_class: if unknown_alias { 0 } else { *noalias_class },
+                indices,
+            };
+            releases.get(&address).is_some_and(|candidates| {
+                candidates.iter().any(|release| {
+                    release.scope.rank() >= AtomicScopeAttr::Workgroup.rank()
+                        && (release.invocation != trace.invocation || release.event < acquire_event)
+                })
+            })
         })
 }
 
