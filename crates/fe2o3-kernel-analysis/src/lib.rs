@@ -24,6 +24,8 @@ mod pliron_hierarchical_ownership;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_invocation_trace;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_launch_contract;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_memory_order;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_pipeline;
@@ -31,6 +33,8 @@ mod pliron_pipeline;
 mod pliron_presburger;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_provenance_alias;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_progress;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_race;
 #[cfg(feature = "pliron-analysis")]
@@ -74,6 +78,8 @@ pub use pliron_effect_refinement::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_hierarchical_ownership::*;
 #[cfg(feature = "pliron-analysis")]
+pub use pliron_launch_contract::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_memory_order::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_pipeline::*;
@@ -81,6 +87,8 @@ pub use pliron_pipeline::*;
 pub use pliron_presburger::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_provenance_alias::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_progress::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_race::*;
 #[cfg(feature = "pliron-analysis")]

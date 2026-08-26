@@ -4132,6 +4132,13 @@ fn production_pipeline_check_error(
     error: ProductionPlironPreloweringErrorV2,
 ) -> ProductionSessionErrorV1 {
     match error {
+        // Ranked recipe construction is target-agnostic. A target-contract
+        // error can only enter through the separate targeted prelowering API.
+        ProductionPlironPreloweringErrorV2::TargetContract(_) => {
+            ProductionSessionErrorV1::RankedRecipe(ProductionRankedKernelErrorV1::Materialization(
+                "target feasibility was requested outside target-agnostic ranked construction",
+            ))
+        }
         ProductionPlironPreloweringErrorV2::TensorLayout(error) => {
             ProductionSessionErrorV1::RankedTensorLayout(error)
         }

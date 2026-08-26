@@ -1764,7 +1764,7 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
         ProductionRankedOperationV1::SemanticExpression {
             result: reference,
             expression: ProductionSemanticExpressionV2::Symbol {
-                symbol: 2,
+                symbol: 1,
                 scalar: float,
             },
             numerical_contract: ProductionNumericalContractV2::exact_for(float),

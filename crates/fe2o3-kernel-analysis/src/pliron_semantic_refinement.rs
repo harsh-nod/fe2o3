@@ -34,6 +34,7 @@ use crate::pliron_effect_refinement::{
     PlironEffectRefinementReportV1, clean_effect_refinement_report_v1,
     run_pliron_effect_refinement_with_analyses_v1,
 };
+use crate::pliron_progress::{PlironProgressReportV1, run_pliron_progress_check_v1};
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
@@ -504,6 +505,13 @@ pub enum PlironSemanticRefinementFindingV1 {
     TypedExpressionRejected {
         reason: &'static str,
     },
+    NumericalProofIncomplete {
+        block: usize,
+        operation: usize,
+        actual: String,
+        reference: String,
+        reason: &'static str,
+    },
     ResourceLimitExceeded,
 }
 
@@ -518,6 +526,7 @@ impl PlironSemanticRefinementFindingV1 {
             | Self::UnresolvedExpression { .. }
             | Self::ReferenceContractIncomplete { .. }
             | Self::CollectiveContractIncomplete { .. }
+            | Self::NumericalProofIncomplete { .. }
             | Self::ResourceLimitExceeded => KernelCheckStatusV1::Incomplete,
         }
     }
@@ -586,10 +595,54 @@ impl fmt::Display for PlironSemanticRefinementFindingV1 {
                 formatter,
                 "error[FE2O3-SEMANTIC-007]: typed semantic expression payload is invalid: {reason}",
             ),
+            Self::NumericalProofIncomplete {
+                block,
+                operation,
+                actual,
+                reference,
+                reason,
+            } => write!(
+                formatter,
+                "error[FE2O3-NUMERIC-001]: numerical refinement is incomplete at block {block} op {operation}: {reason}; actual `{actual}` differs from reference `{reference}`; help: preserve the exact typed operator tree, or supply a future supported interval/error proof for the changed operation order",
+            ),
             Self::ResourceLimitExceeded => formatter.write_str(
                 "error[FE2O3-SEMANTIC-002]: semantic refinement analysis resource limit exceeded",
             ),
         }
+    }
+}
+
+/// A finite-error theorem derived from the live typed operator trees.
+///
+/// V1 proves only structural operator congruence, which makes both derived
+/// error bounds exactly zero. Imported evidence selects the obligation but is
+/// not used to infer these values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlironNumericalBoundCertificateV1 {
+    block: usize,
+    operation: usize,
+    requested_absolute_error_f64_bits: u64,
+    requested_relative_error_f64_bits: u64,
+}
+
+impl PlironNumericalBoundCertificateV1 {
+    pub const fn block(&self) -> usize {
+        self.block
+    }
+    pub const fn operation(&self) -> usize {
+        self.operation
+    }
+    pub const fn derived_absolute_error_f64_bits(&self) -> u64 {
+        0.0_f64.to_bits()
+    }
+    pub const fn derived_relative_error_f64_bits(&self) -> u64 {
+        0.0_f64.to_bits()
+    }
+    pub const fn requested_absolute_error_f64_bits(&self) -> u64 {
+        self.requested_absolute_error_f64_bits
+    }
+    pub const fn requested_relative_error_f64_bits(&self) -> u64 {
+        self.requested_relative_error_f64_bits
     }
 }
 
@@ -603,6 +656,8 @@ pub struct PlironSemanticRefinementReportV1 {
     collective_contracts: usize,
     policy_checked_collective_contracts: usize,
     typed_root_commitments: Vec<[u64; 4]>,
+    numerical_certificates: Vec<PlironNumericalBoundCertificateV1>,
+    progress: PlironProgressReportV1,
     effect_refinement: PlironEffectRefinementReportV1,
 }
 
@@ -617,6 +672,7 @@ impl PlironSemanticRefinementReportV1 {
             .fold(KernelCheckStatusV1::Clean, |status, finding| {
                 status.join(finding.status())
             })
+            .join(self.progress.blocking_status())
             .join(self.effect_refinement.status())
     }
 
@@ -686,6 +742,14 @@ impl PlironSemanticRefinementReportV1 {
         &self.typed_root_commitments
     }
 
+    pub fn numerical_certificates(&self) -> &[PlironNumericalBoundCertificateV1] {
+        &self.numerical_certificates
+    }
+
+    pub const fn progress(&self) -> &PlironProgressReportV1 {
+        &self.progress
+    }
+
     pub const fn effect_refinement(&self) -> &PlironEffectRefinementReportV1 {
         &self.effect_refinement
     }
@@ -721,6 +785,13 @@ impl fmt::Display for PlironSemanticRefinementCheckErrorV1 {
             wrote = true;
         }
         for finding in self.report.effect_refinement.findings() {
+            if wrote {
+                formatter.write_str("\n")?;
+            }
+            finding.fmt(formatter)?;
+            wrote = true;
+        }
+        for finding in self.report.progress.findings() {
             if wrote {
                 formatter.write_str("\n")?;
             }
@@ -777,6 +848,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironSemanticRefinementReportV1 {
+    let progress = run_pliron_progress_check_v1(context, function);
     let mut definitions = Vec::new();
     let mut requirements = Vec::new();
     let mut reference_requirements = Vec::new();
@@ -1236,6 +1308,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         }
     }
     let mut policy_checked_numerical_obligations = 0;
+    let mut numerical_certificates = Vec::new();
     for (
         block,
         operation,
@@ -1286,6 +1359,25 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         }
+        let actual_identity = expressions.identity(actual);
+        let reference_identity = expressions.identity(reference);
+        if actual_identity != reference_identity {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::NumericalProofIncomplete {
+                    block,
+                    operation,
+                    actual: expressions
+                        .describe_value(actual)
+                        .unwrap_or_else(|| actual.unique_name(context).to_string()),
+                    reference: expressions
+                        .describe_value(reference)
+                        .unwrap_or_else(|| reference.unique_name(context).to_string()),
+                    reason: "V1 derives a finite bound only from identical typed IEEE operator trees",
+                },
+            );
+            continue;
+        }
         if domain_fact.is_none_or(|fact| !fact.scalar.is_bool())
             || precondition_fact.is_none_or(|fact| !fact.scalar.is_bool())
         {
@@ -1323,6 +1415,12 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         }
         if contract_valid.contains(&(block, operation)) {
             policy_checked_numerical_obligations += 1;
+            numerical_certificates.push(PlironNumericalBoundCertificateV1 {
+                block,
+                operation,
+                requested_absolute_error_f64_bits: absolute_error.expect("validated bound"),
+                requested_relative_error_f64_bits: relative_error.expect("validated bound"),
+            });
         }
     }
     let collective_count = collective_contracts.len();
@@ -1523,6 +1621,8 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         collective_contracts: collective_count,
         policy_checked_collective_contracts,
         typed_root_commitments,
+        numerical_certificates,
+        progress,
         effect_refinement,
     }
 }
@@ -1587,6 +1687,8 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
         collective_contracts: 0,
         policy_checked_collective_contracts: 0,
         typed_root_commitments: Vec::new(),
+        numerical_certificates: Vec::new(),
+        progress: PlironProgressReportV1::clean(),
         effect_refinement: clean_effect_refinement_report_v1(),
     }
 }
@@ -1646,6 +1748,8 @@ mod status_tests {
             collective_contracts: 0,
             policy_checked_collective_contracts: 0,
             typed_root_commitments: Vec::new(),
+            numerical_certificates: Vec::new(),
+            progress: PlironProgressReportV1::clean(),
             effect_refinement: clean_effect_refinement_report_v1(),
         };
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
@@ -1660,6 +1764,8 @@ mod status_tests {
                 collective_contracts: 0,
                 policy_checked_collective_contracts: 0,
                 typed_root_commitments: Vec::new(),
+                numerical_certificates: Vec::new(),
+                progress: PlironProgressReportV1::clean(),
                 effect_refinement: clean_effect_refinement_report_v1(),
             }
             .status(),

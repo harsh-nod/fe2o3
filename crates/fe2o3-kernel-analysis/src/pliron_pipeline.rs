@@ -7,6 +7,7 @@ use pliron::{builtin::ops::FuncOp, context::Context};
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_barrier::require_pliron_barrier_convergence_with_analyses_v1;
 use crate::pliron_hierarchical_ownership::require_pliron_hierarchical_ownership_with_analyses_v1;
+use crate::pliron_launch_contract::require_pliron_launch_contract_before_lowering_v1;
 use crate::pliron_race::require_pliron_ranked_race_freedom_with_analyses_v1;
 use crate::pliron_ranked_bounds::require_pliron_ranked_bounds_with_analyses_v1;
 use crate::pliron_semantic_refinement::require_pliron_semantic_refinement_with_analyses_v1;
@@ -16,6 +17,7 @@ use crate::{
     HierarchicalOwnershipCheckErrorV1, HierarchicalOwnershipReportV1, KernelCheckPassKindV1,
     KernelCheckStatusV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
+    PlironLaunchContractCheckErrorV1, PlironLaunchContractReportV1, PlironLaunchContractV1,
     PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
     PlironTensorLayoutCheckErrorV1, PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1,
     PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1,
@@ -45,6 +47,7 @@ pub enum KernelCheckRepairActionV1 {
     MakeBarrierControlUniform,
     InitializeAndPublishWorkgroupMemory,
     MatchReferenceSemantics,
+    SatisfyTargetContract,
 }
 
 impl KernelCheckRepairActionV1 {
@@ -60,6 +63,7 @@ impl KernelCheckRepairActionV1 {
             Self::MakeBarrierControlUniform => "FE2O3-FIX-BARRIER",
             Self::InitializeAndPublishWorkgroupMemory => "FE2O3-FIX-WORKGROUP",
             Self::MatchReferenceSemantics => "FE2O3-FIX-SEMANTIC",
+            Self::SatisfyTargetContract => "FE2O3-FIX-TARGET",
         }
     }
 }
@@ -165,6 +169,15 @@ pub fn kernel_check_repair_for_pass_v1(pass: KernelCheckPassKindV1) -> KernelChe
         action,
         KernelCheckRepairApplicabilityV1::HasPlaceholders,
         message,
+    )
+}
+
+fn launch_contract_repair_v1() -> KernelCheckRepairV1 {
+    KernelCheckRepairV1::new(
+        KernelCheckPassKindV1::Structural,
+        KernelCheckRepairActionV1::SatisfyTargetContract,
+        KernelCheckRepairApplicabilityV1::HasPlaceholders,
+        "use a target-supported grid, workgroup, subgroup, and LDS footprint; bind each global allocation origin to a sufficiently large aligned host descriptor, and guard dynamic launch facts at runtime",
     )
 }
 
@@ -453,6 +466,7 @@ pub const PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2: [KernelCheckPassKindV1; 8
 /// Exact reports from one uninterrupted V2 production validation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionPlironPreloweringReportV2 {
+    target_contract: Option<PlironLaunchContractReportV1>,
     tensor_layout: PlironTensorLayoutReportV1,
     bounds: RankedBoundsReportV1,
     atomics: PlironAtomicLegalityReportV1,
@@ -470,6 +484,13 @@ impl ProductionPlironPreloweringReportV2 {
 
     pub const fn tensor_layout(&self) -> &PlironTensorLayoutReportV1 {
         &self.tensor_layout
+    }
+
+    /// Target and host feasibility when the caller supplied compiler target
+    /// inputs. The target-agnostic entry point leaves this absent and still
+    /// grants no launch authority.
+    pub const fn target_contract(&self) -> Option<&PlironLaunchContractReportV1> {
+        self.target_contract.as_ref()
     }
 
     pub const fn bounds(&self) -> &RankedBoundsReportV1 {
@@ -501,15 +522,23 @@ impl ProductionPlironPreloweringReportV2 {
     }
 
     pub fn status(&self) -> KernelCheckStatusV1 {
-        self.tensor_layout
-            .status()
-            .join(self.bounds.status())
-            .join(self.atomics.status())
-            .join(self.race.status())
-            .join(self.ownership.status())
-            .join(self.barriers.status())
-            .join(self.workgroup.status())
-            .join(self.semantics.status())
+        self.target_contract
+            .as_ref()
+            .map_or(
+                KernelCheckStatusV1::Clean,
+                PlironLaunchContractReportV1::status,
+            )
+            .join(
+                self.tensor_layout
+                    .status()
+                    .join(self.bounds.status())
+                    .join(self.atomics.status())
+                    .join(self.race.status())
+                    .join(self.ownership.status())
+                    .join(self.barriers.status())
+                    .join(self.workgroup.status())
+                    .join(self.semantics.status()),
+            )
     }
 
     pub fn is_clean(&self) -> bool {
@@ -527,6 +556,7 @@ impl ProductionPlironPreloweringReportV2 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionPlironPreloweringErrorV2 {
+    TargetContract(PlironLaunchContractCheckErrorV1),
     TensorLayout(PlironTensorLayoutCheckErrorV1),
     Bounds(RankedBoundsCheckErrorV1),
     Atomic(PlironAtomicLegalityCheckErrorV1),
@@ -543,6 +573,7 @@ impl ProductionPlironPreloweringErrorV2 {
     /// applied silently.
     pub fn repair_hints(&self) -> Vec<KernelCheckRepairV1> {
         let repair = match self {
+            Self::TargetContract(_) => return vec![launch_contract_repair_v1()],
             Self::TensorLayout(error) => return vec![tensor_layout_repair_for_error_v1(error)],
             Self::Bounds(_) => KernelCheckPassKindV1::MemoryBounds,
             Self::Atomic(_) => KernelCheckPassKindV1::AtomicLegality,
@@ -559,6 +590,7 @@ impl ProductionPlironPreloweringErrorV2 {
 impl fmt::Display for ProductionPlironPreloweringErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TargetContract(error) => error.fmt(formatter),
             Self::TensorLayout(error) => error.fmt(formatter),
             Self::Bounds(error) => error.fmt(formatter),
             Self::Atomic(error) => error.fmt(formatter),
@@ -575,6 +607,7 @@ impl fmt::Display for ProductionPlironPreloweringErrorV2 {
 impl Error for ProductionPlironPreloweringErrorV2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::TargetContract(error) => Some(error),
             Self::TensorLayout(error) => Some(error),
             Self::Bounds(error) => Some(error),
             Self::Atomic(error) => Some(error),
@@ -591,7 +624,7 @@ pub fn require_production_pliron_checks_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, None)
+    require_production_pliron_checks_v2(context, function, None, None)
 }
 
 pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
@@ -599,15 +632,44 @@ pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
     function: &FuncOp,
     atomic_target: &PlironAtomicTargetContextV1,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, Some(atomic_target))
+    require_production_pliron_checks_v2(context, function, Some(atomic_target), None)
+}
+
+/// Runs the same fixed eight-stage policy pipeline with compiler-supplied
+/// target and host-allocation preconditions checked before those stages.
+pub fn require_production_pliron_checks_with_target_before_lowering_v2(
+    context: &Context,
+    function: &FuncOp,
+    target_contract: &PlironLaunchContractV1,
+) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_v2(context, function, None, Some(target_contract))
+}
+
+pub fn require_production_pliron_checks_with_atomic_and_target_before_lowering_v2(
+    context: &Context,
+    function: &FuncOp,
+    atomic_target: &PlironAtomicTargetContextV1,
+    target_contract: &PlironLaunchContractV1,
+) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_v2(
+        context,
+        function,
+        Some(atomic_target),
+        Some(target_contract),
+    )
 }
 
 fn require_production_pliron_checks_v2(
     context: &Context,
     function: &FuncOp,
     atomic_target: Option<&PlironAtomicTargetContextV1>,
+    target_contract: Option<&PlironLaunchContractV1>,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
     let mut analyses = PlironAnalysisManagerV1::new(function);
+    let target_contract = target_contract
+        .map(|target| require_pliron_launch_contract_before_lowering_v1(context, function, target))
+        .transpose()
+        .map_err(ProductionPlironPreloweringErrorV2::TargetContract)?;
     let tensor_layout =
         require_pliron_tensor_layout_with_analyses_v1(context, function, &mut analyses)
             .map_err(ProductionPlironPreloweringErrorV2::TensorLayout)?;
@@ -636,6 +698,7 @@ fn require_production_pliron_checks_v2(
         require_pliron_semantic_refinement_with_analyses_v1(context, function, &mut analyses)
             .map_err(ProductionPlironPreloweringErrorV2::Semantic)?;
     Ok(ProductionPlironPreloweringReportV2 {
+        target_contract,
         tensor_layout,
         bounds,
         atomics,
