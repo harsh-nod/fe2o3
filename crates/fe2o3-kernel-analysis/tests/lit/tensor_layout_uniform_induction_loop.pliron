@@ -1,6 +1,7 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: PASS
-// CHECK: PASS
+// EXPECT: REJECT
+// CHECK: error[FE2O3-PROGRESS-002]
+// CHECK: symbolic bound with a non-unit step needs a no-wrap range proof
 builtin.func @tensor_layout_uniform_induction_loop: builtin.function <(kernel.index ) -> ()>
 {
   ^entry_block1v1(k_v0: kernel.index ):

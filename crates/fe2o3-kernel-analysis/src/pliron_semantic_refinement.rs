@@ -672,7 +672,7 @@ impl PlironSemanticRefinementReportV1 {
             .fold(KernelCheckStatusV1::Clean, |status, finding| {
                 status.join(finding.status())
             })
-            .join(self.progress.blocking_status())
+            .join(self.progress.status())
             .join(self.effect_refinement.status())
     }
 

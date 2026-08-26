@@ -126,20 +126,6 @@ impl PlironProgressReportV1 {
                 status.join(finding.status())
             })
     }
-    /// Only a concrete nontermination counterexample blocks the compatibility
-    /// pipeline. Unsupported ranking functions remain visible as advisory
-    /// incompleteness and confer no termination authority.
-    pub(crate) fn blocking_status(&self) -> KernelCheckStatusV1 {
-        if self
-            .findings
-            .iter()
-            .any(|finding| finding.status() == KernelCheckStatusV1::Rejected)
-        {
-            KernelCheckStatusV1::Rejected
-        } else {
-            KernelCheckStatusV1::Clean
-        }
-    }
     pub fn is_clean(&self) -> bool {
         self.status() == KernelCheckStatusV1::Clean
     }

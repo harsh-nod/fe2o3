@@ -32,9 +32,9 @@ mod pliron_pipeline;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_presburger;
 #[cfg(feature = "pliron-analysis")]
-mod pliron_provenance_alias;
-#[cfg(feature = "pliron-analysis")]
 mod pliron_progress;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_provenance_alias;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_race;
 #[cfg(feature = "pliron-analysis")]
@@ -86,9 +86,9 @@ pub use pliron_pipeline::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_presburger::*;
 #[cfg(feature = "pliron-analysis")]
-pub use pliron_provenance_alias::*;
-#[cfg(feature = "pliron-analysis")]
 pub use pliron_progress::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_provenance_alias::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_race::*;
 #[cfg(feature = "pliron-analysis")]
