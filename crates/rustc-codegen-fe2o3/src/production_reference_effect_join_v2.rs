@@ -358,7 +358,25 @@ pub(crate) fn prepare_reference_effect_request_v2(
             },
         );
     }
-    discharge_reference_bounds_checks_v2(&binding.effect_ir, &binding.observable_output_writes)?;
+    crate::production_reference_bounds_v2::discharge_reference_bounds_over_ranked_domains_v2(
+        &kernel,
+        &binding.effect_ir,
+        &prepared
+            .iter()
+            .map(
+                |output| crate::production_reference_bounds_v2::CompilerOwnedOutputDomainV2 {
+                    reference: &output.reference_write,
+                    ranked_view: output.write.view,
+                },
+            )
+            .collect::<Vec<_>>(),
+    )
+    .map_err(
+        |error| ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
+            block: error.block(),
+            detail: error.detail().to_owned(),
+        },
+    )?;
 
     let subjects = FunctionalRefinementSubjectsV2::new(
         SafeReferenceKindV2::Mir,
@@ -537,50 +555,6 @@ pub(crate) fn prepare_reference_effect_request_v2(
         requests,
         proof_timeout_seconds,
     })
-}
-
-fn discharge_reference_bounds_checks_v2(
-    effect_ir: &ReferenceEffectIrV1,
-    outputs: &[ReferenceOutputWriteV1],
-) -> Result<(), ProductionReferenceEffectJoinErrorV2> {
-    let checks = effect_ir.resolved_bounds_checks_v1().map_err(|_| {
-        ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-            "a retained safe-slice bounds assertion cannot be normalized",
-        )
-    })?;
-    if let Some(check) = checks.first() {
-        return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-            block: check.block,
-            detail: "no compiler-owned extent relation proves this bounds condition over the complete output domain",
-        });
-    }
-    if let Some(output) = outputs.iter().find(|output| {
-        matches!(output.coordinate, ReferenceOutputCoordinateV1::Dynamic(_))
-            || contains_reference_slice_access_v2(&output.rhs)
-    }) {
-        return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-            block: output.block,
-            detail: "a safe-slice access has no retained bounds assertion and no compiler-owned extent relation proves it over the complete output domain",
-        });
-    }
-    Ok(())
-}
-
-fn contains_reference_slice_access_v2(expression: &ReferenceEffectExpressionV1) -> bool {
-    match expression {
-        ReferenceEffectExpressionV1::InputLoad { .. } => true,
-        ReferenceEffectExpressionV1::Binary { lhs, rhs, .. } => {
-            contains_reference_slice_access_v2(lhs) || contains_reference_slice_access_v2(rhs)
-        }
-        ReferenceEffectExpressionV1::Unary { operand, .. }
-        | ReferenceEffectExpressionV1::Cast { operand, .. } => {
-            contains_reference_slice_access_v2(operand)
-        }
-        ReferenceEffectExpressionV1::PointCoordinate { .. }
-        | ReferenceEffectExpressionV1::KernelScalarArgument { .. }
-        | ReferenceEffectExpressionV1::InputLength { .. }
-        | ReferenceEffectExpressionV1::Constant(_) => false,
-    }
 }
 
 fn supported_ranked_scalar_v2(scalar: ReferenceScalarTypeV1) -> bool {
@@ -1485,7 +1459,7 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
     },
     ReferenceBoundsCheck {
         block: u32,
-        detail: &'static str,
+        detail: String,
     },
     AmbiguousOwnership,
     WriteLocation,
@@ -2022,53 +1996,5 @@ mod tests {
             },
             vec![output],
         )
-    }
-
-    fn assert_bounds_rejection(
-        effect_ir: &ReferenceEffectIrV1,
-        outputs: &[ReferenceOutputWriteV1],
-        detail: &str,
-    ) {
-        let error = discharge_reference_bounds_checks_v2(effect_ir, outputs).unwrap_err();
-        assert!(error.to_string().contains(detail), "{error}");
-    }
-
-    #[test]
-    fn exact_slice_bounds_assertion_requires_a_compiler_owned_extent_relation() {
-        let (effect_ir, outputs) = bounds_discharge_fixture();
-        assert_bounds_rejection(
-            &effect_ir,
-            &outputs,
-            "no compiler-owned extent relation proves this bounds condition over the complete output domain",
-        );
-    }
-
-    #[test]
-    fn slice_access_without_a_retained_assertion_also_fails_closed() {
-        let (mut effect_ir, outputs) = bounds_discharge_fixture();
-        effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 1 };
-        assert_bounds_rejection(
-            &effect_ir,
-            &outputs,
-            "has no retained bounds assertion and no compiler-owned extent relation",
-        );
-    }
-
-    #[test]
-    fn dynamic_output_access_without_an_extent_relation_fails_closed() {
-        let (mut effect_ir, mut outputs) = bounds_discharge_fixture();
-        effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 1 };
-        outputs[0].coordinate = ReferenceOutputCoordinateV1::Dynamic(
-            ReferenceEffectExpressionV1::Constant(usize_constant(0)),
-        );
-        outputs[0].rhs = ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
-            scalar: ReferenceScalarTypeV1::U32,
-            bits: 17,
-        });
-        assert_bounds_rejection(
-            &effect_ir,
-            &outputs,
-            "has no retained bounds assertion and no compiler-owned extent relation",
-        );
     }
 }

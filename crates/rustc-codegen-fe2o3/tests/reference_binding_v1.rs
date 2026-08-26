@@ -107,9 +107,12 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
 
     let slice_read = run_feature(&target.0, "reference-slice-read");
     assert!(
-        slice_read.contains(
-            "no compiler-owned extent relation proves this bounds condition over the complete output domain"
-        ) && !slice_read.contains("functional-refinement proof runtime unavailable"),
+        ((slice_read.contains("cannot prove full-domain bound")
+            && slice_read.contains("no exact ranked extent relation")
+            && slice_read.contains("point[0]"))
+            || (slice_read.contains("ranked extent %")
+                && slice_read.contains("is not an exact constant, argument, or index expression")))
+            && !slice_read.contains("functional-refinement proof runtime unavailable"),
         "safe-slice reference gained full-domain authority without an extent proof:\n{slice_read}",
     );
 }

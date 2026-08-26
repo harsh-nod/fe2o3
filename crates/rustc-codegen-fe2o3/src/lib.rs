@@ -66,6 +66,7 @@ mod production_pipeline;
 #[cfg(not(feature = "qualification-oracles-test-only"))]
 mod production_policy;
 mod production_ranked_projection_v1;
+mod production_reference_bounds_v2;
 mod production_reference_effect_join_v2;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod production_rustc_driver_v1;

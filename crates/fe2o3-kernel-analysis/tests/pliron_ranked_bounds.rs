@@ -1,7 +1,8 @@
 use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DeterministicJoinOp, DimensionOp,
-    GeneralGemmOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, IndexType,
-    RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, TrapOp, register_dialect,
+    GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp,
+    IndexLessThanBranchOp, IndexType, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
+    TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
@@ -731,6 +732,90 @@ fn dominating_guard_remains_valid_across_a_loop_backedge() {
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Clean);
+}
+
+#[test]
+fn sparse_affine_expression_proves_the_exact_static_boundary() {
+    let context = &mut setup();
+    let (function, _) = function(context, "affine_static_boundary", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![16]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let seven = IndexConstantOp::new(context, 7);
+    let two = IndexConstantOp::new(context, 2);
+    let one = IndexConstantOp::new(context, 1);
+    let product = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        seven.result(context),
+        two.result(context),
+    );
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        product.result(context),
+        one.result(context),
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &view);
+    append(context, entry, &seven);
+    append(context, entry, &two);
+    append(context, entry, &one);
+    append(context, entry, &product);
+    append(context, entry, &index);
+    append(context, entry, &access);
+    append(context, entry, &ret);
+
+    assert!(run_pliron_ranked_bounds_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn sparse_affine_overflow_does_not_wrap_into_a_false_bounds_proof() {
+    let context = &mut setup();
+    let (function, _) = function(context, "affine_overflow", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![16]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let one = IndexConstantOp::new(context, 1);
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        maximum.result(context),
+        one.result(context),
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &view);
+    append(context, entry, &maximum);
+    append(context, entry, &one);
+    append(context, entry, &index);
+    append(context, entry, &access);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [RankedBoundsFindingV1::UnprovedBound { dimension: 0, .. }]
+    ));
+    assert!(
+        report.findings()[0]
+            .to_string()
+            .contains("FE2O3-BOUNDS-002")
+    );
 }
 
 #[test]
