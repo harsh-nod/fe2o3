@@ -5,13 +5,16 @@
 //! extension is documented in `crates/dialect-amdgcn/GFX942_FLOATS.md`, and the
 //! source-bound assembly subset is documented in
 //! `crates/dialect-amdgcn/GFX942_INLINE_ASSEMBLY.md`. None of these paths grants
-//! linking, loading, or execution authority.
+//! linking, loading, or execution authority. The gfx950 surface adds only
+//! target-checked low-precision scaled MFMA and LDS transpose-load fragments.
 
 mod device_math;
+mod gfx950;
 mod lowering;
 mod scalar_v2;
 
 pub use device_math::*;
+pub use gfx950::*;
 pub use lowering::*;
 pub use scalar_v2::*;
 
@@ -45,6 +48,9 @@ pub enum AmdgcnIntrinsic {
     Ballot64,
     DsBpermute,
     MfmaF32M16N16K16Bf16,
+    DsReadTr4B64,
+    DsReadTr8B64,
+    DsReadTr16B64,
 }
 
 impl AmdgcnIntrinsic {
@@ -67,6 +73,9 @@ impl AmdgcnIntrinsic {
             Self::Ballot64 => "llvm.amdgcn.ballot.i64",
             Self::DsBpermute => "llvm.amdgcn.ds.bpermute",
             Self::MfmaF32M16N16K16Bf16 => "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
+            Self::DsReadTr4B64 => "llvm.amdgcn.ds.read.tr4.b64.v2i32",
+            Self::DsReadTr8B64 => "llvm.amdgcn.ds.read.tr8.b64.v2i32",
+            Self::DsReadTr16B64 => "llvm.amdgcn.ds.read.tr16.b64.v4i16",
         }
     }
 }

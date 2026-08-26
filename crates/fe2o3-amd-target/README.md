@@ -63,12 +63,13 @@ method emit the same deterministic text.
 
 Additional typed queries describe reviewed source-contract prerequisites for
 workgroup dimensions, standard Rust atomics, native split barriers, FP8 and MX
-formats, MFMA numerical families, device diagnostics, and launch-bounds
-metadata. These queries currently carry a conservative `gfx942` profile.
-Unreviewed processors fail closed with an explicit `unreviewed` status plus
-empty positive projections. This is distinct from `unsupported`, which is a
-reviewed negative fact for a specific target. The older broad target queries
-retain their existing behavior.
+formats, MFMA numerical families, LDS transpose loads, device diagnostics, and
+launch-bounds metadata. These queries carry a conservative complete `gfx942`
+profile and a deliberately partial `gfx950` low-precision profile. Unreviewed
+decisions fail closed with an explicit `unreviewed` status plus empty positive
+projections. This is distinct from `unsupported`, which is a reviewed negative
+fact for a specific target. The older broad target queries retain their
+existing behavior.
 
 The advanced queries do not add fields to the V1 canonical text encoding. The
 encoding remains byte-for-byte compatible and identifies the exact target from
@@ -100,6 +101,12 @@ reviewed occupancy translation. Device printf and debug-trap observation
 require runtime evidence. These facts do not authorize a source operation:
 exact matrix shapes/layouts, linked device libraries, and launch admission
 remain separate checks.
+
+The partial `gfx950` profile admits OCP E4M3/E5M2 FP8, MXFP8/MXBF8/MXFP4,
+scaled `f8f6f4` MFMA, and the format-specific `ds_read_b64_tr_b4`,
+`ds_read_b64_tr_b8`, and `ds_read_b64_tr_b16` transpose loads. Other advanced
+gfx950 areas remain `unreviewed`; this profile does not inherit unrelated
+gfx942 atomic, diagnostic, launch-bound, or workgroup-limit decisions.
 
 ```rust
 use fe2o3_amd_target::{AmdTargetId, CapabilitySupport, WavefrontWidth};

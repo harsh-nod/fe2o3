@@ -4,8 +4,8 @@ use fe2o3_amd_target::{
     AsyncCopyInstructionSet, AtomicAddressSpace, AtomicLegalizability, AtomicOperation,
     AtomicOrdering, AtomicScope, AtomicWidth, CapabilityDerivationError, CapabilitySupport,
     DeviceDiagnosticFeature, Fp8Format, KNOWN_PROCESSORS, LaunchBoundsField, LaunchBoundsMetadata,
-    MatrixInstructionSet, MfmaFamily, MxFormat, ParseAmdTargetIdError, StandardAtomicQuery,
-    WavefrontWidth, WorkgroupAxis,
+    LdsTransposeInstruction, MatrixInstructionSet, MfmaFamily, MxFormat, ParseAmdTargetIdError,
+    StandardAtomicQuery, WavefrontWidth, WorkgroupAxis,
 };
 
 const ATOMIC_OPERATIONS: [AtomicOperation; 14] = [
@@ -119,7 +119,12 @@ fn representative_wave_and_lds_profiles_match_llvm_subtarget_facts() {
 fn representative_matrix_families_are_exact_and_fail_closed() {
     let gfx942 = capabilities("gfx942").matrix_instruction_sets();
     assert!(gfx942.contains(MatrixInstructionSet::Mfma));
+    assert!(!gfx942.contains(MatrixInstructionSet::ScaledMfmaF8F6F4));
     assert!(!gfx942.contains(MatrixInstructionSet::Wmma128));
+
+    let gfx950 = capabilities("gfx950").matrix_instruction_sets();
+    assert!(gfx950.contains(MatrixInstructionSet::Mfma));
+    assert!(gfx950.contains(MatrixInstructionSet::ScaledMfmaF8F6F4));
 
     let gfx1151 = capabilities("gfx1151").matrix_instruction_sets();
     assert!(gfx1151.contains(MatrixInstructionSet::Wmma256));
@@ -318,9 +323,84 @@ fn gfx942_min_workgroups_is_not_implied_by_waves_per_eu_metadata() {
 }
 
 #[test]
+fn gfx950_low_precision_and_transpose_capabilities_are_exact() {
+    let gfx950 = capabilities("gfx950");
+    assert_eq!(
+        gfx950.advanced_profile_status(),
+        AdvancedCapabilityStatus::Supported
+    );
+    assert_eq!(gfx950.max_lds_bytes_per_workgroup(), 160 * 1024);
+    assert!(gfx950.workgroup_limits().is_none());
+    assert_eq!(
+        gfx950.workgroup_limits_support(),
+        AdvancedCapabilityStatus::Unreviewed
+    );
+    assert!(gfx950.standard_atomic_widths().is_empty());
+    assert_eq!(
+        gfx950.native_split_barriers(),
+        AdvancedCapabilityStatus::Unreviewed
+    );
+
+    for format in [Fp8Format::E4M3Ocp, Fp8Format::E5M2Ocp] {
+        assert!(gfx950.fp8_formats().contains(format));
+        assert_eq!(
+            gfx950.fp8_format_support(format),
+            AdvancedCapabilityStatus::Supported
+        );
+    }
+    for format in [Fp8Format::E4M3Fnuz, Fp8Format::E5M2Fnuz] {
+        assert!(!gfx950.fp8_formats().contains(format));
+        assert_eq!(
+            gfx950.fp8_format_support(format),
+            AdvancedCapabilityStatus::Unreviewed
+        );
+    }
+    for format in [MxFormat::Fp8, MxFormat::Bf8, MxFormat::Fp4] {
+        assert!(gfx950.mx_formats().contains(format));
+        assert_eq!(
+            gfx950.mx_format_support(format),
+            AdvancedCapabilityStatus::Supported
+        );
+    }
+    for family in [
+        MfmaFamily::F32FromFp8Ocp,
+        MfmaFamily::F32FromBf8Ocp,
+        MfmaFamily::F32FromFp4Ocp,
+    ] {
+        assert!(gfx950.mfma_families().contains(family));
+        assert_eq!(
+            gfx950.mfma_family_support(family),
+            AdvancedCapabilityStatus::Supported
+        );
+    }
+    for family in [MfmaFamily::F32FromFp8Fnuz, MfmaFamily::F32FromBf8Fnuz] {
+        assert_eq!(
+            gfx950.mfma_family_support(family),
+            AdvancedCapabilityStatus::Unreviewed
+        );
+    }
+
+    for instruction in [
+        LdsTransposeInstruction::DsReadTr4B64,
+        LdsTransposeInstruction::DsReadTr8B64,
+        LdsTransposeInstruction::DsReadTr16B64,
+    ] {
+        assert!(gfx950.lds_transpose_instructions().contains(instruction));
+        assert_eq!(
+            gfx950.lds_transpose_instruction_support(instruction),
+            AdvancedCapabilityStatus::Supported
+        );
+        assert_eq!(
+            capabilities("gfx942").lds_transpose_instruction_support(instruction),
+            AdvancedCapabilityStatus::Unsupported
+        );
+    }
+}
+
+#[test]
 fn unreviewed_advanced_capability_profiles_fail_closed() {
     for &processor in KNOWN_PROCESSORS {
-        if processor == "gfx942" {
+        if matches!(processor, "gfx942" | "gfx950") {
             continue;
         }
         let capabilities = capabilities(processor);
@@ -599,9 +679,9 @@ fn subword_generic_and_signedness_cases_are_explicit() {
 fn advanced_model_revision_and_identity_are_explicit_without_changing_v1() {
     assert_eq!(
         ADVANCED_CAPABILITY_MODEL_REVISION,
-        AdvancedCapabilityModelRevision::V2
+        AdvancedCapabilityModelRevision::V3
     );
-    assert_eq!(ADVANCED_CAPABILITY_MODEL_REVISION.get(), 2);
+    assert_eq!(ADVANCED_CAPABILITY_MODEL_REVISION.get(), 3);
     assert_ne!(
         AdvancedCapabilityModelRevision::V1,
         AdvancedCapabilityModelRevision::V2
@@ -613,7 +693,7 @@ fn advanced_model_revision_and_identity_are_explicit_without_changing_v1() {
     let capabilities = target.capabilities().unwrap();
     assert_eq!(
         capabilities.advanced_model_revision(),
-        AdvancedCapabilityModelRevision::V2
+        AdvancedCapabilityModelRevision::V3
     );
     let post_change_identity = capabilities.advanced_model_identity();
     assert_ne!(pre_change_identity, post_change_identity);
@@ -623,7 +703,7 @@ fn advanced_model_revision_and_identity_are_explicit_without_changing_v1() {
     );
     assert_eq!(
         post_change_identity.revision(),
-        AdvancedCapabilityModelRevision::V2
+        AdvancedCapabilityModelRevision::V3
     );
     assert_eq!(pre_change_identity.target(), target);
     assert_eq!(post_change_identity.target(), target);
@@ -633,7 +713,7 @@ fn advanced_model_revision_and_identity_are_explicit_without_changing_v1() {
     );
     assert_eq!(
         post_change_identity.to_string(),
-        "amd-advanced-capability-model-v2{target=gfx942:xnack-}"
+        "amd-advanced-capability-model-v3{target=gfx942:xnack-}"
     );
     assert_eq!(
         capabilities.to_string(),

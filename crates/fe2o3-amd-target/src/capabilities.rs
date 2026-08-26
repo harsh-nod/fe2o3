@@ -7,8 +7,8 @@ use crate::advanced_model::{
 use crate::atomic_legalizability::{AtomicLegalizability, StandardAtomicQuery};
 use crate::feature_capabilities::{
     AdvancedTargetCapabilities, AtomicOrderings, AtomicWidths, DeviceDiagnosticFeature, Fp8Format,
-    Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, MfmaFamilies, MfmaFamily, MxFormat,
-    MxFormats, WorkgroupLimits,
+    Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, LdsTransposeInstruction,
+    LdsTransposeInstructions, MfmaFamilies, MfmaFamily, MxFormat, MxFormats, WorkgroupLimits,
 };
 use crate::{AmdTargetFeature, AmdTargetId};
 
@@ -53,6 +53,7 @@ impl fmt::Display for AtomicScope {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MatrixInstructionSet {
     Mfma,
+    ScaledMfmaF8F6F4,
     Wmma128,
     Wmma256,
     Swmma,
@@ -62,6 +63,7 @@ impl fmt::Display for MatrixInstructionSet {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Mfma => "mfma",
+            Self::ScaledMfmaF8F6F4 => "scaled-mfma-f8f6f4",
             Self::Wmma128 => "wmma128",
             Self::Wmma256 => "wmma256",
             Self::Swmma => "swmma",
@@ -236,12 +238,14 @@ pub struct MatrixInstructionSets(u8);
 
 impl MatrixInstructionSets {
     const MFMA: u8 = 1 << 0;
-    const WMMA128: u8 = 1 << 1;
-    const WMMA256: u8 = 1 << 2;
-    const SWMMA: u8 = 1 << 3;
+    const SCALED_MFMA_F8F6F4: u8 = 1 << 1;
+    const WMMA128: u8 = 1 << 2;
+    const WMMA256: u8 = 1 << 3;
+    const SWMMA: u8 = 1 << 4;
 
     const NONE: Self = Self(0);
     const MFMA_ONLY: Self = Self(Self::MFMA);
+    const MFMA_AND_SCALED_F8F6F4: Self = Self(Self::MFMA | Self::SCALED_MFMA_F8F6F4);
     const WMMA128_AND_SWMMA: Self = Self(Self::WMMA128 | Self::SWMMA);
     const WMMA256_ONLY: Self = Self(Self::WMMA256);
     const SWMMA_ONLY: Self = Self(Self::SWMMA);
@@ -250,6 +254,7 @@ impl MatrixInstructionSets {
     pub const fn contains(self, instruction_set: MatrixInstructionSet) -> bool {
         let flag = match instruction_set {
             MatrixInstructionSet::Mfma => Self::MFMA,
+            MatrixInstructionSet::ScaledMfmaF8F6F4 => Self::SCALED_MFMA_F8F6F4,
             MatrixInstructionSet::Wmma128 => Self::WMMA128,
             MatrixInstructionSet::Wmma256 => Self::WMMA256,
             MatrixInstructionSet::Swmma => Self::SWMMA,
@@ -269,6 +274,7 @@ impl fmt::Display for MatrixInstructionSets {
         let mut separator = "";
         for instruction_set in [
             MatrixInstructionSet::Mfma,
+            MatrixInstructionSet::ScaledMfmaF8F6F4,
             MatrixInstructionSet::Wmma128,
             MatrixInstructionSet::Wmma256,
             MatrixInstructionSet::Swmma,
@@ -432,8 +438,7 @@ impl AmdTargetCapabilities {
 
     /// Review status for the workgroup-limit record.
     pub const fn workgroup_limits_support(&self) -> AdvancedCapabilityStatus {
-        self.advanced
-            .reviewed_set_member(self.advanced.workgroup_limits.is_some())
+        self.advanced.workgroup_limits_status
     }
 
     /// Returns the maximum wavefront count implied by reviewed workgroup
@@ -496,8 +501,11 @@ impl AmdTargetCapabilities {
 
     /// Returns the reviewed status of one exact scalar FP8 encoding.
     pub const fn fp8_format_support(&self, format: Fp8Format) -> AdvancedCapabilityStatus {
-        self.advanced
-            .reviewed_set_member(self.advanced.fp8_formats.contains(format))
+        AdvancedTargetCapabilities::reviewed_set_member(
+            self.advanced.fp8_formats_status,
+            self.advanced.fp8_formats_nonmember_status,
+            self.advanced.fp8_formats.contains(format),
+        )
     }
 
     /// Reviewed native microscaling formats for this exact target.
@@ -507,8 +515,11 @@ impl AmdTargetCapabilities {
 
     /// Returns the reviewed status of one exact microscaling format.
     pub const fn mx_format_support(&self, format: MxFormat) -> AdvancedCapabilityStatus {
-        self.advanced
-            .reviewed_set_member(self.advanced.mx_formats.contains(format))
+        AdvancedTargetCapabilities::reviewed_set_member(
+            self.advanced.mx_formats_status,
+            self.advanced.mx_formats_nonmember_status,
+            self.advanced.mx_formats.contains(format),
+        )
     }
 
     /// Reviewed MFMA numerical families for this exact target.
@@ -518,8 +529,30 @@ impl AmdTargetCapabilities {
 
     /// Returns the reviewed status of one MFMA numerical family.
     pub const fn mfma_family_support(&self, family: MfmaFamily) -> AdvancedCapabilityStatus {
-        self.advanced
-            .reviewed_set_member(self.advanced.mfma_families.contains(family))
+        AdvancedTargetCapabilities::reviewed_set_member(
+            self.advanced.mfma_families_status,
+            self.advanced.mfma_families_nonmember_status,
+            self.advanced.mfma_families.contains(family),
+        )
+    }
+
+    /// Reviewed LDS transpose-load instructions for this exact target.
+    pub const fn lds_transpose_instructions(&self) -> LdsTransposeInstructions {
+        self.advanced.lds_transpose_instructions
+    }
+
+    /// Returns the reviewed status of one exact LDS transpose-load instruction.
+    pub const fn lds_transpose_instruction_support(
+        &self,
+        instruction: LdsTransposeInstruction,
+    ) -> AdvancedCapabilityStatus {
+        AdvancedTargetCapabilities::reviewed_set_member(
+            self.advanced.lds_transpose_instructions_status,
+            self.advanced.lds_transpose_instructions_nonmember_status,
+            self.advanced
+                .lds_transpose_instructions
+                .contains(instruction),
+        )
     }
 
     /// Returns the target-level support state for a device diagnostic feature.
@@ -686,8 +719,9 @@ fn processor_profile(processor: &str) -> Option<ProcessorProfile> {
     } else {
         64 * 1024
     };
-    let matrix_instruction_sets = if matches!(bytes, b"gfx908" | b"gfx90a" | b"gfx942" | b"gfx950")
-    {
+    let matrix_instruction_sets = if matches!(bytes, b"gfx950") {
+        MatrixInstructionSets::MFMA_AND_SCALED_F8F6F4
+    } else if matches!(bytes, b"gfx908" | b"gfx90a" | b"gfx942") {
         MatrixInstructionSets::MFMA_ONLY
     } else if matches!(
         bytes,

@@ -24,8 +24,9 @@ pub use capabilities::{
 };
 pub use feature_capabilities::{
     AtomicOrdering, AtomicOrderings, AtomicWidth, AtomicWidths, DeviceDiagnosticFeature, Fp8Format,
-    Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, MfmaFamilies, MfmaFamily, MxFormat,
-    MxFormats, WorkgroupAxis, WorkgroupLimits,
+    Fp8Formats, LaunchBoundsField, LaunchBoundsMetadata, LdsTransposeInstruction,
+    LdsTransposeInstructions, MfmaFamilies, MfmaFamily, MxFormat, MxFormats, WorkgroupAxis,
+    WorkgroupLimits,
 };
 pub use resolved_target_v2::{
     AmdTargetDetectionV2, CanonicalResolvedAmdTargetBytesV2, DecodeResolvedAmdTargetV2Error,
@@ -47,6 +48,20 @@ pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1: &str =
     "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS";
 /// Parent-owned rustc arguments for production target crates.
 pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
+
+/// Exact Cargo/rustc target triple admitted by the first gfx950 production profile.
+pub const PRODUCTION_GFX950_RUSTC_TARGET_V1: &str = "amdgcn-amd-amdhsa";
+/// Exact configured processor admitted by the first gfx950 production profile.
+pub const PRODUCTION_GFX950_DEVICE_CPU_V1: &str = "gfx950";
+/// Exact code-object target ID emitted by the first gfx950 production profile.
+pub const PRODUCTION_GFX950_DEVICE_TARGET_V1: &str = "gfx950:xnack-";
+/// Canonical active rustc feature set required by the first gfx950 production profile.
+pub const PRODUCTION_GFX950_RUSTC_FEATURES_V1: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
+/// Cargo's target-scoped rustflags channel for the exact gfx950 rustc target.
+pub const PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1: &str =
+    "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS";
+/// Parent-owned rustc arguments for production gfx950 target crates.
+pub const PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Ctarget-cpu=gfx950 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
 
 /// Concrete canonical AMDGPU processor names understood by this crate.
 ///
@@ -546,6 +561,30 @@ mod tests {
         assert_eq!(
             PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
             "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS"
+        );
+    }
+
+    #[test]
+    fn production_gfx950_profile_is_internally_consistent() {
+        let target = AmdTargetId::parse(PRODUCTION_GFX950_DEVICE_TARGET_V1).unwrap();
+        assert_eq!(target.to_string(), "gfx950:xnack-");
+        assert_eq!(target.processor(), PRODUCTION_GFX950_DEVICE_CPU_V1);
+        assert_eq!(target.sramecc(), None);
+        assert_eq!(target.xnack(), Some(FeatureState::Disabled));
+        assert_eq!(target.amdhsa_elf_flags_v4_plus(), 0x64f);
+        assert!(PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1.contains(&std::format!(
+            "-Ctarget-cpu={PRODUCTION_GFX950_DEVICE_CPU_V1}"
+        )));
+        assert!(PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1.contains(&std::format!(
+            "-Ctarget-feature={PRODUCTION_GFX950_RUSTC_FEATURES_V1}"
+        )));
+        assert_eq!(
+            PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1,
+            "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS"
+        );
+        assert_eq!(
+            PRODUCTION_GFX950_RUSTC_TARGET_V1,
+            PRODUCTION_GFX942_RUSTC_TARGET_V1
         );
     }
 
