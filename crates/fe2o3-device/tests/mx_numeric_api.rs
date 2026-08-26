@@ -95,17 +95,21 @@ fn gfx942_admits_only_reviewed_fnuz_formats() {
 }
 
 #[test]
-fn numeric_admission_fails_closed_for_mx_and_other_targets() {
+fn numeric_admission_matches_reviewed_target_profiles() {
     let gfx942 = AmdTargetId::parse("gfx942:xnack-").unwrap();
     let capabilities = gfx942.capabilities().unwrap();
-    for format in [MxFormat::Fp8, MxFormat::Bf8] {
+    for format in [MxFormat::Fp8, MxFormat::Bf8, MxFormat::Fp4] {
         assert_eq!(
             capabilities.mx_format_support(format),
             AdvancedCapabilityStatus::Unsupported
         );
     }
 
-    for target_text in ["gfx90a", "gfx950", "gfx1100"] {
+    for (target_text, expected_mx_status) in [
+        ("gfx90a", AdvancedCapabilityStatus::Unreviewed),
+        ("gfx950", AdvancedCapabilityStatus::Supported),
+        ("gfx1100", AdvancedCapabilityStatus::Unreviewed),
+    ] {
         let target = AmdTargetId::parse(target_text).unwrap();
         let capabilities = target.capabilities().unwrap();
         for format in [Fp8Format::E4M3Fnuz, Fp8Format::E5M2Fnuz] {
@@ -114,11 +118,8 @@ fn numeric_admission_fails_closed_for_mx_and_other_targets() {
                 AdvancedCapabilityStatus::Supported
             );
         }
-        for format in [MxFormat::Fp8, MxFormat::Bf8] {
-            assert_ne!(
-                capabilities.mx_format_support(format),
-                AdvancedCapabilityStatus::Supported
-            );
+        for format in [MxFormat::Fp8, MxFormat::Bf8, MxFormat::Fp4] {
+            assert_eq!(capabilities.mx_format_support(format), expected_mx_status);
         }
     }
 }
