@@ -28,7 +28,9 @@ use fe2o3_pliron::{
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementTrustPolicyV2,
     ProductionGpuWriteSiteV2, ProductionMiddleEndAssuranceV4,
     ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidencePassV4,
-    ProductionMiddleEndEvidenceV4, ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
+    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractDerivationErrorV1,
+    ProductionNonCanonicalLoopClaimsV1, ProductionNumericalContractV2,
+    ProductionMiddleEndEvidenceV4,
     ProductionNumericalRefinementContractV2, ProductionRankedBlockV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
@@ -1268,15 +1270,20 @@ fn dynamic_total_output_refinement_input() -> ProductionRankedKernelLoweringInpu
 }
 
 fn loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
-    loop_total_output_refinement_input_with_dynamic_bound(false)
+    loop_total_output_refinement_input_with_shape(false, false)
 }
 
 fn dynamic_loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
-    loop_total_output_refinement_input_with_dynamic_bound(true)
+    loop_total_output_refinement_input_with_shape(true, false)
 }
 
-fn loop_total_output_refinement_input_with_dynamic_bound(
+fn noncanonical_loop_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    loop_total_output_refinement_input_with_shape(false, true)
+}
+
+fn loop_total_output_refinement_input_with_shape(
     dynamic_bound: bool,
+    noncanonical_transition: bool,
 ) -> ProductionRankedKernelLoweringInputV1 {
     let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
     let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
@@ -1369,7 +1376,7 @@ fn loop_total_output_refinement_input_with_dynamic_bound(
                     },
                     ProductionRankedOperationV1::IndexConstant {
                         result: ProductionRankedValueIdV1::new(6),
-                        value: 0,
+                        value: if noncanonical_transition { 5 } else { 0 },
                     },
                     ProductionRankedOperationV1::IndexConstant {
                         result: ProductionRankedValueIdV1::new(7),
@@ -1755,6 +1762,41 @@ fn compiler_derivation_covers_every_live_natural_loop_without_a_workload_declara
     assert_eq!(contract.loops()[0].maximum_steps(), 4);
     assert_eq!(contract.domains().len(), 2);
     assert_eq!(reconciled.semantic_contract_report().bounded_loops(), 1);
+}
+
+#[test]
+fn mandatory_semantic_pipeline_returns_exact_noncanonical_loop_request_boundary() {
+    let input = noncanonical_loop_total_output_refinement_input();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let evidence_identity = DigestV1::from_untrusted_bytes(*evidence.identity().sha256());
+    let error =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap_err();
+    let ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopProofRequired {
+        requirement,
+        ..
+    } = error
+    else {
+        panic!("expected the production noncanonical-loop proof boundary, got {error}")
+    };
+    assert_eq!(requirement.header_block(), 1);
+    assert_eq!(requirement.subjects(), functional_subjects());
+    assert_eq!(requirement.pliron_evidence_identity(), evidence_identity);
+    assert_eq!(requirement.loop_blocks(), [1, 2]);
+    assert_eq!(requirement.entry_edges(), [(0, 1)]);
+    assert_eq!(requirement.internal_edges(), [(1, 2), (2, 1)]);
+    assert_eq!(requirement.backedges(), [(2, 1)]);
+    assert_eq!(requirement.exit_edges(), [(1, 3)]);
+    assert!(!requirement.grants_noncanonical_loop_authority());
+
+    let request = requirement
+        .bind_claims(
+            ProductionNonCanonicalLoopClaimsV1::new(91, 1, proof_digest(92), proof_digest(93))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(!request.normalized_obligation().is_zero());
+    assert!(!request.grants_noncanonical_loop_authority());
 }
 
 #[test]

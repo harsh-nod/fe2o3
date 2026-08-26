@@ -22,11 +22,12 @@ use super::mir_pliron_semantic_contract_v1::{
 };
 use super::{
     ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractErrorV1,
-    ProductionMirPlironSemanticContractReportV1, ProductionRankedKernelLoweringInputV1,
+    ProductionMirPlironSemanticContractReportV1, ProductionNonCanonicalLoopProofErrorV1,
+    ProductionNonCanonicalLoopProofRequirementV1, ProductionRankedKernelLoweringInputV1,
     ProductionRankedOperationV1, ProductionRankedValueV1, ProductionTotalOutputRefinementErrorV2,
-    ProductionTotalOutputRefinementReportV2, production_effect_contract_identity_v1,
-    production_ranked_value_identity_v1, require_mir_pliron_semantic_contract_v1,
-    require_total_output_refinement_v2,
+    ProductionTotalOutputRefinementReportV2, derive_noncanonical_loop_proof_requirement_v1,
+    production_effect_contract_identity_v1, production_ranked_value_identity_v1,
+    require_mir_pliron_semantic_contract_v1, require_total_output_refinement_v2,
 };
 
 /// Compiler-derived contract data after independent reconciliation with the
@@ -92,11 +93,11 @@ pub enum ProductionMirPlironSemanticContractDerivationErrorV1 {
     },
     AmbiguousTypedRootDomain,
     UnsupportedNumericalPolicy,
-    UnsupportedLoop {
-        header: u32,
-        latch: u32,
+    NonCanonicalLoopProofRequired {
+        requirement: Box<ProductionNonCanonicalLoopProofRequirementV1>,
         detail: &'static str,
     },
+    NonCanonicalLoopBoundary(ProductionNonCanonicalLoopProofErrorV1),
     AmbiguousFiniteDomain,
     Contract(MirPlironSemanticContractErrorV1),
     Reconciliation(ProductionMirPlironSemanticContractErrorV1),
@@ -149,13 +150,18 @@ impl fmt::Display for ProductionMirPlironSemanticContractDerivationErrorV1 {
             Self::UnsupportedNumericalPolicy => formatter.write_str(
                 "a typed semantic root uses a numerical policy outside exact bitvectors or IEEE operator congruence",
             ),
-            Self::UnsupportedLoop {
-                header,
-                latch,
+            Self::NonCanonicalLoopProofRequired {
+                requirement,
                 detail,
             } => write!(
                 formatter,
-                "natural loop <header={header}, latch={latch}> is outside automatic finite-loop derivation: {detail}",
+                "live loop SCC <header={}> is outside automatic finite-loop derivation: {detail}; exact proof request context {:?} binds the live CFG, MIR subjects, and PLIRON evidence, but imported invariant/variant receipts remain fail-closed until aggregate formula replay supports them",
+                requirement.header_block(),
+                requirement.exact_ranked_graph_identity(),
+            ),
+            Self::NonCanonicalLoopBoundary(error) => write!(
+                formatter,
+                "failed to derive the exact noncanonical-loop proof boundary: {error}"
             ),
             Self::AmbiguousFiniteDomain => formatter.write_str(
                 "one finite-domain identity was derived with incompatible extents",
@@ -172,6 +178,7 @@ impl Error for ProductionMirPlironSemanticContractDerivationErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::TotalOutput(error) => Some(error),
+            Self::NonCanonicalLoopBoundary(error) => Some(error),
             Self::Contract(error) => Some(error),
             Self::Reconciliation(error) => Some(error),
             _ => None,
@@ -397,15 +404,32 @@ fn derive_contract_data_v1(
 
     let backedges = super::mir_pliron_semantic_contract_v1::natural_backedges(ranked.kernel());
     require_limit("loop", backedges.len(), HARD_MAX_SEMANTIC_LOOPS_V1)?;
+    let backedge_set = backedges
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
     let mut loops = Vec::with_capacity(backedges.len());
     for (latch, header) in backedges {
-        let live = canonical_finite_loop_v1(ranked, header, latch).map_err(|detail| {
-            ProductionMirPlironSemanticContractDerivationErrorV1::UnsupportedLoop {
-                header,
-                latch,
-                detail,
+        let live = match canonical_finite_loop_v1(ranked, header, latch) {
+            Ok(live) => live,
+            Err(detail) => {
+                let requirement = derive_noncanonical_loop_proof_requirement_v1(
+                    ranked.kernel(),
+                    header,
+                    first_binding.subjects(),
+                    evidence_identity,
+                )
+                .map_err(
+                    ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopBoundary,
+                )?;
+                return Err(
+                    ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopProofRequired {
+                        requirement: Box::new(requirement),
+                        detail,
+                    },
+                );
             }
-        })?;
+        };
         insert_domain(&mut domains, live.iteration_domain, vec![live.extent])?;
         for value in [
             live.induction_value,
@@ -434,6 +458,27 @@ fn derive_contract_data_v1(
                 live.maximum_steps,
             )
             .map_err(ProductionMirPlironSemanticContractDerivationErrorV1::Contract)?,
+        );
+    }
+    if let Some(header) = super::noncanonical_loop_proof_v1::noncanonical_cyclic_scc_headers_v1(
+        ranked.kernel(),
+        &backedge_set,
+    )
+    .into_iter()
+    .next()
+    {
+        let requirement = derive_noncanonical_loop_proof_requirement_v1(
+            ranked.kernel(),
+            header,
+            first_binding.subjects(),
+            evidence_identity,
+        )
+        .map_err(ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopBoundary)?;
+        return Err(
+            ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopProofRequired {
+                requirement: Box::new(requirement),
+                detail: "the cyclic SCC has no single compiler-admitted natural-loop entry",
+            },
         );
     }
 

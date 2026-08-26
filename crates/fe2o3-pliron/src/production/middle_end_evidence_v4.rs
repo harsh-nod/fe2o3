@@ -51,6 +51,10 @@ const IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/PRODUCTION-MIDDLE-END-EVIDENCE-IDENTIT
 const RANKED_KERNEL_IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/PRODUCTION-RANKED-KERNEL-IDENTITY/V4\0";
 const FUNCTIONAL_REFINEMENT_GRAPH_IDENTITY_DOMAIN_V2: &[u8] =
     b"FE2O3/PRODUCTION-FUNCTIONAL-REFINEMENT-GRAPH/V2\0";
+const EXACT_RANKED_OPERATION_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/PRODUCTION-EXACT-RANKED-OPERATION/V1\0";
+const EXACT_RANKED_TERMINATOR_IDENTITY_DOMAIN_V1: &[u8] =
+    b"FE2O3/PRODUCTION-EXACT-RANKED-TERMINATOR/V1\0";
 
 /// Stable wire domain for a production middle-end evidence record.
 pub const PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4: &[u8] =
@@ -1059,21 +1063,7 @@ pub(super) fn revalidated_source_semantic_identity(
 pub(super) fn derive_ranked_kernel_identity(
     ranked: &ProductionRankedKernelLoweringInputV1,
 ) -> [u8; SHA256_BYTES] {
-    let kernel = ranked.kernel();
-    let mut digest = Sha256::new();
-    digest.update(RANKED_KERNEL_IDENTITY_DOMAIN_V4);
-    hash_blob(&mut digest, kernel.function_name().as_bytes());
-    hash_usize(&mut digest, kernel.argument_count());
-    hash_usize(&mut digest, kernel.blocks().len());
-    for block in kernel.blocks() {
-        digest.update(block.index_argument_count().to_le_bytes());
-        hash_usize(&mut digest, block.operations().len());
-        for operation in block.operations() {
-            hash_ranked_operation(&mut digest, operation);
-        }
-        hash_ranked_terminator(&mut digest, block.terminator());
-    }
-    digest.finalize().into()
+    derive_exact_ranked_graph_identity_v1(ranked.kernel())
 }
 
 /// Canonical identity of the complete ranked graph covered by a functional-refinement request.
@@ -1097,6 +1087,43 @@ pub(super) fn derive_functional_refinement_graph_identity_v2(
         }
         hash_ranked_terminator(&mut digest, block.terminator());
     }
+    digest.finalize().into()
+}
+
+pub(super) fn derive_exact_ranked_graph_identity_v1(
+    kernel: &super::ProductionRankedKernelV1,
+) -> [u8; SHA256_BYTES] {
+    let mut digest = Sha256::new();
+    digest.update(RANKED_KERNEL_IDENTITY_DOMAIN_V4);
+    hash_blob(&mut digest, kernel.function_name().as_bytes());
+    hash_usize(&mut digest, kernel.argument_count());
+    hash_usize(&mut digest, kernel.blocks().len());
+    for block in kernel.blocks() {
+        digest.update(block.index_argument_count().to_le_bytes());
+        hash_usize(&mut digest, block.operations().len());
+        for operation in block.operations() {
+            hash_ranked_operation(&mut digest, operation);
+        }
+        hash_ranked_terminator(&mut digest, block.terminator());
+    }
+    digest.finalize().into()
+}
+
+pub(super) fn derive_exact_ranked_operation_identity_v1(
+    operation: &ProductionRankedOperationV1,
+) -> [u8; SHA256_BYTES] {
+    let mut digest = Sha256::new();
+    digest.update(EXACT_RANKED_OPERATION_IDENTITY_DOMAIN_V1);
+    hash_ranked_operation(&mut digest, operation);
+    digest.finalize().into()
+}
+
+pub(super) fn derive_exact_ranked_terminator_identity_v1(
+    terminator: &ProductionRankedTerminatorV1,
+) -> [u8; SHA256_BYTES] {
+    let mut digest = Sha256::new();
+    digest.update(EXACT_RANKED_TERMINATOR_IDENTITY_DOMAIN_V1);
+    hash_ranked_terminator(&mut digest, terminator);
     digest.finalize().into()
 }
 
