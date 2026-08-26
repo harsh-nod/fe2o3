@@ -19,13 +19,13 @@ use fe2o3_artifacts::{
     DirectLinkLinkedOutputIdentityV1, PayloadDigest, ProofRecordV1, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 use fe2o3_artifacts::{DigestBytes, DirectLinkBindingSourceV1};
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernelBindings, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::PreparedWorkerV2HsacoPublicationV1;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 use fe2o3_kernel_descriptor::KernelId;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 use fe2o3_worker_v2_bundle::{CompilerTransactionEvidenceCapsuleV2, WorkerV2LoadEnvelopeV1};
 use fe2o3_worker_v2_bundle::{
     CompilerTransactionEvidenceIdentityV2, WorkerV2LoadEnvelopeIdentityV1,
@@ -170,7 +170,7 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
 
 enum RetainedWorkerV2PreparationV1 {
     Production(Box<PreparedWorkerV2HsacoPublicationV1>),
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(test)]
     Recovered(Box<WorkerV2LoadEnvelopeV1>),
     #[cfg(any(test, feature = "hardware-test-hooks"))]
     Test {
@@ -183,7 +183,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn attempt(&self) -> BuildAttempt {
         match self {
             Self::Production(prepared) => prepared.attempt(),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(test)]
             Self::Recovered(envelope) => envelope.published_claim().plan().attempt(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { attempt, .. } => *attempt,
@@ -193,7 +193,7 @@ impl RetainedWorkerV2PreparationV1 {
     fn exact_bytes(&self) -> &[u8] {
         match self {
             Self::Production(prepared) => prepared.exact_bytes(),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(test)]
             Self::Recovered(envelope) => envelope.raw_hsaco().bytes(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { exact_bytes, .. } => exact_bytes,
@@ -254,7 +254,7 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
         ))
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(test)]
     pub(crate) fn admit_recovered(
         envelope: WorkerV2LoadEnvelopeV1,
         compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
@@ -560,7 +560,7 @@ struct AdmissionParts {
     selected_kernel_index: usize,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 fn validate_compiler_transaction_lineage(
     envelope: &WorkerV2LoadEnvelopeV1,
     compiler_transaction: &CompilerTransactionEvidenceCapsuleV2,

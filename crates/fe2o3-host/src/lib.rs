@@ -166,16 +166,6 @@ pub mod __hardware_test {
     }
 }
 
-#[cfg(all(
-    target_os = "linux",
-    any(test, feature = "qualification-oracles-test-only")
-))]
-pub use application_descriptor_handoff::WorkerV2ApplicationDescriptorHandoffErrorV1;
-#[cfg(all(
-    target_os = "linux",
-    any(test, feature = "qualification-oracles-test-only")
-))]
-pub use application_descriptor_handoff::consume_inherited_worker_v2_application_handoff_v1;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use application_descriptor_handoff::consume_inherited_worker_v3_application_handoff_v1;
