@@ -67,11 +67,18 @@ class ComparatorTests(unittest.TestCase):
 
 
 class HarnessTests(unittest.TestCase):
-    def test_generated_fixtures_explicitly_select_qualification_runtime(self) -> None:
+    def test_generated_fixtures_use_only_the_worker_v3_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             package = harness._prepare_fixture("fill", Path(directory))
             manifest = (package / "Cargo.toml").read_text(encoding="ascii")
-            self.assertIn('features = ["qualification-oracles-test-only"]', manifest)
+            source = (package / "src/main.rs").read_text(encoding="ascii")
+            self.assertIn("fe2o3-host", manifest)
+            self.assertNotIn("qualification-oracles-test-only", manifest)
+            self.assertNotIn("fe2o3-core", manifest)
+            self.assertIn("#[kernel(", source)
+            self.assertIn("typed,", source)
+            self.assertNotIn("launch!", source)
+            self.assertNotIn("load_module_from_file", source)
 
     def test_environment_validation_and_skip_semantics(self) -> None:
         settings = harness.validate_environment({})

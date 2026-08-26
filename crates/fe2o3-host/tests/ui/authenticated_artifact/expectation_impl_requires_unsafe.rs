@@ -19,7 +19,7 @@ unsafe impl KernelMarkerV1 for Marker {
 
 impl CompilerGeneratedKernelExpectationV1 for Marker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
-        CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
+        CompilerGeneratedKernelProfileV1::new([2; 32]);
     const KERNEL_BINDING_ID_V1: [u8; 32] = [1; 32];
 }
 

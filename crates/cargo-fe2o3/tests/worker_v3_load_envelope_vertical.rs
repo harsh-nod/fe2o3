@@ -214,9 +214,7 @@ unsafe impl KernelMarkerV1 for WorkerV3VecAddMarker {
 
 unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity: TEST_HOST_CONTRACT,
-        };
+        CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
 }
 
@@ -234,9 +232,7 @@ unsafe impl KernelMarkerV1 for WorkerV3SubstitutedScalarMarker {
 
 unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SubstitutedScalarMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity: TEST_HOST_CONTRACT,
-        };
+        CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
 }
 

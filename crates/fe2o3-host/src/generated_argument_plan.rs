@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use crate::{AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1};
 use crate::{KernelId, argument_alias::GeneratedArgumentBorrowV1};
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership,
@@ -247,8 +245,8 @@ fn canonical_slice_layout_with_source_v1(
 /// Compiler-generated expectation for one complete logical kernel ABI.
 ///
 /// This is inert metadata. Constructing it does not authenticate an artifact
-/// or grant load or launch authority. Only the unsafe generated SPI on
-/// [`AuthenticatedKernelArtifactV1`] can turn it into a validated packing plan.
+/// or grant load or dispatch authority. Worker V3 validates it against the
+/// admitted compiler descriptor before constructing a packing plan.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct CompilerGeneratedArgumentLayoutV1 {
@@ -895,34 +893,6 @@ fn validate_generated_field_v1(
         });
     }
     Ok(())
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
-    /// Validates compiler-generated packing metadata against this artifact's
-    /// authenticated manifest ABI.
-    ///
-    /// # Safety
-    ///
-    /// `generated` must come from the trusted compiler analysis that emitted
-    /// the host adapter for `K`. It must not be reconstructed from the artifact
-    /// manifest being checked: that would be a self-comparison and would not
-    /// establish the Rust type, layout, access, or ownership association. The
-    /// caller must pack values of exactly those compiler-established Rust types
-    /// and retain their resources through GPU completion.
-    ///
-    /// Success does not itself authorize loading or launch. Existing marker,
-    /// geometry, context, alias-admission, and lifetime gates remain required.
-    pub unsafe fn validate_argument_packing(
-        &self,
-        generated: &CompilerGeneratedArgumentLayoutV1,
-    ) -> Result<GeneratedArgumentPackingPlanV1, GeneratedArgumentPackingError> {
-        validate_argument_packing(
-            self.identity().kernel_id(),
-            self.identity().abi(),
-            generated,
-        )
-    }
 }
 
 /// Structural defect in a compiler-generated logical argument layout.
@@ -1734,7 +1704,7 @@ fn validate_field_order(fields: &[AbiField]) -> Result<(), GeneratedArgumentLayo
     Ok(())
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 pub(crate) fn validate_argument_packing(
     kernel_id: KernelId,
     manifest: &AbiLayout,
@@ -2078,7 +2048,7 @@ const fn descriptor_scalar_to_rust_layout(value: ScalarTypeV1) -> RustScalarElem
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 fn first_field_mismatch(
     generated: &AbiField,
     manifest: &AbiField,

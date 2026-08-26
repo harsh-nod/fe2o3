@@ -63,10 +63,10 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   and `fe2o3-host` do not depend on `fe2o3-worker-v2-bundle`; that crate is a
   qualification-only compatibility boundary. V1/V2/V3 suffixes that remain on
   records are frozen wire versions, not selectable compiler implementations.
-- Versioned artifact, descriptor, durable-publication, generated launch, HIP,
-  and HSA layers exist. Safe generated dispatch is still profile-specific; an
-  arbitrary manifest cannot manufacture a safe Rust signature or launch
-  authority.
+- Versioned artifact, descriptor, durable-publication, and HSA records exist.
+  Host execution has one workload-neutral Worker V3 graph. An arbitrary
+  manifest cannot manufacture a Rust signature, verifier decision, load
+  authorization, or dispatch authority.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
@@ -494,30 +494,36 @@ authority transitions, rejection suite, and remaining exit gate are specified
 by the
 [general typed dispatch contract](general-typed-dispatch-v1.md).
 
-The transition is:
+The production transition is:
 
 ```text
-compiler-generated KernelDeclaration<K>
-                 +
-validated bundle entry + inspected code-object descriptor
-                 |
-                 v
-LoadedModule<M, C> --select K--> LoadedKernel<'module, K, C>
-                                      |
-                         typed arguments + geometry
-                                      |
-                                      v
-                           PreparedLaunch<'resources, K, C>
-                                      |
-                                      v
-                         submitted dispatch -> quiescence
+RecoveredWorkerV3PinnedDescriptorV1
+        + generated expectation + production verifier
+        |
+        v
+AuthenticatedWorkerV3ExecutableV1<K>
+        |
+        v
+AuthorizedWorkerV3HsaLoadV1<K, A>
+        |
+        v
+LoadedWorkerV3HsaExecutableV1<K, A>
+        + generated arguments + geometry
+        |
+        v
+GeneratedWorkerV3PreparedInvocationV1<K, A, Arguments>
+        |
+        v
+CompletedWorkerV3DispatchV1 -> unload
 ```
 
 The concrete type names may evolve, but these ownership rules do not:
 
-1. `LoadedModule` owns exactly one executable and its observed context.
-2. `LoadedKernel` borrows that module and binds one generated declaration to
-   one manifest entry, inspected descriptor, and resolved HSA symbol.
+1. Recovery pins one durable publication, descriptor, target, observed context,
+   and application handoff lineage before verification begins.
+2. Authentication binds one generated expectation to the recovered compiler,
+   proof, effect, and executable evidence. Authorization and load consume that
+   exact decision; no intermediate authority is cloneable or caller-created.
 3. Generated adapters bind values by source argument index to the existing
    `GeneratedArgumentPackingPlanV1`. The plan writes explicit fields by checked
    descriptor offsets, zeroes padding, preserves scalar bit patterns, and
@@ -530,13 +536,13 @@ The concrete type names may evolve, but these ownership rules do not:
    context, ABI, and launch-contract identities. Values from another entry or
    load generation are not interchangeable even when their bytes match.
 6. Dispatch consumes launch authority, publishes one AQL packet, and releases
-   resources only after quiescence. The module cannot unload while any child
-   kernel, preparation, or submitted operation is live.
+   resources only after quiescence. The executable cannot unload while a
+   prepared or submitted invocation is live.
 
-This design turns the exact vecadd bridge into one generated instance of the
-general rule. It does not make every Rust type device-safe: G2 still controls
-which layouts and language semantics the compiler accepts, and raw dispatch
-remains an explicit `unsafe` escape hatch.
+This design makes vecadd one generated instance of the same general rule. It
+does not make every Rust type device-safe: G2 still controls which layouts and
+language semantics the compiler accepts. The retired host raw-dispatch escape
+hatch is not part of any build.
 
 ## Verification Integration
 

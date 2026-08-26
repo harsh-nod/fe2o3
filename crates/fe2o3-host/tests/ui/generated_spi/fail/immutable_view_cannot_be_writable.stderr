@@ -1,8 +1,8 @@
 error[E0308]: mismatched types
- --> tests/ui/generated_spi/fail/immutable_view_cannot_be_writable.rs:6:69
+ --> tests/ui/generated_spi/fail/immutable_view_cannot_be_writable.rs:6:73
   |
-6 |     let _write = GeneratedWriteDeviceSlice::from_view_mut(observed, shared);
-  |                  ----------------------------------------           ^^^^^^ expected `DeviceBufferViewMut<'_, _>`, found `DeviceBufferView<'_, f32>`
+6 |     let _write = GeneratedReadWriteDeviceSlice::from_view_mut(observed, shared);
+  |                  --------------------------------------------           ^^^^^^ expected `DeviceBufferViewMut<'_, _>`, found `DeviceBufferView<'_, f32>`
   |                  |
   |                  arguments to this function are incorrect
   |

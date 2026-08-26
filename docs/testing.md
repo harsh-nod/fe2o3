@@ -357,18 +357,18 @@ qualification-specific metadata profile.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated
-dispatch route. Worker V2 application recovery is deleted, while
-`qualification-oracles-test-only` retains independent bundle admission,
-prerequisite authentication, loading, launch metadata, and old
-workload-specific adapters for oracle fixtures.
+dispatch route. Worker V2 application recovery, embedded-artifact loading,
+direct HIP module/function loading, raw parameter packing, cooperative launch,
+and workload-specific host adapters are deleted in every feature configuration.
+The compatibility-named qualification feature enables no host execution path.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
-and runtime imports, including the embedded artifact contract and generated
-vecadd `Kernel`, to guard that public API boundary. The macro fixture also
+and runtime imports, including the retired embedded artifact contract, raw HIP
+surface, and generated vecadd `Kernel`, to guard that public API boundary. The macro fixture also
 proves that every supported `#[kernel(typed)]` signature, including exact
 vecadd and Scalar GEMM, emits only generic Worker V3 host code. It rejects the
 retired `qualification_worker_v2` option and verifies lifetime retention,
-private fields, non-cloneable arguments, marker binding, hidden pointers, and
-one-shot dispatch against the V3 API. The vecadd example has no embedded
+private fields, non-cloneable arguments, hidden pointers, and one-shot dispatch
+against the V3 API. The vecadd example has no embedded
 execution feature; it type-checks the V3 `Arguments` surface and fails closed
 before runtime dispatch until a production verifier is supplied.
 

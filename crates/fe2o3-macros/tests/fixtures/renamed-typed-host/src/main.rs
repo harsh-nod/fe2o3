@@ -91,12 +91,11 @@ fn main() {
         <__fe2o3_kernel_marker_renamed_typed as gpu_device::KernelMarkerV1>::REGISTRATION.2,
         4
     );
-    assert!(matches!(
-        <renamed_typed_gpu::Marker as gpu_host::__generated::CompilerGeneratedKernelExpectationV1>::PROFILE,
-        gpu_host::__generated::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity
-        } if generated_host_contract_identity != [0; 32]
-    ));
+    assert_ne!(
+        <renamed_typed_gpu::Marker as gpu_host::__generated::CompilerGeneratedKernelExpectationV1>::PROFILE
+            .generated_host_contract_identity(),
+        [0; 32]
+    );
     assert_eq!(
         <renamed_general_gpu::Marker as gpu_device::KernelMarkerV1>::REGISTRATION.1,
         3
@@ -105,10 +104,9 @@ fn main() {
         <renamed_general_gpu::Marker as gpu_device::KernelMarkerV1>::REGISTRATION.2,
         4
     );
-    assert!(matches!(
-        <renamed_general_gpu::Marker as gpu_host::__generated::CompilerGeneratedKernelExpectationV1>::PROFILE,
-        gpu_host::__generated::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity
-        } if generated_host_contract_identity != [0; 32]
-    ));
+    assert_ne!(
+        <renamed_general_gpu::Marker as gpu_host::__generated::CompilerGeneratedKernelExpectationV1>::PROFILE
+            .generated_host_contract_identity(),
+        [0; 32]
+    );
 }

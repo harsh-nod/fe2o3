@@ -677,9 +677,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 name = "fe2o3-add-inplace"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -748,9 +746,7 @@ dependencies = [
 name = "fe2o3-axpy-inplace"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -837,9 +833,7 @@ version = "0.1.0"
 name = "fe2o3-copy"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -871,9 +865,7 @@ version = "0.1.0"
 name = "fe2o3-downsample"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -895,9 +887,7 @@ dependencies = [
 name = "fe2o3-fill"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -913,9 +903,7 @@ dependencies = [
 name = "fe2o3-gather-odd"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1251,27 +1239,21 @@ dependencies = [
 name = "fe2o3-negate"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-normalize"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-pipeline"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1366,9 +1348,7 @@ dependencies = [
 name = "fe2o3-previous"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1428,72 +1408,56 @@ dependencies = [
 name = "fe2o3-raw-add-index"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-const-minus"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-disjoint-inplace-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-disjoint-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-gather"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-neighbors"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-output-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-parenthesized-sub"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1530,9 +1494,7 @@ dependencies = [
 name = "fe2o3-saxpy"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1547,9 +1509,7 @@ dependencies = [
 name = "fe2o3-scale"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1592,18 +1552,14 @@ version = "0.1.0"
 name = "fe2o3-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-stencil"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1672,9 +1628,7 @@ dependencies = [
 name = "fe2o3-vecadd-f64"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]

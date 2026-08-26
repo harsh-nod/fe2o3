@@ -6,14 +6,8 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[features]
-qualification-raw-launch-test-only = ["fe2o3-host/qualification-oracles-test-only"]
-
 [dependencies]
-fe2o3-core.workspace = true
 fe2o3-device.workspace = true
-fe2o3-host = { workspace = true, optional = true }
 
 [[bin]]
 name = "fe2o3-raw-neighbors"
-required-features = ["qualification-raw-launch-test-only"]

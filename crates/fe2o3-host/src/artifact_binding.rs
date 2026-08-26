@@ -1,38 +1,18 @@
 use crate::{
     BlockSizeV1, DeviceIdentity, DimensionsV1, KernelId, LaunchConstraintsV1, ObservedContext,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use crate::{
-    KernelBrand, LoadedKernel, PrepareLaunchError, PreparedLaunch, UntrustedLaunchRequest,
-};
 use fe2o3_amd_target::{AmdTargetId, ParseAmdTargetIdError};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_artifacts::{
-    AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, ArtifactContainerV1,
-    ContainerDecodeError, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm,
-    KernelSelectionError, Mutability, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
-    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
-    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
-    ScalarType, TypeIdentity, derive_generated_host_contract_identity_v1,
-    derive_generated_kernel_identity_v2,
-};
 use fe2o3_artifacts::{
     AbiLayout, BlockSize, Capability, CodeObjectIdentity, DigestBytes, Endianness, HostLaunchAbi,
     HostLaunchAbiError, LaunchContract, Name, PayloadDigest, PointerWidth, SelectedNativeKernel,
     TargetIdentity,
 };
 use fe2o3_device::KernelMarkerV1;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_device::{DisjointSlice, Index1D};
 use fe2o3_kernel_descriptor::ValidationError as DescriptorValidationError;
 use reserved_fe2o3_symbols::{
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_DOMAIN_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_HEADER_BYTES_V1,
     GENERAL_TYPED_V3_SEMANTIC_WITNESS_MAGIC_V1, GENERAL_TYPED_V3_SEMANTIC_WITNESS_VERSION_V1,
     MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use reserved_fe2o3_symbols::{
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -42,10 +22,6 @@ const AMDGPU_TRIPLE: &str = "amdgcn-amd-amdhsa";
 /// Version of the exact artifact identity carried by the G3 host bridge.
 pub const ARTIFACT_KERNEL_IDENTITY_VERSION: u16 = 1;
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-const TYPE_ID_DOMAIN: &[u8] = b"fe2o3.rust-type.v1\0";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-const LAYOUT_ID_DOMAIN: &[u8] = b"fe2o3.rust-layout.v1\0";
 /// Exact, owned identity of one validated native-kernel selection.
 ///
 /// Values can only be obtained from [`ValidatedArtifactSelectionV1`]. Equality
@@ -132,8 +108,8 @@ impl ArtifactKernelIdentityV1 {
 ///
 /// This public token is intentionally non-generic: structural artifact and ABI
 /// validation cannot establish a relationship to an arbitrary Rust marker
-/// type. It retains exact identity and payload bytes but contains no HIP handle,
-/// cannot construct [`KernelBrand`], and exposes no launch operation.
+/// type. It retains exact identity and payload bytes but contains no runtime
+/// handle and exposes no launch operation.
 ///
 /// [`HostLaunchAbi`] validation performed during construction checks only the
 /// manifest's structural ABI subset. It does not match compiler-generated host
@@ -219,99 +195,27 @@ impl ValidatedArtifactSelectionV1 {
         }
         Ok(())
     }
-
-    /// Binds a compiler-generated marker to this validated selection.
-    ///
-    /// This is an explicit unsafe SPI for compiler-generated adapters. It
-    /// checks only that the marker's logical and exported names exactly match
-    /// the validated artifact identity. It does not inspect
-    /// [`KernelMarkerV1::FUNCTION`] and does not infer a packed ABI from the
-    /// function-pointer type.
-    ///
-    /// # Safety
-    ///
-    /// The caller must independently authenticate the executable payload and
-    /// establish that `K` denotes this exact kernel. The caller must also
-    /// establish the complete host ABI association, including every argument's
-    /// Rust type, size, alignment, field order, mutability, address space,
-    /// ownership, aliasing, and packed layout identity. Structural artifact
-    /// validation and the name checks performed here discharge none of those
-    /// obligations.
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub unsafe fn bind_generated_marker<K: KernelMarkerV1>(
-        &self,
-    ) -> Result<GeneratedKernelBindingV1<K>, GeneratedMarkerBindingError> {
-        let artifact_logical = self.identity.name().as_str();
-        if K::LOGICAL_NAME != artifact_logical {
-            return Err(GeneratedMarkerBindingError::LogicalNameMismatch {
-                marker: K::LOGICAL_NAME,
-                artifact: artifact_logical.to_owned(),
-            });
-        }
-
-        let artifact_export = self.identity.symbol().as_str();
-        if K::EXPORT_NAME != artifact_export {
-            return Err(GeneratedMarkerBindingError::ExportNameMismatch {
-                marker: K::EXPORT_NAME,
-                artifact: artifact_export.to_owned(),
-            });
-        }
-
-        Ok(GeneratedKernelBindingV1 {
-            inner: self.bind_marker(),
-        })
-    }
-
-    /// Deliberately crate-private until generated code can provide unforgeable
-    /// evidence that `K` denotes `self.identity().kernel_id()` and ABI.
-    #[allow(dead_code)]
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn bind_marker<K>(&self) -> ArtifactKernelBrandV1<K> {
-        let brand = KernelBrand::from_internal_binding(
-            self.identity.kernel_id,
-            self.identity.effective_launch.clone(),
-            self.context.clone(),
-        );
-        ArtifactKernelBrandV1 {
-            identity: self.identity.clone(),
-            payload: self.payload.clone(),
-            context: self.context.clone(),
-            brand,
-        }
-    }
 }
 
 /// Validated semantic authority for one compiler-generated kernel expectation.
 ///
-/// This value is intentionally opaque. Legacy V2 implementations receive one
-/// only through their stronger embedded-artifact contract. General typed V3
-/// implementations receive one only after parsing the exact backend-issued
-/// witness bound to their kernel and generated host-contract identities.
+/// This value is intentionally opaque. Implementations receive one only after
+/// parsing the exact backend-issued witness bound to their kernel and generated
+/// host-contract identities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
 pub struct ValidatedCompilerGeneratedSemanticWitnessV1 {
     profile: CompilerGeneratedKernelProfileV1,
     kernel_binding: [u8; 32],
-    generated_host_contract: Option<[u8; 32]>,
+    generated_host_contract: [u8; 32],
 }
 
 impl ValidatedCompilerGeneratedSemanticWitnessV1 {
-    const fn legacy(profile: CompilerGeneratedKernelProfileV1, kernel_binding: [u8; 32]) -> Self {
-        Self {
-            profile,
-            kernel_binding,
-            generated_host_contract: None,
-        }
-    }
-
     const fn general_v3(kernel_binding: [u8; 32], generated_host_contract: [u8; 32]) -> Self {
         Self {
-            profile: CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                generated_host_contract_identity: generated_host_contract,
-            },
+            profile: CompilerGeneratedKernelProfileV1::new(generated_host_contract),
             kernel_binding,
-            generated_host_contract: Some(generated_host_contract),
+            generated_host_contract,
         }
     }
 }
@@ -385,22 +289,11 @@ pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
     /// Full backend-validated identity used by private host linker symbols.
     const KERNEL_BINDING_ID_V1: [u8; 32];
 
-    /// Obtains the legacy qualification witness for this exact expectation.
-    ///
-    /// Production Worker V3 does not call this method. Qualification-only
-    /// Worker V2 paths retain it until those legacy tests are retired.
+    /// Obtains the backend-issued witness for this exact expectation.
     fn semantic_witness_v1()
     -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1>
     {
-        match Self::PROFILE {
-            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 { .. } => {
-                Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
-            }
-            profile => Ok(ValidatedCompilerGeneratedSemanticWitnessV1::legacy(
-                profile,
-                Self::KERNEL_BINDING_ID_V1,
-            )),
-        }
+        Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
     }
 }
 
@@ -410,16 +303,9 @@ pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
 pub fn validate_compiler_generated_semantic_witness_v1<K: CompilerGeneratedKernelExpectationV1>()
 -> Result<ValidatedCompilerGeneratedSemanticWitnessV1, CompilerGeneratedSemanticWitnessErrorV1> {
     let witness = K::semantic_witness_v1()?;
-    let expected_contract = match K::PROFILE {
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity,
-        } => Some(generated_host_contract_identity),
-        CompilerGeneratedKernelProfileV1::TypedVecAddF32V1
-        | CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 => None,
-    };
     if witness.profile != K::PROFILE
         || witness.kernel_binding != K::KERNEL_BINDING_ID_V1
-        || witness.generated_host_contract != expected_contract
+        || witness.generated_host_contract != K::PROFILE.generated_host_contract_identity()
     {
         return Err(CompilerGeneratedSemanticWitnessErrorV1::WitnessSubstitution);
     }
@@ -550,751 +436,23 @@ fn parse_general_typed_v3_semantic_witness_v1(
     ))
 }
 
-/// Trusted backend contract for one embedded compiler-generated artifact.
-///
-/// This trait is an implementation boundary for generated code, not an
-/// application extension point. Authentication always decodes the bytes
-/// returned by [`CompilerGeneratedKernelContractV1::artifact_container_bytes`]
-/// and never accepts a caller-selected container.
-///
-/// # Safety
-///
-/// The implementation must be emitted by the trusted compiler backend and
-/// return the exact, immutable canonical [`ArtifactContainerV1`] bytes that the
-/// backend produced and embedded for `Self`. Those bytes must contain exactly
-/// one entry denoted by the marker's logical and export names, and that entry's
-/// identity, complete physical host ABI, declared effects, launch contract,
-/// and executable behavior must all describe `Self::FUNCTION` exactly.
-///
-/// Every executable memory effect, including effects selected or sized by
-/// scalar arguments, must be represented by the generated adapter's admission
-/// contract. Loading, unloading, and all module initialization or finalization
-/// behavior must also be safe under the generated contract. This host layer
-/// does not inspect init/fini entries; the implementation must establish that
-/// they are absent or that their complete semantics satisfy these obligations.
-/// A false implementation can make safe code load arbitrary native code.
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub unsafe trait CompilerGeneratedKernelContractV1: KernelMarkerV1 {
-    /// Versioned host ABI and memory-effect profile expected by generated code.
-    const PROFILE: CompilerGeneratedKernelProfileV1;
-
-    /// Full backend-validated identity used by private host linker symbols.
-    const KERNEL_BINDING_ID_V1: [u8; 32];
-
-    /// Returns the exact canonical artifact container embedded by the backend.
-    fn artifact_container_bytes() -> &'static [u8];
-}
-
-// SAFETY: `CompilerGeneratedKernelContractV1` has the same profile and binding
-// obligations and additionally authenticates exact embedded artifact bytes.
-// Forwarding those constants preserves the existing generated API while
-// allowing shared-bundle consumers to require only the narrower expectation.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-unsafe impl<K: CompilerGeneratedKernelContractV1> CompilerGeneratedKernelExpectationV1 for K {
-    const PROFILE: CompilerGeneratedKernelProfileV1 =
-        <K as CompilerGeneratedKernelContractV1>::PROFILE;
-    const KERNEL_BINDING_ID_V1: [u8; 32] =
-        <K as CompilerGeneratedKernelContractV1>::KERNEL_BINDING_ID_V1;
-}
-
 /// Exact generated host contract understood by this runtime version.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
-#[non_exhaustive]
-pub enum CompilerGeneratedKernelProfileV1 {
-    /// `(&[f32], &[f32], DisjointSlice<f32>)` with read/read/write effects.
-    TypedVecAddF32V1,
-    /// The same fixed signature with canonical rustc-derived type/layout
-    /// identities independently reconstructed by the host.
-    TypedVecAddF32RustcLayoutV2,
-    /// A bounded scalar/slice signature committed to independently by the
-    /// generated adapter.
-    ///
-    /// The identity is emitted by the compiler from its canonical Rust ABI,
-    /// layout, effects, launch, and binding expectation. Authentication
-    /// derives the same pre-executable identity from the selected artifact and
-    /// rejects a mismatch; the artifact therefore cannot serve as its own
-    /// expectation. Final kernel identity is checked separately after source
-    /// and executable digests exist.
-    ManifestDerivedScalarSliceV1 {
-        generated_host_contract_identity: [u8; 32],
-    },
+pub struct CompilerGeneratedKernelProfileV1 {
+    generated_host_contract_identity: [u8; 32],
 }
 
-/// Authenticated compiler-generated artifact for exactly one kernel marker.
-///
-/// Fields are private so callers cannot replace the validated selection or its
-/// marker binding. Construct this token with [`Self::authenticate`].
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub struct AuthenticatedKernelArtifactV1<K: CompilerGeneratedKernelContractV1> {
-    validated: ValidatedArtifactSelectionV1,
-    binding: GeneratedKernelBindingV1<K>,
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl<K: CompilerGeneratedKernelContractV1> fmt::Debug for AuthenticatedKernelArtifactV1<K> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AuthenticatedKernelArtifactV1")
-            .field("identity", self.validated.identity())
-            .finish_non_exhaustive()
-    }
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl<K: CompilerGeneratedKernelContractV1> AuthenticatedKernelArtifactV1<K> {
-    /// Authenticates the exact artifact bytes embedded for `K` against one
-    /// observed context.
-    ///
-    /// The byte source is fixed by `K`; this API intentionally has no
-    /// caller-supplied bytes parameter. It decodes the complete container,
-    /// requires exactly one kernel with both marker names, selects that entry,
-    /// and applies the existing target, host-ABI, launch, and payload checks.
-    pub fn authenticate(
-        observed: &ObservedContext,
-    ) -> Result<Self, GeneratedArtifactAuthenticationError> {
-        let container = ArtifactContainerV1::from_bytes(K::artifact_container_bytes())
-            .map_err(GeneratedArtifactAuthenticationError::Decode)?;
-
-        let mut matching = container.manifest().kernels().iter().filter(|kernel| {
-            kernel.name().as_str() == K::LOGICAL_NAME && kernel.symbol().as_str() == K::EXPORT_NAME
-        });
-        let kernel = matching
-            .next()
-            .ok_or(GeneratedArtifactAuthenticationError::MatchingKernelNotFound)?;
-        if matching.next().is_some() {
-            return Err(GeneratedArtifactAuthenticationError::MultipleMatchingKernels);
-        }
-
-        let selected = container
-            .select_native_kernel(kernel.kernel_id())
-            .map_err(GeneratedArtifactAuthenticationError::Selection)?;
-        let validated = ValidatedArtifactSelectionV1::validate(selected, observed)
-            .map_err(GeneratedArtifactAuthenticationError::Binding)?;
-        validate_generated_profile(
-            <K as CompilerGeneratedKernelContractV1>::PROFILE,
-            <K as CompilerGeneratedKernelContractV1>::KERNEL_BINDING_ID_V1,
-            validated.identity(),
-        )
-        .map_err(GeneratedArtifactAuthenticationError::Profile)?;
-
-        // SAFETY: `CompilerGeneratedKernelContractV1` requires the trusted
-        // backend to establish the exact marker, identity, complete ABI,
-        // effects, init/fini behavior, and executable provenance association.
-        // The exact-name cardinality and structural artifact checks above
-        // independently reject accidental selection or corruption.
-        let binding = unsafe { validated.bind_generated_marker::<K>() }
-            .map_err(GeneratedArtifactAuthenticationError::Marker)?;
-
-        Ok(Self { validated, binding })
-    }
-
-    pub fn identity(&self) -> &ArtifactKernelIdentityV1 {
-        self.validated.identity()
-    }
-
-    /// Consumes this authenticated token and safely loads its exact embedded
-    /// payload into `context`.
-    pub fn load(
-        self,
-        context: &Arc<fe2o3_core::GpuContext>,
-    ) -> Result<LoadedKernel<K>, crate::loaded_kernel::LoadedKernelLoadError> {
-        let Self { validated, binding } = self;
-        let binding = binding.into_inner();
-
-        // SAFETY: the unsafe generated contract authenticates the exact
-        // embedded executable and establishes its marker, complete ABI,
-        // effects, and load/unload behavior. `authenticate` decoded only those
-        // bytes, selected exactly one matching entry, and applied the existing
-        // target/ABI/payload checks. The private token fields preserve that
-        // association until this consuming call; the internal loader rechecks
-        // selection and exact context identity before invoking HIP.
-        unsafe { binding.load(&validated, &validated.context, context) }
-    }
-}
-
-/// Failure while authenticating a trusted backend's embedded artifact bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub enum GeneratedArtifactAuthenticationError {
-    Decode(ContainerDecodeError),
-    MatchingKernelNotFound,
-    MultipleMatchingKernels,
-    Selection(KernelSelectionError),
-    Binding(ArtifactBindingError),
-    Profile(GeneratedKernelProfileError),
-    Marker(GeneratedMarkerBindingError),
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl fmt::Display for GeneratedArtifactAuthenticationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Decode(error) => write!(formatter, "invalid embedded artifact: {error}"),
-            Self::MatchingKernelNotFound => formatter
-                .write_str("embedded artifact has no kernel matching the generated marker names"),
-            Self::MultipleMatchingKernels => formatter.write_str(
-                "embedded artifact has multiple kernels matching the generated marker names",
-            ),
-            Self::Selection(error) => error.fmt(formatter),
-            Self::Binding(error) => error.fmt(formatter),
-            Self::Profile(error) => error.fmt(formatter),
-            Self::Marker(error) => error.fmt(formatter),
-        }
-    }
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl std::error::Error for GeneratedArtifactAuthenticationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Decode(error) => Some(error),
-            Self::Selection(error) => Some(error),
-            Self::Binding(error) => Some(error),
-            Self::Profile(error) => Some(error),
-            Self::Marker(error) => Some(error),
-            Self::MatchingKernelNotFound | Self::MultipleMatchingKernels => None,
-        }
-    }
-}
-
-/// Mismatch between an embedded manifest and generated typed host code.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[doc(hidden)]
-#[non_exhaustive]
-pub enum GeneratedKernelProfileError {
-    AbiMismatch,
-    LaunchMismatch,
-    GeneratedContractIdentityMismatch,
-    KernelIdentityMismatch,
-}
-
-impl fmt::Display for GeneratedKernelProfileError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AbiMismatch => formatter.write_str(
-                "embedded artifact ABI/effects do not match the generated kernel profile",
-            ),
-            Self::LaunchMismatch => formatter.write_str(
-                "embedded artifact launch contract does not match the generated kernel profile",
-            ),
-            Self::GeneratedContractIdentityMismatch => formatter.write_str(
-                "embedded artifact does not match the independently generated contract identity",
-            ),
-            Self::KernelIdentityMismatch => formatter.write_str(
-                "embedded artifact kernel identity does not match the generated binding and contract",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for GeneratedKernelProfileError {}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn validate_generated_profile(
-    profile: CompilerGeneratedKernelProfileV1,
-    kernel_binding: [u8; 32],
-    identity: &ArtifactKernelIdentityV1,
-) -> Result<(), GeneratedKernelProfileError> {
-    match profile {
-        CompilerGeneratedKernelProfileV1::TypedVecAddF32V1 => {
-            validate_typed_vecadd_abi(identity.abi())?;
-            let launch = identity.launch();
-            let exact_block = match launch.block_size() {
-                BlockSize::Exact(block) => block,
-                BlockSize::Any | BlockSize::AtMost(_) => {
-                    return Err(GeneratedKernelProfileError::LaunchMismatch);
-                }
-            };
-            if launch.rank() != 1
-                || [exact_block.x(), exact_block.y(), exact_block.z()] != [256, 1, 1]
-                || launch.max_grid().y() != 1
-                || launch.max_grid().z() != 1
-                || launch.static_shared_memory_bytes() != 0
-                || launch.max_dynamic_shared_memory_bytes() != 0
-            {
-                return Err(GeneratedKernelProfileError::LaunchMismatch);
-            }
-            Ok(())
-        }
-        CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 => {
-            validate_typed_vecadd_rustc_layout_abi(identity.abi())?;
-            let launch = identity.launch();
-            let exact_block = match launch.block_size() {
-                BlockSize::Exact(block) => block,
-                BlockSize::Any | BlockSize::AtMost(_) => {
-                    return Err(GeneratedKernelProfileError::LaunchMismatch);
-                }
-            };
-            if launch.rank() != 1
-                || [exact_block.x(), exact_block.y(), exact_block.z()] != [256, 1, 1]
-                || launch.max_grid().y() != 1
-                || launch.max_grid().z() != 1
-                || launch.static_shared_memory_bytes() != 0
-                || launch.max_dynamic_shared_memory_bytes() != 0
-            {
-                return Err(GeneratedKernelProfileError::LaunchMismatch);
-            }
-            let expected_kernel_id = derive_generated_kernel_identity_v2(
-                TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-                kernel_binding,
-                identity.name().as_str(),
-                identity.symbol().as_str(),
-                identity.source_digest(),
-                identity.executable_digest(),
-                identity.abi(),
-                identity.launch(),
-            );
-            if identity.kernel_id().as_bytes() != expected_kernel_id.as_bytes() {
-                return Err(GeneratedKernelProfileError::KernelIdentityMismatch);
-            }
-            Ok(())
-        }
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
+impl CompilerGeneratedKernelProfileV1 {
+    pub const fn new(generated_host_contract_identity: [u8; 32]) -> Self {
+        Self {
             generated_host_contract_identity,
-        } => {
-            validate_manifest_derived_scalar_slice_abi(identity.abi())?;
-            let derived_host_contract = derive_generated_host_contract_identity_v1(
-                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                kernel_binding,
-                identity.name().as_str(),
-                identity.symbol().as_str(),
-                identity.abi(),
-                identity.launch(),
-            );
-            if derived_host_contract.as_bytes() != &generated_host_contract_identity {
-                return Err(GeneratedKernelProfileError::GeneratedContractIdentityMismatch);
-            }
-            let expected_kernel_id = derive_generated_kernel_identity_v2(
-                MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                kernel_binding,
-                identity.name().as_str(),
-                identity.symbol().as_str(),
-                identity.source_digest(),
-                identity.executable_digest(),
-                identity.abi(),
-                identity.launch(),
-            );
-            if identity.kernel_id().as_bytes() != expected_kernel_id.as_bytes() {
-                return Err(GeneratedKernelProfileError::KernelIdentityMismatch);
-            }
-            Ok(())
         }
     }
-}
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn validate_manifest_derived_scalar_slice_abi(
-    abi: &AbiLayout,
-) -> Result<(), GeneratedKernelProfileError> {
-    if abi.pointer_width() != PointerWidth::Bits64 || abi.fields().is_empty() {
-        return Err(GeneratedKernelProfileError::AbiMismatch);
+    pub const fn generated_host_contract_identity(self) -> [u8; 32] {
+        self.generated_host_contract_identity
     }
-
-    for field in abi.fields() {
-        match field.kind() {
-            AbiKind::Scalar(scalar) => {
-                let (size, alignment) = scalar_size_alignment(scalar);
-                if field.size() != size
-                    || field.alignment() != alignment
-                    || field.mutability() != Mutability::Immutable
-                    || field.access() != Access::ByValue
-                    || field.address_space() != AddressSpace::Value
-                    || field.ownership() != ArgumentOwnership::ByValue
-                    || field.alias_class() != AliasClass::Value
-                {
-                    return Err(GeneratedKernelProfileError::AbiMismatch);
-                }
-            }
-            AbiKind::Slice {
-                element_size,
-                element_alignment,
-            } => {
-                if field.size() != 16
-                    || field.alignment() != 8
-                    || element_size == 0
-                    || element_alignment == 0
-                    || !element_alignment.is_power_of_two()
-                    || !element_size.is_multiple_of(u64::from(element_alignment))
-                    || field.address_space() != AddressSpace::Global
-                {
-                    return Err(GeneratedKernelProfileError::AbiMismatch);
-                }
-                let shared = field.mutability() == Mutability::Immutable
-                    && field.access() == Access::ReadOnly
-                    && field.ownership() == ArgumentOwnership::SharedBorrow
-                    && field.alias_class() == AliasClass::SharedReadOnly;
-                let exclusive = field.mutability() == Mutability::Mutable
-                    && matches!(
-                        field.access(),
-                        Access::ReadOnly | Access::WriteOnly | Access::ReadWrite
-                    )
-                    && field.ownership() == ArgumentOwnership::UniqueBorrow
-                    && field.alias_class() == AliasClass::Exclusive;
-                if !shared && !exclusive {
-                    return Err(GeneratedKernelProfileError::AbiMismatch);
-                }
-            }
-            AbiKind::Pointer { .. } => {
-                return Err(GeneratedKernelProfileError::AbiMismatch);
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-const fn scalar_size_alignment(scalar: ScalarType) -> (u64, u32) {
-    match scalar {
-        ScalarType::I8 | ScalarType::U8 => (1, 1),
-        ScalarType::I16 | ScalarType::U16 | ScalarType::F16 => (2, 2),
-        ScalarType::I32 | ScalarType::U32 | ScalarType::F32 => (4, 4),
-        ScalarType::I64 | ScalarType::U64 | ScalarType::F64 => (8, 8),
-    }
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn validate_typed_vecadd_rustc_layout_abi(
-    abi: &AbiLayout,
-) -> Result<(), GeneratedKernelProfileError> {
-    let type_identities = host_typed_vecadd_type_identities()?;
-    validate_typed_vecadd_abi_with_identities(abi, type_identities)
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn validate_typed_vecadd_abi(abi: &AbiLayout) -> Result<(), GeneratedKernelProfileError> {
-    if abi.size() != 48
-        || abi.alignment() != 8
-        || abi.pointer_width() != PointerWidth::Bits64
-        || abi.fields().len() != 3
-    {
-        return Err(GeneratedKernelProfileError::AbiMismatch);
-    }
-
-    let shared_identity = generated_type_identity("&[f32]", "slice-f32-ptr64-size16-align8");
-    let output_identity = generated_type_identity(
-        "fe2o3_device::DisjointSlice<f32>",
-        "disjoint-slice-f32-ptr64-size16-align8",
-    );
-    validate_typed_vecadd_abi_with_identities(
-        abi,
-        [shared_identity, shared_identity, output_identity],
-    )
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn validate_typed_vecadd_abi_with_identities(
-    abi: &AbiLayout,
-    type_identities: [TypeIdentity; 3],
-) -> Result<(), GeneratedKernelProfileError> {
-    if abi.size() != 48
-        || abi.alignment() != 8
-        || abi.pointer_width() != PointerWidth::Bits64
-        || abi.fields().len() != 3
-    {
-        return Err(GeneratedKernelProfileError::AbiMismatch);
-    }
-
-    let expected = [
-        (
-            0,
-            Mutability::Immutable,
-            Access::ReadOnly,
-            ArgumentOwnership::SharedBorrow,
-            AliasClass::SharedReadOnly,
-            type_identities[0],
-        ),
-        (
-            16,
-            Mutability::Immutable,
-            Access::ReadOnly,
-            ArgumentOwnership::SharedBorrow,
-            AliasClass::SharedReadOnly,
-            type_identities[1],
-        ),
-        (
-            32,
-            Mutability::Mutable,
-            Access::WriteOnly,
-            ArgumentOwnership::UniqueBorrow,
-            AliasClass::Exclusive,
-            type_identities[2],
-        ),
-    ];
-
-    for (field, (offset, mutability, access, ownership, alias, type_identity)) in
-        abi.fields().iter().zip(expected)
-    {
-        if field.offset() != offset
-            || field.size() != 16
-            || field.alignment() != 8
-            || field.kind()
-                != (AbiKind::Slice {
-                    element_size: 4,
-                    element_alignment: 4,
-                })
-            || field.mutability() != mutability
-            || field.access() != access
-            || field.address_space() != AddressSpace::Global
-            || field.ownership() != ownership
-            || field.alias_class() != alias
-            || field.type_identity() != type_identity
-        {
-            return Err(GeneratedKernelProfileError::AbiMismatch);
-        }
-    }
-    Ok(())
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn host_typed_vecadd_type_identities()
--> Result<[TypeIdentity; 3], GeneratedKernelProfileError> {
-    let pointer_size = u64::try_from(core::mem::size_of::<*const f32>())
-        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
-    let pointer_alignment = u32::try_from(core::mem::align_of::<*const f32>())
-        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
-    let usize_size = u64::try_from(core::mem::size_of::<usize>())
-        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
-    let usize_alignment = u32::try_from(core::mem::align_of::<usize>())
-        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?;
-    if pointer_size != 8 || pointer_alignment != 8 || usize_size != 8 || usize_alignment != 8 {
-        return Err(GeneratedKernelProfileError::AbiMismatch);
-    }
-
-    let shared = RustLayoutEvidenceV1::new(
-        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::shared_slice(
-            RustScalarElementTypeV1::F32,
-        )),
-        RustcAbiClassV1::ScalarPair,
-        PointerWidth::Bits64,
-        u64::try_from(core::mem::size_of::<&[f32]>())
-            .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
-        u32::try_from(core::mem::align_of::<&[f32]>())
-            .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
-        vec![
-            rust_layout_component(
-                0,
-                pointer_size,
-                pointer_alignment,
-                RustPhysicalComponentKindV1::Pointer {
-                    mutability: RustPointerMutabilityV1::Const,
-                    pointee: RustScalarElementTypeV1::F32,
-                },
-            )?,
-            rust_layout_component(
-                pointer_size,
-                usize_size,
-                usize_alignment,
-                RustPhysicalComponentKindV1::Usize,
-            )?,
-        ],
-    )
-    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?
-    .type_identity();
-
-    let (output_size, output_alignment, pointer_offset, length_offset) =
-        DisjointSlice::<f32, Index1D>::__fe2o3_rust_layout_v1();
-    let output = RustLayoutEvidenceV1::new(
-        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::disjoint_slice(
-            RustScalarElementTypeV1::F32,
-            RustDisjointIndexSpaceV1::Index1D,
-        )),
-        RustcAbiClassV1::ScalarPair,
-        PointerWidth::Bits64,
-        u64::try_from(output_size).map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
-        u32::try_from(output_alignment).map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
-        vec![
-            rust_layout_component(
-                u64::try_from(pointer_offset)
-                    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
-                pointer_size,
-                pointer_alignment,
-                RustPhysicalComponentKindV1::Pointer {
-                    mutability: RustPointerMutabilityV1::Mut,
-                    pointee: RustScalarElementTypeV1::F32,
-                },
-            )?,
-            rust_layout_component(
-                u64::try_from(length_offset)
-                    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?,
-                usize_size,
-                usize_alignment,
-                RustPhysicalComponentKindV1::Usize,
-            )?,
-        ],
-    )
-    .map_err(|_| GeneratedKernelProfileError::AbiMismatch)?
-    .type_identity();
-
-    Ok([shared, shared, output])
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn rust_layout_component(
-    offset: u64,
-    size: u64,
-    alignment: u32,
-    kind: RustPhysicalComponentKindV1,
-) -> Result<RustPhysicalComponentV1, GeneratedKernelProfileError> {
-    RustPhysicalComponentV1::new(offset, size, alignment, kind)
-        .map_err(|_| GeneratedKernelProfileError::AbiMismatch)
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn generated_type_identity(rust_type: &str, layout: &str) -> TypeIdentity {
-    TypeIdentity::new(
-        DeclaredRustTypeIdentity::from_untrusted_bytes(generated_profile_digest(
-            TYPE_ID_DOMAIN,
-            rust_type.as_bytes(),
-        )),
-        DeclaredRustLayoutIdentity::from_untrusted_bytes(generated_profile_digest(
-            LAYOUT_ID_DOMAIN,
-            layout.as_bytes(),
-        )),
-    )
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn generated_profile_digest(domain: &[u8], field: &[u8]) -> DigestBytes {
-    let mut canonical = Vec::with_capacity(domain.len() + 8 + field.len());
-    canonical.extend_from_slice(domain);
-    canonical.extend_from_slice(&(field.len() as u64).to_le_bytes());
-    canonical.extend_from_slice(field);
-    DigestAlgorithm::Sha256.calculate(&canonical).bytes()
-}
-
-/// Unsafe generated-code association between marker `K` and one validated
-/// artifact selection.
-///
-/// Fields are private so downstream code cannot manufacture or retarget a
-/// binding. Possessing this value does not authenticate the payload or prove a
-/// complete host ABI.
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub struct GeneratedKernelBindingV1<K: KernelMarkerV1> {
-    inner: ArtifactKernelBrandV1<K>,
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl<K: KernelMarkerV1> GeneratedKernelBindingV1<K> {
-    pub(crate) fn into_inner(self) -> ArtifactKernelBrandV1<K> {
-        self.inner
-    }
-}
-
-/// Failure while matching generated marker names to a validated artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub enum GeneratedMarkerBindingError {
-    LogicalNameMismatch {
-        marker: &'static str,
-        artifact: String,
-    },
-    ExportNameMismatch {
-        marker: &'static str,
-        artifact: String,
-    },
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl fmt::Display for GeneratedMarkerBindingError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LogicalNameMismatch { marker, artifact } => write!(
-                formatter,
-                "generated marker logical name {marker:?} does not match artifact name {artifact:?}"
-            ),
-            Self::ExportNameMismatch { marker, artifact } => write!(
-                formatter,
-                "generated marker export name {marker:?} does not match artifact symbol {artifact:?}"
-            ),
-        }
-    }
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl std::error::Error for GeneratedMarkerBindingError {}
-
-/// Internal typed bridge. It is not exported because artifact structure does
-/// not validate the marker association.
-#[allow(dead_code)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct ArtifactKernelBrandV1<K> {
-    pub(crate) identity: Arc<ArtifactKernelIdentityV1>,
-    pub(crate) payload: Arc<[u8]>,
-    pub(crate) context: ObservedContext,
-    pub(crate) brand: KernelBrand<K>,
-}
-
-#[allow(dead_code)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl<K> ArtifactKernelBrandV1<K> {
-    pub(crate) fn identity(&self) -> &ArtifactKernelIdentityV1 {
-        &self.identity
-    }
-
-    pub(crate) fn prepare(
-        &self,
-        validated: &ValidatedArtifactSelectionV1,
-        context: &ObservedContext,
-        request: UntrustedLaunchRequest<K>,
-    ) -> Result<ArtifactPreparedLaunchV1<K>, ArtifactMarkerPrepareError> {
-        if !Arc::ptr_eq(&self.identity, &validated.identity)
-            || !Arc::ptr_eq(&self.payload, &validated.payload)
-            || !context.same_context(&self.context)
-        {
-            return Err(ArtifactMarkerPrepareError::WrongValidatedSelection);
-        }
-        let prepared = self
-            .brand
-            .prepare(context, request)
-            .map_err(ArtifactMarkerPrepareError::Launch)?;
-        Ok(ArtifactPreparedLaunchV1 {
-            identity: self.identity.clone(),
-            payload: self.payload.clone(),
-            prepared,
-        })
-    }
-
-    /// Loads the exact validated payload and symbol represented by this marker
-    /// binding.
-    ///
-    /// # Safety
-    ///
-    /// The issuer must independently establish that the executable payload is
-    /// trusted and that `K` denotes this exact kernel identity and complete
-    /// host ABI. Structural artifact validation establishes neither fact.
-    pub(crate) unsafe fn load(
-        self,
-        validated: &ValidatedArtifactSelectionV1,
-        observed: &ObservedContext,
-        context: &Arc<fe2o3_core::GpuContext>,
-    ) -> Result<LoadedKernel<K>, crate::loaded_kernel::LoadedKernelLoadError> {
-        // SAFETY: The caller owns the executable-trust and marker/ABI proof
-        // obligations documented above. The callee rechecks every structural
-        // identity and context relationship before invoking HIP.
-        unsafe { LoadedKernel::load(self, validated, observed, context) }
-    }
-}
-
-/// Internal data-only prepared bridge; no module handle or launch method.
-#[allow(dead_code)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct ArtifactPreparedLaunchV1<K> {
-    identity: Arc<ArtifactKernelIdentityV1>,
-    payload: Arc<[u8]>,
-    prepared: PreparedLaunch<K>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) enum ArtifactMarkerPrepareError {
-    WrongValidatedSelection,
-    Launch(PrepareLaunchError),
 }
 
 /// Failure while binding a validated artifact selection to an observed device.
@@ -1644,10 +802,6 @@ fn descriptor_dimensions(dimensions: fe2o3_artifacts::Dimensions) -> DimensionsV
 }
 
 #[cfg(test)]
-#[path = "artifact_binding_authentication_tests.rs"]
-mod authentication_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use fe2o3_artifacts::{
@@ -1657,61 +811,11 @@ mod tests {
         IdentityText, KernelEntry, ManifestV1, Mutability, ScalarType, ToolIdentity, TypeIdentity,
     };
 
-    struct VecAdd;
-    struct WrongLogicalName;
-    struct WrongExportName;
-    struct LegacyExpectation;
-    struct GeneralExpectationWithoutBackend;
+    struct ExpectationWithoutBackend;
 
     fn marker_function() {}
 
-    unsafe impl KernelMarkerV1 for VecAdd {
-        type Function = fn();
-        type Registration = ();
-
-        const LOGICAL_NAME: &'static str = "vector_add";
-        const EXPORT_NAME: &'static str = "vector_add.kd";
-        const FUNCTION: Self::Function = marker_function;
-        const REGISTRATION: &'static Self::Registration = &();
-    }
-
-    unsafe impl KernelMarkerV1 for WrongLogicalName {
-        type Function = fn();
-        type Registration = ();
-
-        const LOGICAL_NAME: &'static str = "not_vector_add";
-        const EXPORT_NAME: &'static str = "vector_add.kd";
-        const FUNCTION: Self::Function = marker_function;
-        const REGISTRATION: &'static Self::Registration = &();
-    }
-
-    unsafe impl KernelMarkerV1 for WrongExportName {
-        type Function = fn();
-        type Registration = ();
-
-        const LOGICAL_NAME: &'static str = "vector_add";
-        const EXPORT_NAME: &'static str = "wrong_export.kd";
-        const FUNCTION: Self::Function = marker_function;
-        const REGISTRATION: &'static Self::Registration = &();
-    }
-
-    unsafe impl KernelMarkerV1 for LegacyExpectation {
-        type Function = fn();
-        type Registration = ();
-
-        const LOGICAL_NAME: &'static str = "legacy";
-        const EXPORT_NAME: &'static str = "legacy";
-        const FUNCTION: Self::Function = marker_function;
-        const REGISTRATION: &'static Self::Registration = &();
-    }
-
-    unsafe impl CompilerGeneratedKernelExpectationV1 for LegacyExpectation {
-        const PROFILE: CompilerGeneratedKernelProfileV1 =
-            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
-        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x31; 32];
-    }
-
-    unsafe impl KernelMarkerV1 for GeneralExpectationWithoutBackend {
+    unsafe impl KernelMarkerV1 for ExpectationWithoutBackend {
         type Function = fn();
         type Registration = ();
 
@@ -1721,11 +825,9 @@ mod tests {
         const REGISTRATION: &'static Self::Registration = &();
     }
 
-    unsafe impl CompilerGeneratedKernelExpectationV1 for GeneralExpectationWithoutBackend {
+    unsafe impl CompilerGeneratedKernelExpectationV1 for ExpectationWithoutBackend {
         const PROFILE: CompilerGeneratedKernelProfileV1 =
-            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                generated_host_contract_identity: [0x42; 32],
-            };
+            CompilerGeneratedKernelProfileV1::new([0x42; 32]);
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x41; 32];
     }
 
@@ -1783,12 +885,10 @@ mod tests {
 
         assert_eq!(
             witness.profile,
-            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                generated_host_contract_identity: contract,
-            }
+            CompilerGeneratedKernelProfileV1::new(contract)
         );
         assert_eq!(witness.kernel_binding, binding);
-        assert_eq!(witness.generated_host_contract, Some(contract));
+        assert_eq!(witness.generated_host_contract, contract);
     }
 
     #[test]
@@ -1863,18 +963,9 @@ mod tests {
     }
 
     #[test]
-    fn semantic_authority_defaults_preserve_v2_and_fail_closed_for_general_v3() {
-        let legacy =
-            validate_compiler_generated_semantic_witness_v1::<LegacyExpectation>().unwrap();
+    fn semantic_authority_requires_a_backend_witness() {
         assert_eq!(
-            legacy.profile,
-            CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2
-        );
-        assert_eq!(legacy.kernel_binding, [0x31; 32]);
-        assert_eq!(legacy.generated_host_contract, None);
-
-        assert_eq!(
-            validate_compiler_generated_semantic_witness_v1::<GeneralExpectationWithoutBackend>(),
+            validate_compiler_generated_semantic_witness_v1::<ExpectationWithoutBackend>(),
             Err(CompilerGeneratedSemanticWitnessErrorV1::MissingBackendWitness)
         );
     }
@@ -2060,14 +1151,6 @@ mod tests {
         KernelId::from_bytes([byte; 32])
     }
 
-    fn request(kernel: KernelId) -> UntrustedLaunchRequest<VecAdd> {
-        UntrustedLaunchRequest::new(kernel, 1, [17, 1, 1], [64, 1, 1], 128)
-    }
-
-    fn test_loaded(validated: &ValidatedArtifactSelectionV1) -> crate::LoadedKernel<VecAdd> {
-        crate::LoadedKernel::from_test_binding(validated.bind_marker())
-    }
-
     #[test]
     fn validates_exact_identity_and_retains_payload_without_marker_authority() {
         let observed = context(7, 3, "gfx942");
@@ -2101,282 +1184,6 @@ mod tests {
     }
 
     #[test]
-    fn generated_marker_binding_rejects_logical_and_export_name_mismatches() {
-        let observed = context(7, 3, "gfx942");
-        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-
-        let logical = unsafe { validated.bind_generated_marker::<WrongLogicalName>() }
-            .err()
-            .expect("logical-name mismatch must fail");
-        assert_eq!(
-            logical,
-            GeneratedMarkerBindingError::LogicalNameMismatch {
-                marker: "not_vector_add",
-                artifact: "vector_add".to_owned(),
-            }
-        );
-
-        let export = unsafe { validated.bind_generated_marker::<WrongExportName>() }
-            .err()
-            .expect("export-name mismatch must fail");
-        assert_eq!(
-            export,
-            GeneratedMarkerBindingError::ExportNameMismatch {
-                marker: "wrong_export.kd",
-                artifact: "vector_add.kd".to_owned(),
-            }
-        );
-
-        // SAFETY: the test fixture deliberately models the exact marker names;
-        // it does not load or execute the unauthenticated fixture payload.
-        assert!(unsafe { validated.bind_generated_marker::<VecAdd>() }.is_ok());
-    }
-
-    #[test]
-    fn internal_typed_bridge_preserves_brand_and_prepared_identity() {
-        let observed = context(7, 0, "gfx942");
-        let container = decoded_container(FixtureSpec::default());
-        let selected = container.select_native_kernel(digest(0x11)).unwrap();
-        let validated = ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap();
-        let brand = validated.bind_marker::<VecAdd>();
-        let prepared = brand
-            .prepare(&validated, &observed, request(kernel_id(0x11)))
-            .unwrap();
-
-        assert_eq!(brand.identity(), validated.identity());
-        assert!(Arc::ptr_eq(&prepared.identity, &validated.identity));
-        assert!(Arc::ptr_eq(&prepared.payload, &validated.payload));
-        assert_eq!(prepared.payload.as_ref(), selected.payload());
-        assert!(prepared.prepared.belongs_to(&brand.brand));
-        assert_eq!(prepared.prepared.device(), observed.device());
-    }
-
-    #[test]
-    fn loaded_authority_consumes_only_its_own_prepared_launch() {
-        let observed = context(7, 0, "gfx942");
-        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let loaded = test_loaded(&validated);
-        let prepared = loaded.prepare(&observed, request(kernel_id(0x11))).unwrap();
-        let bound = loaded.bind(prepared).unwrap();
-
-        assert_eq!(loaded.identity(), validated.identity());
-        assert_eq!(loaded.device(), observed.device());
-        assert_eq!(bound.identity(), validated.identity());
-        assert_eq!(bound.geometry().grid().dimensions(), [17, 1, 1]);
-        assert_eq!(bound.geometry().block().dimensions(), [64, 1, 1]);
-        assert_eq!(bound.resources().dynamic_shared_memory_bytes(), 128);
-        let config = bound.launch_config();
-        assert_eq!(config.grid_dim, (17, 1, 1));
-        assert_eq!(config.block_dim, (64, 1, 1));
-        assert_eq!(config.shared_mem_bytes, 128);
-    }
-
-    #[test]
-    fn loaded_admission_preserves_existing_artifact_authority() {
-        let observed = context(17, 0, "gfx942");
-        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let first = test_loaded(&validated);
-        let second = test_loaded(&validated);
-        let admitted = first
-            .prepare(&observed, request(kernel_id(0x11)))
-            .unwrap()
-            .admit_arguments(std::iter::empty::<crate::ArgumentAccess<'static>>())
-            .unwrap();
-
-        assert_eq!(
-            second.bind_admitted(admitted).unwrap_err(),
-            crate::LoadedKernelMatchError::WrongArtifactAuthority
-        );
-
-        let admitted = first
-            .prepare(&observed, request(kernel_id(0x11)))
-            .unwrap()
-            .admit_arguments(std::iter::empty::<crate::ArgumentAccess<'static>>())
-            .unwrap();
-        let bound = first.bind_admitted(admitted).unwrap();
-        assert_eq!(bound.identity(), validated.identity());
-        assert_eq!(bound.argument_count(), 0);
-        assert_eq!(bound.geometry().grid().dimensions(), [17, 1, 1]);
-    }
-
-    #[test]
-    fn separate_marker_issuance_cannot_reuse_a_prepared_launch() {
-        let observed = context(7, 0, "gfx942");
-        let validated = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let first = test_loaded(&validated);
-        let second = test_loaded(&validated);
-        let prepared = first.prepare(&observed, request(kernel_id(0x11))).unwrap();
-
-        assert_eq!(
-            second.bind(prepared).unwrap_err(),
-            crate::LoadedKernelMatchError::WrongArtifactAuthority
-        );
-    }
-
-    #[test]
-    fn payload_manifest_and_abi_identity_changes_cannot_cross_authorities() {
-        let observed = context(7, 0, "gfx942");
-        let original = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let original_loaded = test_loaded(&original);
-
-        for changed in [
-            FixtureSpec {
-                payload: b"different-native-code-object".to_vec(),
-                ..FixtureSpec::default()
-            },
-            FixtureSpec {
-                compiler_version: "1.94.1",
-                ..FixtureSpec::default()
-            },
-            FixtureSpec {
-                abi: scalar_abi(),
-                ..FixtureSpec::default()
-            },
-        ] {
-            let changed = validate_fixture(changed, &observed).unwrap();
-            assert_ne!(original.identity(), changed.identity());
-            let changed_loaded = test_loaded(&changed);
-            let prepared = changed_loaded
-                .prepare(&observed, request(kernel_id(0x11)))
-                .unwrap();
-            assert_eq!(
-                original_loaded.bind(prepared).unwrap_err(),
-                crate::LoadedKernelMatchError::WrongArtifactAuthority
-            );
-        }
-    }
-
-    #[test]
-    fn kernel_identity_change_cannot_cross_loaded_authorities() {
-        let observed = context(7, 0, "gfx942");
-        let original = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let changed_container = decoded_container(FixtureSpec {
-            kernel_id: 0x12,
-            ..FixtureSpec::default()
-        });
-        let changed = ValidatedArtifactSelectionV1::validate(
-            changed_container
-                .select_native_kernel(digest(0x12))
-                .unwrap(),
-            &observed,
-        )
-        .unwrap();
-        let original_loaded = test_loaded(&original);
-        let changed_loaded = test_loaded(&changed);
-        let prepared = changed_loaded
-            .prepare(&observed, request(kernel_id(0x12)))
-            .unwrap();
-
-        assert_eq!(
-            original_loaded.bind(prepared).unwrap_err(),
-            crate::LoadedKernelMatchError::WrongKernel
-        );
-    }
-
-    #[test]
-    fn context_device_limits_and_capabilities_cannot_cross_loaded_authorities() {
-        let original_observed = context(7, 0, "gfx942");
-        let original = validate_fixture(FixtureSpec::default(), &original_observed).unwrap();
-        let original_loaded = test_loaded(&original);
-
-        let cases = [
-            (
-                context(7, 1, "gfx942"),
-                crate::LoadedKernelMatchError::WrongDevice,
-            ),
-            (
-                context(8, 0, "gfx942"),
-                crate::LoadedKernelMatchError::WrongContext,
-            ),
-            (
-                ObservedContext::for_test(7, 0, "gfx942", 512, 65_536),
-                crate::LoadedKernelMatchError::DeviceLimitsChanged,
-            ),
-            (
-                original_observed
-                    .clone()
-                    .with_changed_test_hip_capabilities(),
-                crate::LoadedKernelMatchError::DeviceCapabilitiesChanged,
-            ),
-        ];
-
-        for (changed_observed, expected) in cases {
-            let changed = validate_fixture(FixtureSpec::default(), &changed_observed).unwrap();
-            let changed_loaded = test_loaded(&changed);
-            let prepared = changed_loaded
-                .prepare(&changed_observed, request(kernel_id(0x11)))
-                .unwrap();
-            assert_eq!(original_loaded.bind(prepared).unwrap_err(), expected);
-        }
-    }
-
-    #[test]
-    fn loaded_issuance_rechecks_selection_context_device_limits_and_capabilities() {
-        use crate::loaded_kernel::{LoadedKernelLoadError, validate_issuance};
-
-        let observed = context(7, 0, "gfx942");
-        let first = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let second = validate_fixture(FixtureSpec::default(), &observed).unwrap();
-        let binding = first.bind_marker::<VecAdd>();
-
-        assert!(validate_issuance(&binding, &first, &observed).is_ok());
-        assert!(matches!(
-            validate_issuance(&binding, &second, &observed),
-            Err(LoadedKernelLoadError::WrongValidatedSelection)
-        ));
-        assert!(matches!(
-            validate_issuance(&binding, &first, &context(7, 1, "gfx942")),
-            Err(LoadedKernelLoadError::WrongDevice)
-        ));
-        assert!(matches!(
-            validate_issuance(&binding, &first, &context(8, 0, "gfx942")),
-            Err(LoadedKernelLoadError::WrongContext)
-        ));
-        assert!(matches!(
-            validate_issuance(
-                &binding,
-                &first,
-                &ObservedContext::for_test(7, 0, "gfx942", 512, 65_536)
-            ),
-            Err(LoadedKernelLoadError::DeviceLimitsChanged)
-        ));
-        assert!(matches!(
-            validate_issuance(
-                &binding,
-                &first,
-                &observed.clone().with_changed_test_hip_capabilities()
-            ),
-            Err(LoadedKernelLoadError::DeviceCapabilitiesChanged)
-        ));
-    }
-
-    #[test]
-    #[ignore = "requires a working HIP device"]
-    fn loaded_issuance_rejects_another_wrapper_for_the_same_hip_device() {
-        use crate::loaded_kernel::LoadedKernelLoadError;
-
-        let context = fe2o3_core::GpuContext::new(0).unwrap();
-        let another_context = fe2o3_core::GpuContext::new(0).unwrap();
-        let observed = ObservedContext::observe(&context).unwrap();
-        let architecture: &'static str =
-            Box::leak(observed.device().target().to_owned().into_boxed_str());
-        let validated = validate_fixture(
-            FixtureSpec {
-                architecture,
-                ..FixtureSpec::default()
-            },
-            &observed,
-        )
-        .unwrap();
-        let binding = validated.bind_marker::<VecAdd>();
-
-        // SAFETY: This test expects rejection before HIP sees the deliberately
-        // fake payload, so none of the unsafe loading obligations are relied on.
-        let error = unsafe { binding.load(&validated, &observed, &another_context) }.unwrap_err();
-        assert!(matches!(error, LoadedKernelLoadError::WrongContextWrapper));
-    }
-
-    #[test]
     fn same_names_and_kernel_id_cannot_confuse_different_payloads() {
         let observed = context(1, 0, "gfx942");
         let first = decoded_container(FixtureSpec::default());
@@ -2404,11 +1211,6 @@ mod tests {
         let second_validated =
             ValidatedArtifactSelectionV1::validate(second_selected, &observed).unwrap();
         assert_ne!(validated.identity(), second_validated.identity());
-        let brand = validated.bind_marker::<VecAdd>();
-        assert!(matches!(
-            brand.prepare(&second_validated, &observed, request(kernel_id(0x11))),
-            Err(ArtifactMarkerPrepareError::WrongValidatedSelection)
-        ));
     }
 
     #[test]
@@ -2795,28 +1597,6 @@ mod tests {
             validated.revalidate(selected, &changed_capabilities),
             Err(ArtifactRevalidationError::DeviceCapabilitiesChanged)
         );
-    }
-
-    #[test]
-    fn internal_typed_preparation_rejects_wrong_kernel_and_cross_issuance() {
-        let observed = context(1, 0, "gfx942");
-        let container = decoded_container(FixtureSpec::default());
-        let selected = container.select_native_kernel(digest(0x11)).unwrap();
-        let validated = ValidatedArtifactSelectionV1::validate(selected, &observed).unwrap();
-        let first = validated.bind_marker::<VecAdd>();
-        let second = validated.bind_marker::<VecAdd>();
-
-        assert!(matches!(
-            first.prepare(&validated, &observed, request(kernel_id(0x12))),
-            Err(ArtifactMarkerPrepareError::Launch(
-                PrepareLaunchError::WrongKernel { .. }
-            ))
-        ));
-        let prepared = first
-            .prepare(&validated, &observed, request(kernel_id(0x11)))
-            .unwrap();
-        assert!(prepared.prepared.belongs_to(&first.brand));
-        assert!(!prepared.prepared.belongs_to(&second.brand));
     }
 
     #[test]

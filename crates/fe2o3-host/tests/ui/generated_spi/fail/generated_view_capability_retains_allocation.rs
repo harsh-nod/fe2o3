@@ -1,5 +1,5 @@
 use fe2o3_core::DeviceBuffer;
-use fe2o3_host::{GeneratedReadDeviceSlice, GeneratedWriteDeviceSlice, ObservedContext};
+use fe2o3_host::{GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, ObservedContext};
 
 fn shared_view_retains_parent(observed: &ObservedContext, input: DeviceBuffer<f32>) {
     let view = input.view(..).unwrap();
@@ -10,7 +10,7 @@ fn shared_view_retains_parent(observed: &ObservedContext, input: DeviceBuffer<f3
 
 fn mutable_view_retains_parent(observed: &ObservedContext, mut output: DeviceBuffer<f32>) {
     let view = output.view_mut(..).unwrap();
-    let capability = GeneratedWriteDeviceSlice::from_view_mut(observed, view).unwrap();
+    let capability = GeneratedReadWriteDeviceSlice::from_view_mut(observed, view).unwrap();
     let _reuse = output.len();
     drop(capability);
 }

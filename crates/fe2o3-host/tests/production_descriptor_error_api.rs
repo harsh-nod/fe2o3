@@ -1,5 +1,3 @@
-#![cfg(not(feature = "qualification-oracles-test-only"))]
-
 use fe2o3_host::{
     ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
 };

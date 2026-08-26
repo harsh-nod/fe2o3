@@ -2,13 +2,9 @@
 mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod cooperative_launch;
 mod generated_argument_plan;
 mod generated_worker_v3_dispatch;
 mod hsa_executable_lifecycle;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod loaded_kernel;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
@@ -92,32 +88,17 @@ pub use argument_alias::{
 #[doc(hidden)]
 pub use argument_alias::{
     GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-    GeneratedWriteDeviceSlice,
 };
 pub use artifact_binding::{
     ARTIFACT_KERNEL_IDENTITY_VERSION, ArtifactBindingError, ArtifactKernelIdentityV1,
     ArtifactLaunchContractError, ArtifactRevalidationError, ValidatedArtifactSelectionV1,
 };
 #[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use artifact_binding::{
-    AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-    GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1, GeneratedMarkerBindingError,
-};
-#[doc(hidden)]
 pub use artifact_binding::{
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedSemanticWitnessErrorV1, GeneratedKernelProfileError,
-    ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-    validate_compiler_generated_semantic_witness_v1,
+    CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
+    semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use cooperative_launch::{
-    CooperativeAdmissionError, CooperativeLaunchAdmission, CooperativeLaunchError,
-    CooperativeResidencyAdmission,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use fe2o3_core::{KernelParams, LaunchConfig};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
 #[doc(hidden)]
 pub use generated_argument_plan::{
@@ -142,14 +123,6 @@ pub use hsa_executable_lifecycle::{
     HsaUnloadObservationV1, LoadedWorkerV3HsaExecutableV1, ReviewedHsaExecutableLifecycleAdapterV1,
     ReviewedHsaImplicitKernargAdapterV1, UnloadedHsaExecutableV1, WorkerV3GeneratedDispatchErrorV1,
     WorkerV3HsaExecutableLoadErrorV1, WorkerV3HsaLoadAuthorizationErrorV1,
-};
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use loaded_kernel::{
-    LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
-    LoadedPreparedLaunch,
 };
 pub use prepared_launch::{
     ArgumentAdmittedLaunch, CheckedDimensions, DeviceIdentity, KernelBrand, LaunchAxis,
@@ -196,173 +169,20 @@ pub mod __generated {
     #[cfg(target_os = "linux")]
     pub use crate::production_application::load_admitted_worker_v3_application_v1;
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub use crate::{
-        AuthenticatedKernelArtifactV1, CompilerGeneratedKernelContractV1,
-        GeneratedArtifactAuthenticationError, GeneratedKernelBindingV1,
-        GeneratedMarkerBindingError,
-    };
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
         CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentFieldProperty,
         GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedKernelProfileError,
-        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
-        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
-        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
-        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
-        GeneratedWriteDeviceSlice, ValidatedCompilerGeneratedSemanticWitnessV1,
+        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
+        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
+        GeneratedSliceArgumentPairV1, GeneratedWorkerV3ArgumentBindingV1,
+        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
+        GeneratedWorkerV3PreparedInvocationV1, ValidatedCompilerGeneratedSemanticWitnessV1,
         semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
     };
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub use crate::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,
         PointerWidth, RustDisjointIndexSpaceV1, ScalarType,
     };
-
-    /// Constructs the exact immutable slice promised by a generated backend
-    /// accessor pair.
-    ///
-    /// # Safety
-    ///
-    /// `pointer` must be non-null, correctly aligned, and point to one live,
-    /// immutable allocation containing exactly `length` initialized bytes.
-    /// That allocation must remain live and immutable for the entire program.
-    /// `length` must not exceed `isize::MAX`, and the range must not wrap the
-    /// address space. Only compiler-generated unsafe trait implementations may
-    /// call this function with values returned by the trusted backend object.
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub unsafe fn artifact_bytes_from_backend_v1(
-        pointer: *const u8,
-        length: usize,
-    ) -> &'static [u8] {
-        if pointer.is_null()
-            || length == 0
-            || length > isize::MAX as usize
-            || pointer.addr().checked_add(length).is_none()
-        {
-            return &[];
-        }
-
-        // SAFETY: the caller establishes the single-allocation, initialization,
-        // immutability, range, and static-lifetime requirements above.
-        unsafe { core::slice::from_raw_parts(pointer, length) }
-    }
-}
-
-/// Loads and launches a GPU kernel using raw, caller-described ABI arguments.
-///
-/// # Safety
-///
-/// The caller must ensure that the named function's ABI exactly matches the
-/// argument kinds, order, and Rust types supplied here. Every device pointer
-/// must be valid for the kernel's accesses and remain alive until the stream
-/// has completed the launch. The supplied module must remain loaded until that
-/// completion; a temporary module expression does not satisfy this requirement.
-/// Mutable arguments must satisfy the kernel's aliasing and synchronization
-/// requirements, and the launch configuration must satisfy the kernel's grid,
-/// block, and shared-memory requirements.
-///
-/// An unguarded launch does not compile:
-///
-/// ```compile_fail,E0133
-/// use fe2o3_core::{GpuModule, LaunchConfig, Result, Stream};
-/// use fe2o3_host::launch;
-/// use std::sync::Arc;
-///
-/// fn unguarded(module: &Arc<GpuModule>, stream: &Stream) -> Result<()> {
-///     launch! {
-///         kernel: example,
-///         stream: stream,
-///         module: module,
-///         config: LaunchConfig::for_num_elems(1),
-///         args: []
-///     }
-/// }
-/// ```
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-#[macro_export]
-macro_rules! launch {
-    (
-        kernel: $kernel:ident,
-        stream: $stream:expr,
-        module: $module:expr,
-        config: $config:expr,
-        args: [$($kind:ident($value:expr)),* $(,)?]
-    ) => {{
-        let __fe2o3_function = ($module).load_function(stringify!($kernel))?;
-        let mut __fe2o3_params = ::fe2o3_core::KernelParams::new();
-        $(
-            $crate::__push_kernel_arg!(__fe2o3_params, $kind($value));
-        )*
-        ::fe2o3_core::launch_kernel_on_stream(
-            &__fe2o3_function,
-            $config,
-            &$stream,
-            &mut __fe2o3_params,
-        )
-    }};
-}
-
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-#[macro_export]
-macro_rules! __push_kernel_arg {
-    ($params:ident, scalar($value:expr)) => {{
-        $params.push($value);
-    }};
-    ($params:ident, raw($value:expr)) => {{
-        $params.push($value);
-    }};
-    ($params:ident, buffer($value:expr)) => {{
-        $params.push(($value).as_device_ptr());
-    }};
-    ($params:ident, slice($value:expr)) => {{
-        $params.push(($value).as_device_ptr());
-        $params.push(($value).len());
-    }};
-    ($params:ident, slice_mut($value:expr)) => {{
-        $params.push(($value).as_device_ptr());
-        $params.push(($value).len());
-    }};
-}
-
-#[cfg(test)]
-mod tests {
-    use fe2o3_core::KernelParams;
-
-    #[derive(Clone, Copy)]
-    struct FakeBuffer {
-        ptr: usize,
-        len: usize,
-    }
-
-    impl FakeBuffer {
-        fn as_device_ptr(&self) -> usize {
-            self.ptr
-        }
-
-        fn len(&self) -> usize {
-            self.len
-        }
-    }
-
-    #[test]
-    fn argument_kinds_preserve_abi_field_counts() {
-        let buffer = FakeBuffer {
-            ptr: 0x1000,
-            len: 8,
-        };
-        let mut params = KernelParams::new();
-
-        crate::__push_kernel_arg!(params, scalar(1.0_f32));
-        crate::__push_kernel_arg!(params, raw(7_u32));
-        crate::__push_kernel_arg!(params, buffer(buffer));
-        crate::__push_kernel_arg!(params, slice(buffer));
-        crate::__push_kernel_arg!(params, slice_mut(buffer));
-
-        assert_eq!(params.len(), 7);
-    }
 }

@@ -1,5 +1,3 @@
-#![cfg(feature = "qualification-oracles-test-only")]
-
 #[test]
 fn generated_spi_is_explicit_unsafe_and_type_sealed() {
     let tests = trybuild::TestCases::new();

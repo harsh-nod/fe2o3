@@ -5,8 +5,6 @@ use crate::{
         GeneratedDeviceScalarV1,
     },
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_core::KernelParams;
 use fe2o3_core::{
     DeviceBuffer, DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
     DeviceCopy, DevicePtr,
@@ -426,13 +424,6 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
         )
     }
 
-    /// Appends this slice's exact device pointer and element count.
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
-        params.push(self.pointer);
-        params.push(self.len);
-    }
-
     pub fn len(&self) -> usize {
         self.len
     }
@@ -472,75 +463,6 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
             input: self.bind_argument(plan, argument_index)?,
             access: self.argument_access(),
         })
-    }
-}
-
-/// Generated writable capability for one exclusive typed device-buffer region.
-///
-/// This doc-hidden SPI owns the actual exclusive buffer borrow. Its admission
-/// access is fixed to [`ArgumentAccessMode::ExclusiveWrite`], and its packing
-/// helper emits the pointer and element count from that same retained buffer.
-/// Empty regions retain their allocation provenance and describe no memory effects.
-#[doc(hidden)]
-pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
-    #[cfg_attr(
-        not(any(test, feature = "qualification-oracles-test-only")),
-        allow(dead_code)
-    )]
-    pointer: DevicePtr<T>,
-    len: usize,
-    metadata: GeneratedDeviceSliceMetadata,
-    marker: PhantomData<&'allocation mut T>,
-}
-
-impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
-    pub fn new(
-        observed: &ObservedContext,
-        buffer: &'allocation mut DeviceBuffer<T>,
-    ) -> Result<Self, RegionError> {
-        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, buffer)?;
-        Ok(Self {
-            pointer: buffer.region_device_ptr(),
-            len: buffer.region_len(),
-            metadata,
-            marker: PhantomData,
-        })
-    }
-
-    /// Consumes one checked exclusive subregion as a generated writable argument.
-    pub fn from_view_mut(
-        observed: &ObservedContext,
-        view: DeviceBufferViewMut<'allocation, T>,
-    ) -> Result<Self, RegionError> {
-        let metadata = GeneratedDeviceSliceMetadata::from_region(observed, &view)?;
-        Ok(Self {
-            pointer: view.region_device_ptr(),
-            len: view.region_len(),
-            metadata,
-            marker: PhantomData,
-        })
-    }
-
-    pub fn argument_access(&self) -> ArgumentAccess<'allocation> {
-        ArgumentAccess::new(
-            self.metadata.checked_region(),
-            ArgumentAccessMode::ExclusiveWrite,
-        )
-    }
-
-    /// Appends this slice's exact device pointer and element count.
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
-        params.push(self.pointer);
-        params.push(self.len);
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
     }
 }
 
@@ -865,9 +787,8 @@ impl<'allocation> ArgumentAccess<'allocation> {
 
 /// Inert evidence that one set of argument regions passed host alias checks.
 ///
-/// This value is deliberately disconnected from `LoadedKernel` and
-/// `LoadedPreparedLaunch`. It cannot authorize or enqueue a launch, and it
-/// carries no static race-freedom or verification claim.
+/// This value cannot authorize or enqueue a launch, and it carries no static
+/// race-freedom or verification claim.
 pub struct ArgumentAliasAdmission<'allocation> {
     context: ObservedContext,
     accesses: Vec<AdmittedAccess<'allocation>>,

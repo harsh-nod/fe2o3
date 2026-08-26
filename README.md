@@ -427,18 +427,15 @@ Safe ownership of resources used by asynchronous copies is documented in
   ABI, witness dataflow, bounds control flow, and accepted kernel shapes are
   fail closed: invalid values and unsupported kernels remove stale generation
   artifacts and never fall back or acquire production publication authority.
-- The HIP runtime provides contexts, streams, device buffers, pinned host
-  buffers, events, synchronous transfers, event-backed borrowed and owned
-  asynchronous transfers, module loading, and kernel launch.
-- The `fe2o3-host` raw launch macro and parameter pack are qualification-only
-  `unsafe` escape hatches. Production applications load and dispatch through
-  the authenticated Worker V3 transaction and compiler-generated typed
-  arguments. Feature-free `fe2o3-core` retains context, stream, memory, event,
-  and capability APIs but does not export raw modules, functions, parameter
-  packs, launch configurations, or launch functions. Those primitives require
-  `qualification-raw-hip-test-only`; qualification callers remain responsible
-  for artifact trust, target and ABI compatibility, pointer validity, aliasing,
-  launch geometry, and resource lifetimes.
+- `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
+  host buffers, events, synchronous transfers, and event-backed borrowed and
+  owned asynchronous transfers. It exports no raw module, function, parameter
+  pack, launch configuration, or launch function in any downstream build.
+- Production applications load and dispatch only through the authenticated
+  Worker V3 transaction, compiler-generated typed arguments, and reviewed HSA
+  adapter. The former host `launch!` macro and the selectable raw-HIP core
+  feature are deleted; raw HIP module/launch mechanics remain private unit-test
+  implementation details.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 
@@ -511,17 +508,15 @@ turn the foundations below into end-to-end features.
   reaches only verified Kernel IR. Dynamic-LDS launch-byte plumbing, broad
   atomics and collectives, general source-to-HSACO finalization, and compiler
   refinement remain fail-closed gaps.
-- `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
-  `LoadedKernel<K>` authority that owns the exact HIP module and function and
-  can bind only matching prepared launches. Argument admission reserves
-  context-scoped allocation ranges and rejects overlapping mutable or
-  mutable/shared aliases. The exact generated vecadd adapter assembles these
-  pieces behind its safe API. The general doc-hidden generated-code SPI still
-  exposes an unsafe compiler boundary for legacy profiles: association of a
-  marker, complete ABI and effects, and executable semantics must be correct
-  before its sealed launch can be treated as safe. Production Worker V3 checks
-  the generated marker binding against the independently admitted descriptor,
-  then checks the complete generated argument layout before dispatch.
+- `fe2o3-host` exposes one Worker V3 execution graph. It consumes a recovered
+  pinned descriptor, authenticates compiler and verification evidence, grants
+  one exact HSA load authorization, resolves the selected kernel, validates
+  generated arguments and geometry against the admitted descriptor, packs the
+  complete COV6 kernarg, admits aliases, and dispatches through the reviewed HSA
+  adapter. The old HIP module/function loader, raw `KernelParams`, `launch!`,
+  cooperative-launch bridge, embedded-artifact contract, and profile-specific
+  vecadd host route are deleted. `PreparedLaunch<K>` and argument admission are
+  inert validation foundations; neither can load or dispatch an executable.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -561,9 +556,9 @@ turn the foundations below into end-to-end features.
 - The recovered Worker V2 host descriptor, launch-metadata bridge, synchronous
   HSA handoff, and Scalar GEMM Worker V2 hardware harness are deleted. The
   reviewed HSA adapter and physical observations remain shared mechanics for
-  the production Worker V3 lifecycle. Qualification-only Worker V2 bundle and
-  exact generated dispatch code are being removed next; they grant no
-  production authority.
+  the production Worker V3 lifecycle. Qualification-only compiler publication
+  records remain as isolated evidence inputs, but there is no Worker V2 or raw
+  HIP host execution authority in any feature configuration.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while
