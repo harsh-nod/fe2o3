@@ -361,6 +361,13 @@ its feature graph enables `fe2o3-host` only with `hardware-test-hooks`; it does
 not enable the host qualification feature. The old V2 host-consumer binary,
 input adapter, and Cargo feature have been deleted.
 
+The shared hostile application fixture also speaks only Worker V3. Its active
+vertical tests cover descriptor quarantine, commitment and descriptor
+substitution, missing/truncated/extended acknowledgments, public-ACK
+non-authority, process and exec containment, stalled-ACK cleanup, envelope
+mutation, generation replacement, and stale-publication turnover. The suite is
+a mandatory generic-core CI step.
+
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only
 with `qualification-oracles-test-only`; they are absent from the normal binary

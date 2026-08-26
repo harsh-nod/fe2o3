@@ -257,7 +257,7 @@ run_cpu_tests() {
   run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \
-      --test worker_v3_load_envelope_vertical
+      --test worker_v3_load_envelope_vertical -- --test-threads=1
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   run_step dialect-mir-pliron-tests \
     cargo test --locked -p dialect-mir --features pliron --test pliron_shell

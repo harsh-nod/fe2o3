@@ -8,11 +8,13 @@ use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
+    thread,
+    time::{Duration, Instant},
 };
 
 use fe2o3_amd_target::AmdTargetId;
@@ -111,9 +113,15 @@ const SCALAR_GEMM_MARKER_BINDING: [u8; 32] = [
     0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
 ];
 
-fn static_host_consumer_application_fixture() -> &'static Path {
-    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
-    FIXTURE.get_or_init(|| {
+struct StaticV3ApplicationFixtures {
+    host_consumer: PathBuf,
+    hostile: PathBuf,
+    no_protocol: PathBuf,
+}
+
+fn static_v3_application_fixtures() -> &'static StaticV3ApplicationFixtures {
+    static FIXTURES: OnceLock<StaticV3ApplicationFixtures> = OnceLock::new();
+    FIXTURES.get_or_init(|| {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let target = std::env::temp_dir().join(format!(
             "cargo-fe2o3-v3-static-host-consumer-{}",
@@ -144,9 +152,13 @@ fn static_host_consumer_application_fixture() -> &'static Path {
                 "-p",
                 "cargo-fe2o3",
                 "--features",
-                "worker-v3-host-consumer-fixture",
+                "worker-v3-host-consumer-fixture,application-handoff-adversarial-fixture",
                 "--bin",
                 "cargo-fe2o3-worker-v3-host-consumer-app-fixture",
+                "--bin",
+                "cargo-fe2o3-runner-app-fixture",
+                "--bin",
+                "cargo-fe2o3-runner-chain-fixture",
             ])
             .output()
             .unwrap();
@@ -155,9 +167,25 @@ fn static_host_consumer_application_fixture() -> &'static Path {
             "failed to build static V3 host consumer: {}",
             String::from_utf8_lossy(&built.stderr)
         );
-        target
-            .join("x86_64-unknown-linux-gnu/debug/cargo-fe2o3-worker-v3-host-consumer-app-fixture")
+        let directory = target.join("x86_64-unknown-linux-gnu/debug");
+        StaticV3ApplicationFixtures {
+            host_consumer: directory.join("cargo-fe2o3-worker-v3-host-consumer-app-fixture"),
+            hostile: directory.join("cargo-fe2o3-runner-app-fixture"),
+            no_protocol: directory.join("cargo-fe2o3-runner-chain-fixture"),
+        }
     })
+}
+
+fn static_host_consumer_application_fixture() -> &'static Path {
+    &static_v3_application_fixtures().host_consumer
+}
+
+fn static_hostile_application_fixture() -> &'static Path {
+    &static_v3_application_fixtures().hostile
+}
+
+fn static_no_protocol_application_fixture() -> &'static Path {
+    &static_v3_application_fixtures().no_protocol
 }
 
 fn lower_hex(bytes: &[u8]) -> String {
@@ -728,12 +756,19 @@ fn prepared_v3_application_fixture() -> PreparedV3ApplicationFixture {
     }
 }
 
-fn v3_application_runner_command(fixture: &PreparedV3ApplicationFixture, report: &Path) -> Command {
+fn v3_application_runner_command_for(
+    fixture: &PreparedV3ApplicationFixture,
+    application: &Path,
+) -> Command {
+    v3_application_runner_command_for_context(fixture, application, "3")
+}
+
+fn v3_application_runner_command_for_context(
+    fixture: &PreparedV3ApplicationFixture,
+    application: &Path,
+    runner_context: &str,
+) -> Command {
     let metadata = fs::metadata(&fixture.directory.0).unwrap();
-    #[cfg(feature = "worker-v2-fault-injection-test-only")]
-    let runner_context = "3-test-scheduler-tolerant";
-    #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
-    let runner_context = "3";
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
     command
         .arg("__fe2o3-runner-v1")
@@ -745,10 +780,37 @@ fn v3_application_runner_command(fixture: &PreparedV3ApplicationFixture, report:
         .arg(metadata.ino().to_string())
         .arg("required")
         .arg("0")
-        .arg(static_host_consumer_application_fixture())
+        .arg(application);
+    command
+}
+
+fn v3_application_runner_command(fixture: &PreparedV3ApplicationFixture, report: &Path) -> Command {
+    let mut command =
+        v3_application_runner_command_for(fixture, static_host_consumer_application_fixture());
+    command
         .arg(&fixture.kernel)
         .arg("gfx942:xnack-")
         .arg(report);
+    command
+}
+
+fn v3_hostile_runner_command(fixture: &PreparedV3ApplicationFixture, report: &Path) -> Command {
+    let mut command =
+        v3_application_runner_command_for(fixture, static_hostile_application_fixture());
+    command.arg(report).arg("worker-v3-application-payload");
+    command
+}
+
+fn v3_fast_failure_hostile_runner_command(
+    fixture: &PreparedV3ApplicationFixture,
+    report: &Path,
+) -> Command {
+    let mut command = v3_application_runner_command_for_context(
+        fixture,
+        static_hostile_application_fixture(),
+        "3-test-fast-failures",
+    );
+    command.arg(report).arg("worker-v3-application-payload");
     command
 }
 
@@ -830,6 +892,338 @@ fn strict_v3_handoff_rejects_truncated_and_extended_envelopes_before_spawn() {
         assert!(!rejected.status.success());
         assert!(!report.exists(), "application must not be spawned");
     }
+}
+
+#[test]
+fn strict_v3_handoff_closes_unrelated_inheritable_descriptors() {
+    use std::fs::File;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+
+    const PROBE_FD: i32 = 199;
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("close-range-report.json");
+    let source = File::open("/dev/null").unwrap();
+    let source_fd = source.as_raw_fd();
+    let mut command = v3_hostile_runner_command(&fixture, &report);
+    command
+        .arg("--fe2o3-test-probe-fd")
+        .arg(PROBE_FD.to_string());
+    // SAFETY: the callback creates one intentionally inheritable descriptor in the runner child.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(source_fd, PROBE_FD) != PROBE_FD
+                || libc::fcntl(PROBE_FD, libc::F_SETFD, 0) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let completed = command.output().unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["probe_fd_open"], false);
+    assert_eq!(report["handoff"]["acknowledged"], true);
+}
+
+#[test]
+fn strict_v3_public_ack_does_not_claim_child_currentness_authority() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("public-ack-report.json");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-public-ack-without-reacquire")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["handoff"]["acknowledged"], true);
+    assert_eq!(report["handoff"]["child_reacquired_currentness"], false);
+}
+
+#[test]
+fn strict_v3_seccomp_rejects_process_and_session_escape() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("seccomp-process-report.json");
+    let escape_marker = fixture.directory.0.join("double-fork-setsid-escaped");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-seccomp-process-probe")
+        .arg(&escape_marker)
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    for probe in [
+        "fork",
+        "vfork",
+        "clone",
+        "clone3",
+        "unshare",
+        "setns",
+        "setsid",
+        "io_uring",
+        "double_fork_setsid",
+    ] {
+        assert_eq!(report["handoff"]["process_creation"][probe], "EPERM");
+    }
+    assert!(!escape_marker.exists());
+}
+
+#[test]
+fn strict_v3_seccomp_rejects_static_and_dynamic_exec_replacement() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("seccomp-exec-report.json");
+    let completed = v3_hostile_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-exec-replacement-probe")
+        .arg(static_no_protocol_application_fixture())
+        .arg("/bin/true")
+        .output()
+        .unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    for probe in [
+        "static_execve",
+        "static_execveat",
+        "dynamic_execve",
+        "dynamic_execveat",
+    ] {
+        assert_eq!(report["handoff"]["exec_replacement"][probe], "EPERM");
+    }
+}
+
+#[test]
+fn strict_v3_handoff_rejects_child_protocol_substitution_and_omission() {
+    let fixture = prepared_v3_application_fixture();
+    for probe in [
+        "--fe2o3-test-reuse-handoff-fd",
+        "--fe2o3-test-reuse-artifact-dir-fd",
+        "--fe2o3-test-substitute-commitment",
+        "--fe2o3-test-ignore-handoff",
+        "--fe2o3-test-premature-close-ack",
+        "--fe2o3-test-extra-ack-byte",
+    ] {
+        let report = fixture.directory.0.join(format!("rejected-{probe}.json"));
+        let rejected = v3_fast_failure_hostile_runner_command(&fixture, &report)
+            .arg(probe)
+            .output()
+            .unwrap();
+        assert!(
+            !rejected.status.success(),
+            "{probe} unexpectedly passed: {}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+    }
+
+    let report = fixture.directory.0.join("absent-child-protocol.json");
+    let rejected = v3_application_runner_command_for_context(
+        &fixture,
+        static_no_protocol_application_fixture(),
+        "3-test-fast-failures",
+    )
+    .arg(&report)
+    .output()
+    .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("acknowledgment"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+}
+
+#[test]
+fn strict_v3_handoff_rejects_replaced_generation_directory() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("replaced-generation-report.json");
+    let mut command = v3_hostile_runner_command(&fixture, &report);
+    let original = fixture.directory.0.clone();
+    let moved = original.with_extension("original");
+    fs::rename(&original, &moved).unwrap();
+    fs::create_dir(&original).unwrap();
+    let rejected = command.output().unwrap();
+    fs::remove_dir(&original).unwrap();
+    fs::rename(&moved, &original).unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr).contains("identity was substituted"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+}
+
+fn process_cpu_ticks(process: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{process}/stat")).unwrap();
+    let fields = stat
+        .rsplit_once(')')
+        .expect("process stat command field")
+        .1
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+}
+
+#[test]
+fn strict_v3_stalled_ack_times_out_without_spinning_and_reaps_application() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("stalled-ack-report.json");
+    let ready = fixture.directory.0.join("stalled-ack-ready");
+    let mut command = v3_application_runner_command_for_context(
+        &fixture,
+        static_hostile_application_fixture(),
+        "3-test-short-timeouts",
+    );
+    command
+        .arg(&report)
+        .arg("worker-v3-application-payload")
+        .arg("--fe2o3-test-stall-before-ack")
+        .arg(&ready)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let started = Instant::now();
+    let child = command.spawn().unwrap();
+    let runner = child.id();
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !ready.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready.exists(), "application did not reach stalled ACK");
+    let ack_started = Instant::now();
+    let application = fs::read_to_string(&ready)
+        .unwrap()
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    let before = process_cpu_ticks(runner);
+    thread::sleep(Duration::from_millis(500));
+    let consumed = process_cpu_ticks(runner).saturating_sub(before);
+    // SAFETY: `_SC_CLK_TCK` is a scalar process-configuration query.
+    let ticks_per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    assert!(ticks_per_second > 0);
+    assert!(
+        consumed <= (ticks_per_second as u64 / 10).max(1),
+        "stalled ACK polling consumed {consumed} CPU ticks in 500 ms"
+    );
+
+    let rejected = child.wait_with_output().unwrap();
+    let ack_elapsed = ack_started.elapsed();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("application handoff acknowledgment timed out"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert!(ack_elapsed >= Duration::from_secs(1));
+    assert!(ack_elapsed < Duration::from_secs(15));
+    assert!(started.elapsed() < Duration::from_secs(90));
+    assert!(
+        !Path::new(&format!("/proc/{application}")).exists(),
+        "timed-out application was not killed and reaped"
+    );
+}
+
+#[test]
+fn strict_v3_handoff_rejects_stale_envelope_after_publication_turnover() {
+    let directory = worker_v3_fixture::TestDirectory::new();
+    let first = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x61);
+    let first_envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(first.published).unwrap();
+    let first_intent = first_envelope.wire().publication_intent_record().identity();
+    let first_exact_envelope = first_envelope.encode_canonical().unwrap();
+    let first_readiness = first_envelope
+        .persist_durable_replay_custody_v1(&directory.0)
+        .unwrap();
+    let first_path = first_readiness.envelope_path().to_path_buf();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &first.producer,
+        first.attempt,
+        first_intent,
+        first_readiness.receipt(),
+    )
+    .unwrap();
+    drop(first_envelope);
+
+    let second = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x62);
+    let second_envelope =
+        WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(second.published).unwrap();
+    let second_intent = second_envelope
+        .wire()
+        .publication_intent_record()
+        .identity();
+    let exact_envelope = second_envelope.encode_canonical().unwrap();
+    let second_readiness = second_envelope
+        .persist_durable_replay_custody_v1(&directory.0)
+        .unwrap();
+    let second_path = second_readiness.envelope_path().to_path_buf();
+    retire_worker_v3_publication_intent_after_load_readiness_v1(
+        &directory.0,
+        &second.producer,
+        second.attempt,
+        second_intent,
+        second_readiness.receipt(),
+    )
+    .unwrap();
+    drop(second_envelope);
+    assert_ne!(first_path, second_path);
+    fs::write(&first_path, first_exact_envelope).unwrap();
+    fs::set_permissions(&first_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut owner = b"fe2o3-owned-v1\0".to_vec();
+    owner.extend_from_slice(&[0x55; 16]);
+    let owner_path = directory.0.join(".fe2o3-owned-v1");
+    fs::write(&owner_path, owner).unwrap();
+    fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let kernel = directory.0.join("v3-application.kernel-id");
+    fs::write(&kernel, "a1".repeat(32)).unwrap();
+    let fixture = PreparedV3ApplicationFixture {
+        directory,
+        attempt: second.attempt,
+        readiness: second_readiness.receipt(),
+        envelope_path: second_path,
+        exact_envelope,
+        kernel,
+    };
+
+    let current_report = fixture.directory.0.join("current-after-turnover.json");
+    let current = v3_hostile_runner_command(&fixture, &current_report)
+        .output()
+        .unwrap();
+    assert!(
+        current.status.success(),
+        "{}",
+        String::from_utf8_lossy(&current.stderr)
+    );
+
+    fs::remove_file(&fixture.envelope_path).unwrap();
+    let stale_report = fixture.directory.0.join("stale-after-turnover.json");
+    let stale = v3_hostile_runner_command(&fixture, &stale_report)
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    assert!(!stale_report.exists());
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("current"),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
 }
 
 #[test]

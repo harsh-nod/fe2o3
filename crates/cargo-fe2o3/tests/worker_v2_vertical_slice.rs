@@ -2,7 +2,7 @@
 
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, File};
+use std::fs;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -19,7 +19,6 @@ use serde_json::{Value as JsonValue, json};
 use sha2::{Digest, Sha256};
 
 use fe2o3_hsaco_finalize::finalize_unfinalized;
-use fe2o3_worker_v2_bundle::WorkerV2LoadEnvelopeV1;
 
 #[allow(dead_code)]
 #[path = "../src/worker_v2_artifact_container_test_fixture.rs"]
@@ -646,7 +645,6 @@ fn artifact_dir(directory: &TestDirectory) -> PathBuf {
 
 struct StaticApplicationFixtures {
     protocol: PathBuf,
-    no_protocol: PathBuf,
 }
 
 fn static_application_fixtures() -> &'static StaticApplicationFixtures {
@@ -676,11 +674,9 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
                 "-p",
                 "cargo-fe2o3",
                 "--features",
-                "qualification-oracles-test-only",
+                "application-handoff-adversarial-fixture",
                 "--bin",
                 "cargo-fe2o3-runner-app-fixture",
-                "--bin",
-                "cargo-fe2o3-runner-chain-fixture",
             ])
             .output()
             .unwrap();
@@ -688,27 +684,12 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
         let directory = target.join("x86_64-unknown-linux-gnu/debug");
         StaticApplicationFixtures {
             protocol: directory.join("cargo-fe2o3-runner-app-fixture"),
-            no_protocol: directory.join("cargo-fe2o3-runner-chain-fixture"),
         }
     })
 }
 
 fn application_fixture() -> &'static Path {
     &static_application_fixtures().protocol
-}
-
-fn no_protocol_application_fixture() -> &'static Path {
-    &static_application_fixtures().no_protocol
-}
-
-fn envelope_paths(directory: &TestDirectory) -> Vec<PathBuf> {
-    artifact_entries(directory)
-        .into_iter()
-        .filter(|path| {
-            let name = path.file_name().unwrap().to_string_lossy();
-            name.starts_with(".fe2o3-worker-v2-load-envelope-v1-") && name.ends_with(".envelope")
-        })
-        .collect()
 }
 
 fn application_runner_command(
@@ -858,14 +839,6 @@ fn run_wrapper_with_options(
     run_wrapper_options(directory, Some(config), options)
 }
 
-fn stop_outer_harness(directory: &TestDirectory) {
-    let harness = directory.1.lock().unwrap().take();
-    if let Some(harness) = harness {
-        let output = harness.stop();
-        assert!(output.status.success(), "{}", stderr(&output));
-    }
-}
-
 fn outer_command(directory: &TestDirectory, config: Option<&Path>, control: &Path) -> Command {
     let source = directory.0.join("workflow_fixture.rs");
     fs::write(&source, "fn main() {}\n").unwrap();
@@ -946,20 +919,6 @@ fn scrub_test_harness_dynamic_loader_environment(command: &mut Command) {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-#[cfg(feature = "worker-v2-fault-injection-test-only")]
-fn process_cpu_ticks(process: u32) -> u64 {
-    let stat = fs::read_to_string(format!("/proc/{process}/stat")).unwrap();
-    let fields = stat
-        .rsplit_once(") ")
-        .expect("process stat has a parenthesized command")
-        .1
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    let user = fields[11].parse::<u64>().unwrap();
-    let system = fields[12].parse::<u64>().unwrap();
-    user + system
 }
 
 fn process_start_time(process: u32) -> Option<u64> {
@@ -1320,247 +1279,6 @@ fn retired_v2_envelope_is_rejected_before_application_spawn() {
 }
 
 #[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_handoff_close_range_blocks_unrelated_inheritable_descriptors() {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::process::CommandExt;
-
-    const PROBE_FD: i32 = 199;
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-
-    let report = directory.0.join("close-range-report.json");
-    let source = File::open("/dev/null").unwrap();
-    let source_fd = source.as_raw_fd();
-    let mut command = application_runner_command(&directory, application_fixture(), &report);
-    command
-        .arg("--fe2o3-test-probe-fd")
-        .arg(PROBE_FD.to_string());
-    // SAFETY: this callback creates one intentionally inheritable descriptor in the runner child
-    // before exec. The application pre-exec close_range must quarantine it atomically.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::dup2(source_fd, PROBE_FD) != PROBE_FD
-                || libc::fcntl(PROBE_FD, libc::F_SETFD, 0) != 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let application = command.output().unwrap();
-    assert!(application.status.success(), "{}", stderr(&application));
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    assert_eq!(report["probe_fd_open"], false);
-    assert_eq!(report["handoff"]["acknowledged"], true);
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-
-    let report = directory.0.join("public-ack-report.json");
-    let completed = application_runner_command(&directory, application_fixture(), &report)
-        .arg("--fe2o3-test-public-ack-without-reacquire")
-        .output()
-        .unwrap();
-    assert!(completed.status.success(), "{}", stderr(&completed));
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    assert_eq!(report["handoff"]["acknowledged"], true);
-    assert_eq!(report["handoff"]["child_reacquired_currentness"], false);
-    // Success remains grounded in the runner's private retained lease and its post-ACK
-    // currentness check; the reproducible child bytes supply only protocol completion.
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
-    // Process-tree probes run inside the bounded ACK window. Keep them from
-    // competing with the other static application fixtures on hosted runners.
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-
-    let report = directory.0.join("seccomp-process-report.json");
-    let escape_marker = directory.0.join("double-fork-setsid-escaped");
-    let application = application_fixture();
-    let completed = application_runner_command(&directory, application, &report)
-        .arg("--fe2o3-test-seccomp-process-probe")
-        .arg(&escape_marker)
-        .output()
-        .unwrap();
-    assert!(completed.status.success(), "{}", stderr(&completed));
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    assert_eq!(report["handoff"]["acknowledged"], true);
-    for probe in [
-        "fork",
-        "vfork",
-        "clone",
-        "clone3",
-        "unshare",
-        "setns",
-        "setsid",
-        "io_uring",
-        "double_fork_setsid",
-    ] {
-        assert_eq!(report["handoff"]["process_creation"][probe], "EPERM");
-    }
-    assert!(
-        !escape_marker.exists(),
-        "double-fork+setsid descendant escaped the seccomp profile"
-    );
-}
-
-#[cfg(feature = "worker-v2-fault-injection-test-only")]
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-
-    let report = directory.0.join("stalled-ack-report.json");
-    let ready = directory.0.join("stalled-ack-ready");
-    let context = "3-test-short-timeouts";
-    let mut command = application_runner_command_with_context(
-        &directory,
-        application_fixture(),
-        context,
-        [
-            report.as_os_str(),
-            OsStr::new("worker-v2-application-payload"),
-        ],
-    );
-    command
-        .arg("--fe2o3-test-stall-before-ack")
-        .arg(&ready)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let started = Instant::now();
-    let child = command.spawn().unwrap();
-    let runner = child.id();
-
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !ready.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        ready.exists(),
-        "application did not reach the stalled ACK boundary"
-    );
-    let ack_started = Instant::now();
-    let application = fs::read_to_string(&ready)
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
-    let before = process_cpu_ticks(runner);
-    thread::sleep(Duration::from_millis(500));
-    let consumed = process_cpu_ticks(runner).saturating_sub(before);
-    // SAFETY: `_SC_CLK_TCK` is a scalar process-configuration query.
-    let ticks_per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    assert!(ticks_per_second > 0);
-    assert!(
-        consumed <= (ticks_per_second as u64 / 10).max(1),
-        "stalled ACK polling consumed {consumed} CPU ticks in 500 ms"
-    );
-
-    let rejected = child.wait_with_output().unwrap();
-    let ack_elapsed = ack_started.elapsed();
-    assert!(
-        !rejected.status.success(),
-        "stalled ACK unexpectedly passed"
-    );
-    assert!(
-        stderr(&rejected).contains("application handoff acknowledgment timed out"),
-        "{}",
-        stderr(&rejected)
-    );
-    assert!(
-        ack_elapsed >= Duration::from_secs(1),
-        "short ACK timeout returned too early: {ack_elapsed:?}"
-    );
-    assert!(
-        ack_elapsed < Duration::from_secs(15),
-        "ACK timeout and cleanup exceeded the broad phase bound: {ack_elapsed:?}"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(90),
-        "application startup and ACK handling exceeded the broad harness bound"
-    );
-    assert!(
-        !Path::new(&format!("/proc/{application}")).exists(),
-        "timed-out application leader was not killed and reaped"
-    );
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_seccomp_rejects_static_and_dynamic_exec_replacement() {
-    // The four exec probes share the same bounded application handoff window.
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-
-    let report = directory.0.join("seccomp-exec-report.json");
-    let completed = application_runner_command(&directory, application_fixture(), &report)
-        .arg("--fe2o3-test-exec-replacement-probe")
-        .arg(no_protocol_application_fixture())
-        .arg("/bin/true")
-        .output()
-        .unwrap();
-    assert!(completed.status.success(), "{}", stderr(&completed));
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    for probe in [
-        "static_execve",
-        "static_execveat",
-        "dynamic_execve",
-        "dynamic_execveat",
-    ] {
-        assert_eq!(report["handoff"]["exec_replacement"][probe], "EPERM");
-    }
-}
-
-#[test]
 fn repeated_required_builds_do_not_accumulate_capsules_or_temps() {
     let directory = TestDirectory::new();
     for seed in [0, 1, 2] {
@@ -1789,203 +1507,6 @@ fn repeated_required_envelope_temp_crashes_are_bounded_and_recover() {
     assert_eq!(
         published_artifacts(&directory),
         [fixture.expected_publication]
-    );
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_handoff_rejects_child_protocol_substitution_and_omission() {
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-
-    for probe in [
-        "--fe2o3-test-reuse-handoff-fd",
-        "--fe2o3-test-reuse-artifact-dir-fd",
-        "--fe2o3-test-substitute-commitment",
-        "--fe2o3-test-ignore-handoff",
-        "--fe2o3-test-premature-close-ack",
-        "--fe2o3-test-extra-ack-byte",
-    ] {
-        let report = directory.0.join(format!("rejected-{probe}.json"));
-        let rejected = application_runner_command(&directory, application_fixture(), &report)
-            .arg(probe)
-            .output()
-            .unwrap();
-        assert!(
-            !rejected.status.success(),
-            "{probe} unexpectedly passed: {}",
-            stderr(&rejected)
-        );
-    }
-
-    let absent_report = directory.0.join("absent-child-protocol.json");
-    let absent = application_runner_command(
-        &directory,
-        no_protocol_application_fixture(),
-        &absent_report,
-    )
-    .output()
-    .unwrap();
-    assert!(
-        !absent.status.success(),
-        "child without protocol support passed"
-    );
-    assert!(
-        stderr(&absent).contains("acknowledgment"),
-        "{}",
-        stderr(&absent)
-    );
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_handoff_rejects_symlink_and_generation_path_replacement() {
-    use std::os::unix::fs::symlink;
-
-    let symlink_directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&symlink_directory);
-    let published = run_wrapper_with_options(
-        &symlink_directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-    stop_outer_harness(&symlink_directory);
-    let envelope = envelope_paths(&symlink_directory).pop().unwrap();
-    let saved = envelope.with_extension("saved");
-    fs::rename(&envelope, &saved).unwrap();
-    symlink(saved.file_name().unwrap(), &envelope).unwrap();
-    let symlinked = run_application_fixture(
-        &symlink_directory,
-        &symlink_directory.0.join("symlinked-report.json"),
-    );
-    assert!(!symlinked.status.success(), "symlinked envelope passed");
-    drop(symlink_directory);
-
-    let replaced_directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&replaced_directory);
-    let published = run_wrapper_with_options(
-        &replaced_directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-    stop_outer_harness(&replaced_directory);
-    let report = replaced_directory.0.join("replaced-generation-report.json");
-    let mut command =
-        application_runner_command(&replaced_directory, application_fixture(), &report);
-    let original = artifact_dir(&replaced_directory);
-    let moved = replaced_directory.0.join("original-fe2o3");
-    fs::rename(&original, &moved).unwrap();
-    fs::create_dir(&original).unwrap();
-    let replaced = command.output().unwrap();
-    assert!(
-        !replaced.status.success(),
-        "replaced generation directory passed"
-    );
-    assert!(
-        stderr(&replaced).contains("identity was substituted"),
-        "{}",
-        stderr(&replaced)
-    );
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_handoff_rejects_truncated_and_extended_envelopes() {
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-    let envelope = envelope_paths(&directory).pop().unwrap();
-    let exact = fs::read(&envelope).unwrap();
-
-    fs::write(&envelope, &exact[..exact.len() - 1]).unwrap();
-    let truncated = run_application_fixture(&directory, &directory.0.join("truncated.json"));
-    assert!(!truncated.status.success(), "truncated envelope passed");
-
-    let mut extended = exact;
-    extended.push(0);
-    fs::write(&envelope, extended).unwrap();
-    let extra = run_application_fixture(&directory, &directory.0.join("extended.json"));
-    assert!(!extra.status.success(), "extended envelope passed");
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn application_handoff_rejects_stale_envelope_after_publication_turnover() {
-    let directory = TestDirectory::new_exclusive();
-    let first = required_alpha_zeta_publication_fixture_with_seed(&directory, 0);
-    let published =
-        run_wrapper_with_options(&directory, &first.config, "publish-valid", first.cov6, None);
-    assert!(published.status.success(), "{}", stderr(&published));
-    let old = envelope_paths(&directory);
-    assert_eq!(old.len(), 1);
-    let old_bytes = fs::read(&old[0]).unwrap();
-
-    fs::remove_file(directory.0.join("spawned")).unwrap();
-    let second = required_alpha_zeta_publication_fixture_with_seed(&directory, 0);
-    let mut second_config: JsonValue =
-        serde_json::from_slice(&fs::read(&second.config).unwrap()).unwrap();
-    second_config["limits"]["timeout_ms"] = json!(2001);
-    fs::write(&second.config, serde_json::to_vec(&second_config).unwrap()).unwrap();
-    let published = run_wrapper_with_options(
-        &directory,
-        &second.config,
-        "publish-valid",
-        second.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-    let all = envelope_paths(&directory);
-    assert!(
-        all.iter().any(|candidate| !old.contains(candidate)),
-        "second publication must have a distinct envelope"
-    );
-    let current_report = directory.0.join("current-after-turnover.json");
-    let current_run = run_application_fixture(&directory, &current_report);
-    assert!(current_run.status.success(), "{}", stderr(&current_run));
-    let report: JsonValue = serde_json::from_slice(&fs::read(current_report).unwrap()).unwrap();
-    let admitted_identity = report["handoff"]["envelope_identity"].as_str().unwrap();
-    let current = all
-        .iter()
-        .find(|candidate| {
-            let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&fs::read(candidate).unwrap())
-                .expect("decode test envelope");
-            hex(&envelope.identity().as_bytes()) == admitted_identity
-        })
-        .expect("locate the envelope admitted after turnover");
-    stop_outer_harness(&directory);
-    fs::remove_file(current).unwrap();
-    fs::write(&old[0], old_bytes).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&old[0], fs::Permissions::from_mode(0o600)).unwrap();
-
-    let stale_report = directory.0.join("stale.json");
-    let stale = run_application_fixture(&directory, &stale_report);
-    assert!(!stale.status.success(), "stale envelope passed");
-    assert!(
-        stderr(&stale).contains("none is current"),
-        "{}",
-        stderr(&stale)
     );
 }
 
