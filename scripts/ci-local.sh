@@ -12,6 +12,7 @@ readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_TEST_DRIVER_PACKAGE="cargo-fe2o3"
 readonly RUSTC_CODEGEN_QUALIFICATION_FEATURE="qualification-oracles-test-only"
 readonly CARGO_FE2O3_QUALIFICATION_FEATURE="qualification-oracles-test-only"
+readonly CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE="worker-v3-envelope-integration-test-only"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
@@ -253,6 +254,10 @@ run_cpu_tests() {
   run_step cargo-fe2o3-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}"
+  run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
+    cargo test --locked -p cargo-fe2o3 \
+      --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \
+      --test worker_v3_load_envelope_vertical
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   run_step dialect-mir-pliron-tests \
     cargo test --locked -p dialect-mir --features pliron --test pliron_shell

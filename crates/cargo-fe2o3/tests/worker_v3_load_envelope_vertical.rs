@@ -16,7 +16,10 @@ use std::{
 };
 
 use fe2o3_amd_target::AmdTargetId;
-use fe2o3_artifact_transaction::retire_worker_v3_publication_intent_after_load_readiness_v1;
+use fe2o3_artifact_transaction::{
+    BuildAttempt, WorkerV3LoadReadinessReceiptV1,
+    retire_worker_v3_publication_intent_after_load_readiness_v1,
+};
 use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestAlgorithm,
     DigestBytes, Mutability, Name, PayloadDigest, PointerWidth,
@@ -672,8 +675,16 @@ fn recover_published_worker_v3_fixture(
     (directory, recovered)
 }
 
-#[test]
-fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
+struct PreparedV3ApplicationFixture {
+    directory: worker_v3_fixture::TestDirectory,
+    attempt: BuildAttempt,
+    readiness: WorkerV3LoadReadinessReceiptV1,
+    envelope_path: PathBuf,
+    exact_envelope: Vec<u8>,
+    kernel: PathBuf,
+}
+
+fn prepared_v3_application_fixture() -> PreparedV3ApplicationFixture {
     let worker_v3_fixture::PublishedWorkerV3Fixture {
         directory,
         producer,
@@ -682,15 +693,18 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
     } = worker_v3_fixture::published_worker_v3_fixture();
     let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).unwrap();
     let intent = envelope.wire().publication_intent_record().identity();
+    let exact_envelope = envelope.encode_canonical().unwrap();
     let readiness = envelope
         .persist_durable_replay_custody_v1(&directory.0)
         .unwrap();
+    let readiness_receipt = readiness.receipt();
+    let envelope_path = readiness.envelope_path().to_path_buf();
     retire_worker_v3_publication_intent_after_load_readiness_v1(
         &directory.0,
         &producer,
         attempt,
         intent,
-        readiness.receipt(),
+        readiness_receipt,
     )
     .unwrap();
     drop(envelope);
@@ -703,25 +717,46 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
     fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o600)).unwrap();
 
     let kernel = directory.0.join("v3-application.kernel-id");
-    let report = directory.0.join("v3-application-report.json");
     fs::write(&kernel, "a1".repeat(32)).unwrap();
-    let metadata = fs::metadata(&directory.0).unwrap();
+    PreparedV3ApplicationFixture {
+        directory,
+        attempt,
+        readiness: readiness_receipt,
+        envelope_path,
+        exact_envelope,
+        kernel,
+    }
+}
+
+fn v3_application_runner_command(fixture: &PreparedV3ApplicationFixture, report: &Path) -> Command {
+    let metadata = fs::metadata(&fixture.directory.0).unwrap();
     #[cfg(feature = "worker-v2-fault-injection-test-only")]
     let runner_context = "3-test-scheduler-tolerant";
     #[cfg(not(feature = "worker-v2-fault-injection-test-only"))]
     let runner_context = "3";
-    let completed = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    command
         .arg("__fe2o3-runner-v1")
         .arg(runner_context)
-        .arg(lower_hex(directory.0.as_os_str().as_encoded_bytes()))
+        .arg(lower_hex(
+            fixture.directory.0.as_os_str().as_encoded_bytes(),
+        ))
         .arg(metadata.dev().to_string())
         .arg(metadata.ino().to_string())
         .arg("required")
         .arg("0")
         .arg(static_host_consumer_application_fixture())
-        .arg(&kernel)
+        .arg(&fixture.kernel)
         .arg("gfx942:xnack-")
-        .arg(&report)
+        .arg(report);
+    command
+}
+
+#[test]
+fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("v3-application-report.json");
+    let completed = v3_application_runner_command(&fixture, &report)
         .output()
         .unwrap();
     assert!(
@@ -736,8 +771,65 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
     assert_eq!(report["admitted"], true);
     assert_eq!(report["current"], true);
 
-    let recovered = recover_worker_v3_load_envelope_v1(&directory.0, attempt).unwrap();
-    assert_eq!(recovered.receipt(), readiness.receipt());
+    let recovered =
+        recover_worker_v3_load_envelope_v1(&fixture.directory.0, fixture.attempt).unwrap();
+    assert_eq!(recovered.receipt(), fixture.readiness);
+}
+
+#[test]
+fn strict_v3_host_consumer_rejects_substituted_commitment() {
+    let fixture = prepared_v3_application_fixture();
+    let report = fixture.directory.0.join("substituted-commitment.json");
+    let rejected = v3_application_runner_command(&fixture, &report)
+        .arg("--fe2o3-test-substitute-commitment")
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["host_consumer"], true);
+    assert_eq!(report["loader_environment_clear"], true);
+    assert_eq!(report["admitted"], false);
+}
+
+#[test]
+fn strict_v3_handoff_rejects_a_symlinked_envelope_before_spawn() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = prepared_v3_application_fixture();
+    let saved = fixture.envelope_path.with_extension("saved");
+    fs::rename(&fixture.envelope_path, &saved).unwrap();
+    symlink(saved.file_name().unwrap(), &fixture.envelope_path).unwrap();
+    let report = fixture.directory.0.join("symlinked-envelope.json");
+    let rejected = v3_application_runner_command(&fixture, &report)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(!report.exists(), "application must not be spawned");
+}
+
+#[test]
+fn strict_v3_handoff_rejects_truncated_and_extended_envelopes_before_spawn() {
+    for trailing_byte in [false, true] {
+        let fixture = prepared_v3_application_fixture();
+        let bytes = if trailing_byte {
+            let mut bytes = fixture.exact_envelope.clone();
+            bytes.push(0);
+            bytes
+        } else {
+            fixture.exact_envelope[..fixture.exact_envelope.len() - 1].to_vec()
+        };
+        fs::write(&fixture.envelope_path, bytes).unwrap();
+        let report = fixture.directory.0.join(if trailing_byte {
+            "extended-envelope.json"
+        } else {
+            "truncated-envelope.json"
+        });
+        let rejected = v3_application_runner_command(&fixture, &report)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(!report.exists(), "application must not be spawned");
+    }
 }
 
 #[test]
