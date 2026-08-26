@@ -672,17 +672,14 @@ turn the foundations below into end-to-end features.
   recognized only so they can be rejected before application spawn.
   Feature-free `fe2o3-host` builds export only the Worker V3 application,
   admission, verification, HSA load, and generated dispatch route. Worker V2
-  application recovery, bundle admission, prerequisite authentication, HSA
-  loading, launch metadata, and its alpha/zeta, scalar-GEMM, and Worker-V2
-  vecadd adapters require the host crate's
+  application recovery has been deleted. Independent bundle admission,
+  prerequisite authentication, HSA loading, launch metadata, and the old
+  workload-specific adapters still require the host crate's
   `qualification-oracles-test-only` feature. General
   `#[kernel(typed)]` expansion, including the exact `f32` vecadd signature,
-  emits only its Worker V3 adapter unless an oracle fixture explicitly requests
-  `qualification_worker_v2`. The old embedded vecadd artifact contract and
-  generated `Kernel`/`Prepared` API are absent from feature-free host builds.
-  They remain available only to differential tests through the host
-  qualification feature and the example's
-  `qualification-embedded-vecadd-test-only` feature.
+  emits only the generic Worker V3 adapter. The old
+  `qualification_worker_v2` macro option, embedded vecadd artifact contract,
+  generated `Kernel`/`Prepared` API, and example feature have been deleted.
   Production prerequisite authentication, authorized HSA loading, and launch
   remain open.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs

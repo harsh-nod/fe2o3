@@ -630,19 +630,20 @@ qualification-specific metadata profile.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated
-dispatch route, while `qualification-oracles-test-only` restores Worker V2
-application recovery, bundle admission, prerequisite authentication, loading,
-launch metadata, and its alpha/zeta, scalar-GEMM, and Worker-V2 vecadd adapters
-for oracle fixtures.
+dispatch route. Worker V2 application recovery is deleted, while
+`qualification-oracles-test-only` retains independent bundle admission,
+prerequisite authentication, loading, launch metadata, and old
+workload-specific adapters for oracle fixtures.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
 and runtime imports, including the embedded artifact contract and generated
 vecadd `Kernel`, to guard that public API boundary. The macro fixture also
 proves that every supported `#[kernel(typed)]` signature, including exact
-vecadd, emits only Worker V3 host code unless it explicitly carries the
-`qualification_worker_v2` oracle marker. The vecadd example exposes the old
-embedded execution path only with
-`qualification-embedded-vecadd-test-only`; its default build type-checks the
-V3 `Arguments` surface and fails closed before runtime dispatch.
+vecadd and Scalar GEMM, emits only generic Worker V3 host code. It rejects the
+retired `qualification_worker_v2` option and verifies lifetime retention,
+private fields, non-cloneable arguments, marker binding, hidden pointers, and
+one-shot dispatch against the V3 API. The vecadd example has no embedded
+execution feature; it type-checks the V3 `Arguments` surface and fails closed
+before runtime dispatch until a production verifier is supplied.
 
 The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
 dependency graph contains `fe2o3-host/default` and

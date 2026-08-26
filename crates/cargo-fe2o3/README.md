@@ -354,9 +354,9 @@ fail-closed rejection sentinels. Independent Worker V2 bundle admission,
 prerequisite authentication, HSA loading, launch metadata, and its alpha/zeta,
 scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
 `qualification-oracles-test-only` feature. General `#[kernel(typed)]`
-expansion emits only Worker V3 host code unless an oracle fixture explicitly
-requests `qualification_worker_v2`. The exact embedded vecadd compatibility
-API is the remaining generated host island to migrate to this V3 route.
+expansion emits only Worker V3 host code. The retired
+`qualification_worker_v2` option is rejected, and the embedded vecadd
+compatibility API has been deleted.
 
 The application integration fixture is V3-only. It has no runtime selector and
 its feature graph enables `fe2o3-host` only with `hardware-test-hooks`; it does
