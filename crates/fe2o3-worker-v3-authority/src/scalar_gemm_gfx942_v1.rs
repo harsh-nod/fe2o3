@@ -66,6 +66,200 @@ pub const PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1:
     ProductionScalarGemmWorkerV3OpenObligationV1::RustEffectContract,
 ];
 
+/// Evidence that the exact scalar GEMM audit authenticates without granting authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub enum ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1 {
+    /// The generated marker, descriptor, gfx942 target, and code-object version agree.
+    ExactRequestProfile,
+    /// The complete semantic capsule matches its independently retained canonical identity.
+    CanonicalSemanticCapsule,
+    /// The formal-memory receipt matches its independently retained canonical identity.
+    CanonicalFormalMemoryReceipt,
+    /// The compiler proof-binding receipt matches its independently retained canonical identity.
+    CanonicalCompilerProofBindingReceipt,
+    /// The exact finalized HSACO bytes match their retained length and SHA-256.
+    FinalizedHsacoIdentity,
+    /// The final HSACO has the required target, COV6 metadata, and one exact descriptor.
+    FinalizedHsacoStructure,
+    /// The compiler receipts form the exact expected semantic-to-KIR association.
+    CompilerProofAssociation,
+    /// The associated KIR is the reviewed scalar GEMM profile.
+    ExactScalarKernelIr,
+    /// A retained Verus execution authenticates the challenge-bound scalar KIR proof.
+    RetainedChallengeBoundVerusExecution,
+}
+
+/// Exact authoritative evidence still required at one scalar GEMM proof boundary.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub enum ProductionScalarGemmWorkerV3MissingEvidenceV1 {
+    /// A measured compiler/rustc execution receipt bound to this compilation is absent.
+    AuthenticatedCompilerExecution,
+    /// An authenticated Rust source/MIR-to-KIR refinement receipt is absent.
+    AuthenticatedSourceMirToKernelIrRefinement,
+    /// An authenticated Rust-to-KIR IEEE-754 semantics receipt is absent.
+    AuthenticatedRustIeeeF32Semantics,
+    /// An authenticated KIR-to-final-gfx942-machine refinement receipt is absent.
+    AuthenticatedKernelIrToMachineRefinement,
+    /// A fresh proof binding that covers this exact post-link executable is absent.
+    FreshProofExecutableBinding,
+    /// An authenticated Rust type/layout-to-kernarg ABI receipt is absent.
+    AuthenticatedRustTypeLayoutContract,
+    /// An authenticated Rust-to-KIR-to-machine effect refinement receipt is absent.
+    AuthenticatedEndToEndEffectContract,
+}
+
+/// One fail-closed authority assessment after a complete retained scalar GEMM audit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionScalarGemmWorkerV3ObligationStatusV1 {
+    obligation: ProductionScalarGemmWorkerV3OpenObligationV1,
+    authenticated_prerequisites: &'static [ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1],
+    missing_evidence: ProductionScalarGemmWorkerV3MissingEvidenceV1,
+}
+
+impl ProductionScalarGemmWorkerV3ObligationStatusV1 {
+    /// Returns the authority boundary being assessed.
+    pub const fn obligation(self) -> ProductionScalarGemmWorkerV3OpenObligationV1 {
+        self.obligation
+    }
+
+    /// Returns evidence authenticated by the exact audit before this boundary.
+    ///
+    /// These prerequisites are audit evidence only. They do not discharge the missing authority
+    /// evidence and cannot be used independently to load or launch code.
+    pub const fn authenticated_prerequisites(
+        self,
+    ) -> &'static [ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] {
+        self.authenticated_prerequisites
+    }
+
+    /// Returns the exact authoritative evidence still missing at this boundary.
+    pub const fn missing_evidence(self) -> ProductionScalarGemmWorkerV3MissingEvidenceV1 {
+        self.missing_evidence
+    }
+
+    /// No current scalar GEMM authority obligation is closed.
+    pub const fn is_closed(self) -> bool {
+        false
+    }
+}
+
+const REQUEST_AND_CAPSULE_EVIDENCE: &[ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] = &[
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::ExactRequestProfile,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CanonicalSemanticCapsule,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CanonicalCompilerProofBindingReceipt,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CompilerProofAssociation,
+];
+const SOURCE_KIR_EVIDENCE: &[ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] = &[
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CanonicalSemanticCapsule,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CompilerProofAssociation,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::ExactScalarKernelIr,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::RetainedChallengeBoundVerusExecution,
+];
+const MACHINE_EVIDENCE: &[ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] = &[
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::ExactScalarKernelIr,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::FinalizedHsacoIdentity,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::FinalizedHsacoStructure,
+];
+const PROOF_EXECUTABLE_EVIDENCE: &[ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] = &[
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::RetainedChallengeBoundVerusExecution,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::FinalizedHsacoIdentity,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::FinalizedHsacoStructure,
+];
+const LAYOUT_EVIDENCE: &[ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] = &[
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::ExactRequestProfile,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CanonicalSemanticCapsule,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::FinalizedHsacoStructure,
+];
+const EFFECT_EVIDENCE: &[ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1] = &[
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::CanonicalFormalMemoryReceipt,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::ExactScalarKernelIr,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::RetainedChallengeBoundVerusExecution,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1::FinalizedHsacoStructure,
+];
+
+/// Stable, exhaustive scalar GEMM authority assessment after a complete retained audit.
+pub const PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1:
+    [ProductionScalarGemmWorkerV3ObligationStatusV1; 7] = [
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::CompilerExecutionProvenance,
+        authenticated_prerequisites: REQUEST_AND_CAPSULE_EVIDENCE,
+        missing_evidence:
+            ProductionScalarGemmWorkerV3MissingEvidenceV1::AuthenticatedCompilerExecution,
+    },
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::SourceMirToKernelIrRefinement,
+        authenticated_prerequisites: SOURCE_KIR_EVIDENCE,
+        missing_evidence: ProductionScalarGemmWorkerV3MissingEvidenceV1::AuthenticatedSourceMirToKernelIrRefinement,
+    },
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::RustIeeeF32Semantics,
+        authenticated_prerequisites: SOURCE_KIR_EVIDENCE,
+        missing_evidence:
+            ProductionScalarGemmWorkerV3MissingEvidenceV1::AuthenticatedRustIeeeF32Semantics,
+    },
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::EmittedMachineRefinement,
+        authenticated_prerequisites: MACHINE_EVIDENCE,
+        missing_evidence: ProductionScalarGemmWorkerV3MissingEvidenceV1::AuthenticatedKernelIrToMachineRefinement,
+    },
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::ProofExecutableBinding,
+        authenticated_prerequisites: PROOF_EXECUTABLE_EVIDENCE,
+        missing_evidence:
+            ProductionScalarGemmWorkerV3MissingEvidenceV1::FreshProofExecutableBinding,
+    },
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::RustTypeLayoutContract,
+        authenticated_prerequisites: LAYOUT_EVIDENCE,
+        missing_evidence:
+            ProductionScalarGemmWorkerV3MissingEvidenceV1::AuthenticatedRustTypeLayoutContract,
+    },
+    ProductionScalarGemmWorkerV3ObligationStatusV1 {
+        obligation: ProductionScalarGemmWorkerV3OpenObligationV1::RustEffectContract,
+        authenticated_prerequisites: EFFECT_EVIDENCE,
+        missing_evidence:
+            ProductionScalarGemmWorkerV3MissingEvidenceV1::AuthenticatedEndToEndEffectContract,
+    },
+];
+
+/// Non-forgeable report returned only after the full request and retained Verus audit succeeds.
+///
+/// ```compile_fail
+/// use fe2o3_worker_v3_authority::ProductionScalarGemmWorkerV3AuthorityClosureV1;
+///
+/// let forged = ProductionScalarGemmWorkerV3AuthorityClosureV1 { _private: () };
+/// ```
+#[derive(Debug)]
+pub struct ProductionScalarGemmWorkerV3AuthorityClosureV1 {
+    _private: (),
+}
+
+impl ProductionScalarGemmWorkerV3AuthorityClosureV1 {
+    /// Returns the exhaustive, stable authority assessment.
+    pub const fn obligation_statuses(
+        &self,
+    ) -> &'static [ProductionScalarGemmWorkerV3ObligationStatusV1] {
+        &PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1
+    }
+
+    /// The production verifier remains unavailable until every status is closed.
+    pub const fn is_complete(&self) -> bool {
+        false
+    }
+
+    /// An incomplete closure can never enter the Worker V3 authority gate.
+    pub const fn can_enter_worker_v3_gate(&self) -> bool {
+        false
+    }
+
+    /// An incomplete closure grants no artifact, load, or launch authority.
+    pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Non-authoritative result of auditing one exact scalar GEMM Worker V3 request.
 ///
 /// The result is move-only and remains bound to the host-derived challenge carried by its proof.
@@ -192,6 +386,11 @@ impl ProductionScalarGemmWorkerV3AuditV1 {
     /// Parallel retention is not yet a proof-to-executable refinement.
     pub const fn establishes_proof_executable_binding(&self) -> bool {
         false
+    }
+
+    /// Returns the typed fail-closed authority assessment produced by this complete audit.
+    pub const fn authority_closure(&self) -> ProductionScalarGemmWorkerV3AuthorityClosureV1 {
+        ProductionScalarGemmWorkerV3AuthorityClosureV1 { _private: () }
     }
 
     /// Returns every authority obligation that remains open after this audit.
@@ -638,5 +837,52 @@ mod tests {
                 ProductionScalarGemmWorkerV3OpenObligationV1::RustEffectContract,
             ]
         );
+    }
+
+    #[test]
+    fn obligation_statuses_are_exhaustive_unique_and_fail_closed() {
+        use std::collections::BTreeSet;
+
+        let statuses = &PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1;
+        assert_eq!(
+            statuses.len(),
+            PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1.len()
+        );
+        assert_eq!(
+            statuses.map(ProductionScalarGemmWorkerV3ObligationStatusV1::obligation),
+            PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .map(|status| status.obligation())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            statuses.len()
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .map(|status| status.missing_evidence())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            statuses.len()
+        );
+        for status in statuses {
+            assert!(!status.authenticated_prerequisites().is_empty());
+            assert!(!status.is_closed());
+        }
+    }
+
+    #[test]
+    fn closure_report_cannot_promote_authenticated_prerequisites_to_authority() {
+        let closure = ProductionScalarGemmWorkerV3AuthorityClosureV1 { _private: () };
+        assert_eq!(
+            closure.obligation_statuses(),
+            &PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1
+        );
+        assert!(!closure.is_complete());
+        assert!(!closure.can_enter_worker_v3_gate());
+        assert!(!closure.grants_artifact_or_runtime_authority());
     }
 }

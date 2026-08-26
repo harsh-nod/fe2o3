@@ -10,8 +10,12 @@
 mod scalar_gemm_gfx942_v1;
 
 pub use scalar_gemm_gfx942_v1::{
+    PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1,
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
     PreparedProductionScalarGemmWorkerV3ProofV1, ProductionScalarGemmWorkerV3AuditV1,
-    ProductionScalarGemmWorkerV3OpenObligationV1, ProductionScalarGemmWorkerV3RequestAuditorV1,
-    ProductionScalarGemmWorkerV3VerifierErrorV1, ProductionScalarGemmWorkerV3VerifierV1,
+    ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1,
+    ProductionScalarGemmWorkerV3AuthorityClosureV1, ProductionScalarGemmWorkerV3MissingEvidenceV1,
+    ProductionScalarGemmWorkerV3ObligationStatusV1, ProductionScalarGemmWorkerV3OpenObligationV1,
+    ProductionScalarGemmWorkerV3RequestAuditorV1, ProductionScalarGemmWorkerV3VerifierErrorV1,
+    ProductionScalarGemmWorkerV3VerifierV1,
 };
