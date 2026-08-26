@@ -44,6 +44,38 @@ fn production_configuration_has_no_compatibility_type_alias() {
 }
 
 #[test]
+fn cargo_package_has_no_worker_v2_compiler_surface() {
+    let manifest = include_str!("../Cargo.toml");
+    for rejected in [
+        "qualification-oracles-test-only",
+        "worker-v2-fault-injection-test-only",
+        "fe2o3-worker-v2-bundle",
+        "cargo-fe2o3-worker-v2-fixture",
+        "cargo-fe2o3-envelope-input-fixture",
+    ] {
+        assert!(
+            !manifest.contains(rejected),
+            "Cargo package still exposes retired compiler surface {rejected}"
+        );
+    }
+    assert!(manifest.contains("application-handoff-fault-injection-test-only"));
+    assert!(manifest.contains("worker-v3-envelope-integration-test-only"));
+
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for retired in [
+        "src/worker_v2_artifact_container.rs",
+        "src/worker_v2_envelope_mode.rs",
+        "src/worker_v2_restart.rs",
+        "tests/worker_v2_vertical_slice.rs",
+    ] {
+        assert!(
+            !package.join(retired).exists(),
+            "retired Cargo compiler implementation remains at {retired}"
+        );
+    }
+}
+
+#[test]
 fn unit_test_configuration_cannot_select_qualification_code() {
     for (name, source) in [
         ("main", include_str!("../src/main.rs")),

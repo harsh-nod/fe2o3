@@ -1610,11 +1610,11 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         Some(application_handoff::RUNNER_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::PRODUCTION
         }
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        #[cfg(feature = "application-handoff-fault-injection-test-only")]
         Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::TEST_SHORT
         }
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        #[cfg(feature = "application-handoff-fault-injection-test-only")]
         Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT
         }

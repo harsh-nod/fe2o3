@@ -11,19 +11,15 @@ description = "Cargo subcommand for fe2o3."
 [features]
 compiler-handoff-observation-test-only = []
 application-handoff-adversarial-fixture = []
-qualification-oracles-test-only = [
-    "dep:fe2o3-worker-v2-bundle",
-]
-worker-v2-fault-injection-test-only = ["qualification-oracles-test-only"]
+application-handoff-fault-injection-test-only = []
 worker-v3-host-consumer-fixture = ["dep:fe2o3-host", "fe2o3-host/hardware-test-hooks"]
 worker-v3-envelope-integration-test-only = [
     "application-handoff-adversarial-fixture",
-    "qualification-oracles-test-only",
+    "application-handoff-fault-injection-test-only",
     "dep:fe2o3-core",
     "dep:fe2o3-hsa-runtime",
     "dep:fe2o3-scalar-gemm-v1",
     "dep:fe2o3-worker-v3-authority",
-    "worker-v2-fault-injection-test-only",
     "worker-v3-host-consumer-fixture",
 ]
 
@@ -47,7 +43,6 @@ fe2o3-rustc-invocation.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-scalar-gemm-v1 = { path = "../../examples/scalar_gemm_v1", optional = true }
 fe2o3-verifier.workspace = true
-fe2o3-worker-v2-bundle = { workspace = true, optional = true }
 fe2o3-worker-v3-authority = { workspace = true, optional = true }
 libc.workspace = true
 reserved-fe2o3-symbols.workspace = true
@@ -60,9 +55,7 @@ syn = { workspace = true, features = ["visit"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
 fe2o3-device.workspace = true
 fe2o3-kernel-ir.workspace = true
-fe2o3-worker-v2-bundle.workspace = true
 fe2o3-worker-v3-authority.workspace = true
-rmpv = { version = "1.3.1", default-features = false }
 
 [[bin]]
 name = "cargo-fe2o3"
@@ -71,20 +64,6 @@ path = "src/main.rs"
 [[bin]]
 name = "fe2o3-rustc-wrapper"
 path = "src/bin/fe2o3-rustc-wrapper.rs"
-
-[[bin]]
-name = "cargo-fe2o3-worker-v2-fixture"
-path = "tests/fixtures/worker_v2_fixture.rs"
-required-features = ["qualification-oracles-test-only"]
-test = false
-bench = false
-
-[[bin]]
-name = "cargo-fe2o3-envelope-input-fixture"
-path = "tests/fixtures/envelope_input_fixture.rs"
-required-features = ["qualification-oracles-test-only"]
-test = false
-bench = false
 
 [[bin]]
 name = "fe2o3-worker-v2-hsaco-fixture"
