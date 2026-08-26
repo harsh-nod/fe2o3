@@ -49,7 +49,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. Legacy V1/V2 work state,
   workload-specific paths, and source-debug execution compile only with
-  `qualification-oracles-test-only`; Cargo's Worker V2 application transfer has
+  `qualification-oracles-test-only`; the Cargo and host Worker V2 application
+  transfer, consumer, retained descriptors, and compatibility error alias have
   been deleted from every build.
 - Production orchestration has one fixed Cargo plan. The first phase always
   builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
