@@ -990,6 +990,7 @@ version = "0.1.0"
 name = "fe2o3-host-link-closure"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-artifact-transaction",
  "object 0.39.1",
  "rustix",
  "sha2 0.11.0",

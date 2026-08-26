@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "Authenticated descriptor-backed host-link execution closure for fe2o3"
 
 [dependencies]
+fe2o3-artifact-transaction.workspace = true
 object = { version = "0.39.1", default-features = false, features = ["archive", "elf", "read_core"] }
 rustix = { workspace = true, features = ["pipe", "process", "rand", "runtime"] }
 sha2.workspace = true
