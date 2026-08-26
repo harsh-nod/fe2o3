@@ -9,8 +9,6 @@ mod moe_top2_resource_observation;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod row_softmax_resource_observation;
 mod sys;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod workgroup_sync_resource_observation;
 
 #[cfg(feature = "hardware-test-hooks")]
 pub use dispatch::ReviewedHsaHardwareTestBufferV1;
