@@ -1,9 +1,21 @@
 # gfx950 advanced systems kernels
 
-This directory is a fixed-shape validation suite for several systems patterns
-on AMD CDNA 4 (`gfx950`). It is deliberately small enough to have independent,
-deterministic CPU oracles; it is not a framework, a distributed runtime, or a
-production collective implementation.
+The ordinary attributed Rust kernels in [`src/kernel.rs`](src/kernel.rs) are
+the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
+contains independent safe CPU references, and `cargo test --offline` checks
+their bounded numerical and transactional contracts. The HIP program remains
+a separate compiler, ISA, and MI350 hardware-validation companion.
+
+The current rustc backend cannot lower these Rust sources to gfx950 HSACO: its
+production profile is still exact `gfx942:xnack-`, and gfx950 low-precision
+semantic importing and Kernel IR lowering are pending. The source therefore
+claims source and CPU-reference evidence only; the HIP results below do not
+silently become fe2o3 artifact evidence.
+
+The fixed-shape suite covers several systems patterns on AMD CDNA 4 (`gfx950`).
+It is deliberately small enough to have independent, deterministic CPU oracles;
+it is not a framework, a distributed runtime, or a production collective
+implementation.
 
 The executable covers:
 

@@ -1,7 +1,39 @@
 # gfx950 low-precision kernels
 
-This standalone HIP example contains four fixed-shape, single-wave kernels for
-AMD CDNA 4 (`gfx950`):
+The primary source examples in this directory are four ordinary safe Rust
+`#[kernel(typed)]` functions in `src/kernel.rs`:
+
+- `gfx950_fp4_gemm_rust`
+- `gfx950_fp8_gemm_rust`
+- `gfx950_fp4_attention_rust`
+- `gfx950_fp8_attention_rust`
+
+The GEMMs use format- and role-typed gfx950 `16x16x128` scaled-MFMA fragments.
+Each logical FP4 code occupies the low nibble of one input byte; the typed
+fragment load owns the dense register packing required by the instruction.
+The attention sources additionally use the move-only
+`Gfx950LdsTransposeTile` transition
+`Uninitialized -> Staged -> Published` before reading the K fragment, then
+perform stable softmax and value accumulation through typed fe2o3 operations.
+`src/reference.rs` is an independent CPU oracle with deterministic,
+axis-varying inputs and exact OCP E2M1/E4M3 decoders.
+
+Run the Rust source and oracle checks with:
+
+```bash
+cargo test --manifest-path Cargo.toml
+```
+
+The production rustc importer, Kernel IR schema, gfx950 production target
+profile, and full-module AMDGPU lowering do not yet consume these new device
+terminals. `GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1` is therefore `false`;
+the repository does not claim that these Rust sources currently produce the
+HSACO described below.
+
+## HIP compiler and hardware fixture
+
+The neighboring standalone HIP fixture contains four fixed-shape, single-wave
+kernels for AMD CDNA 4 (`gfx950`):
 
 - E2M1 FP4 `16x16x128` GEMM
 - E4M3 FP8 `16x16x128` GEMM

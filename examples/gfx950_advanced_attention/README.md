@@ -1,5 +1,19 @@
 # gfx950 advanced attention kernels
 
+The ordinary attributed Rust kernels in [`src/kernel.rs`](src/kernel.rs) are
+the fe2o3 source for these tutorials. [`src/reference.rs`](src/reference.rs)
+contains independent safe CPU references, and `cargo test --offline` checks
+their fixed-shape numerical and selection contracts. The HIP program remains
+a separate compiler, ISA, and MI350 hardware-validation companion.
+
+The current rustc backend cannot lower these Rust sources to gfx950 HSACO: its
+production profile is still exact `gfx942:xnack-`, and gfx950 low-precision
+tensor, transpose, device-math, and control-flow lowering are pending. The
+Rust kernels therefore use conservative scalar grid-leader algorithms and set
+`GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1` to `false`. They
+claim source and CPU-reference evidence only; the HIP ISA and runtime results
+below do not become fe2o3 artifact or execution evidence.
+
 This directory is a bounded educational validation suite for AMD CDNA 4
 (`gfx950`). It is not a production implementation, performance claim, model
 reproduction, or general-purpose operator library.
@@ -30,7 +44,13 @@ each kernel symbol. At this bounded shape, the score MFMA covers all 16 tokens;
 the sparse kernel applies its selected ragged set to softmax and the value
 reduction. This suite does not claim a production sparse-QK scheduling strategy.
 
-Build, inspect, and run on a gfx950 system:
+Run the Rust source and independent CPU-reference checks:
+
+```bash
+cargo test --offline
+```
+
+Build, inspect, and run the companion HIP validation on a gfx950 system:
 
 ```bash
 ./build_and_test.sh
@@ -42,7 +62,7 @@ Compiler and ISA validation without execution is available with:
 ./build_and_test.sh --compile-only
 ```
 
-## Validation evidence
+## HIP validation evidence
 
 On 2026-08-26, `./build_and_test.sh` passed via SSH alias `mi350` (remote
 hostname `smci350-rck-g03-b19-03`) with ROCm 7.2.1, HIP 7.2.53211, AMD Clang

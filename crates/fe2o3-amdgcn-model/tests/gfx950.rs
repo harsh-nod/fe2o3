@@ -21,7 +21,7 @@ fn scaled_mfma_fp4_and_fp8_emit_exact_format_immediates() {
     .unwrap();
     assert_eq!(
         fp4,
-        "%4 = call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v4i32.v4i32(<4 x i32> %1, <4 x i32> %2, <4 x float> %3, i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)"
+        "%4 = call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(<8 x i32> %1, <8 x i32> %2, <4 x float> %3, i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)"
     );
 
     let fp8 = lower_gfx950_scaled_mfma_to_llvm_ir(
@@ -40,7 +40,7 @@ fn scaled_mfma_fp4_and_fp8_emit_exact_format_immediates() {
     assert_eq!(
         Gfx950ScaledMfma::new(Gfx950MfmaFormat::Fp4E2M1Ocp, Gfx950MfmaFormat::Fp4E2M1Ocp,)
             .declaration(),
-        "declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v4i32.v4i32(<4 x i32>, <4 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32)"
+        "declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(<8 x i32>, <8 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32)"
     );
     assert_eq!(
         Gfx950ScaledMfma::new(Gfx950MfmaFormat::Fp8E4M3Ocp, Gfx950MfmaFormat::Fp8E5M2Ocp,)
@@ -51,12 +51,21 @@ fn scaled_mfma_fp4_and_fp8_emit_exact_format_immediates() {
     let mixed = Gfx950ScaledMfma::new(Gfx950MfmaFormat::Fp4E2M1Ocp, Gfx950MfmaFormat::Fp8E4M3Ocp);
     assert_eq!(
         mixed.declaration(),
-        "declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v4i32.v8i32(<4 x i32>, <8 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32)"
+        "declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(<8 x i32>, <8 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32)"
     );
     assert_eq!(
         lower_gfx950_scaled_mfma_to_llvm_ir(gfx950(), mixed, 12, 9, 10, 11).unwrap(),
-        "%12 = call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v4i32.v8i32(<4 x i32> %9, <8 x i32> %10, <4 x float> %11, i32 4, i32 0, i32 0, i32 0, i32 0, i32 0)"
+        "%12 = call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(<8 x i32> %9, <8 x i32> %10, <4 x float> %11, i32 4, i32 0, i32 0, i32 0, i32 0, i32 0)"
     );
+}
+
+#[test]
+fn fp4_uses_the_v8i32_abi_with_four_required_zero_upper_dwords() {
+    assert_eq!(Gfx950MfmaFormat::Fp4E2M1Ocp.register_dwords(), 8);
+    assert_eq!(Gfx950MfmaFormat::Fp4E2M1Ocp.meaningful_register_dwords(), 4);
+    assert_eq!(Gfx950MfmaFormat::Fp4E2M1Ocp.required_zero_upper_dwords(), 4);
+    assert_eq!(Gfx950MfmaFormat::Fp8E4M3Ocp.register_dwords(), 8);
+    assert_eq!(Gfx950MfmaFormat::Fp8E4M3Ocp.required_zero_upper_dwords(), 0);
 }
 
 #[test]

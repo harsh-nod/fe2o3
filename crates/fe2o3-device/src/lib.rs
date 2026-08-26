@@ -23,6 +23,7 @@ pub mod collective;
 pub mod diagnostics;
 pub mod ffi;
 pub mod fp8;
+pub mod gfx950;
 pub mod group;
 pub mod half;
 pub mod kernel_result;
@@ -53,6 +54,16 @@ pub use ffi::{
     DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
 };
 pub use fp8::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
+pub use gfx950::{
+    GFX950_LOW_PRECISION_CONTRACT_VERSION_V1, GFX950_MFMA_K, GFX950_MFMA_M, GFX950_MFMA_N,
+    GFX950_MFMA_OPERAND_DWORDS, GFX950_MFMA_WAVE_LANES, GFX950_SUBGROUP_MAX_WIDTH,
+    Gfx950F32AccumulatorFragment, Gfx950Fp4E2M1, Gfx950Fp4MfmaAFragment, Gfx950Fp4MfmaAMatrix,
+    Gfx950Fp4MfmaBFragment, Gfx950Fp4MfmaBMatrix, Gfx950Fp8E4M3, Gfx950Fp8MfmaAFragment,
+    Gfx950Fp8MfmaAMatrix, Gfx950Fp8MfmaBFragment, Gfx950Fp8MfmaBMatrix, Gfx950LdsTransposeTile,
+    Gfx950Matrix, Gfx950MatrixViewError, Gfx950MfmaAMatrix, Gfx950MfmaBMatrix, Gfx950MfmaFormat,
+    Gfx950MfmaFragment, Gfx950MfmaOperandA, Gfx950MfmaOperandB, Gfx950Subgroup,
+    Gfx950TransposePublished, Gfx950TransposeStaged, Gfx950TransposeUninitialized,
+};
 pub use group::{
     ActiveLaneGroup, Grid, Group, GroupMemoryOrdering, GroupMemorySpace, GroupScope, SubgroupTile,
     SynchronizationContract, TYPED_GROUP_CONTRACT_VERSION_V1, UnsupportedSynchronization,
