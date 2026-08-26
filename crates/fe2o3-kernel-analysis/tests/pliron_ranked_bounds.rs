@@ -1,8 +1,8 @@
 use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DeterministicJoinOp, DimensionOp,
     GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp,
-    IndexLessThanBranchOp, IndexType, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
-    TrapOp, register_dialect,
+    IndexLessThanBranchOp, IndexType, InvocationIndexOp, RankedAccessOp, RankedViewOp,
+    RankedViewType, ReturnOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
@@ -774,6 +774,70 @@ fn sparse_affine_expression_proves_the_exact_static_boundary() {
     append(context, entry, &ret);
 
     assert!(run_pliron_ranked_bounds_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn presburger_affine_failure_reports_the_first_bad_invocation() {
+    let context = &mut setup();
+    let (function, _) = function(context, "affine_counterexample", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![12]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 8);
+    let two = IndexConstantOp::new(context, 2);
+    let one = IndexConstantOp::new(context, 1);
+    let product = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        invocation.result(context),
+        two.result(context),
+    );
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        product.result(context),
+        one.result(context),
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    for operation in [
+        view.get_operation(),
+        invocation.get_operation(),
+        two.get_operation(),
+        one.get_operation(),
+        product.get_operation(),
+        index.get_operation(),
+        access.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert_eq!(
+        report.findings(),
+        &[RankedBoundsFindingV1::PresburgerOutOfBounds {
+            block: 0,
+            operation: 6,
+            access: AccessKindAttr::Read,
+            view: view.result(context).unique_name(context).to_string(),
+            dimension: 0,
+            invocation: vec![6],
+            index: 13,
+            extent: 12,
+        }]
+    );
+    let diagnostic = report.findings()[0].to_string();
+    assert!(diagnostic.contains("FE2O3-BOUNDS-004"));
+    assert!(diagnostic.contains("counterexample invocation [6] computes index 13"));
+    assert!(diagnostic.contains("guard the access"));
 }
 
 #[test]

@@ -26,6 +26,8 @@ mod pliron_invocation_trace;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_pipeline;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_presburger;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_race;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_ranked_bounds;
@@ -67,6 +69,8 @@ pub use pliron_effect_refinement::*;
 pub use pliron_hierarchical_ownership::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_pipeline::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_presburger::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_race::*;
 #[cfg(feature = "pliron-analysis")]

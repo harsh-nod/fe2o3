@@ -33,6 +33,7 @@ use crate::pliron_invocation_trace::{
 use crate::pliron_race::run_pliron_ranked_race_check_with_analyses_v1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
+use crate::{PresburgerCoverageDecisionV1, PresburgerFiniteImageV1};
 
 /// Maximum logical output elements materialized by one exact coverage proof.
 pub const MAX_HIERARCHICAL_OWNERSHIP_ELEMENTS_V1: usize = 1_048_576;
@@ -1373,14 +1374,40 @@ fn analyze_contract(
     if !collective
         && let (Some(extents), Some(element_count)) = (extents, element_count)
         && owners.len() != element_count
-        && let Some(coordinate) = first_domain_hole(extents, &owners)
     {
-        findings.push(HierarchicalOwnershipFindingV1::CoverageHole {
-            view: contract.view_name.clone(),
-            coordinate,
-            extents: extents.to_vec(),
-        });
-        return;
+        let image = PresburgerFiniteImageV1::new(
+            extents.len(),
+            owners.keys().map(|coordinate| {
+                coordinate
+                    .iter()
+                    .map(|coordinate| i128::from(*coordinate))
+                    .collect()
+            }),
+        );
+        match image.map(|image| image.find_uncovered(extents)) {
+            Ok(PresburgerCoverageDecisionV1::Hole { point }) => {
+                let coordinate = point
+                    .into_iter()
+                    .map(|coordinate| {
+                        u64::try_from(coordinate)
+                            .expect("zero-based u64 ownership box produced a u64 coordinate")
+                    })
+                    .collect();
+                findings.push(HierarchicalOwnershipFindingV1::CoverageHole {
+                    view: contract.view_name.clone(),
+                    coordinate,
+                    extents: extents.to_vec(),
+                });
+                return;
+            }
+            Ok(PresburgerCoverageDecisionV1::Proved) => {}
+            Ok(PresburgerCoverageDecisionV1::Incomplete(failure)) | Err(failure) => {
+                findings.push(HierarchicalOwnershipFindingV1::EffectDomainIncomplete {
+                    detail: format!("Presburger coverage query failed: {failure}"),
+                });
+                return;
+            }
+        }
     }
 
     regions.extend(sets.into_iter().map(|(identity, coordinates)| {
@@ -1433,20 +1460,6 @@ fn first_rectangle_hole(coordinates: &BTreeSet<Vec<u64>>) -> Option<Vec<u64>> {
         &bounds.iter().map(|range| range.minimum).collect::<Vec<_>>(),
         &bounds.iter().map(|range| range.maximum).collect::<Vec<_>>(),
         |coordinate| !coordinates.contains(coordinate),
-    )
-}
-
-fn first_domain_hole(
-    extents: &[u64],
-    owners: &BTreeMap<Vec<u64>, HierarchicalOwnerWitnessV1>,
-) -> Option<Vec<u64>> {
-    if extents.contains(&0) {
-        return None;
-    }
-    first_coordinate_matching(
-        &vec![0; extents.len()],
-        &extents.iter().map(|extent| extent - 1).collect::<Vec<_>>(),
-        |coordinate| !owners.contains_key(coordinate),
     )
 }
 

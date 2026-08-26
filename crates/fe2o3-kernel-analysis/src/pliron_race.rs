@@ -31,7 +31,9 @@ use crate::pliron_invocation_trace::PlironTraceFailureV1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::pliron_sparse_index::SparseAffineIndexV1;
 use crate::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, MAX_PRESBURGER_WORK_UNITS_V1,
+    PlironPresburgerAnalysisV1, PresburgerCollisionDecisionV1, SparseIndexAnalysisV1,
+    SparseIndexFailureV1,
 };
 
 pub const MAX_PLIRON_RACE_INVOCATIONS_V1: u64 = 65_536;
@@ -397,6 +399,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     analyses: &mut PlironAnalysisManagerV1,
 ) -> RankedRaceReportV1 {
     analyses.prepare_sparse_indices(context, function);
+    analyses.prepare_presburger(context, function);
     if let Err(failure) = analyses.sparse_indices() {
         return one(RankedRaceFindingV1::SparseIndexAnalysisFailed {
             detail: sparse_failure(failure),
@@ -405,6 +408,14 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
     analyses.prepare_execution_layout(context, function);
     let sparse = match analyses.sparse_indices() {
         Ok(sparse) => sparse,
+        Err(failure) => {
+            return one(RankedRaceFindingV1::SparseIndexAnalysisFailed {
+                detail: sparse_failure(failure),
+            });
+        }
+    };
+    let presburger = match analyses.presburger() {
+        Ok(presburger) => presburger,
         Err(failure) => {
             return one(RankedRaceFindingV1::SparseIndexAnalysisFailed {
                 detail: sparse_failure(failure),
@@ -677,7 +688,8 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         &sparse,
         &launch_extents,
         invocation_bounds.as_deref(),
-    ) {
+    ) || presburger_proves_no_conflicts(&effects, sparse, presburger, &launch_extents)
+    {
         return clean();
     }
     let release_signal_views = effects
@@ -1096,6 +1108,100 @@ fn symbolically_proves_disjoint(
         }
     }
     true
+}
+
+/// Uses exact bounded relation images to discharge affine/remainder effect
+/// families that the matrix-rank fast path cannot prove. This query only
+/// returns true when every potentially conflicting pair has an empty
+/// cross-invocation intersection. Unsupported facts and exhausted budgets fall
+/// through to the existing exact trace path.
+fn presburger_proves_no_conflicts(
+    effects: &[EffectV1],
+    sparse: &SparseIndexAnalysisV1,
+    presburger: &PlironPresburgerAnalysisV1,
+    launch_extents: &[u64],
+) -> bool {
+    let Some(invocations) = launch_extents.iter().try_fold(1_u128, |count, extent| {
+        count.checked_mul(u128::from(*extent))
+    }) else {
+        return false;
+    };
+    // The existing address-indexed trace is O(invocations * effects) and is
+    // preferable inside its admitted domain. Presburger map intersection is
+    // reserved for domains that trace intentionally refuses.
+    if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
+        return false;
+    }
+    let relevant_pairs = (0..effects.len())
+        .flat_map(|first| (first..effects.len()).map(move |second| (first, second)))
+        .filter(|(first, second)| {
+            let first = &effects[*first];
+            let second = &effects[*second];
+            first.noalias_class == second.noalias_class
+                && access_kinds_need_disjoint_coordinates(first.kind, second.kind)
+                && !atomics_are_device_compatible(first, second)
+        })
+        .count();
+    let estimated_work = invocations
+        .checked_mul((launch_extents.len() as u128).saturating_add(1))
+        .and_then(|work| work.checked_mul(2))
+        .and_then(|work| work.checked_mul(relevant_pairs as u128));
+    if estimated_work.is_none_or(|work| work > MAX_PRESBURGER_WORK_UNITS_V1 as u128) {
+        return false;
+    }
+    for first_index in 0..effects.len() {
+        for second_index in first_index..effects.len() {
+            let first = &effects[first_index];
+            let second = &effects[second_index];
+            if first.noalias_class != second.noalias_class
+                || !access_kinds_need_disjoint_coordinates(first.kind, second.kind)
+                || atomics_are_device_compatible(first, second)
+            {
+                continue;
+            }
+            let first_facts = first
+                .indices
+                .iter()
+                .map(|index| sparse.fact(*index).clone())
+                .collect::<Vec<_>>();
+            let second_facts = second
+                .indices
+                .iter()
+                .map(|index| sparse.fact(*index).clone())
+                .collect::<Vec<_>>();
+            let (Ok(first_map), Ok(second_map)) = (
+                presburger.map_for_facts_over_extents(&first_facts, launch_extents),
+                presburger.map_for_facts_over_extents(&second_facts, launch_extents),
+            ) else {
+                return false;
+            };
+            if first_map.find_cross_collision(&second_map, true)
+                != PresburgerCollisionDecisionV1::Proved
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn access_kinds_need_disjoint_coordinates(first: AccessKindAttr, second: AccessKindAttr) -> bool {
+    first.writes_memory() || second.writes_memory()
+}
+
+fn atomics_are_device_compatible(first: &EffectV1, second: &EffectV1) -> bool {
+    first.kind.is_atomic()
+        && second.kind.is_atomic()
+        && [first.atomic_scope, second.atomic_scope]
+            .into_iter()
+            .all(|scope| {
+                matches!(
+                    scope,
+                    Some(
+                        AtomicScopeAttr::Agent | AtomicScopeAttr::Device | AtomicScopeAttr::System
+                    )
+                )
+            })
 }
 
 fn row_striped_2d_effect_family_is_injective(
