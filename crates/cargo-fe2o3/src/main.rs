@@ -5,6 +5,7 @@ mod application_supervisor;
 mod authority_release;
 mod authorized_kernel_closure;
 mod binding_wrapper;
+mod build_config;
 mod capability_broker;
 mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
@@ -29,11 +30,6 @@ mod pinned_executable;
 mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod production_release_no_hardware;
-#[cfg(feature = "qualification-oracles-test-only")]
-use production_release_no_hardware as production_release;
-mod build_config;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
@@ -42,12 +38,6 @@ mod tool_commands;
 #[allow(dead_code)]
 #[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
 mod verification_certificate;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod worker_v2_artifact_container;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod worker_v2_envelope_mode;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod worker_v2_restart;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -2712,7 +2702,7 @@ fn print_help() {
     );
 }
 
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 mod tests {
     use super::{
         TARGET_ENV, aggregate_post_spawn_results, configure_production_target_environment,
