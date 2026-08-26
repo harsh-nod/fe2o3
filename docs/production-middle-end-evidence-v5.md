@@ -31,6 +31,16 @@ recurrences, and permutation gathers with explicit domains, step bounds,
 evaluation order, numerical policy, and coverage binding. Zero declarations
 remain absence of evidence. V5 rejects any declared/proved mismatch.
 
+The live tensor-layout stage is not limited to validating detached instruction
+attributes. Compiler-derived lhs, rhs, accumulator, and result roots survive
+ranked PLIRON materialization. The bounded layout analysis joins result facts
+at CFG merges and rejects any consumer whose required operand or accumulator
+ABI differs from the propagated producer fact. The semantic stage then joins
+each tensor-reference obligation to the exact propagated result root and its
+component/scalar contract. The canonical ranked-IR identity retains the
+compiler-derived tensor bindings; decoded V5 bytes do not recreate live
+dataflow facts or source authority.
+
 V5 also binds every counter in `ProductionTypedSemanticObligationSummaryV2`.
 While the owner-held PLIRON graph is live, construction independently walks the
 retained typed ranked recipe and the actual

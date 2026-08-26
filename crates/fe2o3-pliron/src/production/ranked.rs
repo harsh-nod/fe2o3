@@ -4554,9 +4554,23 @@ fn materialize_operation(
             contract,
             convergence,
             active_lanes,
-            ..
+            binding,
         } => {
-            let op = TensorLayoutOp::new(context, contract, *convergence, *active_lanes);
+            let op = match binding {
+                Some(binding) => TensorLayoutOp::new_with_dataflow_roots(
+                    context,
+                    contract,
+                    *convergence,
+                    *active_lanes,
+                    dialect_kernel::TensorDataflowRootsV1 {
+                        lhs: digest_words_v2(*binding.lhs_root().as_bytes()),
+                        rhs: digest_words_v2(*binding.rhs_root().as_bytes()),
+                        accumulator: digest_words_v2(*binding.accumulator_root().as_bytes()),
+                        result: digest_words_v2(*binding.result_root().as_bytes()),
+                    },
+                ),
+                None => TensorLayoutOp::new(context, contract, *convergence, *active_lanes),
+            };
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::TensorResultComponent {

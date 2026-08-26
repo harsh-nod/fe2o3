@@ -23,7 +23,7 @@ use crate::{
     SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
     SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
     SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr,
-    TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp, TrapOp,
+    TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp, TensorValueRootAttr, TrapOp,
 };
 
 fn registration_hook(
@@ -71,6 +71,7 @@ fn registration_hook(
     service.register_attribute::<TensorConvergenceAttr>()?;
     service.register_attribute::<TensorInstructionAttr>()?;
     service.register_attribute::<TensorFragmentAttr>()?;
+    service.register_attribute::<TensorValueRootAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
     service.register_operation::<GeneralGemmOp>()?;
     service.register_operation::<RankedViewOp>()?;
