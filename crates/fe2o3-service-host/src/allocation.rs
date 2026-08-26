@@ -10,9 +10,9 @@ use fe2o3_kfd::{
     CheckedGfx942XnackMinusDevice, Gfx942DeviceContentDescriptorV1, Gfx942DeviceMemoryLeaseV1,
     Gfx942DeviceMemoryMappedV1, Gfx942DeviceMemoryUnmappedV1, Gfx942FixedDispatchDataKindV1,
     Gfx942FixedDispatchDataV1, Gfx942InitializedHostVisibleMemoryV1, Gfx942RepeatedByteContentV1,
-    GttCpuWritableV1, GttGpuAccessibleMutableV1, HostVisibleCoherentGttV1, MemorySessionError,
-    SharedGttAllocationV1, SharedGttMemorySessionV1, SharedMemorySessionPhaseV1,
-    HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+    GttCpuWritableV1, GttGpuAccessibleMutableV1, HOST_VISIBLE_MEMORY_PAGE_BYTES_V1,
+    HostVisibleCoherentGttV1, MemorySessionError, SharedGttAllocationV1, SharedGttMemorySessionV1,
+    SharedMemorySessionPhaseV1,
 };
 
 /// Canonical scope and non-claims for the first service allocation owner.
@@ -3762,9 +3762,11 @@ mod tests {
         assert!(reissued.iter().all(|range| range.data_index == 0));
         assert_eq!(reissued[0].offset_bytes, 0);
         assert_eq!(reissued[1].offset_bytes, 4_096);
-        assert!(reissued
-            .iter()
-            .all(|range| ledger.validate_range(*range).is_ok()));
+        assert!(
+            reissued
+                .iter()
+                .all(|range| ledger.validate_range(*range).is_ok())
+        );
         assert!(matches!(
             ledger.reissue_partitioned_device_local(&first_subleases),
             Err(ServiceAllocationErrorV1::AllocationGenerationMismatch)
@@ -3995,9 +3997,11 @@ mod tests {
         let snapshot = ServiceHostDispatchSnapshotRangeV1 {
             range: snapshot_range,
         };
-        assert!(ledger
-            .validate_host_dispatch_snapshot(interior, snapshot)
-            .is_ok());
+        assert!(
+            ledger
+                .validate_host_dispatch_snapshot(interior, snapshot)
+                .is_ok()
+        );
 
         let mut stale_range = snapshot_range;
         stale_range.binding.generation += 1;

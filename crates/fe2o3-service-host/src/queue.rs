@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt;
 
-use fe2o3_aql::{AqlRingCapacityV1, AQL_MAX_FIXED_BATCH_PACKETS_V2};
+use fe2o3_aql::{AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlRingCapacityV1};
 use fe2o3_kfd::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
