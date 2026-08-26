@@ -800,6 +800,8 @@ pub struct HsaKernelResolutionObservationV1 {
     export_symbol: Box<str>,
     kernarg_segment_size: u64,
     kernarg_segment_alignment: u64,
+    group_segment_size: u64,
+    private_segment_size: u64,
 }
 
 impl HsaKernelResolutionObservationV1 {
@@ -809,6 +811,8 @@ impl HsaKernelResolutionObservationV1 {
         export_symbol: impl Into<Box<str>>,
         kernarg_segment_size: u64,
         kernarg_segment_alignment: u64,
+        group_segment_size: u64,
+        private_segment_size: u64,
     ) -> Result<Self, HsaObservationError> {
         let export_symbol = export_symbol.into();
         validate_identity_text(&export_symbol, "HSA kernel symbol")?;
@@ -826,6 +830,8 @@ impl HsaKernelResolutionObservationV1 {
             export_symbol,
             kernarg_segment_size,
             kernarg_segment_alignment,
+            group_segment_size,
+            private_segment_size,
         })
     }
 
@@ -847,6 +853,14 @@ impl HsaKernelResolutionObservationV1 {
 
     pub const fn kernarg_segment_alignment(&self) -> u64 {
         self.kernarg_segment_alignment
+    }
+
+    pub const fn group_segment_size(&self) -> u64 {
+        self.group_segment_size
+    }
+
+    pub const fn private_segment_size(&self) -> u64 {
+        self.private_segment_size
     }
 }
 
@@ -1400,6 +1414,8 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
             symbol,
             physical.kernarg_segment_size(),
             physical.kernarg_segment_alignment(),
+            physical.group_segment_fixed_size(),
+            physical.private_segment_fixed_size(),
             load.executable_object(),
             &resolution,
         ) {
@@ -1934,6 +1950,8 @@ fn validate_kernel_resolution(
         selected.export_symbol(),
         physical.kernarg_segment_size(),
         physical.kernarg_segment_alignment(),
+        physical.group_segment_fixed_size(),
+        physical.private_segment_fixed_size(),
         executable,
         resolution,
     )
@@ -1943,6 +1961,8 @@ fn validate_kernel_resolution_fields(
     export_symbol: &str,
     kernarg_segment_size: u64,
     kernarg_segment_alignment: u64,
+    group_segment_size: u64,
+    private_segment_size: u64,
     executable: HsaExecutableObjectIdentityV1,
     resolution: &HsaKernelResolutionObservationV1,
 ) -> Result<(), &'static str> {
@@ -1963,6 +1983,14 @@ fn validate_kernel_resolution_fields(
         (
             resolution.kernarg_segment_alignment == expected_hsa_alignment,
             "kernarg segment alignment",
+        ),
+        (
+            resolution.group_segment_size == group_segment_size,
+            "static group segment size",
+        ),
+        (
+            resolution.private_segment_size == private_segment_size,
+            "private segment size",
         ),
     ] {
         if !matches {
@@ -2460,6 +2488,14 @@ fn validate_selected_kernel_resolution(
         (
             selected.kernarg_segment_alignment == expected_hsa_alignment,
             "kernarg segment alignment",
+        ),
+        (
+            selected.group_segment_size == launch.group_segment_fixed_size(),
+            "static group segment size",
+        ),
+        (
+            selected.private_segment_size == launch.private_segment_fixed_size(),
+            "private segment size",
         ),
         (
             selected.export_symbol == primary.export_symbol
@@ -4014,6 +4050,8 @@ pub(crate) mod tests {
         KernelObjectAlias,
         KernargSize,
         KernargAlignment,
+        GroupSegmentSize,
+        PrivateSegmentSize,
         DispatchObject,
         DispatchKernel,
         DispatchGeometry,
@@ -4191,6 +4229,8 @@ pub(crate) mod tests {
                     symbol,
                     size,
                     alignment,
+                    u64::from(self.fault == AdapterFault::GroupSegmentSize),
+                    u64::from(self.fault == AdapterFault::PrivateSegmentSize),
                 )
                 .unwrap(),
             ))
@@ -5057,6 +5097,8 @@ pub(crate) mod tests {
             (AdapterFault::KernelObjectAlias, "HSA kernel object alias"),
             (AdapterFault::KernargSize, "kernarg segment size"),
             (AdapterFault::KernargAlignment, "kernarg segment alignment"),
+            (AdapterFault::GroupSegmentSize, "static group segment size"),
+            (AdapterFault::PrivateSegmentSize, "private segment size"),
         ] {
             let (loaded, unloads, _directory) = load_two_kernels(0x8b);
             let mut loaded = loaded.unwrap();

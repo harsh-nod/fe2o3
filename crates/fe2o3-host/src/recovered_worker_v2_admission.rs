@@ -2070,6 +2070,8 @@ mod tests {
                     export_symbol,
                     kernarg_segment_size,
                     16,
+                    0,
+                    0,
                 )
                 .map_err(|_| "invalid test kernel observation")?,
             ))

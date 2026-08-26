@@ -280,6 +280,8 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for FakeAdapter {
                 symbol,
                 size,
                 alignment,
+                0,
+                0,
             )
             .unwrap(),
         ))

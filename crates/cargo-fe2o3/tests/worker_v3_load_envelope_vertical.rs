@@ -582,6 +582,8 @@ unsafe impl ReviewedHsaExecutableLifecycleAdapterV1 for ReviewedTestHsaAdapter {
                 export_symbol,
                 272,
                 16,
+                0,
+                0,
             )
             .unwrap(),
         ))

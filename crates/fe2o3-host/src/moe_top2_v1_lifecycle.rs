@@ -982,6 +982,8 @@ fn validate_resolution(
         EXPORT_SYMBOL,
         COMPLETE_KERNARG_BYTES as u64,
         HSA_KERNARG_ALIGNMENT,
+        0,
+        0,
     )
     .expect("static resolution");
     (resolution == &expected)

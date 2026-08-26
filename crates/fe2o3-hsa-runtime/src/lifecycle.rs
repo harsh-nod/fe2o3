@@ -288,6 +288,8 @@ fn resolve_kernel<A: ExecutableApi>(
         export_symbol,
         u64::from(symbol.kernarg_size),
         u64::from(symbol.kernarg_alignment),
+        u64::from(symbol.group_segment_size),
+        u64::from(symbol.private_segment_size),
     )
     .map_err(|_| HsaRuntimeAdapterError::InvalidExecutableObservation("kernel ABI"))?;
     Ok((

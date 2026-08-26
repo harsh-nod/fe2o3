@@ -1138,6 +1138,8 @@ fn validate_kernel<P: ExactWorkgroupSyncHostProfileV1>(
         P::EXPORT_SYMBOL,
         P::COMPLETE_KERNARG_BYTES as u64,
         RUNTIME_KERNARG_ALIGNMENT,
+        0,
+        0,
     )
     .expect("static kernel observation");
     if value == &expected {
