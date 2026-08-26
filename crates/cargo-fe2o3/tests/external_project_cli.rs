@@ -1,3 +1,5 @@
+#![cfg(feature = "qualification-oracles-test-only")]
+
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;

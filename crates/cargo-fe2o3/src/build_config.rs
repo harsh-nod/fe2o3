@@ -5,12 +5,12 @@
 //! a differential oracle over the same bounded file and link-input helpers.
 
 use std::error::Error;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use std::ffi::OsStr;
 use std::fmt;
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use std::fs;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -18,13 +18,13 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use crate::production_release::{
     ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1, RowSoftmaxV1ReleaseWorkloadV1,
 };
 use crate::protected_compiler_handoff_v3::ParentConsumedProductionHandoff;
 use fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_artifact_transaction::{
     ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
 };
@@ -38,7 +38,7 @@ use fe2o3_hsaco_finalize::{
     WorkerProtocolError, execute_preflighted_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_hsaco_finalize::{
     FirstBuildWorkerV2Error, InertFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error,
@@ -47,18 +47,18 @@ use fe2o3_hsaco_finalize::{
     execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_verifier::{
     GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256, MAX_GENERAL_GEMM_PROOF_TIMEOUT_SECONDS_V1,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_worker_v2_bundle::{MAX_WORKER_V2_ENVELOPE_INPUTS_BYTES, WorkerV2EnvelopeInputsV1};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use rustix::fs::{FileType, Mode, OFlags, fstat, open};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) use crate::worker_v2_envelope_mode::WorkerV2EnvelopeModeV1;
 
 pub(crate) const QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
@@ -67,29 +67,29 @@ pub(crate) const PRODUCTION_BUILD_CONFIG_ENV: &str = "FE2O3_PRODUCTION_BUILD_CON
 pub(crate) const PRODUCTION_BUILD_EXPECTED_ID_ENV: &str = "FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1";
 pub(crate) const WORKER_V2_CONFIG_ENV: &str = "FE2O3_WORKER_V2_CONFIG_V2";
 pub(crate) const WORKER_V2_EXPECTED_ID_ENV: &str = "FE2O3_WORKER_V2_EXPECTED_ID_V1";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT_ENV: &str =
     "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256_ENV: &str =
     "FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256";
 pub(crate) const WORKER_V2_SOURCE_DEBUG_PROFILE_ENV: &str =
     "FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const WORKER_V2_PIPELINE: &str = "kernel-ir-worker-v2";
 const PRODUCTION_CONFIG_PROFILE_ID_V1: &str = "production-v1";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const OBSOLETE_PRODUCTION_SELECTOR: &str = PRODUCTION_CONFIG_PROFILE_ID_V1;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const SCALAR_GEMM_V1_PIPELINE: &str = "collected-scalar-gemm-v1";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_V1_PIPELINE: &str = "collected-row-softmax-v1";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) const GENERAL_GEMM_V1_PIPELINE: &str = "collected-general-gemm-v1";
 const PRODUCTION_BUILD_CONFIG_FORMAT: &str = "fe2o3-production-build-config-v1";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const WORKER_V2_CONFIG_FORMAT: &str = "fe2o3-worker-v2-config-v2";
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const S09_ALPHA_DEBUG_PROFILE: &str = "s09-alpha-gfx942-o0-v1";
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 4096;
@@ -103,7 +103,7 @@ const ROOT_KEYS: &[&str] = &[
     "units",
     "worker",
 ];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROOT_KEYS_WITH_ENVELOPE: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
@@ -115,7 +115,7 @@ const ROOT_KEYS_WITH_ENVELOPE: &[&str] = &[
     "units",
     "worker",
 ];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROOT_KEYS_WITH_ENVELOPE_MODE: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
@@ -126,7 +126,7 @@ const ROOT_KEYS_WITH_ENVELOPE_MODE: &[&str] = &[
     "units",
     "worker",
 ];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROOT_KEYS_WITH_ENVELOPE_INPUTS: &[&str] = &[
     "candidate_output_max_bytes",
     "format",
@@ -137,7 +137,7 @@ const ROOT_KEYS_WITH_ENVELOPE_INPUTS: &[&str] = &[
     "units",
     "worker",
 ];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const ENVELOPE_INPUT_KEYS: &[&str] = &["byte_len", "path", "sha256"];
 const WORKER_KEYS: &[&str] = &[
     "byte_len",
@@ -150,7 +150,7 @@ const PROVIDER_KEYS: &[&str] = &["byte_len", "kind", "path", "sha256"];
 const OPTION_KEYS: &[&str] = &["name", "value"];
 const LIMIT_KEYS: &[&str] = &["stderr_bytes", "stdout_bytes", "timeout_ms"];
 const UNIT_KEYS: &[&str] = &["crate_name", "source", "working_directory"];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
     "case",
     "comparison_policy",
@@ -163,14 +163,14 @@ const ROW_SOFTMAX_V1_KEYS: &[&str] = &[
     "provider_stable_crate_id",
     "row_elements",
 ];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const GENERAL_GEMM_V1_KEYS: &[&str] = &[
     "profile",
     "proof_timeout_seconds",
     "runtime_closure_v2_manifest_sha256",
     "runtime_closure_v2_root",
 ];
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 const GENERAL_GEMM_QUALIFICATION_PAIR_PROFILE_V1: &str = "qualification-pair-v1";
 const REQUIRED_OPTIONS: &[(&str, &[&str])] = &[
     ("code-object-version", &["4", "5", "6"]),
@@ -191,7 +191,7 @@ impl BuildConfigIdentity {
         hex(&self.0)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn for_test(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
@@ -219,26 +219,26 @@ pub(crate) struct PreparedProductionBuildConfig {
     link: PreparedLinkBuildConfig,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedBuildConfig {
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     manifest_path: PathBuf,
     link: PreparedLinkBuildConfig,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     profile: BuildConfigProfile,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     envelope_mode: WorkerV2EnvelopeModeV1,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     envelope_inputs: Option<ConfiguredEnvelopeInputs>,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     source_debug_profile: Option<WorkerV2SourceDebugProfileV1>,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     row_softmax_v1: Option<PreparedRowSoftmaxV1Config>,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     general_gemm_v1: Option<PreparedGeneralGemmV1Config>,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedGeneralGemmV1Config {
     runtime_closure_v2_root: PathBuf,
@@ -246,7 +246,7 @@ pub(crate) struct PreparedGeneralGemmV1Config {
     proof_timeout_seconds: u32,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedGeneralGemmV1Config {
     pub(crate) fn runtime_closure_v2_root(&self) -> &Path {
         &self.runtime_closure_v2_root
@@ -261,7 +261,7 @@ impl PreparedGeneralGemmV1Config {
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct PreparedRowSoftmaxV1Config {
     provider: RowSoftmaxV1ProviderManifestV1,
     ocml: RowSoftmaxV1OcmlProviderPinsV1,
@@ -271,7 +271,7 @@ pub(crate) struct PreparedRowSoftmaxV1Config {
     comparison_policy: String,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedRowSoftmaxV1Config {
     pub(crate) const fn provider(&self) -> RowSoftmaxV1ProviderManifestV1 {
         self.provider
@@ -288,7 +288,7 @@ impl PreparedRowSoftmaxV1Config {
 }
 
 #[derive(Clone, Copy, Debug)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) struct WorkerV2BuildObservation<'a> {
     pub(crate) config_identity: BuildConfigIdentity,
     pub(crate) executable_sha256: [u8; 32],
@@ -303,12 +303,12 @@ pub(crate) struct WorkerV2BuildObservation<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) enum WorkerV2SourceDebugProfileV1 {
     S09AlphaGfx942O0,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BuildConfigProfile {
     General,
@@ -318,7 +318,7 @@ enum BuildConfigProfile {
     GeneralGemmV1,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 impl BuildConfigProfile {
     fn from_environment_value(value: &OsStr) -> Option<Self> {
         if value == WORKER_V2_PIPELINE {
@@ -346,7 +346,7 @@ impl BuildConfigProfile {
 }
 
 /// Matches the backend's closed route rule: only unset means production.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn production_compilation_selected(profile: Option<&OsStr>) -> bool {
     profile.is_none()
 }
@@ -354,17 +354,17 @@ pub(crate) fn production_compilation_selected(profile: Option<&OsStr>) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BuildCompileEnvironmentProfileV1 {
     ProductionGfx942,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     S09AlphaGfx942O0,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     ScalarGemmV1Gfx942,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     RowSoftmaxV1Gfx942,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     GeneralGemmV1Gfx942,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 impl WorkerV2SourceDebugProfileV1 {
     pub(crate) const fn env_value(self) -> &'static str {
         match self {
@@ -373,7 +373,7 @@ impl WorkerV2SourceDebugProfileV1 {
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 #[derive(Clone, Debug)]
 struct ConfiguredEnvelopeInputs {
     path: PathBuf,
@@ -381,7 +381,7 @@ struct ConfiguredEnvelopeInputs {
     pinned: Option<Box<WorkerV2EnvelopeInputsV1>>,
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 impl PreparedBuildConfig {
     pub(crate) fn from_environment() -> Result<Option<Self>, BuildConfigError> {
         Self::from_environment_values(
@@ -403,7 +403,7 @@ impl PreparedBuildConfig {
             qualification_oracle,
             production_config_path,
             qualification_config_path,
-            cfg!(any(test, feature = "qualification-oracles-test-only")),
+            cfg!(feature = "qualification-oracles-test-only"),
         )
     }
 
@@ -443,11 +443,11 @@ impl PreparedBuildConfig {
 
     pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, BuildConfigError> {
         let mut prepared = Self::from_environment()?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         if let Some(config) = prepared.as_mut() {
             config.pin_envelope_inputs()?;
         }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
         let _ = &mut prepared;
         Ok(prepared)
     }
@@ -464,18 +464,18 @@ impl PreparedBuildConfig {
         let selected = if production_compilation_selected(profile) {
             Some(BuildConfigProfile::Production)
         } else {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             {
                 profile.and_then(BuildConfigProfile::from_environment_value)
             }
-            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
             {
                 None
             }
         };
         match (selected, config_path) {
             (None, None) => Ok(None),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             (Some(BuildConfigProfile::RowSoftmaxV1), None) => Ok(None),
             (None, Some(_)) => Err(BuildConfigError::UnexpectedConfiguration),
             (Some(_), None) => Err(BuildConfigError::MissingConfiguration),
@@ -486,7 +486,7 @@ impl PreparedBuildConfig {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn from_manifest(path: &Path) -> Result<Self, BuildConfigError> {
         Self::from_manifest_for_profile(path, BuildConfigProfile::General)
     }
@@ -596,27 +596,27 @@ impl PreparedBuildConfig {
         self.link.identity
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn manifest_path(&self) -> &Path {
         &self.manifest_path
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn envelope_mode(&self) -> WorkerV2EnvelopeModeV1 {
         self.envelope_mode
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn source_debug_profile(&self) -> Option<WorkerV2SourceDebugProfileV1> {
         self.source_debug_profile
     }
 
     pub(crate) const fn requires_source_debug_profile(&self) -> bool {
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         {
             self.source_debug_profile.is_some()
         }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
             false
         }
@@ -626,33 +626,33 @@ impl PreparedBuildConfig {
         true
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn row_softmax_v1(&self) -> Option<&PreparedRowSoftmaxV1Config> {
         self.row_softmax_v1.as_ref()
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn general_gemm_v1(&self) -> Option<&PreparedGeneralGemmV1Config> {
         self.general_gemm_v1.as_ref()
     }
 
     pub(crate) const fn executes_worker_in_rustc(&self) -> bool {
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         {
             matches!(self.profile, BuildConfigProfile::GeneralGemmV1)
         }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
             false
         }
     }
 
     pub(crate) const fn is_production_compilation(&self) -> bool {
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         {
             matches!(self.profile, BuildConfigProfile::Production)
         }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
             true
         }
@@ -675,7 +675,7 @@ impl PreparedBuildConfig {
         }
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn row_softmax_v1_worker_pins(
         &self,
     ) -> Result<RowSoftmaxV1DirectWorkerPinsV1, BuildConfigError> {
@@ -703,7 +703,7 @@ impl PreparedBuildConfig {
         if !self.selects(crate_name, source, working_directory) {
             return None;
         }
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         {
             if self.profile == BuildConfigProfile::Production {
                 Some(BuildCompileEnvironmentProfileV1::ProductionGfx942)
@@ -719,13 +719,13 @@ impl PreparedBuildConfig {
                 None
             }
         }
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+        #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
             Some(BuildCompileEnvironmentProfileV1::ProductionGfx942)
         }
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn build_observation(
         &self,
         prepared_rustc_command_sha256: [u8; 32],
@@ -750,7 +750,7 @@ impl PreparedBuildConfig {
         }
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn load_envelope_inputs(
         &self,
     ) -> Result<Option<WorkerV2EnvelopeInputsV1>, BuildConfigError> {
@@ -760,7 +760,7 @@ impl PreparedBuildConfig {
             .transpose()
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn pin_envelope_inputs(&mut self) -> Result<(), BuildConfigError> {
         let Some(configured) = self.envelope_inputs.as_mut() else {
             return Ok(());
@@ -794,7 +794,7 @@ impl PreparedBuildConfig {
             .is_ok()
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn execute(
         &self,
         consumed: ConsumedCompilerModuleHandoffV1,
@@ -809,7 +809,7 @@ impl PreparedBuildConfig {
         )
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn execute_protected(
         &self,
         consumed: ConsumedCompilerModuleHandoffV2,
@@ -825,7 +825,7 @@ impl PreparedBuildConfig {
     }
 }
 
-#[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+#[cfg(not(feature = "qualification-oracles-test-only"))]
 impl PreparedProductionBuildConfig {
     pub(crate) fn from_environment() -> Result<Option<Self>, BuildConfigError> {
         if let Some(value) = std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV) {
@@ -933,7 +933,7 @@ fn prepare_production_manifest(
     .map_err(BuildConfigError::Protocol)?;
     let limits = parse_limits(required_value(root, "limits", "configuration")?)?;
     let units = parse_units(required_value(root, "units", "configuration")?)?;
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     let identity = transitive_identity(
         PRODUCTION_CONFIG_PROFILE_ID_V1,
         &bytes,
@@ -941,7 +941,7 @@ fn prepare_production_manifest(
         &providers,
         None,
     );
-    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let identity =
         transitive_identity(PRODUCTION_CONFIG_PROFILE_ID_V1, &bytes, &worker, &providers);
     Ok(PreparedProductionBuildConfig {
@@ -991,7 +991,7 @@ impl PreparedProductionBuildConfig {
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn parse_general_gemm_v1(
     root: &Map<String, Value>,
     profile: BuildConfigProfile,
@@ -1092,7 +1092,7 @@ fn parse_general_gemm_v1(
     }))
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn parse_row_softmax_v1(
     root: &Map<String, Value>,
     profile: BuildConfigProfile,
@@ -1221,7 +1221,7 @@ fn parse_row_softmax_v1(
     }))
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn parse_envelope_inputs(
     root: &Map<String, Value>,
 ) -> Result<(WorkerV2EnvelopeModeV1, Option<ConfiguredEnvelopeInputs>), BuildConfigError> {
@@ -1270,9 +1270,9 @@ fn parse_envelope_inputs(
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 impl ConfiguredEnvelopeInputs {
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     fn load(&self) -> Result<WorkerV2EnvelopeInputsV1, BuildConfigError> {
         if let Some(inputs) = &self.pinned {
             return Ok(inputs.as_ref().clone());
@@ -1312,7 +1312,7 @@ fn transitive_identity(
     manifest: &[u8],
     worker: &PinnedWorkerV1,
     providers: &[WorkerInputV1],
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))] envelope_inputs: Option<
+    #[cfg(feature = "qualification-oracles-test-only")] envelope_inputs: Option<
         &ConfiguredEnvelopeInputs,
     >,
 ) -> BuildConfigIdentity {
@@ -1335,7 +1335,7 @@ fn transitive_identity(
         update_identity(&mut hash, &provider.identity().byte_len().to_le_bytes());
         update_identity(&mut hash, provider.bytes());
     }
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     if let Some(inputs) = envelope_inputs {
         update_identity(&mut hash, &[1]);
         update_identity(&mut hash, inputs.expected.sha256());
@@ -1362,7 +1362,7 @@ fn hex(bytes: &[u8]) -> String {
 #[derive(Debug)]
 pub(crate) enum BuildConfigError {
     MissingConfiguration,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     UnexpectedConfiguration,
     Io {
         kind: &'static str,
@@ -1379,19 +1379,19 @@ pub(crate) enum BuildConfigError {
 impl fmt::Display for BuildConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::MissingConfiguration => write!(
                 formatter,
                 "production requires {PRODUCTION_BUILD_CONFIG_ENV}; a qualification profile requires {WORKER_V2_CONFIG_ENV}"
             ),
-            #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+            #[cfg(not(feature = "qualification-oracles-test-only"))]
             Self::MissingConfiguration => {
                 write!(
                     formatter,
                     "production requires {PRODUCTION_BUILD_CONFIG_ENV}"
                 )
             }
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::UnexpectedConfiguration => {
                 write!(
                     formatter,
@@ -1422,7 +1422,7 @@ impl Error for BuildConfigError {
             Self::Protocol(error) => Some(error),
             Self::Worker(error) => Some(error),
             Self::MissingConfiguration | Self::Json(_) | Self::Invalid(_) => None,
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             Self::UnexpectedConfiguration => None,
         }
     }
@@ -1516,7 +1516,7 @@ fn parse_link_options(value: &Value) -> Result<Vec<LinkOptionV1>, BuildConfigErr
     Ok(options)
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn parse_source_debug_profile(
     root: &Map<String, Value>,
     options: &[LinkOptionV1],
@@ -1649,7 +1649,7 @@ fn exact_production_root_object(value: &Value) -> Result<&Map<String, Value>, Bu
     Ok(object)
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn exact_qualification_root_object(value: &Value) -> Result<&Map<String, Value>, BuildConfigError> {
     let object = value
         .as_object()
@@ -1736,7 +1736,7 @@ fn require_absolute_path(path: &Path, context: &str) -> Result<(), BuildConfigEr
     Ok(())
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn require_closed_child_manifest_path(path: &Path, context: &str) -> Result<(), BuildConfigError> {
     let Some(value) = path.to_str() else {
         return Err(BuildConfigError::Invalid(format!(
@@ -1816,7 +1816,7 @@ fn read_bounded(
     Ok(bytes)
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn read_measured_private(
     path: &Path,
     exact_len: usize,
@@ -1905,7 +1905,7 @@ fn decode_sha256(value: &str, context: &str) -> Result<[u8; 32], BuildConfigErro
     Ok(bytes)
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn decode_fixed_hex<const N: usize>(
     value: &str,
     context: &str,
@@ -1927,7 +1927,7 @@ fn decode_fixed_hex<const N: usize>(
     Ok(bytes)
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 fn decode_identity_array<const COUNT: usize, const WIDTH: usize>(
     value: &Value,
     context: &str,
@@ -1965,7 +1965,7 @@ fn valid_selector_text(value: &str) -> bool {
         && !value.bytes().any(|byte| byte.is_ascii_control())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod tests {
     use super::*;
     use fe2o3_hsaco_finalize::ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1;

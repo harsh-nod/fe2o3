@@ -28,26 +28,26 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     use std::collections::BTreeMap;
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use std::fs::OpenOptions;
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
     use std::net::Shutdown;
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::os::fd::IntoRawFd;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
     use std::path::PathBuf;
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::process::Command;
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     use fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1;
     use fe2o3_artifact_transaction::{
         BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
@@ -68,9 +68,9 @@ mod platform {
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-10\0";
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     const _: () = assert!(REQUEST_MAGIC.len() == S09_REQUEST_MAGIC.len());
     const ROUTE_PREFIX: &str = "fe2o3-capability-route-v3";
     const ENDPOINT_BYTES: usize = 32;
@@ -98,7 +98,7 @@ mod platform {
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 210;
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -109,7 +109,7 @@ mod platform {
     );
     const BROKER_INVOCATION_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
     const BROKER_INVOCATION_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     const BROKER_IO_TIMEOUT: Duration = BROKER_AUTHENTICATION_TIMEOUT;
     const MAX_ACTIVE_CONNECTIONS: usize = 64;
     const MAX_CONCURRENT_AUTHENTICATIONS: usize = 8;
@@ -132,7 +132,7 @@ mod platform {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         S09,
     }
 
@@ -140,7 +140,7 @@ mod platform {
         const fn request_magic(self) -> &'static [u8] {
             match self {
                 Self::Ordinary => REQUEST_MAGIC,
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                #[cfg(feature = "qualification-oracles-test-only")]
                 Self::S09 => S09_REQUEST_MAGIC,
             }
         }
@@ -148,7 +148,7 @@ mod platform {
         const fn descriptor_count(self) -> usize {
             match self {
                 Self::Ordinary => 2,
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                #[cfg(feature = "qualification-oracles-test-only")]
                 Self::S09 => 3,
             }
         }
@@ -156,7 +156,7 @@ mod platform {
         const fn name(self) -> &'static str {
             match self {
                 Self::Ordinary => "ordinary",
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                #[cfg(feature = "qualification-oracles-test-only")]
                 Self::S09 => "S09",
             }
         }
@@ -164,7 +164,7 @@ mod platform {
         const fn route_name(self) -> &'static str {
             match self {
                 Self::Ordinary => "ordinary",
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                #[cfg(feature = "qualification-oracles-test-only")]
                 Self::S09 => "s09",
             }
         }
@@ -172,7 +172,7 @@ mod platform {
         fn parse_route_name(value: &str) -> Option<Self> {
             match value {
                 "ordinary" => Some(Self::Ordinary),
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                #[cfg(feature = "qualification-oracles-test-only")]
                 "s09" => Some(Self::S09),
                 _ => None,
             }
@@ -197,7 +197,7 @@ mod platform {
             rustc_executable_sha256: [u8; RUSTC_EXECUTABLE_ID_BYTES],
             retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
         ) -> Result<Self, String> {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             if profile == CapabilityProfileV1::S09 && config_identity.is_none() {
                 return Err("S09 capability binding requires a Worker V2 config identity".into());
             }
@@ -527,21 +527,21 @@ mod platform {
         invocation_authorization: InvocationAuthorizationRegistryV1,
         shutdown: Arc<BrokerShutdown>,
         worker: Option<JoinHandle<()>>,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         _test_permit: TestBrokerPermit,
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     static TEST_BROKER_ACTIVE: Mutex<bool> = Mutex::new(false);
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     static TEST_BROKER_AVAILABLE: Condvar = Condvar::new();
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     struct TestBrokerPermit {
         process_lock: File,
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     impl TestBrokerPermit {
         fn acquire() -> Self {
             let mut active = TEST_BROKER_ACTIVE
@@ -576,7 +576,7 @@ mod platform {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     impl Drop for TestBrokerPermit {
         fn drop(&mut self) {
             if unsafe { libc::flock(self.process_lock.as_raw_fd(), libc::LOCK_UN) } != 0 {
@@ -605,25 +605,25 @@ mod platform {
         authentication_available: Condvar,
         max_concurrent_authentications: usize,
         max_active_connections: usize,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         accept_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         worker_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         dispatch_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         locked_dispatch_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         begin_started: std::sync::atomic::AtomicBool,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         request_read_started: std::sync::atomic::AtomicBool,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         panic_next_worker: std::sync::atomic::AtomicBool,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fail_next_worker_spawn: std::sync::atomic::AtomicBool,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         caught_worker_panics: std::sync::atomic::AtomicUsize,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         admission_rejections: std::sync::atomic::AtomicUsize,
     }
 
@@ -636,25 +636,25 @@ mod platform {
                 max_concurrent_authentications: max_active_connections
                     .min(MAX_CONCURRENT_AUTHENTICATIONS),
                 max_active_connections,
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 accept_pause: Mutex::new(None),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 worker_pause: Mutex::new(None),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 dispatch_pause: Mutex::new(None),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 locked_dispatch_pause: Mutex::new(None),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 begin_started: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 request_read_started: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 panic_next_worker: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 fail_next_worker_spawn: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 caught_worker_panics: std::sync::atomic::AtomicUsize::new(0),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 admission_rejections: std::sync::atomic::AtomicUsize::new(0),
             }
         }
@@ -680,7 +680,7 @@ mod platform {
                 return Ok(None);
             }
             if state.active.len() >= self.max_active_connections {
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 self.admission_rejections
                     .fetch_add(1, std::sync::atomic::Ordering::Release);
                 let _ = stream.shutdown(Shutdown::Both);
@@ -690,7 +690,7 @@ mod platform {
                 ));
             }
             if let Err(error) = deadline.require_remaining() {
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 self.admission_rejections
                     .fetch_add(1, std::sync::atomic::Ordering::Release);
                 let _ = stream.shutdown(Shutdown::Both);
@@ -751,7 +751,7 @@ mod platform {
         }
 
         fn begin(&self) {
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             self.begin_started
                 .store(true, std::sync::atomic::Ordering::Release);
             let mut state = self.state();
@@ -771,7 +771,7 @@ mod platform {
             descriptors: &[BorrowedFd<'_>],
             deadline: BrokerDeadline,
         ) -> io::Result<()> {
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             self.pause(&self.dispatch_pause, None);
 
             let state = self.state();
@@ -781,7 +781,7 @@ mod platform {
                     "capability broker is shutting down",
                 ));
             }
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             self.pause(&self.locked_dispatch_pause, None);
             deadline.require_remaining()?;
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
@@ -806,7 +806,7 @@ mod platform {
             Ok(())
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn install_pause(slot: &Mutex<Option<Arc<TestPause>>>) -> TestPauseControl {
             let (pause, control) = TestPause::new();
             *slot
@@ -815,7 +815,7 @@ mod platform {
             control
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn pause(&self, slot: &Mutex<Option<Arc<TestPause>>>, socket_identity: Option<(u64, u64)>) {
             let pause = {
                 slot.lock()
@@ -827,12 +827,12 @@ mod platform {
             }
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn install_accept_pause(&self) -> TestPauseControl {
             Self::install_pause(&self.accept_pause)
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn pause_after_accept(&self, stream: &UnixStream) {
             let socket_identity = fs::metadata(format!("/proc/self/fd/{}", stream.as_raw_fd()))
                 .ok()
@@ -847,17 +847,17 @@ mod platform {
             }
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn install_dispatch_pause(&self) -> TestPauseControl {
             Self::install_pause(&self.dispatch_pause)
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn install_worker_pause(&self) -> TestPauseControl {
             Self::install_pause(&self.worker_pause)
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn remove_worker_pause(&self) {
             self.worker_pause
                 .lock()
@@ -865,12 +865,12 @@ mod platform {
                 .take();
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn install_locked_dispatch_pause(&self) -> TestPauseControl {
             Self::install_pause(&self.locked_dispatch_pause)
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn wait_for_begin(&self) {
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while !self
@@ -885,7 +885,7 @@ mod platform {
             }
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn wait_for_request_read(&self) {
             let deadline = std::time::Instant::now() + BROKER_AUTHENTICATION_TIMEOUT;
             while !self
@@ -900,7 +900,7 @@ mod platform {
             }
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn active_socket_identity(&self) -> Option<(u64, u64)> {
             let state = self.state();
             let active = state.active.values().next()?;
@@ -909,30 +909,30 @@ mod platform {
                 .map(|metadata| (metadata.dev(), metadata.ino()))
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn active_connection_count(&self) -> usize {
             self.state().active.len()
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn inject_worker_panic(&self) {
             self.panic_next_worker
                 .store(true, std::sync::atomic::Ordering::Release);
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn inject_worker_spawn_failure(&self) {
             self.fail_next_worker_spawn
                 .store(true, std::sync::atomic::Ordering::Release);
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn take_worker_spawn_failure(&self) -> bool {
             self.fail_next_worker_spawn
                 .swap(false, std::sync::atomic::Ordering::AcqRel)
         }
 
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         fn maybe_inject_worker_panic(&self) {
             if self
                 .panic_next_worker
@@ -964,19 +964,19 @@ mod platform {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     struct TestPause {
         reached: std::sync::mpsc::SyncSender<Option<(u64, u64)>>,
         release: Mutex<std::sync::mpsc::Receiver<()>>,
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     struct TestPauseControl {
         reached: std::sync::mpsc::Receiver<Option<(u64, u64)>>,
         release: std::sync::mpsc::SyncSender<()>,
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     impl TestPause {
         fn new() -> (Arc<Self>, TestPauseControl) {
             let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(0);
@@ -1004,7 +1004,7 @@ mod platform {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     impl TestPauseControl {
         fn wait_until_reached(&self) -> Option<(u64, u64)> {
             self.reached
@@ -1111,7 +1111,7 @@ mod platform {
                     CompilerClosureCapabilityV1::create(closure)
                 })
                 .transpose()?;
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             let test_permit = TestBrokerPermit::acquire();
             let endpoint = random_endpoint().map_err(|error| {
                 format!("failed to allocate capability broker endpoint: {error}")
@@ -1128,7 +1128,7 @@ mod platform {
             let artifact = artifact
                 .try_clone_for_transfer()
                 .map_err(|error| format!("failed to retain broker artifact directory: {error}"))?;
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             let pinned_cargo_image =
                 pinned_cargo_image
                     .try_clone_for_transfer()
@@ -1162,14 +1162,14 @@ mod platform {
                         executable,
                         backend,
                         artifact,
-                        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+                        #[cfg(feature = "qualification-oracles-test-only")]
                         pinned_cargo_image,
                         compiler_closure,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
                         invocation_lifetime: limits.invocation_lifetime,
                         invocation_authorization: worker_invocation_authorization,
-                        #[cfg(test)]
+                        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                         test_invocation_authorization: Mutex::new(()),
                         shutdown: worker_shutdown,
                     }
@@ -1181,7 +1181,7 @@ mod platform {
                 invocation_authorization,
                 shutdown,
                 worker: Some(worker),
-                #[cfg(test)]
+                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                 _test_permit: test_permit,
             })
         }
@@ -1207,7 +1207,7 @@ mod platform {
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
@@ -1235,7 +1235,7 @@ mod platform {
             )
         }
 
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         pub(crate) fn prepare(
             &self,
             claim: BrokeredInvocationCapabilityClaimV1,
@@ -1265,7 +1265,7 @@ mod platform {
             Ok(())
         }
 
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         pub(crate) fn inherit_for_child(&self, command: &mut Command) -> Result<(), String> {
             // SAFETY: this only probes the process-local reserved descriptor.
             let target = unsafe { BorrowedFd::borrow_raw(INVOCATION_AUTHORITY_CHILD_FD_V1) };
@@ -1405,7 +1405,7 @@ mod platform {
         } else {
             None
         };
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         let pinned_cargo_image = if binding.profile == CapabilityProfileV1::S09 {
             let image = normalize_received_descriptor(
                 descriptors.pop().expect("S09 descriptor count checked"),
@@ -1437,7 +1437,7 @@ mod platform {
         Ok(BrokeredCapabilities {
             backend,
             artifact,
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             pinned_cargo_image,
             compiler_closure,
             invocation_authority: None,
@@ -1464,14 +1464,14 @@ mod platform {
         executable: BrokerPeerIdentityV2,
         backend: File,
         artifact: File,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         pinned_cargo_image: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
         invocation_lifetime: Duration,
         invocation_authorization: InvocationAuthorizationRegistryV1,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         test_invocation_authorization: Mutex<()>,
         shutdown: Arc<BrokerShutdown>,
     }
@@ -1486,7 +1486,7 @@ mod platform {
                             let accepted_at = Instant::now();
                             let deadline =
                                 BrokerDeadline::new(accepted_at, self.authentication_timeout);
-                            #[cfg(test)]
+                            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                             self.shutdown.pause_after_accept(&stream);
                             match self.shutdown.register(&stream, deadline) {
                                 Ok(Some(registry_guard)) => {
@@ -1495,27 +1495,39 @@ mod platform {
                                         let _registry_guard = registry_guard;
                                         let outcome = std::panic::catch_unwind(
                                             std::panic::AssertUnwindSafe(|| {
-                                                #[cfg(test)]
+                                                #[cfg(all(
+                                                    test,
+                                                    feature = "qualification-oracles-test-only"
+                                                ))]
                                                 server
                                                     .shutdown
                                                     .pause(&server.shutdown.worker_pause, None);
-                                                #[cfg(test)]
+                                                #[cfg(all(
+                                                    test,
+                                                    feature = "qualification-oracles-test-only"
+                                                ))]
                                                 server.shutdown.maybe_inject_worker_panic();
                                                 server.serve_one(&stream, deadline)
                                             }),
                                         );
                                         if outcome.is_err() {
-                                            #[cfg(test)]
+                                            #[cfg(all(
+                                                test,
+                                                feature = "qualification-oracles-test-only"
+                                            ))]
                                             server
                                                 .shutdown
                                                 .caught_worker_panics
                                                 .fetch_add(1, std::sync::atomic::Ordering::Release);
                                         }
                                     };
-                                    #[cfg(test)]
+                                    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
                                     let injected_spawn_failure =
                                         self.shutdown.take_worker_spawn_failure();
-                                    #[cfg(not(test))]
+                                    #[cfg(not(all(
+                                        test,
+                                        feature = "qualification-oracles-test-only"
+                                    )))]
                                     let injected_spawn_failure = false;
                                     let spawned = if injected_spawn_failure {
                                         Err(io::Error::other(
@@ -1554,23 +1566,23 @@ mod platform {
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             drop(authentication);
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             let test_authorization = self
                 .test_invocation_authorization
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             self.invocation_authorization
                 .authorize_test_process(client)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             self.invocation_authorization
                 .consume(client)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             drop(test_authorization);
             deadline.require_remaining()?;
             let mut request = vec![0_u8; REQUEST_BYTES];
-            #[cfg(test)]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             self.shutdown
                 .request_read_started
                 .store(true, std::sync::atomic::Ordering::Release);
@@ -1600,9 +1612,9 @@ mod platform {
                 [REQUEST_BYTES - REQUEST_AUTH_BYTES..]
                 .try_into()
                 .expect("request authentication field has a fixed size");
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             let profile = self.binding.profile;
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             // SCM_RIGHTS preserves the open-file-description offset. Give each S09 wrapper an
             // independently opened description of the retained pinned image. Ordinary clients
             // retain their historical two-descriptor response.
@@ -1616,7 +1628,7 @@ mod platform {
                 .transpose()?;
             deadline.require_remaining()?;
             let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+            #[cfg(feature = "qualification-oracles-test-only")]
             if let Some(pinned_cargo_image) = &pinned_cargo_image {
                 descriptors.push(pinned_cargo_image.as_fd());
             }
@@ -1867,7 +1879,7 @@ mod platform {
 
     fn random_endpoint() -> io::Result<String> {
         let bytes = random_bytes()?;
-        #[cfg(test)]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         let bytes = {
             let mut bytes = bytes;
             static NEXT_TEST_ENDPOINT: std::sync::atomic::AtomicU64 =
@@ -2026,7 +2038,7 @@ mod platform {
         endpoint
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     mod tests {
         use std::collections::BTreeSet;
         use std::path::PathBuf;
@@ -3447,10 +3459,10 @@ pub(crate) use platform::*;
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 mod unsupported {
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     use std::process::Command;
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     use fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1;
     use fe2o3_artifact_transaction::BuildSession;
 
@@ -3461,14 +3473,14 @@ mod unsupported {
     use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
         fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         S09,
     }
 
@@ -3566,7 +3578,7 @@ mod unsupported {
             Err("Cargo capability transport requires Linux".to_owned())
         }
 
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         pub(crate) fn inherit_for_child(&self, _command: &mut Command) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
         }
@@ -3575,7 +3587,7 @@ mod unsupported {
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+        #[cfg(feature = "qualification-oracles-test-only")]
         pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,

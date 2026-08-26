@@ -422,7 +422,7 @@ struct SourceArtifactVisitor {
 
 impl<'ast> Visit<'ast> for SourceArtifactVisitor {
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
-        if node.attrs.iter().any(is_typed_kernel_attribute) {
+        if node.attrs.iter().any(is_kernel_attribute) {
             self.artifacts.push(format!("{}.hsaco", node.sig.ident));
         }
         visit::visit_item_fn(self, node);
@@ -441,14 +441,18 @@ impl<'ast> Visit<'ast> for SourceArtifactVisitor {
     }
 }
 
-fn is_typed_kernel_attribute(attribute: &Attribute) -> bool {
-    is_typed_kernel_meta(&attribute.meta)
+fn is_kernel_attribute(attribute: &Attribute) -> bool {
+    is_kernel_meta(&attribute.meta)
 }
 
-fn is_typed_kernel_meta(meta: &Meta) -> bool {
-    let Meta::List(list) = meta else {
-        return false;
-    };
+fn is_kernel_meta(meta: &Meta) -> bool {
+    if let Meta::Path(path) = meta {
+        return path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "kernel" && segment.arguments.is_empty());
+    }
+    let Meta::List(list) = meta else { return false };
     let Some(segment) = list.path.segments.last() else {
         return false;
     };
@@ -461,7 +465,7 @@ fn is_typed_kernel_meta(meta: &Meta) -> bool {
         return arguments
             .into_iter()
             .skip(1)
-            .any(|meta| is_typed_kernel_meta(&meta));
+            .any(|meta| is_kernel_meta(&meta));
     }
     if segment.ident != "kernel" || !segment.arguments.is_empty() {
         return false;
@@ -491,7 +495,7 @@ fn is_typed_kernel_meta(meta: &Meta) -> bool {
             _ => return false,
         }
     }
-    typed
+    typed || namespace || list.tokens.is_empty()
 }
 
 fn source_artifact_literals(source: &str) -> Result<Vec<String>, String> {
@@ -722,6 +726,7 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
                 "configured.hsaco",
                 "namespaced.hsaco",
                 "nested.hsaco",
+                "ordinary.hsaco",
                 "reordered.hsaco",
                 "vecadd.hsaco",
             ]
