@@ -3674,24 +3674,6 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn alpha_cov6_arguments_for_lifecycle_test(
-        observed: &ObservedContext,
-    ) -> (AlphaCov6TestArguments, Arc<AtomicUsize>) {
-        let drops = Arc::new(AtomicUsize::new(0));
-        let arguments = AlphaCov6TestArguments {
-            observed: observed.clone(),
-            scale: 1.5,
-            input_address: 0x10_000,
-            output_address: 0x20_000,
-            length: 257,
-            input_owner: Box::leak(Box::new(())),
-            output_owner: Box::leak(Box::new(())),
-            bound: RefCell::new(false),
-            drops: drops.clone(),
-        };
-        (arguments, drops)
-    }
-
     unsafe impl CompilerGeneratedAlphaZetaCov6ArgumentsV1<'static, AlphaCov6TestKernel>
         for AlphaCov6TestArguments
     {

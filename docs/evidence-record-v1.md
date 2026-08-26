@@ -353,14 +353,14 @@ Durable Worker V2 publication, finalized-bundle host admission, currentness
 leases, the authenticated HSA load state machine, generated alpha/zeta safe
 dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter are production code.
 Canonical lease reacquisition and a Worker V3 load-readiness envelope with
-complete bundle/proof and raw/finalized lineage are implemented foundations. Cargo now
-durably publishes and reconstructs that envelope, a cooperative application
-handoff transfers pinned descriptors, and recovered host admission reacquires
-currentness and revalidates the handoff. Those paths remain inert without
-prerequisite authority. The application boundary now admits only the V3
+complete bundle/proof and raw/finalized lineage are implemented foundations.
+Cargo now durably publishes and reconstructs that envelope, and the Worker V3
+application handoff transfers pinned descriptors, reacquires currentness, and
+revalidates the handoff. The recovered Worker V2 host admission and launch
+bridge are deleted. The application boundary now admits only the V3
 protocol and binds pinned descriptors to a sealed application identity and
 fresh occurrence. The blocking production gap is a production
-`WorkerV2PrerequisiteAuthenticatorV1`. Current authenticator implementations
+`WorkerV3VerifierV1`. Current verifier implementations
 are tests/fakes, so compiler, Verus, proof, ABI, and effect evidence cannot yet
 be authentically promoted into safe load/launch authority.
 Neither adapter nor either hardware observation may restamp a declaration

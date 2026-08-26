@@ -281,12 +281,13 @@ refinement, or repository-wide CUDA-Oxide parity.
 3. Implemented: Cargo durably publishes and reconstructs the canonical bounded
    Worker V3 load-readiness envelope containing the container, bundle/proof
    index, descriptor lineage, raw/finalized identities, and published claim.
-4. Implemented inert foundation: recovered host admission consumes that
-   envelope with a freshly reacquired lease. The production V3 application
-   handoff transfers read-only pinned descriptors to an identity-pinned sealed
-   application and binds them to a fresh occurrence. Prerequisite
-   authentication and a generated-safe MI300X replay without the external
-   HSACO test handoff remain open.
+4. Implemented production foundation: the V3 application handoff consumes that
+   envelope with a freshly reacquired lease, transfers read-only pinned
+   descriptors to an identity-pinned sealed application, and binds them to a
+   fresh occurrence. The separate recovered Worker V2 host admission and launch
+   bridge are deleted. A production `WorkerV3VerifierV1` implementation and a
+   generated-safe MI300X replay without the external HSACO test handoff remain
+   open.
 5. Implemented inert foundation: bounded physical machine-effect evidence and
    executable-evidence records bind reviewed mechanics and identities. Direct
    extraction of each final alpha/zeta entry's complete machine effects and
@@ -295,9 +296,9 @@ refinement, or repository-wide CUDA-Oxide parity.
    proof inputs, tools, identities, and freshness. They grant no proof authority,
    are not compiler or machine-code refinement, and are not production-bound to
    the final payload.
-7. Implement a production `WorkerV2PrerequisiteAuthenticatorV1` only after the
-   compiler, Verus, proof-to-executable, Rust-layout, and machine-effect inputs
-   are reviewed and immutable; reject mutation and stale replay.
+7. Implement a production `WorkerV3VerifierV1` only after the compiler, Verus,
+   proof-to-executable, Rust-layout, and machine-effect inputs are reviewed and
+   immutable; reject mutation and stale replay.
 8. Implemented API foundation: safe mutable splits retain exact disjoint
    allocation-relative regions with unit and compile-fail coverage. Mechanical
    Verus correspondence and general same-allocation MI300X execution remain.

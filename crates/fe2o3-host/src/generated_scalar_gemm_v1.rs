@@ -228,8 +228,6 @@ mod worker_v2 {
         AbiField, AbiKind, AliasClass, ArgumentOwnership, BlockSize, Mutability, ScalarType,
         TargetIdentity,
     };
-    #[cfg(any(test, feature = "hardware-test-hooks"))]
-    use fe2o3_artifacts::{AbiLayout, Dimensions, LaunchContract, Name};
     use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
     use std::fmt;
     use std::ptr::NonNull;
@@ -1145,91 +1143,6 @@ mod worker_v2 {
     impl std::error::Error for ScalarGemmV1GeometryError {}
     impl std::error::Error for ScalarGemmV1PhysicalKernargError {}
 
-    #[cfg(any(test, feature = "hardware-test-hooks"))]
-    pub(crate) fn scalar_gemm_v1_test_abi() -> AbiLayout {
-        let scalar_u32 = |name: &str, offset: u64| {
-            AbiField::new(
-                Name::new(name).unwrap(),
-                offset,
-                4,
-                4,
-                AbiKind::Scalar(ScalarType::U32),
-                Mutability::Immutable,
-                Access::ByValue,
-                AddressSpace::Value,
-                u32::scalar_type_identity_v1(PointerWidth::Bits64),
-                ArgumentOwnership::ByValue,
-                AliasClass::Value,
-            )
-            .unwrap()
-        };
-        let slice = |name: &str, offset: u64, read_write: bool| {
-            AbiField::new(
-                Name::new(name).unwrap(),
-                offset,
-                16,
-                8,
-                AbiKind::Slice {
-                    element_size: 4,
-                    element_alignment: 4,
-                },
-                if read_write {
-                    Mutability::Mutable
-                } else {
-                    Mutability::Immutable
-                },
-                if read_write {
-                    Access::ReadWrite
-                } else {
-                    Access::ReadOnly
-                },
-                AddressSpace::Global,
-                if read_write {
-                    f32::disjoint_slice_type_identity_v1(PointerWidth::Bits64)
-                } else {
-                    f32::shared_slice_type_identity_v1(PointerWidth::Bits64)
-                },
-                if read_write {
-                    ArgumentOwnership::UniqueBorrow
-                } else {
-                    ArgumentOwnership::SharedBorrow
-                },
-                if read_write {
-                    AliasClass::Exclusive
-                } else {
-                    AliasClass::SharedReadOnly
-                },
-            )
-            .unwrap()
-        };
-        AbiLayout::new(
-            64,
-            8,
-            PointerWidth::Bits64,
-            vec![
-                slice("a", 0, false),
-                slice("b", 16, false),
-                slice("c", 32, true),
-                scalar_u32("m", 48),
-                scalar_u32("n", 52),
-                scalar_u32("k", 56),
-            ],
-        )
-        .unwrap()
-    }
-
-    #[cfg(any(test, feature = "hardware-test-hooks"))]
-    pub(crate) fn scalar_gemm_v1_test_launch() -> LaunchContract {
-        LaunchContract::new(
-            1,
-            BlockSize::Exact(Dimensions::new(SCALAR_GEMM_V1_BLOCK_X, 1, 1).unwrap()),
-            Dimensions::new(u32::MAX, 1, 1).unwrap(),
-            0,
-            0,
-        )
-        .unwrap()
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1308,7 +1221,7 @@ mod worker_v2 {
         }
 
         fn abi() -> AbiLayout {
-            super::scalar_gemm_v1_test_abi()
+            AbiLayout::new(64, 8, PointerWidth::Bits64, fields()).unwrap()
         }
 
         fn plan(seed: u8) -> GeneratedArgumentPackingPlanV1 {
@@ -1380,7 +1293,14 @@ mod worker_v2 {
         }
 
         fn launch() -> LaunchContract {
-            super::scalar_gemm_v1_test_launch()
+            LaunchContract::new(
+                1,
+                BlockSize::Exact(Dimensions::new(SCALAR_GEMM_V1_BLOCK_X, 1, 1).unwrap()),
+                Dimensions::new(u32::MAX, 1, 1).unwrap(),
+                0,
+                0,
+            )
+            .unwrap()
         }
 
         fn physical_facts() -> ScalarGemmPhysicalFacts {
@@ -1897,5 +1817,3 @@ pub use worker_v2::{
     ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError,
     ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
 };
-#[cfg(any(test, feature = "hardware-test-hooks"))]
-pub(crate) use worker_v2::{scalar_gemm_v1_test_abi, scalar_gemm_v1_test_launch};

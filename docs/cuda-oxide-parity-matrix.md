@@ -562,11 +562,11 @@ The detailed dependencies and exit criteria are in
   admission. Exact named alpha/zeta roles now receive macro-generated packing,
   preparation, and synchronous dispatch adapters, while other signatures remain
   inert. Durable publication, finalized-bundle admission, currentness leasing,
-  authenticated loading, required-envelope persistence/recovery, recovered host
-  admission, and the reviewed runtime adapter exist. The envelope and recovered
-  descriptor remain authority-free, and only test/fake
-  `WorkerV2PrerequisiteAuthenticatorV1` implementations can promote evidence
-  into the generated adapters. The generated-safe MI300X run uses fake
+  authenticated loading, required-envelope persistence/recovery, and the
+  reviewed runtime adapter exist. The recovered Worker V2 host admission and
+  launch bridge are deleted; Worker V3 is the only production application
+  route. Only test/fake verifier implementations can currently promote evidence
+  into dispatch authority. The generated-safe MI300X run uses fake
   prerequisite authority. Arbitrary Rust layouts, authenticated machine-code
   effect verification, architecture breadth, application handoff, and
   production authenticated dispatch are incomplete, so both rows remain
@@ -605,10 +605,10 @@ The detailed dependencies and exit criteria are in
   reconciles the authenticated complete implicit-kernarg contract with AMDHSA
   metadata and produced the digest-pinned MI300X hardware artifact. Required
   mode now persists a measured upstream envelope-input capsule and reconstructs
-  the exact canonical envelope across restart; recovered host admission
-  revalidates the durable publication. Neither path authenticates compiler,
-  proof, or effect evidence or grants load/launch authority, and no production
-  prerequisite authenticator promotes that evidence into generated dispatch.
+  the exact canonical envelope across restart. The production Worker V3 handoff
+  revalidates the durable publication; the Worker V2 host recovery route is
+  deleted. No production verifier yet authenticates compiler, proof, or effect
+  evidence and promotes it into generated dispatch.
   This is not general compiler production, all-target loading, or machine-code
   refinement evidence.
 - Supplemental rows S04 and S05: bounded `DeviceCopy`, pinned-memory, event,

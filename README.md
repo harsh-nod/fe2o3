@@ -544,20 +544,13 @@ turn the foundations below into end-to-end features.
   descriptors have explicit/complete COV6 kernarg sizes `40/296` and `56/312`.
   Exact role, name, signature, mutability, or layout substitutions fail closed.
 
-  The macro generates signature-specific `Arguments` and exact alpha/zeta host
-  adapters from that same typed source model. The adapters retain allocation
-  borrows, reconstruct the named ABI, validate the selected Worker V2 entry,
-  pack the explicit prefix, admit aliases and geometry, allocate the complete
-  aligned COV6 kernarg, initialize the implicit region, and expose synchronous
-  preparation/dispatch. Other General-V3 signatures still receive inert
-  `Arguments` only. This generated path is implemented, but it is not yet a
-  usable production authority path. Durable Worker V2 publication,
-  finalized-bundle host admission, a currentness lease, the authenticated load
-  state machine, and the reviewed `fe2o3-hsa-runtime` adapter exist. The missing
-  bridge is a production implementation of
-  `WorkerV2PrerequisiteAuthenticatorV1`: only test/fake implementations can
-  currently promote compiler, Verus/proof, and effect evidence into the
-  generated safe preparation path.
+  The macro generates signature-specific `Arguments` for the workload-neutral
+  Worker V3 host contract. The generic adapter retains allocation borrows,
+  reconstructs the named ABI, validates the selected Worker V3 descriptor,
+  packs the explicit prefix, admits aliases and geometry, allocates the complete
+  aligned COV6 kernarg, initializes the implicit region, and exposes synchronous
+  preparation/dispatch. Production verifier implementations are still needed
+  to promote compiler, Verus/proof, and effect evidence into that path.
 
   The rustc path recognizes only the exact alpha/zeta MIR shapes and lowers
   their trusted thread index, `Option`-guarded `DisjointSlice::get_mut`, slice
@@ -565,24 +558,12 @@ turn the foundations below into end-to-end features.
   contract through canonical Kernel IR. Unsupported targets, float policy,
   names, signatures, branches, or payload provenance fail closed. This is an
   exact lowering profile, not general Rust GPU lowering.
-- The bounded Worker V2 host path can admit every manifest kernel that shares
-  one exact finalized payload and select two distinct compiler-generated marker
-  types from that admitted executable identity. Selection rechecks marker,
-  binding, target, ABI/effects, physical-layout, and executable identities and
-  retains a borrow of the admitted bundle. The reviewed HSA lifecycle can load
-  one code object and resolve a fixed set of distinct symbols into a non-clone
-  kernel set that borrows the executable; duplicate requests and native symbol,
-  kernel-object, or derived-identity aliases are rejected, and safe Rust cannot
-  unload the executable while the set is live. These are typed admission,
-  symbol-resolution, and lifetime foundations. Exact alpha/zeta generated
-  adapters add named-ABI packing and synchronous safe dispatch on top of this
-  state machine. General kernarg derivation remains absent, and the exact
-  adapters cannot enter their production safe path until a production
-  `WorkerV2PrerequisiteAuthenticatorV1` promotes the required evidence.
-  Recovery can independently reopen the exact durable publication, reacquire a
-  fresh currentness lease, revalidate finalized bytes and descriptor lineage,
-  and return an inert recovered-bundle descriptor. That descriptor carries no
-  bytes, authentication, load, launch, or prerequisite authority.
+- The recovered Worker V2 host descriptor, launch-metadata bridge, synchronous
+  HSA handoff, and Scalar GEMM Worker V2 hardware harness are deleted. The
+  reviewed HSA adapter and physical observations remain shared mechanics for
+  the production Worker V3 lifecycle. Qualification-only Worker V2 bundle and
+  exact generated dispatch code are being removed next; they grant no
+  production authority.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while

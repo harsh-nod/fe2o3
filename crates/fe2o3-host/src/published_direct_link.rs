@@ -1556,67 +1556,6 @@ pub(crate) mod tests {
         )
     }
 
-    pub(crate) fn scalar_gemm_v1_hsaco_for_target(target: &str) -> TestHsaco {
-        let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
-        let slice_arguments = |name: &str, offset: u64, access: &'static str| {
-            vec![
-                test_explicit_argument(
-                    &format!("{name}_ptr"),
-                    offset,
-                    8,
-                    "global_buffer",
-                    Some("global"),
-                    Some(8),
-                    Some(access),
-                    Some(access),
-                ),
-                test_explicit_argument(
-                    &format!("{name}_len"),
-                    offset + 8,
-                    8,
-                    "by_value",
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-            ]
-        };
-        let mut arguments = slice_arguments("a", 0, "read_only");
-        arguments.extend(slice_arguments("b", 16, "read_only"));
-        arguments.extend(slice_arguments("c", 32, "read_write"));
-        for (name, offset) in [("m", 48), ("n", 52), ("k", 56)] {
-            arguments.push(test_explicit_argument(
-                name, offset, 4, "by_value", None, None, None, None,
-            ));
-        }
-        let metadata = test_metadata(
-            target,
-            vec![test_metadata_kernel_with_wavefront(
-                "scalar_gemm_v1",
-                "scalar_gemm_v1.kd",
-                arguments,
-                320,
-                8,
-                0,
-                private_segment_fixed_size,
-                Some([256, 1, 1]),
-                [None; 3],
-                false,
-                if target.starts_with("gfx94") { 64 } else { 32 },
-            )],
-        );
-        binding_hsaco_with_kernel_names(
-            metadata,
-            target,
-            0,
-            private_segment_fixed_size,
-            320,
-            ("scalar_gemm_v1", "scalar_gemm_v1.kd"),
-            None,
-        )
-    }
-
     pub(crate) fn alpha_zeta_cov6_hsaco_for_target(target: &str) -> TestHsaco {
         let private_segment_fixed_size: u32 = if target.starts_with("gfx94") { 0 } else { 16 };
         let slice_arguments = |name: &str, offset: u64, access: &'static str| {

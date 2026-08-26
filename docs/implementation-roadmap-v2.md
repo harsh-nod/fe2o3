@@ -359,12 +359,12 @@ COV6, raw hardware, and generated-safe runtime-composition evidence. Both
 harnesses still inject the exported HSACO, and the safe harness uses an
 explicitly fake authenticator. Follow-on work now provides canonical durable
 lease reacquisition, sealed finalizer intent, a bounded Worker V2 envelope,
-Cargo publication and reconstruction of that inert envelope, cooperative
-descriptor handoff, recovered inert host admission, and one-history persistent
-multi-kernel proof admission. Bounded alpha/zeta proof records and physical
-machine-effect records also exist. The handoff is not protected production
+Cargo publication and reconstruction of that inert envelope, the production V3
+descriptor handoff, and one-history persistent multi-kernel proof admission.
+The recovered Worker V2 host route is deleted. Bounded alpha/zeta proof records
+and physical machine-effect records also exist. The handoff is not protected production
 authority, the records are not production-bound to compiler origin and the
-exact payload, and no production `WorkerV2PrerequisiteAuthenticatorV1` exists.
+exact payload, and no production `WorkerV3VerifierV1` exists.
 Therefore this is not production proof-authenticated safe
 dispatch, no parity row is promoted solely by this checkpoint,
 repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
@@ -427,12 +427,12 @@ earlier authority transition.
    adapter is compiled outside tests and durably publishes and reconstructs the
    canonical envelope from sealed lineage before completing the build attempt.
    This was implemented ahead of W1 authority and deliberately grants none.
-7. **Implemented inert foundation: recovered host admission and cooperative
-   application handoff.** The host reacquires a fresh lease and rechecks the
-   envelope, lineage, semantic and physical ABI, currentness, and marker facts.
-   Cargo transfers only pinned read-only descriptors. A protected production
-   handoff and generated-safe MI300X replay without external HSACO injection
-   remain open.
+7. **Implemented production foundation: Worker V3 application handoff.** The
+   host reacquires a fresh lease and rechecks the envelope, lineage, semantic and
+   physical ABI, currentness, and marker facts. Cargo transfers only pinned
+   read-only descriptors. The separate recovered Worker V2 host admission and
+   launch bridge are deleted. A production verifier and generated-safe MI300X
+   replay without external HSACO injection remain open.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
    closed call graph and physical memory sites. Production admission must still
@@ -679,8 +679,8 @@ Durable publication, finalized-bundle admission, currentness lease
 revalidation, the authenticated load state machine, generated alpha/zeta safe
 dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, Cargo
 publication of the canonical load envelope, V3-only production descriptor
-handoff, recovered inert host admission, and safe split mutable views already
-exist. Still missing is a production `WorkerV2PrerequisiteAuthenticatorV1` that
+handoff, and safe split mutable views already exist. The recovered Worker V2
+host route is deleted. Still missing is a production `WorkerV3VerifierV1` that
 can promote the carried evidence into authorized HSA load and launch custody.
 Bounded machine-effect and Verus proof records are not production-bound to
 compiler origin and the exact artifact. These are the ordered critical

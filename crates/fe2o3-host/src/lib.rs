@@ -14,16 +14,12 @@ mod generated_vecadd;
 mod generated_worker_v3_dispatch;
 mod hsa_executable_lifecycle;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod launch_kernel_v2_bridge;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod loaded_kernel;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
 mod published_direct_link;
 mod published_hsaco_inspection;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod recovered_worker_v2_admission;
 mod recovered_worker_v3_admission;
 mod tile_interop;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -226,16 +222,6 @@ pub use hsa_executable_lifecycle::{
 };
 #[doc(hidden)]
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use launch_kernel_v2_bridge::{
-    CurrentRecoveredLaunchKernelMetadataV2, Gfx942DynamicLdsProjectionV2, Gfx942ImplicitAbiKindV2,
-    Gfx942ImplicitAbiParameterV2, Gfx942OccupancyMetadataStatusV2,
-    Gfx942PhysicalKernelSignatureIdentityV2, Gfx942PhysicalKernelSignatureV2,
-    Gfx942PhysicalLaunchProjectionV2, Gfx942PhysicalResourceProjectionV2,
-    LaunchKernelMetadataBridgeErrorV2, OccupancyDependentLaunchAdmissionErrorV2,
-    bind_current_recovered_launch_kernel_metadata_v2,
-};
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use loaded_kernel::{GeneratedAdmittedLaunch, LoadedKernelLoadError};
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use loaded_kernel::{
@@ -261,18 +247,6 @@ pub use published_hsaco_inspection::{
     PublishedKernelPhysicalLayoutV1, PublishedLoadAdmissionError,
     PublishedPhysicalArgumentLayoutV1, PublishedPhysicalHiddenArgumentLayoutV1,
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use recovered_worker_v2_admission::{
-    RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
-    RecoveredWorkerV2SynchronousHsaDispatchError, RecoveredWorkerV2SynchronousHsaHandoffError,
-    RecoveredWorkerV2SynchronousHsaHandoffV1, RecoveredWorkerV2SynchronousHsaPrepareError,
-    RecoveredWorkerV2SynchronousHsaPrepareResultV1,
-    RecoveredWorkerV2SynchronousHsaPreparedInvocationV1,
-    RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareError,
-    RecoveredWorkerV2SynchronousHsaScalarGemmV1PrepareResultV1,
-    RecoveredWorkerV2SynchronousHsaScalarGemmV1PreparedInvocationV1,
-    RecoveredWorkerV2SynchronousHsaUnloadError,
 };
 pub use recovered_worker_v3_admission::{
     RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,

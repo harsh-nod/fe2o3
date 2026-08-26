@@ -1,7 +1,0 @@
-error[E0277]: the trait bound `AdmittedFinalizedWorkerV2BundleV1: From<RecoveredWorkerV2PinnedDescriptorV1>` is not satisfied
- --> tests/ui/recovered_worker_v2_admission/cannot_convert_into_admission.rs:7:15
-  |
-7 |     recovered.into()
-  |               ^^^^ the trait `From<RecoveredWorkerV2PinnedDescriptorV1>` is not implemented for `AdmittedFinalizedWorkerV2BundleV1`
-  |
-  = note: required for `RecoveredWorkerV2PinnedDescriptorV1` to implement `Into<AdmittedFinalizedWorkerV2BundleV1>`

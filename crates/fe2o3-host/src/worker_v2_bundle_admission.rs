@@ -19,14 +19,8 @@ use fe2o3_artifacts::{
     DirectLinkLinkedOutputIdentityV1, PayloadDigest, ProofRecordV1, SelectedNativeKernel,
     ValidatedDirectLinkBundleEvidenceV1,
 };
-#[cfg(test)]
-use fe2o3_artifacts::{DigestBytes, DirectLinkBindingSourceV1};
 use fe2o3_hsaco::{CodeObjectVersion, InspectedKernelBindings, KernelDescriptorBinding};
 use fe2o3_hsaco_finalize::PreparedWorkerV2HsacoPublicationV1;
-#[cfg(test)]
-use fe2o3_kernel_descriptor::KernelId;
-#[cfg(test)]
-use fe2o3_worker_v2_bundle::{CompilerTransactionEvidenceCapsuleV2, WorkerV2LoadEnvelopeV1};
 use fe2o3_worker_v2_bundle::{
     CompilerTransactionEvidenceIdentityV2, WorkerV2LoadEnvelopeIdentityV1,
 };
@@ -170,8 +164,6 @@ pub struct AdmittedFinalizedWorkerV2BundleV1 {
 
 enum RetainedWorkerV2PreparationV1 {
     Production(Box<PreparedWorkerV2HsacoPublicationV1>),
-    #[cfg(test)]
-    Recovered(Box<WorkerV2LoadEnvelopeV1>),
     #[cfg(any(test, feature = "hardware-test-hooks"))]
     Test {
         attempt: BuildAttempt,
@@ -183,8 +175,6 @@ impl RetainedWorkerV2PreparationV1 {
     fn attempt(&self) -> BuildAttempt {
         match self {
             Self::Production(prepared) => prepared.attempt(),
-            #[cfg(test)]
-            Self::Recovered(envelope) => envelope.published_claim().plan().attempt(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { attempt, .. } => *attempt,
         }
@@ -193,8 +183,6 @@ impl RetainedWorkerV2PreparationV1 {
     fn exact_bytes(&self) -> &[u8] {
         match self {
             Self::Production(prepared) => prepared.exact_bytes(),
-            #[cfg(test)]
-            Self::Recovered(envelope) => envelope.raw_hsaco().bytes(),
             #[cfg(any(test, feature = "hardware-test-hooks"))]
             Self::Test { exact_bytes, .. } => exact_bytes,
         }
@@ -251,60 +239,6 @@ impl AdmittedFinalizedWorkerV2BundleV1 {
             RetainedWorkerV2PreparationV1::Production(Box::new(prepared)),
             parts,
             None,
-        ))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn admit_recovered(
-        envelope: WorkerV2LoadEnvelopeV1,
-        compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
-        current_lease: DurableCurrentLinkPublicationLeaseV1,
-        kernel_id: KernelId,
-        observed: &ObservedContext,
-    ) -> Result<Self, FinalizedWorkerV2BundleAdmissionError> {
-        let expectation = envelope
-            .direct_link_evidence()
-            .bindings()
-            .first()
-            .ok_or(FinalizedWorkerV2BundleAdmissionError::EnvelopeRevalidation)?
-            .expectation()
-            .clone();
-        let source = DirectLinkBindingSourceV1::new(envelope.container(), expectation);
-        let validated_bundle = envelope
-            .direct_link_evidence()
-            .validate_against(envelope.bundle_index(), &[envelope.container()], &[source])
-            .map_err(|_| FinalizedWorkerV2BundleAdmissionError::EnvelopeRevalidation)?;
-        let selected = envelope
-            .container()
-            .select_native_kernel(DigestBytes::from_bytes(*kernel_id.as_bytes()))
-            .map_err(|_| FinalizedWorkerV2BundleAdmissionError::SelectedKernelSubstitution)?;
-        let claim = envelope.published_claim();
-        validate_compiler_transaction_lineage(&envelope, &compiler_transaction)?;
-        let full_lineage = RecoveredWorkerV2FullLineageV2 {
-            envelope: envelope.identity(),
-            descriptor_lineage: envelope
-                .descriptor_lineage()
-                .canonical_bytes()
-                .into_boxed_slice(),
-            proof_records: envelope.proof_records().to_vec().into_boxed_slice(),
-            raw_hsaco: envelope.raw_hsaco().identity(),
-            compiler_transaction: compiler_transaction.identity(),
-        };
-        let parts = admit_parts_with_lease(
-            claim.plan().attempt(),
-            envelope.raw_hsaco().bytes(),
-            claim.receipt(),
-            current_lease,
-            &validated_bundle,
-            envelope.container(),
-            selected,
-            observed,
-        )?;
-
-        Ok(Self::from_parts(
-            RetainedWorkerV2PreparationV1::Recovered(Box::new(envelope)),
-            parts,
-            Some(full_lineage),
         ))
     }
 
@@ -558,53 +492,6 @@ struct AdmissionParts {
     inspected: InspectedKernelBindings,
     kernels: Box<[PublishedKernelPhysicalLayoutV1]>,
     selected_kernel_index: usize,
-}
-
-#[cfg(test)]
-fn validate_compiler_transaction_lineage(
-    envelope: &WorkerV2LoadEnvelopeV1,
-    compiler_transaction: &CompilerTransactionEvidenceCapsuleV2,
-) -> Result<(), FinalizedWorkerV2BundleAdmissionError> {
-    let expectation = envelope
-        .direct_link_evidence()
-        .bindings()
-        .first()
-        .ok_or(FinalizedWorkerV2BundleAdmissionError::EnvelopeRevalidation)?
-        .expectation();
-    let container = DirectLinkContainerIdentityV1::new(
-        DIRECT_LINK_EVIDENCE_DIGEST_ALGORITHM.calculate(&envelope.container().to_bytes()),
-    );
-    let checks = [
-        (
-            compiler_transaction.worker_request() == expectation.request_identity(),
-            "direct-link request",
-        ),
-        (
-            compiler_transaction.worker_response() == expectation.response_identity(),
-            "direct-link response",
-        ),
-        (
-            compiler_transaction.target() == envelope.published_claim().plan().scope().target(),
-            "target",
-        ),
-        (
-            compiler_transaction.raw_hsaco() == expectation.linked_output_identity(),
-            "raw HSACO",
-        ),
-        (
-            compiler_transaction.finalized_hsaco() == expectation.finalized_payload_identity(),
-            "finalized HSACO",
-        ),
-        (compiler_transaction.artifact() == container, "container"),
-    ];
-    for (matches, field) in checks {
-        if !matches {
-            return Err(
-                FinalizedWorkerV2BundleAdmissionError::CompilerTransactionLineageMismatch(field),
-            );
-        }
-    }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1208,8 +1095,7 @@ pub(crate) mod tests {
         make_single_hsaco_fixture, make_single_hsaco_fixture_with_kernel_id,
         make_single_hsaco_fixture_with_names_and_kernel_id, make_two_hsaco_fixture_with_kernel_ids,
         make_two_hsaco_fixture_with_kernel_ids_and_abis, physical_test_abi,
-        scalar_gemm_v1_hsaco_for_target, typed_vecadd_hsaco_for_target,
-        typed_vecadd_two_kernel_hsaco_for_target,
+        typed_vecadd_hsaco_for_target, typed_vecadd_two_kernel_hsaco_for_target,
     };
     use fe2o3_artifact_transaction::{
         AtomicPublicationIdentityV1, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
@@ -1524,34 +1410,6 @@ pub(crate) mod tests {
         finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
     }
 
-    fn scalar_gemm_v1_admission_fixture(seed: u8) -> AdmissionFixture {
-        let hsaco = scalar_gemm_v1_hsaco_for_target(REQUIRED_GFX942_TEST_TARGET);
-        let abi = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_abi();
-        let launch = crate::generated_scalar_gemm_v1::scalar_gemm_v1_test_launch();
-        let kernel_binding = [0x71; 32];
-        let kernel_id = derive_generated_kernel_identity_v2(
-            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-            kernel_binding,
-            "scalar_gemm_v1",
-            "scalar_gemm_v1",
-            repeated_digest(seed.wrapping_add(0x40)),
-            repeated_digest(seed.wrapping_add(0x50)),
-            &abi,
-            &launch,
-        );
-        let fixture = make_single_hsaco_fixture_with_names_and_kernel_id(
-            seed,
-            hsaco.bytes.clone(),
-            REQUIRED_GFX942_TEST_TARGET,
-            "scalar_gemm_v1",
-            "scalar_gemm_v1",
-            abi,
-            launch,
-            kernel_id,
-        );
-        finish_admission_fixture(seed, 0, fixture, hsaco.bytes.clone(), hsaco.bytes)
-    }
-
     fn renamed_abi_field(template: &AbiField, name: &str, offset: u64) -> AbiField {
         AbiField::new(
             Name::new(name).unwrap(),
@@ -1775,49 +1633,6 @@ pub(crate) mod tests {
         seed: u8,
     ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
         let input = alpha_cov6_admission_fixture(seed);
-        let validated = input.fixture.validated();
-        let selected_kernel = selected(&input.fixture);
-        let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);
-        let parts = admit_parts(
-            input.attempt,
-            &input.exact_bytes,
-            input.publication,
-            &validated,
-            &input.fixture.container,
-            selected_kernel,
-            &observed,
-        )
-        .unwrap();
-        let admission = AdmittedFinalizedWorkerV2BundleV1 {
-            prepared: RetainedWorkerV2PreparationV1::Test {
-                attempt: input.attempt,
-                exact_bytes: input.exact_bytes.into_boxed_slice(),
-            },
-            current_lease: parts.current_lease,
-            receipt: parts.receipt,
-            published: parts.published,
-            bundle_index_identity: parts.bundle_index_identity,
-            bundle_evidence_identity: parts.bundle_evidence_identity,
-            binding_index: parts.binding_index,
-            container_identity: parts.container_identity,
-            linked_output_identity: parts.linked_output_identity,
-            finalization_identity: parts.finalization_identity,
-            finalized_payload_identity: parts.finalized_payload_identity,
-            artifact_identity: parts.artifact_identity,
-            kernel_identities: parts.kernel_identities,
-            device: parts.device,
-            inspected: parts.inspected,
-            kernels: parts.kernels,
-            selected_kernel_index: parts.selected_kernel_index,
-            full_lineage: Some(test_full_lineage(&input.fixture, seed)),
-        };
-        (admission, input._directory)
-    }
-
-    pub(crate) fn admitted_scalar_gemm_v1_for_lifecycle_test(
-        seed: u8,
-    ) -> (AdmittedFinalizedWorkerV2BundleV1, TestDirectory) {
-        let input = scalar_gemm_v1_admission_fixture(seed);
         let validated = input.fixture.validated();
         let selected_kernel = selected(&input.fixture);
         let observed = make_observed_for(seed.into(), REQUIRED_GFX942_TEST_TARGET);

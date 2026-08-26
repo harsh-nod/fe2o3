@@ -53,25 +53,9 @@ note: found an item that was configured out
   |
   | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
   |          --------------------------------------------------- the item is gated here
-  | pub use launch_kernel_v2_bridge::{
-  |     CurrentRecoveredLaunchKernelMetadataV2, Gfx942DynamicLdsProjectionV2, Gfx942ImplicitAbiKindV2,
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> src/lib.rs
-  |
-  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-  |          --------------------------------------------------- the item is gated here
   | pub use generated_vecadd::{
   |     GeneratedVecAddKernelV1, GeneratedVecAddLoadError, GeneratedVecAddPrepareError,
   |     ^^^^^^^^^^^^^^^^^^^^^^^
-note: found an item that was configured out
- --> src/lib.rs
-  |
-  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-  |          --------------------------------------------------- the item is gated here
-  | pub use recovered_worker_v2_admission::{
-  |     RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
-  |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: a similar name exists in the module
   |
 2 -     AdmittedFinalizedWorkerV2BundleV1, AuthenticatedWorkerV2ExecutableV1,

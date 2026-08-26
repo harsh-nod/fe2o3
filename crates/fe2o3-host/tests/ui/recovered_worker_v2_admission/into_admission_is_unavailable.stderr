@@ -1,5 +1,0 @@
-error[E0599]: no method named `into_admission` found for struct `RecoveredWorkerV2PinnedDescriptorV1` in the current scope
- --> tests/ui/recovered_worker_v2_admission/into_admission_is_unavailable.rs:7:15
-  |
-7 |     recovered.into_admission()
-  |               ^^^^^^^^^^^^^^ method not found in `RecoveredWorkerV2PinnedDescriptorV1`
