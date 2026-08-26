@@ -23,7 +23,6 @@ legacy-hsa-runtime = [
     "fe2o3-hsa-runtime/qualification-oracles-test-only",
     "fe2o3-host/qualification-oracles-test-only",
 ]
-worker-v2-host-consumer-fixture = ["legacy-hsa-runtime", "fe2o3-host/hardware-test-hooks"]
 worker-v3-host-consumer-fixture = ["dep:fe2o3-host", "fe2o3-host/hardware-test-hooks"]
 worker-v3-envelope-integration-test-only = [
     "qualification-oracles-test-only",
@@ -141,20 +140,6 @@ bench = false
 [[bin]]
 name = "cargo-fe2o3-runner-chain-fixture"
 path = "tests/fixtures/runner_chain_fixture.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "cargo-fe2o3-host-consumer-input-fixture"
-path = "tests/fixtures/host_consumer_input_fixture.rs"
-required-features = ["qualification-oracles-test-only"]
-test = false
-bench = false
-
-[[bin]]
-name = "cargo-fe2o3-worker-v2-host-consumer-app-fixture"
-path = "tests/fixtures/worker_v2_host_consumer_app_fixture.rs"
-required-features = ["worker-v2-host-consumer-fixture"]
 test = false
 bench = false
 

@@ -199,12 +199,6 @@ fn envelope_input_fixture() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-envelope-input-fixture"))
 }
 
-fn host_consumer_input_fixture() -> &'static Path {
-    Path::new(env!(
-        "CARGO_BIN_EXE_cargo-fe2o3-host-consumer-input-fixture"
-    ))
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -652,7 +646,6 @@ fn artifact_dir(directory: &TestDirectory) -> PathBuf {
 
 struct StaticApplicationFixtures {
     protocol: PathBuf,
-    host_consumer: PathBuf,
     no_protocol: PathBuf,
 }
 
@@ -683,11 +676,9 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
                 "-p",
                 "cargo-fe2o3",
                 "--features",
-                "worker-v2-host-consumer-fixture",
+                "qualification-oracles-test-only",
                 "--bin",
                 "cargo-fe2o3-runner-app-fixture",
-                "--bin",
-                "cargo-fe2o3-worker-v2-host-consumer-app-fixture",
                 "--bin",
                 "cargo-fe2o3-runner-chain-fixture",
             ])
@@ -697,7 +688,6 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
         let directory = target.join("x86_64-unknown-linux-gnu/debug");
         StaticApplicationFixtures {
             protocol: directory.join("cargo-fe2o3-runner-app-fixture"),
-            host_consumer: directory.join("cargo-fe2o3-worker-v2-host-consumer-app-fixture"),
             no_protocol: directory.join("cargo-fe2o3-runner-chain-fixture"),
         }
     })
@@ -705,10 +695,6 @@ fn static_application_fixtures() -> &'static StaticApplicationFixtures {
 
 fn application_fixture() -> &'static Path {
     &static_application_fixtures().protocol
-}
-
-fn host_consumer_application_fixture() -> &'static Path {
-    &static_application_fixtures().host_consumer
 }
 
 fn no_protocol_application_fixture() -> &'static Path {
@@ -787,27 +773,6 @@ where
         .arg(application)
         .args(arguments);
     command
-}
-
-fn host_consumer_runner_command(directory: &TestDirectory, report: &Path) -> Command {
-    let capsule = directory.0.join("host-consumer.compiler-transaction");
-    let kernel = directory.0.join("host-consumer.kernel-id");
-    let envelope = envelope_paths(directory).pop().unwrap();
-    let generated = Command::new(host_consumer_input_fixture())
-        .args([&envelope, &capsule, &kernel])
-        .output()
-        .unwrap();
-    assert!(generated.status.success(), "{}", stderr(&generated));
-    application_runner_command_with_args(
-        directory,
-        host_consumer_application_fixture(),
-        [
-            capsule.as_os_str(),
-            kernel.as_os_str(),
-            OsStr::new("gfx942:xnack-"),
-            report.as_os_str(),
-        ],
-    )
 }
 
 fn run_application_fixture(directory: &TestDirectory, report: &Path) -> Output {
@@ -981,137 +946,6 @@ fn scrub_test_harness_dynamic_loader_environment(command: &mut Command) {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-const CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC: &[u8] =
-    b"host consumer fixture: application handoff commitment does not bind the envelope and current executable";
-const CHILD_AMD_WAVE_DIAGNOSTIC: &[u8] = b"host consumer fixture: failed to recover inherited Worker V2 envelope: Worker V2 host admission failed: HIP observations are too coarse to establish required capability AmdWave";
-const PARENT_TRUNCATED_ACK_DIAGNOSTIC: &[u8] = b"cargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (0 bytes)";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ApplicationRejectionDiagnostic {
-    CompletedParentZeroByteAcknowledgment,
-}
-
-impl ApplicationRejectionDiagnostic {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::CompletedParentZeroByteAcknowledgment => {
-                "completed-parent-zero-byte-acknowledgment"
-            }
-        }
-    }
-}
-
-fn classify_application_rejection_diagnostic(
-    stderr: &[u8],
-    child_diagnostic: &[u8],
-) -> Option<ApplicationRejectionDiagnostic> {
-    let stderr = stderr.strip_suffix(b"\n").unwrap_or(stderr);
-    let child_prefix = stderr.strip_suffix(PARENT_TRUNCATED_ACK_DIAGNOSTIC)?;
-    if child_diagnostic.starts_with(child_prefix)
-        || child_prefix.strip_suffix(b"\n") == Some(child_diagnostic)
-    {
-        Some(ApplicationRejectionDiagnostic::CompletedParentZeroByteAcknowledgment)
-    } else {
-        None
-    }
-}
-
-#[test]
-fn application_rejection_diagnostic_classifier_is_exact() {
-    let expected = Some(ApplicationRejectionDiagnostic::CompletedParentZeroByteAcknowledgment);
-    let diagnostics = [
-        ("commitment", CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC),
-        ("amd-wave", CHILD_AMD_WAVE_DIAGNOSTIC),
-    ];
-
-    for (name, child_diagnostic) in diagnostics {
-        for prefix_length in 0..=child_diagnostic.len() {
-            let child_prefix = &child_diagnostic[..prefix_length];
-            for parent_trailing_lf in [false, true] {
-                let mut completed = child_prefix.to_vec();
-                completed.extend_from_slice(PARENT_TRUNCATED_ACK_DIAGNOSTIC);
-                if parent_trailing_lf {
-                    completed.push(b'\n');
-                }
-                assert_eq!(
-                    classify_application_rejection_diagnostic(&completed, child_diagnostic),
-                    expected,
-                    "{name}: rejected child prefix length {prefix_length} with parent trailing LF {parent_trailing_lf}"
-                );
-            }
-
-            assert_eq!(
-                classify_application_rejection_diagnostic(child_prefix, child_diagnostic),
-                None,
-                "{name}: accepted child-only prefix length {prefix_length}"
-            );
-            let mut child_only_with_lf = child_prefix.to_vec();
-            child_only_with_lf.push(b'\n');
-            assert_eq!(
-                classify_application_rejection_diagnostic(&child_only_with_lf, child_diagnostic),
-                None,
-                "{name}: accepted child-only prefix length {prefix_length} with LF"
-            );
-
-            if prefix_length < child_diagnostic.len() {
-                for parent_trailing_lf in [false, true] {
-                    let mut partial_line = child_only_with_lf.clone();
-                    partial_line.extend_from_slice(PARENT_TRUNCATED_ACK_DIAGNOSTIC);
-                    if parent_trailing_lf {
-                        partial_line.push(b'\n');
-                    }
-                    assert_eq!(
-                        classify_application_rejection_diagnostic(&partial_line, child_diagnostic),
-                        None,
-                        "{name}: accepted partial child line length {prefix_length} with parent trailing LF {parent_trailing_lf}"
-                    );
-                }
-            }
-        }
-
-        for parent_trailing_lf in [false, true] {
-            let mut complete_child_line = child_diagnostic.to_vec();
-            complete_child_line.push(b'\n');
-            complete_child_line.extend_from_slice(PARENT_TRUNCATED_ACK_DIAGNOSTIC);
-            if parent_trailing_lf {
-                complete_child_line.push(b'\n');
-            }
-            assert_eq!(
-                classify_application_rejection_diagnostic(&complete_child_line, child_diagnostic),
-                expected,
-                "{name}: rejected complete child line"
-            );
-        }
-
-        let other_diagnostic = if child_diagnostic == CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC {
-            CHILD_AMD_WAVE_DIAGNOSTIC
-        } else {
-            CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC
-        };
-        for invalid in [
-            [PARENT_TRUNCATED_ACK_DIAGNOSTIC, child_diagnostic].concat(),
-            [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"\n", child_diagnostic].concat(),
-            [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"\r\n"].concat(),
-            [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"\n\n"].concat(),
-            [PARENT_TRUNCATED_ACK_DIAGNOSTIC, b"extra"].concat(),
-            [b"extra", PARENT_TRUNCATED_ACK_DIAGNOSTIC].concat(),
-            [child_diagnostic, b"\r\n", PARENT_TRUNCATED_ACK_DIAGNOSTIC].concat(),
-            [other_diagnostic, PARENT_TRUNCATED_ACK_DIAGNOSTIC].concat(),
-            b"cargo-fe2o3 application runner: application handoff acknowledgment timed out".to_vec(),
-            b"cargo-fe2o3 application runner: application containment failed".to_vec(),
-            b"cargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (1 bytes)".to_vec(),
-            b"host consumer fixture: arbitrary child errorcargo-fe2o3 application runner: invalid Worker V2 application acknowledgment: application handoff acknowledgment is truncated (0 bytes)".to_vec(),
-        ] {
-            assert_eq!(
-                classify_application_rejection_diagnostic(&invalid, child_diagnostic),
-                None,
-                "{name}: accepted invalid diagnostic: {}",
-                String::from_utf8_lossy(&invalid)
-            );
-        }
-    }
 }
 
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
@@ -1483,117 +1317,6 @@ fn retired_v2_envelope_is_rejected_before_application_spawn() {
         stderr(&application)
     );
     assert!(!report.exists(), "retired V2 child must not be spawned");
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn real_host_consumer_reaches_exact_prerequisite_admission() {
-    let directory = published_host_consumer_fixture();
-    let report = directory.0.join("host-consumer-report.json");
-    let consumed = host_consumer_runner_command(&directory, &report)
-        .env("LD_PRELOAD", "")
-        .env("LD_LIBRARY_PATH", "/untrusted/runtime")
-        .env("LD_AUDIT", "")
-        .env("LD_PROFILE", "untrusted.profile")
-        .env("GLIBC_TUNABLES", "glibc.malloc.trim_threshold=1")
-        .env("GCONV_PATH", "/untrusted/gconv")
-        .env("HOSTALIASES", "/untrusted/aliases")
-        .env("LANG", "C.UTF-8")
-        .env("LANGUAGE", "untrusted")
-        .env("LC_ALL", "C.UTF-8")
-        .env("LOCALDOMAIN", "untrusted.invalid")
-        .env("LOCPATH", "/untrusted/locale")
-        .env("MALLOC_ARENA_MAX", "1")
-        .env("MALLOC_PERTURB_", "7")
-        .env("NSS_DISABLE_AUDIT", "1")
-        .env("RES_OPTIONS", "attempts:1")
-        .env("RESOLV_HOST_CONF", "/untrusted/host.conf")
-        .env("PATH", "/untrusted/bin")
-        .env("TMPDIR", "/untrusted/tmp")
-        .env("ARBITRARY_APPLICATION_VARIABLE", "must-not-survive")
-        .output()
-        .unwrap();
-    assert!(!consumed.status.success());
-    let consumed_stderr = stderr(&consumed);
-    // The real-input integration and the host's direct typed unit test are decomposed coverage.
-    // This terminal parent EOF record proves bounded containment and error propagation, not that
-    // this invocation observed the complete typed child error before containment won the race.
-    let classification =
-        classify_application_rejection_diagnostic(&consumed.stderr, CHILD_AMD_WAVE_DIAGNOSTIC)
-            .unwrap_or_else(|| {
-                panic!("unexpected AMD-wave rejection diagnostic:\n{consumed_stderr}")
-            });
-    eprintln!(
-        "AMD-wave rejection diagnostic class: {}",
-        classification.label()
-    );
-    assert_eq!(
-        classification,
-        ApplicationRejectionDiagnostic::CompletedParentZeroByteAcknowledgment
-    );
-    assert!(
-        !consumed_stderr.contains("unexpected application environment survived"),
-        "{consumed_stderr}"
-    );
-    assert_rejected_host_consumer_report(&report);
-}
-
-#[test]
-#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
-fn real_host_consumer_rejects_substituted_commitment() {
-    let directory = published_host_consumer_fixture();
-    let report = directory.0.join("host-consumer-substitution.json");
-    let rejected = host_consumer_runner_command(&directory, &report)
-        .arg("--fe2o3-test-substitute-commitment")
-        .output()
-        .unwrap();
-    assert!(!rejected.status.success());
-    let rejected_stderr = stderr(&rejected);
-    // The mutated-input integration and direct typed helper unit test are decomposed coverage. This
-    // terminal parent EOF record proves bounded containment and error propagation, not that this
-    // integration invocation observed the exact typed child error before containment won the race.
-    let classification = classify_application_rejection_diagnostic(
-        &rejected.stderr,
-        CHILD_COMMITMENT_MISMATCH_DIAGNOSTIC,
-    )
-    .unwrap_or_else(|| panic!("unexpected commitment rejection diagnostic:\n{rejected_stderr}"));
-    eprintln!(
-        "commitment rejection diagnostic class: {}",
-        classification.label()
-    );
-    assert_eq!(
-        classification,
-        ApplicationRejectionDiagnostic::CompletedParentZeroByteAcknowledgment
-    );
-    assert!(!rejected_stderr.contains("AmdWave"), "{rejected_stderr}");
-    assert!(
-        !rejected_stderr.contains("unexpected application environment survived"),
-        "{rejected_stderr}"
-    );
-    assert_rejected_host_consumer_report(&report);
-}
-
-fn published_host_consumer_fixture() -> TestDirectory {
-    // These paths exercise the production handoff deadline and must not compete with other
-    // process-tree fixtures on low-core hosted runners.
-    let directory = TestDirectory::new_exclusive();
-    let fixture = required_alpha_zeta_publication_fixture(&directory);
-    let published = run_wrapper_with_options(
-        &directory,
-        &fixture.config,
-        "publish-valid",
-        fixture.cov6,
-        None,
-    );
-    assert!(published.status.success(), "{}", stderr(&published));
-    directory
-}
-
-fn assert_rejected_host_consumer_report(report: &Path) {
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    assert_eq!(report["host_consumer"], true);
-    assert_eq!(report["loader_environment_clear"], true);
-    assert_eq!(report["admitted"], false);
 }
 
 #[test]

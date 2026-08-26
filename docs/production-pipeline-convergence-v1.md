@@ -115,12 +115,11 @@ The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
 select it implicitly.
 
-The active host-consumer fixture accepts only V3 inputs and does not enable the
-host qualification feature. The old V2 consumer binary remains standalone
-qualification source while its host-side oracle is retired, but Cargo has no
-V2 application transfer capable of launching it. Hostile application-boundary
-coverage quarantined with that fixture must move to the strict V3 fixture
-before the V2 source and feature are deleted.
+The host-consumer fixture accepts only V3 inputs and does not enable the host
+qualification feature. The old V2 consumer binary, its input adapter, and its
+Cargo feature are deleted. Remaining hostile application-boundary coverage in
+the broader V2 vertical fixture must move to the strict V3 fixture before that
+fixture's protocol source is deleted.
 
 Version suffixes remain on serialized records, identity domains, receipts, and
 external protocol types. Private production methods and states are unversioned
