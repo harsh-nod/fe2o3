@@ -27,9 +27,9 @@ use crate::batch::ServiceFixedBatchV1;
 
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-service-addressless-fixed-queue-r13-v1\n",
-    "source.compute_aql_session_sha256=067ff7248b9dfa7881420a3be9cb3edce033e9cd20f3484caded4dafac772330\n",
-    "queue=one-long-lived-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-rebind\n",
+    "profile=fe2o3-service-addressless-fixed-queue-r14-v1\n",
+    "source.compute_aql_session_sha256=367158d1f4b1edd6b09aaf8a993dae6d30ab7624d63a5400e858bd98c86c8ac5\n",
+    "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
     "publication=one-reservation-one-write-counter-fetch-add,one-retained-final-ordering-header-per-packet,one-final-doorbell-per-fixed-batch\n",
@@ -37,7 +37,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "data=read-and-readwrite-require-sealed-full-initialization,write-only-may-consume-uninitialized-exclusive-storage,initialized-state-retained-after-generic-completion-without-stale-content-digest\n",
     "subleases=whole-native-allocation-owner-retained,partition-registry-transfers-with-ledger,partitioned-bindings-require-member-index-and-contained-offset-extent,detached-initialized-replacement-preflights-and-atomically-installs-an-exact-new-partition,replacement-denies-old-allocation-generation\n",
     "readback=caller-can-mint-only-from-current-recycled-owner,request-binds-exact-dispatch-generation-and-owner-checked-host-allocation-generation,lower-owner-allows-an-ordinary-range-within-one-inspected-write-or-readwrite-binding-or-one-exact-declared-initialized-enclosing-snapshot-with-an-isolated-writable-interior-and-returns-owned-bytes,no-address-or-initialization-promotion\n",
-    "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,dispatch-generation-strictly-advances-from-the-detached-predecessor,lower-owner-reclaims-authoritative-model-foundation-after-every-live-allocation-lifecycle-mutation\n",
+    "rebind=same-native-queue-may-consume-a-different-fixed-cardinality-program-geometry-kernarg-and-addressless-data-binding-after-exact-recycle,unbound-device-partition-insertion-removal-or-replacement-and-host-visible-replacement-advance-private-ledgers-and-reissue-shifted-addressless-ranges,rollover-may-consume-a-new-ring-size-only-after-exact-detach-and-confirmed-old-native-destroy,dispatch-generation-strictly-advances-from-the-detached-predecessor-across-either-route,lower-owner-reclaims-authoritative-model-foundation-after-every-live-allocation-lifecycle-mutation\n",
     "release=return-attached-or-exact-ordered-detached-data-custody-after-exact-recycle,destroy-native-queue,restore-service-ledger,reverse-order-unmap-and-free\n",
     "qualification-fault-injection=feature-gated-post-recycle-before-completed-read-attempt-terminal-typestate,prior-attempt-rejects-and-returns-recycled-owner,ordinary-native-teardown-only,no-synthetic-kfd-error-or-hardware-fault-claim\n",
     "failure=pure-rejection-recovers-input-owners,ambiguous-native-side-effect-is-terminal-and-denies-retry,opaque-quarantine-retains-available-owner-state,timeout-observation-grants-no-live-introspection-or-authority\n",
@@ -47,7 +47,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "626dcb5b56a69924485015be77391395dd1670f326e9b97d10064f916c8c825b";
+    "6a47bea84002c4c06d5cb6f9a377ed3993f6df7760f7be37f0962d8a934263ad";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -990,6 +990,88 @@ impl ServiceQueueUnboundSessionV1 {
         }
     }
 
+    /// Destroys the quiescent native queue and creates a replacement queue
+    /// with a newly admitted ring and fixed batch while retaining the exact
+    /// mapped dispatch-data allocation set.
+    ///
+    /// Ring and batch validation complete before native destruction. A pure
+    /// rejection therefore returns both unchanged inputs. Once destruction
+    /// begins, any failure is terminal because native creation may have taken
+    /// effect and no public owner can be reconstructed honestly.
+    pub fn rollover<'a, const M: usize>(
+        self,
+        ring_bytes: u32,
+        batch: ServiceFixedBatchV1<'a, M>,
+    ) -> Result<ServiceQueueRolloverSuccessV1<M>, ServiceQueueRolloverFailureV1<'a, M>> {
+        if let Err(error) = validate_ring::<M>(ring_bytes) {
+            return Err(ServiceQueueRolloverFailureV1::Rejected {
+                error,
+                queue: Box::new(self),
+                batch: Box::new(batch),
+            });
+        }
+        if let Err(error) = batch.validate(&self.owner.ledger) {
+            return Err(ServiceQueueRolloverFailureV1::Rejected {
+                error: ServiceQueueErrorV1::Allocation(error),
+                queue: Box::new(self),
+                batch: Box::new(batch),
+            });
+        }
+        let replacement_dispatch_generation = match self.dispatch_generation.checked_add(1) {
+            Some(generation) => generation,
+            None => {
+                return Err(ServiceQueueRolloverFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::BatchContract(
+                        "rollover dispatch generation exhaustion",
+                    ),
+                    queue: Box::new(self),
+                    batch: Box::new(batch),
+                });
+            }
+        };
+        let Self {
+            owner,
+            dispatch_generation,
+            data,
+        } = self;
+        let ServiceQueueOwnerV1 { queue, ledger } = owner;
+        let resources = queue
+            .destroy_returning_detached_fixed_dispatch_resources(data)
+            .map_err(|error| ServiceQueueRolloverFailureV1::Terminal {
+                error: ServiceQueueErrorV1::Kfd(error),
+                previous_queue_destroyed: None,
+                previous_dispatch_generation: dispatch_generation,
+            })?;
+        if resources.dispatch_generation() != dispatch_generation {
+            return Err(ServiceQueueRolloverFailureV1::Terminal {
+                error: ServiceQueueErrorV1::Kfd(ComputeAqlQueueSessionErrorV1::Contract(
+                    "rollover dispatch generation",
+                )),
+                previous_queue_destroyed: Some(resources.destroyed()),
+                previous_dispatch_generation: dispatch_generation,
+            });
+        }
+        let previous_queue_destroyed = resources.destroyed();
+        let (programs, packets) = batch.into_kfd();
+        let queue = resources
+            .recreate_compute_aql_queue_with_fixed_dispatch(ring_bytes, programs, packets)
+            .map_err(|error| ServiceQueueRolloverFailureV1::Terminal {
+                error: ServiceQueueErrorV1::Kfd(error),
+                previous_queue_destroyed: Some(previous_queue_destroyed),
+                previous_dispatch_generation: dispatch_generation,
+            })?;
+        let replacement_queue_observation = queue.observation();
+        Ok(ServiceQueueRolloverSuccessV1 {
+            queue: ServiceQueueSessionV1 {
+                owner: ServiceQueueOwnerV1 { queue, ledger },
+            },
+            previous_queue_destroyed,
+            previous_dispatch_generation: dispatch_generation,
+            replacement_queue_observation,
+            replacement_dispatch_generation,
+        })
+    }
+
     /// Replaces one complete detached allocation with newly verified device-local bytes.
     ///
     /// The old allocation is validated and released before the new allocation is
@@ -1178,6 +1260,414 @@ impl ServiceQueueUnboundSessionV1 {
             subleases,
             ranges: dispatch_ranges,
         })
+    }
+
+    /// Inserts one initialized partitioned device-local allocation before the
+    /// retained host-visible data suffix.
+    pub fn insert_initialized_partitioned_device_local<R, const N: usize>(
+        mut self,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: Gfx942DeviceContentDescriptorV1,
+        members: [(u64, u64, u64); N],
+    ) -> Result<ServiceQueuePartitionedDataUpdateV1<R, N>, ServiceQueueDataUpdateFailureV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let observed = Gfx942DeviceContentDescriptorV1::from_bytes(content.role(), &bytes);
+        if observed.is_err() || observed.as_ref().is_ok_and(|actual| actual != &content) {
+            return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                error: ServiceQueueErrorV1::BatchContract("device content descriptor"),
+                queue: Box::new(self),
+            });
+        }
+        let extent_bytes = match u64::try_from(bytes.len()) {
+            Ok(extent_bytes) => extent_bytes,
+            Err(_) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(ServiceAllocationErrorV1::InvalidExtent),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        if self.data.try_reserve(1).is_err() {
+            return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                error: ServiceQueueErrorV1::Allocation(
+                    ServiceAllocationErrorV1::AllocationRegistryReservation,
+                ),
+                queue: Box::new(self),
+            });
+        }
+        let insertion = match self
+            .owner
+            .ledger
+            .prepare_initialized_partition_insertion::<R, N>(extent_bytes, alignment, members)
+        {
+            Ok(insertion) => insertion,
+            Err(error) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(error),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        let data_index = insertion.data_index();
+        let data = match self
+            .owner
+            .queue
+            .insert_initialized_fixed_dispatch_data(data_index, bytes, alignment, content)
+        {
+            Ok(data) => data,
+            Err(error) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                    error: ServiceQueueErrorV1::Kfd(error),
+                    retained: Box::new(QuarantinedServiceQueueV1 {
+                        owner: self.owner,
+                        detached_data: Some(self.data),
+                    }),
+                });
+            }
+        };
+        self.data.insert(data_index, data);
+        let (subleases, ranges) = self
+            .owner
+            .ledger
+            .commit_initialized_partition_insertion::<R, N>(insertion);
+        Ok(ServiceQueuePartitionedDataUpdateV1 {
+            queue: self,
+            subleases,
+            ranges,
+        })
+    }
+
+    /// Removes and releases one complete partitioned device-local allocation.
+    ///
+    /// The supplied witness is borrowed for validation. On success it is stale
+    /// and every future use is rejected by the advanced private ledger.
+    pub fn remove_partitioned_device_local<R, const N: usize>(
+        mut self,
+        old: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+    ) -> Result<Self, ServiceQueueDataUpdateFailureV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        let removal = match self.owner.ledger.prepare_partitioned_removal(old) {
+            Ok(removal) => removal,
+            Err(error) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(error),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        let data = self.data.remove(removal.data_index());
+        if let Err(error) = self.owner.queue.release_detached_fixed_dispatch_data(data) {
+            return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                error: ServiceQueueErrorV1::Kfd(error),
+                retained: Box::new(QuarantinedServiceQueueV1 {
+                    owner: self.owner,
+                    detached_data: Some(self.data),
+                }),
+            });
+        }
+        self.owner.ledger.commit_partitioned_removal(removal);
+        Ok(self)
+    }
+
+    /// Replaces one complete host-visible allocation with a fresh uninitialized
+    /// mapped extent at the same detached data ordinal.
+    pub fn replace_host_visible<R>(
+        self,
+        old: ServiceHostDispatchRangeV1,
+        requested_bytes: usize,
+    ) -> Result<ServiceQueueHostDataUpdateV1, ServiceQueueDataUpdateFailureV1>
+    where
+        R: crate::HostAllocationRoleMarkerV1,
+    {
+        self.replace_host_visible_inner::<R>(old, requested_bytes, None)
+    }
+
+    /// Replaces one complete host-visible allocation with exact initialized
+    /// bytes and returns a fresh full-range snapshot witness.
+    pub fn replace_initialized_host_visible<R>(
+        self,
+        old: ServiceHostDispatchRangeV1,
+        bytes: Box<[u8]>,
+    ) -> Result<ServiceQueueHostDataUpdateV1, ServiceQueueDataUpdateFailureV1>
+    where
+        R: crate::HostAllocationRoleMarkerV1,
+    {
+        self.replace_host_visible_inner::<R>(old, bytes.len(), Some(bytes))
+    }
+
+    fn replace_host_visible_inner<R>(
+        mut self,
+        old: ServiceHostDispatchRangeV1,
+        requested_bytes: usize,
+        initialized: Option<Box<[u8]>>,
+    ) -> Result<ServiceQueueHostDataUpdateV1, ServiceQueueDataUpdateFailureV1>
+    where
+        R: crate::HostAllocationRoleMarkerV1,
+    {
+        let extent_bytes = match u64::try_from(requested_bytes) {
+            Ok(extent_bytes) => extent_bytes,
+            Err(_) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(ServiceAllocationErrorV1::InvalidExtent),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        let replacement = match self
+            .owner
+            .ledger
+            .prepare_host_replacement::<R>(old, extent_bytes)
+        {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                return Err(ServiceQueueDataUpdateFailureV1::Rejected {
+                    error: ServiceQueueErrorV1::Allocation(error),
+                    queue: Box::new(self),
+                });
+            }
+        };
+        let data_index = replacement.data_index();
+        let old_data = self.data.remove(data_index);
+        if let Err(error) = self
+            .owner
+            .queue
+            .release_detached_fixed_dispatch_data(old_data)
+        {
+            return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                error: ServiceQueueErrorV1::Kfd(error),
+                retained: Box::new(QuarantinedServiceQueueV1 {
+                    owner: self.owner,
+                    detached_data: Some(self.data),
+                }),
+            });
+        }
+        self.owner
+            .ledger
+            .commit_host_replacement_release(&replacement);
+        let (data, initialized) = match initialized {
+            Some(bytes) => match self
+                .owner
+                .queue
+                .initialize_host_visible_fixed_dispatch_data(bytes)
+            {
+                Ok(data) => (data, true),
+                Err(error) => {
+                    return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                        error: ServiceQueueErrorV1::Kfd(error),
+                        retained: Box::new(QuarantinedServiceQueueV1 {
+                            owner: self.owner,
+                            detached_data: Some(self.data),
+                        }),
+                    });
+                }
+            },
+            None => match self
+                .owner
+                .queue
+                .allocate_host_visible_fixed_dispatch_data(requested_bytes)
+            {
+                Ok(data) => (data, false),
+                Err(error) => {
+                    return Err(ServiceQueueDataUpdateFailureV1::Terminal {
+                        error: ServiceQueueErrorV1::Kfd(error),
+                        retained: Box::new(QuarantinedServiceQueueV1 {
+                            owner: self.owner,
+                            detached_data: Some(self.data),
+                        }),
+                    });
+                }
+            },
+        };
+        self.data.insert(data_index, data);
+        let range = self.owner.ledger.commit_host_replacement(replacement);
+        let snapshot =
+            initialized.then(|| ServiceHostDispatchSnapshotRangeV1::from_initialized_range(range));
+        Ok(ServiceQueueHostDataUpdateV1 {
+            queue: self,
+            range,
+            snapshot,
+        })
+    }
+}
+
+/// Fresh queue and host-visible range custody after detached replacement.
+#[must_use = "the live queue and fresh host allocation range must remain retained"]
+pub struct ServiceQueueHostDataUpdateV1 {
+    queue: ServiceQueueUnboundSessionV1,
+    range: ServiceHostDispatchRangeV1,
+    snapshot: Option<ServiceHostDispatchSnapshotRangeV1>,
+}
+
+impl ServiceQueueHostDataUpdateV1 {
+    /// Separates the live queue, fresh complete range, and optional initialized snapshot.
+    pub fn into_parts(
+        self,
+    ) -> (
+        ServiceQueueUnboundSessionV1,
+        ServiceHostDispatchRangeV1,
+        Option<ServiceHostDispatchSnapshotRangeV1>,
+    ) {
+        (self.queue, self.range, self.snapshot)
+    }
+}
+
+impl fmt::Debug for ServiceQueueHostDataUpdateV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServiceQueueHostDataUpdateV1")
+            .field("queue", &self.queue)
+            .field("range", &self.range)
+            .field("has_snapshot", &self.snapshot.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Successful quiescent queue rollover with confirmed predecessor teardown.
+#[must_use = "the replacement live queue requires an explicit linear transition"]
+pub struct ServiceQueueRolloverSuccessV1<const N: usize> {
+    queue: ServiceQueueSessionV1<N>,
+    previous_queue_destroyed: ComputeAqlQueueDestroyedV1,
+    previous_dispatch_generation: u64,
+    replacement_queue_observation: ComputeAqlQueueObservationV1,
+    replacement_dispatch_generation: u64,
+}
+
+impl<const N: usize> ServiceQueueRolloverSuccessV1<N> {
+    /// Returns confirmed destruction of the predecessor native queue.
+    pub const fn previous_queue_destroyed(&self) -> ComputeAqlQueueDestroyedV1 {
+        self.previous_queue_destroyed
+    }
+
+    /// Returns the exact recycled generation that authorized rollover.
+    pub const fn previous_dispatch_generation(&self) -> u64 {
+        self.previous_dispatch_generation
+    }
+
+    /// Returns the prepared replacement native queue observation.
+    pub const fn replacement_queue_observation(&self) -> ComputeAqlQueueObservationV1 {
+        self.replacement_queue_observation
+    }
+
+    /// Returns the dispatch generation prepared for the replacement queue.
+    pub const fn replacement_dispatch_generation(&self) -> u64 {
+        self.replacement_dispatch_generation
+    }
+
+    /// Consumes rollover evidence into the prepared replacement queue.
+    pub fn into_queue(self) -> ServiceQueueSessionV1<N> {
+        self.queue
+    }
+}
+
+impl<const N: usize> fmt::Debug for ServiceQueueRolloverSuccessV1<N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServiceQueueRolloverSuccessV1")
+            .field("previous_queue_destroyed", &self.previous_queue_destroyed)
+            .field(
+                "previous_dispatch_generation",
+                &self.previous_dispatch_generation,
+            )
+            .field(
+                "replacement_queue_observation",
+                &self.replacement_queue_observation,
+            )
+            .field(
+                "replacement_dispatch_generation",
+                &self.replacement_dispatch_generation,
+            )
+            .field("replacement_queue", &self.queue)
+            .finish()
+    }
+}
+
+/// Quiescent queue-rollover rejection or terminal native transition failure.
+#[must_use = "pure rejection retains both inputs; terminal failure requires process teardown"]
+pub enum ServiceQueueRolloverFailureV1<'a, const N: usize> {
+    /// Validation rejected the replacement before native queue destruction.
+    Rejected {
+        /// Exact rejection.
+        error: ServiceQueueErrorV1,
+        /// Unchanged detached queue owner.
+        queue: Box<ServiceQueueUnboundSessionV1>,
+        /// Unchanged replacement batch.
+        batch: Box<ServiceFixedBatchV1<'a, N>>,
+    },
+    /// Native destruction or replacement creation consumed the inputs.
+    Terminal {
+        /// Exact lower-layer error.
+        error: ServiceQueueErrorV1,
+        /// Confirmed predecessor destruction, when rollover reached that boundary.
+        previous_queue_destroyed: Option<ComputeAqlQueueDestroyedV1>,
+        /// Exact recycled predecessor dispatch generation.
+        previous_dispatch_generation: u64,
+    },
+}
+
+impl<const N: usize> fmt::Debug for ServiceQueueRolloverFailureV1<'_, N> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rejected { error, .. } => formatter
+                .debug_struct("Rejected")
+                .field("error", error)
+                .finish_non_exhaustive(),
+            Self::Terminal {
+                error,
+                previous_queue_destroyed,
+                previous_dispatch_generation,
+            } => formatter
+                .debug_struct("Terminal")
+                .field("error", error)
+                .field("previous_queue_destroyed", previous_queue_destroyed)
+                .field("previous_dispatch_generation", previous_dispatch_generation)
+                .finish(),
+        }
+    }
+}
+
+impl<'a, const N: usize> ServiceQueueRolloverFailureV1<'a, N> {
+    /// Returns the exact error without discarding retained rejection inputs.
+    pub const fn error(&self) -> &ServiceQueueErrorV1 {
+        match self {
+            Self::Rejected { error, .. } | Self::Terminal { error, .. } => error,
+        }
+    }
+
+    /// Returns confirmed predecessor destruction for a post-destroy terminal failure.
+    pub const fn previous_queue_destroyed(&self) -> Option<ComputeAqlQueueDestroyedV1> {
+        match self {
+            Self::Rejected { .. } => None,
+            Self::Terminal {
+                previous_queue_destroyed,
+                ..
+            } => *previous_queue_destroyed,
+        }
+    }
+
+    /// Returns the recycled predecessor generation once native rollover began.
+    pub const fn previous_dispatch_generation(&self) -> Option<u64> {
+        match self {
+            Self::Rejected { .. } => None,
+            Self::Terminal {
+                previous_dispatch_generation,
+                ..
+            } => Some(*previous_dispatch_generation),
+        }
+    }
+
+    /// Recovers both unchanged inputs only after pure preflight rejection.
+    pub fn into_rejected_inputs(
+        self,
+    ) -> Option<(ServiceQueueUnboundSessionV1, ServiceFixedBatchV1<'a, N>)> {
+        match self {
+            Self::Rejected { queue, batch, .. } => Some((*queue, *batch)),
+            Self::Terminal { .. } => None,
+        }
     }
 }
 

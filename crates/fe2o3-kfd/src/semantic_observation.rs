@@ -25,7 +25,7 @@ const ZERO_SCOPE: [u8; 32] = [0; 32];
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-direct-kfd-semantic-observation-r3-v1\n",
     "source.device_admission_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
-    "source.queue_session_sha256=067ff7248b9dfa7881420a3be9cb3edce033e9cd20f3484caded4dafac772330\n",
+    "source.queue_session_sha256=367158d1f4b1edd6b09aaf8a993dae6d30ab7624d63a5400e858bd98c86c8ac5\n",
     "input=detached-device-binding-optional,detached-live-queue,detached-destroyed-queue-optional\n",
     "bounds=fixed-size,no-input-read,no-variable-allocation,no-device-enumeration\n",
     "identity=sha256-domain-separated-canonical-little-endian,caller-supplied-nonzero-scope,opaque-correlation-not-authentication-or-secrecy\n",
@@ -39,7 +39,7 @@ pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`KFD_SEMANTIC_OBSERVATION_MANIFEST_V1`].
 pub const KFD_SEMANTIC_OBSERVATION_MANIFEST_SHA256_V1: &str =
-    "517fce05edb2eb94d230983b93b30de3c9e7c40245a5dc1c512cb25da0faf2f5";
+    "e595755fb337dccfd3ed2e0b02732c715ef00883920ae9568ad1caeeb804b0c0";
 
 /// A caller-controlled correlation scope for one observation domain.
 ///

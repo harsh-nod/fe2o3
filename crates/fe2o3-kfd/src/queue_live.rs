@@ -70,7 +70,7 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and fixed-batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r29-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r30-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=9a1e6a725a4a0e575e4f9a8f47cfc11b3510ced53d7808b809348d77e0f1e947\n",
     "kfd_userptr_memory_schema_sha256=c1cee09bdf884d2c14a5dbb89c1f6f7885962c75b1457caf412821490919ee9e\n",
@@ -100,7 +100,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "liveness-probe=three-public-consuming-checked-device-entries-select-production-aql-special-doubled-diagnostic-plain-executable-one-x-or-diagnostic-userptr-writable-executable-coherent-uncached-no-substitute-one-x-ring,selected-backing-and-exact-ring-span-bound-into-plan-and-configuration,selected-backing-bound-into-every-redacted-outcome,typed-nonzero-bounded-polls-validated-before-device-consumption,diagnostic-backings-not-selectable-by-reusable-or-dispatch-queue-APIs,exact-fresh-zero-history-no-dispatch-queue,one-zero-dependency-system-scope-barrier,queue-and-signal-generation-only,submission-retryable-only-by-explicit-before-side-effect-stage-classification,success-requires-currentness-packet-count1-write1-read0or1-timing-sensitive-header0x1403-or-device-consumed-invalid1-setup0-user-signal-completed-zero-exception-then-signal-reset-and-confirmed-explicit-queue-destroy,Creation-has-no-live-queue-and-precedes-userptr-control-registration-entry,TerminalCreation-covers-every-error-at-or-after-userptr-control-registration-entry-every-create-result-not-explicitly-failed-no-effect-and-every-post-create-failure-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination,QuarantinedExecution-retains-opaque-custody-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,TerminalTeardown-and-panic-retain-permanent-gate-poison-and-recover-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
     "dispatch=public-addressless-linear-fixed-batch,1-through-32-inspected-programs,1-through-8192-packets,validated-code-materialization,zero-pointer-kernarg-internal-injection,metadata-derived-COV6-geometry-and-dynamic-lds-implicit-subset-with-caller-zero-suffix,queue-pointer-and-runtime-address-fields-rejected,exact-mapped-data-set-retained-even-when-unreferenced-by-current-batch,referenced-subset-only-inspected-access-and-sealed-initialization-gates,ordinary-release-or-exact-recycle-gated-attached-or-detached-return-after-destroy\n",
     "readback=coherent-host-data-only,owned-bounded-copy-after-exact-acquire-observed-completion-and-signal-recycle,exact-dispatch-generation,ordinary-range-within-one-inspected-write-or-readwrite-binding-or-exact-admitted-initialized-enclosing-snapshot,no-native-address-or-mapped-borrow,no-whole-allocation-initialization-promotion\n",
-    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,queue-ring-signal-event-doorbell-and-runtime-remain-live,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
+    "rebinding=exact-completion-and-signal-recycle-before-detach,code-and-kernarg-released,live-rebind-retains-queue-ring-signal-event-doorbell-and-runtime,quiescent-rollover-confirms-old-native-destroy-before-new-queue-creation,exact-complete-detached-generation-cardinality-and-ordered-private-storage-identity-ledger,preflighted-device-or-host-insertion-at-exact-ordinal-and-release-gated-removal-or-replacement-while-unbound,replacement-owner-seeded-from-exact-predecessor-and-next-publication-strictly-advances-dispatch-generation-across-live-rebind-or-queue-rollover,all-mapped-data-retained-with-inspected-effects-only-for-currently-referenced-subset,new-ring-program-count-packet-count-geometry-kernarg-and-data-admitted-before-next-publication,fully-initialized-state-preserved-without-stale-current-content-digest,authoritative-model-foundation-restored-around-every-live-queue-allocation-lifecycle-mutation-and-reclaimed-before-return\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
     "lifecycle=runtime-enable,event-create,queue-create;all-completion-batches-observed-and-recycled;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-queue-resource-and-completion-arena-release;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio;timeout-observation-confirms-device-runtime-event-and-CWSR-structure-before-and-after-its-sequential-racy-loads\n",
@@ -114,7 +114,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "067ff7248b9dfa7881420a3be9cb3edce033e9cd20f3484caded4dafac772330";
+    "367158d1f4b1edd6b09aaf8a993dae6d30ab7624d63a5400e858bd98c86c8ac5";
 
 type AqlSpecialRingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -934,6 +934,47 @@ impl Gfx942RecycledDispatchResourcesV1 {
         self,
     ) -> (SharedGttMemorySessionV1, Vec<Gfx942FixedDispatchDataV1>) {
         (self.memory, self.data)
+    }
+
+    /// Creates a replacement native queue while retaining the exact mapped
+    /// data returned by the confirmed destruction of its predecessor.
+    ///
+    /// The replacement dispatch owner advances from the exact recycled
+    /// predecessor generation. This transition does not restore stale content
+    /// authority or expose native addresses. Any error consumes the returned
+    /// resources because queue creation may have crossed a native side-effect
+    /// boundary.
+    pub fn recreate_compute_aql_queue_with_fixed_dispatch<const N: usize>(
+        self,
+        ring_bytes: u32,
+        programs: Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'_>>,
+        packets: [Gfx942FixedDispatchPacketV1; N],
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        validate_fixed_batch_ring::<N>(ring_bytes)?;
+        let Self {
+            destroyed: _,
+            memory,
+            dispatch_generation,
+            data,
+        } = self;
+        let geometry = memory.plan_aql_queue_resources(ring_bytes)?;
+        ComputeAqlQueueSessionV1::create_compute_aql_queue_inner(
+            memory,
+            geometry,
+            ring_bytes,
+            QueueRingBackingV1::AqlSpecial,
+            move |memory| {
+                prepare_public_fixed_dispatch_resources_after_recycle(
+                    memory,
+                    programs,
+                    packets,
+                    data,
+                    dispatch_generation,
+                )
+                .map(Some)
+                .map_err(ComputeAqlQueueSessionErrorV1::DispatchBinding)
+            },
+        )
     }
 }
 
@@ -1825,6 +1866,152 @@ impl ComputeAqlQueueSessionV1 {
         }
     }
 
+    /// Allocates and inserts one initialized device-local extent at an exact
+    /// detached data ordinal without replacing an existing allocation.
+    ///
+    /// The insertion ordinal is validated before allocation. It is intended
+    /// for service ledgers that keep device-local entries before coherent host
+    /// entries while changing the detached allocation cardinality.
+    pub fn insert_initialized_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        bytes: Box<[u8]>,
+        alignment: u64,
+        content: Gfx942DeviceContentDescriptorV1,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_gfx942_device_memory(bytes, alignment, content)
+                .map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::initialized(memory);
+                self.record_new_detached_data_at(&data, data_index);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates, initializes, and inserts one coherent host-visible extent at
+    /// an exact detached data ordinal.
+    pub fn insert_initialized_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        bytes: Box<[u8]>,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_host_visible_coherent(bytes)
+                .map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_initialized(memory);
+                self.record_new_detached_data_at(&data, data_index);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates and initializes one coherent host-visible extent at the exact
+    /// ordinal vacated by the immediately preceding detached release.
+    pub fn initialize_host_visible_fixed_dispatch_data(
+        &mut self,
+        bytes: Box<[u8]>,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        if self.detached_next_insertion_index.is_none() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        let result = self.with_live_queue_memory_model(|memory| {
+            memory
+                .initialize_host_visible_coherent(bytes)
+                .map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_initialized(memory);
+                self.record_new_detached_data(&data);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates, maps, and inserts one uninitialized coherent host-visible
+    /// extent at an exact detached data ordinal.
+    pub fn insert_host_visible_fixed_dispatch_data(
+        &mut self,
+        data_index: usize,
+        requested_bytes: usize,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        self.require_new_detached_data_index(data_index)?;
+        let result = self.with_live_queue_memory_model(|memory| {
+            let allocation = memory.allocate_host_visible_coherent(requested_bytes)?;
+            memory.map_to_gpu(allocation).map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory);
+                self.record_new_detached_data_at(&data, data_index);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
+    /// Allocates and maps one uninitialized coherent host-visible extent at the
+    /// exact ordinal vacated by the immediately preceding detached release.
+    pub fn allocate_host_visible_fixed_dispatch_data(
+        &mut self,
+        requested_bytes: usize,
+    ) -> Result<Gfx942FixedDispatchDataV1, ComputeAqlQueueSessionErrorV1> {
+        self.require_unbound_fixed_dispatch()?;
+        self.require_detached_allocation_capacity()?;
+        if self.detached_next_insertion_index.is_none() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+        }
+        let result = self.with_live_queue_memory_model(|memory| {
+            let allocation = memory.allocate_host_visible_coherent(requested_bytes)?;
+            memory.map_to_gpu(allocation).map_err(Into::into)
+        });
+        match result {
+            Ok(memory) => {
+                let data = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory);
+                self.record_new_detached_data(&data);
+                Ok(data)
+            }
+            Err(error) => {
+                self.poison_terminal();
+                Err(error)
+            }
+        }
+    }
+
     /// Unmaps and releases detached fixed-dispatch storage exactly once.
     pub fn release_detached_fixed_dispatch_data(
         &mut self,
@@ -1897,12 +2084,32 @@ impl ComputeAqlQueueSessionV1 {
         Ok(())
     }
 
+    fn require_new_detached_data_index(
+        &self,
+        data_index: usize,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.detached_next_insertion_index.is_some() || data_index > self.detached_data_count {
+            return Err(Gfx942DispatchBindingErrorV1::InvalidData {
+                index: data_index.min(self.detached_data_count),
+                detail: "detached insertion ordinal",
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     fn record_new_detached_data(&mut self, data: &Gfx942FixedDispatchDataV1) {
         insert_detached_identity(
             &mut self.detached_data_identities,
             &mut self.detached_next_insertion_index,
             data.storage_identity(),
         );
+        self.detached_data_count += 1;
+    }
+
+    fn record_new_detached_data_at(&mut self, data: &Gfx942FixedDispatchDataV1, data_index: usize) {
+        self.detached_data_identities
+            .insert(data_index, data.storage_identity());
         self.detached_data_count += 1;
     }
 
