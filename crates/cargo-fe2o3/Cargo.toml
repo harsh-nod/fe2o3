@@ -10,6 +10,7 @@ description = "Cargo subcommand for fe2o3."
 
 [features]
 compiler-handoff-observation-test-only = []
+application-handoff-adversarial-fixture = []
 qualification-oracles-test-only = [
     "dep:fe2o3-kir-sim-cli",
     "dep:fe2o3-worker-v2-bundle",
@@ -25,11 +26,13 @@ legacy-hsa-runtime = [
 ]
 worker-v3-host-consumer-fixture = ["dep:fe2o3-host", "fe2o3-host/hardware-test-hooks"]
 worker-v3-envelope-integration-test-only = [
+    "application-handoff-adversarial-fixture",
     "qualification-oracles-test-only",
     "dep:fe2o3-core",
     "dep:fe2o3-hsa-runtime",
     "dep:fe2o3-scalar-gemm-v1",
     "dep:fe2o3-worker-v3-authority",
+    "worker-v2-fault-injection-test-only",
     "worker-v3-host-consumer-fixture",
 ]
 
@@ -133,7 +136,7 @@ bench = false
 [[bin]]
 name = "cargo-fe2o3-runner-app-fixture"
 path = "tests/fixtures/runner_app_fixture.rs"
-required-features = ["qualification-oracles-test-only"]
+required-features = ["application-handoff-adversarial-fixture"]
 test = false
 bench = false
 

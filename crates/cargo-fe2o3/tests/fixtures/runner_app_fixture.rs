@@ -9,15 +9,16 @@ use std::thread;
 use std::time::Duration;
 
 use fe2o3_artifact_transaction::{
-    DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v1,
+    DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
-use fe2o3_worker_v2_bundle::{
-    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WorkerV2ApplicationHandoffChallengeV1,
-    WorkerV2ApplicationHandoffCommitmentV1, WorkerV2ApplicationHandoffExpectationV1,
-    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
+use fe2o3_runtime_protocol::{
+    MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
+    WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
+    WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+    WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+    WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
+    WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
+    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV1,
 };
 
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
@@ -344,11 +345,12 @@ fn forge_supervisor_result() -> Result<bool, String> {
 
 fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, String> {
     let names = [
-        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
+        WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+        WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+        WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+        WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+        WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     ];
     let values = names.map(env::var_os);
     if values.iter().all(Option::is_none) {
@@ -374,6 +376,7 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     let [
         envelope_fd,
         artifact_directory_fd,
+        occurrence,
         commitment,
         ack_fd,
         challenge,
@@ -386,8 +389,20 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     let envelope_fd = parse_fd(envelope_fd?, "envelope")?;
     let artifact_directory_fd = parse_fd(artifact_directory_fd?, "artifact directory")?;
     let ack_fd = parse_fd(ack_fd?, "acknowledgment")?;
-    let challenge = WorkerV2ApplicationHandoffChallengeV1::from_hex(&challenge?)
-        .map_err(|error| format!("decode application handoff challenge: {error}"))?;
+    let challenge = WorkerV3ApplicationHandoffChallengeV1::decode_canonical(&decode_hex(
+        &challenge?,
+        "application handoff challenge",
+    )?)
+    .map_err(|error| format!("decode application handoff challenge: {error}"))?;
+    let occurrence = WorkerV3ApplicationOccurrenceV1::decode_canonical_with_budget(
+        &decode_hex(&occurrence?, "application occurrence")?,
+        fe2o3_runtime_protocol::WorkerV3ApplicationHandoffCodecBudgetV1::new(
+            MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1,
+            MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1,
+            3,
+        ),
+    )
+    .map_err(|error| format!("decode application occurrence: {error}"))?;
     let mut commitment = commitment?;
 
     if controls.reuse_handoff_fd {
@@ -429,23 +444,32 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
 
     let mut bytes = Vec::new();
     Read::by_ref(&mut envelope_file)
-        .take((MAX_WORKER_V2_LOAD_ENVELOPE_BYTES + 1) as u64)
+        .take((MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("read inherited envelope: {error}"))?;
-    let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&bytes)
+    let envelope = WorkerV3LoadEnvelopeWireV1::decode_canonical(&bytes)
         .map_err(|error| format!("decode inherited envelope: {error}"))?;
-    if envelope.to_bytes() != bytes {
+    if envelope
+        .encode_canonical()
+        .map_err(|error| format!("encode inherited envelope: {error}"))?
+        != bytes
+    {
         return Err("inherited envelope is not canonical".to_string());
     }
     let child =
         fs::read("/proc/self/exe").map_err(|error| format!("read child executable: {error}"))?;
-    let expectation = WorkerV2ApplicationHandoffExpectationV1::new(
-        &envelope,
-        WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&child)
-            .map_err(|error| format!("bind sealed-static child executable: {error}"))?,
-    );
-    let supplied_commitment = WorkerV2ApplicationHandoffCommitmentV1::from_hex(&commitment)
-        .map_err(|error| format!("decode application handoff commitment: {error}"))?;
+    let application = WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(&child)
+        .map_err(|error| format!("bind sealed-static child executable: {error}"))?;
+    if occurrence.application() != application {
+        return Err("application occurrence does not bind the current executable".to_string());
+    }
+    let envelope_identity = WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(&bytes)
+        .map_err(|error| format!("identify inherited envelope: {error}"))?;
+    let expectation = WorkerV3ApplicationHandoffExpectationV1::new(envelope_identity, &occurrence);
+    let supplied_commitment = WorkerV3ApplicationHandoffCommitmentV1::decode_canonical(
+        &decode_hex(&commitment, "application handoff commitment")?,
+    )
+    .map_err(|error| format!("decode application handoff commitment: {error}"))?;
     if supplied_commitment != expectation.commitment() {
         return Err(
             "application handoff commitment does not match the descriptor and child".into(),
@@ -453,15 +477,20 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     }
 
     if controls.public_ack_without_reacquire {
+        let acknowledgment = expectation
+            .acknowledgment(challenge)
+            .encode_canonical()
+            .map_err(|error| format!("encode public protocol acknowledgment: {error}"))?;
         ack_file
-            .write_all(&expectation.acknowledgment(challenge).encode_canonical())
+            .write_all(&acknowledgment)
             .map_err(|error| format!("write public protocol acknowledgment: {error}"))?;
         drop(ack_file);
         return Ok(ValidatedHandoff {
             report: serde_json::json!({
                 "acknowledged": true,
                 "child_reacquired_currentness": false,
-                "commitment": supplied_commitment.to_hex(),
+                "commitment": hex(&supplied_commitment.encode_canonical()
+                    .map_err(|error| format!("encode application handoff commitment: {error}"))?),
             }),
             _envelope: Some(envelope_file),
             _artifact_directory: Some(artifact_directory_file),
@@ -471,7 +500,7 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
 
     let descriptor_path = PathBuf::from(format!("/proc/self/fd/{artifact_directory_fd}"));
     let current_lease =
-        reacquire_current_hsaco_publication_lease_v1(&descriptor_path, envelope.published_claim())
+        reacquire_current_hsaco_publication_lease_v3(&descriptor_path, envelope.published_claim())
             .map_err(|error| format!("reacquire descriptor-only current publication: {error}"))?;
     let current_token = current_lease
         .acquire_current_token()
@@ -515,7 +544,10 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
     if controls.premature_close_ack {
         drop(ack_file);
     } else {
-        let acknowledgment = expectation.acknowledgment(challenge).encode_canonical();
+        let acknowledgment = expectation
+            .acknowledgment(challenge)
+            .encode_canonical()
+            .map_err(|error| format!("encode application handoff acknowledgment: {error}"))?;
         ack_file
             .write_all(&acknowledgment)
             .map_err(|error| format!("write application handoff acknowledgment: {error}"))?;
@@ -537,9 +569,10 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
             "artifact_directory_descriptor": artifact_directory_fd,
             "artifact_directory_read_only": true,
             "child_reacquired_currentness": true,
-            "commitment": supplied_commitment.to_hex(),
+            "commitment": hex(&supplied_commitment.encode_canonical()
+                .map_err(|error| format!("encode application handoff commitment: {error}"))?),
             "descriptor": envelope_fd,
-            "envelope_identity": hex(&envelope.identity().as_bytes()),
+            "envelope_identity": hex(&envelope_identity.sha256()),
             "process_creation": process_creation,
             "exec_replacement": exec_replacement,
             "read_only": true,
@@ -804,11 +837,12 @@ fn is_build_control(name: &OsStr) -> bool {
 
 fn is_handoff_environment(name: &OsStr) -> bool {
     [
-        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
+        WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+        WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+        WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+        WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+        WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
         TEST_ACK_READY_FD_ENV,
         "FE2O3_HSACO_DIR",
     ]
@@ -818,6 +852,23 @@ fn is_handoff_environment(name: &OsStr) -> bool {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_hex(value: &str, field: &str) -> Result<Vec<u8>, String> {
+    if value.len() % 2 != 0 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("{field} is not canonical hexadecimal"));
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            u8::from_str_radix(
+                std::str::from_utf8(pair).expect("ASCII hexadecimal pair"),
+                16,
+            )
+            .map_err(|_| format!("{field} is not canonical hexadecimal"))
+        })
+        .collect()
 }
 
 #[cfg(unix)]
