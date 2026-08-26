@@ -1122,6 +1122,18 @@ fn run_cargo_with_backend_inner(
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     let mut forwarded_args = args.to_vec();
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    if context.production_target_profile {
+        let position = forwarded_args
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap_or(forwarded_args.len());
+        forwarded_args.insert(position, OsString::from("--target"));
+        forwarded_args.insert(
+            position + 1,
+            OsString::from(fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1),
+        );
+    }
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     if context.requires_locked_closure {
         let position = forwarded_args
             .iter()

@@ -966,9 +966,12 @@ fn configure_build_observation_environment_with_test_mutation(
 }
 
 fn reject_dynamic_loader_environment() -> Result<(), BindingWrapperError> {
-    let authority_sensitive = std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").is_some()
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    let authority_sensitive = selected_compilation_requires_protected_invocation()
         || std::env::var_os(PRODUCTION_BUILD_CONFIG_ENV).is_some()
         || std::env::var_os(crate::build_config::WORKER_V2_CONFIG_ENV).is_some();
+    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
+    let authority_sensitive = true;
     let unprotected_validation = cfg!(debug_assertions)
         && std::env::var_os(crate::NON_PRODUCTION_AUTHORITY_VALIDATION_ENV).as_deref()
             == Some(OsStr::new("1"));

@@ -2513,7 +2513,7 @@ fn missing_or_mismeasured_configuration_prevents_rustc_spawn() {
     assert!(!mismatched.status.success());
     assert!(!mismatched_directory.0.join("spawned").exists());
     assert!(
-        stderr(&mismatched).contains("Worker V2 setup failed"),
+        stderr(&mismatched).contains("WorkerIdentityMismatch"),
         "{}",
         stderr(&mismatched)
     );
@@ -2549,7 +2549,7 @@ fn s09_requires_the_outer_prepared_worker_identity() {
     assert!(!output.status.success());
     assert!(!directory.0.join("spawned").exists());
     assert!(
-        stderr(&output).contains("S09 Worker V2 configuration requires"),
+        stderr(&output).contains("build configuration requires FE2O3_WORKER_V2_EXPECTED_ID_V1"),
         "{}",
         stderr(&output)
     );
