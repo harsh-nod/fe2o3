@@ -99,11 +99,12 @@ __device__ i32x8 pack_fp4_fragment(const std::uint8_t* matrix, int row, int colu
 __device__ i32x8 pack_fp8_fragment(const std::uint8_t* matrix, int row, int column_stride)
 {
     const int lane = static_cast<int>(threadIdx.x) & 63;
-    const int depth_base = (lane / 16) * 32;
+    const int group = lane / 16;
     i32x8 packed = {};
 #pragma unroll
     for (int i = 0; i < 32; ++i) {
-        const std::uint32_t byte = matrix[(depth_base + i) * column_stride + row];
+        const int depth = i < 16 ? group * 16 + i : 64 + group * 16 + (i - 16);
+        const std::uint32_t byte = matrix[depth * column_stride + row];
         packed[i / 4] |= static_cast<int>(byte << ((i % 4) * 8));
     }
     return packed;
@@ -127,12 +128,49 @@ __device__ i32x8 pack_fp4_a(const std::uint8_t* matrix, int row)
 __device__ i32x8 pack_fp8_a(const std::uint8_t* matrix, int row)
 {
     const int lane = static_cast<int>(threadIdx.x) & 63;
-    const int depth_base = (lane / 16) * 32;
+    const int group = lane / 16;
     i32x8 packed = {};
 #pragma unroll
     for (int i = 0; i < 32; ++i) {
-        const std::uint32_t byte = matrix[row * kK + depth_base + i];
+        const int depth = i < 16 ? group * 16 + i : 64 + group * 16 + (i - 16);
+        const std::uint32_t byte = matrix[row * kK + depth];
         packed[i / 4] |= static_cast<int>(byte << ((i % 4) * 8));
+    }
+    return packed;
+}
+
+__device__ i32x2 stage_fp4_transpose_source(
+    const std::uint8_t* matrix,
+    int lane,
+    int part)
+{
+    const int lane_in_group = lane & 15;
+    const int depth = (lane / 16) * 32 + part * 16 + lane_in_group;
+    i32x2 packed = {};
+#pragma unroll
+    for (int token = 0; token < 16; ++token) {
+        const std::uint32_t nibble = matrix[token * kK + depth] & 15;
+        packed[token / 8] |= static_cast<int>(nibble << ((token % 8) * 4));
+    }
+    return packed;
+}
+
+__device__ i32x2 stage_fp8_transpose_source(
+    const std::uint8_t* matrix,
+    int lane,
+    int part)
+{
+    const int lane_in_group = lane & 15;
+    const int token_base = (lane_in_group & 1) * 8;
+    const int group = lane / 16;
+    const int depth = part < 2
+        ? group * 16 + part * 8 + lane_in_group / 2
+        : 64 + group * 16 + (part - 2) * 8 + lane_in_group / 2;
+    i32x2 packed = {};
+#pragma unroll
+    for (int token_offset = 0; token_offset < 8; ++token_offset) {
+        const std::uint32_t byte = matrix[(token_base + token_offset) * kK + depth];
+        packed[token_offset / 4] |= static_cast<int>(byte << ((token_offset % 4) * 8));
     }
     return packed;
 }
@@ -158,7 +196,7 @@ std::vector<std::uint8_t> make_matrix(int rows, int columns, Encode encode, int 
     constexpr float values[] = {-1.0f, -0.5f, 0.0f, 0.5f, 1.0f};
     for (int row = 0; row < rows; ++row) {
         for (int column = 0; column < columns; ++column) {
-            result[row * columns + column] = encode(values[(row * 3 + column * 5 + salt) % 5]);
+            result[row * columns + column] = encode(values[(row * 3 + column * 2 + salt) % 5]);
         }
     }
     return result;
@@ -224,7 +262,21 @@ void check_result(const char* name, const std::vector<float>& actual, const std:
     float maximum_error = 0.0f;
     int maximum_index = 0;
     for (std::size_t i = 0; i < actual.size(); ++i) {
+        if (!std::isfinite(actual[i]) || !std::isfinite(expected[i])) {
+            std::fprintf(
+                stderr,
+                "FAIL %-14s non-finite index=%zu gpu=%g cpu=%g\n",
+                name,
+                i,
+                actual[i],
+                expected[i]);
+            std::exit(1);
+        }
         const float error = std::fabs(actual[i] - expected[i]);
+        if (!std::isfinite(error)) {
+            std::fprintf(stderr, "FAIL %-14s non-finite error index=%zu\n", name, i);
+            std::exit(1);
+        }
         if (error > maximum_error) {
             maximum_error = error;
             maximum_index = static_cast<int>(i);
@@ -338,9 +390,10 @@ extern "C" __global__ __launch_bounds__(64) void gfx950_fp4_flash_attention(
     __shared__ i32x2 transposed_k[64 * 2];
     const int lane = static_cast<int>(threadIdx.x) & 63;
     const int column = lane & 15;
-    const i32x8 packed_k = pack_fp4_a(k, column);
-    transposed_k[lane * 2] = {packed_k[0], packed_k[1]};
-    transposed_k[lane * 2 + 1] = {packed_k[2], packed_k[3]};
+#pragma unroll
+    for (int part = 0; part < 2; ++part) {
+        transposed_k[lane * 2 + part] = stage_fp4_transpose_source(k, lane, part);
+    }
     __syncthreads();
 
     i32x8 b = {};
@@ -390,10 +443,9 @@ extern "C" __global__ __launch_bounds__(64) void gfx950_fp8_flash_attention(
     __shared__ i32x2 transposed_k[64 * 4];
     const int lane = static_cast<int>(threadIdx.x) & 63;
     const int column = lane & 15;
-    const i32x8 packed_k = pack_fp8_a(k, column);
 #pragma unroll
     for (int part = 0; part < 4; ++part) {
-        transposed_k[lane * 4 + part] = {packed_k[part * 2], packed_k[part * 2 + 1]};
+        transposed_k[lane * 4 + part] = stage_fp8_transpose_source(k, lane, part);
     }
     __syncthreads();
 
@@ -466,7 +518,7 @@ int main()
         gemm_reference(fp8_a, fp8_b, decode_fp8));
 
     auto fp4_q = make_matrix(kM, kK, encode_fp4, 0);
-    std::vector<std::uint8_t> fp4_k(kN * kK, encode_fp4(0.5f));
+    auto fp4_k = make_matrix(kN, kK, encode_fp4, 4);
     auto fp4_v = make_matrix(kN, kN, encode_fp4, 2);
     check_result(
         "FP4 attention",
@@ -474,7 +526,7 @@ int main()
         attention_reference(fp4_q, fp4_k, fp4_v, decode_fp4));
 
     auto fp8_q = make_matrix(kM, kK, encode_fp8, 1);
-    std::vector<std::uint8_t> fp8_k(kN * kK, encode_fp8(0.5f));
+    auto fp8_k = make_matrix(kN, kK, encode_fp8, 0);
     auto fp8_v = make_matrix(kN, kN, encode_fp8, 3);
     check_result(
         "FP8 attention",
