@@ -51,7 +51,7 @@
         "g2_monomorphization",
         "production_extraction_driver_v1",
         "production_general_matrix_driver_v1",
-        "production_pipeline_v1",
+        "production_pipeline",
         "production_ranked_bounds_driver_v1",
         "reference_binding_v1",
         "trusted_device_items"

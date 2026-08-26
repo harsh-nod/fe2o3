@@ -3,9 +3,9 @@
 This document defines the implementation shape for
 [#175](https://github.com/harsh-nod/fe2o3/issues/175). It narrows the compiler
 work under [#134](https://github.com/harsh-nod/fe2o3/issues/134) to one
-production route. Existing scalar, GEMM, attention, collective, and MoE routes
-remain qualification oracles while their behavior migrates. They are not
-additional production architectures.
+production transaction. Existing scalar, GEMM, attention, collective, and MoE
+implementations remain qualification oracles while their evidence migrates.
+They are not additional production architectures.
 
 ## One transaction
 
@@ -24,6 +24,16 @@ authenticated rustc kernel closure
     -> independently inspected AMDHSA artifact
     -> generated typed host interface
 ```
+
+`cargo fe2o3 build` and `cargo fe2o3 run` realize that transaction with one
+fixed orchestration plan. Cargo first performs a device `build` for the fixed
+AMDGPU target under the protected compiler closure. Only after the exact
+generated-artifact generation commits does a fresh Cargo process build or run
+the same package/feature/profile selection for the pinned host target using
+ordinary rustc. Run payload arguments are forwarded only to that host process.
+The caller cannot pass `--target`, and the host phase receives no fe2o3 backend,
+wrapper, broker, device, build-manifest, qualification, or simulation controls.
+This is phase separation inside one production build, not two compiler routes.
 
 Compiler provenance is one cross-cutting input to this transaction, not a
 second compiler route. The canonical `CompilerClosureV2` commits to six
@@ -88,16 +98,18 @@ authority immediately after authenticating the transfer. The release
 child-inheritance API; those compile only for the row-softmax qualification
 oracle. The S09 broker profile and pinned-Cargo transfer image are likewise
 absent from feature-free compilation. Shared closure, backend, Cargo-image,
-and artifact validation remains route-neutral and runs before either
+and artifact validation remains implementation-neutral and runs before either
 constructor receives custody.
 
 The feature-free rustc backend likewise does not compile
-`QualificationSelection`, `CompilationRoute`, or `RustcInvocationPolicy`.
+`QualificationSelection`, `SelectedQualificationOracle`, or
+`RustcInvocationPolicy`.
 It captures a selector-free production environment preflight, enters protected
 V3 rustc admission directly, and requires the production device transaction to
-complete directly for every discovered kernel. The route and invocation-policy
-enums exist only in the qualification-feature build used for differential
-testing; they are not release implementation choices.
+complete directly for every discovered kernel. The qualification-feature build
+has an optional non-publishing oracle token and an invocation-policy enum for
+differential testing, but no compiler-route enum or release implementation
+choice.
 
 The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
@@ -114,7 +126,7 @@ because there is only one implementation. A new production schema must be an
 explicit migration of the same transaction, never a selectable pipeline.
 
 The implementation uses one move-only typestate owner, conceptually
-`ProductionCompilationV1<'tcx, Stage>`. A transition consumes the previous
+`ProductionCompilation<'tcx, Stage>`. A transition consumes the previous
 stage and returns the next. The owner retains:
 
 - the active compiler session and #140-authenticated graph handles;
@@ -214,7 +226,7 @@ The production dependency direction is:
 Pliron owner/registration core
     <- fe2o3 dialect definitions and typed constructors
     <- closed production Pliron session and transform adapters
-    <- ProductionCompilationV1 typestate transaction
+    <- ProductionCompilation typestate transaction
 ```
 
 The lower owner core contains context identity, bounded dialect-registration
@@ -236,7 +248,7 @@ new stage capability plus a canonical receipt. Any failure after allocation or
 mutation begins poisons and terminally consumes the production session.
 
 The current textual import and detached lowering services remain test and
-migration bridges. They cannot be called by `ProductionCompilationV1`, and
+migration bridges. They cannot be called by `ProductionCompilation`, and
 removing their final production callers is part of #140/#178 rather than a
 second compiler route.
 
@@ -310,27 +322,29 @@ suffixes identify frozen records and protocols, not selectable implementations.
 Production build inputs use only `FE2O3_PRODUCTION_BUILD_CONFIG_V1` with the
 `fe2o3-production-build-config-v1` schema. Worker V2 config, expected-identity,
 envelope, and source-debug controls are qualification-only and cannot be mixed
-with that production namespace.
+with that production namespace. The qualification build carries an optional
+non-publishing oracle token; there is no production-or-qualification route
+enum that could acquire another production implementation.
 
 Migration follows these rules:
 
-1. Add no new workload-specific `CodegenPipeline` production variant.
+1. Add no workload-specific production implementation or selector.
 2. Move exact-profile entry points behind qualification-oracle tests or tools.
 3. Migrate a semantic slice only after ordinary attributed Rust passes the
-   general route and differential tests match its existing oracle.
+   production transaction and differential tests match its existing oracle.
 4. Once a slice migrates, keep the old implementation only as a qualification
    oracle until its differential coverage is no longer needed.
 5. For a kernel-containing crate, unsupported production behavior is terminal.
    `legacy-v1` and exact-profile selectors are never fallbacks.
-6. Host-only Rust code may continue through rustc LLVM; that is not a device
-   compiler route.
+6. Host-only Rust code may continue through rustc LLVM; that is not a second
+   device compiler implementation.
 7. Keep non-authoritative comparisons only in qualification tooling. The
    compiler API has no implementation selector, and exact-profile qualification
    oracles retire as their differential coverage migrates.
 
-Production became the sole unselected route after the first scalar slice
+Production became the sole unselected compiler transaction after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no
-selector. An incomplete general route now fails closed instead of silently
+selector. An incomplete production transaction now fails closed instead of silently
 entering legacy codegen. Retained oracles are absent from feature-free Cargo
 and backend builds. Each requires the package-local
 `qualification-oracles-test-only` feature and an explicit
@@ -339,13 +353,12 @@ not use this marker: the wrapper omits fe2o3's managed rustc arguments and
 backend descriptor so rustc uses its built-in LLVM backend directly.
 
 The 2026-08-20 compiler review made this distinction structural. Qualification
-names now come from one table, every route has an explicit production-or-oracle
-purpose, and tests prove that only the unselected production route is
-production-capable. The backend has one protected publication call, Cargo has
+names come from one feature-gated table, while production has no corresponding
+variant or selector. The backend has one protected publication call, Cargo has
 one production intake without a schema selector, and production recovery is a
 separate state machine from V1/V2 qualification recovery. Shared oracle
 collection and frontend-record validation do not weaken the boundary:
-`ProductionCompilationV1` still receives only the move-only production closure
+`ProductionCompilation` still receives only the move-only production closure
 and cannot call the oracle helper. See
 `compiler-convergence-review-2026-08-20.md` for the deletion inventory and
 remaining complexity bounds.
@@ -363,7 +376,7 @@ The vertical slices migrate through the same transaction in this order:
 7. scalar GEMM and parameterized tiled GEMM;
 8. reductions, softmax, attention, and MoE.
 
-For each slice, the existing route becomes a differential oracle. Tests compare
+For each slice, the old implementation becomes a differential oracle. Tests compare
 canonical MIR, Kernel IR, ABI, artifact structure, numerical results, canaries,
 synchronization behavior, and terminal cleanup before its selector is removed.
 
@@ -414,11 +427,11 @@ routes.
    inspected gfx942 artifact and generated host interface through only the
    production transaction.
 3. **Safety semantics:** memory, barriers, wave operations, and scoped atomics
-   use the same route with source-spanned rejection and hostile tests.
+   use the same transaction with source-spanned rejection and hostile tests.
 4. **Rust and verification:** #106 evidence is consumed by the generic #174
    MIR-to-KIR receipt; no profile-selected semantic replacement remains.
 5. **Parameterized GEMM:** ordinary attributed Rust GEMM reaches inspected
-   HSACO through the general route; #173 remains only an oracle.
+   HSACO through the production transaction; #173 remains only an oracle.
 6. **Selector convergence:** all exact-profile production selectors are gone,
    default kernel compilation uses the one transaction, and unsupported code
    fails without fallback.

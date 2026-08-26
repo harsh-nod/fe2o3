@@ -292,10 +292,6 @@ impl ProjectFixture {
         let build_config = self.inert_production_build_config();
         let mut command = self.isolated_protected_release_command("build");
         command
-            .args([
-                "--target",
-                fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1,
-            ])
             .env("CARGO", cargo)
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", file_sha256(cargo))
             .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &rustc)
@@ -1874,6 +1870,12 @@ fn protected_release_preserves_rustc_custody_and_requires_a_real_compiler_handof
     for required in ["build", "--offline", "--frozen"] {
         assert!(args.iter().any(|value| value == required), "{report}");
     }
+    assert!(
+        args.windows(2).any(|pair| {
+            pair[0] == "--target" && pair[1] == fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1
+        }),
+        "{report}"
+    );
     assert_eq!(report["wrapper"], "/proc/self/fd/192", "{report}");
     assert!(report["trampoline_path_input"].is_null(), "{report}");
     assert!(report["trampoline_digest_input"].is_null(), "{report}");

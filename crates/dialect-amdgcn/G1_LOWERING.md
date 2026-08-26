@@ -131,7 +131,7 @@ The former `executable_scalar_control_flow_v1` bridge was removed during the
 and duplicated behavior now covered by the active collected scalar/control-flow
 V2 oracle and the general Kernel IR lowering tests. Production scalar and
 control flow must enter through the sole semantic-MIR importer and
-`ProductionCompilationV1`; this G1 test boundary is not a replacement compiler
+`ProductionCompilation`; this G1 test boundary is not a replacement compiler
 route.
 
 The crate has no in-process LLVM target-machine/code-object API. Consequently

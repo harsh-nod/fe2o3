@@ -997,8 +997,9 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         "missing exact admission diagnostic:\n{unsupported_stderr}"
     );
     assert!(
-        unsupported_stderr
-            .contains("production-v1 does not fall back to a qualification-only lowering route"),
+        unsupported_stderr.contains(
+            "production compilation does not fall back to a qualification-only lowering route"
+        ),
         "diagnostic did not prohibit production fallback:\n{unsupported_stderr}"
     );
     assert!(!unsupported_stderr.contains("emitted copy"));

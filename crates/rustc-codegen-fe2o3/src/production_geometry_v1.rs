@@ -440,9 +440,8 @@ impl fmt::Display for ProductionGeometryErrorV1 {
                 formatter,
                 "workgroup {workgroup:?} exceeds reviewed gfx942 limits",
             ),
-            Self::DynamicWorkgroupMemory => {
-                formatter.write_str("production-v1 does not support dynamic workgroup memory")
-            }
+            Self::DynamicWorkgroupMemory => formatter
+                .write_str("production compilation does not support dynamic workgroup memory"),
             Self::InvalidWorkgroupAlignment(alignment) => write!(
                 formatter,
                 "workgroup allocation alignment {alignment} is not a nonzero power of two",

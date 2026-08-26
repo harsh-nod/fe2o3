@@ -385,8 +385,9 @@ The detailed dependencies and exit criteria are in
   crate/kernel binding IDs are derived independently by the Cargo wrapper,
   macro, and backend and qualify private host/accessor symbols; a real two-rlib
   same-name link test rejects silent archive coalescing. The backend rejects
-  token aliases and local trusted-type lookalikes. V3 requires a backend-issued
-  semantic witness. The former exact-vecadd V2 registration, deterministic
+  token aliases and local trusted-type lookalikes. Production Worker V3 instead
+  matches the generated marker binding and complete argument layout to the
+  independently admitted compiler descriptor. The former exact-vecadd V2 registration, deterministic
   private embedded-artifact accessors, and generated `Kernel`/`Prepared` API are
   qualification-only; Worker V2 emits deterministic private host-object
   accessors, and the alpha/zeta native-worker integration links and validates

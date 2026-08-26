@@ -151,16 +151,16 @@ impl fmt::Display for ProductionTargetErrorV1 {
         match self {
             Self::ConfiguredCpu { observed } => write!(
                 formatter,
-                "production-v1 requires configured target CPU {PRODUCTION_GFX942_DEVICE_CPU_V1:?}; found {observed:?}"
+                "production compilation requires configured target CPU {PRODUCTION_GFX942_DEVICE_CPU_V1:?}; found {observed:?}"
             ),
             Self::RustcObservation(error) => {
                 write!(
                     formatter,
-                    "production-v1 could not capture the rustc target: {error}"
+                    "production compilation could not capture the rustc target: {error}"
                 )
             }
             Self::RustcSessionChanged => formatter.write_str(
-                "production-v1 rustc target facts changed between collection and semantic import",
+                "production compilation rustc target facts changed between collection and semantic import",
             ),
             Self::RustcTargetMismatch {
                 field,
@@ -168,7 +168,7 @@ impl fmt::Display for ProductionTargetErrorV1 {
                 observed,
             } => write!(
                 formatter,
-                "production-v1 requires authoritative rustc {field} {expected:?}; found {observed:?}",
+                "production compilation requires authoritative rustc {field} {expected:?}; found {observed:?}",
             ),
         }
     }

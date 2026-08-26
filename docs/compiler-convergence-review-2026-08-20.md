@@ -68,7 +68,7 @@ The repository currently retains:
 Only the final item may produce production semantic MIR. The other four are
 oracles and fixtures. Shared collection/frontend validation was consolidated,
 but their semantic import code must not be called from
-`ProductionCompilationV1`.
+`ProductionCompilation`.
 
 ### High: detached Pliron lowering shells duplicate the wrong boundary
 
@@ -147,26 +147,24 @@ must preserve the tests' path-substitution and build-custody properties.
 |---|---|---|
 | `legacy-v1` | Explicit compatibility oracle; never a default or fallback | Equivalent evidence is retained by production-neutral tests or tools |
 | `kernel-ir-v1`, `kernel-ir-worker-v2` | Generic compatibility and Worker evidence | Production transaction reaches equivalent inspected artifact |
-| `collected_*` selectors | Differential workload and hardware oracles | Matching slice passes general-route differential gates |
+| `collected_*` oracles | Differential workload and hardware evidence | Matching slice passes production differential gates |
 | `mir_import`, `same_session_rustc_v1`, `mir_import_v2` | Existing semantic/custody observations | Sole AMD-target importer subsumes each required fact and hostile test |
 | detached MIR/Kernel/GPU Pliron services | #140 migration and conformance evidence | Closed session constructs and transforms the same graphs through opaque handles |
 
 The dormant `fe2o3-legacy-compiler` fixture and every compiler API
 implementation selector were subsequently removed. The compiler API and driver
 now expose one production backend contract; non-authoritative comparison remains
-qualification tooling rather than a second route.
+qualification tooling rather than a second compiler implementation.
 
-## Required next sequence
+## Implemented convergence
 
-1. Implement the AMD-target rustc driver adapter and one consuming semantic-MIR
-   importer under #176.
-2. Make `ProductionCompilationV1` retain the semantic record and owner-held MIR
-   graph; prohibit all oracle imports by type and dependency.
-3. Complete the closed #140 construction/transformation service and route
-   MIR-to-Kernel plus Kernel-to-GPU through it.
-4. Reach one inspected scalar/control-flow HSACO and typed host interface through
-   only `production-v1`.
-5. Switch the default, then remove selectors as differential slices pass.
+The AMD-target rustc adapter, consuming semantic-MIR importer, owner-held
+middle end, ranked verification, target-neutral KIR lowering, gfx942 lowering,
+and strict Worker V3 handoff now execute inside `ProductionCompilation`. The
+backend has no production selector or alternate publication implementation.
+Qualification oracles remain feature-gated while their differential evidence
+is migrated; they cannot be selected by a feature-free production build and
+are not represented as variants of a compiler-route enum.
 
 Do not add another workload-specific `QualificationOracleV1` variant, importer, raw
 context callback, textual identity boundary, or in-process profile finalizer.

@@ -21,10 +21,8 @@ impl ScratchTarget {
             .duration_since(UNIX_EPOCH)
             .expect("system clock after Unix epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "fe2o3-production-v1-{}-{nonce}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("fe2o3-production-{}-{nonce}", std::process::id()));
         std::fs::create_dir(&path).expect("create isolated Cargo target directory");
         Self { path }
     }
@@ -112,7 +110,7 @@ fn cargo_fe2o3(
         .env("FE2O3_PRODUCTION_BUILD_CONFIG_V1", build_config)
         .env("CARGO_TARGET_DIR", isolated_target)
         .env_remove("LD_LIBRARY_PATH")
-        .args([command, "-p", package, "--target", "amdgcn-amd-amdhsa"]);
+        .args([command, "-p", package]);
     remove_rustc_overrides(&mut process);
     process.output().expect("run cargo-fe2o3")
 }

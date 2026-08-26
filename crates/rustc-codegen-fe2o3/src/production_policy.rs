@@ -36,7 +36,7 @@ mod tests {
     use super::rejection_from_values;
 
     #[test]
-    fn unset_environment_selects_the_only_production_pipeline() {
+    fn unset_environment_accepts_the_only_production_compiler() {
         assert_eq!(rejection_from_values(None, None), None);
     }
 

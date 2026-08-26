@@ -58,7 +58,7 @@ impl PreparedProductionWorkerHandoff {
 /// code-object envelope, and constructs canonical coordination bytes. It does
 /// not invoke LLVM, link, publish an artifact, load, or launch.
 pub(crate) fn prepare_production_worker_handoff(
-    authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
+    authenticated: crate::production_pipeline::AuthenticatedProductionGfx942Module,
 ) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
     let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
