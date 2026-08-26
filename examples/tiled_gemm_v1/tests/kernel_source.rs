@@ -115,7 +115,7 @@ fn fixed_source_contract_reaches_ir_and_still_fails_closed_before_llvm() {
             LDS_SLICE1_SOURCE_BLOCKER_V1,
             "the authenticated source path is not joined to the dedicated upstream-LLVM LDS lowering",
             "the reviewed source-to-IR correspondence is not a compiler-refinement proof",
-            "protected Worker V2 publication, HSACO load, and launch remain fail-closed",
+            "protected Worker V3 publication custody, HSACO load, and launch remain fail-closed",
         ]
     );
 }
