@@ -17,7 +17,7 @@ use super::{
     ProductionIeeeRoundingModeV2, ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueV1, ProductionSemanticScalarTypeV2,
-    ProductionTotalOutputRefinementErrorV2, ProductionTotalOutputRefinementReportV2,
+    ProductionTotalOutputStagingErrorV2, ProductionTotalOutputStagingReportV2,
 };
 
 const EFFECT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/EFFECT-IDENTITY/V1\0";
@@ -58,10 +58,10 @@ impl ProductionMirPlironSemanticContractReportV1 {
     pub const fn typed_roots(self) -> u64 {
         self.typed_roots
     }
-    /// The accepted statement is bound to the exact MIR subjects and PLIRON
+    /// The structurally reconciled statement is bound to the exact MIR subjects and PLIRON
     /// evidence. Soundness of the MIR projector and mandatory analyses remains
     /// in the compiler trusted base.
-    pub const fn binds_safe_reference_mir_to_live_pliron(self) -> bool {
+    pub const fn structurally_binds_safe_reference_mir_to_live_pliron(self) -> bool {
         true
     }
     pub const fn proves_the_compiler_implementation_sound(self) -> bool {
@@ -103,6 +103,11 @@ pub enum ProductionMirPlironSemanticContractErrorV1 {
     DynamicLoopStepUnproved {
         header: u32,
         latch: u32,
+    },
+    FiniteLoopExtentUnproved {
+        header: u32,
+        latch: u32,
+        detail: &'static str,
     },
     CollectiveCountMismatch,
     CollectiveMismatch {
@@ -157,6 +162,14 @@ impl fmt::Display for ProductionMirPlironSemanticContractErrorV1 {
                 formatter,
                 "dynamic loop <header={header}, latch={latch}> does not have a constant unit step, so overflow-free progress to its u64 upper bound is unproved",
             ),
+            Self::FiniteLoopExtentUnproved {
+                header,
+                latch,
+                detail,
+            } => write!(
+                formatter,
+                "finite loop <header={header}, latch={latch}> is not proved: {detail}",
+            ),
             Self::CollectiveCountMismatch => formatter.write_str(
                 "semantic contract collective count differs from the live PLIRON graph",
             ),
@@ -184,28 +197,28 @@ impl Error for ProductionMirPlironSemanticContractErrorV1 {}
 /// boundary.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::ProductionVerifiedMirPlironKernelV1;
+/// use fe2o3_pliron::ProductionReconciledMirPlironKernelV1;
 ///
 /// fn requires_clone<T: Clone>() {}
-/// requires_clone::<ProductionVerifiedMirPlironKernelV1>();
+/// requires_clone::<ProductionReconciledMirPlironKernelV1>();
 /// ```
 #[derive(Debug)]
-pub struct ProductionVerifiedMirPlironKernelV1 {
+pub struct ProductionReconciledMirPlironKernelV1 {
     ranked: ProductionRankedKernelLoweringInputV1,
     evidence: ProductionMiddleEndEvidenceV5,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     semantics: ProductionMirPlironSemanticContractReportV1,
     contract: MirPlironSemanticContractV1,
 }
 
-impl ProductionVerifiedMirPlironKernelV1 {
+impl ProductionReconciledMirPlironKernelV1 {
     pub const fn ranked(&self) -> &ProductionRankedKernelLoweringInputV1 {
         &self.ranked
     }
     pub const fn evidence(&self) -> &ProductionMiddleEndEvidenceV5 {
         &self.evidence
     }
-    pub const fn total_output_report(&self) -> ProductionTotalOutputRefinementReportV2 {
+    pub const fn total_output_report(&self) -> ProductionTotalOutputStagingReportV2 {
         self.total_output
     }
     pub const fn semantic_contract_report(&self) -> ProductionMirPlironSemanticContractReportV1 {
@@ -218,7 +231,7 @@ impl ProductionVerifiedMirPlironKernelV1 {
     pub const fn semantic_contract(&self) -> &MirPlironSemanticContractV1 {
         &self.contract
     }
-    pub const fn establishes_total_output_refinement_at_mir_pliron_boundary(&self) -> bool {
+    pub const fn has_policy_checked_total_output_staging(&self) -> bool {
         true
     }
     pub const fn compiler_projection_and_pass_soundness_remain_trusted(&self) -> bool {
@@ -230,12 +243,12 @@ impl ProductionVerifiedMirPlironKernelV1 {
 }
 
 #[derive(Debug)]
-pub enum ProductionMirPlironVerificationErrorV1 {
-    TotalOutput(ProductionTotalOutputRefinementErrorV2),
+pub enum ProductionMirPlironReconciliationErrorV1 {
+    TotalOutput(ProductionTotalOutputStagingErrorV2),
     SemanticContract(ProductionMirPlironSemanticContractErrorV1),
 }
 
-impl fmt::Display for ProductionMirPlironVerificationErrorV1 {
+impl fmt::Display for ProductionMirPlironReconciliationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TotalOutput(error) => {
@@ -248,19 +261,19 @@ impl fmt::Display for ProductionMirPlironVerificationErrorV1 {
     }
 }
 
-impl Error for ProductionMirPlironVerificationErrorV1 {}
+impl Error for ProductionMirPlironReconciliationErrorV1 {}
 
-pub fn verify_ranked_kernel_against_safe_reference_mir_v1(
+pub fn reconcile_ranked_kernel_with_safe_reference_mir_v1(
     ranked: ProductionRankedKernelLoweringInputV1,
     evidence: ProductionMiddleEndEvidenceV5,
     contract: &MirPlironSemanticContractV1,
-) -> Result<ProductionVerifiedMirPlironKernelV1, ProductionMirPlironVerificationErrorV1> {
-    let total_output = super::require_total_output_refinement_v2(&ranked, &evidence)
-        .map_err(ProductionMirPlironVerificationErrorV1::TotalOutput)?;
+) -> Result<ProductionReconciledMirPlironKernelV1, ProductionMirPlironReconciliationErrorV1> {
+    let total_output = super::require_total_output_staging_v2(&ranked, &evidence)
+        .map_err(ProductionMirPlironReconciliationErrorV1::TotalOutput)?;
     let semantics =
         require_mir_pliron_semantic_contract_v1(&ranked, &evidence, total_output, contract)
-            .map_err(ProductionMirPlironVerificationErrorV1::SemanticContract)?;
-    Ok(ProductionVerifiedMirPlironKernelV1 {
+            .map_err(ProductionMirPlironReconciliationErrorV1::SemanticContract)?;
+    Ok(ProductionReconciledMirPlironKernelV1 {
         ranked,
         evidence,
         total_output,
@@ -272,7 +285,7 @@ pub fn verify_ranked_kernel_against_safe_reference_mir_v1(
 pub fn require_mir_pliron_semantic_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     contract: &MirPlironSemanticContractV1,
 ) -> Result<ProductionMirPlironSemanticContractReportV1, ProductionMirPlironSemanticContractErrorV1>
 {
@@ -282,7 +295,7 @@ pub fn require_mir_pliron_semantic_contract_v1(
     {
         return Err(ProductionMirPlironSemanticContractErrorV1::TotalOutputEvidenceMismatch);
     }
-    for receipt in ranked.retained_functional_refinement_receipts() {
+    for receipt in ranked.retained_policy_checked_refinement_staging() {
         let binding = receipt.binding();
         if binding.safe_reference_mir_hash() != contract.safe_reference_mir()
             || binding.kernel_mir_hash() != contract.kernel_mir()
@@ -576,7 +589,7 @@ pub fn production_loop_variant_identity_v1(
     domain_digest(LOOP_VARIANT_DOMAIN_V1, &bytes)
 }
 
-pub(super) struct CanonicalStaticLoopV1 {
+pub(super) struct CanonicalFiniteLoopV1 {
     pub(super) identity: DigestV1,
     pub(super) exit: u32,
     pub(super) iteration_domain: DigestV1,
@@ -588,6 +601,7 @@ pub(super) struct CanonicalStaticLoopV1 {
     pub(super) variant: DigestV1,
     pub(super) direction: SemanticLoopDirectionV1,
     pub(super) maximum_steps: u64,
+    pub(super) extent: SemanticFiniteExtentV1,
 }
 
 struct LiveLoopDescriptorV1 {
@@ -674,14 +688,14 @@ fn live_loop_descriptor_v1(
     })
 }
 
-/// Extracts the statically finite canonical-loop subset admitted by automatic
-/// contract derivation. Dynamic bounds remain unsupported until a retained
-/// range receipt can supply their finite domain.
-pub(super) fn canonical_static_loop_v1(
+/// Extracts the finite canonical-loop subset admitted by automatic contract
+/// derivation. A dynamic ranked index is bounded by its exact machine type;
+/// no narrower caller-provided range is accepted without a retained receipt.
+pub(super) fn canonical_finite_loop_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     header: u32,
     latch: u32,
-) -> Result<CanonicalStaticLoopV1, &'static str> {
+) -> Result<CanonicalFiniteLoopV1, &'static str> {
     let kernel = ranked.kernel();
     let live = live_loop_descriptor_v1(ranked, header, latch).map_err(|error| match error {
         LiveLoopDescriptorErrorV1::Structure => "the natural-loop CFG is inconsistent",
@@ -689,20 +703,9 @@ pub(super) fn canonical_static_loop_v1(
             "the loop is not a canonical increasing induction loop"
         }
     })?;
-    let lower = index_constant(kernel, live.lower_value)
-        .ok_or("the lower bound is dynamic and has no retained range receipt")?;
-    let upper = index_constant(kernel, live.upper_value)
-        .ok_or("the upper bound is dynamic and has no retained range receipt")?;
     let step = index_constant(kernel, live.step_value)
         .filter(|step| *step != 0)
         .ok_or("the step is dynamic or zero")?;
-    let span = upper
-        .checked_sub(lower)
-        .ok_or("the increasing-loop upper bound is below its lower bound")?;
-    let maximum_steps = span.div_ceil(step);
-    if maximum_steps == 0 {
-        return Err("the iteration domain is empty");
-    }
     let induction = production_ranked_value_identity_v1(live.induction_value);
     let lower_identity = production_ranked_value_identity_v1(live.lower_value);
     let upper_identity = production_ranked_value_identity_v1(live.upper_value);
@@ -719,6 +722,21 @@ pub(super) fn canonical_static_loop_v1(
         live.transition,
         direction,
     );
+    let (maximum_steps, extent) = finite_loop_extent_v1(
+        ranked,
+        header,
+        latch,
+        live.exit,
+        live.lower_value,
+        live.upper_value,
+        step,
+        induction,
+        lower_identity,
+        upper_identity,
+        step_identity,
+        live.transition,
+        variant,
+    )?;
     let mut domain_bytes = Vec::with_capacity(32 * 6 + 8 * 2 + 12);
     domain_bytes
         .extend_from_slice(&super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
@@ -740,7 +758,7 @@ pub(super) fn canonical_static_loop_v1(
     let mut identity_bytes = domain_bytes;
     identity_bytes.extend_from_slice(iteration_domain.as_bytes());
     let identity = domain_digest(LOOP_CONTRACT_DOMAIN_V1, &identity_bytes);
-    Ok(CanonicalStaticLoopV1 {
+    Ok(CanonicalFiniteLoopV1 {
         identity,
         exit: live.exit,
         iteration_domain,
@@ -752,7 +770,109 @@ pub(super) fn canonical_static_loop_v1(
         variant,
         direction,
         maximum_steps,
+        extent,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finite_loop_extent_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+    exit: u32,
+    lower_value: ProductionRankedValueV1,
+    upper_value: ProductionRankedValueV1,
+    step: u64,
+    induction: DigestV1,
+    lower_bound: DigestV1,
+    upper_bound: DigestV1,
+    step_identity: DigestV1,
+    transition: DigestV1,
+    variant: DigestV1,
+) -> Result<(u64, SemanticFiniteExtentV1), &'static str> {
+    match (
+        index_constant(ranked.kernel(), lower_value),
+        index_constant(ranked.kernel(), upper_value),
+    ) {
+        (Some(lower), Some(upper)) => {
+            let span = upper
+                .checked_sub(lower)
+                .ok_or("the increasing-loop upper bound is below its lower bound")?;
+            let maximum_steps = span.div_ceil(step);
+            if maximum_steps == 0 {
+                return Err("the iteration domain is empty");
+            }
+            require_overflow_free_static_latch_v1(lower, maximum_steps, step)?;
+            Ok((maximum_steps, SemanticFiniteExtentV1::Static(maximum_steps)))
+        }
+        _ if step == 1 => Ok((
+            u64::MAX,
+            SemanticFiniteExtentV1::Dynamic {
+                symbol: production_dynamic_loop_symbol_v1(
+                    ranked,
+                    header,
+                    latch,
+                    exit,
+                    induction,
+                    lower_bound,
+                    upper_bound,
+                    step_identity,
+                    transition,
+                    variant,
+                ),
+                inclusive_upper_bound: u64::MAX,
+            },
+        )),
+        _ => Err(
+            "a dynamic finite loop requires a constant unit step until a narrower range receipt is retained",
+        ),
+    }
+}
+
+fn require_overflow_free_static_latch_v1(
+    lower: u64,
+    maximum_steps: u64,
+    step: u64,
+) -> Result<(), &'static str> {
+    maximum_steps
+        .checked_mul(step)
+        .and_then(|distance| lower.checked_add(distance))
+        .ok_or("the final increasing-loop latch transition can overflow u64")?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn production_dynamic_loop_symbol_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+    exit: u32,
+    induction: DigestV1,
+    lower_bound: DigestV1,
+    upper_bound: DigestV1,
+    step: DigestV1,
+    transition: DigestV1,
+    variant: DigestV1,
+) -> u32 {
+    let mut bytes = Vec::with_capacity(32 * 7 + 12);
+    bytes.extend_from_slice(&super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
+    for block in [header, latch, exit] {
+        bytes.extend_from_slice(&block.to_le_bytes());
+    }
+    for identity in [
+        induction,
+        lower_bound,
+        upper_bound,
+        step,
+        transition,
+        variant,
+    ] {
+        bytes.extend_from_slice(identity.as_bytes());
+    }
+    let digest = domain_digest(b"FE2O3/PRODUCTION-DYNAMIC-LOOP-SYMBOL/V1\0", &bytes);
+    let mut symbol = [0_u8; 4];
+    symbol.copy_from_slice(&digest.as_bytes()[..4]);
+    u32::from_le_bytes(symbol)
 }
 
 fn require_live_loop_contract(
@@ -794,6 +914,36 @@ fn require_live_loop_contract(
         live.transition,
         declared.direction(),
     );
+    let step = index_constant(kernel, live.step_value)
+        .filter(|step| *step != 0)
+        .ok_or(
+            ProductionMirPlironSemanticContractErrorV1::DynamicLoopStepUnproved {
+                header: declared.header_block(),
+                latch: declared.latch_block(),
+            },
+        )?;
+    let expected_extent = finite_loop_extent_v1(
+        ranked,
+        declared.header_block(),
+        declared.latch_block(),
+        declared.exit_block(),
+        live.lower_value,
+        live.upper_value,
+        step,
+        induction,
+        lower_bound,
+        upper_bound_identity,
+        step_identity,
+        live.transition,
+        variant,
+    )
+    .map_err(|detail| {
+        ProductionMirPlironSemanticContractErrorV1::FiniteLoopExtentUnproved {
+            header: declared.header_block(),
+            latch: declared.latch_block(),
+            detail,
+        }
+    })?;
     let Some(domain) = contract
         .domains()
         .iter()
@@ -829,15 +979,10 @@ fn require_live_loop_contract(
             );
         }
     }
-    let extent_matches = static_loop_extent_matches(
-        kernel,
-        live.lower_value,
-        live.upper_value,
-        live.step_value,
-        domain.extents()[0],
-    );
+    let extent_matches = domain.extents().first().copied() == Some(expected_extent.1);
     if domain.extents().len() != 1
         || domain.maximum_cardinality() != Some(declared.maximum_steps())
+        || declared.maximum_steps() != expected_extent.0
         || declared.direction() != SemanticLoopDirectionV1::Increasing
         || !extent_matches
         || declared.induction() != induction
@@ -968,39 +1113,6 @@ fn can_reach_without_header(
         pending.extend(successors(block.terminator()));
     }
     false
-}
-
-fn static_loop_extent_matches(
-    kernel: &super::ProductionRankedKernelV1,
-    lower_bound: ProductionRankedValueV1,
-    upper_bound: ProductionRankedValueV1,
-    step: ProductionRankedValueV1,
-    extent: SemanticFiniteExtentV1,
-) -> bool {
-    if let SemanticFiniteExtentV1::Dynamic { .. } = extent {
-        // The production gate checked the full type bound and unit step before
-        // reaching this structural extent comparison.
-        return true;
-    }
-    let SemanticFiniteExtentV1::Static(expected) = extent else {
-        unreachable!()
-    };
-    let (Some(lower), Some(upper), Some(step)) = (
-        index_constant(kernel, lower_bound),
-        index_constant(kernel, upper_bound),
-        index_constant(kernel, step),
-    ) else {
-        return false;
-    };
-    if step == 0 {
-        return false;
-    }
-    let iterations = if upper <= lower {
-        0
-    } else {
-        (upper - lower).div_ceil(step)
-    };
-    iterations == expected
 }
 
 fn index_constant(
@@ -1336,4 +1448,111 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> DigestV1 {
 
 fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1> {
     u64::try_from(value).map_err(|_| ProductionMirPlironSemanticContractErrorV1::CounterOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_finite_loop_v1, require_overflow_free_static_latch_v1};
+    use crate::{
+        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
+        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
+        ProductionRankedValueV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    };
+
+    #[test]
+    fn static_loop_latch_requires_an_overflow_free_final_transition() {
+        assert!(require_overflow_free_static_latch_v1(4, 3, 2).is_ok());
+        assert!(require_overflow_free_static_latch_v1(u64::MAX - 2, 1, 2).is_ok());
+        assert_eq!(
+            require_overflow_free_static_latch_v1(u64::MAX - 1, 1, 2),
+            Err("the final increasing-loop latch transition can overflow u64"),
+        );
+        assert_eq!(
+            require_overflow_free_static_latch_v1(1, u64::MAX, 2),
+            Err("the final increasing-loop latch transition can overflow u64"),
+        );
+    }
+
+    #[test]
+    fn compiled_static_loop_with_overflowing_latch_is_rejected_by_canonical_extraction() {
+        let lower = ProductionRankedValueIdV1::new(0);
+        let upper = ProductionRankedValueIdV1::new(1);
+        let step = ProductionRankedValueIdV1::new(2);
+        let local = ProductionRankedValueV1::Local;
+        let kernel = ProductionRankedKernelV1::new(
+            "overflowing_static_latch",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::ExecutionLayout {
+                            grid_identity: 1,
+                            global_extents: [1, 1, 1],
+                            workgroup_extents: [1, 1, 1],
+                            subgroup_size: 1,
+                            full_physical_workgroups: true,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: lower,
+                            value: u64::MAX - 1,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: upper,
+                            value: u64::MAX,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: step,
+                            value: 2,
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::BranchArgs {
+                        arguments: vec![local(lower)],
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThanArgs {
+                        lhs: ProductionRankedValueV1::BlockArgument {
+                            block: 1,
+                            argument: 0,
+                        },
+                        rhs: local(upper),
+                        true_arguments: vec![ProductionRankedValueV1::BlockArgument {
+                            block: 1,
+                            argument: 0,
+                        }],
+                        false_arguments: vec![],
+                        true_block: 2,
+                        false_block: 3,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::BranchArgsAdd {
+                        value: ProductionRankedValueV1::BlockArgument {
+                            block: 2,
+                            argument: 0,
+                        },
+                        step: local(step),
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap();
+        let construction = ProductionConstructionV1::ranked_kernel("module", kernel).unwrap();
+        let ranked = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            canonical_finite_loop_v1(&ranked, 1, 2).err(),
+            Some("the final increasing-loop latch transition can overflow u64"),
+        );
+    }
 }

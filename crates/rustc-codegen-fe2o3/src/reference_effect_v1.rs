@@ -15,8 +15,8 @@ use rustc_abi::ExternAbi;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{BlockCheckMode, ExprKind, Mutability, Safety, UnsafeSource};
 use rustc_middle::mir::{
-    BinOp, Body, CastKind, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
-    UnOp, UnwindAction,
+    AssertMessage, BinOp, Body, CastKind, Operand, Place, ProjectionElem, Rvalue, StatementKind,
+    TerminatorKind, UnOp, UnwindAction,
 };
 use rustc_middle::ty::{Instance, Ty, TyCtxt, TyKind, TypingEnv};
 use rustc_span::Spanned;
@@ -183,6 +183,9 @@ pub(crate) enum ReferenceValueV1 {
         target: ReferenceScalarTypeV1,
         operand: ReferenceOperandV1,
     },
+    InputLength {
+        reference_argument: u32,
+    },
     /// Exact, compiler-derived summary of one direct safe local scalar helper.
     /// The summary uses `KernelScalarArgument` leaves as helper-formal symbols;
     /// the resolver substitutes the independently lowered call operands.
@@ -217,7 +220,26 @@ pub(crate) enum ReferenceTerminatorV1 {
         condition: ReferenceOperandV1,
         expected: bool,
         success: u32,
+        bounds_check: Option<ReferenceBoundsCheckV1>,
     },
+}
+
+/// Exact operands retained from one compiler-generated safe-slice bounds
+/// assertion. The assertion condition remains independently retained on the
+/// terminator and must normalize to `index < length` before it can be erased.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReferenceBoundsCheckV1 {
+    pub(crate) index: ReferenceOperandV1,
+    pub(crate) length: ReferenceOperandV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedReferenceBoundsCheckV1 {
+    pub(crate) block: u32,
+    pub(crate) expected: bool,
+    pub(crate) condition: ReferenceEffectExpressionV1,
+    pub(crate) index: ReferenceEffectExpressionV1,
+    pub(crate) length: ReferenceEffectExpressionV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -248,8 +270,8 @@ pub(crate) struct ReferenceLoopSummaryV2 {
     pub(crate) header: u32,
     pub(crate) latch: u32,
     pub(crate) exit: u32,
-    pub(crate) exact_iterations: u32,
-    pub(crate) maximum_iterations: u32,
+    pub(crate) exact_iterations: Option<u64>,
+    pub(crate) maximum_iterations: u64,
     pub(crate) carried_locals: Box<[u32]>,
     pub(crate) initial_state_sha256: [u8; 32],
     pub(crate) transition_sha256: [u8; 32],
@@ -265,6 +287,15 @@ pub(crate) enum ReferenceEffectExpressionV1 {
         argument: u32,
     },
     Constant(ReferenceConstantV1),
+    /// Safe reference load from one exact logical input argument. The
+    /// production join must bind it to a unique live ranked GPU read.
+    InputLoad {
+        reference_argument: u32,
+        index: Box<Self>,
+    },
+    InputLength {
+        reference_argument: u32,
+    },
     Binary {
         operation: ReferenceBinaryOpV1,
         lhs: Box<Self>,
@@ -353,6 +384,47 @@ pub(crate) struct ReferenceOutputWriteV1 {
 }
 
 impl ReferenceEffectIrV1 {
+    pub(crate) fn resolved_bounds_checks_v1(
+        &self,
+    ) -> Result<Vec<ResolvedReferenceBoundsCheckV1>, ReferenceBindingErrorV1> {
+        let resolver = ReferenceExpressionResolverV1::new(self)?;
+        let mut checks = Vec::new();
+        for block in &self.blocks {
+            let ReferenceTerminatorV1::Assert {
+                condition,
+                expected,
+                bounds_check: Some(bounds_check),
+                ..
+            } = &block.terminator
+            else {
+                continue;
+            };
+            checks.push(ResolvedReferenceBoundsCheckV1 {
+                block: block.block,
+                expected: *expected,
+                condition: resolver.resolve_operand_inner_v1(
+                    condition,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                    1,
+                )?,
+                index: resolver.resolve_operand_inner_v1(
+                    &bounds_check.index,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                    1,
+                )?,
+                length: resolver.resolve_operand_inner_v1(
+                    &bounds_check.length,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                    1,
+                )?,
+            });
+        }
+        Ok(checks)
+    }
+
     fn observable_output_writes_v1(
         &self,
     ) -> Result<Vec<ReferenceOutputWriteV1>, ReferenceBindingErrorV1> {
@@ -465,7 +537,7 @@ impl ReferenceEffectIrV1 {
         .map_err(|_| ReferenceBindingErrorV1::new("point coordinate count exceeds u32"))
     }
 
-    fn reference_argument_for_kernel_argument_v1(
+    pub(crate) fn reference_argument_for_kernel_argument_v1(
         &self,
         kernel_argument: u32,
     ) -> Result<u32, ReferenceBindingErrorV1> {
@@ -524,7 +596,13 @@ impl ReferenceEffectIrV1 {
             digest.update(summary.header.to_le_bytes());
             digest.update(summary.latch.to_le_bytes());
             digest.update(summary.exit.to_le_bytes());
-            digest.update(summary.exact_iterations.to_le_bytes());
+            match summary.exact_iterations {
+                Some(iterations) => {
+                    digest.update([1]);
+                    digest.update(iterations.to_le_bytes());
+                }
+                None => digest.update([0]),
+            }
             digest.update(summary.maximum_iterations.to_le_bytes());
             put_len(&mut digest, summary.carried_locals.len());
             for local in &summary.carried_locals {
@@ -561,6 +639,8 @@ struct ReferenceLoopTraceV2 {
     initial: ReferenceSymbolicEnvironmentV2,
     transitions: Vec<ReferenceSymbolicEnvironmentV2>,
     variants: Vec<ReferenceEffectExpressionV1>,
+    exact_iterations: Option<u64>,
+    maximum_iterations: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -698,6 +778,8 @@ impl ReferenceEffectIrV1 {
                                 initial: state.environment.clone(),
                                 transitions: Vec::new(),
                                 variants: Vec::new(),
+                                exact_iterations: None,
+                                maximum_iterations: None,
                             },
                         );
                     }
@@ -773,7 +855,20 @@ impl ReferenceEffectIrV1 {
                     condition,
                     expected,
                     success,
+                    bounds_check,
                 } => {
+                    if bounds_check.is_some() {
+                        dispatch_symbolic_edge_v2(
+                            &mut pending,
+                            state,
+                            block.block,
+                            *success,
+                            backedges,
+                            &loop_nodes,
+                            &mut work_budget,
+                        )?;
+                        continue;
+                    }
                     let expression =
                         symbolic_scalar_v2(symbolic_operand_v2(&state.environment, condition)?)?;
                     let actual = reference_constant_bits_v2(&expression)
@@ -834,8 +929,40 @@ impl ReferenceEffectIrV1 {
                         )?;
                     } else {
                         if loop_headers.contains(&block.block) {
+                            if let Some(summary) = self.summarize_dynamic_counted_loop_v2(
+                                block,
+                                discriminant,
+                                values,
+                                *otherwise,
+                                &state,
+                                &loop_nodes,
+                            )? {
+                                state.environment.insert(
+                                    summary.induction_local,
+                                    ReferenceSymbolicValueV2::Scalar(
+                                        summary.final_induction.clone(),
+                                    ),
+                                );
+                                let trace = state
+                                    .traces
+                                    .get_mut(&(block.block, summary.latch))
+                                    .ok_or_else(|| {
+                                        ReferenceBindingErrorV1::new(
+                                            "dynamic reference loop lost its compiler trace",
+                                        )
+                                    })?;
+                                trace.exit = Some(summary.exit);
+                                trace.exact_iterations = None;
+                                trace.maximum_iterations = Some(summary.maximum_iterations);
+                                trace.transitions.push(state.environment.clone());
+                                trace.variants.push(expression);
+                                state.block = summary.exit;
+                                work_budget.charge_state_clone_v2(&state)?;
+                                pending.push_back(state);
+                                continue;
+                            }
                             return Err(ReferenceBindingErrorV1::new(format!(
-                                "dynamic reference loop at header {} has no authenticated finite maximum; provide a compiler range fact no larger than {MAX_REFERENCE_LOOP_ITERATIONS_V2}",
+                                "dynamic reference loop at header {} has no authenticated finite maximum and canonical unit-step variant",
                                 block.block,
                             )));
                         }
@@ -949,6 +1076,235 @@ impl ReferenceEffectIrV1 {
         }))
     }
 
+    fn summarize_dynamic_counted_loop_v2(
+        &self,
+        header: &ReferenceBlockV1,
+        discriminant: &ReferenceOperandV1,
+        values: &[(u128, u32)],
+        otherwise: u32,
+        state: &ReferenceSymbolicStateV2,
+        loop_nodes: &BTreeMap<(u32, u32), BTreeSet<u32>>,
+    ) -> Result<Option<DynamicReferenceLoopSummaryV2>, ReferenceBindingErrorV1> {
+        let (ReferenceOperandV1::Copy(discriminant) | ReferenceOperandV1::Move(discriminant)) =
+            discriminant
+        else {
+            return Ok(None);
+        };
+        if !discriminant.projection.is_empty() {
+            return Ok(None);
+        }
+        let assignments = header
+            .assignments
+            .iter()
+            .filter(|assignment| {
+                assignment.destination.local == discriminant.local
+                    && assignment.destination.projection.is_empty()
+            })
+            .collect::<Vec<_>>();
+        let [assignment] = assignments.as_slice() else {
+            return Ok(None);
+        };
+        let ReferenceValueV1::Binary {
+            operation: ReferenceBinaryOpV1::LessThan,
+            lhs,
+            rhs: bound,
+            checked: false,
+        } = &assignment.value
+        else {
+            return Ok(None);
+        };
+        let (ReferenceOperandV1::Copy(induction) | ReferenceOperandV1::Move(induction)) = lhs
+        else {
+            return Ok(None);
+        };
+        if !induction.projection.is_empty() {
+            return Ok(None);
+        }
+        let mut induction = induction.clone();
+        for _ in 0..fe2o3_pliron::MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2 {
+            let aliases = header
+                .assignments
+                .iter()
+                .filter(|assignment| {
+                    assignment.destination.local == induction.local
+                        && assignment.destination.projection.is_empty()
+                })
+                .collect::<Vec<_>>();
+            let [alias] = aliases.as_slice() else {
+                break;
+            };
+            let ReferenceValueV1::Use(
+                ReferenceOperandV1::Copy(source) | ReferenceOperandV1::Move(source),
+            ) = &alias.value
+            else {
+                break;
+            };
+            if !source.projection.is_empty() || source.local == induction.local {
+                break;
+            }
+            induction = source.clone();
+        }
+        let [(0, exit)] = values else {
+            return Ok(None);
+        };
+        let mut matching_loops = loop_nodes.iter().filter(|((_, loop_header), nodes)| {
+            *loop_header == header.block && nodes.contains(&otherwise) && !nodes.contains(exit)
+        });
+        let Some((&(latch, _), nodes)) = matching_loops.next() else {
+            return Ok(None);
+        };
+        if matching_loops.next().is_some() {
+            return Ok(None);
+        }
+        let initial = state.environment.get(&induction.local);
+        let Some(ReferenceSymbolicValueV2::Scalar(initial)) = initial else {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop has no scalar initial induction value",
+            ));
+        };
+        let Some((initial_scalar, 0)) = reference_constant_bits_v2(initial) else {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop induction is not initialized to unsigned zero",
+            ));
+        };
+        let final_induction = symbolic_scalar_v2(symbolic_operand_v2(&state.environment, bound)?)?;
+        let maximum_iterations = match &final_induction {
+            ReferenceEffectExpressionV1::KernelScalarArgument { argument } => {
+                let scalar = self.relations.iter().find_map(|relation| match relation {
+                    ReferenceArgumentRelationV1::ScalarInput {
+                        argument: actual,
+                        scalar,
+                    } if actual == argument => Some(*scalar),
+                    _ => None,
+                });
+                let Some(scalar) = scalar else {
+                    return Err(ReferenceBindingErrorV1::new(
+                        "dynamic counted loop bound has no scalar ABI relation",
+                    ));
+                };
+                let Some(maximum) = unsigned_reference_scalar_maximum_v2(scalar) else {
+                    return Err(ReferenceBindingErrorV1::new(
+                        "dynamic counted loop bound is not an unsigned finite machine scalar",
+                    ));
+                };
+                if scalar != initial_scalar {
+                    return Err(ReferenceBindingErrorV1::new(
+                        "dynamic counted loop induction and bound types differ",
+                    ));
+                }
+                maximum
+            }
+            _ => return Ok(None),
+        };
+        let mut induction_assignments = Vec::new();
+        for node in nodes {
+            for assignment in &self.blocks[*node as usize].assignments {
+                if !assignment.destination.projection.is_empty() {
+                    return Err(ReferenceBindingErrorV1::new(
+                        "dynamic counted loop contains a projected memory effect",
+                    ));
+                }
+                if state
+                    .traces
+                    .get(&(header.block, latch))
+                    .is_some_and(|trace| trace.initial.contains_key(&assignment.destination.local))
+                    && assignment.destination.local != induction.local
+                {
+                    return Err(ReferenceBindingErrorV1::new(
+                        "dynamic counted loop mutates another loop-carried local",
+                    ));
+                }
+                if assignment.destination.local == induction.local {
+                    induction_assignments.push(assignment);
+                }
+            }
+        }
+        let [induction_assignment] = induction_assignments.as_slice() else {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop does not have one induction assignment",
+            ));
+        };
+        let ReferenceValueV1::Use(
+            ReferenceOperandV1::Copy(increment_value) | ReferenceOperandV1::Move(increment_value),
+        ) = &induction_assignment.value
+        else {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop induction is not assigned from checked arithmetic",
+            ));
+        };
+        let [ReferencePlaceProjectionV1::Field(0)] = increment_value.projection.as_ref() else {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop induction does not select the checked value field",
+            ));
+        };
+        let increment_pair = increment_value.local;
+        let increment = nodes
+            .iter()
+            .flat_map(|node| self.blocks[*node as usize].assignments.iter())
+            .find(|assignment| {
+                assignment.destination.local == increment_pair
+                    && assignment.destination.projection.is_empty()
+            });
+        let Some(ReferenceAssignmentV1 {
+            value:
+                ReferenceValueV1::Binary {
+                    operation: ReferenceBinaryOpV1::Add,
+                    lhs: increment_lhs,
+                    rhs: increment_rhs,
+                    checked: true,
+                },
+            ..
+        }) = increment
+        else {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop has no checked additive transition",
+            ));
+        };
+        let increment_matches = [
+            (increment_lhs, increment_rhs),
+            (increment_rhs, increment_lhs),
+        ]
+        .into_iter()
+        .any(|(candidate_induction, candidate_step)| {
+            matches!(
+                candidate_induction,
+                ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
+                    if place.local == induction.local && place.projection.is_empty()
+            ) && matches!(
+                candidate_step,
+                ReferenceOperandV1::Constant(ReferenceConstantV1::Scalar { bits: 1, .. })
+            )
+        });
+        if !increment_matches {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop transition is not induction plus one",
+            ));
+        }
+        let overflow_checked = nodes.iter().any(|node| {
+            matches!(
+                &self.blocks[*node as usize].terminator,
+                ReferenceTerminatorV1::Assert {
+                    condition: ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place),
+                    expected: false,
+                    ..
+                } if place.local == increment_pair
+                    && matches!(place.projection.as_ref(), [ReferencePlaceProjectionV1::Field(1)])
+            )
+        });
+        if !overflow_checked {
+            return Err(ReferenceBindingErrorV1::new(
+                "dynamic counted loop does not retain its overflow assertion",
+            ));
+        }
+        Ok(Some(DynamicReferenceLoopSummaryV2 {
+            latch,
+            exit: *exit,
+            induction_local: induction.local,
+            final_induction,
+            maximum_iterations,
+        }))
+    }
+
     fn symbolic_output_coordinate_v2(
         &self,
         environment: &ReferenceSymbolicEnvironmentV2,
@@ -1001,6 +1357,24 @@ impl ReferenceEffectIrV1 {
             ))),
         }
     }
+}
+
+struct DynamicReferenceLoopSummaryV2 {
+    latch: u32,
+    exit: u32,
+    induction_local: u32,
+    final_induction: ReferenceEffectExpressionV1,
+    maximum_iterations: u64,
+}
+
+fn unsigned_reference_scalar_maximum_v2(scalar: ReferenceScalarTypeV1) -> Option<u64> {
+    Some(match scalar {
+        ReferenceScalarTypeV1::U8 => u64::from(u8::MAX),
+        ReferenceScalarTypeV1::U16 => u64::from(u16::MAX),
+        ReferenceScalarTypeV1::U32 => u64::from(u32::MAX),
+        ReferenceScalarTypeV1::U64 | ReferenceScalarTypeV1::Usize => u64::MAX,
+        _ => return None,
+    })
 }
 
 fn symbolic_value_v2(
@@ -1059,6 +1433,11 @@ fn symbolic_value_v2(
                 },
             ))
         }
+        ReferenceValueV1::InputLength { reference_argument } => Ok(
+            ReferenceSymbolicValueV2::Scalar(ReferenceEffectExpressionV1::InputLength {
+                reference_argument: *reference_argument,
+            }),
+        ),
         ReferenceValueV1::SafeHelperCall {
             parameters,
             arguments,
@@ -1116,6 +1495,39 @@ fn symbolic_operand_v2(
                     place.local,
                 ))),
             }
+        }
+        ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
+            if matches!(
+                place.projection.as_ref(),
+                [
+                    ReferencePlaceProjectionV1::Dereference,
+                    ReferencePlaceProjectionV1::Index(_)
+                ]
+            ) =>
+        {
+            let [
+                ReferencePlaceProjectionV1::Dereference,
+                ReferencePlaceProjectionV1::Index(index),
+            ] = place.projection.as_ref()
+            else {
+                unreachable!()
+            };
+            let reference_argument = place.local.checked_sub(1).ok_or_else(|| {
+                ReferenceBindingErrorV1::new(
+                    "safe reference load uses the return-place local as its base",
+                )
+            })?;
+            let index = environment.get(index).cloned().ok_or_else(|| {
+                ReferenceBindingErrorV1::new(format!(
+                    "safe reference load index _{index} has no symbolic value",
+                ))
+            })?;
+            Ok(ReferenceSymbolicValueV2::Scalar(
+                ReferenceEffectExpressionV1::InputLoad {
+                    reference_argument,
+                    index: Box::new(symbolic_scalar_v2(index)?),
+                },
+            ))
         }
         ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
             if matches!(
@@ -1207,11 +1619,13 @@ fn symbolic_expression_nodes_v2(
                 pending.push((rhs, depth + 1));
             }
             ReferenceEffectExpressionV1::Unary { operand, .. }
-            | ReferenceEffectExpressionV1::Cast { operand, .. } => {
+            | ReferenceEffectExpressionV1::Cast { operand, .. }
+            | ReferenceEffectExpressionV1::InputLoad { index: operand, .. } => {
                 pending.push((operand, depth + 1));
             }
             ReferenceEffectExpressionV1::PointCoordinate { .. }
             | ReferenceEffectExpressionV1::KernelScalarArgument { .. }
+            | ReferenceEffectExpressionV1::InputLength { .. }
             | ReferenceEffectExpressionV1::Constant(_) => {}
         }
     }
@@ -1555,14 +1969,20 @@ fn reference_loop_summary_v2(
     for variant in &trace.variants {
         digest_effect_expression_v1(&mut variant_digest, variant);
     }
-    let iterations = u32::try_from(trace.transitions.len())
-        .map_err(|_| ReferenceBindingErrorV1::new("reference loop iteration count exceeds u32"))?;
+    let iterations = u64::try_from(trace.transitions.len())
+        .map_err(|_| ReferenceBindingErrorV1::new("reference loop iteration count exceeds u64"))?;
+    let exact_iterations = if trace.maximum_iterations.is_some() {
+        trace.exact_iterations
+    } else {
+        Some(iterations)
+    };
+    let maximum_iterations = trace.maximum_iterations.unwrap_or(iterations);
     Ok(ReferenceLoopSummaryV2 {
         header: trace.header,
         latch: trace.latch,
         exit,
-        exact_iterations: iterations,
-        maximum_iterations: iterations,
+        exact_iterations,
+        maximum_iterations,
         carried_locals: carried_locals.into_boxed_slice(),
         initial_state_sha256: initial_digest.finalize().into(),
         transition_sha256: transition_digest.finalize().into(),
@@ -1673,6 +2093,8 @@ fn reference_fold_constant_v2(
         }
         ReferenceEffectExpressionV1::PointCoordinate { .. }
         | ReferenceEffectExpressionV1::KernelScalarArgument { .. }
+        | ReferenceEffectExpressionV1::InputLoad { .. }
+        | ReferenceEffectExpressionV1::InputLength { .. }
         | ReferenceEffectExpressionV1::Cast { .. } => None,
     }
 }
@@ -2150,12 +2572,22 @@ fn lower_reference_effect_ir_v1<'tcx>(
                 expected,
                 target,
                 unwind: UnwindAction::Unreachable,
-                ..
-            } => ReferenceTerminatorV1::Assert {
-                condition: lower_operand_v1(tcx, body, cond, block_index)?,
-                expected: *expected,
-                success: target.as_u32(),
-            },
+                msg,
+            } => {
+                let bounds_check = match &**msg {
+                    AssertMessage::BoundsCheck { len, index } => Some(ReferenceBoundsCheckV1 {
+                        index: lower_operand_v1(tcx, body, index, block_index)?,
+                        length: lower_operand_v1(tcx, body, len, block_index)?,
+                    }),
+                    _ => None,
+                };
+                ReferenceTerminatorV1::Assert {
+                    condition: lower_operand_v1(tcx, body, cond, block_index)?,
+                    expected: *expected,
+                    success: target.as_u32(),
+                    bounds_check,
+                }
+            }
             TerminatorKind::Call {
                 func,
                 args,
@@ -2471,6 +2903,7 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
                     condition: lower_operand_v1(tcx, body, cond, block_index)?,
                     expected: *expected,
                     success: target.as_u32(),
+                    bounds_check: None,
                 }
             }
             TerminatorKind::SwitchInt { .. } | TerminatorKind::Assert { .. } => {
@@ -2738,6 +3171,56 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     ))),
                 }
             }
+            ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place)
+                if matches!(
+                    place.projection.as_ref(),
+                    [
+                        ReferencePlaceProjectionV1::Dereference,
+                        ReferencePlaceProjectionV1::Index(_)
+                    ]
+                ) =>
+            {
+                let [
+                    ReferencePlaceProjectionV1::Dereference,
+                    ReferencePlaceProjectionV1::Index(index),
+                ] = place.projection.as_ref()
+                else {
+                    unreachable!()
+                };
+                let reference_argument = place.local.checked_sub(1).ok_or_else(|| {
+                    ReferenceBindingErrorV1::new(
+                        "safe reference load uses the return-place local as its base",
+                    )
+                })?;
+                let point_count = self.effect_ir.point_coordinate_count_v1()?;
+                let kernel_argument =
+                    reference_argument.checked_sub(point_count).ok_or_else(|| {
+                        ReferenceBindingErrorV1::new(
+                            "safe reference load base has no logical kernel argument",
+                        )
+                    })?;
+                if !self.effect_ir.relations.iter().any(|relation| {
+                    matches!(
+                        relation,
+                        ReferenceArgumentRelationV1::SharedSliceInput { argument, .. }
+                            if *argument == kernel_argument
+                    )
+                }) {
+                    return Err(ReferenceBindingErrorV1::new(
+                        "safe reference load base is not a shared-slice input",
+                    ));
+                }
+                Self::charge_node_v1(work)?;
+                Ok(ReferenceEffectExpressionV1::InputLoad {
+                    reference_argument,
+                    index: Box::new(self.resolve_local_inner_v1(
+                        *index,
+                        visiting,
+                        work,
+                        depth + 1,
+                    )?),
+                })
+            }
             ReferenceOperandV1::Copy(place) | ReferenceOperandV1::Move(place) => {
                 Err(ReferenceBindingErrorV1::new(format!(
                     "reference effect scalar operand uses unsupported place projection {:?}",
@@ -2798,6 +3281,11 @@ impl<'a> ReferenceExpressionResolverV1<'a> {
                     depth + 1,
                 )?),
             }),
+            ReferenceValueV1::InputLength { reference_argument } => {
+                Ok(ReferenceEffectExpressionV1::InputLength {
+                    reference_argument: *reference_argument,
+                })
+            }
             ReferenceValueV1::SafeHelperCall {
                 parameters,
                 arguments,
@@ -2841,6 +3329,16 @@ fn substitute_helper_summary_v2(
         ReferenceEffectExpressionV1::PointCoordinate { .. } => {
             return Err(ReferenceBindingErrorV1::new(
                 "safe scalar helper summary unexpectedly contains a point-coordinate symbol",
+            ));
+        }
+        ReferenceEffectExpressionV1::InputLoad { .. } => {
+            return Err(ReferenceBindingErrorV1::new(
+                "safe scalar helper summaries cannot capture reference loads",
+            ));
+        }
+        ReferenceEffectExpressionV1::InputLength { .. } => {
+            return Err(ReferenceBindingErrorV1::new(
+                "safe scalar helper summaries cannot capture slice lengths",
             ));
         }
         ReferenceEffectExpressionV1::Constant(constant) => {
@@ -2993,17 +3491,22 @@ fn reference_guarded_edges_v1(
             condition,
             expected,
             success,
+            bounds_check,
         } => Ok(vec![(
             *success,
-            Some(ReferenceGuardAtomV1::Assert {
-                condition: resolver.resolve_operand_inner_v1(
-                    condition,
-                    &mut BTreeSet::new(),
-                    &mut 0,
-                    1,
-                )?,
-                expected: *expected,
-            }),
+            if bounds_check.is_some() {
+                None
+            } else {
+                Some(ReferenceGuardAtomV1::Assert {
+                    condition: resolver.resolve_operand_inner_v1(
+                        condition,
+                        &mut BTreeSet::new(),
+                        &mut 0,
+                        1,
+                    )?,
+                    expected: *expected,
+                })
+            },
         )]),
         ReferenceTerminatorV1::Switch {
             discriminant,
@@ -3272,18 +3775,32 @@ fn lower_rvalue_v1<'tcx>(
                 checked,
             })
         }
+        Rvalue::UnaryOp(UnOp::PtrMetadata, operand) => {
+            let (Operand::Copy(place) | Operand::Move(place)) = operand else {
+                return Err(ReferenceBindingErrorV1::at(
+                    tcx,
+                    body,
+                    block,
+                    "slice metadata source is not one reference argument",
+                ));
+            };
+            if !place.projection.is_empty() || place.local.as_u32() == 0 {
+                return Err(ReferenceBindingErrorV1::at(
+                    tcx,
+                    body,
+                    block,
+                    "slice metadata source is not one direct reference argument",
+                ));
+            }
+            Ok(ReferenceValueV1::InputLength {
+                reference_argument: place.local.as_u32() - 1,
+            })
+        }
         Rvalue::UnaryOp(operation, operand) => Ok(ReferenceValueV1::Unary {
             operation: match operation {
                 UnOp::Not => ReferenceUnaryOpV1::Not,
                 UnOp::Neg => ReferenceUnaryOpV1::Negate,
-                UnOp::PtrMetadata => {
-                    return Err(ReferenceBindingErrorV1::at(
-                        tcx,
-                        body,
-                        block,
-                        "slice and pointer reads require an independently bound GPU load symbol",
-                    ));
-                }
+                UnOp::PtrMetadata => unreachable!(),
             },
             operand: lower_operand_v1(tcx, body, operand, block)?,
         }),
@@ -3488,6 +4005,10 @@ fn digest_value(digest: &mut Sha256, value: &ReferenceValueV1) {
             }
             digest_effect_expression_v1(digest, summary);
         }
+        ReferenceValueV1::InputLength { reference_argument } => {
+            digest.update([5]);
+            digest.update(reference_argument.to_le_bytes());
+        }
     }
 }
 
@@ -3534,6 +4055,18 @@ fn digest_effect_expression_v1(digest: &mut Sha256, expression: &ReferenceEffect
                 },
             ]);
             digest_effect_expression_v1(digest, operand);
+        }
+        ReferenceEffectExpressionV1::InputLoad {
+            reference_argument,
+            index,
+        } => {
+            digest.update([6]);
+            digest.update(reference_argument.to_le_bytes());
+            digest_effect_expression_v1(digest, index);
+        }
+        ReferenceEffectExpressionV1::InputLength { reference_argument } => {
+            digest.update([7]);
+            digest.update(reference_argument.to_le_bytes());
         }
         ReferenceEffectExpressionV1::Cast {
             kind,
@@ -3654,10 +4187,15 @@ fn digest_terminator(digest: &mut Sha256, terminator: &ReferenceTerminatorV1) {
             condition,
             expected,
             success,
+            bounds_check,
         } => {
-            digest.update([3, u8::from(*expected)]);
+            digest.update([3, u8::from(*expected), u8::from(bounds_check.is_some())]);
             digest_operand(digest, condition);
             digest.update(success.to_le_bytes());
+            if let Some(bounds_check) = bounds_check {
+                digest_operand(digest, &bounds_check.index);
+                digest_operand(digest, &bounds_check.length);
+            }
         }
     }
 }
@@ -4000,6 +4538,7 @@ mod tests {
                         condition: checked_field(6, 1),
                         expected: false,
                         success: 3,
+                        bounds_check: None,
                     },
                 },
                 ReferenceBlockV1 {
@@ -4022,6 +4561,7 @@ mod tests {
                         condition: checked_field(7, 1),
                         expected: false,
                         success: 4,
+                        bounds_check: None,
                     },
                 },
                 ReferenceBlockV1 {
@@ -4069,7 +4609,7 @@ mod tests {
             ReferenceEffectExpressionV1::Constant(scalar_constant(17)),
         );
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].exact_iterations, 4);
+        assert_eq!(summaries[0].exact_iterations, Some(4));
         assert_eq!(summaries[0].maximum_iterations, 4);
         assert_eq!(summaries[0].carried_locals.as_ref(), &[3, 4]);
         assert_ne!(summaries[0].transition_sha256, [0; 32]);
@@ -4077,7 +4617,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_counted_loop_without_range_fact_fails_closed() {
+    fn dynamic_loop_with_additional_carried_state_fails_closed() {
         let effect_ir = counted_loop_reference_ir(local(1));
         let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
         let error = effect_ir
@@ -4086,8 +4626,108 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("has no authenticated finite maximum")
+                .contains("mutates another loop-carried local"),
+            "{error}"
         );
+    }
+
+    #[test]
+    fn dynamic_induction_only_loop_uses_the_unsigned_type_bound() {
+        let effect_ir = ReferenceEffectIrV1 {
+            argument_count: 2,
+            local_count: 6,
+            relations: vec![
+                ReferenceArgumentRelationV1::ScalarInput {
+                    argument: 0,
+                    scalar: ReferenceScalarTypeV1::U32,
+                },
+                ReferenceArgumentRelationV1::DisjointOutputCoordinate {
+                    argument: 1,
+                    element: ReferenceScalarTypeV1::U32,
+                },
+            ]
+            .into_boxed_slice(),
+            blocks: vec![
+                ReferenceBlockV1 {
+                    block: 0,
+                    assignments: vec![assign(3, 0, ReferenceValueV1::Use(scalar_operand(0)))]
+                        .into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Goto { target: 1 },
+                },
+                ReferenceBlockV1 {
+                    block: 1,
+                    assignments: vec![assign(
+                        4,
+                        0,
+                        ReferenceValueV1::Binary {
+                            operation: ReferenceBinaryOpV1::LessThan,
+                            lhs: local(3),
+                            rhs: local(1),
+                            checked: false,
+                        },
+                    )]
+                    .into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Switch {
+                        discriminant: local(4),
+                        values: vec![(0, 4)].into_boxed_slice(),
+                        otherwise: 2,
+                    },
+                },
+                ReferenceBlockV1 {
+                    block: 2,
+                    assignments: vec![assign(
+                        5,
+                        0,
+                        ReferenceValueV1::Binary {
+                            operation: ReferenceBinaryOpV1::Add,
+                            lhs: local(3),
+                            rhs: scalar_operand(1),
+                            checked: true,
+                        },
+                    )]
+                    .into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Assert {
+                        condition: checked_field(5, 1),
+                        expected: false,
+                        success: 3,
+                        bounds_check: None,
+                    },
+                },
+                ReferenceBlockV1 {
+                    block: 3,
+                    assignments: vec![assign(3, 0, ReferenceValueV1::Use(checked_field(5, 0)))]
+                        .into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Goto { target: 1 },
+                },
+                ReferenceBlockV1 {
+                    block: 4,
+                    assignments: vec![ReferenceAssignmentV1 {
+                        statement: 0,
+                        destination: ReferencePlaceV1 {
+                            local: 2,
+                            projection: vec![ReferencePlaceProjectionV1::Dereference]
+                                .into_boxed_slice(),
+                        },
+                        value: ReferenceValueV1::Use(local(3)),
+                    }]
+                    .into_boxed_slice(),
+                    terminator: ReferenceTerminatorV1::Return,
+                },
+            ]
+            .into_boxed_slice(),
+            loop_summaries: Box::default(),
+            observable_output_effects: Box::default(),
+        };
+        let backedges = reference_cfg_backedges_v2(&effect_ir).unwrap();
+        let (writes, summaries) = effect_ir
+            .observable_output_writes_with_loops_v2(&backedges)
+            .unwrap();
+        assert_eq!(
+            writes[0].rhs,
+            ReferenceEffectExpressionV1::KernelScalarArgument { argument: 0 }
+        );
+        assert_eq!(summaries[0].exact_iterations, None);
+        assert_eq!(summaries[0].maximum_iterations, u64::from(u32::MAX));
     }
 
     #[test]
@@ -4128,9 +4768,15 @@ mod tests {
     }
 
     #[test]
-    fn projected_slice_read_is_not_accepted_as_an_opaque_symbol() {
-        let error = symbolic_operand_v2(
-            &BTreeMap::new(),
+    fn projected_slice_read_retains_its_exact_argument_and_index() {
+        let environment = BTreeMap::from([(
+            2,
+            ReferenceSymbolicValueV2::Scalar(ReferenceEffectExpressionV1::PointCoordinate {
+                axis: 0,
+            }),
+        )]);
+        let value = symbolic_operand_v2(
+            &environment,
             &ReferenceOperandV1::Copy(ReferencePlaceV1 {
                 local: 1,
                 projection: vec![
@@ -4140,11 +4786,13 @@ mod tests {
                 .into_boxed_slice(),
             }),
         )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("independently bound GPU load symbol")
+        .unwrap();
+        assert_eq!(
+            value,
+            ReferenceSymbolicValueV2::Scalar(ReferenceEffectExpressionV1::InputLoad {
+                reference_argument: 0,
+                index: Box::new(ReferenceEffectExpressionV1::PointCoordinate { axis: 0 }),
+            })
         );
     }
 
@@ -4181,6 +4829,8 @@ mod tests {
                     initial: BTreeMap::new(),
                     transitions: vec![BTreeMap::new(); MAX_REFERENCE_LOOP_ITERATIONS_V2],
                     variants: Vec::new(),
+                    exact_iterations: None,
+                    maximum_iterations: None,
                 },
             )]),
         };

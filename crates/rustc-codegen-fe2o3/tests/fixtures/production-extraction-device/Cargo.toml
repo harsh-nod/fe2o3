@@ -27,6 +27,10 @@ reference-missing = []
 reference-no-output = []
 reference-duplicate = []
 reference-orphan = []
+reference-two-output-positive = []
+reference-two-output-substitution = []
+reference-two-output-alias = []
+reference-two-output-schedule = []
 
 [dependencies]
 fe2o3-device.workspace = true

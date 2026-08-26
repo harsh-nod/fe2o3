@@ -17,16 +17,17 @@ use fe2o3_functional_proof::{
 use fe2o3_proof_contracts::DigestV1;
 
 use super::mir_pliron_semantic_contract_v1::{
-    LiveTypedRootV1, canonical_static_loop_v1, coverage, evaluation_order, live_typed_roots,
+    LiveTypedRootV1, canonical_finite_loop_v1, coverage, evaluation_order, live_typed_roots,
     production_dynamic_output_symbol_v1, production_output_domain_identity_v1,
 };
 use super::{
     ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractErrorV1,
-    ProductionMirPlironSemanticContractReportV1, ProductionRankedKernelLoweringInputV1,
-    ProductionRankedOperationV1, ProductionRankedValueV1, ProductionTotalOutputRefinementErrorV2,
-    ProductionTotalOutputRefinementReportV2, production_effect_contract_identity_v1,
-    production_ranked_value_identity_v1, require_mir_pliron_semantic_contract_v1,
-    require_total_output_refinement_v2,
+    ProductionMirPlironSemanticContractReportV1, ProductionNonCanonicalLoopProofErrorV1,
+    ProductionNonCanonicalLoopProofRequirementV1, ProductionRankedKernelLoweringInputV1,
+    ProductionRankedOperationV1, ProductionRankedValueV1, ProductionTotalOutputStagingErrorV2,
+    ProductionTotalOutputStagingReportV2, derive_noncanonical_loop_proof_requirement_v1,
+    production_effect_contract_identity_v1, production_ranked_value_identity_v1,
+    require_mir_pliron_semantic_contract_v1, require_total_output_staging_v2,
 };
 
 /// Compiler-derived contract data after independent reconciliation with the
@@ -37,7 +38,7 @@ use super::{
 #[derive(Debug)]
 pub struct ProductionReconciledMirPlironSemanticContractV1 {
     contract: MirPlironSemanticContractV1,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     semantics: ProductionMirPlironSemanticContractReportV1,
 }
 
@@ -46,7 +47,7 @@ impl ProductionReconciledMirPlironSemanticContractV1 {
         &self.contract
     }
 
-    pub const fn total_output_report(&self) -> ProductionTotalOutputRefinementReportV2 {
+    pub const fn total_output_report(&self) -> ProductionTotalOutputStagingReportV2 {
         self.total_output
     }
 
@@ -65,7 +66,7 @@ impl ProductionReconciledMirPlironSemanticContractV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionMirPlironSemanticContractDerivationErrorV1 {
-    TotalOutput(ProductionTotalOutputRefinementErrorV2),
+    TotalOutput(ProductionTotalOutputStagingErrorV2),
     MissingRetainedReceipt,
     WrongRefinementBoundary,
     InconsistentMirSubjects,
@@ -92,11 +93,11 @@ pub enum ProductionMirPlironSemanticContractDerivationErrorV1 {
     },
     AmbiguousTypedRootDomain,
     UnsupportedNumericalPolicy,
-    UnsupportedLoop {
-        header: u32,
-        latch: u32,
+    NonCanonicalLoopProofRequired {
+        requirement: Box<ProductionNonCanonicalLoopProofRequirementV1>,
         detail: &'static str,
     },
+    NonCanonicalLoopBoundary(ProductionNonCanonicalLoopProofErrorV1),
     AmbiguousFiniteDomain,
     Contract(MirPlironSemanticContractErrorV1),
     Reconciliation(ProductionMirPlironSemanticContractErrorV1),
@@ -149,13 +150,18 @@ impl fmt::Display for ProductionMirPlironSemanticContractDerivationErrorV1 {
             Self::UnsupportedNumericalPolicy => formatter.write_str(
                 "a typed semantic root uses a numerical policy outside exact bitvectors or IEEE operator congruence",
             ),
-            Self::UnsupportedLoop {
-                header,
-                latch,
+            Self::NonCanonicalLoopProofRequired {
+                requirement,
                 detail,
             } => write!(
                 formatter,
-                "natural loop <header={header}, latch={latch}> is outside automatic finite-loop derivation: {detail}",
+                "live loop SCC <header={}> is outside automatic finite-loop derivation: {detail}; exact proof request context {:?} binds the live CFG, MIR subjects, and PLIRON evidence, but imported invariant/variant receipts remain fail-closed until aggregate formula replay supports them",
+                requirement.header_block(),
+                requirement.exact_ranked_graph_identity(),
+            ),
+            Self::NonCanonicalLoopBoundary(error) => write!(
+                formatter,
+                "failed to derive the exact noncanonical-loop proof boundary: {error}"
             ),
             Self::AmbiguousFiniteDomain => formatter.write_str(
                 "one finite-domain identity was derived with incompatible extents",
@@ -172,6 +178,7 @@ impl Error for ProductionMirPlironSemanticContractDerivationErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::TotalOutput(error) => Some(error),
+            Self::NonCanonicalLoopBoundary(error) => Some(error),
             Self::Contract(error) => Some(error),
             Self::Reconciliation(error) => Some(error),
             _ => None,
@@ -190,7 +197,7 @@ pub fn derive_and_reconcile_mir_pliron_semantic_contract_v1(
     ProductionReconciledMirPlironSemanticContractV1,
     ProductionMirPlironSemanticContractDerivationErrorV1,
 > {
-    let total_output = require_total_output_refinement_v2(ranked, evidence)
+    let total_output = require_total_output_staging_v2(ranked, evidence)
         .map_err(ProductionMirPlironSemanticContractDerivationErrorV1::TotalOutput)?;
     let contract = derive_contract_data_v1(ranked, evidence)?;
     let semantics =
@@ -207,7 +214,7 @@ fn derive_contract_data_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
 ) -> Result<MirPlironSemanticContractV1, ProductionMirPlironSemanticContractDerivationErrorV1> {
-    let receipts = ranked.retained_functional_refinement_receipts();
+    let receipts = ranked.retained_policy_checked_refinement_staging();
     let first = receipts
         .first()
         .ok_or(ProductionMirPlironSemanticContractDerivationErrorV1::MissingRetainedReceipt)?;
@@ -397,20 +404,33 @@ fn derive_contract_data_v1(
 
     let backedges = super::mir_pliron_semantic_contract_v1::natural_backedges(ranked.kernel());
     require_limit("loop", backedges.len(), HARD_MAX_SEMANTIC_LOOPS_V1)?;
+    let backedge_set = backedges
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
     let mut loops = Vec::with_capacity(backedges.len());
     for (latch, header) in backedges {
-        let live = canonical_static_loop_v1(ranked, header, latch).map_err(|detail| {
-            ProductionMirPlironSemanticContractDerivationErrorV1::UnsupportedLoop {
-                header,
-                latch,
-                detail,
+        let live = match canonical_finite_loop_v1(ranked, header, latch) {
+            Ok(live) => live,
+            Err(detail) => {
+                let requirement = derive_noncanonical_loop_proof_requirement_v1(
+                    ranked.kernel(),
+                    header,
+                    first_binding.subjects(),
+                    evidence_identity,
+                )
+                .map_err(
+                    ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopBoundary,
+                )?;
+                return Err(
+                    ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopProofRequired {
+                        requirement: Box::new(requirement),
+                        detail,
+                    },
+                );
             }
-        })?;
-        insert_domain(
-            &mut domains,
-            live.iteration_domain,
-            vec![SemanticFiniteExtentV1::Static(live.maximum_steps)],
-        )?;
+        };
+        insert_domain(&mut domains, live.iteration_domain, vec![live.extent])?;
         for value in [
             live.induction_value,
             live.lower_value,
@@ -438,6 +458,27 @@ fn derive_contract_data_v1(
                 live.maximum_steps,
             )
             .map_err(ProductionMirPlironSemanticContractDerivationErrorV1::Contract)?,
+        );
+    }
+    if let Some(header) = super::noncanonical_loop_proof_v1::noncanonical_cyclic_scc_headers_v1(
+        ranked.kernel(),
+        &backedge_set,
+    )
+    .into_iter()
+    .next()
+    {
+        let requirement = derive_noncanonical_loop_proof_requirement_v1(
+            ranked.kernel(),
+            header,
+            first_binding.subjects(),
+            evidence_identity,
+        )
+        .map_err(ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopBoundary)?;
+        return Err(
+            ProductionMirPlironSemanticContractDerivationErrorV1::NonCanonicalLoopProofRequired {
+                requirement: Box::new(requirement),
+                detail: "the cyclic SCC has no single compiler-admitted natural-loop entry",
+            },
         );
     }
 

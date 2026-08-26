@@ -2,7 +2,7 @@ use fe2o3_device::{DisjointSlice, kernel, memory, thread};
 
 #[kernel(
     typed,
-    namespace = "8a39e9b58cfb459f4a7f1bd1a9e154388c354af66d5dab5bbf9c51fd23e60cf1"
+    namespace = "b3af5b6ffddbe9690db8f90eb9a3c6dcbd57ca219f23d85ec93797fd50556836"
 )]
 pub fn memory_v1_kernel(source: &[f32], mut destination: DisjointSlice<f32>) {
     let destination_index = thread::index_1d().into_disjoint();

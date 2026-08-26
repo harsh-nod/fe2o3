@@ -1,5 +1,5 @@
 fn escape(
-    input: gpu_host::__generated::GeneratedScalarGemmV1ReadDeviceSlice<'_>,
+    input: gpu_host::__generated::GeneratedReadDeviceSlice<'_, f32>,
 ) -> *const () {
     input.device_pointer()
 }

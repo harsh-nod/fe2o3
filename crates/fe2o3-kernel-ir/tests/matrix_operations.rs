@@ -655,3 +655,19 @@ fn frozen_module_wire_versions_reject_matrix_authority() {
         ));
     }
 }
+
+#[test]
+fn tensor_instruction_semantic_data_is_target_owned_and_workload_neutral() {
+    let descriptor = TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64
+        .semantic_descriptor()
+        .unwrap();
+    assert_eq!(descriptor.call_argument_count, 4);
+    assert_eq!(descriptor.subgroup_width, 64);
+    assert_eq!(descriptor.contribution_shape, [16, 16, 16]);
+    assert_eq!(descriptor.output_shape, [16, 16]);
+    assert!(
+        TensorInstructionProfileV1::Opaque(7)
+            .semantic_descriptor()
+            .is_none()
+    );
+}

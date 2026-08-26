@@ -114,18 +114,30 @@ verus! {
     uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
 
     proof fn fe2o3_output_0_effect_formula_v1() {
-        let v5: int = fe2o3_bv_norm_v2(0, 64);
-        let v4: int = fe2o3_bv_norm_v2(1, 1);
-        let v2: int = fe2o3_bv_norm_v2(7, 32);
+        let v8: int = fe2o3_bv_norm_v2(0, 64);
+        let v7: int = fe2o3_bv_norm_v2(1, 1);
         let v3: int = fe2o3_bv_norm_v2(7, 32);
-        assert(v5 == v5);
-        assert(v4 == v4);
-        assert(v4 == v4);
-        assert(v2 == v3);
+        let v4: int = fe2o3_bv_norm_v2(7, 32);
+        assert(v8 == v8);
+        assert(v7 == v7);
+        assert(v7 == v7);
+        assert(v3 == v4);
+    }
+
+    proof fn fe2o3_output_1_effect_formula_v1() {
+        let v8: int = fe2o3_bv_norm_v2(0, 64);
+        let v7: int = fe2o3_bv_norm_v2(1, 1);
+        let v5: int = fe2o3_bv_norm_v2(9, 32);
+        let v6: int = fe2o3_bv_norm_v2(10, 32);
+        assert(v8 == v8);
+        assert(v7 == v7);
+        assert(v7 == v7);
+        assert(v5 == v6);
     }
 
     proof fn fe2o3_replay_all_output_effect_formulas_v1() {
         fe2o3_output_0_effect_formula_v1();
+        fe2o3_output_1_effect_formula_v1();
     }
 }
 

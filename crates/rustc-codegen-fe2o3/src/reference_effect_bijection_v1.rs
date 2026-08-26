@@ -3,7 +3,7 @@
 //! A successful match establishes per-effect partial correctness for the
 //! modeled writes. It deliberately does not establish total output coverage.
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use crate::reference_effect_v1::{
     ReferenceOutputCoordinateV1, ReferenceOutputWriteV1, ReferencePathPredicateV1,
@@ -42,15 +42,35 @@ pub(crate) fn establish_reference_effect_bijection_v1(
     reference: &[ReferenceOutputWriteV1],
     gpu: &[CompilerExtractedGpuOutputEffectV1],
 ) -> Result<Box<[ReferenceEffectPairV1]>, ReferenceEffectBijectionErrorV1> {
+    let mut exact_gpu = BTreeMap::<
+        (u32, &ReferenceOutputCoordinateV1, &ReferencePathPredicateV1),
+        Vec<usize>,
+    >::new();
+    let mut gpu_by_argument = BTreeMap::<u32, Vec<usize>>::new();
+    for (index, effect) in gpu.iter().enumerate() {
+        exact_gpu
+            .entry((effect.output_argument, &effect.coordinate, &effect.guard))
+            .or_default()
+            .push(index);
+        gpu_by_argument
+            .entry(effect.output_argument)
+            .or_default()
+            .push(index);
+    }
     let mut used_gpu = vec![false; gpu.len()];
     let mut pairs = Vec::with_capacity(reference.len());
     for reference_effect in reference {
-        let exact = gpu
-            .iter()
-            .enumerate()
-            .filter(|(index, gpu_effect)| {
-                !used_gpu[*index] && same_site_v1(reference_effect, gpu_effect)
-            })
+        let exact = exact_gpu
+            .get(&(
+                reference_effect.argument,
+                &reference_effect.coordinate,
+                &reference_effect.guard,
+            ))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|index| !used_gpu[*index])
+            .take(2)
             .collect::<Vec<_>>();
         if exact.len() > 1 {
             return Err(ReferenceEffectBijectionErrorV1::AmbiguousGpuOutput {
@@ -59,7 +79,8 @@ pub(crate) fn establish_reference_effect_bijection_v1(
                 reference_statement: reference_effect.statement,
             });
         }
-        if let Some((index, gpu_effect)) = exact.first().copied() {
+        if let Some(index) = exact.first().copied() {
+            let gpu_effect = &gpu[index];
             used_gpu[index] = true;
             pairs.push(ReferenceEffectPairV1 {
                 reference_block: reference_effect.block,
@@ -70,10 +91,13 @@ pub(crate) fn establish_reference_effect_bijection_v1(
             continue;
         }
 
-        let candidate = gpu.iter().enumerate().find(|(index, gpu_effect)| {
-            !used_gpu[*index] && gpu_effect.output_argument == reference_effect.argument
-        });
-        let Some((_, candidate)) = candidate else {
+        let candidate = gpu_by_argument
+            .get(&reference_effect.argument)
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|index| !used_gpu[*index]);
+        let Some(candidate) = candidate.map(|index| &gpu[index]) else {
             return Err(ReferenceEffectBijectionErrorV1::MissingGpuOutput {
                 output_argument: reference_effect.argument,
                 reference_block: reference_effect.block,
@@ -114,15 +138,6 @@ pub(crate) fn establish_reference_effect_bijection_v1(
         });
     }
     Ok(pairs.into_boxed_slice())
-}
-
-fn same_site_v1(
-    reference: &ReferenceOutputWriteV1,
-    gpu: &CompilerExtractedGpuOutputEffectV1,
-) -> bool {
-    reference.argument == gpu.output_argument
-        && reference.coordinate == gpu.coordinate
-        && reference.guard == gpu.guard
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

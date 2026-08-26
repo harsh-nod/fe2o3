@@ -21,6 +21,7 @@ use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
+    op::Op,
     operation::Operation,
     value::Value,
 };
@@ -520,8 +521,7 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     &environment,
                     branch.lhs(context),
                     0,
-                )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
+                );
                 let rhs = evaluate_trace_value_v1(
                     context,
                     sparse,
@@ -529,15 +529,27 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                     &environment,
                     branch.rhs(context),
                     0,
-                )
-                .ok_or(PlironTraceFailureV1::UnresolvedBranch { block: block_index })?;
-                let successor_index = usize::from(lhs >= rhs);
-                let arguments = if successor_index == 0 {
-                    branch.true_arguments(context)
+                );
+                if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+                    let successor_index = usize::from(lhs >= rhs);
+                    let arguments = if successor_index == 0 {
+                        branch.true_arguments(context)
+                    } else {
+                        branch.false_arguments(context)
+                    };
+                    (raw.successors().nth(successor_index), arguments)
+                } else if let Some(exit) = summarize_trace_silent_finite_loop_v1(
+                    context,
+                    sparse,
+                    &invocation,
+                    &environment,
+                    blocks[block_index],
+                    branch,
+                ) {
+                    (Some(exit), branch.false_arguments(context))
                 } else {
-                    branch.false_arguments(context)
-                };
-                (raw.successors().nth(successor_index), arguments)
+                    return Err(PlironTraceFailureV1::UnresolvedBranch { block: block_index });
+                }
             } else if let Some(branch) = terminator.downcast_ref::<IndexEqualBranchOp>() {
                 let lhs = evaluate_trace_value_v1(
                     context,
@@ -622,6 +634,66 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
         });
     }
     Ok(traces)
+}
+
+/// Summarize only a canonical machine-finite loop whose body cannot emit a
+/// trace event. This lets the event analyses cross a dynamic induction-only
+/// loop without inventing a value for its external bound. Any extra operation,
+/// edge, carried value, or non-unit transition keeps the branch unresolved.
+fn summarize_trace_silent_finite_loop_v1(
+    context: &Context,
+    sparse: &crate::SparseIndexAnalysisV1,
+    invocation: &[u64],
+    environment: &HashMap<Value, u64>,
+    header: Ptr<BasicBlock>,
+    branch: &IndexLessThanBranchArgsOp,
+) -> Option<Ptr<BasicBlock>> {
+    let header_block = header.deref(context);
+    if header_block.get_num_arguments() != 1
+        || branch.lhs(context) != header_block.get_argument(0)
+        || branch.true_arguments(context).as_slice() != [branch.lhs(context)]
+        || !branch.false_arguments(context).is_empty()
+    {
+        return None;
+    }
+
+    let raw = branch.get_operation().deref(context);
+    let body = raw.successors().next()?;
+    let exit = raw.successors().nth(1)?;
+    let body_block = body.deref(context);
+    if body_block.get_num_arguments() != 1 {
+        return None;
+    }
+    let operations = body_block.iter(context).collect::<Vec<_>>();
+    if operations.len() != 2 || body_block.get_terminator(context)? != operations[1] {
+        return None;
+    }
+
+    let increment = Operation::get_op_dyn(operations[0], context);
+    let increment = increment.downcast_ref::<IndexBinaryOp>()?;
+    if increment.kind(context)? != IndexBinaryKindAttr::Add
+        || increment.lhs(context) != body_block.get_argument(0)
+        || evaluate_trace_value_v1(
+            context,
+            sparse,
+            invocation,
+            environment,
+            increment.rhs(context),
+            0,
+        ) != Some(1)
+    {
+        return None;
+    }
+
+    let backedge = Operation::get_op_dyn(operations[1], context);
+    let backedge = backedge.downcast_ref::<BranchArgsOp>()?;
+    let arguments = backedge.arguments(context);
+    if arguments.as_slice() != [increment.result(context)]
+        || backedge.get_operation().deref(context).successors().next() != Some(header)
+    {
+        return None;
+    }
+    Some(exit)
 }
 
 fn evaluate_trace_value_v1(

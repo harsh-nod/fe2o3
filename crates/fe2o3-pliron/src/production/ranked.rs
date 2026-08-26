@@ -1,7 +1,10 @@
+#[cfg(feature = "internal-proof-staging")]
+use fe2o3_functional_proof::ImportedFunctionalRefinementProofV2;
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
-    ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2,
+    HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1, HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1,
+    VerusToolchainIdentityV2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -33,11 +36,12 @@ use dialect_kernel::{
     SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
     SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
     SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
-    TensorLayoutOp, TrapOp,
+    TensorLayoutOp, TensorResultComponentOp, TrapOp,
 };
 use dialect_proof::{
-    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
-    PropertyAttr, RequireEffectRefinementOp, RequireRefinementOp,
+    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
+    ProofIdAttr, PropertyAttr, RelativeErrorF64BitsAttr, RequireEffectRefinementOp,
+    RequireNumericalRefinementOp, RequireRefinementOp, RequireTensorRefinementOp,
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
@@ -46,7 +50,7 @@ use fe2o3_kernel_analysis::{
     ProductionPlironPreloweringReportV2, RankedBoundsReportV1, RankedRaceReportV1,
     require_production_pliron_checks_before_lowering_v2,
 };
-use fe2o3_kernel_ir::TensorLayoutContractV1;
+use fe2o3_kernel_ir::{MatrixElement, TensorLayoutContractV1};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
@@ -54,6 +58,7 @@ use pliron::{
         ops::{FuncOp, ModuleOp},
         types::FunctionType,
     },
+    common_traits::Named,
     context::Ptr,
     identifier::Identifier,
     linked_list::ContainsLinkedList,
@@ -70,10 +75,90 @@ use super::{
     ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2,
 };
 
+/// Compiler-derived provenance retained for one cooperative tensor call.
+///
+/// These are identities of typed capability roots, not user assertions. The
+/// source projector obtains them from the dominating context, lane, operand,
+/// and accumulator producers. Production semantic composition additionally
+/// binds this record to the live layout, control-flow site, output relation,
+/// hierarchy reports, and authenticated refinement receipt.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionCooperativeTensorBindingV1 {
+    context_root: DigestV1,
+    lane_root: DigestV1,
+    lhs_root: DigestV1,
+    rhs_root: DigestV1,
+    accumulator_root: DigestV1,
+    result_root: DigestV1,
+    argument_count: u16,
+}
+
+impl ProductionCooperativeTensorBindingV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        context_root: DigestV1,
+        lane_root: DigestV1,
+        lhs_root: DigestV1,
+        rhs_root: DigestV1,
+        accumulator_root: DigestV1,
+        result_root: DigestV1,
+        argument_count: u16,
+    ) -> Option<Self> {
+        if [
+            context_root,
+            lane_root,
+            lhs_root,
+            rhs_root,
+            accumulator_root,
+            result_root,
+        ]
+        .into_iter()
+        .any(DigestV1::is_zero)
+            || argument_count == 0
+            || argument_count > HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1
+        {
+            return None;
+        }
+        Some(Self {
+            context_root,
+            lane_root,
+            lhs_root,
+            rhs_root,
+            accumulator_root,
+            result_root,
+            argument_count,
+        })
+    }
+
+    pub const fn context_root(self) -> DigestV1 {
+        self.context_root
+    }
+    pub const fn lane_root(self) -> DigestV1 {
+        self.lane_root
+    }
+    pub const fn lhs_root(self) -> DigestV1 {
+        self.lhs_root
+    }
+    pub const fn rhs_root(self) -> DigestV1 {
+        self.rhs_root
+    }
+    pub const fn accumulator_root(self) -> DigestV1 {
+        self.accumulator_root
+    }
+    pub const fn result_root(self) -> DigestV1 {
+        self.result_root
+    }
+    pub const fn argument_count(self) -> u16 {
+        self.argument_count
+    }
+}
+
+#[cfg(feature = "internal-proof-staging")]
+use super::HARD_MAX_PRODUCTION_CONSTRUCTIONS;
 use super::{
-    ConstructedGraphStageV1, HARD_MAX_PRODUCTION_CONSTRUCTIONS, KernelChecksVerifiedGraphStageV1,
-    ProductionConstructionKindV1, ProductionConstructionV1, ProductionPlironSessionV1,
-    ProductionRootHandleV1, ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
+    ConstructedGraphStageV1, KernelChecksVerifiedGraphStageV1, ProductionConstructionKindV1,
+    ProductionConstructionV1, ProductionPlironSessionV1, ProductionRootHandleV1,
+    ProductionSessionErrorV1, ProductionStageHandleV1, RootIdentityV1,
 };
 use crate::{
     ContextBuildError, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, NameError, NameKind, OperationHandle,
@@ -264,7 +349,7 @@ impl ProductionReferenceProofV1 {
 /// Exact receipt and semantic binding requested by one ranked recipe operation.
 ///
 /// This cloneable request is not evidence. Only
-/// [`compile_ranked_kernel_for_lowering_v2`] can reconcile it with a consumed,
+/// [`compile_ranked_kernel_with_policy_checked_refinement_staging_v2`] can reconcile it with a consumed,
 /// authenticated [`ImportedFunctionalRefinementProofV2`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionReferenceProofV2 {
@@ -295,9 +380,16 @@ impl ProductionReferenceProofV2 {
 const FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2: &[u8] =
     b"FE2O3/PLIRON/FUNCTIONAL-REFINEMENT-FORMULA/V2\0";
 const EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PLIRON/EFFECT-REFINEMENT-CONTRACT/V2\0";
+const NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] =
+    b"FE2O3/PLIRON/NUMERICAL-REFINEMENT-CONTRACT/V2\0";
+const TENSOR_REFINEMENT_CONTRACT_DOMAIN_V1: &[u8] = b"FE2O3/PLIRON/TENSOR-REFINEMENT-CONTRACT/V1\0";
 pub const MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2: usize = MAX_RANKED_MEMORY_RANK;
+pub const MAX_PRODUCTION_TENSOR_COMPONENTS_V1: usize =
+    dialect_kernel::MAX_TENSOR_RESULT_COMPONENTS_V1;
+pub const MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1: usize =
+    HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProductionGpuWriteSiteV2 {
     block: u32,
     operation: u32,
@@ -466,6 +558,272 @@ impl ProductionEffectRefinementContractV2 {
             writer.value(tag, value);
         }
         writer.finish()
+    }
+}
+
+/// Workload-neutral finite-error theorem over two typed semantic roots.
+///
+/// At every logical point where `domain && precondition`, the theorem means
+/// both floating results are finite and
+/// `abs(actual - reference) <= absolute + relative * abs(reference)`.
+/// Exceptional values therefore require a false precondition or a separate
+/// exact-bit relation; they cannot satisfy this finite-error claim.
+///
+/// Construction validates only the closed claim shape. Authority comes from a
+/// receipt whose obligation digest binds this contract to the complete ranked
+/// graph and exact MIR subjects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionNumericalRefinementContractV2 {
+    contract_identity: u64,
+    actual: ProductionRankedValueV1,
+    reference: ProductionRankedValueV1,
+    domain: ProductionRankedValueV1,
+    precondition: ProductionRankedValueV1,
+    absolute_error_f64_bits: u64,
+    relative_error_f64_bits: u64,
+}
+
+impl ProductionNumericalRefinementContractV2 {
+    pub fn new(
+        contract_identity: u64,
+        actual: ProductionRankedValueV1,
+        reference: ProductionRankedValueV1,
+        domain: ProductionRankedValueV1,
+        precondition: ProductionRankedValueV1,
+        absolute_error_f64_bits: u64,
+        relative_error_f64_bits: u64,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        let absolute = f64::from_bits(absolute_error_f64_bits);
+        let relative = f64::from_bits(relative_error_f64_bits);
+        if contract_identity == 0
+            || !absolute.is_finite()
+            || !relative.is_finite()
+            || absolute < 0.0
+            || relative < 0.0
+            || (absolute == 0.0 && relative == 0.0)
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            contract_identity,
+            actual,
+            reference,
+            domain,
+            precondition,
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+        })
+    }
+
+    pub const fn contract_identity(self) -> u64 {
+        self.contract_identity
+    }
+    pub const fn actual(self) -> ProductionRankedValueV1 {
+        self.actual
+    }
+    pub const fn reference(self) -> ProductionRankedValueV1 {
+        self.reference
+    }
+    pub const fn domain(self) -> ProductionRankedValueV1 {
+        self.domain
+    }
+    pub const fn precondition(self) -> ProductionRankedValueV1 {
+        self.precondition
+    }
+    pub const fn absolute_error_f64_bits(self) -> u64 {
+        self.absolute_error_f64_bits
+    }
+    pub const fn relative_error_f64_bits(self) -> u64 {
+        self.relative_error_f64_bits
+    }
+
+    pub fn request_shape_hash(self) -> DigestV1 {
+        let mut writer = CanonicalRefinementDigestV2::new(NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2);
+        writer.field(1, &self.contract_identity.to_le_bytes());
+        for (tag, value) in [
+            (2, self.actual),
+            (3, self.reference),
+            (4, self.domain),
+            (5, self.precondition),
+        ] {
+            writer.value(tag, value);
+        }
+        writer.field(6, &self.absolute_error_f64_bits.to_le_bytes());
+        writer.field(7, &self.relative_error_f64_bits.to_le_bytes());
+        writer.finish()
+    }
+}
+
+/// Stable location of one live cooperative-tensor instruction in ranked IR.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionTensorInstructionSiteV1 {
+    block: u32,
+    operation: u32,
+}
+
+impl ProductionTensorInstructionSiteV1 {
+    pub const fn new(block: u32, operation: u32) -> Self {
+        Self { block, operation }
+    }
+    pub const fn block(self) -> u32 {
+        self.block
+    }
+    pub const fn operation(self) -> u32 {
+        self.operation
+    }
+}
+
+/// Ordered binding from one tensor result component to one exact output write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionTensorResultComponentV1 {
+    component: u16,
+    store_site: ProductionGpuWriteSiteV2,
+    indices: Vec<ProductionRankedValueV1>,
+    gpu_value: ProductionRankedValueV1,
+    reference_value: ProductionRankedValueV1,
+}
+
+impl ProductionTensorResultComponentV1 {
+    pub fn new(
+        component: u16,
+        store_site: ProductionGpuWriteSiteV2,
+        indices: Vec<ProductionRankedValueV1>,
+        gpu_value: ProductionRankedValueV1,
+        reference_value: ProductionRankedValueV1,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        if indices.is_empty() || indices.len() > MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2 {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            component,
+            store_site,
+            indices,
+            gpu_value,
+            reference_value,
+        })
+    }
+
+    pub const fn component(&self) -> u16 {
+        self.component
+    }
+    pub const fn store_site(&self) -> ProductionGpuWriteSiteV2 {
+        self.store_site
+    }
+    pub fn indices(&self) -> &[ProductionRankedValueV1] {
+        &self.indices
+    }
+    pub const fn gpu_value(&self) -> ProductionRankedValueV1 {
+        self.gpu_value
+    }
+    pub const fn reference_value(&self) -> ProductionRankedValueV1 {
+        self.reference_value
+    }
+}
+
+/// Claim-specific functional composition of one cooperative tensor instruction.
+///
+/// The supported V1 subset is deliberately finite: one live tensor instruction,
+/// all of its declared result components, one logical output view, and exact
+/// component stores. The claim states that the ordered component pair at ordinal
+/// `i` is the scalar extraction `i` of `tensor_result_root`, that its GPU member
+/// is the value consumed by the named store at the named output coordinate, and
+/// that the ordered product of all pairs refines the aggregate `actual` to the
+/// aggregate `reference` under `numerical_contract`. Construction grants no
+/// authority. Production admission requires an independently imported receipt
+/// over the complete ranked graph and this exact contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionTensorRefinementContractV1 {
+    contract_identity: u64,
+    tensor_site: ProductionTensorInstructionSiteV1,
+    tensor_result_root: DigestV1,
+    output_view: ProductionRankedValueV1,
+    actual: ProductionRankedValueV1,
+    reference: ProductionRankedValueV1,
+    component_scalar: ProductionSemanticScalarTypeV2,
+    numerical_contract: ProductionNumericalContractV2,
+    components: Vec<ProductionTensorResultComponentV1>,
+}
+
+impl ProductionTensorRefinementContractV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        contract_identity: u64,
+        tensor_site: ProductionTensorInstructionSiteV1,
+        tensor_result_root: DigestV1,
+        output_view: ProductionRankedValueV1,
+        actual: ProductionRankedValueV1,
+        reference: ProductionRankedValueV1,
+        component_scalar: ProductionSemanticScalarTypeV2,
+        numerical_contract: ProductionNumericalContractV2,
+        components: Vec<ProductionTensorResultComponentV1>,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        if contract_identity == 0
+            || tensor_result_root.is_zero()
+            || components.is_empty()
+            || components.len() > MAX_PRODUCTION_TENSOR_COMPONENTS_V1
+            || !numerical_contract.is_supported()
+            || !numerical_contract.admits_scalar(component_scalar)
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        let canonical_components = components
+            .iter()
+            .enumerate()
+            .all(|(index, component)| usize::from(component.component) == index);
+        let unique_stores = components
+            .iter()
+            .map(|component| component.store_site)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == components.len();
+        let unique_gpu_values = components
+            .iter()
+            .map(|component| component.gpu_value)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == components.len();
+        if !canonical_components || !unique_stores || !unique_gpu_values {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            contract_identity,
+            tensor_site,
+            tensor_result_root,
+            output_view,
+            actual,
+            reference,
+            component_scalar,
+            numerical_contract,
+            components,
+        })
+    }
+
+    pub const fn contract_identity(&self) -> u64 {
+        self.contract_identity
+    }
+    pub const fn tensor_site(&self) -> ProductionTensorInstructionSiteV1 {
+        self.tensor_site
+    }
+    pub const fn tensor_result_root(&self) -> DigestV1 {
+        self.tensor_result_root
+    }
+    pub const fn output_view(&self) -> ProductionRankedValueV1 {
+        self.output_view
+    }
+    pub const fn actual(&self) -> ProductionRankedValueV1 {
+        self.actual
+    }
+    pub const fn reference(&self) -> ProductionRankedValueV1 {
+        self.reference
+    }
+    pub const fn component_scalar(&self) -> ProductionSemanticScalarTypeV2 {
+        self.component_scalar
+    }
+    pub const fn numerical_contract(&self) -> ProductionNumericalContractV2 {
+        self.numerical_contract
+    }
+    pub fn components(&self) -> &[ProductionTensorResultComponentV1] {
+        &self.components
     }
 }
 
@@ -643,6 +1001,271 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
     Ok(writer.finish())
 }
 
+/// Derives the exact claim-specific cooperative-tensor obligation from the
+/// complete ranked graph. This function proves no arithmetic: its digest is the
+/// statement authenticated by an independently imported receipt.
+pub fn normalized_tensor_refinement_hash_for_kernel_v1(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    contract: &ProductionTensorRefinementContractV1,
+    subjects: FunctionalRefinementSubjectsV2,
+) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
+    let mut tensor_sites = Vec::new();
+    let mut component_definitions = Vec::new();
+    let mut writes = Vec::new();
+    let mut ownership = Vec::new();
+    for (candidate_block, block) in kernel.blocks.iter().enumerate() {
+        for (candidate_operation, operation) in block.operations.iter().enumerate() {
+            match operation {
+                ProductionRankedOperationV1::TensorLayout {
+                    contract,
+                    convergence,
+                    active_lanes,
+                    binding,
+                } => tensor_sites.push((
+                    candidate_block,
+                    candidate_operation,
+                    contract,
+                    *convergence,
+                    *active_lanes,
+                    *binding,
+                )),
+                ProductionRankedOperationV1::TensorResultComponent {
+                    result,
+                    tensor_result_root,
+                    component,
+                    scalar,
+                    numerical_contract,
+                } => component_definitions.push((
+                    ProductionRankedValueV1::Local(*result),
+                    *tensor_result_root,
+                    *component,
+                    *scalar,
+                    *numerical_contract,
+                )),
+                ProductionRankedOperationV1::ValueAccess {
+                    kind,
+                    view,
+                    indices,
+                    value,
+                } if kind.writes_memory() && *view == contract.output_view => {
+                    writes.push((candidate_block, candidate_operation, *kind, indices, *value));
+                }
+                ProductionRankedOperationV1::Access { kind, view, .. }
+                | ProductionRankedOperationV1::AtomicAccess { kind, view, .. }
+                    if kind.writes_memory() && *view == contract.output_view =>
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
+                ProductionRankedOperationV1::AtomicValueAccess { kind, view, .. }
+                    if kind.writes_memory() && *view == contract.output_view =>
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
+                ProductionRankedOperationV1::OwnershipContract {
+                    view,
+                    coverage,
+                    partition,
+                } if *view == contract.output_view => {
+                    ownership.push((*coverage, *partition));
+                }
+                _ => {}
+            }
+        }
+    }
+    let bound_result_roots = tensor_sites
+        .iter()
+        .filter_map(|(_, _, _, _, _, binding)| binding.map(|binding| binding.result_root()))
+        .collect::<Vec<_>>();
+    if bound_result_roots
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != bound_result_roots.len()
+    {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
+    let matching_tensor_sites = tensor_sites
+        .iter()
+        .filter(|(block, operation, ..)| {
+            *block == contract.tensor_site.block as usize
+                && *operation == contract.tensor_site.operation as usize
+        })
+        .collect::<Vec<_>>();
+    let [(_tensor_block, _tensor_operation, layout, convergence, active_lanes, Some(binding))] =
+        matching_tensor_sites.as_slice()
+    else {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    };
+    if binding.result_root() != contract.tensor_result_root
+        || tensor_layout_result_scalar_v1(layout) != Some(contract.component_scalar)
+        || usize::from(layout.accumulator.fragment_elements) != contract.components.len()
+        || component_definitions
+            .iter()
+            .filter(|(_, result_root, ..)| *result_root == contract.tensor_result_root)
+            .count()
+            != contract.components.len()
+        || writes.len() != contract.components.len()
+        || ownership.as_slice()
+            != [(
+                OwnershipCoverageAttr::TotalView,
+                OwnershipPartitionAttr::ExactSets,
+            )]
+    {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
+    for component in &contract.components {
+        let matching_definition = component_definitions
+            .iter()
+            .filter(|(value, result_root, ordinal, scalar, numerical)| {
+                *value == component.gpu_value
+                    && *result_root == contract.tensor_result_root
+                    && *ordinal == component.component
+                    && *scalar == contract.component_scalar
+                    && *numerical == contract.numerical_contract
+            })
+            .count();
+        let matching = writes
+            .iter()
+            .filter(|(block, operation, kind, indices, value)| {
+                *block == component.store_site.block as usize
+                    && *operation == component.store_site.operation as usize
+                    && *kind == AccessKindAttr::Write
+                    && *indices == &component.indices
+                    && *value == component.gpu_value
+            })
+            .count();
+        if matching_definition != 1 || matching != 1 {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+    }
+
+    let mut writer = CanonicalRefinementDigestV2::new(TENSOR_REFINEMENT_CONTRACT_DOMAIN_V1);
+    writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.field(
+        12,
+        &super::middle_end_evidence_v4::derive_functional_refinement_graph_identity_v2(kernel),
+    );
+    writer.field(20, &contract.contract_identity.to_le_bytes());
+    writer.field(21, &contract.tensor_site.block.to_le_bytes());
+    writer.field(22, &contract.tensor_site.operation.to_le_bytes());
+    writer.field(23, contract.tensor_result_root.as_bytes());
+    writer.value(24, contract.output_view);
+    writer.value(25, contract.actual);
+    writer.value(26, contract.reference);
+    let mut scalar = vec![];
+    match contract.component_scalar {
+        ProductionSemanticScalarTypeV2::Bool => scalar.push(1),
+        ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
+            scalar.extend([2, u8::from(signed)]);
+            scalar.extend(bits.to_le_bytes());
+        }
+        ProductionSemanticScalarTypeV2::Float { bits } => {
+            scalar.push(3);
+            scalar.extend(bits.to_le_bytes());
+        }
+    }
+    writer.field(38, &scalar);
+    let mut numerical = vec![];
+    match contract.numerical_contract {
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => numerical.push(1),
+        ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding,
+            exceptional_values,
+        } => numerical.extend([2, rounding as u8, exceptional_values as u8]),
+        ProductionNumericalContractV2::ErrorBounded {
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+        } => {
+            numerical.push(3);
+            numerical.extend(absolute_error_f64_bits.to_le_bytes());
+            numerical.extend(relative_error_f64_bits.to_le_bytes());
+        }
+        ProductionNumericalContractV2::Relaxed => numerical.push(4),
+    }
+    writer.field(39, &numerical);
+
+    let mut layout_digest = Sha256::new();
+    super::middle_end_evidence_v4::hash_tensor_layout_contract(&mut layout_digest, layout);
+    writer.field(27, &layout_digest.finalize());
+    writer.field(
+        28,
+        &[match convergence {
+            TensorConvergenceAttr::UniformSubgroup => 1,
+            TensorConvergenceAttr::Divergent => 2,
+            TensorConvergenceAttr::UniformWorkgroup => 3,
+            TensorConvergenceAttr::Opaque => 4,
+        }],
+    );
+    writer.field(29, &active_lanes.to_le_bytes());
+    for (tag, root) in [
+        (30, binding.context_root()),
+        (31, binding.lane_root()),
+        (32, binding.lhs_root()),
+        (33, binding.rhs_root()),
+        (34, binding.accumulator_root()),
+        (35, binding.result_root()),
+    ] {
+        writer.field(tag, root.as_bytes());
+    }
+    writer.field(36, &binding.argument_count().to_le_bytes());
+    writer.field(37, &(contract.components.len() as u64).to_le_bytes());
+    for (index, component) in contract.components.iter().enumerate() {
+        let base = 100
+            + u16::try_from(index)
+                .map_err(|_| ProductionRankedKernelErrorV1::InvalidReferenceContract)?
+                * 8;
+        writer.field(base, &component.component.to_le_bytes());
+        writer.field(base + 1, &component.store_site.block.to_le_bytes());
+        writer.field(base + 2, &component.store_site.operation.to_le_bytes());
+        writer.values(base + 3, &component.indices);
+        writer.value(base + 4, component.gpu_value);
+        writer.value(base + 5, component.reference_value);
+    }
+    Ok(writer.finish())
+}
+
+fn tensor_layout_result_scalar_v1(
+    layout: &TensorLayoutContractV1,
+) -> Option<ProductionSemanticScalarTypeV2> {
+    match layout.accumulator.element {
+        MatrixElement::F32 => Some(ProductionSemanticScalarTypeV2::Float { bits: 32 }),
+        // The semantic scalar model has no BF16 kind yet. Keep such result
+        // layouts closed rather than conflating BF16 with IEEE binary16.
+        MatrixElement::Bf16 => None,
+    }
+}
+
+/// Derives the exact finite-error obligation from the complete ranked graph.
+pub fn normalized_numerical_refinement_hash_for_kernel_v2(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    contract: ProductionNumericalRefinementContractV2,
+    subjects: FunctionalRefinementSubjectsV2,
+) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
+    let mut writer = CanonicalRefinementDigestV2::new(NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2);
+    writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.field(
+        12,
+        &super::middle_end_evidence_v4::derive_functional_refinement_graph_identity_v2(kernel),
+    );
+    writer.field(20, &contract.contract_identity.to_le_bytes());
+    for (tag, value) in [
+        (21, contract.actual),
+        (22, contract.reference),
+        (23, contract.domain),
+        (24, contract.precondition),
+    ] {
+        writer.value(tag, value);
+    }
+    writer.field(25, &contract.absolute_error_f64_bits.to_le_bytes());
+    writer.field(26, &contract.relative_error_f64_bits.to_le_bytes());
+    Ok(writer.finish())
+}
+
 struct CanonicalRefinementDigestV2(Sha256);
 
 impl CanonicalRefinementDigestV2 {
@@ -775,18 +1398,21 @@ fn atomic_scope_tag(scope: AtomicScopeAttr) -> u8 {
     }
 }
 
-/// Compiler-retained summary constructible only from strict V2 import output.
+/// Non-authoritative policy-checked staging summary for one imported receipt.
+///
+/// Signature and caller-selected policy checks do not establish proof execution or
+/// compiler authority. Only the private aggregate exact-formula replay may do so.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::ProductionFunctionalRefinementEvidenceV2;
+/// use fe2o3_pliron::ProductionPolicyCheckedRefinementStagingV2;
 ///
-/// fn duplicate(evidence: ProductionFunctionalRefinementEvidenceV2) {
+/// fn duplicate(evidence: ProductionPolicyCheckedRefinementStagingV2) {
 ///     let _first = evidence;
 ///     let _second = evidence;
 /// }
 /// ```
 #[derive(Debug, Eq, PartialEq)]
-pub struct ProductionFunctionalRefinementEvidenceV2 {
+pub struct ProductionPolicyCheckedRefinementStagingV2 {
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
     binding: FunctionalRefinementBindingV2,
     signer_identity: DigestV1,
@@ -795,14 +1421,19 @@ pub struct ProductionFunctionalRefinementEvidenceV2 {
     boundary: FunctionalRefinementBoundaryV2,
 }
 
-/// Compiler-configuration trust root for production V2 admission.
+/// Caller-selected policy for non-authoritative receipt staging.
+///
+/// The policy is deliberately not a compiler trust root. Its constructor is exposed
+/// only to the workspace verifier and hostile tests through `internal-proof-staging`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductionFunctionalRefinementTrustPolicyV2 {
+#[cfg(feature = "internal-proof-staging")]
+pub struct ProductionRefinementStagingPolicyV2 {
     signer_identities: BTreeSet<DigestV1>,
     toolchain: VerusToolchainIdentityV2,
 }
 
-impl ProductionFunctionalRefinementTrustPolicyV2 {
+#[cfg(feature = "internal-proof-staging")]
+impl ProductionRefinementStagingPolicyV2 {
     pub fn new(
         signer_identities: impl IntoIterator<Item = DigestV1>,
         toolchain: VerusToolchainIdentityV2,
@@ -829,7 +1460,8 @@ impl ProductionFunctionalRefinementTrustPolicyV2 {
     }
 }
 
-impl ProductionFunctionalRefinementEvidenceV2 {
+impl ProductionPolicyCheckedRefinementStagingV2 {
+    #[cfg(feature = "internal-proof-staging")]
     fn from_imported(proof: ImportedFunctionalRefinementProofV2) -> Self {
         Self {
             receipt_identity: proof.receipt_identity(),
@@ -859,7 +1491,7 @@ impl ProductionFunctionalRefinementEvidenceV2 {
     pub const fn boundary(&self) -> FunctionalRefinementBoundaryV2 {
         self.boundary
     }
-    pub const fn is_retained_policy_verified_receipt(&self) -> bool {
+    pub const fn is_policy_checked_untrusted_staging(&self) -> bool {
         true
     }
     pub const fn grants_source_to_isa_authority(&self) -> bool {
@@ -1018,6 +1650,15 @@ pub enum ProductionRankedOperationV1 {
         contract: TensorLayoutContractV1,
         convergence: TensorConvergenceAttr,
         active_lanes: u32,
+        binding: Option<ProductionCooperativeTensorBindingV1>,
+    },
+    /// Exact typed SSA extraction from one authenticated tensor result root.
+    TensorResultComponent {
+        result: ProductionRankedValueIdV1,
+        tensor_result_root: DigestV1,
+        component: u16,
+        scalar: ProductionSemanticScalarTypeV2,
+        numerical_contract: ProductionNumericalContractV2,
     },
     SemanticSymbol {
         result: ProductionRankedValueIdV1,
@@ -1085,6 +1726,30 @@ pub enum ProductionRankedOperationV1 {
     /// Generator input for an effect contract before exact proof import.
     RequestEffectRefinement {
         contract: ProductionEffectRefinementContractV2,
+        subjects: FunctionalRefinementSubjectsV2,
+    },
+    /// Requires one authenticated finite-error theorem over exact typed roots.
+    RequireNumericalRefinement {
+        contract: ProductionNumericalRefinementContractV2,
+        proof: ProductionReferenceProofV2,
+    },
+    /// Import input for a claim-specific finite-error theorem.
+    ///
+    /// The generic Verus generator rejects this request because scalar
+    /// equality does not prove guarded finiteness or the stated inequality.
+    RequestNumericalRefinement {
+        contract: ProductionNumericalRefinementContractV2,
+        subjects: FunctionalRefinementSubjectsV2,
+    },
+    /// Requires one independently proved cooperative-tensor composition.
+    RequireTensorRefinement {
+        contract: ProductionTensorRefinementContractV1,
+        proof: ProductionReferenceProofV2,
+    },
+    /// Import input for a claim-specific tensor theorem. The generic scalar
+    /// proof generator deliberately does not synthesize this theorem.
+    RequestTensorRefinement {
+        contract: ProductionTensorRefinementContractV1,
         subjects: FunctionalRefinementSubjectsV2,
     },
 }
@@ -1268,6 +1933,22 @@ impl ProductionRankedKernelV1 {
                     proof,
                 }
             }
+            ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects }
+                if *subjects == proof.binding().subjects() =>
+            {
+                ProductionRankedOperationV1::RequireNumericalRefinement {
+                    contract: *contract,
+                    proof,
+                }
+            }
+            ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects }
+                if *subjects == proof.binding().subjects() =>
+            {
+                ProductionRankedOperationV1::RequireTensorRefinement {
+                    contract: contract.clone(),
+                    proof,
+                }
+            }
             _ => return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract),
         };
         *operation = replacement;
@@ -1290,6 +1971,27 @@ impl ProductionRankedKernelV1 {
                 actual: self.blocks.len(),
             });
         }
+        let tensor_sites = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(operation, ProductionRankedOperationV1::TensorLayout { .. })
+            })
+            .count();
+        let tensor_claims = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                        | ProductionRankedOperationV1::RequestTensorRefinement { .. }
+                )
+            })
+            .count();
+        validate_tensor_refinement_resource_counts_v1(tensor_sites, tensor_claims)?;
         for expression in self.blocks.iter().flat_map(|block| {
             block
                 .operations
@@ -1304,6 +2006,7 @@ impl ProductionRankedKernelV1 {
             expression
                 .validate()
                 .map_err(ProductionRankedKernelErrorV1::InvalidSemanticExpression)?;
+            validate_live_semantic_loads(self, expression)?;
         }
         let operation_count = self.blocks.iter().try_fold(0_usize, |total, block| {
             let materialized = block
@@ -1321,6 +2024,10 @@ impl ProductionRankedKernelV1 {
                                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                                | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
+                                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                                | ProductionRankedOperationV1::RequestTensorRefinement { .. }
                         ) => 3,
                         _ => 1,
                     })
@@ -1479,6 +2186,149 @@ impl ProductionRankedKernelV1 {
             )?;
         }
         Ok(tree_work)
+    }
+}
+
+fn validate_tensor_refinement_resource_counts_v1(
+    tensor_sites: usize,
+    tensor_claims: usize,
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    for (resource, actual) in [
+        ("cooperative tensor instruction site", tensor_sites),
+        ("cooperative tensor refinement claim", tensor_claims),
+    ] {
+        if actual > MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 {
+            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                resource,
+                limit: MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                actual,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tensor_refinement_resource_tests {
+    use super::*;
+
+    #[test]
+    fn tensor_site_and_claim_prescans_are_bounded_at_sixty_four() {
+        assert_eq!(
+            validate_tensor_refinement_resource_counts_v1(
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+            ),
+            Ok(())
+        );
+        for (sites, claims, resource) in [
+            (
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 + 1,
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                "cooperative tensor instruction site",
+            ),
+            (
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 + 1,
+                "cooperative tensor refinement claim",
+            ),
+        ] {
+            assert_eq!(
+                validate_tensor_refinement_resource_counts_v1(sites, claims),
+                Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource,
+                    limit: MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                    actual: MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 + 1,
+                })
+            );
+        }
+    }
+}
+
+fn validate_live_semantic_loads(
+    kernel: &ProductionRankedKernelV1,
+    expression: &ProductionSemanticExpressionV2,
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    match expression {
+        ProductionSemanticExpressionV2::Load(load) => {
+            let operation = kernel
+                .blocks()
+                .get(load.block as usize)
+                .and_then(|block| block.operations().get(load.operation as usize));
+            let Some(ProductionRankedOperationV1::Access {
+                kind,
+                view,
+                indices,
+            }) = operation
+            else {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            };
+            if *kind != AccessKindAttr::Read
+                || *view != load.view
+                || indices.as_slice() != load.indices.as_ref()
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            let ProductionRankedValueV1::Local(view_identity) = load.view else {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            };
+            let mut definitions = kernel
+                .blocks()
+                .iter()
+                .flat_map(|block| block.operations())
+                .filter_map(|operation| match operation {
+                    ProductionRankedOperationV1::ViewInSpace {
+                        result,
+                        element_width,
+                        allocation_origin,
+                        memory_space,
+                        ..
+                    } if *result == view_identity => {
+                        Some((*element_width, *allocation_origin, *memory_space))
+                    }
+                    ProductionRankedOperationV1::View {
+                        result,
+                        element_width,
+                        allocation_origin,
+                        ..
+                    } if *result == view_identity => {
+                        Some((*element_width, *allocation_origin, MemorySpaceAttr::Global))
+                    }
+                    _ => None,
+                });
+            let Some((element_width, allocation_origin, memory_space)) = definitions.next() else {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            };
+            if definitions.next().is_some()
+                || memory_space != MemorySpaceAttr::Global
+                || allocation_origin != load.allocation_origin
+                || element_width != u32::from(load.scalar.bit_width())
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(())
+        }
+        ProductionSemanticExpressionV2::Symbol { .. }
+        | ProductionSemanticExpressionV2::Constant { .. } => Ok(()),
+        ProductionSemanticExpressionV2::Unary { operand, .. }
+        | ProductionSemanticExpressionV2::Cast { operand, .. } => {
+            validate_live_semantic_loads(kernel, operand)
+        }
+        ProductionSemanticExpressionV2::Binary { lhs, rhs, .. }
+        | ProductionSemanticExpressionV2::Compare { lhs, rhs, .. } => {
+            validate_live_semantic_loads(kernel, lhs)?;
+            validate_live_semantic_loads(kernel, rhs)
+        }
+        ProductionSemanticExpressionV2::Select {
+            condition,
+            when_true,
+            when_false,
+            ..
+        } => {
+            validate_live_semantic_loads(kernel, condition)?;
+            validate_live_semantic_loads(kernel, when_true)?;
+            validate_live_semantic_loads(kernel, when_false)
+        }
     }
 }
 
@@ -2176,8 +3026,37 @@ fn validate_operation(
         ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. } => Ok(None),
-        ProductionRankedOperationV1::SemanticSymbol { result, .. }
-        | ProductionRankedOperationV1::SemanticConstant { result, .. } => {
+        ProductionRankedOperationV1::TensorResultComponent {
+            result,
+            tensor_result_root,
+            component,
+            scalar,
+            numerical_contract,
+        } => {
+            if tensor_result_root.is_zero()
+                || usize::from(*component) >= MAX_PRODUCTION_TENSOR_COMPONENTS_V1
+                || !numerical_contract.is_supported()
+                || !numerical_contract.admits_scalar(*scalar)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(Some((
+                *result,
+                RecipeValueKindV1::TypedSemantic {
+                    scalar: *scalar,
+                    numerical_contract: *numerical_contract,
+                },
+            )))
+        }
+        ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
+            if *symbol >= super::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 {
+                return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                    ProductionSemanticExpressionErrorV2::ReservedSymbol,
+                ));
+            }
+            Ok(Some((*result, RecipeValueKindV1::Semantic)))
+        }
+        ProductionRankedOperationV1::SemanticConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
         ProductionRankedOperationV1::SemanticBinary {
@@ -2297,6 +3176,49 @@ fn validate_operation(
                 ])
             {
                 require_semantic(value, argument_count, locals)?;
+            }
+            Ok(None)
+        }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } => {
+            let actual = require_typed_semantic(contract.actual(), argument_count, locals)?;
+            let reference = require_typed_semantic(contract.reference(), argument_count, locals)?;
+            let domain = require_typed_semantic(contract.domain(), argument_count, locals)?;
+            let precondition =
+                require_typed_semantic(contract.precondition(), argument_count, locals)?;
+            let boolean = (
+                ProductionSemanticScalarTypeV2::Bool,
+                ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+            );
+            if actual != reference
+                || !actual.0.is_float()
+                || domain != boolean
+                || precondition != boolean
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(None)
+        }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { contract, .. } => {
+            require_view(contract.output_view(), argument_count, locals)?;
+            let actual = require_typed_semantic(contract.actual(), argument_count, locals)?;
+            let reference = require_typed_semantic(contract.reference(), argument_count, locals)?;
+            if actual != reference
+                || actual != (contract.component_scalar(), contract.numerical_contract())
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            for component in contract.components() {
+                for index in component.indices() {
+                    require_index(*index, argument_count, locals)?;
+                }
+                let gpu = require_typed_semantic(component.gpu_value(), argument_count, locals)?;
+                let sequential =
+                    require_typed_semantic(component.reference_value(), argument_count, locals)?;
+                if gpu != actual || sequential != reference {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
             }
             Ok(None)
         }
@@ -2472,6 +3394,30 @@ fn validate_block_argument_values_v1(
                 validate(value)?;
             }
         }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } => {
+            for value in [
+                contract.actual(),
+                contract.reference(),
+                contract.domain(),
+                contract.precondition(),
+            ] {
+                validate(value)?;
+            }
+        }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { contract, .. } => {
+            validate(contract.output_view())?;
+            validate(contract.actual())?;
+            validate(contract.reference())?;
+            for component in contract.components() {
+                for value in component.indices() {
+                    validate(*value)?;
+                }
+                validate(component.gpu_value())?;
+                validate(component.reference_value())?;
+            }
+        }
         ProductionRankedOperationV1::ExecutionLayout { .. }
         | ProductionRankedOperationV1::IndexConstant { .. }
         | ProductionRankedOperationV1::IndexUnknown { .. }
@@ -2479,6 +3425,7 @@ fn validate_block_argument_values_v1(
         | ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. }
+        | ProductionRankedOperationV1::TensorResultComponent { .. }
         | ProductionRankedOperationV1::AllocationEffect { .. }
         | ProductionRankedOperationV1::SemanticSymbol { .. }
         | ProductionRankedOperationV1::SemanticConstant { .. } => {}
@@ -2744,7 +3691,8 @@ pub(super) struct ConstructedRootV1 {
     pub(super) identity: RootIdentityV1,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
-    pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+    pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
 }
 
@@ -2752,7 +3700,8 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) operation: OperationHandle,
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
-    pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+    pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
 }
 
 impl ProductionConstructionV1 {
@@ -2765,7 +3714,7 @@ impl ProductionConstructionV1 {
             kind: ProductionConstructionKindV1::RankedKernel {
                 root_name: root_name.to_owned(),
                 kernel,
-                authenticated_functional_refinement: Vec::new(),
+                policy_checked_refinement_staging: Vec::new(),
             },
         })
     }
@@ -2818,18 +3767,17 @@ impl ProductionPlironSessionV1 {
                     operation,
                     ranked_function: None,
                     ranked_kernel: None,
-                    authenticated_functional_refinement: Vec::new(),
+                    ranked_view_names: BTreeMap::new(),
+                    policy_checked_refinement_staging: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
             ProductionConstructionKindV1::RankedKernel {
                 kernel,
-                authenticated_functional_refinement,
+                policy_checked_refinement_staging,
                 ..
-            } => self.materialize_ranked_kernel(
-                root_name,
-                kernel,
-                authenticated_functional_refinement,
-            ),
+            } => {
+                self.materialize_ranked_kernel(root_name, kernel, policy_checked_refinement_staging)
+            }
         }));
         match result {
             Ok(result) => result,
@@ -2843,7 +3791,7 @@ impl ProductionPlironSessionV1 {
         &mut self,
         root_name: &str,
         kernel: ProductionRankedKernelV1,
-        authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+        policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     ) -> Result<MaterializedConstructionV1, ProductionSessionErrorV1> {
         if !self
             .inner
@@ -2977,7 +3925,7 @@ impl ProductionPlironSessionV1 {
                     &arguments,
                     &mut locals,
                     &block_arguments,
-                    &authenticated_functional_refinement,
+                    &policy_checked_refinement_staging,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
             }
@@ -2995,11 +3943,45 @@ impl ProductionPlironSessionV1 {
         self.inner
             .finish_internal_root_construction(&operation)
             .map_err(ProductionSessionErrorV1::Operation)?;
+        let ranked_view_names = kernel
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::View { result, .. }
+                | ProductionRankedOperationV1::ViewInSpace { result, .. } => {
+                    let value = ProductionRankedValueV1::Local(*result);
+                    let live = locals.get(result.get() as usize)?;
+                    Some((value, live.unique_name(&self.inner.context).to_string()))
+                }
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let ranked_view_count = kernel
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::View { .. }
+                        | ProductionRankedOperationV1::ViewInSpace { .. }
+                )
+            })
+            .count();
+        if ranked_view_names.len() != ranked_view_count {
+            return Err(ProductionSessionErrorV1::RankedRecipe(
+                ProductionRankedKernelErrorV1::Materialization(
+                    "ranked view identity binding is incomplete",
+                ),
+            ));
+        }
         Ok(MaterializedConstructionV1 {
             operation,
             ranked_function: Some(function.get_operation()),
             ranked_kernel: Some(kernel),
-            authenticated_functional_refinement,
+            ranked_view_names,
+            policy_checked_refinement_staging,
         })
     }
 
@@ -3137,7 +4119,8 @@ impl ProductionPlironSessionV1 {
         Ok(ProductionRankedKernelLoweringInputV1 {
             kernel,
             production_pipeline_report: report,
-            authenticated_functional_refinement: record.authenticated_functional_refinement,
+            ranked_view_names: record.ranked_view_names,
+            policy_checked_refinement_staging: record.policy_checked_refinement_staging,
             _session: self,
             _stage: stage,
             _root: root,
@@ -3198,6 +4181,44 @@ fn resolve_value(
     }
 }
 
+fn materialize_policy_checked_refinement_header(
+    context: &mut pliron::context::Context,
+    block: Ptr<BasicBlock>,
+    retained: &[ProductionPolicyCheckedRefinementStagingV2],
+    proof: &ProductionReferenceProofV2,
+) -> Result<ProofIdAttr, ProductionRankedKernelErrorV1> {
+    let imported = retained
+        .iter()
+        .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
+        .filter(|candidate| candidate.binding() == proof.binding())
+        .ok_or(ProductionRankedKernelErrorV1::Materialization(
+            "policy-checked functional-refinement staging was not retained",
+        ))?;
+    let [obligation_words, subject_words, model_words, evidence_words] =
+        policy_checked_proof_ids(imported)?;
+    let obligation_id = ProofIdAttr::new(obligation_words);
+    ObligationOp::new(
+        context,
+        obligation_id.clone(),
+        ProofIdAttr::new(subject_words),
+        ProofIdAttr::new(model_words),
+        PropertyAttr::FunctionalRefinement,
+    )
+    .get_operation()
+    .insert_at_back(block, context);
+    EvidenceRefOp::new(
+        context,
+        ProofIdAttr::new(evidence_words),
+        obligation_id.clone(),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Checked,
+        CoveredBoundaryAttr::Mir,
+    )
+    .get_operation()
+    .insert_at_back(block, context);
+    Ok(obligation_id)
+}
+
 fn materialize_operation(
     context: &mut pliron::context::Context,
     block: Ptr<BasicBlock>,
@@ -3205,7 +4226,7 @@ fn materialize_operation(
     arguments: &[Value],
     locals: &mut Vec<Value>,
     block_arguments: &HashMap<(u32, u32), Value>,
-    authenticated_functional_refinement: &[ProductionFunctionalRefinementEvidenceV2],
+    policy_checked_refinement_staging: &[ProductionPolicyCheckedRefinementStagingV2],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
@@ -3533,9 +4554,27 @@ fn materialize_operation(
             contract,
             convergence,
             active_lanes,
+            ..
         } => {
             let op = TensorLayoutOp::new(context, contract, *convergence, *active_lanes);
             (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::TensorResultComponent {
+            result,
+            tensor_result_root,
+            component,
+            scalar,
+            ..
+        } => {
+            let op = TensorResultComponentOp::new(
+                context,
+                dialect_kernel::SemanticExpressionCommitmentAttr::new(digest_words_v2(
+                    *tensor_result_root.as_bytes(),
+                )),
+                u32::from(*component),
+                typed_scalar(*scalar)?,
+            );
+            (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             let op = SemanticSymbolOp::new(context, *symbol);
@@ -3700,33 +4739,12 @@ fn materialize_operation(
             expected,
             proof,
         } => {
-            let imported = authenticated_functional_refinement
-                .iter()
-                .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
-                .filter(|candidate| candidate.binding() == proof.binding())
-                .ok_or(ProductionRankedKernelErrorV1::Materialization(
-                    "authenticated functional-refinement evidence was not retained",
-                ))?;
-            let [obligation_words, subject_words, model_words, evidence_words] =
-                authenticated_proof_ids(imported)?;
-            let obligation_id = ProofIdAttr::new(obligation_words);
-            let obligation = ObligationOp::new(
+            let obligation_id = materialize_policy_checked_refinement_header(
                 context,
-                obligation_id.clone(),
-                ProofIdAttr::new(subject_words),
-                ProofIdAttr::new(model_words),
-                PropertyAttr::FunctionalRefinement,
-            );
-            obligation.get_operation().insert_at_back(block, context);
-            let evidence = EvidenceRefOp::new(
-                context,
-                ProofIdAttr::new(evidence_words),
-                obligation_id.clone(),
-                PropertyAttr::FunctionalRefinement,
-                EvidenceStatusAttr::Proved,
-                CoveredBoundaryAttr::Mir,
-            );
-            evidence.get_operation().insert_at_back(block, context);
+                block,
+                policy_checked_refinement_staging,
+                proof,
+            )?;
             let op = RequireRefinementOp::new(
                 context,
                 obligation_id,
@@ -3736,33 +4754,12 @@ fn materialize_operation(
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
-            let imported = authenticated_functional_refinement
-                .iter()
-                .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
-                .filter(|candidate| candidate.binding() == proof.binding())
-                .ok_or(ProductionRankedKernelErrorV1::Materialization(
-                    "authenticated effect-refinement evidence was not retained",
-                ))?;
-            let [obligation_words, subject_words, model_words, evidence_words] =
-                authenticated_proof_ids(imported)?;
-            let obligation_id = ProofIdAttr::new(obligation_words);
-            let obligation = ObligationOp::new(
+            let obligation_id = materialize_policy_checked_refinement_header(
                 context,
-                obligation_id.clone(),
-                ProofIdAttr::new(subject_words),
-                ProofIdAttr::new(model_words),
-                PropertyAttr::FunctionalRefinement,
-            );
-            obligation.get_operation().insert_at_back(block, context);
-            let evidence = EvidenceRefOp::new(
-                context,
-                ProofIdAttr::new(evidence_words),
-                obligation_id.clone(),
-                PropertyAttr::FunctionalRefinement,
-                EvidenceStatusAttr::Proved,
-                CoveredBoundaryAttr::Mir,
-            );
-            evidence.get_operation().insert_at_back(block, context);
+                block,
+                policy_checked_refinement_staging,
+                proof,
+            )?;
             let op = RequireEffectRefinementOp::new(
                 context,
                 obligation_id,
@@ -3811,8 +4808,63 @@ fn materialize_operation(
             );
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
+            let obligation_id = materialize_policy_checked_refinement_header(
+                context,
+                block,
+                policy_checked_refinement_staging,
+                proof,
+            )?;
+            let op = RequireNumericalRefinementOp::new(
+                context,
+                obligation_id,
+                AbsoluteErrorF64BitsAttr(contract.absolute_error_f64_bits()),
+                RelativeErrorF64BitsAttr(contract.relative_error_f64_bits()),
+                resolve_value(contract.actual(), arguments, locals, block_arguments)?,
+                resolve_value(contract.reference(), arguments, locals, block_arguments)?,
+                resolve_value(contract.domain(), arguments, locals, block_arguments)?,
+                resolve_value(contract.precondition(), arguments, locals, block_arguments)?,
+            );
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+            let obligation_id = materialize_policy_checked_refinement_header(
+                context,
+                block,
+                policy_checked_refinement_staging,
+                proof,
+            )?;
+            let components = contract
+                .components()
+                .iter()
+                .map(|component| {
+                    Ok((
+                        resolve_value(component.gpu_value(), arguments, locals, block_arguments)?,
+                        resolve_value(
+                            component.reference_value(),
+                            arguments,
+                            locals,
+                            block_arguments,
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProductionRankedKernelErrorV1>>()?;
+            let op = RequireTensorRefinementOp::try_new(
+                context,
+                obligation_id,
+                ProofIdAttr::new(digest_words_v2(*contract.tensor_result_root().as_bytes())),
+                resolve_value(contract.output_view(), arguments, locals, block_arguments)?,
+                resolve_value(contract.actual(), arguments, locals, block_arguments)?,
+                resolve_value(contract.reference(), arguments, locals, block_arguments)?,
+                components,
+            )
+            .map_err(|_| ProductionRankedKernelErrorV1::InvalidReferenceContract)?;
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-        | ProductionRankedOperationV1::RequestEffectRefinement { .. } => {
+        | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+        | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { .. } => {
             return Err(ProductionRankedKernelErrorV1::Materialization(
                 "unbound functional-refinement request cannot be materialized",
             ));
@@ -3956,6 +5008,10 @@ fn materialize_typed_semantic_expression(
         ProductionSemanticExpressionV2::Constant { scalar, bits } => {
             SemanticTypedConstantOp::new(context, *bits, typed_scalar(*scalar)?).get_operation()
         }
+        ProductionSemanticExpressionV2::Load(load) => {
+            SemanticTypedSymbolOp::new(context, load.proof_symbol(), typed_scalar(load.scalar)?)
+                .get_operation()
+        }
         ProductionSemanticExpressionV2::Unary {
             operation,
             scalar,
@@ -4097,8 +5153,8 @@ fn materialize_typed_semantic_expression(
     Ok(result)
 }
 
-fn authenticated_proof_ids(
-    evidence: &ProductionFunctionalRefinementEvidenceV2,
+fn policy_checked_proof_ids(
+    evidence: &ProductionPolicyCheckedRefinementStagingV2,
 ) -> Result<[[u64; 4]; 4], ProductionRankedKernelErrorV1> {
     let inputs = [
         (
@@ -4351,7 +5407,8 @@ fn materialize_terminator(
 pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
     production_pipeline_report: ProductionPlironPreloweringReportV2,
-    authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+    ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
+    policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     _session: ProductionPlironSessionV1,
     _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
     _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
@@ -4383,16 +5440,26 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.kernel
     }
 
+    /// Compiler-captured live PLIRON SSA identity for one stable ranked value.
+    /// The mapping is created during closed materialization and is never accepted
+    /// from a contract or downstream caller.
+    pub fn live_ranked_view_name(&self, view: ProductionRankedValueV1) -> Option<&str> {
+        self.ranked_view_names.get(&view).map(String::as_str)
+    }
+
     /// Indivisible lineage from the mandatory eight-pass production pipeline.
     pub const fn production_pipeline_report(&self) -> &ProductionPlironPreloweringReportV2 {
         &self.production_pipeline_report
     }
 
-    /// Exact signature- and policy-verified receipts retained for this graph.
-    pub fn retained_functional_refinement_receipts(
+    /// Policy-checked, non-authoritative receipt staging retained for aggregate replay.
+    ///
+    /// A caller-selected policy can satisfy this structural check. This accessor never
+    /// reports proof execution and the returned values grant no authority.
+    pub fn retained_policy_checked_refinement_staging(
         &self,
-    ) -> &[ProductionFunctionalRefinementEvidenceV2] {
-        &self.authenticated_functional_refinement
+    ) -> &[ProductionPolicyCheckedRefinementStagingV2] {
+        &self.policy_checked_refinement_staging
     }
 
     pub const fn bounds_report(&self) -> &RankedBoundsReportV1 {
@@ -4439,8 +5506,8 @@ impl ProductionRankedKernelLoweringInputV1 {
         false
     }
 
-    pub const fn has_retained_functional_refinement_receipts(&self) -> bool {
-        !self.authenticated_functional_refinement.is_empty()
+    pub const fn has_retained_policy_checked_refinement_staging(&self) -> bool {
+        !self.policy_checked_refinement_staging.is_empty()
     }
 }
 
@@ -4565,14 +5632,15 @@ impl Error for ProductionRankedCompileErrorV2 {
     }
 }
 
+#[cfg(feature = "internal-proof-staging")]
 fn admit_functional_refinement_v2(
     construction: &mut ProductionConstructionV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
-    policy: &ProductionFunctionalRefinementTrustPolicyV2,
+    policy: &ProductionRefinementStagingPolicyV2,
 ) -> Result<(), ProductionFunctionalRefinementAdmissionErrorV2> {
     let ProductionConstructionKindV1::RankedKernel {
         kernel,
-        authenticated_functional_refinement,
+        policy_checked_refinement_staging,
         ..
     } = &mut construction.kind
     else {
@@ -4628,7 +5696,7 @@ fn admit_functional_refinement_v2(
                 ),
             );
         }
-        retained.push(ProductionFunctionalRefinementEvidenceV2::from_imported(
+        retained.push(ProductionPolicyCheckedRefinementStagingV2::from_imported(
             proof,
         ));
         Ok(())
@@ -4642,7 +5710,9 @@ fn admit_functional_refinement_v2(
                     );
                 }
                 ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
-                | ProductionRankedOperationV1::RequestEffectRefinement { .. } => {
+                | ProductionRankedOperationV1::RequestEffectRefinement { .. }
+                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                | ProductionRankedOperationV1::RequestTensorRefinement { .. } => {
                     return Err(ProductionFunctionalRefinementAdmissionErrorV2::UnboundRequest);
                 }
                 ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
@@ -4680,6 +5750,36 @@ fn admit_functional_refinement_v2(
                 })?;
                     admit(proof, expected_digest)?;
                 }
+                ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
+                    let expected_digest = normalized_numerical_refinement_hash_for_kernel_v2(
+                        kernel,
+                        block_index,
+                        operation_index,
+                        *contract,
+                        proof.binding().subjects(),
+                    )
+                    .map_err(|_| {
+                        ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                            proof.receipt_identity(),
+                        )
+                    })?;
+                    admit(proof, expected_digest)?;
+                }
+                ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+                    let expected_digest = normalized_tensor_refinement_hash_for_kernel_v1(
+                        kernel,
+                        block_index,
+                        operation_index,
+                        contract,
+                        proof.binding().subjects(),
+                    )
+                    .map_err(|_| {
+                        ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                            proof.receipt_identity(),
+                        )
+                    })?;
+                    admit(proof, expected_digest)?;
+                }
                 _ => {}
             }
         }
@@ -4689,7 +5789,7 @@ fn admit_functional_refinement_v2(
             ProductionFunctionalRefinementAdmissionErrorV2::UnusedImportedReceipt(identity),
         );
     }
-    *authenticated_functional_refinement = retained;
+    *policy_checked_refinement_staging = retained;
     Ok(())
 }
 
@@ -4725,17 +5825,18 @@ pub fn compile_ranked_kernel_for_lowering_v1(
         .map_err(ProductionRankedCompileErrorV1::Session)
 }
 
-/// Executes the ranked production path after consuming and exactly reconciling
-/// authenticated V2 functional-refinement proofs.
+/// Stages caller-policy-checked V2 receipts against exact ranked obligations.
 ///
-/// Only MIR-to-MIR functional-refinement authority is admitted. Source-to-MIR,
-/// lowering, ISA, artifact, load, launch, and hardware authority remain outside
-/// this transition.
-pub fn compile_ranked_kernel_for_lowering_v2(
+/// This workspace-internal transition is deliberately non-authoritative: signatures
+/// under a caller-selected policy do not prove verifier execution. Only the private
+/// aggregate exact-formula Verus replay may grant MIR-to-live-PLIRON refinement.
+/// It grants no compiler, lowering, ISA, artifact, load, launch, or hardware authority.
+#[cfg(feature = "internal-proof-staging")]
+pub fn compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
     mut construction: ProductionConstructionV1,
     limits: ProductionSessionLimitsV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
-    policy: ProductionFunctionalRefinementTrustPolicyV2,
+    policy: ProductionRefinementStagingPolicyV2,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV2> {
     admit_functional_refinement_v2(&mut construction, imported, &policy)
         .map_err(ProductionRankedCompileErrorV2::Proof)?;

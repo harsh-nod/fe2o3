@@ -2,7 +2,9 @@
 //!
 //! This path is workload-neutral: it derives a bounded Verus program from a validated ranked
 //! scalar/effect request and binds the exact source, process result, retained runtime closure, and
-//! functional-refinement statement. The public producer accepts no caller-authored Verus source.
+//! functional-refinement statement. Finite-error requests require imported claim-specific proofs;
+//! this generic generator cannot discharge them from scalar equality. The public producer accepts
+//! no caller-authored Verus source.
 //! It does not establish Rust source-to-MIR correspondence; current MIR subjects are supplied by
 //! the compiler frontend.
 
@@ -24,8 +26,8 @@ use fe2o3_functional_proof::{
     VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionRankedKernelV1,
-    ProductionRankedOperationV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
+    ProductionRankedValueV1, ProductionRefinementStagingPolicyV2,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
@@ -151,8 +153,10 @@ impl PreparedFunctionalRefinementReceiptV2 {
     }
 }
 
-/// Generates Verus source from the ranked semantic DAG and executes it through
-/// the retained runtime. There is no caller-provided source parameter.
+/// Generates Verus source for scalar/effect requests from the ranked semantic
+/// DAG and executes it through the retained runtime. Finite-error requests are
+/// rejected for claim-specific import. There is no caller-provided source
+/// parameter.
 pub fn prepare_ranked_functional_refinement_receipt_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
@@ -179,7 +183,8 @@ pub fn prepare_ranked_functional_refinement_receipt_v2(
     Ok(PreparedFunctionalRefinementReceiptV2 { binding, unsigned })
 }
 
-/// Local compilation path with an ephemeral compiler-owned trust root.
+/// Local compilation path with an ephemeral policy used only for staging.
+/// The returned policy grants no proof or compiler authority.
 pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
     kernel: &ProductionRankedKernelV1,
@@ -191,7 +196,7 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     (
         FunctionalRefinementBindingV2,
         ImportedFunctionalRefinementProofV2,
-        ProductionFunctionalRefinementTrustPolicyV2,
+        ProductionRefinementStagingPolicyV2,
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
@@ -204,7 +209,7 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =
-        ProductionFunctionalRefinementTrustPolicyV2::new([policy.signer_identity()], toolchain)
+        ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
     let prepared = prepare_ranked_functional_refinement_receipt_v2(
         runtime,
@@ -241,7 +246,7 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
 ) -> Result<
     (
         ImportedFunctionalRefinementProofV2,
-        ProductionFunctionalRefinementTrustPolicyV2,
+        ProductionRefinementStagingPolicyV2,
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
@@ -254,7 +259,7 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =
-        ProductionFunctionalRefinementTrustPolicyV2::new([policy.signer_identity()], toolchain)
+        ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
     let unsigned = execute_functional_refinement_verus_and_prepare_receipt_v2(
         runtime,
@@ -336,6 +341,9 @@ fn generate_ranked_functional_refinement_proof_v2(
             ]);
             (obligation, pairs)
         }
+        ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
+            return Err(claim_specific_numerical_proof_required());
+        }
         _ => return Err(invalid_ranked_recipe()),
     };
     let binding = FunctionalRefinementBindingV2::from_subjects(subjects, obligation)
@@ -350,6 +358,79 @@ fn generate_ranked_functional_refinement_proof_v2(
             }
         })?;
     Ok((binding, source))
+}
+
+/// Compiler-derived exact effect formula replayed inside the aggregate proof.
+pub(crate) struct RankedEffectFormulaReplayV2 {
+    lemma: String,
+    symbols: Vec<u32>,
+}
+
+impl RankedEffectFormulaReplayV2 {
+    pub(crate) fn lemma(&self) -> &str {
+        &self.lemma
+    }
+
+    pub(crate) fn symbols(&self) -> &[u32] {
+        &self.symbols
+    }
+}
+
+/// Rebuilds the exact formula proved by one admitted effect receipt. The
+/// aggregate proof uses this instead of treating the receipt digest as an
+/// axiom or accepting the desired relation as a premise.
+pub(crate) fn generate_ranked_effect_formula_replay_v2(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    lemma_name: &str,
+) -> Result<RankedEffectFormulaReplayV2, FunctionalRefinementVerusExecutionErrorV2> {
+    let operation = kernel
+        .blocks()
+        .get(block_index)
+        .and_then(|block| block.operations().get(operation_index))
+        .ok_or_else(invalid_ranked_recipe)?;
+    let ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } = operation else {
+        return Err(invalid_ranked_recipe());
+    };
+    let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+        kernel,
+        block_index,
+        operation_index,
+        contract,
+        proof.binding().subjects(),
+    )
+    .map_err(|_| invalid_ranked_recipe())?;
+    if obligation != proof.binding().normalized_obligation_effect_ir_hash() {
+        return Err(invalid_ranked_recipe());
+    }
+    let mut pairs = contract
+        .gpu_coordinates()
+        .iter()
+        .copied()
+        .zip(contract.reference_coordinates().iter().copied())
+        .collect::<Vec<_>>();
+    pairs.extend([
+        (contract.gpu_domain(), contract.reference_domain()),
+        (
+            contract.gpu_precondition(),
+            contract.reference_precondition(),
+        ),
+        (contract.gpu_value(), contract.reference_value()),
+    ]);
+    let program = SemanticFormulaProgramV2::build(kernel, &pairs)?;
+    Ok(RankedEffectFormulaReplayV2 {
+        lemma: program.render_lemma(&pairs, lemma_name)?,
+        symbols: program.symbols.iter().copied().collect(),
+    })
+}
+
+pub(crate) const fn ranked_effect_formula_replay_prelude_v2() -> &'static str {
+    BITVECTOR_SEMANTICS_V2
+}
+
+pub(crate) const fn ranked_effect_ieee_congruence_declaration_v2() -> &'static str {
+    IEEE_CONGRUENCE_DECLARATION_V2
 }
 
 #[derive(Clone)]
@@ -397,6 +478,9 @@ impl SemanticFormulaProgramV2 {
                     Some((*result, SemanticDefinitionV2::Symbol(*symbol)))
                 }
                 ProductionRankedOperationV1::SemanticConstant { result, value } => {
+                    Some((*result, SemanticDefinitionV2::Constant(i128::from(*value))))
+                }
+                ProductionRankedOperationV1::IndexConstant { result, value } => {
                     Some((*result, SemanticDefinitionV2::Constant(i128::from(*value))))
                 }
                 ProductionRankedOperationV1::SemanticBinary {
@@ -558,9 +642,33 @@ impl SemanticFormulaProgramV2 {
         let mut source = BoundedVerusSourceV2::default();
         write!(
             source,
-            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;\n\n    proof fn fe2o3_functional_refinement_v2("
+            "use vstd::prelude::*;\n\nverus! {{\n{BITVECTOR_SEMANTICS_V2}\n{IEEE_CONGRUENCE_DECLARATION_V2}\n"
         )
         .map_err(|_| generated_source_limit())?;
+        self.write_lemma(&mut source, pairs, "fe2o3_functional_refinement_v2")?;
+        source
+            .write_str("}\n\nfn main() {}\n")
+            .map_err(|_| generated_source_limit())?;
+        Ok(source.into_string())
+    }
+
+    fn render_lemma(
+        &self,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+        lemma_name: &str,
+    ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
+        let mut source = BoundedVerusSourceV2::default();
+        self.write_lemma(&mut source, pairs, lemma_name)?;
+        Ok(source.into_string())
+    }
+
+    fn write_lemma(
+        &self,
+        source: &mut BoundedVerusSourceV2,
+        pairs: &[(ProductionRankedValueV1, ProductionRankedValueV1)],
+        lemma_name: &str,
+    ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
+        write!(source, "    proof fn {lemma_name}(").map_err(|_| generated_source_limit())?;
         for (index, symbol) in self.symbols.iter().enumerate() {
             if index != 0 {
                 source
@@ -640,9 +748,9 @@ impl SemanticFormulaProgramV2 {
             .map_err(|_| generated_source_limit())?;
         }
         source
-            .write_str("    }\n}\n\nfn main() {}\n")
+            .write_str("    }\n\n")
             .map_err(|_| generated_source_limit())?;
-        Ok(source.into_string())
+        Ok(())
     }
 }
 
@@ -750,6 +858,13 @@ const BITVECTOR_SEMANTICS_V2: &str = r#"
     }
 "#;
 
+const IEEE_CONGRUENCE_DECLARATION_V2: &str = r#"
+    // This symbol models congruence of identical compiler-side operator DAG
+    // applications only. It grants no IEEE real-value, lowering, or target
+    // instruction semantics.
+    uninterp spec fn fe2o3_ieee_operator_congruence_v2(tag: int, a: int, b: int, c: int) -> int;
+"#;
+
 fn render_bitvector_expression_v2(
     expression: &fe2o3_pliron::ProductionSemanticExpressionV2,
 ) -> Result<String, FunctionalRefinementVerusExecutionErrorV2> {
@@ -766,6 +881,10 @@ fn render_bitvector_expression_v2(
         }
         Expression::Constant { bits, .. } => {
             format!("fe2o3_bv_norm_v2({bits}, {width})")
+        }
+        Expression::Load(load) => {
+            let symbol = load.proof_symbol();
+            format!("fe2o3_bv_norm_v2(s{symbol}, {width})")
         }
         Expression::Unary {
             operation,
@@ -912,6 +1031,13 @@ fn render_ieee_congruence_expression_v2(
             format!(
                 "fe2o3_ieee_operator_congruence_v2({}, {bits}, 0, 0)",
                 semantic_operation_tag_v2(2, 0, scalar, 0)
+            )
+        }
+        Expression::Load(load) => {
+            let symbol = load.proof_symbol();
+            format!(
+                "fe2o3_ieee_operator_congruence_v2({}, s{symbol}, 0, 0)",
+                semantic_operation_tag_v2(8, 0, scalar, 0)
             )
         }
         Expression::Unary {
@@ -1075,6 +1201,16 @@ fn incomplete_semantic_domain() -> FunctionalRefinementVerusExecutionErrorV2 {
     }
 }
 
+fn claim_specific_numerical_proof_required() -> FunctionalRefinementVerusExecutionErrorV2 {
+    FunctionalRefinementVerusExecutionErrorV2 {
+        kind: FunctionalRefinementVerusExecutionErrorKindV2::ClaimSpecificNumericalProofRequired,
+        detail: Some(
+            "finite-error refinement requires an imported claim-specific receipt proving the exact guard, finiteness, and absolute/relative inequality"
+                .to_owned(),
+        ),
+    }
+}
+
 fn validate_proved_output(
     observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
@@ -1150,6 +1286,7 @@ pub enum FunctionalRefinementVerusExecutionErrorKindV2 {
     InvalidTimeout,
     InvalidRankedProofRecipe,
     IncompleteSemanticDomain,
+    ClaimSpecificNumericalProofRequired,
     GeneratedSource,
     Runtime,
     UnexpectedProofResult,
@@ -1209,9 +1346,10 @@ mod tests {
     use dialect_kernel::SemanticBinaryKindAttr;
     use fe2o3_functional_proof::SafeReferenceKindV2;
     use fe2o3_pliron::{
-        ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionRankedBlockV1,
-        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionSemanticBinaryOpV2,
-        ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
+        ProductionNumericalContractV2, ProductionNumericalRefinementContractV2,
+        ProductionOverflowContractV2, ProductionRankedBlockV1, ProductionRankedOperationV1,
+        ProductionRankedTerminatorV1, ProductionSemanticBinaryOpV2, ProductionSemanticExpressionV2,
+        ProductionSemanticScalarTypeV2,
     };
 
     fn output(
@@ -1497,6 +1635,84 @@ mod tests {
             positive_binding.normalized_obligation_effect_ir_hash(),
             mutated_binding.normalized_obligation_effect_ir_hash(),
         );
+    }
+
+    #[test]
+    fn numerical_generator_rejects_the_unsound_exact_fallback() {
+        let float = ProductionSemanticScalarTypeV2::Float { bits: 32 };
+        let boolean = ProductionSemanticScalarTypeV2::Bool;
+        let local = ProductionRankedValueV1::Local;
+        let ids =
+            std::array::from_fn::<_, 4, _>(|index| ProductionRankedValueIdV1::new(index as u32));
+        let build = |absolute: f64| {
+            let contract = ProductionNumericalRefinementContractV2::new(
+                7,
+                local(ids[0]),
+                local(ids[1]),
+                local(ids[2]),
+                local(ids[3]),
+                absolute.to_bits(),
+                0.01_f64.to_bits(),
+            )
+            .unwrap();
+            ProductionRankedKernelV1::new(
+                "numerical_exact_fallback",
+                0,
+                vec![ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[0],
+                            expression: ProductionSemanticExpressionV2::Symbol {
+                                symbol: 9,
+                                scalar: float,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+                        },
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[1],
+                            expression: ProductionSemanticExpressionV2::Symbol {
+                                symbol: 9,
+                                scalar: float,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(float),
+                        },
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[2],
+                            expression: ProductionSemanticExpressionV2::Constant {
+                                scalar: boolean,
+                                bits: 1,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+                        },
+                        ProductionRankedOperationV1::SemanticExpression {
+                            result: ids[3],
+                            expression: ProductionSemanticExpressionV2::Constant {
+                                scalar: boolean,
+                                bits: 1,
+                            },
+                            numerical_contract: ProductionNumericalContractV2::exact_for(boolean),
+                        },
+                        ProductionRankedOperationV1::RequestNumericalRefinement {
+                            contract,
+                            subjects: subjects(),
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .unwrap()
+        };
+
+        for absolute in [0.001, 0.002] {
+            let error =
+                generate_ranked_functional_refinement_proof_v2(&build(absolute), 0, 4, subjects())
+                    .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                FunctionalRefinementVerusExecutionErrorKindV2::ClaimSpecificNumericalProofRequired
+            );
+            assert!(error.to_string().contains("claim-specific receipt"));
+        }
     }
 
     #[test]

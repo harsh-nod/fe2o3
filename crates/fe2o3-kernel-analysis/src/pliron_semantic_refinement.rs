@@ -13,10 +13,12 @@ use dialect_kernel::{
     SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp, SemanticTypedCompareOp,
     SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedExpressionV1,
     SemanticTypedScalarV1, SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp,
+    TensorResultComponentOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
-    RequireEffectRefinementOp, RequireRefinementOp,
+    RequireEffectRefinementOp, RequireNumericalRefinementOp, RequireRefinementOp,
+    RequireTensorRefinementOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -594,9 +596,11 @@ impl fmt::Display for PlironSemanticRefinementFindingV1 {
 pub struct PlironSemanticRefinementReportV1 {
     findings: Vec<PlironSemanticRefinementFindingV1>,
     reference_obligations: usize,
-    proved_reference_obligations: usize,
+    policy_checked_reference_obligations: usize,
+    numerical_obligations: usize,
+    policy_checked_numerical_obligations: usize,
     collective_contracts: usize,
-    proved_collective_contracts: usize,
+    policy_checked_collective_contracts: usize,
     typed_root_commitments: Vec<[u64; 4]>,
     effect_refinement: PlironEffectRefinementReportV1,
 }
@@ -629,18 +633,34 @@ impl PlironSemanticRefinementReportV1 {
         self.reference_obligations
     }
 
-    /// Number of reference-bound equalities with one exact proved source
-    /// evidence record and an equal target-neutral expression.
-    pub const fn proved_reference_obligation_count(&self) -> usize {
-        self.proved_reference_obligations
+    /// Number of reference-bound equalities with one exact policy-checked staging
+    /// record and an equal target-neutral expression. This is not proof authority.
+    pub const fn policy_checked_reference_obligation_count(&self) -> usize {
+        self.policy_checked_reference_obligations
     }
 
-    /// Whether at least one reference obligation was declared and every such
-    /// obligation was discharged by this pass.
-    pub fn all_reference_obligations_are_proved(&self) -> bool {
+    /// Whether every declared reference obligation has structurally consistent,
+    /// policy-checked staging. This does not report functional proof.
+    pub fn all_reference_obligations_are_policy_checked(&self) -> bool {
         self.is_clean()
             && self.reference_obligations != 0
-            && self.reference_obligations == self.proved_reference_obligations
+            && self.reference_obligations == self.policy_checked_reference_obligations
+    }
+
+    /// Number of finite-error relations with policy-checked staging in the live graph.
+    pub const fn numerical_obligation_count(&self) -> usize {
+        self.numerical_obligations
+    }
+
+    /// Number whose typed roots, finite bounds, and exact evidence join passed.
+    pub const fn policy_checked_numerical_obligation_count(&self) -> usize {
+        self.policy_checked_numerical_obligations
+    }
+
+    pub fn all_numerical_obligations_are_policy_checked(&self) -> bool {
+        self.is_clean()
+            && self.numerical_obligations != 0
+            && self.numerical_obligations == self.policy_checked_numerical_obligations
     }
 
     /// Number of closed finite fold, recurrence, and permutation contracts.
@@ -648,15 +668,15 @@ impl PlironSemanticRefinementReportV1 {
         self.collective_contracts
     }
 
-    /// Number independently joined to one proved MIR functional-refinement obligation.
-    pub const fn proved_collective_contract_count(&self) -> usize {
-        self.proved_collective_contracts
+    /// Number structurally joined to one policy-checked MIR staging obligation.
+    pub const fn policy_checked_collective_contract_count(&self) -> usize {
+        self.policy_checked_collective_contracts
     }
 
-    pub fn all_collective_contracts_are_proved(&self) -> bool {
+    pub fn all_collective_contracts_are_policy_checked(&self) -> bool {
         self.is_clean()
             && self.collective_contracts != 0
-            && self.collective_contracts == self.proved_collective_contracts
+            && self.collective_contracts == self.policy_checked_collective_contracts
     }
 
     /// Canonical typed-root commitments reconstructed and verified by the
@@ -759,6 +779,9 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let mut definitions = Vec::new();
     let mut requirements = Vec::new();
     let mut reference_requirements = Vec::new();
+    let mut numerical_requirements = Vec::new();
+    let mut tensor_requirements = Vec::new();
+    let mut tensor_components = HashMap::new();
     let mut effect_requirement_ids = HashSet::new();
     let mut obligations = Vec::new();
     let mut evidence = Vec::new();
@@ -781,6 +804,15 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 || is_typed_semantic_definition(&*operation)
             {
                 definitions.push(operation.get_operation());
+            } else if let Some(component) = operation.downcast_ref::<TensorResultComponentOp>() {
+                tensor_components.insert(
+                    component.result(context),
+                    (
+                        component.result_root(context),
+                        component.component(context),
+                        component.scalar(context),
+                    ),
+                );
             } else if let Some(requirement) = operation.downcast_ref::<RequireEquivalentOp>() {
                 requirements.push((
                     block_index,
@@ -796,9 +828,35 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                     requirement.actual(context),
                     requirement.expected(context),
                 ));
+            } else if let Some(requirement) = operation.downcast_ref::<RequireTensorRefinementOp>()
+            {
+                tensor_requirements.push((
+                    block_index,
+                    operation_index,
+                    requirement.obligation_id(context),
+                    requirement.result_root(context),
+                    requirement.view(context),
+                    requirement.actual(context),
+                    requirement.reference(context),
+                    requirement.components(context),
+                ));
             } else if let Some(requirement) = operation.downcast_ref::<RequireEffectRefinementOp>()
             {
                 effect_requirement_ids.insert(requirement.obligation_id(context).unwrap_or([0; 4]));
+            } else if let Some(requirement) =
+                operation.downcast_ref::<RequireNumericalRefinementOp>()
+            {
+                numerical_requirements.push((
+                    block_index,
+                    operation_index,
+                    requirement.obligation_id(context),
+                    operation.get_operation().deref(context).get_operand(0),
+                    operation.get_operation().deref(context).get_operand(1),
+                    operation.get_operation().deref(context).get_operand(2),
+                    operation.get_operation().deref(context).get_operand(3),
+                    requirement.absolute_error_f64_bits(context),
+                    requirement.relative_error_f64_bits(context),
+                ));
             } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
                 obligations.push((
                     block_index,
@@ -866,11 +924,28 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
     }
 
-    let reference_count = reference_requirements.len();
+    let reference_count = reference_requirements.len() + tensor_requirements.len();
+    let numerical_count = numerical_requirements.len();
+    let policy_checked_requirements = reference_requirements
+        .iter()
+        .map(|&(block, operation, identity, actual, expected)| {
+            (block, operation, identity, actual, expected)
+        })
+        .chain(numerical_requirements.iter().map(
+            |&(block, operation, identity, actual, reference, ..)| {
+                (block, operation, identity, actual, reference)
+            },
+        ))
+        .chain(tensor_requirements.iter().map(
+            |&(block, operation, identity, _, _, actual, reference, _)| {
+                (block, operation, identity, actual, reference)
+            },
+        ))
+        .collect::<Vec<_>>();
     let mut findings = Vec::new();
     let mut contract_valid = HashSet::new();
     let mut used_obligations = HashSet::new();
-    for (block, operation, identity, _, _) in &reference_requirements {
+    for (block, operation, identity, _, _) in &policy_checked_requirements {
         let identity = identity.unwrap_or([0; 4]);
         let matching = obligations
             .iter()
@@ -961,14 +1036,14 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         }
-        if record.5 != Some(EvidenceStatusAttr::Proved) {
+        if record.5 != Some(EvidenceStatusAttr::Checked) {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
                     block: *block,
                     operation: *operation,
                     obligation: identity,
-                    reason: "functional refinement requires exact Proved evidence",
+                    reason: "policy-checked staging requires exact Checked evidence",
                 },
             );
             continue;
@@ -1050,8 +1125,56 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
         }
     }
-    let mut proved_reference_obligations = 0;
+    let mut policy_checked_reference_obligations = 0;
     let mut proved_reference_pairs = HashSet::new();
+    for (block, operation, _, result_root, _, actual, reference, components) in tensor_requirements
+    {
+        let actual_fact = expressions.typed_root_fact(actual);
+        let reference_fact = expressions.typed_root_fact(reference);
+        let valid_aggregate = actual_fact
+            .zip(reference_fact)
+            .is_some_and(|(actual, reference)| actual == reference);
+        let root_component_count = result_root.map_or(0, |root| {
+            tensor_components
+                .values()
+                .filter(|(candidate, ..)| *candidate == Some(root))
+                .count()
+        });
+        let mut seen = HashSet::new();
+        let valid_components = result_root.is_some()
+            && !components.is_empty()
+            && root_component_count == components.len()
+            && components
+                .iter()
+                .enumerate()
+                .all(|(ordinal, (gpu, sequential))| {
+                    seen.insert(*gpu)
+                        && tensor_components.get(gpu).is_some_and(
+                            |(component_root, component_ordinal, scalar)| {
+                                *component_root == result_root
+                                    && *component_ordinal == u32::try_from(ordinal).ok()
+                                    && actual_fact.is_some_and(|fact| *scalar == Some(fact.scalar))
+                            },
+                        )
+                        && reference_fact
+                            .zip(expressions.typed_root_fact(*sequential))
+                            .is_some_and(|(aggregate, component)| aggregate == component)
+                });
+        if !valid_aggregate || !valid_components {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "tensor refinement lacks an exact result-root/component SSA mapping or compatible typed aggregate roots",
+                },
+            );
+        } else if contract_valid.contains(&(block, operation)) {
+            policy_checked_reference_obligations += 1;
+            proved_reference_pairs.insert((actual, reference));
+        }
+    }
     for (block, operation, _, actual, expected) in reference_requirements {
         let Some(actual_node) = expressions.identity(actual) else {
             push(
@@ -1086,12 +1209,102 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 },
             );
         } else if contract_valid.contains(&(block, operation)) {
-            proved_reference_obligations += 1;
+            policy_checked_reference_obligations += 1;
             proved_reference_pairs.insert((actual, expected));
         }
     }
+    let mut policy_checked_numerical_obligations = 0;
+    for (
+        block,
+        operation,
+        _,
+        actual,
+        reference,
+        domain,
+        precondition,
+        absolute_error,
+        relative_error,
+    ) in numerical_requirements
+    {
+        let Some(actual_fact) = expressions.typed_root_fact(actual) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "the numerical actual value is not a reconstructed typed root",
+                },
+            );
+            continue;
+        };
+        let Some(reference_fact) = expressions.typed_root_fact(reference) else {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "the numerical reference value is not a reconstructed typed root",
+                },
+            );
+            continue;
+        };
+        let domain_fact = expressions.typed_root_fact(domain);
+        let precondition_fact = expressions.typed_root_fact(precondition);
+        if actual_fact != reference_fact || !actual_fact.scalar.is_float() {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "numerical actual and reference roots must share one floating scalar contract",
+                },
+            );
+            continue;
+        }
+        if domain_fact.is_none_or(|fact| !fact.scalar.is_bool())
+            || precondition_fact.is_none_or(|fact| !fact.scalar.is_bool())
+        {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "numerical domain and precondition must be typed Boolean roots",
+                },
+            );
+            continue;
+        }
+        let bounds = absolute_error
+            .zip(relative_error)
+            .map(|(absolute, relative)| (f64::from_bits(absolute), f64::from_bits(relative)));
+        if bounds.is_none_or(|(absolute, relative)| {
+            !absolute.is_finite()
+                || !relative.is_finite()
+                || absolute < 0.0
+                || relative < 0.0
+                || (absolute == 0.0 && relative == 0.0)
+        }) {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "numerical refinement requires finite nonnegative nonzero bounds",
+                },
+            );
+            continue;
+        }
+        if contract_valid.contains(&(block, operation)) {
+            policy_checked_numerical_obligations += 1;
+        }
+    }
     let collective_count = collective_contracts.len();
-    let mut proved_collective_contracts = 0;
+    let mut policy_checked_collective_contracts = 0;
     let mut used_reference_pairs = HashSet::new();
     for collective in collective_contracts {
         let block = collective.block;
@@ -1274,7 +1487,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         }
-        proved_collective_contracts += 1;
+        policy_checked_collective_contracts += 1;
     }
     let effect_refinement =
         run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
@@ -1282,9 +1495,11 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     PlironSemanticRefinementReportV1 {
         findings,
         reference_obligations: reference_count,
-        proved_reference_obligations,
+        policy_checked_reference_obligations,
+        numerical_obligations: numerical_count,
+        policy_checked_numerical_obligations,
         collective_contracts: collective_count,
-        proved_collective_contracts,
+        policy_checked_collective_contracts,
         typed_root_commitments,
         effect_refinement,
     }
@@ -1333,9 +1548,11 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
     PlironSemanticRefinementReportV1 {
         findings: vec![finding],
         reference_obligations: 0,
-        proved_reference_obligations: 0,
+        policy_checked_reference_obligations: 0,
+        numerical_obligations: 0,
+        policy_checked_numerical_obligations: 0,
         collective_contracts: 0,
-        proved_collective_contracts: 0,
+        policy_checked_collective_contracts: 0,
         typed_root_commitments: Vec::new(),
         effect_refinement: clean_effect_refinement_report_v1(),
     }
@@ -1390,9 +1607,11 @@ mod status_tests {
                 mismatch(),
             ],
             reference_obligations: 1,
-            proved_reference_obligations: 0,
+            policy_checked_reference_obligations: 0,
+            numerical_obligations: 0,
+            policy_checked_numerical_obligations: 0,
             collective_contracts: 0,
-            proved_collective_contracts: 0,
+            policy_checked_collective_contracts: 0,
             typed_root_commitments: Vec::new(),
             effect_refinement: clean_effect_refinement_report_v1(),
         };
@@ -1402,9 +1621,11 @@ mod status_tests {
             PlironSemanticRefinementReportV1 {
                 findings: vec![],
                 reference_obligations: 0,
-                proved_reference_obligations: 0,
+                policy_checked_reference_obligations: 0,
+                numerical_obligations: 0,
+                policy_checked_numerical_obligations: 0,
                 collective_contracts: 0,
-                proved_collective_contracts: 0,
+                policy_checked_collective_contracts: 0,
                 typed_root_commitments: Vec::new(),
                 effect_refinement: clean_effect_refinement_report_v1(),
             }

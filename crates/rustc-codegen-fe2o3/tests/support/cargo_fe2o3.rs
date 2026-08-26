@@ -32,6 +32,8 @@ fn binary(workspace: &Path) -> &'static Path {
                 "cargo-fe2o3",
                 "--bin",
                 "cargo-fe2o3",
+                "--features",
+                "qualification-oracles-test-only",
             ]);
             scrub_dynamic_loader_environment(&mut command);
             let output = command.output().expect("build cargo-fe2o3 test binary");
@@ -47,10 +49,15 @@ fn binary(workspace: &Path) -> &'static Path {
 
 pub fn non_production_command(workspace: &Path) -> Command {
     let mut command = Command::new(binary(workspace));
-    command.env(
-        "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
-        "1",
-    );
+    command
+        .env(
+            "FE2O3_BACKEND",
+            cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so"),
+        )
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        );
     scrub_dynamic_loader_environment(&mut command);
     command
 }

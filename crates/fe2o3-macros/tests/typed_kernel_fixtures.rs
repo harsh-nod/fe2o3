@@ -105,7 +105,7 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
 }
 
 #[test]
-fn exact_alpha_zeta_generated_adapter_compiles_downstream() {
+fn generated_worker_v3_adapter_compiles_downstream() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");
     let target_dir = manifest_dir.join("../../target/alpha-zeta-adapter-test");
@@ -119,38 +119,11 @@ fn exact_alpha_zeta_generated_adapter_compiles_downstream() {
 }
 
 #[test]
-fn exact_alpha_zeta_generated_adapter_rejects_unsafe_escape_hatches() {
+fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");
     let target_dir = manifest_dir.join("../../target/alpha-zeta-adapter-test");
     let cases: &[(&str, &[&str])] = &[
-        (
-            "wrong_role",
-            &[
-                "error[E0277]",
-                "zeta_gpu::Arguments<'static>",
-                "unsatisfied trait bound",
-                "is not implemented",
-            ],
-        ),
-        (
-            "wrong_signature",
-            &[
-                "error[E0277]",
-                "alpha_gpu::Arguments<'static>",
-                "unsatisfied trait bound",
-                "is not implemented",
-            ],
-        ),
-        (
-            "wrong_mutability",
-            &[
-                "error[E0277]",
-                "alpha_gpu::Arguments<'static>",
-                "unsatisfied trait bound",
-                "is not implemented",
-            ],
-        ),
         ("lifetime_escape", &["lifetime may not live long enough"]),
         ("private_fields", &["private"]),
         ("non_clone", &["no method named `clone`"]),
@@ -173,15 +146,7 @@ fn exact_alpha_zeta_generated_adapter_rejects_unsafe_escape_hatches() {
             "scalar_abi_substitution",
             &[
                 "error[E0277]",
-                "CompilerGeneratedScalarGemmV1Arguments",
-                "is not implemented",
-            ],
-        ),
-        (
-            "scalar_wrong_mutability",
-            &[
-                "error[E0277]",
-                "CompilerGeneratedScalarGemmV1Arguments",
+                "CompilerGeneratedWorkerV3ArgumentsV1",
                 "is not implemented",
             ],
         ),

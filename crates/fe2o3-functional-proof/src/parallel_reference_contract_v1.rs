@@ -13,11 +13,11 @@ use sha2::{Digest as _, Sha256};
 use crate::{SemanticEvaluationOrderV1, SemanticIeeeExceptionalValueV1, SemanticIeeeRoundingV1};
 
 pub const HARD_MAX_PARALLEL_OUTPUT_RELATIONS_V1: usize = 4_096;
-pub const HARD_MAX_PARALLEL_CALL_SUMMARIES_V1: usize = 4_096;
-pub const HARD_MAX_RELATION_SUMMARIES_V1: usize = 256;
 pub const HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1: u16 = 256;
+pub const HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1: usize = 64;
 
 const CONTRACT_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE-CONTRACT/V1\0";
+const CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PARALLEL-REFERENCE-CONTRACT/V2\0";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ParallelHierarchyLevelV1 {
@@ -33,15 +33,6 @@ pub const COMPLETE_GPU_HIERARCHY_V1: [ParallelHierarchyLevelV1; 4] = [
     ParallelHierarchyLevelV1::Workgroup,
     ParallelHierarchyLevelV1::Grid,
 ];
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ParallelExecutionScopeV1 {
-    SequentialReference,
-    Invocation,
-    Subgroup,
-    Workgroup,
-    Grid,
-}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ParallelFoldOrderV1 {
@@ -128,111 +119,19 @@ impl ParallelNumericalPolicyV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ParallelCallKindV1 {
-    SafeRustHelper,
-    CompilerIntrinsic,
-    CooperativeTensorIntrinsic {
-        site_ordinal: u32,
-        layout_identity: DigestV1,
-    },
-}
-
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ParallelCallSummaryV1 {
-    identity: DigestV1,
-    callsite_identity: DigestV1,
-    actual_root: DigestV1,
-    reference_root: DigestV1,
-    authenticated_proof: DigestV1,
-    argument_count: u16,
-    scope: ParallelExecutionScopeV1,
-    kind: ParallelCallKindV1,
-    numerical_policy: ParallelNumericalPolicyV1,
-}
-
-impl ParallelCallSummaryV1 {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        identity: DigestV1,
-        callsite_identity: DigestV1,
-        actual_root: DigestV1,
-        reference_root: DigestV1,
-        authenticated_proof: DigestV1,
-        argument_count: u16,
-        scope: ParallelExecutionScopeV1,
-        kind: ParallelCallKindV1,
-        numerical_policy: ParallelNumericalPolicyV1,
-    ) -> Result<Self, ParallelReferenceContractErrorV1> {
-        if [
-            identity,
-            callsite_identity,
-            actual_root,
-            reference_root,
-            authenticated_proof,
-        ]
-        .into_iter()
-        .any(DigestV1::is_zero)
-            || argument_count > HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1
-            || matches!(kind, ParallelCallKindV1::CooperativeTensorIntrinsic { layout_identity, .. } if layout_identity.is_zero())
-            || matches!(kind, ParallelCallKindV1::CooperativeTensorIntrinsic { .. })
-                && scope != ParallelExecutionScopeV1::Subgroup
-        {
-            return Err(ParallelReferenceContractErrorV1::InvalidCallSummary);
-        }
-        numerical_policy.validate()?;
-        Ok(Self {
-            identity,
-            callsite_identity,
-            actual_root,
-            reference_root,
-            authenticated_proof,
-            argument_count,
-            scope,
-            kind,
-            numerical_policy,
-        })
-    }
-
-    pub const fn identity(&self) -> DigestV1 {
-        self.identity
-    }
-    pub const fn callsite_identity(&self) -> DigestV1 {
-        self.callsite_identity
-    }
-    pub const fn actual_root(&self) -> DigestV1 {
-        self.actual_root
-    }
-    pub const fn reference_root(&self) -> DigestV1 {
-        self.reference_root
-    }
-    pub const fn authenticated_proof(&self) -> DigestV1 {
-        self.authenticated_proof
-    }
-    pub const fn argument_count(&self) -> u16 {
-        self.argument_count
-    }
-    pub const fn scope(&self) -> ParallelExecutionScopeV1 {
-        self.scope
-    }
-    pub const fn kind(&self) -> ParallelCallKindV1 {
-        self.kind
-    }
-    pub const fn numerical_policy(&self) -> ParallelNumericalPolicyV1 {
-        self.numerical_policy
-    }
-}
-
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ParallelOutputRelationV1 {
     identity: DigestV1,
     output_contract: DigestV1,
     logical_domain: DigestV1,
+    ranked_view_identity: DigestV1,
+    ownership_identity: DigestV1,
+    frame_identity: DigestV1,
     schedule: ParallelScheduleRelationV1,
     numerical_policy: ParallelNumericalPolicyV1,
     hierarchy: Box<[ParallelHierarchyLevelV1]>,
-    call_summaries: Box<[DigestV1]>,
-    authenticated_proof: DigestV1,
+    tensor_refinement_identity: Option<DigestV1>,
+    policy_checked_staging_identity: DigestV1,
 }
 
 impl ParallelOutputRelationV1 {
@@ -241,29 +140,28 @@ impl ParallelOutputRelationV1 {
         identity: DigestV1,
         output_contract: DigestV1,
         logical_domain: DigestV1,
+        ranked_view_identity: DigestV1,
+        ownership_identity: DigestV1,
+        frame_identity: DigestV1,
         schedule: ParallelScheduleRelationV1,
         numerical_policy: ParallelNumericalPolicyV1,
         hierarchy: Vec<ParallelHierarchyLevelV1>,
-        call_summaries: Vec<DigestV1>,
-        authenticated_proof: DigestV1,
+        tensor_refinement_identity: Option<DigestV1>,
+        policy_checked_staging_identity: DigestV1,
     ) -> Result<Self, ParallelReferenceContractErrorV1> {
         if [
             identity,
             output_contract,
             logical_domain,
-            authenticated_proof,
+            ranked_view_identity,
+            ownership_identity,
+            frame_identity,
+            policy_checked_staging_identity,
         ]
         .into_iter()
         .any(DigestV1::is_zero)
             || hierarchy.as_slice() != COMPLETE_GPU_HIERARCHY_V1
-            || call_summaries.len() > HARD_MAX_RELATION_SUMMARIES_V1
-            || call_summaries.iter().any(|identity| identity.is_zero())
-            || call_summaries
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-                .len()
-                != call_summaries.len()
+            || tensor_refinement_identity.is_some_and(DigestV1::is_zero)
         {
             return Err(ParallelReferenceContractErrorV1::InvalidOutputRelation);
         }
@@ -275,11 +173,14 @@ impl ParallelOutputRelationV1 {
             identity,
             output_contract,
             logical_domain,
+            ranked_view_identity,
+            ownership_identity,
+            frame_identity,
             schedule,
             numerical_policy,
             hierarchy: hierarchy.into_boxed_slice(),
-            call_summaries: call_summaries.into_boxed_slice(),
-            authenticated_proof,
+            tensor_refinement_identity,
+            policy_checked_staging_identity,
         })
     }
 
@@ -292,6 +193,15 @@ impl ParallelOutputRelationV1 {
     pub const fn logical_domain(&self) -> DigestV1 {
         self.logical_domain
     }
+    pub const fn ranked_view_identity(&self) -> DigestV1 {
+        self.ranked_view_identity
+    }
+    pub const fn ownership_identity(&self) -> DigestV1 {
+        self.ownership_identity
+    }
+    pub const fn frame_identity(&self) -> DigestV1 {
+        self.frame_identity
+    }
     pub const fn schedule(&self) -> ParallelScheduleRelationV1 {
         self.schedule
     }
@@ -301,31 +211,33 @@ impl ParallelOutputRelationV1 {
     pub fn hierarchy(&self) -> &[ParallelHierarchyLevelV1] {
         &self.hierarchy
     }
-    pub fn call_summaries(&self) -> &[DigestV1] {
-        &self.call_summaries
+    /// Claim-specific receipt identity for a bounded cooperative-tensor
+    /// composition, distinct from the output-effect proof.
+    pub const fn tensor_refinement_identity(&self) -> Option<DigestV1> {
+        self.tensor_refinement_identity
     }
-    pub const fn authenticated_proof(&self) -> DigestV1 {
-        self.authenticated_proof
+    pub const fn policy_checked_staging_identity(&self) -> DigestV1 {
+        self.policy_checked_staging_identity
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParallelReferenceContractV1 {
     semantic_contract_identity: DigestV1,
+    output_product_identity: DigestV1,
     relations: Box<[ParallelOutputRelationV1]>,
-    call_summaries: Box<[ParallelCallSummaryV1]>,
 }
 
 impl ParallelReferenceContractV1 {
     pub fn new(
         semantic_contract_identity: DigestV1,
+        output_product_identity: DigestV1,
         relations: Vec<ParallelOutputRelationV1>,
-        call_summaries: Vec<ParallelCallSummaryV1>,
     ) -> Result<Self, ParallelReferenceContractErrorV1> {
         if semantic_contract_identity.is_zero()
+            || output_product_identity.is_zero()
             || relations.is_empty()
             || relations.len() > HARD_MAX_PARALLEL_OUTPUT_RELATIONS_V1
-            || call_summaries.len() > HARD_MAX_PARALLEL_CALL_SUMMARIES_V1
         {
             return Err(ParallelReferenceContractErrorV1::ResourceLimit);
         }
@@ -337,53 +249,72 @@ impl ParallelReferenceContractV1 {
             .iter()
             .map(ParallelOutputRelationV1::output_contract)
             .collect::<BTreeSet<_>>();
-        if relation_ids.len() != relations.len() || output_ids.len() != relations.len() {
-            return Err(ParallelReferenceContractErrorV1::DuplicateIdentity);
-        }
-        let summaries = call_summaries
+        let view_ids = relations
             .iter()
-            .map(ParallelCallSummaryV1::identity)
+            .map(ParallelOutputRelationV1::ranked_view_identity)
             .collect::<BTreeSet<_>>();
-        if summaries.len() != call_summaries.len() {
-            return Err(ParallelReferenceContractErrorV1::DuplicateIdentity);
-        }
-        let used = relations
+        let ownership_ids = relations
             .iter()
-            .flat_map(|relation| relation.call_summaries.iter().copied())
+            .map(ParallelOutputRelationV1::ownership_identity)
             .collect::<BTreeSet<_>>();
-        if !used.is_subset(&summaries) {
-            return Err(ParallelReferenceContractErrorV1::UnknownCallSummary);
-        }
-        if used != summaries {
-            return Err(ParallelReferenceContractErrorV1::UnusedCallSummary);
+        let frame_ids = relations
+            .iter()
+            .map(ParallelOutputRelationV1::frame_identity)
+            .collect::<BTreeSet<_>>();
+        if [
+            relation_ids.len(),
+            output_ids.len(),
+            view_ids.len(),
+            ownership_ids.len(),
+            frame_ids.len(),
+        ]
+        .into_iter()
+        .any(|count| count != relations.len())
+        {
+            return Err(ParallelReferenceContractErrorV1::DuplicateIdentity);
         }
         Ok(Self {
             semantic_contract_identity,
+            output_product_identity,
             relations: relations.into_boxed_slice(),
-            call_summaries: call_summaries.into_boxed_slice(),
         })
     }
 
     pub const fn semantic_contract_identity(&self) -> DigestV1 {
         self.semantic_contract_identity
     }
+    pub const fn output_product_identity(&self) -> DigestV1 {
+        self.output_product_identity
+    }
     pub fn relations(&self) -> &[ParallelOutputRelationV1] {
         &self.relations
-    }
-    pub fn call_summaries(&self) -> &[ParallelCallSummaryV1] {
-        &self.call_summaries
     }
 
     pub fn canonical_sha256(&self) -> DigestV1 {
         let mut digest = Sha256::new();
-        put_blob(&mut digest, CONTRACT_DOMAIN_V1);
+        let tensor_v2 = self
+            .relations
+            .iter()
+            .any(|relation| relation.tensor_refinement_identity.is_some());
+        put_blob(
+            &mut digest,
+            if tensor_v2 {
+                CONTRACT_DOMAIN_V2
+            } else {
+                CONTRACT_DOMAIN_V1
+            },
+        );
         put_digest(&mut digest, self.semantic_contract_identity);
+        put_digest(&mut digest, self.output_product_identity);
         put_u64(&mut digest, self.relations.len() as u64);
         for relation in &self.relations {
             for value in [
                 relation.identity,
                 relation.output_contract,
                 relation.logical_domain,
+                relation.ranked_view_identity,
+                relation.ownership_identity,
+                relation.frame_identity,
             ] {
                 put_digest(&mut digest, value);
             }
@@ -393,38 +324,16 @@ impl ParallelReferenceContractV1 {
             for level in &relation.hierarchy {
                 digest.update([hierarchy_tag(*level)]);
             }
-            put_u64(&mut digest, relation.call_summaries.len() as u64);
-            for summary in &relation.call_summaries {
-                put_digest(&mut digest, *summary);
-            }
-            put_digest(&mut digest, relation.authenticated_proof);
-        }
-        put_u64(&mut digest, self.call_summaries.len() as u64);
-        for summary in &self.call_summaries {
-            for value in [
-                summary.identity,
-                summary.callsite_identity,
-                summary.actual_root,
-                summary.reference_root,
-                summary.authenticated_proof,
-            ] {
-                put_digest(&mut digest, value);
-            }
-            digest.update(summary.argument_count.to_le_bytes());
-            digest.update([scope_tag(summary.scope)]);
-            match summary.kind {
-                ParallelCallKindV1::SafeRustHelper => digest.update([1]),
-                ParallelCallKindV1::CompilerIntrinsic => digest.update([2]),
-                ParallelCallKindV1::CooperativeTensorIntrinsic {
-                    site_ordinal,
-                    layout_identity,
-                } => {
-                    digest.update([3]);
-                    digest.update(site_ordinal.to_le_bytes());
-                    put_digest(&mut digest, layout_identity);
+            if tensor_v2 {
+                match relation.tensor_refinement_identity {
+                    None => digest.update([0]),
+                    Some(identity) => {
+                        digest.update([1]);
+                        put_digest(&mut digest, identity);
+                    }
                 }
             }
-            put_numerical(&mut digest, summary.numerical_policy);
+            put_digest(&mut digest, relation.policy_checked_staging_identity);
         }
         DigestV1::from_untrusted_bytes(digest.finalize().into())
     }
@@ -438,23 +347,17 @@ pub enum ParallelReferenceContractErrorV1 {
     InvalidScheduleRelation,
     InvalidNumericalPolicy,
     UnboundedRelaxedPolicy,
-    InvalidCallSummary,
-    UnknownCallSummary,
-    UnusedCallSummary,
 }
 
 impl fmt::Display for ParallelReferenceContractErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ResourceLimit => formatter.write_str("parallel-reference contract is empty or exceeds a hard resource limit"),
-            Self::DuplicateIdentity => formatter.write_str("parallel-reference contract reuses a relation, output, or summary identity"),
+            Self::DuplicateIdentity => formatter.write_str("parallel-reference contract reuses a relation, output, ranked view, ownership, or frame identity"),
             Self::InvalidOutputRelation => formatter.write_str("parallel output relation must bind a finite logical output through invocation, subgroup, workgroup, and grid ownership"),
             Self::InvalidScheduleRelation => formatter.write_str("parallel schedule relation is missing its live permutation, fold, recurrence, loop, bound, or order proof identity"),
             Self::InvalidNumericalPolicy => formatter.write_str("parallel numerical policy has an invalid type, finite error bound, witness, or proof identity"),
             Self::UnboundedRelaxedPolicy => formatter.write_str("unbounded relaxed floating-point semantics are not a correctness policy; provide an authenticated finite error bound"),
-            Self::InvalidCallSummary => formatter.write_str("parallel helper or intrinsic summary has an invalid scope, callsite, typed root, layout, arity, or proof identity"),
-            Self::UnknownCallSummary => formatter.write_str("parallel output relation names an undeclared helper or intrinsic summary"),
-            Self::UnusedCallSummary => formatter.write_str("parallel helper or intrinsic summary is not consumed by any output relation"),
         }
     }
 }
@@ -497,15 +400,6 @@ fn hierarchy_tag(level: ParallelHierarchyLevelV1) -> u8 {
         ParallelHierarchyLevelV1::Subgroup => 2,
         ParallelHierarchyLevelV1::Workgroup => 3,
         ParallelHierarchyLevelV1::Grid => 4,
-    }
-}
-fn scope_tag(scope: ParallelExecutionScopeV1) -> u8 {
-    match scope {
-        ParallelExecutionScopeV1::SequentialReference => 1,
-        ParallelExecutionScopeV1::Invocation => 2,
-        ParallelExecutionScopeV1::Subgroup => 3,
-        ParallelExecutionScopeV1::Workgroup => 4,
-        ParallelExecutionScopeV1::Grid => 5,
     }
 }
 fn order_tag(order: SemanticEvaluationOrderV1) -> u8 {
@@ -613,24 +507,26 @@ mod tests {
     }
     fn relation(
         policy: ParallelNumericalPolicyV1,
-        summaries: Vec<DigestV1>,
     ) -> Result<ParallelOutputRelationV1, ParallelReferenceContractErrorV1> {
         ParallelOutputRelationV1::new(
             d(1),
             d(2),
             d(3),
+            d(20),
+            d(21),
+            d(22),
             ParallelScheduleRelationV1::PointwiseBijection,
             policy,
             COMPLETE_GPU_HIERARCHY_V1.to_vec(),
-            summaries,
+            None,
             d(4),
         )
     }
 
     #[test]
     fn exact_pointwise_relation_covers_the_complete_hierarchy() {
-        let relation = relation(ParallelNumericalPolicyV1::ExactBitVector, vec![]).unwrap();
-        let contract = ParallelReferenceContractV1::new(d(5), vec![relation], vec![]).unwrap();
+        let relation = relation(ParallelNumericalPolicyV1::ExactBitVector).unwrap();
+        let contract = ParallelReferenceContractV1::new(d(5), d(6), vec![relation]).unwrap();
         assert_eq!(
             contract.relations()[0].hierarchy(),
             COMPLETE_GPU_HIERARCHY_V1
@@ -639,9 +535,52 @@ mod tests {
     }
 
     #[test]
+    fn canonical_v1_none_hash_is_stable_and_tensor_v2_binds_the_claim() {
+        let scalar = relation(ParallelNumericalPolicyV1::ExactBitVector).unwrap();
+        let scalar_contract =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![scalar.clone()]).unwrap();
+        assert_eq!(
+            scalar_contract.canonical_sha256(),
+            DigestV1::from_untrusted_bytes([
+                213, 95, 232, 195, 103, 219, 84, 38, 63, 7, 99, 212, 212, 196, 94, 28, 163, 116,
+                19, 53, 68, 178, 233, 55, 215, 221, 90, 51, 185, 215, 65, 35,
+            ]),
+        );
+        let tensor_relation = |identity| {
+            ParallelOutputRelationV1::new(
+                scalar.identity(),
+                scalar.output_contract(),
+                scalar.logical_domain(),
+                scalar.ranked_view_identity(),
+                scalar.ownership_identity(),
+                scalar.frame_identity(),
+                scalar.schedule(),
+                scalar.numerical_policy(),
+                scalar.hierarchy().to_vec(),
+                Some(identity),
+                scalar.policy_checked_staging_identity(),
+            )
+            .unwrap()
+        };
+        let first =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![tensor_relation(d(30))]).unwrap();
+        let second =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![tensor_relation(d(31))]).unwrap();
+        assert_eq!(
+            first.canonical_sha256(),
+            DigestV1::from_untrusted_bytes([
+                216, 122, 125, 99, 68, 227, 66, 65, 97, 27, 161, 11, 127, 67, 240, 105, 39, 54,
+                172, 116, 241, 125, 171, 59, 200, 48, 177, 97, 58, 81, 189, 88,
+            ]),
+        );
+        assert_ne!(first.canonical_sha256(), scalar_contract.canonical_sha256());
+        assert_ne!(first.canonical_sha256(), second.canonical_sha256());
+    }
+
+    #[test]
     fn unbounded_or_invalid_error_policies_fail_closed() {
         assert_eq!(
-            relation(ParallelNumericalPolicyV1::UnboundedRelaxed, vec![]),
+            relation(ParallelNumericalPolicyV1::UnboundedRelaxed),
             Err(ParallelReferenceContractErrorV1::UnboundedRelaxedPolicy)
         );
         for (absolute, relative) in [
@@ -657,19 +596,16 @@ mod tests {
                 proof: d(9),
             };
             assert_eq!(
-                relation(policy, vec![]),
+                relation(policy),
                 Err(ParallelReferenceContractErrorV1::InvalidNumericalPolicy)
             );
         }
-        relation(
-            ParallelNumericalPolicyV1::ErrorBounded {
-                absolute_error_f64_bits: 1.0_f64.to_bits(),
-                relative_error_f64_bits: 0.0_f64.to_bits(),
-                witness_root: d(8),
-                proof: d(9),
-            },
-            vec![],
-        )
+        relation(ParallelNumericalPolicyV1::ErrorBounded {
+            absolute_error_f64_bits: 1.0_f64.to_bits(),
+            relative_error_f64_bits: 0.0_f64.to_bits(),
+            witness_root: d(8),
+            proof: d(9),
+        })
         .unwrap();
     }
 
@@ -680,13 +616,16 @@ mod tests {
                 d(1),
                 d(2),
                 d(3),
+                d(20),
+                d(21),
+                d(22),
                 ParallelScheduleRelationV1::PointwiseBijection,
                 ParallelNumericalPolicyV1::ExactBitVector,
                 vec![
                     ParallelHierarchyLevelV1::Invocation,
                     ParallelHierarchyLevelV1::Grid
                 ],
-                vec![],
+                None,
                 d(4)
             ),
             Err(ParallelReferenceContractErrorV1::InvalidOutputRelation)
@@ -704,10 +643,13 @@ mod tests {
                 d(1),
                 d(2),
                 d(3),
+                d(20),
+                d(21),
+                d(22),
                 bad_fold,
                 ParallelNumericalPolicyV1::ExactBitVector,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
-                vec![],
+                None,
                 d(4)
             ),
             Err(ParallelReferenceContractErrorV1::InvalidScheduleRelation)
@@ -723,60 +665,89 @@ mod tests {
                 d(1),
                 d(2),
                 d(3),
+                d(20),
+                d(21),
+                d(22),
                 bad_dynamic,
                 ParallelNumericalPolicyV1::ExactBitVector,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
-                vec![],
+                None,
                 d(4)
             ),
             Err(ParallelReferenceContractErrorV1::InvalidScheduleRelation)
         );
     }
 
-    #[test]
-    fn summaries_must_be_scoped_and_consumed() {
-        let summary = ParallelCallSummaryV1::new(
-            d(10),
-            d(11),
-            d(12),
-            d(13),
-            d(14),
-            2,
-            ParallelExecutionScopeV1::Invocation,
-            ParallelCallKindV1::CompilerIntrinsic,
+    fn distinct_relation(
+        base: u8,
+        ranked_view_identity: DigestV1,
+        ownership_identity: DigestV1,
+        frame_identity: DigestV1,
+        schedule: ParallelScheduleRelationV1,
+    ) -> ParallelOutputRelationV1 {
+        ParallelOutputRelationV1::new(
+            d(base),
+            d(base + 1),
+            d(100),
+            ranked_view_identity,
+            ownership_identity,
+            frame_identity,
+            schedule,
             ParallelNumericalPolicyV1::ExactBitVector,
+            COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+            None,
+            d(base + 2),
         )
-        .unwrap();
-        assert_eq!(
-            ParallelReferenceContractV1::new(
-                d(5),
-                vec![relation(ParallelNumericalPolicyV1::ExactBitVector, vec![]).unwrap()],
-                vec![summary.clone()]
-            ),
-            Err(ParallelReferenceContractErrorV1::UnusedCallSummary)
+        .unwrap()
+    }
+
+    #[test]
+    fn output_product_rejects_reused_view_ownership_or_frame_identity() {
+        let pointwise = ParallelScheduleRelationV1::PointwiseBijection;
+        for second in [
+            distinct_relation(20, d(40), d(51), d(52), pointwise),
+            distinct_relation(20, d(50), d(41), d(52), pointwise),
+            distinct_relation(20, d(50), d(51), d(42), pointwise),
+        ] {
+            let first = distinct_relation(10, d(40), d(41), d(42), pointwise);
+            assert_eq!(
+                ParallelReferenceContractV1::new(d(5), d(6), vec![first, second]),
+                Err(ParallelReferenceContractErrorV1::DuplicateIdentity)
+            );
+        }
+    }
+
+    #[test]
+    fn output_product_accepts_independent_output_schedules() {
+        let pointwise = distinct_relation(
+            10,
+            d(40),
+            d(41),
+            d(42),
+            ParallelScheduleRelationV1::PointwiseBijection,
         );
-        ParallelReferenceContractV1::new(
-            d(5),
-            vec![relation(ParallelNumericalPolicyV1::ExactBitVector, vec![d(10)]).unwrap()],
-            vec![summary],
-        )
-        .unwrap();
-        assert_eq!(
-            ParallelCallSummaryV1::new(
-                d(10),
-                d(11),
-                d(12),
-                d(13),
-                d(14),
-                2,
-                ParallelExecutionScopeV1::Workgroup,
-                ParallelCallKindV1::CooperativeTensorIntrinsic {
-                    site_ordinal: 0,
-                    layout_identity: d(15)
-                },
-                ParallelNumericalPolicyV1::ExactBitVector
-            ),
-            Err(ParallelReferenceContractErrorV1::InvalidCallSummary)
+        let folded = distinct_relation(
+            20,
+            d(50),
+            d(51),
+            d(52),
+            ParallelScheduleRelationV1::Fold {
+                collective: d(60),
+                order: ParallelFoldOrderV1::Preserved,
+                reference_order: SemanticEvaluationOrderV1::SequentialAscending,
+            },
         );
+        let contract =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![pointwise, folded]).unwrap();
+        assert_eq!(contract.relations().len(), 2);
+        assert!(matches!(
+            contract.relations()[0].schedule(),
+            ParallelScheduleRelationV1::PointwiseBijection
+        ));
+        assert!(matches!(
+            contract.relations()[1].schedule(),
+            ParallelScheduleRelationV1::Fold { .. }
+        ));
+        assert_ne!(contract.canonical_sha256(), DigestV1::ZERO);
     }
 }

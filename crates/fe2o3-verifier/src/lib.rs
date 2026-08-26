@@ -161,6 +161,7 @@ pub use generated_verus_proof_input_v3::{
     GeneratedVerusProofInputIdentityV3, MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
 };
 pub use mir_pliron_per_compilation_verus_v1::{
+    MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
     ProductionMirPlironPerCompilationVerusErrorV1, ProductionMirPlironPerCompilationVerusReportV1,
     ProductionVerusVerifiedMirPlironKernelV1,
     execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,

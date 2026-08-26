@@ -35,8 +35,8 @@ impl WorkerV2MissingEnvelope {
             .collect::<String>();
         let fixture_source =
             "crates/rustc-codegen-fe2o3/tests/fixtures/memory-v1-compiler/src/main.rs";
-        let path = workspace.join(format!(
-            "target/memory-v1-worker-v2-missing-envelope-{}.json",
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-memory-v1-worker-v2-missing-envelope-{}.json",
             std::process::id()
         ));
         let worker = worker.to_str().expect("UTF-8 worker path");

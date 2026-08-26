@@ -21,10 +21,13 @@ use dialect_kernel::{
     RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
     SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
     SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
-    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp, TrapOp,
-    ranked_view_type,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp,
+    TensorResultComponentOp, TrapOp, ranked_view_type,
 };
-use dialect_proof::{EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireRefinementOp};
+use dialect_proof::{
+    EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
+    RequireRefinementOp, RequireTensorRefinementOp,
+};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -394,6 +397,9 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::SemanticExpressionCommitment)
     } else if operation.downcast_ref::<SemanticTypedSymbolOp>().is_some()
         || operation
+            .downcast_ref::<TensorResultComponentOp>()
+            .is_some()
+        || operation
             .downcast_ref::<SemanticTypedConstantOp>()
             .is_some()
         || operation.downcast_ref::<SemanticTypedUnaryOp>().is_some()
@@ -424,7 +430,14 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::ProofObligation)
     } else if operation.downcast_ref::<EvidenceRefOp>().is_some() {
         Some(RankedOperationKind::ProofEvidence)
-    } else if operation.downcast_ref::<RequireRefinementOp>().is_some() {
+    } else if operation.downcast_ref::<RequireRefinementOp>().is_some()
+        || operation
+            .downcast_ref::<RequireNumericalRefinementOp>()
+            .is_some()
+        || operation
+            .downcast_ref::<RequireTensorRefinementOp>()
+            .is_some()
+    {
         Some(RankedOperationKind::RequireRefinement)
     } else if operation
         .downcast_ref::<RequireEffectRefinementOp>()
