@@ -44,6 +44,8 @@ pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
 pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short-timeouts";
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 pub(crate) const RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION: &str = "3-test-scheduler-tolerant";
+#[cfg(feature = "application-handoff-adversarial-fixture")]
+pub(crate) const RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION: &str = "3-test-fast-failures";
 pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
@@ -102,6 +104,14 @@ impl ApplicationTimeouts {
     pub(crate) const TEST_SCHEDULER_TOLERANT: Self = Self {
         ack: Duration::from_secs(30),
         cleanup: Duration::from_secs(5),
+        wait_for_test_ready: false,
+    };
+
+    #[cfg(feature = "application-handoff-adversarial-fixture")]
+    pub(crate) const TEST_FAST_FAILURES: Self = Self {
+        ack: Duration::from_secs(2),
+        cleanup: Duration::from_millis(500),
+        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
         wait_for_test_ready: false,
     };
 }

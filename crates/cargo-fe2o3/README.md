@@ -356,12 +356,17 @@ expansion emits only Worker V3 host code unless an oracle fixture explicitly
 requests `qualification_worker_v2`. The exact embedded vecadd compatibility
 API is the remaining generated host island to migrate to this V3 route.
 
-The active application integration fixture is V3-only. It has no runtime
-selector and its feature graph enables `fe2o3-host` only with
-`hardware-test-hooks`; it does not enable the host qualification feature. The
-old V2 consumer fixture remains standalone qualification source while its
-host-side oracle is retired, but Cargo no longer produces a V2 child handoff
-for it.
+The application integration fixture is V3-only. It has no runtime selector and
+its feature graph enables `fe2o3-host` only with `hardware-test-hooks`; it does
+not enable the host qualification feature. The old V2 host-consumer binary,
+input adapter, and Cargo feature have been deleted.
+
+The shared hostile application fixture also speaks only Worker V3. Its active
+vertical tests cover descriptor quarantine, commitment and descriptor
+substitution, missing/truncated/extended acknowledgments, public-ACK
+non-authority, process and exec containment, stalled-ACK cleanup, envelope
+mutation, generation replacement, and stale-publication turnover. The suite is
+a mandatory generic-core CI step.
 
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only

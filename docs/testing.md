@@ -652,7 +652,7 @@ dependency graph contains `fe2o3-host/default` and
 ```text
 cargo test --locked -p cargo-fe2o3 \
   --features worker-v3-envelope-integration-test-only \
-  --test worker_v3_load_envelope_vertical
+  --test worker_v3_load_envelope_vertical -- --test-threads=1
 ```
 
 ## Guard tests

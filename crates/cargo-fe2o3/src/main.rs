@@ -2096,6 +2096,10 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT
         }
+        #[cfg(feature = "application-handoff-adversarial-fixture")]
+        Some(application_handoff::RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION) => {
+            application_handoff::ApplicationTimeouts::TEST_FAST_FAILURES
+        }
         _ => {
             return Err(format!(
                 "unsupported application runner context {:?}",

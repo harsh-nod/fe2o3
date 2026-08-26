@@ -383,6 +383,7 @@ for core_step in \
   workspace-check \
   backend-build \
   ci-local-test-gate \
+  cargo-fe2o3-worker-v3-envelope-tests \
   cpu-tests \
   rustc-codegen-lib-tests \
   core-doc-tests \
@@ -394,6 +395,10 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE} --test worker_v3_load_envelope_vertical -- --test-threads=1" \
+  "$(step_command cargo-fe2o3-worker-v3-envelope-tests)" \
+  'generic core did not gate the strict Worker V3 envelope vertical suite'
 workspace_check_command="$(step_command workspace-check)"
 for wrapper_only_fixture in \
   fe2o3-production-extraction-fixture \
