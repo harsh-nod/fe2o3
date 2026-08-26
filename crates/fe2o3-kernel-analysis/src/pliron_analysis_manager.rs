@@ -10,7 +10,7 @@ use crate::pliron_memory_order::{
     PlironMemoryOrderAnalysisV1, PlironMemoryOrderFailureV1, analyze_pliron_memory_order_v1,
 };
 use crate::pliron_provenance_alias::{
-    PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1, analyze_pliron_provenance_alias_v1,
+    PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1, collect_pliron_provenance_alias_v1,
 };
 use crate::pliron_simt_protocol::{PlironSimtProtocolAnalysisV1, analyze_pliron_simt_protocol_v1};
 use crate::pliron_tensor_layout::{
@@ -30,6 +30,7 @@ pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 8;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlironMemoryOrderAnalysisFailureV1 {
     Trace(PlironTraceFailureV1),
+    Provenance(PlironProvenanceFailureV1),
     MemoryOrder(PlironMemoryOrderFailureV1),
 }
 
@@ -139,7 +140,7 @@ impl PlironAnalysisManagerV1 {
         self.assert_function(function);
         if self.provenance_alias.is_none() {
             self.computations.provenance_alias += 1;
-            self.provenance_alias = Some(analyze_pliron_provenance_alias_v1(context, function));
+            self.provenance_alias = Some(collect_pliron_provenance_alias_v1(context, function));
         }
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }
@@ -228,11 +229,18 @@ impl PlironAnalysisManagerV1 {
             return;
         }
         self.prepare_exact_trace(context, function);
+        self.prepare_provenance_alias(context, function);
         self.computations.memory_order += 1;
-        self.memory_order = Some(match self.exact_trace() {
-            Ok(traces) => analyze_pliron_memory_order_v1(traces)
-                .map_err(PlironMemoryOrderAnalysisFailureV1::MemoryOrder),
-            Err(failure) => Err(PlironMemoryOrderAnalysisFailureV1::Trace(failure)),
+        self.memory_order = Some(match (self.exact_trace(), self.provenance_alias()) {
+            (Ok(traces), Ok(provenance)) => {
+                match provenance.validate_space(dialect_kernel::MemorySpaceAttr::Workgroup) {
+                    Ok(()) => analyze_pliron_memory_order_v1(traces, provenance)
+                        .map_err(PlironMemoryOrderAnalysisFailureV1::MemoryOrder),
+                    Err(failure) => Err(PlironMemoryOrderAnalysisFailureV1::Provenance(failure)),
+                }
+            }
+            (Err(failure), _) => Err(PlironMemoryOrderAnalysisFailureV1::Trace(failure)),
+            (_, Err(failure)) => Err(PlironMemoryOrderAnalysisFailureV1::Provenance(failure)),
         });
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }

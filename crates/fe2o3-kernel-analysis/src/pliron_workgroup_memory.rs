@@ -267,9 +267,7 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
 fn memory_order_failure_detail(failure: PlironMemoryOrderAnalysisFailureV1) -> String {
     match failure {
         PlironMemoryOrderAnalysisFailureV1::Trace(failure) => trace_failure_detail(failure),
-        PlironMemoryOrderAnalysisFailureV1::MemoryOrder(
-            PlironMemoryOrderFailureV1::AllocationContractUnavailable { detail },
-        ) => detail,
+        PlironMemoryOrderAnalysisFailureV1::Provenance(failure) => failure.to_string(),
         PlironMemoryOrderAnalysisFailureV1::MemoryOrder(
             PlironMemoryOrderFailureV1::UnresolvedAddress { location },
         ) => format!(

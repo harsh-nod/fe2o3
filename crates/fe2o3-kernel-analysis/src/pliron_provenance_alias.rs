@@ -100,14 +100,14 @@ impl fmt::Display for PlironProvenanceFailureV1 {
                 origins,
             } => write!(
                 formatter,
-                "potentially aliasing class {class} in {memory_space:?} memory contains writable subjects from allocation origins {origins:?}, but ranked IR does not retain their relative base offsets",
+                "potentially aliasing class {class} in {memory_space:?} memory contains writable views from distinct allocation origins {origins:?}, but ranked IR does not retain their relative base offsets",
             ),
             Self::IncompatibleViewSignature {
                 memory_space,
                 class,
             } => write!(
                 formatter,
-                "potentially aliasing view class {class} in {memory_space:?} memory has an incompatible element width or rank/shape signature",
+                "potentially aliasing view class {class} in {memory_space:?} memory has incompatible element widths or rank/shapes",
             ),
         }
     }
@@ -150,6 +150,7 @@ pub enum PlironAliasDecisionV1 {
 pub struct PlironProvenanceAliasAnalysisV1 {
     views: HashMap<Value, PlironProvenanceContractV1>,
     unknown_spaces: HashSet<MemorySpaceAttr>,
+    subjects: Vec<SubjectV1>,
 }
 
 impl PlironProvenanceAliasAnalysisV1 {
@@ -186,6 +187,13 @@ impl PlironProvenanceAliasAnalysisV1 {
         }
         PlironAliasDecisionV1::Incomplete
     }
+
+    pub(crate) fn validate_space(
+        &self,
+        memory_space: MemorySpaceAttr,
+    ) -> Result<(), PlironProvenanceFailureV1> {
+        validate_subjects_for_space(&self.subjects, memory_space)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -195,7 +203,7 @@ enum SubjectIdentityV1 {
     AllocationSite(usize, usize),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SubjectV1 {
     identity: SubjectIdentityV1,
     label: String,
@@ -207,6 +215,21 @@ struct SubjectV1 {
 }
 
 pub fn analyze_pliron_provenance_alias_v1(
+    context: &Context,
+    function: &FuncOp,
+) -> Result<PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1> {
+    let analysis = collect_pliron_provenance_alias_v1(context, function)?;
+    for memory_space in [
+        MemorySpaceAttr::Private,
+        MemorySpaceAttr::Workgroup,
+        MemorySpaceAttr::Global,
+    ] {
+        analysis.validate_space(memory_space)?;
+    }
+    Ok(analysis)
+}
+
+pub(crate) fn collect_pliron_provenance_alias_v1(
     context: &Context,
     function: &FuncOp,
 ) -> Result<PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1> {
@@ -297,7 +320,6 @@ pub fn analyze_pliron_provenance_alias_v1(
         }
     }
 
-    validate_subjects(&subjects)?;
     let unknown_spaces = subjects
         .iter()
         .filter_map(|subject| (subject.noalias_class == 0).then_some(subject.memory_space))
@@ -305,6 +327,7 @@ pub fn analyze_pliron_provenance_alias_v1(
     Ok(PlironProvenanceAliasAnalysisV1 {
         views,
         unknown_spaces,
+        subjects,
     })
 }
 
@@ -322,9 +345,16 @@ fn push_subject(
     Ok(())
 }
 
-fn validate_subjects(subjects: &[SubjectV1]) -> Result<(), PlironProvenanceFailureV1> {
+fn validate_subjects_for_space(
+    subjects: &[SubjectV1],
+    memory_space: MemorySpaceAttr,
+) -> Result<(), PlironProvenanceFailureV1> {
     let mut classes_by_origin = HashMap::new();
-    for subject in subjects {
+    let relevant = subjects
+        .iter()
+        .filter(|subject| subject.memory_space == memory_space)
+        .collect::<Vec<_>>();
+    for subject in &relevant {
         if subject.noalias_class != 0 && subject.allocation_origin == 0 {
             return Err(PlironProvenanceFailureV1::ClaimedNoAliasWithoutOrigin {
                 subject: subject.label.clone(),
@@ -344,63 +374,53 @@ fn validate_subjects(subjects: &[SubjectV1]) -> Result<(), PlironProvenanceFailu
         }
     }
 
-    for memory_space in [
-        MemorySpaceAttr::Private,
-        MemorySpaceAttr::Workgroup,
-        MemorySpaceAttr::Global,
-    ] {
-        let relevant = subjects
-            .iter()
-            .filter(|subject| subject.memory_space == memory_space)
-            .collect::<Vec<_>>();
-        let distinct = relevant
-            .iter()
-            .map(|subject| &subject.identity)
-            .collect::<HashSet<_>>();
-        if relevant.iter().any(|subject| subject.noalias_class == 0)
-            && relevant.iter().any(|subject| subject.writes)
-            && distinct.len() > 1
-        {
-            return Err(PlironProvenanceFailureV1::UnknownWritableAlias { memory_space });
-        }
+    let distinct = relevant
+        .iter()
+        .map(|subject| &subject.identity)
+        .collect::<HashSet<_>>();
+    if relevant.iter().any(|subject| subject.noalias_class == 0)
+        && relevant.iter().any(|subject| subject.writes)
+        && distinct.len() > 1
+    {
+        return Err(PlironProvenanceFailureV1::UnknownWritableAlias { memory_space });
+    }
 
-        let writable_classes = relevant
-            .iter()
-            .filter_map(|subject| subject.writes.then_some(subject.noalias_class))
-            .collect::<HashSet<_>>();
-        let mut origins_by_class = HashMap::<u64, HashSet<u64>>::new();
-        let mut signatures_by_class = HashMap::new();
-        for subject in relevant {
-            if subject.noalias_class == 0 || !writable_classes.contains(&subject.noalias_class) {
-                continue;
-            }
-            origins_by_class
-                .entry(subject.noalias_class)
-                .or_default()
-                .insert(subject.allocation_origin);
-            if let Some(signature) = &subject.signature
-                && signatures_by_class
-                    .insert(subject.noalias_class, signature.clone())
-                    .is_some_and(|previous| previous != *signature)
-            {
-                return Err(PlironProvenanceFailureV1::IncompatibleViewSignature {
-                    memory_space,
-                    class: subject.noalias_class,
-                });
-            }
+    let writable_classes = relevant
+        .iter()
+        .filter_map(|subject| subject.writes.then_some(subject.noalias_class))
+        .collect::<HashSet<_>>();
+    let mut origins_by_class = HashMap::<u64, HashSet<u64>>::new();
+    let mut signatures_by_class = HashMap::new();
+    for subject in relevant {
+        if subject.noalias_class == 0 || !writable_classes.contains(&subject.noalias_class) {
+            continue;
         }
-        if let Some((&class, origins)) = origins_by_class
-            .iter()
-            .find(|(class, origins)| origins.len() > 1 && writable_classes.contains(class))
+        origins_by_class
+            .entry(subject.noalias_class)
+            .or_default()
+            .insert(subject.allocation_origin);
+        if let Some(signature) = &subject.signature
+            && signatures_by_class
+                .insert(subject.noalias_class, signature.clone())
+                .is_some_and(|previous| previous != *signature)
         {
-            let mut origins = origins.iter().copied().collect::<Vec<_>>();
-            origins.sort_unstable();
-            return Err(PlironProvenanceFailureV1::MissingRelativeOffset {
+            return Err(PlironProvenanceFailureV1::IncompatibleViewSignature {
                 memory_space,
-                class,
-                origins,
+                class: subject.noalias_class,
             });
         }
+    }
+    if let Some((&class, origins)) = origins_by_class
+        .iter()
+        .find(|(class, origins)| origins.len() > 1 && writable_classes.contains(class))
+    {
+        let mut origins = origins.iter().copied().collect::<Vec<_>>();
+        origins.sort_unstable();
+        return Err(PlironProvenanceFailureV1::MissingRelativeOffset {
+            memory_space,
+            class,
+            origins,
+        });
     }
     Ok(())
 }

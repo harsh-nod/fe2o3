@@ -3,11 +3,12 @@
 //! Facts come only from executed access, barrier, fence, and atomic events.
 //! An ordering attribute is never treated as proof of a read-from edge.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::pliron_invocation_trace::{
     PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceLocationV1,
 };
+use crate::pliron_provenance_alias::PlironProvenanceAliasAnalysisV1;
 use dialect_gpu::{
     AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr as GpuMemoryOrderAttr, MemoryScopeAttr,
 };
@@ -155,9 +156,6 @@ pub enum PlironMemoryOrderIssueV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironMemoryOrderFailureV1 {
-    AllocationContractUnavailable {
-        detail: String,
-    },
     UnresolvedAddress {
         location: PlironMemoryLocationV1,
     },
@@ -224,8 +222,8 @@ struct PublishedVersionV1 {
 
 pub(crate) fn analyze_pliron_memory_order_v1(
     traces: &[PlironInvocationTraceV1],
+    provenance: &PlironProvenanceAliasAnalysisV1,
 ) -> Result<PlironMemoryOrderAnalysisV1, PlironMemoryOrderFailureV1> {
-    let unknown_alias = validate_allocation_contract(traces)?;
     if let Some(location) = traces
         .iter()
         .flat_map(|trace| &trace.events)
@@ -254,7 +252,7 @@ pub(crate) fn analyze_pliron_memory_order_v1(
         issues: Vec::new(),
     };
     for ((grid, workgroup), group) in grouped {
-        analyze_workgroup(grid, workgroup, &group, unknown_alias, &mut analysis)?;
+        analyze_workgroup(grid, workgroup, &group, provenance, &mut analysis)?;
     }
     Ok(analysis)
 }
@@ -263,13 +261,13 @@ fn analyze_workgroup(
     grid: u64,
     workgroup: u64,
     traces: &[&PlironInvocationTraceV1],
-    unknown_alias: bool,
+    provenance: &PlironProvenanceAliasAnalysisV1,
     analysis: &mut PlironMemoryOrderAnalysisV1,
 ) -> Result<(), PlironMemoryOrderFailureV1> {
     let mut cursors = vec![0_usize; traces.len()];
     let mut epoch = 0_usize;
     let mut published = HashMap::<PlironMemoryAddressV1, Vec<PublishedVersionV1>>::new();
-    let release_atomics = collect_release_atomics(traces, unknown_alias);
+    let release_atomics = collect_release_atomics(traces, provenance);
 
     loop {
         let mut epoch_states = HashMap::<PlironMemoryAddressV1, EpochAddressStateV1>::new();
@@ -324,7 +322,8 @@ fn analyze_workgroup(
                             return Err(PlironMemoryOrderFailureV1::UnresolvedAddress { location });
                         };
                         let address = PlironMemoryAddressV1 {
-                            allocation_class: if unknown_alias { 0 } else { *noalias_class },
+                            allocation_class: provenance
+                                .canonical_class(MemorySpaceAttr::Workgroup, *noalias_class),
                             indices,
                         };
                         let effect = EffectV1 {
@@ -340,7 +339,7 @@ fn analyze_workgroup(
                             let issue = if has_plausible_atomic_publication(
                                 trace,
                                 cursors[trace_index],
-                                unknown_alias,
+                                provenance,
                                 &release_atomics,
                             ) {
                                 PlironMemoryOrderIssueV1::AtomicReadFromUnresolved {
@@ -475,7 +474,7 @@ fn effects_conflict(first: AccessKindAttr, second: AccessKindAttr) -> bool {
 
 fn collect_release_atomics(
     traces: &[&PlironInvocationTraceV1],
-    unknown_alias: bool,
+    provenance: &PlironProvenanceAliasAnalysisV1,
 ) -> HashMap<PlironMemoryAddressV1, Vec<ReleaseAtomicV1>> {
     let mut releases = HashMap::<PlironMemoryAddressV1, Vec<ReleaseAtomicV1>>::new();
     for trace in traces {
@@ -508,7 +507,8 @@ fn collect_release_atomics(
             };
             releases
                 .entry(PlironMemoryAddressV1 {
-                    allocation_class: if unknown_alias { 0 } else { *noalias_class },
+                    allocation_class: provenance
+                        .canonical_class(MemorySpaceAttr::Workgroup, *noalias_class),
                     indices,
                 })
                 .or_default()
@@ -525,7 +525,7 @@ fn collect_release_atomics(
 fn has_plausible_atomic_publication(
     trace: &PlironInvocationTraceV1,
     cursor: usize,
-    unknown_alias: bool,
+    provenance: &PlironProvenanceAliasAnalysisV1,
     releases: &HashMap<PlironMemoryAddressV1, Vec<ReleaseAtomicV1>>,
 ) -> bool {
     trace.events[..cursor]
@@ -559,7 +559,8 @@ fn has_plausible_atomic_publication(
                 return false;
             };
             let address = PlironMemoryAddressV1 {
-                allocation_class: if unknown_alias { 0 } else { *noalias_class },
+                allocation_class: provenance
+                    .canonical_class(MemorySpaceAttr::Workgroup, *noalias_class),
                 indices,
             };
             releases.get(&address).is_some_and(|candidates| {
@@ -580,130 +581,4 @@ fn push_issue(
     }
     analysis.issues.push(issue);
     Ok(())
-}
-
-fn validate_allocation_contract(
-    traces: &[PlironInvocationTraceV1],
-) -> Result<bool, PlironMemoryOrderFailureV1> {
-    #[derive(Clone, Debug, Eq, PartialEq)]
-    struct ContractV1 {
-        origin: u64,
-        class: u64,
-        signature: (u32, Vec<u64>),
-        writes: bool,
-    }
-
-    let mut views = HashMap::<_, ContractV1>::new();
-    let mut origins = HashMap::new();
-    for event in traces.iter().flat_map(|trace| &trace.events) {
-        let PlironTraceEventV1::Memory {
-            view,
-            memory_space: MemorySpaceAttr::Workgroup,
-            access,
-            allocation_origin,
-            noalias_class,
-            view_signature,
-            ..
-        } = event
-        else {
-            continue;
-        };
-        let candidate = ContractV1 {
-            origin: *allocation_origin,
-            class: *noalias_class,
-            signature: view_signature.clone(),
-            writes: access.writes_memory(),
-        };
-        if let Some(old) = views.get_mut(view) {
-            if old.origin != candidate.origin
-                || old.class != candidate.class
-                || old.signature != candidate.signature
-            {
-                return Err(PlironMemoryOrderFailureV1::AllocationContractUnavailable {
-                    detail: "one workgroup view carries inconsistent allocation metadata"
-                        .to_owned(),
-                });
-            }
-            old.writes |= candidate.writes;
-        } else {
-            views.insert(*view, candidate);
-        }
-        if *noalias_class != 0 && *allocation_origin == 0 {
-            return Err(PlironMemoryOrderFailureV1::AllocationContractUnavailable {
-                detail: format!(
-                    "workgroup view claims no-alias class {noalias_class} without a compiler-issued allocation origin"
-                ),
-            });
-        }
-        if *allocation_origin != 0
-            && origins
-                .insert(*allocation_origin, *noalias_class)
-                .is_some_and(|old| old != *noalias_class)
-        {
-            return Err(PlironMemoryOrderFailureV1::AllocationContractUnavailable {
-                detail: format!(
-                    "workgroup allocation origin {allocation_origin} has inconsistent no-alias classes"
-                ),
-            });
-        }
-    }
-
-    let unknown = views.values().any(|contract| contract.class == 0);
-    if unknown && views.len() > 1 && views.values().any(|contract| contract.writes) {
-        return Err(PlironMemoryOrderFailureV1::AllocationContractUnavailable {
-            detail: "an unknown-alias workgroup view may overlap another view, but relative base offsets are not retained".to_owned(),
-        });
-    }
-
-    let mut origins_by_class = HashMap::<u64, HashSet<u64>>::new();
-    let mut writable_classes = HashSet::new();
-    for contract in views.values() {
-        if contract.class == 0 {
-            continue;
-        }
-        origins_by_class
-            .entry(contract.class)
-            .or_default()
-            .insert(contract.origin);
-        if contract.writes {
-            writable_classes.insert(contract.class);
-        }
-    }
-    if let Some((&class, _)) = origins_by_class
-        .iter()
-        .find(|(class, origins)| origins.len() > 1 && writable_classes.contains(class))
-    {
-        return Err(PlironMemoryOrderFailureV1::AllocationContractUnavailable {
-            detail: format!(
-                "potentially aliasing workgroup class {class} contains writable views from distinct allocation origins, but relative base offsets are not retained"
-            ),
-        });
-    }
-
-    let effective_class = |contract: &ContractV1| {
-        if unknown { 0 } else { contract.class }
-    };
-    let classes_with_writes = views
-        .values()
-        .filter_map(|contract| contract.writes.then_some(effective_class(contract)))
-        .collect::<HashSet<_>>();
-    let mut signatures = HashMap::new();
-    for contract in views.values() {
-        let class = effective_class(contract);
-        if !classes_with_writes.contains(&class) {
-            continue;
-        }
-        if signatures
-            .insert(class, contract.signature.clone())
-            .is_some_and(|old| old != contract.signature)
-        {
-            return Err(
-                PlironMemoryOrderFailureV1::AllocationContractUnavailable {
-                    detail: "potentially aliasing workgroup views have incompatible element widths or rank/shapes"
-                        .to_owned(),
-                },
-            );
-        }
-    }
-    Ok(unknown)
 }

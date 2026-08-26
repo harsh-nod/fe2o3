@@ -429,6 +429,11 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             });
         }
     };
+    if let Err(failure) = provenance.validate_space(MemorySpaceAttr::Global) {
+        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+            detail: failure.to_string(),
+        });
+    }
     let mut effects = Vec::new();
     let mut has_global_fence = false;
     for (block_index, block) in function
