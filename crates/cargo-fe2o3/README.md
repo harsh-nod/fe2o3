@@ -348,9 +348,11 @@ authenticate prerequisites or grant HSA load or launch authority.
 
 The same boundary is enforced by `fe2o3-host`: feature-free builds export only
 the Worker V3 application, admission, verification, load, and generated
-dispatch route. Worker V2 application recovery, bundle admission,
-prerequisite authentication, HSA loading, launch metadata, and its
-alpha/zeta, scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
+dispatch route. Worker V2 application recovery and retained-descriptor support
+have been deleted; only stale V2 environment and envelope names remain as
+fail-closed rejection sentinels. Independent Worker V2 bundle admission,
+prerequisite authentication, HSA loading, launch metadata, and its alpha/zeta,
+scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
 `qualification-oracles-test-only` feature. General `#[kernel(typed)]`
 expansion emits only Worker V3 host code unless an oracle fixture explicitly
 requests `qualification_worker_v2`. The exact embedded vecadd compatibility

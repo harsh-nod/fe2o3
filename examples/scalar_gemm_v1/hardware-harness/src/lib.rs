@@ -305,10 +305,6 @@ fn require_current_recovered_dispatch<Completion, AdapterError: Debug>(
         RecoveredWorkerV2SynchronousHsaDispatchError::CurrentPublication(source) => failure(
             format!("{case} stale Worker V2 publication prevented HSA dispatch: {source}"),
         ),
-        #[cfg(target_os = "linux")]
-        RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(source) => failure(
-            format!("{case} stale application descriptors prevented HSA dispatch: {source}"),
-        ),
         RecoveredWorkerV2SynchronousHsaDispatchError::Dispatch(source) => {
             failure(format!("{case} HSA dispatch failed: {source:?}"))
         }
@@ -438,19 +434,4 @@ mod tests {
         assert!(message.contains("test generation changed"));
     }
 
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn stale_application_binding_cannot_be_a_dispatch_success() {
-        let result = require_current_recovered_dispatch::<(), ()>(
-            "stale-application",
-            Err(
-                RecoveredWorkerV2SynchronousHsaDispatchError::ApplicationDescriptors(
-                    fe2o3_host::WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged,
-                ),
-            ),
-        );
-        let message = result.unwrap_err().to_string();
-        assert!(message.contains("stale application descriptors prevented HSA dispatch"));
-        assert!(message.contains("inherited Worker V2 envelope changed"));
-    }
 }
