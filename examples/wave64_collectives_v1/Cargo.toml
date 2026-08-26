@@ -7,15 +7,9 @@ repository = "https://github.com/fe2o3-gpu/fe2o3"
 rust-version = "1.94"
 publish = false
 
-# The package remains standalone so its protected hardware test can pin every
-# compiler/Worker/finalizer input without widening the root workspace graph.
+# The package remains standalone so its proof and source tests do not widen the
+# root workspace graph.
 [workspace]
-
-[features]
-qualification-oracles-test-only = [
-    "fe2o3-host/qualification-oracles-test-only",
-    "fe2o3-hsa-runtime/qualification-oracles-test-only",
-]
 
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
@@ -26,13 +20,6 @@ sha2 = { version = "0.11", default-features = false }
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
-fe2o3-artifact-transaction = { path = "../../crates/fe2o3-artifact-transaction" }
-fe2o3-compiler-ffi = { path = "../../crates/fe2o3-compiler-ffi" }
-fe2o3-core = { path = "../../crates/fe2o3-core" }
-fe2o3-hsa-runtime = { path = "../../crates/fe2o3-hsa-runtime" }
-fe2o3-hsaco = { path = "../../crates/fe2o3-hsaco" }
-fe2o3-hsaco-finalize = { path = "../../crates/fe2o3-hsaco-finalize" }
-fe2o3-kernel-descriptor = { path = "../../crates/fe2o3-kernel-descriptor" }
 syn = { version = "2", features = ["full", "visit"] }
 
 [lib]

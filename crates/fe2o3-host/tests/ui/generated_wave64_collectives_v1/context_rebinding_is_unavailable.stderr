@@ -1,5 +1,0 @@
-error[E0599]: no method named `with_context` found for struct `GeneratedWave64CollectivesV1HostAdapterV1<'input, 'reduction, 'inclusive, 'exclusive>` in the current scope
- --> tests/ui/generated_wave64_collectives_v1/context_rebinding_is_unavailable.rs:8:19
-  |
-8 |     let _ = value.with_context(context);
-  |                   ^^^^^^^^^^^^ method not found in `GeneratedWave64CollectivesV1HostAdapterV1<'_, '_, '_, '_>`
