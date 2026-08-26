@@ -669,7 +669,9 @@ turn the foundations below into end-to-end features.
   artifact-directory descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
   the challenge-bound ACK and retains the current-publication lease through
-  application exit. Worker V2 application transfer is qualification-only.
+  application exit. Cargo has no Worker V2 application transfer branch in
+  either production or qualification builds; stale V2 envelope names are
+  recognized only so they can be rejected before application spawn.
   Feature-free `fe2o3-host` builds export only the Worker V3 application,
   admission, verification, HSA load, and generated dispatch route. Worker V2
   application recovery, bundle admission, prerequisite authentication, HSA

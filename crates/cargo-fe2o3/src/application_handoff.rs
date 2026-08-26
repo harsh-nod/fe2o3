@@ -17,8 +17,6 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_artifact_transaction::reacquire_current_hsaco_publication_lease_v1;
 use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
@@ -31,15 +29,6 @@ use fe2o3_runtime_protocol::{
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
     WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
     WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV1,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_worker_v2_bundle::{
-    MAX_WORKER_V2_LOAD_ENVELOPE_BYTES, WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-    WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
-    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WorkerV2ApplicationHandoffAckV1,
-    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffExpectationV1,
-    WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1, worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
@@ -59,6 +48,8 @@ pub(crate) const RUNNER_EXPECTS_ENVELOPE: &str = "required";
 const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &[u8] = b".fe2o3-worker-v2-load-envelope-v1-";
 const RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1: &[u8] = b".envelope";
+const RETIRED_WORKER_V2_ENVELOPE_ERROR: &str =
+    "Worker V2 application envelopes are retired and unavailable";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
@@ -565,35 +556,9 @@ pub(crate) struct PinnedApplicationEnvelope<'directory> {
     file: File,
     snapshot: FileSnapshot,
     exact_bytes: Vec<u8>,
-    envelope: ApplicationEnvelopeWireV1,
+    envelope: WorkerV3LoadEnvelopeWireV1,
     artifact_directory_file: File,
     current_lease: Option<DurableCurrentLinkPublicationLeaseV1>,
-}
-
-enum ApplicationEnvelopeWireV1 {
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    WorkerV2(Box<WorkerV2LoadEnvelopeV1>),
-    WorkerV3(Box<WorkerV3LoadEnvelopeWireV1>),
-}
-
-impl ApplicationEnvelopeWireV1 {
-    const fn schema_name(&self) -> &'static str {
-        match self {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::WorkerV2(_) => "Worker V2",
-            Self::WorkerV3(_) => "Worker V3",
-        }
-    }
-
-    fn encode_canonical(&self) -> Result<Vec<u8>, String> {
-        match self {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::WorkerV2(envelope) => Ok(envelope.to_bytes()),
-            Self::WorkerV3(envelope) => envelope
-                .encode_canonical()
-                .map_err(|error| format!("failed to encode canonical Worker V3 envelope: {error}")),
-        }
-    }
 }
 
 impl<'directory> PinnedApplicationEnvelope<'directory> {
@@ -604,7 +569,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             return Ok(None);
         }
 
-        validate_single_envelope_schema(&names)?;
+        reject_retired_worker_v2_envelopes(&names)?;
 
         let mut current = None;
         let mut rejected = Vec::new();
@@ -634,20 +599,13 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     }
 
     fn open(directory: &'directory PinnedDirectory, name: String) -> Result<Self, String> {
-        let is_worker_v2 = is_canonical_v2_envelope_name(name.as_bytes());
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-        if is_worker_v2 {
-            return Err(
-                "Worker V2 application envelopes are unavailable in production builds".to_string(),
-            );
+        if is_canonical_v2_envelope_name(name.as_bytes()) {
+            return Err(RETIRED_WORKER_V2_ENVELOPE_ERROR.to_string());
         }
-        let schema = if is_worker_v2 {
-            "Worker V2"
-        } else if is_canonical_v3_envelope_name(name.as_bytes()) {
-            "Worker V3"
-        } else {
+        if !is_canonical_v3_envelope_name(name.as_bytes()) {
             return Err("application envelope name has no admitted schema".to_string());
-        };
+        }
+        let schema = "Worker V3";
         let descriptor = openat2(
             directory.file(),
             Path::new(&name),
@@ -677,13 +635,6 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let size = usize::try_from(initial.st_size).map_err(|_| {
             format!("canonical {schema} envelope has a negative or unrepresentable size")
         })?;
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        let maximum = if is_worker_v2 {
-            MAX_WORKER_V2_LOAD_ENVELOPE_BYTES
-        } else {
-            MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1
-        };
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
         let maximum = MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1;
         if size == 0 || size > maximum {
             return Err(format!(
@@ -704,25 +655,6 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 "canonical {schema} envelope changed while it was read"
             ));
         }
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        let envelope = if is_worker_v2 {
-            let envelope = WorkerV2LoadEnvelopeV1::from_bytes(&exact_bytes)
-                .map_err(|error| format!("invalid canonical Worker V2 envelope {name}: {error}"))?;
-            if envelope.to_bytes() != exact_bytes {
-                return Err("Worker V2 envelope encoding is not canonical".to_string());
-            }
-            if name
-                != worker_v2_load_envelope_name_v1(
-                    envelope.published_claim().receipt().publication_identity(),
-                )
-            {
-                return Err("Worker V2 envelope filename does not bind its publication".to_string());
-            }
-            ApplicationEnvelopeWireV1::WorkerV2(Box::new(envelope))
-        } else {
-            decode_worker_v3_envelope(&name, &exact_bytes)?
-        };
-        #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
         let envelope = decode_worker_v3_envelope(&name, &exact_bytes)?;
         file.seek(SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind canonical {schema} envelope: {error}"))?;
@@ -740,23 +672,11 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     }
 
     fn retain_current_lease(mut self) -> Result<Self, String> {
-        let lease = match &self.envelope {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            ApplicationEnvelopeWireV1::WorkerV2(envelope) => {
-                reacquire_current_hsaco_publication_lease_v1(
-                    &self.directory.child_path(),
-                    envelope.published_claim(),
-                )
-                .map_err(|error| format!("{}: {error}", self.name))?
-            }
-            ApplicationEnvelopeWireV1::WorkerV3(envelope) => {
-                reacquire_current_hsaco_publication_lease_v3(
-                    &self.directory.child_path(),
-                    envelope.published_claim(),
-                )
-                .map_err(|error| format!("{}: {error}", self.name))?
-            }
-        };
+        let lease = reacquire_current_hsaco_publication_lease_v3(
+            &self.directory.child_path(),
+            self.envelope.published_claim(),
+        )
+        .map_err(|error| format!("{}: {error}", self.name))?;
         self.current_lease = Some(lease);
         Ok(self)
     }
@@ -787,13 +707,18 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         if FileSnapshot::from_stat(&stat) != self.snapshot || bytes != self.exact_bytes {
             return Err(format!(
                 "inherited {} envelope changed after validation",
-                self.envelope.schema_name()
+                "Worker V3"
             ));
         }
-        if self.envelope.encode_canonical()? != bytes {
+        if self
+            .envelope
+            .encode_canonical()
+            .map_err(|error| format!("failed to encode canonical Worker V3 envelope: {error}"))?
+            != bytes
+        {
             return Err(format!(
                 "inherited {} envelope identity changed",
-                self.envelope.schema_name()
+                "Worker V3"
             ));
         }
         self.validate_retained_currentness()?;
@@ -808,8 +733,6 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
     pub(crate) fn configure_child_with_timeouts(
         &mut self,
         command: &mut Command,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        application_v2: WorkerV2ApplicationIdentityV1,
         application_v3: WorkerV3ApplicationIdentityV1,
         timeouts: ApplicationTimeouts,
     ) -> Result<PendingApplicationAck, String> {
@@ -836,108 +759,62 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             .map_err(|error| format!("failed to inspect inherited artifact directory: {error}"))?;
         let ack_stat = fstat(&ack_write)
             .map_err(|error| format!("failed to inspect application acknowledgment: {error}"))?;
-        let protocol = match &self.envelope {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            ApplicationEnvelopeWireV1::WorkerV2(envelope) => {
-                let expectation =
-                    WorkerV2ApplicationHandoffExpectationV1::new(envelope, application_v2);
-                let challenge = random_v2_challenge()?;
-                command
-                    .env(
-                        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-                        envelope_fd.to_string(),
-                    )
-                    .env(
-                        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-                        artifact_directory_fd.to_string(),
-                    )
-                    .env(
-                        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-                        expectation.commitment().to_hex(),
-                    )
-                    .env(
-                        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-                        ack_fd.to_string(),
-                    )
-                    .env(
-                        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-                        challenge.to_hex(),
-                    );
-                ApplicationHandoffExpectationV1::WorkerV2 {
-                    expectation,
-                    challenge,
-                }
-            }
-            ApplicationEnvelopeWireV1::WorkerV3(_) => {
-                let envelope = WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(&self.exact_bytes)
-                    .map_err(|error| format!("failed to identify exact V3 envelope: {error}"))?;
-                let envelope_stat = fstat(&self.file)
-                    .map_err(|error| format!("failed to inspect inherited V3 envelope: {error}"))?;
-                let inputs = [
-                    descriptor_occurrence(1, &envelope_stat)?,
-                    descriptor_occurrence(2, &directory_stat)?,
-                    descriptor_occurrence(3, &ack_stat)?,
-                ];
-                let occurrence = WorkerV3ApplicationOccurrenceV1::new(
-                    application_v3,
-                    random_identity_bytes()?,
-                    &inputs,
-                )
+        let envelope = WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(&self.exact_bytes)
+            .map_err(|error| format!("failed to identify exact V3 envelope: {error}"))?;
+        let envelope_stat = fstat(&self.file)
+            .map_err(|error| format!("failed to inspect inherited V3 envelope: {error}"))?;
+        let inputs = [
+            descriptor_occurrence(1, &envelope_stat)?,
+            descriptor_occurrence(2, &directory_stat)?,
+            descriptor_occurrence(3, &ack_stat)?,
+        ];
+        let occurrence =
+            WorkerV3ApplicationOccurrenceV1::new(application_v3, random_identity_bytes()?, &inputs)
                 .map_err(|error| format!("failed to bind V3 application occurrence: {error}"))?;
-                let expectation =
-                    WorkerV3ApplicationHandoffExpectationV1::new(envelope, &occurrence);
-                let challenge =
-                    WorkerV3ApplicationHandoffChallengeV1::from_bytes(random_identity_bytes()?)
-                        .map_err(|error| format!("invalid V3 application challenge: {error}"))?;
-                command
-                    .env(
-                        WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
-                        envelope_fd.to_string(),
-                    )
-                    .env(
-                        WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-                        artifact_directory_fd.to_string(),
-                    )
-                    .env(
-                        WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-                        ack_fd.to_string(),
-                    )
-                    .env(
-                        WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
-                        encode_lower_hex(&occurrence.encode_canonical().map_err(|error| {
-                            format!("failed to encode V3 application occurrence: {error}")
-                        })?),
-                    )
-                    .env(
-                        WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-                        encode_lower_hex(
-                            &expectation
-                                .commitment()
-                                .encode_canonical()
-                                .map_err(|error| {
-                                    format!("failed to encode V3 commitment: {error}")
-                                })?,
-                        ),
-                    )
-                    .env(
-                        WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-                        encode_lower_hex(
-                            &challenge.encode_canonical().map_err(|error| {
-                                format!("failed to encode V3 challenge: {error}")
-                            })?,
-                        ),
-                    );
-                ApplicationHandoffExpectationV1::WorkerV3 {
-                    expectation,
-                    challenge,
-                }
-            }
+        let expectation = WorkerV3ApplicationHandoffExpectationV1::new(envelope, &occurrence);
+        let challenge = WorkerV3ApplicationHandoffChallengeV1::from_bytes(random_identity_bytes()?)
+            .map_err(|error| format!("invalid V3 application challenge: {error}"))?;
+        command
+            .env(
+                WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
+                envelope_fd.to_string(),
+            )
+            .env(
+                WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+                artifact_directory_fd.to_string(),
+            )
+            .env(
+                WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
+                ack_fd.to_string(),
+            )
+            .env(
+                WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
+                encode_lower_hex(&occurrence.encode_canonical().map_err(|error| {
+                    format!("failed to encode V3 application occurrence: {error}")
+                })?),
+            )
+            .env(
+                WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
+                encode_lower_hex(
+                    &expectation
+                        .commitment()
+                        .encode_canonical()
+                        .map_err(|error| format!("failed to encode V3 commitment: {error}"))?,
+                ),
+            )
+            .env(
+                WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+                encode_lower_hex(
+                    &challenge
+                        .encode_canonical()
+                        .map_err(|error| format!("failed to encode V3 challenge: {error}"))?,
+                ),
+            );
+        let protocol = ApplicationHandoffExpectationV1 {
+            expectation,
+            challenge,
         };
-        let timeouts = match protocol {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            ApplicationHandoffExpectationV1::WorkerV2 { .. } => timeouts,
-            ApplicationHandoffExpectationV1::WorkerV3 { .. } => timeouts.for_worker_v3(),
-        };
+        let timeouts = timeouts.for_worker_v3();
         let directory_device = directory_stat.st_dev;
         let directory_inode = directory_stat.st_ino;
         let seccomp_filter = no_fork_application_filter();
@@ -1018,7 +895,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
 fn decode_worker_v3_envelope(
     name: &str,
     exact_bytes: &[u8],
-) -> Result<ApplicationEnvelopeWireV1, String> {
+) -> Result<WorkerV3LoadEnvelopeWireV1, String> {
     let envelope = WorkerV3LoadEnvelopeWireV1::decode_canonical(exact_bytes)
         .map_err(|error| format!("invalid canonical Worker V3 envelope {name}: {error}"))?;
     if envelope
@@ -1028,7 +905,7 @@ fn decode_worker_v3_envelope(
     {
         return Err("Worker V3 envelope encoding is not canonical".to_string());
     }
-    Ok(ApplicationEnvelopeWireV1::WorkerV3(Box::new(envelope)))
+    Ok(envelope)
 }
 
 pub(crate) fn terminate_application_group(
@@ -1141,45 +1018,21 @@ pub(crate) struct PendingApplicationAck {
 }
 
 #[derive(Clone, Copy)]
-enum ApplicationHandoffExpectationV1 {
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    WorkerV2 {
-        expectation: WorkerV2ApplicationHandoffExpectationV1,
-        challenge: WorkerV2ApplicationHandoffChallengeV1,
-    },
-    WorkerV3 {
-        expectation: WorkerV3ApplicationHandoffExpectationV1,
-        challenge: WorkerV3ApplicationHandoffChallengeV1,
-    },
+struct ApplicationHandoffExpectationV1 {
+    expectation: WorkerV3ApplicationHandoffExpectationV1,
+    challenge: WorkerV3ApplicationHandoffChallengeV1,
 }
 
 impl ApplicationHandoffExpectationV1 {
     const fn maximum_ack_bytes(self) -> usize {
-        match self {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::WorkerV2 { .. } => WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
-            Self::WorkerV3 { .. } => WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
-        }
+        WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1
     }
 
     fn validate_ack(self, bytes: &[u8]) -> Result<(), String> {
-        match self {
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::WorkerV2 {
-                expectation,
-                challenge,
-            } => WorkerV2ApplicationHandoffAckV1::decode_canonical(bytes)
-                .map_err(|error| format!("invalid Worker V2 application acknowledgment: {error}"))?
-                .validate(expectation, challenge)
-                .map_err(|error| format!("rejected Worker V2 application acknowledgment: {error}")),
-            Self::WorkerV3 {
-                expectation,
-                challenge,
-            } => WorkerV3ApplicationHandoffAckV1::decode_canonical(bytes)
-                .map_err(|error| format!("invalid Worker V3 application acknowledgment: {error}"))?
-                .validate(expectation, challenge)
-                .map_err(|error| format!("rejected Worker V3 application acknowledgment: {error}")),
-        }
+        WorkerV3ApplicationHandoffAckV1::decode_canonical(bytes)
+            .map_err(|error| format!("invalid Worker V3 application acknowledgment: {error}"))?
+            .validate(self.expectation, self.challenge)
+            .map_err(|error| format!("rejected Worker V3 application acknowledgment: {error}"))
     }
 }
 
@@ -1416,12 +1269,6 @@ fn random_identity_bytes() -> Result<[u8; 32], String> {
         ));
     }
     Ok(bytes)
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn random_v2_challenge() -> Result<WorkerV2ApplicationHandoffChallengeV1, String> {
-    WorkerV2ApplicationHandoffChallengeV1::from_bytes(random_identity_bytes()?)
-        .map_err(|error| format!("invalid application handoff challenge: {error}"))
 }
 
 fn descriptor_occurrence(
@@ -1803,30 +1650,12 @@ fn is_canonical_v3_envelope_name(bytes: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
-fn validate_single_envelope_schema(names: &[String]) -> Result<(), String> {
-    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
-    return reject_worker_v2_production_envelopes(names);
-
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    let v2_names = names
-        .iter()
-        .filter(|name| is_canonical_v2_envelope_name(name.as_bytes()))
-        .count();
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    if v2_names != 0 && v2_names != names.len() {
-        Err("Worker V2 and Worker V3 application envelopes cannot coexist".to_string())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(any(test, not(feature = "qualification-oracles-test-only")))]
-fn reject_worker_v2_production_envelopes(names: &[String]) -> Result<(), String> {
+fn reject_retired_worker_v2_envelopes(names: &[String]) -> Result<(), String> {
     if names
         .iter()
         .any(|name| is_canonical_v2_envelope_name(name.as_bytes()))
     {
-        Err("Worker V2 application envelopes are unavailable in production builds".to_string())
+        Err(RETIRED_WORKER_V2_ENVELOPE_ERROR.to_string())
     } else {
         Ok(())
     }
@@ -2011,7 +1840,7 @@ mod tests {
         }
     }
 
-    fn canonical_envelope_name(fill: u8) -> Vec<u8> {
+    fn canonical_retired_worker_v2_envelope_name(fill: u8) -> Vec<u8> {
         assert!(fill.is_ascii_hexdigit() && !fill.is_ascii_uppercase());
         let mut name = Vec::with_capacity(RETIRED_WORKER_V2_ENVELOPE_NAME_BYTES_V1);
         name.extend_from_slice(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1);
@@ -2072,8 +1901,8 @@ mod tests {
 
     #[test]
     fn artifact_scan_counts_mixed_entries_and_sorts_canonical_candidates() {
-        let first = canonical_envelope_name(b'0');
-        let last = canonical_envelope_name(b'f');
+        let first = canonical_retired_worker_v2_envelope_name(b'0');
+        let last = canonical_retired_worker_v2_envelope_name(b'f');
         let names = collect_envelope_names(|visit| {
             for _ in 0..MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 - 3 {
                 visit(b"unrelated")?;
@@ -2113,36 +1942,37 @@ mod tests {
         })
         .unwrap();
         assert_eq!(names, [String::from_utf8(envelope).unwrap()]);
-        validate_single_envelope_schema(&names).unwrap();
+        reject_retired_worker_v2_envelopes(&names).unwrap();
     }
 
     #[test]
-    fn application_handoff_rejects_v2_v3_envelope_coexistence() {
+    fn application_handoff_rejects_retired_v2_even_beside_v3() {
         let names = [
-            String::from_utf8(canonical_envelope_name(b'a')).unwrap(),
+            String::from_utf8(canonical_retired_worker_v2_envelope_name(b'a')).unwrap(),
             String::from_utf8(canonical_v3_envelope_name(b'b')).unwrap(),
         ];
         assert_eq!(
-            validate_single_envelope_schema(&names),
-            Err("Worker V2 and Worker V3 application envelopes cannot coexist".to_string())
+            reject_retired_worker_v2_envelopes(&names),
+            Err(RETIRED_WORKER_V2_ENVELOPE_ERROR.to_string())
         );
     }
 
     #[test]
-    fn production_schema_policy_rejects_worker_v2_and_accepts_worker_v3() {
-        let worker_v2 = [String::from_utf8(canonical_envelope_name(b'a')).unwrap()];
+    fn sole_schema_policy_rejects_worker_v2_and_accepts_worker_v3() {
+        let worker_v2 =
+            [String::from_utf8(canonical_retired_worker_v2_envelope_name(b'a')).unwrap()];
         assert_eq!(
-            reject_worker_v2_production_envelopes(&worker_v2),
-            Err("Worker V2 application envelopes are unavailable in production builds".to_string())
+            reject_retired_worker_v2_envelopes(&worker_v2),
+            Err(RETIRED_WORKER_V2_ENVELOPE_ERROR.to_string())
         );
 
         let worker_v3 = [String::from_utf8(canonical_v3_envelope_name(b'b')).unwrap()];
-        reject_worker_v2_production_envelopes(&worker_v3).unwrap();
+        reject_retired_worker_v2_envelopes(&worker_v3).unwrap();
     }
 
     #[test]
     fn artifact_scan_preserves_deterministic_duplicate_candidates() {
-        let duplicate = canonical_envelope_name(b'a');
+        let duplicate = canonical_retired_worker_v2_envelope_name(b'a');
         let names = collect_envelope_names(|visit| {
             visit(&duplicate)?;
             visit(&duplicate)
@@ -2415,11 +2245,11 @@ mod tests {
             &mut ack_read,
             &application,
             Duration::from_secs(1),
-            WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+            WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
         )
         .unwrap();
         assert_eq!(bytes, b"x");
-        assert!(WorkerV2ApplicationHandoffAckV1::decode_canonical(&bytes).is_err());
+        assert!(WorkerV3ApplicationHandoffAckV1::decode_canonical(&bytes).is_err());
         assert_eq!(
             observe_leader_exit_without_reaping(application.id() as libc::pid_t).unwrap(),
             LeaderExitObservation::Exited
@@ -2619,7 +2449,7 @@ mod tests {
                 &mut ack_read,
                 &child,
                 Duration::from_secs(1),
-                WORKER_V2_APPLICATION_HANDOFF_ACK_BYTES_V1,
+                WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
             )
             .unwrap()
             .is_empty()

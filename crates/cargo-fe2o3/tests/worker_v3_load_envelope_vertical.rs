@@ -117,11 +117,17 @@ fn static_host_consumer_application_fixture() -> &'static Path {
             std::process::id()
         ));
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut static_rustflags = std::env::var_os("RUSTFLAGS").unwrap_or_default();
+        if !static_rustflags.is_empty() {
+            static_rustflags.push(" ");
+        }
+        static_rustflags.push("-C target-feature=+crt-static");
         let built = Command::new(cargo)
             .current_dir(workspace)
+            .env_remove("RUSTFLAGS")
             .env(
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
-                "-C target-feature=+crt-static",
+                static_rustflags,
             )
             .env("FE2O3_HIP_SYS_DISABLE", "1")
             .args([

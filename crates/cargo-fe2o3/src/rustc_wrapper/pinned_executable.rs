@@ -18,8 +18,6 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
 use fe2o3_runtime_protocol::WorkerV3ApplicationHandoffProtocolErrorV1;
 
 /// A deliberately bounded read prevents a selected tool path from causing unbounded hashing work.
@@ -84,11 +82,6 @@ pub(crate) enum PinExecutableError {
     },
     SnapshotSealsChanged {
         path: PathBuf,
-    },
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    UnsealedApplicationRuntime {
-        path: PathBuf,
-        source: SealedStaticApplicationErrorV1,
     },
     InvalidV3ApplicationIdentity {
         path: PathBuf,
@@ -182,12 +175,6 @@ impl fmt::Display for PinExecutableError {
                 "sealed executable snapshot has missing or unexpected seals for {}",
                 path.display()
             ),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::UnsealedApplicationRuntime { path, source } => write!(
-                formatter,
-                "application {} does not satisfy the sealed-static runtime profile: {source}",
-                path.display()
-            ),
             Self::InvalidV3ApplicationIdentity { path, source } => write!(
                 formatter,
                 "application {} has no valid Worker V3 application identity: {source}",
@@ -205,8 +192,6 @@ impl Error for PinExecutableError {
             | Self::Read { source, .. }
             | Self::Rewind { source, .. }
             | Self::ExecutionStrategy { source, .. } => Some(source),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::UnsealedApplicationRuntime { source, .. } => Some(source),
             Self::InvalidV3ApplicationIdentity { source, .. } => Some(source),
             Self::UnsupportedPlatform
             | Self::NotRegular { .. }
@@ -309,8 +294,6 @@ mod platform {
         execution_path: PathBuf,
         snapshot: ObjectSnapshot,
         seals: SealFlags,
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        identity: fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1,
         identity_v3: fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1,
     }
 
@@ -687,20 +670,6 @@ mod platform {
             Ok(bytes)
         }
 
-        #[cfg(test)]
-        pub(crate) fn sealed_static_application_identity(
-            &self,
-        ) -> Result<fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1, PinExecutableError>
-        {
-            fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(
-                &self.authenticated_bytes()?,
-            )
-            .map_err(|source| PinExecutableError::UnsealedApplicationRuntime {
-                path: self.display_path.clone(),
-                source,
-            })
-        }
-
         pub(crate) fn seal_static_application(
             &self,
         ) -> Result<SealedStaticApplication, PinExecutableError> {
@@ -817,17 +786,6 @@ mod platform {
                     path: self.display_path.clone(),
                 });
             }
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            let identity =
-                fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(
-                    &bytes,
-                )
-                .map_err(|source| {
-                    PinExecutableError::UnsealedApplicationRuntime {
-                        path: self.display_path.clone(),
-                        source,
-                    }
-                })?;
             let identity_v3 =
                 fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(
                     &bytes,
@@ -868,8 +826,6 @@ mod platform {
                 execution_path,
                 snapshot,
                 seals,
-                #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-                identity,
                 identity_v3,
             })
         }
@@ -943,13 +899,6 @@ mod platform {
     }
 
     impl SealedStaticApplication {
-        #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-        pub(crate) const fn identity(
-            &self,
-        ) -> fe2o3_worker_v2_bundle::WorkerV2ApplicationIdentityV1 {
-            self.identity
-        }
-
         pub(crate) const fn identity_v3(
             &self,
         ) -> fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1 {
@@ -1314,22 +1263,20 @@ mod platform {
         }
 
         #[test]
-        fn sealed_static_identity_matches_the_shared_cross_component_golden() {
+        fn sealed_static_v3_identity_matches_the_shared_derivation() {
             let root = TestDirectory::new();
             let path = root.path().join("static-app");
-            write_executable(&path, &sealed_static_elf());
+            let exact = sealed_static_elf();
+            write_executable(&path, &exact);
             let pinned = PinnedExecutable::open(&path).unwrap();
+            let sealed = pinned.seal_static_application().unwrap();
 
             assert_eq!(
-                pinned
-                    .sealed_static_application_identity()
-                    .unwrap()
-                    .as_bytes(),
-                [
-                    0x1c, 0x1f, 0x80, 0x10, 0x16, 0xa0, 0xe0, 0x7e, 0xbc, 0x20, 0xae, 0x1e, 0xc6,
-                    0xc7, 0x0f, 0xf4, 0x0f, 0x91, 0x1a, 0x4e, 0xab, 0xab, 0x88, 0xe6, 0xbd, 0x21,
-                    0x0b, 0xc4, 0x7e, 0x68, 0xfa, 0x93,
-                ]
+                sealed.identity_v3(),
+                fe2o3_runtime_protocol::WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(
+                    &exact,
+                )
+                .unwrap()
             );
         }
 
@@ -1341,20 +1288,20 @@ mod platform {
             write_executable(&path, &original);
             let pinned = PinnedExecutable::open(&path).unwrap();
             let sealed = pinned.seal_static_application().unwrap();
-            let identity = sealed.identity();
+            let identity = sealed.identity_v3();
 
             let mut first_mutation = original.clone();
             *first_mutation.last_mut().unwrap() ^= 0xff;
             fs::write(&path, &first_mutation).unwrap();
             let command = sealed.command().unwrap();
             assert_eq!(sealed.bytes(), original);
-            assert_eq!(sealed.identity(), identity);
+            assert_eq!(sealed.identity_v3(), identity);
 
             let mut second_mutation = first_mutation;
             second_mutation[0] ^= 0xff;
             fs::write(&path, &second_mutation).unwrap();
             assert_eq!(sealed.bytes(), original);
-            assert_eq!(sealed.identity(), identity);
+            assert_eq!(sealed.identity_v3(), identity);
             assert_eq!(command.as_command().get_program(), sealed.execution_path);
         }
 
