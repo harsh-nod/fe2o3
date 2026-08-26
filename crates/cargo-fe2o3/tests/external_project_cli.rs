@@ -289,18 +289,14 @@ impl ProjectFixture {
     fn protected_release_build_command(&self) -> Command {
         let cargo = Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-release-cargo-fixture"));
         let rustc = release_rustc_fixture_executable(&self.root);
-        let worker_config = self.inert_production_worker_config();
+        let build_config = self.inert_production_build_config();
         let mut command = self.isolated_protected_release_command("build");
         command
-            .args([
-                "--target",
-                fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1,
-            ])
             .env("CARGO", cargo)
             .env("FE2O3_AUTHORITY_CARGO_SHA256_V1", file_sha256(cargo))
             .env("FE2O3_AUTHORITY_RUSTC_PATH_V1", &rustc)
             .env("FE2O3_AUTHORITY_RUSTC_SHA256_V1", file_sha256(&rustc))
-            .env("FE2O3_WORKER_V2_CONFIG_V2", worker_config)
+            .env("FE2O3_PRODUCTION_BUILD_CONFIG_V1", build_config)
             .env(
                 "FE2O3_AUTHORITY_RUSTC_RUNTIME_SHA256_V1",
                 runtime_tree_sha256(
@@ -315,14 +311,14 @@ impl ProjectFixture {
         command
     }
 
-    fn inert_production_worker_config(&self) -> PathBuf {
+    fn inert_production_build_config(&self) -> PathBuf {
         let worker = env::current_exe().expect("resolve inert production worker fixture");
         let worker_bytes = fs::read(&worker).expect("read inert production worker fixture");
         let worker_sha256 = file_sha256(&worker);
-        let config = self.root.join("production-worker-config.json");
+        let config = self.root.join("production-build-config.json");
         let value = serde_json::json!({
             "candidate_output_max_bytes": 4_194_304,
-            "format": "fe2o3-worker-v2-config-v2",
+            "format": "fe2o3-production-build-config-v1",
             "limits": {
                 "stderr_bytes": 65_536,
                 "stdout_bytes": 8_388_608,
@@ -1874,6 +1870,12 @@ fn protected_release_preserves_rustc_custody_and_requires_a_real_compiler_handof
     for required in ["build", "--offline", "--frozen"] {
         assert!(args.iter().any(|value| value == required), "{report}");
     }
+    assert!(
+        args.windows(2).any(|pair| {
+            pair[0] == "--target" && pair[1] == fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1
+        }),
+        "{report}"
+    );
     assert_eq!(report["wrapper"], "/proc/self/fd/192", "{report}");
     assert!(report["trampoline_path_input"].is_null(), "{report}");
     assert!(report["trampoline_digest_input"].is_null(), "{report}");

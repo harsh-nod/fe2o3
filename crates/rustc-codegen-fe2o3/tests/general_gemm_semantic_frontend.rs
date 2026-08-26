@@ -5,6 +5,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fe2o3_artifact_transaction::{EmitError, ProducerIdentity, emit_artifact_transaction};
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str =
     "FE2O3_GENERAL_GEMM_CONFIGURED_ARTIFACT_GUARD_CHILD";
 
@@ -79,18 +82,9 @@ fn managed_build(
     cargo_args: &[&str],
     artifacts: &Path,
 ) -> Output {
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "--locked",
-            "--manifest-path",
-        ])
+        .args(["build", "--locked", "--manifest-path"])
         .arg(manifest)
         .args(cargo_args)
         .env(
@@ -187,7 +181,14 @@ fn safe_general_gemm_mir_reaches_kir_and_exact_semantic_mutations_are_diagnostic
     let fixture = fixture(&workspace);
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+        ])
         .output()
         .expect("build codegen backend");
     assert!(

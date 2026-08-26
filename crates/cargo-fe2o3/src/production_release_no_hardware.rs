@@ -113,7 +113,7 @@ pub fn admit_row_softmax_v1_source_tested_artifact_v1(
     _expectation: RowSoftmaxV1DirectWorkerExpectationV1,
 ) -> Result<NoHardwareRowSoftmaxTokenV1, RowSoftmaxV1ProductionErrorV1> {
     Err(RowSoftmaxV1ProductionErrorV1::Runtime(
-        "cargo-fe2o3 was built without the explicit legacy-hsa-runtime feature".to_owned(),
+        "the workload-specific row-softmax runtime was retired; use Worker V3".to_owned(),
     ))
 }
 
@@ -122,7 +122,7 @@ pub fn execute_row_softmax_v1_production_workload_v1(
     _workload: AdmittedRowSoftmaxV1WorkloadV1,
 ) -> Result<RowSoftmaxV1ProductionReceiptV1, RowSoftmaxV1ProductionErrorV1> {
     Err(RowSoftmaxV1ProductionErrorV1::Runtime(
-        "cargo-fe2o3 was built without the explicit legacy-hsa-runtime feature".to_owned(),
+        "the workload-specific row-softmax runtime was retired; use Worker V3".to_owned(),
     ))
 }
 

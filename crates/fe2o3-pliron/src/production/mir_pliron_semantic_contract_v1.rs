@@ -4,11 +4,10 @@ use std::{collections::BTreeSet, error::Error, fmt};
 
 use dialect_kernel::{DYNAMIC_EXTENT, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr};
 use fe2o3_functional_proof::{
-    FunctionalRefinementBoundaryV2, MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1,
-    MirPlironSemanticContractV1, SemanticCollectiveKindV1, SemanticCoverageBindingV1,
-    SemanticEvaluationOrderV1, SemanticFiniteExtentV1, SemanticIeeeExceptionalValueV1,
-    SemanticIeeeRoundingV1, SemanticLoopContractV1, SemanticLoopDirectionV1,
-    SemanticNumericalPolicyV1, SemanticScalarTypeV1,
+    FunctionalRefinementBoundaryV2, MirPlironSemanticContractV1, SemanticCollectiveKindV1,
+    SemanticCoverageBindingV1, SemanticEvaluationOrderV1, SemanticFiniteExtentV1,
+    SemanticIeeeExceptionalValueV1, SemanticIeeeRoundingV1, SemanticLoopContractV1,
+    SemanticLoopDirectionV1, SemanticNumericalPolicyV1, SemanticScalarTypeV1,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -18,13 +17,17 @@ use super::{
     ProductionIeeeRoundingModeV2, ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueV1, ProductionSemanticScalarTypeV2,
-    ProductionTotalOutputRefinementErrorV2, ProductionTotalOutputRefinementReportV2,
+    ProductionTotalOutputStagingErrorV2, ProductionTotalOutputStagingReportV2,
 };
 
 const EFFECT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/EFFECT-IDENTITY/V1\0";
 const VALUE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/RANKED-VALUE/V1\0";
 const LOOP_TRANSITION_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/LOOP-TRANSITION/V1\0";
 const LOOP_VARIANT_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/LOOP-VARIANT/V1\0";
+const LOOP_CONTRACT_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/LOOP-CONTRACT/V1\0";
+const LOOP_ITERATION_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/LOOP-ITERATION-DOMAIN/V1\0";
+const OUTPUT_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/OUTPUT-DOMAIN/V1\0";
+const DYNAMIC_OUTPUT_SYMBOL_V1: &[u8] = b"FE2O3/MIR-PLIRON/DYNAMIC-OUTPUT-SYMBOL/V1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionMirPlironSemanticContractReportV1 {
@@ -34,7 +37,6 @@ pub struct ProductionMirPlironSemanticContractReportV1 {
     finite_collectives: u64,
     total_outputs: u64,
     typed_roots: u64,
-    refinement_theorem_identity: DigestV1,
 }
 
 impl ProductionMirPlironSemanticContractReportV1 {
@@ -56,14 +58,10 @@ impl ProductionMirPlironSemanticContractReportV1 {
     pub const fn typed_roots(self) -> u64 {
         self.typed_roots
     }
-    pub const fn refinement_theorem_identity(self) -> DigestV1 {
-        self.refinement_theorem_identity
-    }
-
-    /// The accepted statement is bound to the exact MIR subjects and PLIRON
+    /// The structurally reconciled statement is bound to the exact MIR subjects and PLIRON
     /// evidence. Soundness of the MIR projector and mandatory analyses remains
     /// in the compiler trusted base.
-    pub const fn binds_safe_reference_mir_to_live_pliron(self) -> bool {
+    pub const fn structurally_binds_safe_reference_mir_to_live_pliron(self) -> bool {
         true
     }
     pub const fn proves_the_compiler_implementation_sound(self) -> bool {
@@ -105,6 +103,11 @@ pub enum ProductionMirPlironSemanticContractErrorV1 {
     DynamicLoopStepUnproved {
         header: u32,
         latch: u32,
+    },
+    FiniteLoopExtentUnproved {
+        header: u32,
+        latch: u32,
+        detail: &'static str,
     },
     CollectiveCountMismatch,
     CollectiveMismatch {
@@ -159,6 +162,14 @@ impl fmt::Display for ProductionMirPlironSemanticContractErrorV1 {
                 formatter,
                 "dynamic loop <header={header}, latch={latch}> does not have a constant unit step, so overflow-free progress to its u64 upper bound is unproved",
             ),
+            Self::FiniteLoopExtentUnproved {
+                header,
+                latch,
+                detail,
+            } => write!(
+                formatter,
+                "finite loop <header={header}, latch={latch}> is not proved: {detail}",
+            ),
             Self::CollectiveCountMismatch => formatter.write_str(
                 "semantic contract collective count differs from the live PLIRON graph",
             ),
@@ -186,33 +197,41 @@ impl Error for ProductionMirPlironSemanticContractErrorV1 {}
 /// boundary.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::ProductionVerifiedMirPlironKernelV1;
+/// use fe2o3_pliron::ProductionReconciledMirPlironKernelV1;
 ///
 /// fn requires_clone<T: Clone>() {}
-/// requires_clone::<ProductionVerifiedMirPlironKernelV1>();
+/// requires_clone::<ProductionReconciledMirPlironKernelV1>();
 /// ```
 #[derive(Debug)]
-pub struct ProductionVerifiedMirPlironKernelV1 {
+pub struct ProductionReconciledMirPlironKernelV1 {
     ranked: ProductionRankedKernelLoweringInputV1,
     evidence: ProductionMiddleEndEvidenceV5,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     semantics: ProductionMirPlironSemanticContractReportV1,
+    contract: MirPlironSemanticContractV1,
 }
 
-impl ProductionVerifiedMirPlironKernelV1 {
+impl ProductionReconciledMirPlironKernelV1 {
     pub const fn ranked(&self) -> &ProductionRankedKernelLoweringInputV1 {
         &self.ranked
     }
     pub const fn evidence(&self) -> &ProductionMiddleEndEvidenceV5 {
         &self.evidence
     }
-    pub const fn total_output_report(&self) -> ProductionTotalOutputRefinementReportV2 {
+    pub const fn total_output_report(&self) -> ProductionTotalOutputStagingReportV2 {
         self.total_output
     }
     pub const fn semantic_contract_report(&self) -> ProductionMirPlironSemanticContractReportV1 {
         self.semantics
     }
-    pub const fn establishes_total_output_refinement_at_mir_pliron_boundary(&self) -> bool {
+    /// Returns the exact validated contract retained under this move-only owner.
+    ///
+    /// The contract is data, not proof authority. Its fields have already been
+    /// reconciled against the owned MIR receipts and live PLIRON evidence.
+    pub const fn semantic_contract(&self) -> &MirPlironSemanticContractV1 {
+        &self.contract
+    }
+    pub const fn has_policy_checked_total_output_staging(&self) -> bool {
         true
     }
     pub const fn compiler_projection_and_pass_soundness_remain_trusted(&self) -> bool {
@@ -224,12 +243,12 @@ impl ProductionVerifiedMirPlironKernelV1 {
 }
 
 #[derive(Debug)]
-pub enum ProductionMirPlironVerificationErrorV1 {
-    TotalOutput(ProductionTotalOutputRefinementErrorV2),
+pub enum ProductionMirPlironReconciliationErrorV1 {
+    TotalOutput(ProductionTotalOutputStagingErrorV2),
     SemanticContract(ProductionMirPlironSemanticContractErrorV1),
 }
 
-impl fmt::Display for ProductionMirPlironVerificationErrorV1 {
+impl fmt::Display for ProductionMirPlironReconciliationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TotalOutput(error) => {
@@ -242,30 +261,31 @@ impl fmt::Display for ProductionMirPlironVerificationErrorV1 {
     }
 }
 
-impl Error for ProductionMirPlironVerificationErrorV1 {}
+impl Error for ProductionMirPlironReconciliationErrorV1 {}
 
-pub fn verify_ranked_kernel_against_safe_reference_mir_v1(
+pub fn reconcile_ranked_kernel_with_safe_reference_mir_v1(
     ranked: ProductionRankedKernelLoweringInputV1,
     evidence: ProductionMiddleEndEvidenceV5,
     contract: &MirPlironSemanticContractV1,
-) -> Result<ProductionVerifiedMirPlironKernelV1, ProductionMirPlironVerificationErrorV1> {
-    let total_output = super::require_total_output_refinement_v2(&ranked, &evidence)
-        .map_err(ProductionMirPlironVerificationErrorV1::TotalOutput)?;
+) -> Result<ProductionReconciledMirPlironKernelV1, ProductionMirPlironReconciliationErrorV1> {
+    let total_output = super::require_total_output_staging_v2(&ranked, &evidence)
+        .map_err(ProductionMirPlironReconciliationErrorV1::TotalOutput)?;
     let semantics =
         require_mir_pliron_semantic_contract_v1(&ranked, &evidence, total_output, contract)
-            .map_err(ProductionMirPlironVerificationErrorV1::SemanticContract)?;
-    Ok(ProductionVerifiedMirPlironKernelV1 {
+            .map_err(ProductionMirPlironReconciliationErrorV1::SemanticContract)?;
+    Ok(ProductionReconciledMirPlironKernelV1 {
         ranked,
         evidence,
         total_output,
         semantics,
+        contract: contract.clone(),
     })
 }
 
 pub fn require_mir_pliron_semantic_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     contract: &MirPlironSemanticContractV1,
 ) -> Result<ProductionMirPlironSemanticContractReportV1, ProductionMirPlironSemanticContractErrorV1>
 {
@@ -275,7 +295,7 @@ pub fn require_mir_pliron_semantic_contract_v1(
     {
         return Err(ProductionMirPlironSemanticContractErrorV1::TotalOutputEvidenceMismatch);
     }
-    for receipt in ranked.retained_functional_refinement_receipts() {
+    for receipt in ranked.retained_policy_checked_refinement_staging() {
         let binding = receipt.binding();
         if binding.safe_reference_mir_hash() != contract.safe_reference_mir()
             || binding.kernel_mir_hash() != contract.kernel_mir()
@@ -409,7 +429,9 @@ pub fn require_mir_pliron_semantic_contract_v1(
             && typed_value_identity(&values, live.gpu_value()) == Some(declared.actual())
             && typed_value_identity(&values, live.reference_value()) == Some(declared.reference())
             && live_auxiliary.as_deref() == Some(declared.auxiliary_roots())
-            && domain.is_some_and(|domain| shape_matches(domain.extents(), view_shape));
+            && domain.is_some_and(|domain| {
+                shape_matches(domain.extents(), view_shape, live.view(), evidence_identity)
+            });
         if !matches {
             return Err(ProductionMirPlironSemanticContractErrorV1::OutputMismatch { index });
         }
@@ -422,7 +444,6 @@ pub fn require_mir_pliron_semantic_contract_v1(
         finite_collectives: count(contract.collectives().len())?,
         total_outputs: count(contract.outputs().len())?,
         typed_roots: count(contract.typed_roots().len())?,
-        refinement_theorem_identity: MIR_PLIRON_SEMANTIC_REFINEMENT_THEOREM_SHA256_V1,
     })
 }
 
@@ -448,6 +469,41 @@ pub fn production_ranked_value_identity_v1(value: ProductionRankedValueV1) -> Di
         }
     }
     domain_digest(VALUE_IDENTITY_DOMAIN_V1, &bytes)
+}
+
+/// Canonical identity for one exact output shape. Dynamic shapes are
+/// additionally bound to the view and exact V5 evidence record.
+pub(super) fn production_output_domain_identity_v1(
+    view: ProductionRankedValueV1,
+    evidence: DigestV1,
+    shape: &[u64],
+) -> DigestV1 {
+    let dynamic = shape.contains(&DYNAMIC_EXTENT);
+    let mut bytes = Vec::with_capacity(8 + shape.len() * 8 + usize::from(dynamic) * 64);
+    if dynamic {
+        bytes.extend_from_slice(production_ranked_value_identity_v1(view).as_bytes());
+        bytes.extend_from_slice(evidence.as_bytes());
+    }
+    bytes.extend_from_slice(&(shape.len() as u64).to_le_bytes());
+    for extent in shape {
+        bytes.extend_from_slice(&extent.to_le_bytes());
+    }
+    domain_digest(OUTPUT_DOMAIN_V1, &bytes)
+}
+
+pub(super) fn production_dynamic_output_symbol_v1(
+    view: ProductionRankedValueV1,
+    evidence: DigestV1,
+    dimension: usize,
+) -> u32 {
+    let mut bytes = Vec::with_capacity(32 * 2 + 8);
+    bytes.extend_from_slice(production_ranked_value_identity_v1(view).as_bytes());
+    bytes.extend_from_slice(evidence.as_bytes());
+    bytes.extend_from_slice(&(dimension as u64).to_le_bytes());
+    let digest = domain_digest(DYNAMIC_OUTPUT_SYMBOL_V1, &bytes);
+    let mut symbol = [0_u8; 4];
+    symbol.copy_from_slice(&digest.as_bytes()[..4]);
+    u32::from_le_bytes(symbol)
 }
 
 fn production_loop_latch_identity_v1(
@@ -533,38 +589,305 @@ pub fn production_loop_variant_identity_v1(
     domain_digest(LOOP_VARIANT_DOMAIN_V1, &bytes)
 }
 
+pub(super) struct CanonicalFiniteLoopV1 {
+    pub(super) identity: DigestV1,
+    pub(super) exit: u32,
+    pub(super) iteration_domain: DigestV1,
+    pub(super) induction_value: ProductionRankedValueV1,
+    pub(super) lower_value: ProductionRankedValueV1,
+    pub(super) upper_value: ProductionRankedValueV1,
+    pub(super) step_value: ProductionRankedValueV1,
+    pub(super) transition: DigestV1,
+    pub(super) variant: DigestV1,
+    pub(super) direction: SemanticLoopDirectionV1,
+    pub(super) maximum_steps: u64,
+    pub(super) extent: SemanticFiniteExtentV1,
+}
+
+struct LiveLoopDescriptorV1 {
+    exit: u32,
+    induction_value: ProductionRankedValueV1,
+    lower_value: ProductionRankedValueV1,
+    upper_value: ProductionRankedValueV1,
+    step_value: ProductionRankedValueV1,
+    transition: DigestV1,
+}
+
+enum LiveLoopDescriptorErrorV1 {
+    Structure,
+    Unsupported,
+}
+
+fn live_loop_descriptor_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+) -> Result<LiveLoopDescriptorV1, LiveLoopDescriptorErrorV1> {
+    let kernel = ranked.kernel();
+    let header_block = kernel
+        .blocks()
+        .get(header as usize)
+        .ok_or(LiveLoopDescriptorErrorV1::Structure)?;
+    let latch_block = kernel
+        .blocks()
+        .get(latch as usize)
+        .ok_or(LiveLoopDescriptorErrorV1::Structure)?;
+    let (induction_value, upper_value, continue_block, exit) = match header_block.terminator() {
+        ProductionRankedTerminatorV1::IndexLessThan {
+            lhs,
+            rhs,
+            true_block,
+            false_block,
+        }
+        | ProductionRankedTerminatorV1::IndexLessThanArgs {
+            lhs,
+            rhs,
+            true_block,
+            false_block,
+            ..
+        } => (*lhs, *rhs, *true_block, *false_block),
+        _ => return Err(LiveLoopDescriptorErrorV1::Unsupported),
+    };
+    let ProductionRankedValueV1::BlockArgument {
+        block,
+        argument: induction_argument,
+    } = induction_value
+    else {
+        return Err(LiveLoopDescriptorErrorV1::Unsupported);
+    };
+    if block != header
+        || !can_reach_without_header(kernel, continue_block, latch, header)
+        || can_reach_without_header(kernel, exit, latch, header)
+    {
+        return Err(LiveLoopDescriptorErrorV1::Structure);
+    }
+    let preheaders = predecessors(kernel, header)
+        .into_iter()
+        .filter(|predecessor| *predecessor != latch)
+        .collect::<Vec<_>>();
+    let [preheader] = preheaders.as_slice() else {
+        return Err(LiveLoopDescriptorErrorV1::Unsupported);
+    };
+    let lower_value = incoming_argument(
+        kernel.blocks()[*preheader as usize].terminator(),
+        header,
+        induction_argument,
+    )
+    .ok_or(LiveLoopDescriptorErrorV1::Unsupported)?;
+    let step_value = loop_step(latch_block.terminator(), header, induction_argument)
+        .ok_or(LiveLoopDescriptorErrorV1::Unsupported)?;
+    let transition = production_loop_transition_identity_v1(ranked, header, latch, exit)
+        .ok_or(LiveLoopDescriptorErrorV1::Unsupported)?;
+    Ok(LiveLoopDescriptorV1 {
+        exit,
+        induction_value,
+        lower_value,
+        upper_value,
+        step_value,
+        transition,
+    })
+}
+
+/// Extracts the finite canonical-loop subset admitted by automatic contract
+/// derivation. A dynamic ranked index is bounded by its exact machine type;
+/// no narrower caller-provided range is accepted without a retained receipt.
+pub(super) fn canonical_finite_loop_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+) -> Result<CanonicalFiniteLoopV1, &'static str> {
+    let kernel = ranked.kernel();
+    let live = live_loop_descriptor_v1(ranked, header, latch).map_err(|error| match error {
+        LiveLoopDescriptorErrorV1::Structure => "the natural-loop CFG is inconsistent",
+        LiveLoopDescriptorErrorV1::Unsupported => {
+            "the loop is not a canonical increasing induction loop"
+        }
+    })?;
+    let step = index_constant(kernel, live.step_value)
+        .filter(|step| *step != 0)
+        .ok_or("the step is dynamic or zero")?;
+    let induction = production_ranked_value_identity_v1(live.induction_value);
+    let lower_identity = production_ranked_value_identity_v1(live.lower_value);
+    let upper_identity = production_ranked_value_identity_v1(live.upper_value);
+    let step_identity = production_ranked_value_identity_v1(live.step_value);
+    let direction = SemanticLoopDirectionV1::Increasing;
+    let variant = production_loop_variant_identity_v1(
+        header,
+        latch,
+        live.exit,
+        induction,
+        lower_identity,
+        upper_identity,
+        step_identity,
+        live.transition,
+        direction,
+    );
+    let (maximum_steps, extent) = finite_loop_extent_v1(
+        ranked,
+        header,
+        latch,
+        live.exit,
+        live.lower_value,
+        live.upper_value,
+        step,
+        induction,
+        lower_identity,
+        upper_identity,
+        step_identity,
+        live.transition,
+        variant,
+    )?;
+    let mut domain_bytes = Vec::with_capacity(32 * 6 + 8 * 2 + 12);
+    domain_bytes
+        .extend_from_slice(&super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
+    for block in [header, latch, live.exit] {
+        domain_bytes.extend_from_slice(&block.to_le_bytes());
+    }
+    for value in [
+        induction,
+        lower_identity,
+        upper_identity,
+        step_identity,
+        live.transition,
+        variant,
+    ] {
+        domain_bytes.extend_from_slice(value.as_bytes());
+    }
+    domain_bytes.extend_from_slice(&maximum_steps.to_le_bytes());
+    let iteration_domain = domain_digest(LOOP_ITERATION_DOMAIN_V1, &domain_bytes);
+    let mut identity_bytes = domain_bytes;
+    identity_bytes.extend_from_slice(iteration_domain.as_bytes());
+    let identity = domain_digest(LOOP_CONTRACT_DOMAIN_V1, &identity_bytes);
+    Ok(CanonicalFiniteLoopV1 {
+        identity,
+        exit: live.exit,
+        iteration_domain,
+        induction_value: live.induction_value,
+        lower_value: live.lower_value,
+        upper_value: live.upper_value,
+        step_value: live.step_value,
+        transition: live.transition,
+        variant,
+        direction,
+        maximum_steps,
+        extent,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finite_loop_extent_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+    exit: u32,
+    lower_value: ProductionRankedValueV1,
+    upper_value: ProductionRankedValueV1,
+    step: u64,
+    induction: DigestV1,
+    lower_bound: DigestV1,
+    upper_bound: DigestV1,
+    step_identity: DigestV1,
+    transition: DigestV1,
+    variant: DigestV1,
+) -> Result<(u64, SemanticFiniteExtentV1), &'static str> {
+    match (
+        index_constant(ranked.kernel(), lower_value),
+        index_constant(ranked.kernel(), upper_value),
+    ) {
+        (Some(lower), Some(upper)) => {
+            let span = upper
+                .checked_sub(lower)
+                .ok_or("the increasing-loop upper bound is below its lower bound")?;
+            let maximum_steps = span.div_ceil(step);
+            if maximum_steps == 0 {
+                return Err("the iteration domain is empty");
+            }
+            require_overflow_free_static_latch_v1(lower, maximum_steps, step)?;
+            Ok((maximum_steps, SemanticFiniteExtentV1::Static(maximum_steps)))
+        }
+        _ if step == 1 => Ok((
+            u64::MAX,
+            SemanticFiniteExtentV1::Dynamic {
+                symbol: production_dynamic_loop_symbol_v1(
+                    ranked,
+                    header,
+                    latch,
+                    exit,
+                    induction,
+                    lower_bound,
+                    upper_bound,
+                    step_identity,
+                    transition,
+                    variant,
+                ),
+                inclusive_upper_bound: u64::MAX,
+            },
+        )),
+        _ => Err(
+            "a dynamic finite loop requires a constant unit step until a narrower range receipt is retained",
+        ),
+    }
+}
+
+fn require_overflow_free_static_latch_v1(
+    lower: u64,
+    maximum_steps: u64,
+    step: u64,
+) -> Result<(), &'static str> {
+    maximum_steps
+        .checked_mul(step)
+        .and_then(|distance| lower.checked_add(distance))
+        .ok_or("the final increasing-loop latch transition can overflow u64")?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn production_dynamic_loop_symbol_v1(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+    header: u32,
+    latch: u32,
+    exit: u32,
+    induction: DigestV1,
+    lower_bound: DigestV1,
+    upper_bound: DigestV1,
+    step: DigestV1,
+    transition: DigestV1,
+    variant: DigestV1,
+) -> u32 {
+    let mut bytes = Vec::with_capacity(32 * 7 + 12);
+    bytes.extend_from_slice(&super::middle_end_evidence_v4::derive_ranked_kernel_identity(ranked));
+    for block in [header, latch, exit] {
+        bytes.extend_from_slice(&block.to_le_bytes());
+    }
+    for identity in [
+        induction,
+        lower_bound,
+        upper_bound,
+        step,
+        transition,
+        variant,
+    ] {
+        bytes.extend_from_slice(identity.as_bytes());
+    }
+    let digest = domain_digest(b"FE2O3/PRODUCTION-DYNAMIC-LOOP-SYMBOL/V1\0", &bytes);
+    let mut symbol = [0_u8; 4];
+    symbol.copy_from_slice(&digest.as_bytes()[..4]);
+    u32::from_le_bytes(symbol)
+}
+
 fn require_live_loop_contract(
     ranked: &ProductionRankedKernelLoweringInputV1,
     contract: &MirPlironSemanticContractV1,
     declared: &SemanticLoopContractV1,
 ) -> Result<(), ProductionMirPlironSemanticContractErrorV1> {
     let kernel = ranked.kernel();
-    let header = usize::try_from(declared.header_block()).ok();
-    let latch = usize::try_from(declared.latch_block()).ok();
-    let (Some(header), Some(latch)) = (header, latch) else {
-        return Err(loop_structure_error(declared));
-    };
-    let (Some(header_block), Some(latch_block)) =
-        (kernel.blocks().get(header), kernel.blocks().get(latch))
-    else {
-        return Err(loop_structure_error(declared));
-    };
-    let (condition_induction, upper_bound, continue_block, exit_block) =
-        match header_block.terminator() {
-            ProductionRankedTerminatorV1::IndexLessThan {
-                lhs,
-                rhs,
-                true_block,
-                false_block,
+    let live =
+        match live_loop_descriptor_v1(ranked, declared.header_block(), declared.latch_block()) {
+            Ok(live) => live,
+            Err(LiveLoopDescriptorErrorV1::Structure) => {
+                return Err(loop_structure_error(declared));
             }
-            | ProductionRankedTerminatorV1::IndexLessThanArgs {
-                lhs,
-                rhs,
-                true_block,
-                false_block,
-                ..
-            } => (*lhs, *rhs, *true_block, *false_block),
-            _ => {
+            Err(LiveLoopDescriptorErrorV1::Unsupported) => {
                 return Err(
                     ProductionMirPlironSemanticContractErrorV1::UnsupportedLoopShape {
                         header: declared.header_block(),
@@ -573,79 +896,13 @@ fn require_live_loop_contract(
                 );
             }
         };
-    let ProductionRankedValueV1::BlockArgument {
-        block,
-        argument: induction_argument,
-    } = condition_induction
-    else {
-        return Err(
-            ProductionMirPlironSemanticContractErrorV1::UnsupportedLoopShape {
-                header: declared.header_block(),
-                latch: declared.latch_block(),
-            },
-        );
-    };
-    if block != declared.header_block()
-        || exit_block != declared.exit_block()
-        || !can_reach_without_header(kernel, continue_block, declared.latch_block(), block)
-        || can_reach_without_header(kernel, exit_block, declared.latch_block(), block)
-    {
+    if live.exit != declared.exit_block() {
         return Err(loop_structure_error(declared));
     }
-
-    let preheaders = predecessors(kernel, declared.header_block())
-        .into_iter()
-        .filter(|predecessor| *predecessor != declared.latch_block())
-        .collect::<Vec<_>>();
-    let [preheader] = preheaders.as_slice() else {
-        return Err(
-            ProductionMirPlironSemanticContractErrorV1::UnsupportedLoopShape {
-                header: declared.header_block(),
-                latch: declared.latch_block(),
-            },
-        );
-    };
-    let Some(lower_bound_value) = incoming_argument(
-        kernel.blocks()[*preheader as usize].terminator(),
-        declared.header_block(),
-        induction_argument,
-    ) else {
-        return Err(
-            ProductionMirPlironSemanticContractErrorV1::UnsupportedLoopShape {
-                header: declared.header_block(),
-                latch: declared.latch_block(),
-            },
-        );
-    };
-    let Some(step_value) = loop_step(
-        latch_block.terminator(),
-        declared.header_block(),
-        induction_argument,
-    ) else {
-        return Err(
-            ProductionMirPlironSemanticContractErrorV1::UnsupportedLoopShape {
-                header: declared.header_block(),
-                latch: declared.latch_block(),
-            },
-        );
-    };
-    let Some(transition) = production_loop_transition_identity_v1(
-        ranked,
-        declared.header_block(),
-        declared.latch_block(),
-        declared.exit_block(),
-    ) else {
-        return Err(
-            ProductionMirPlironSemanticContractErrorV1::UnsupportedLoopShape {
-                header: declared.header_block(),
-                latch: declared.latch_block(),
-            },
-        );
-    };
-    let induction = production_ranked_value_identity_v1(condition_induction);
-    let lower_bound = production_ranked_value_identity_v1(lower_bound_value);
-    let upper_bound_identity = production_ranked_value_identity_v1(upper_bound);
-    let step_identity = production_ranked_value_identity_v1(step_value);
+    let induction = production_ranked_value_identity_v1(live.induction_value);
+    let lower_bound = production_ranked_value_identity_v1(live.lower_value);
+    let upper_bound_identity = production_ranked_value_identity_v1(live.upper_value);
+    let step_identity = production_ranked_value_identity_v1(live.step_value);
     let variant = production_loop_variant_identity_v1(
         declared.header_block(),
         declared.latch_block(),
@@ -654,9 +911,39 @@ fn require_live_loop_contract(
         lower_bound,
         upper_bound_identity,
         step_identity,
-        transition,
+        live.transition,
         declared.direction(),
     );
+    let step = index_constant(kernel, live.step_value)
+        .filter(|step| *step != 0)
+        .ok_or(
+            ProductionMirPlironSemanticContractErrorV1::DynamicLoopStepUnproved {
+                header: declared.header_block(),
+                latch: declared.latch_block(),
+            },
+        )?;
+    let expected_extent = finite_loop_extent_v1(
+        ranked,
+        declared.header_block(),
+        declared.latch_block(),
+        declared.exit_block(),
+        live.lower_value,
+        live.upper_value,
+        step,
+        induction,
+        lower_bound,
+        upper_bound_identity,
+        step_identity,
+        live.transition,
+        variant,
+    )
+    .map_err(|detail| {
+        ProductionMirPlironSemanticContractErrorV1::FiniteLoopExtentUnproved {
+            header: declared.header_block(),
+            latch: declared.latch_block(),
+            detail,
+        }
+    })?;
     let Some(domain) = contract
         .domains()
         .iter()
@@ -683,7 +970,7 @@ fn require_live_loop_contract(
                 },
             );
         }
-        if index_constant(kernel, step_value) != Some(1) {
+        if index_constant(kernel, live.step_value) != Some(1) {
             return Err(
                 ProductionMirPlironSemanticContractErrorV1::DynamicLoopStepUnproved {
                     header: declared.header_block(),
@@ -692,22 +979,17 @@ fn require_live_loop_contract(
             );
         }
     }
-    let extent_matches = static_loop_extent_matches(
-        kernel,
-        lower_bound_value,
-        upper_bound,
-        step_value,
-        domain.extents()[0],
-    );
+    let extent_matches = domain.extents().first().copied() == Some(expected_extent.1);
     if domain.extents().len() != 1
         || domain.maximum_cardinality() != Some(declared.maximum_steps())
+        || declared.maximum_steps() != expected_extent.0
         || declared.direction() != SemanticLoopDirectionV1::Increasing
         || !extent_matches
         || declared.induction() != induction
         || declared.lower_bound() != lower_bound
         || declared.upper_bound() != upper_bound_identity
         || declared.step() != step_identity
-        || declared.transition() != transition
+        || declared.transition() != live.transition
         || declared.variant() != variant
     {
         return Err(
@@ -833,39 +1115,6 @@ fn can_reach_without_header(
     false
 }
 
-fn static_loop_extent_matches(
-    kernel: &super::ProductionRankedKernelV1,
-    lower_bound: ProductionRankedValueV1,
-    upper_bound: ProductionRankedValueV1,
-    step: ProductionRankedValueV1,
-    extent: SemanticFiniteExtentV1,
-) -> bool {
-    if let SemanticFiniteExtentV1::Dynamic { .. } = extent {
-        // The production gate checked the full type bound and unit step before
-        // reaching this structural extent comparison.
-        return true;
-    }
-    let SemanticFiniteExtentV1::Static(expected) = extent else {
-        unreachable!()
-    };
-    let (Some(lower), Some(upper), Some(step)) = (
-        index_constant(kernel, lower_bound),
-        index_constant(kernel, upper_bound),
-        index_constant(kernel, step),
-    ) else {
-        return false;
-    };
-    if step == 0 {
-        return false;
-    }
-    let iterations = if upper <= lower {
-        0
-    } else {
-        (upper - lower).div_ceil(step)
-    };
-    iterations == expected
-}
-
 fn index_constant(
     kernel: &super::ProductionRankedKernelV1,
     value: ProductionRankedValueV1,
@@ -890,14 +1139,16 @@ fn put_value_identity(bytes: &mut Vec<u8>, value: ProductionRankedValueV1) {
 }
 
 #[derive(Clone, Copy)]
-struct LiveTypedRootV1 {
-    value: ProductionRankedValueV1,
-    commitment: DigestV1,
-    scalar: SemanticScalarTypeV1,
-    numerical_policy: SemanticNumericalPolicyV1,
+pub(super) struct LiveTypedRootV1 {
+    pub(super) value: ProductionRankedValueV1,
+    pub(super) commitment: DigestV1,
+    pub(super) scalar: SemanticScalarTypeV1,
+    pub(super) numerical_policy: SemanticNumericalPolicyV1,
 }
 
-fn live_typed_roots(ranked: &ProductionRankedKernelLoweringInputV1) -> Vec<LiveTypedRootV1> {
+pub(super) fn live_typed_roots(
+    ranked: &ProductionRankedKernelLoweringInputV1,
+) -> Vec<LiveTypedRootV1> {
     ranked
         .kernel()
         .blocks()
@@ -963,22 +1214,32 @@ fn live_view_shape(
         })
 }
 
-fn shape_matches(extents: &[SemanticFiniteExtentV1], shape: Option<&[u64]>) -> bool {
+fn shape_matches(
+    extents: &[SemanticFiniteExtentV1],
+    shape: Option<&[u64]>,
+    view: ProductionRankedValueV1,
+    evidence: DigestV1,
+) -> bool {
     let Some(shape) = shape else { return false };
     shape.len() == extents.len()
         && shape
             .iter()
             .zip(extents)
-            .all(|(live, declared)| match declared {
+            .enumerate()
+            .all(|(dimension, (live, declared))| match declared {
                 SemanticFiniteExtentV1::Static(extent) => live == extent,
                 SemanticFiniteExtentV1::Dynamic {
+                    symbol,
                     inclusive_upper_bound,
-                    ..
-                } => *live == DYNAMIC_EXTENT && *inclusive_upper_bound == u64::MAX,
+                } => {
+                    *live == DYNAMIC_EXTENT
+                        && *inclusive_upper_bound == u64::MAX
+                        && *symbol == production_dynamic_output_symbol_v1(view, evidence, dimension)
+                }
             })
 }
 
-fn natural_backedges(kernel: &super::ProductionRankedKernelV1) -> Vec<(u32, u32)> {
+pub(super) fn natural_backedges(kernel: &super::ProductionRankedKernelV1) -> Vec<(u32, u32)> {
     let block_count = kernel.blocks().len();
     let successors = kernel
         .blocks()
@@ -1087,7 +1348,9 @@ fn successors(terminator: &ProductionRankedTerminatorV1) -> Vec<u32> {
     }
 }
 
-fn collective_kind(kind: ProductionCollectiveSemanticKindV1) -> SemanticCollectiveKindV1 {
+pub(super) fn collective_kind(
+    kind: ProductionCollectiveSemanticKindV1,
+) -> SemanticCollectiveKindV1 {
     match kind {
         ProductionCollectiveSemanticKindV1::FiniteFold => SemanticCollectiveKindV1::FiniteFold,
         ProductionCollectiveSemanticKindV1::FiniteRecurrence => {
@@ -1099,7 +1362,7 @@ fn collective_kind(kind: ProductionCollectiveSemanticKindV1) -> SemanticCollecti
     }
 }
 
-fn evaluation_order(order: SemanticEvaluationOrderAttr) -> SemanticEvaluationOrderV1 {
+pub(super) fn evaluation_order(order: SemanticEvaluationOrderAttr) -> SemanticEvaluationOrderV1 {
     match order {
         SemanticEvaluationOrderAttr::Ascending => SemanticEvaluationOrderV1::SequentialAscending,
         SemanticEvaluationOrderAttr::Descending => SemanticEvaluationOrderV1::SequentialDescending,
@@ -1108,7 +1371,7 @@ fn evaluation_order(order: SemanticEvaluationOrderAttr) -> SemanticEvaluationOrd
     }
 }
 
-fn coverage(coverage: SemanticCoverageBindingAttr) -> SemanticCoverageBindingV1 {
+pub(super) fn coverage(coverage: SemanticCoverageBindingAttr) -> SemanticCoverageBindingV1 {
     match coverage {
         SemanticCoverageBindingAttr::TotalView => SemanticCoverageBindingV1::TotalView,
         SemanticCoverageBindingAttr::CollectiveContributions => {
@@ -1185,4 +1448,111 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> DigestV1 {
 
 fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1> {
     u64::try_from(value).map_err(|_| ProductionMirPlironSemanticContractErrorV1::CounterOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonical_finite_loop_v1, require_overflow_free_static_latch_v1};
+    use crate::{
+        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
+        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
+        ProductionRankedValueV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    };
+
+    #[test]
+    fn static_loop_latch_requires_an_overflow_free_final_transition() {
+        assert!(require_overflow_free_static_latch_v1(4, 3, 2).is_ok());
+        assert!(require_overflow_free_static_latch_v1(u64::MAX - 2, 1, 2).is_ok());
+        assert_eq!(
+            require_overflow_free_static_latch_v1(u64::MAX - 1, 1, 2),
+            Err("the final increasing-loop latch transition can overflow u64"),
+        );
+        assert_eq!(
+            require_overflow_free_static_latch_v1(1, u64::MAX, 2),
+            Err("the final increasing-loop latch transition can overflow u64"),
+        );
+    }
+
+    #[test]
+    fn compiled_static_loop_with_overflowing_latch_is_rejected_by_canonical_extraction() {
+        let lower = ProductionRankedValueIdV1::new(0);
+        let upper = ProductionRankedValueIdV1::new(1);
+        let step = ProductionRankedValueIdV1::new(2);
+        let local = ProductionRankedValueV1::Local;
+        let kernel = ProductionRankedKernelV1::new(
+            "overflowing_static_latch",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::ExecutionLayout {
+                            grid_identity: 1,
+                            global_extents: [1, 1, 1],
+                            workgroup_extents: [1, 1, 1],
+                            subgroup_size: 1,
+                            full_physical_workgroups: true,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: lower,
+                            value: u64::MAX - 1,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: upper,
+                            value: u64::MAX,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: step,
+                            value: 2,
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::BranchArgs {
+                        arguments: vec![local(lower)],
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThanArgs {
+                        lhs: ProductionRankedValueV1::BlockArgument {
+                            block: 1,
+                            argument: 0,
+                        },
+                        rhs: local(upper),
+                        true_arguments: vec![ProductionRankedValueV1::BlockArgument {
+                            block: 1,
+                            argument: 0,
+                        }],
+                        false_arguments: vec![],
+                        true_block: 2,
+                        false_block: 3,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::BranchArgsAdd {
+                        value: ProductionRankedValueV1::BlockArgument {
+                            block: 2,
+                            argument: 0,
+                        },
+                        step: local(step),
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap();
+        let construction = ProductionConstructionV1::ranked_kernel("module", kernel).unwrap();
+        let ranked = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            canonical_finite_loop_v1(&ranked, 1, 2).err(),
+            Some("the final increasing-loop latch transition can overflow u64"),
+        );
+    }
 }

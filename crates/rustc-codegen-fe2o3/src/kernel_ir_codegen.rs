@@ -40,7 +40,7 @@ use std::{fs, path::Path};
 
 #[cfg(feature = "qualification-oracles-test-only")]
 const NO_QUALIFICATION_FALLBACK_HINT: &str =
-    "production-v1 does not fall back to a qualification-only lowering route";
+    "production compilation does not fall back to a qualification-only lowering route";
 #[cfg(feature = "qualification-oracles-test-only")]
 const WORKGROUP_X: u32 = 256;
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -3465,7 +3465,7 @@ mod tests {
         assert!(text.contains(
             "translated kernel identity \"fill\" does not match collected kernel identity \"saxpy\""
         ));
-        assert!(text.contains("production-v1 does not fall back"));
+        assert!(text.contains("production compilation does not fall back"));
     }
 
     #[test]
@@ -3478,7 +3478,7 @@ mod tests {
             .expect_err("oversized authenticated identity must fail closed");
         let text = error.to_string();
         assert!(text.contains("authenticated kernel export identity exceeds the 256-byte"));
-        assert!(text.contains("production-v1 does not fall back"));
+        assert!(text.contains("production compilation does not fall back"));
     }
 
     #[test]

@@ -357,12 +357,18 @@ assert_step_count() {
 }
 
 assert_codegen_test_driver_once() {
-  assert_step_count rustc-codegen-driver-bootstrap 1 \
-    'codegen tests did not build the shared test driver exactly once'
+  assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 1 \
+    'codegen tests did not seal the qualification driver exactly once'
   assert_equals \
-    "env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE} --features ${CARGO_FE2O3_QUALIFICATION_FEATURE} --bin ${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
-    "$(step_command rustc-codegen-driver-bootstrap)" \
-    'codegen test driver bootstrap is not bounded and qualification-enabled'
+    "cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features ${CARGO_FE2O3_QUALIFICATION_FEATURE} --message-format=json-render-diagnostics" \
+    "$(step_command rustc-codegen-driver-cargo-fe2o3-bootstrap)" \
+    'codegen test driver bootstrap is not sealed and qualification-enabled'
+}
+
+codegen_target_prefix() {
+  printf 'env CARGO_PROFILE_DEV_DEBUG=1 FE2O3_TEST_CARGO_FE2O3_BIN=%s FE2O3_TEST_CARGO_FE2O3_SHA256=%s cargo test --locked -p %s --features %s --test ' \
+    "${CARGO_FE2O3_BINARY}" "${CARGO_FE2O3_SHA256}" \
+    "${RUSTC_CODEGEN_TEST_PACKAGE}" "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"
 }
 
 assert_all_codegen_targets_once() {
@@ -377,6 +383,12 @@ assert_all_codegen_targets_once() {
       expected_total=$((expected_total + 1))
       assert_step_count "rustc-codegen-test-${test_target}" 1 \
         "codegen target ${test_target} did not run exactly once"
+      [[ "$(step_command "rustc-codegen-test-${test_target}")" == \
+        "$(codegen_target_prefix)${test_target}"* ]] || {
+        printf 'codegen target %s did not receive the sealed driver binding\n' \
+          "${test_target}" >&2
+        exit 1
+      }
     done
   done
   for test_target in "${STEP_NAMES[@]}"; do
@@ -440,7 +452,7 @@ assert_equals \
   "$(step_command rustc-codegen-qualification-route-tests)" \
   'generic backend qualification route test command changed'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test g2_layout" \
+  "$(codegen_target_prefix)g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'generic backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
@@ -465,7 +477,7 @@ for backend_command in "${STEP_COMMANDS[@]}"; do
     exit 1
   fi
 done
-codegen_integration_prefix="env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test "
+codegen_integration_prefix="$(codegen_target_prefix)"
 serialized_codegen_targets=0
 for index in "${!STEP_NAMES[@]}"; do
   if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
@@ -474,13 +486,14 @@ for index in "${!STEP_NAMES[@]}"; do
       "${STEP_NAMES[index]}" >&2
     exit 1
   fi
-  if [[ "${STEP_COMMANDS[index]}" == *"-- --test-threads="* ]]; then
+  if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
+    [[ "${STEP_COMMANDS[index]}" == *"-- --test-threads="* ]]; then
     serialized_codegen_targets=$((serialized_codegen_targets + 1))
     assert_equals rustc-codegen-test-collected_executable_scalar_control_flow_v2 \
       "${STEP_NAMES[index]}" \
       'an unrelated codegen target received the serialization policy'
     assert_equals \
-      "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test collected_executable_scalar_control_flow_v2 -- --test-threads=1" \
+      "$(codegen_target_prefix)collected_executable_scalar_control_flow_v2 -- --test-threads=1" \
       "${STEP_COMMANDS[index]}" \
       'the heavy control-flow target did not use the reviewed thread bound'
   fi
@@ -505,7 +518,7 @@ assert_equals \
   "$(step_command rustc-codegen-qualification-route-tests)" \
   'full workspace backend qualification route test command changed'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test g2_layout" \
+  "$(codegen_target_prefix)g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'full workspace backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
@@ -519,7 +532,7 @@ assert_equals \
   "$(step_command rustc-codegen-shard-policy)" \
   'codegen shard did not validate the checked-in assignment'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test collected_executable_scalar_control_flow_v2 -- --test-threads=1" \
+  "$(codegen_target_prefix)collected_executable_scalar_control_flow_v2 -- --test-threads=1" \
   "$(step_command rustc-codegen-test-collected_executable_scalar_control_flow_v2)" \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
@@ -534,7 +547,7 @@ done
 
 STEP_NAMES=()
 STEP_COMMANDS=()
-reset_mock_production_driver
+retire_cargo_fe2o3_driver
 run_generic_core
 for core_step in \
   workspace-dependency-policy-tests \
@@ -563,6 +576,7 @@ for core_step in \
   workspace-binding-projection-revalidation \
   backend-build \
   ci-local-test-gate \
+  cargo-fe2o3-worker-v3-envelope-tests \
   cpu-tests \
   wrapper-managed-cpu-tests \
   cpu-test-partition-revalidation \
@@ -577,6 +591,10 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE} --test worker_v3_load_envelope_vertical -- --test-threads=1" \
+  "$(step_command cargo-fe2o3-worker-v3-envelope-tests)" \
+  'generic core did not gate the strict Worker V3 envelope vertical suite'
 assert_equals \
   "python3 ${WORKSPACE_DEPENDENCY_POLICY_TESTS}" \
   "$(step_command workspace-dependency-policy-tests)" \
@@ -625,12 +643,12 @@ for core_step in "${STEP_NAMES[@]}"; do
     exit 1
   fi
 done
-assert_step_count rustc-codegen-driver-bootstrap 0 \
+assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 0 \
   'generic core unexpectedly built the codegen integration test driver'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
-reset_mock_production_driver
+retire_cargo_fe2o3_driver
 run_generic
 assert_codegen_test_driver_once
 assert_all_codegen_targets_once

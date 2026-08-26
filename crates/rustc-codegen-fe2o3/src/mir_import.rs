@@ -2173,27 +2173,47 @@ fn import_fragment_container<'a>(
             "outer type does not have one variant",
         ));
     };
-    let [values, contract, not_send_sync] = variant.fields.as_slice() else {
+    if variant.fields.len() != usize::from(expected.field_count) {
         return Err(matrix_layout_error(
             role,
-            "outer type does not have the three reviewed fragment fields",
+            "outer type does not have the exact payload and invariant-marker field count",
+        ));
+    }
+    let mut payload = None;
+    for field in &variant.fields {
+        if matches!(field.layout.kind, TypeLayoutKind::Array(_)) {
+            if payload.replace(field).is_some() {
+                return Err(matrix_layout_error(
+                    role,
+                    "outer type has more than one array payload field",
+                ));
+            }
+            continue;
+        }
+        if field.layout.size_bytes != 0
+            || field.layout.uninhabited
+            || field.layout.largest_niche.is_some()
+            || !matches!(
+                field.layout.backend_representation,
+                BackendRepresentationFacts::Memory
+            )
+        {
+            return Err(matrix_layout_error(
+                role,
+                "non-payload fields are not inert zero-sized invariant markers",
+            ));
+        }
+    }
+    let Some(values) = payload else {
+        return Err(matrix_layout_error(
+            role,
+            "outer type has no array payload field",
         ));
     };
-    if values.name.as_deref() != Some("values")
-        || values.source_index != 0
-        || values.memory_index != 0
-    {
-        return Err(matrix_layout_error(role, "payload field identity drifted"));
-    }
     let TypeLayoutKind::Array(array) = &values.layout.kind else {
-        return Err(matrix_layout_error(role, "payload field is not an array"));
-    };
-    if !is_fragment_phantom_field(contract, "_contract", 1, facts.size_bytes)
-        || !is_fragment_phantom_field(not_send_sync, "_not_send_sync", 2, facts.size_bytes)
-    {
         return Err(matrix_layout_error(
             role,
-            "contract or non-Send/Sync marker layout drifted",
+            "selected payload field is not an array",
         ));
     };
     let observed = MatrixFragmentLayoutV1 {

@@ -3,9 +3,10 @@ use fe2o3_pliron_owner_core::{
 };
 
 use crate::{
-    CoveredBoundaryAttr, DIALECT_NAME, EvidenceRefOp, EvidenceRefType, EvidenceStatusAttr,
-    ObligationOp, ObligationRefType, ProofIdAttr, PropertyAttr, RequireEffectRefinementOp,
-    RequireRefinementOp,
+    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, DIALECT_NAME, EvidenceRefOp, EvidenceRefType,
+    EvidenceStatusAttr, ObligationOp, ObligationRefType, ProofIdAttr, PropertyAttr,
+    RelativeErrorF64BitsAttr, RequireEffectRefinementOp, RequireNumericalRefinementOp,
+    RequireRefinementOp, RequireTensorRefinementOp,
 };
 
 fn registration_hook(
@@ -16,12 +17,16 @@ fn registration_hook(
     service.register_attribute::<PropertyAttr>()?;
     service.register_attribute::<EvidenceStatusAttr>()?;
     service.register_attribute::<CoveredBoundaryAttr>()?;
+    service.register_attribute::<AbsoluteErrorF64BitsAttr>()?;
+    service.register_attribute::<RelativeErrorF64BitsAttr>()?;
     service.register_type::<ObligationRefType>()?;
     service.register_type::<EvidenceRefType>()?;
     service.register_operation::<ObligationOp>()?;
     service.register_operation::<EvidenceRefOp>()?;
     service.register_operation::<RequireRefinementOp>()?;
     service.register_operation::<RequireEffectRefinementOp>()?;
+    service.register_operation::<RequireNumericalRefinementOp>()?;
+    service.register_operation::<RequireTensorRefinementOp>()?;
     Ok(())
 }
 

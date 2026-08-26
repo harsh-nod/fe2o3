@@ -1,29 +1,17 @@
-//! Cooperative-process Cargo-to-application handoff for canonical Worker V2 and V3 evidence.
+//! Cooperative-process Cargo-to-application handoff for production Worker V3 evidence.
 //!
 //! This module is an inert foundation, not a same-process security boundary. The application must
 //! consume the inherited handoff before threads, signal handlers, descendants, or unrelated FD
 //! mutation can race it. A malicious application in the same process can bypass these cooperative
 //! assumptions and must instead be isolated from authority by a separate broker.
 
-#[cfg(test)]
-use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_for_test;
-#[cfg(all(not(test), feature = "qualification-oracles-test-only"))]
-use crate::recovered_worker_v2_admission::recover_worker_v2_load_envelope_v1;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use crate::recovered_worker_v2_admission::{
-    RecoveredWorkerV2AdmissionError, RecoveredWorkerV2PinnedDescriptorV1,
-};
 use crate::{
     KernelId, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
     RecoveredWorkerV3PinnedDescriptorV1, admit_recovered_worker_v3_descriptor_v1,
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
-use fe2o3_worker_v2_bundle::{
-    ApplicationHandoffProtocolErrorV1, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1,
+use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
-    WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-    WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1,
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
@@ -34,13 +22,6 @@ use fe2o3_worker_v2_bundle::{
     WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
     WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeIdentityV1,
     WorkerV3LoadEnvelopeWireV1, recover_worker_v3_load_envelope_v1,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-use fe2o3_worker_v2_bundle::{
-    CompilerTransactionEvidenceCapsuleV2, MAX_WORKER_V2_LOAD_ENVELOPE_BYTES,
-    WorkerV2ApplicationHandoffChallengeV1, WorkerV2ApplicationHandoffCommitmentV1,
-    WorkerV2ApplicationHandoffExpectationV1, WorkerV2ApplicationIdentityV1, WorkerV2LoadEnvelopeV1,
-    worker_v2_load_envelope_name_v1,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
 use std::error::Error;
@@ -55,6 +36,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const MAX_APPLICATION_EXECUTABLE_BYTES_V1: u64 = 1 << 30;
+const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
+const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v2-load-envelope-v1-";
+const WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1: &str = "FE2O3_APPLICATION_ENVELOPE_FD_V1";
+const WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1: &str = "FE2O3_APPLICATION_ARTIFACT_DIR_FD_V1";
+const WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1: &str =
+    "FE2O3_APPLICATION_ENVELOPE_COMMITMENT_V1";
+const WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1: &str = "FE2O3_APPLICATION_HANDOFF_ACK_FD_V1";
+const WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1: &str =
+    "FE2O3_APPLICATION_HANDOFF_CHALLENGE_V1";
 const ACK_DEADLINE_V1: Duration = Duration::from_secs(5);
 const WORKER_V3_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v3-load-readiness-v1-";
 const WORKER_V3_ENVELOPE_SUFFIX_V1: &str = ".envelope";
@@ -128,60 +118,11 @@ impl EnvelopeSnapshotV1 {
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-struct InspectedEnvelopeV1 {
-    snapshot: EnvelopeSnapshotV1,
-    exact_bytes: Box<[u8]>,
-    decoded: WorkerV2LoadEnvelopeV1,
-    canonical_name: String,
-}
-
 struct InspectedWorkerV3EnvelopeV1 {
     snapshot: EnvelopeSnapshotV1,
     exact_bytes: Box<[u8]>,
     decoded: WorkerV3LoadEnvelopeWireV1,
     canonical_name: String,
-}
-
-/// Exact inherited descriptors retained through recovered load and synchronous dispatch.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct RetainedWorkerV2ApplicationDescriptorsV1 {
-    directory: File,
-    envelope: File,
-    directory_snapshot: DirectorySnapshotV1,
-    envelope_snapshot: EnvelopeSnapshotV1,
-    envelope_name: String,
-    exact_envelope_bytes: Box<[u8]>,
-    expectation: WorkerV2ApplicationHandoffExpectationV1,
-    challenge: WorkerV2ApplicationHandoffChallengeV1,
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl fmt::Debug for RetainedWorkerV2ApplicationDescriptorsV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RetainedWorkerV2ApplicationDescriptorsV1")
-            .field("directory", &self.directory_snapshot)
-            .field("envelope", &self.envelope_snapshot)
-            .field("envelope_name", &self.envelope_name)
-            .field("commitment", &self.expectation.commitment())
-            .field("challenge", &self.challenge)
-            .finish_non_exhaustive()
-    }
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-impl RetainedWorkerV2ApplicationDescriptorsV1 {
-    pub(crate) fn revalidate(&self) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
-        validate_directory(&self.directory, self.directory_snapshot)?;
-        validate_envelope(
-            &self.directory,
-            &self.envelope,
-            self.envelope_snapshot,
-            &self.exact_envelope_bytes,
-            &self.envelope_name,
-        )
-    }
 }
 
 /// Exact inherited V3 inputs retained through native executable unload.
@@ -223,114 +164,6 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
         .map_err(worker_v3_descriptor_error)?;
         reject_worker_v2_envelope_coexistence(&self.directory).map_err(worker_v3_descriptor_error)
     }
-}
-
-/// Consumes the inherited descriptor environment installed by the Cargo application runner.
-///
-/// The five environment values are removed before parsing, including on rejection. This one-shot
-/// startup function must be called before the application creates threads or descendants. The
-/// inherited descriptor numbers are claimed as owned descriptors immediately; no caller-selected
-/// filesystem path participates in recovery. The envelope and artifact-directory descriptors
-/// remain retained by the returned linear authority through load, generated preparation,
-/// synchronous HSA dispatch, and unload. The emitted ACK is reproducible liveness data and grants
-/// no recovery, load, or launch authority. The output remains non-production evidence until real
-/// compiler and prerequisite issuers replace the explicitly unsafe caller-supplied boundary.
-///
-/// # Safety
-///
-/// The caller must invoke this startup operation before creating any threads, installing signal
-/// handlers that can access the environment or descriptor table, spawning descendants, or
-/// allowing any unrelated close, duplicate, flag change, or mutation of handoff FDs. Rust cannot
-/// synchronize environment or descriptor-table mutation with foreign code, signal handlers, or
-/// independently managed threads. A hostile same-process caller violates this contract.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub unsafe fn consume_inherited_worker_v2_application_handoff_v1(
-    compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
-    kernel_id: KernelId,
-    observed: &ObservedContext,
-) -> Result<RecoveredWorkerV2PinnedDescriptorV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let environment = take_inherited_environment();
-    if INHERITED_HANDOFF_CLAIMED_V1
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        close_environment_handoff_descriptors(&environment);
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AlreadyConsumed);
-    }
-    if environment.v3.iter().any(Option::is_some) {
-        close_environment_handoff_descriptors(&environment);
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::MixedSchema);
-    }
-    let environment = environment.v2;
-
-    let envelope_raw = environment_fd(
-        WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
-        environment[0].as_deref(),
-    );
-    let directory_raw = environment_fd(
-        WORKER_V2_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
-        environment[1].as_deref(),
-    );
-    let ack_raw = environment_fd(
-        WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
-        environment[3].as_deref(),
-    );
-    let (envelope_raw, directory_raw, ack_raw) = match (envelope_raw, directory_raw, ack_raw) {
-        (Ok(envelope), Ok(directory), Ok(acknowledgment)) => (envelope, directory, acknowledgment),
-        (envelope, directory, acknowledgment) => {
-            close_available_handoff_descriptors([
-                envelope.as_ref().ok().copied(),
-                directory.as_ref().ok().copied(),
-                acknowledgment.as_ref().ok().copied(),
-            ]);
-            return Err(envelope
-                .err()
-                .or_else(|| directory.err())
-                .or_else(|| acknowledgment.err())
-                .expect("the non-success branch contains an error"));
-        }
-    };
-    if envelope_raw == directory_raw || envelope_raw == ack_raw || directory_raw == ack_raw {
-        close_aliased_handoff_descriptors(envelope_raw, directory_raw, ack_raw);
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AliasedDescriptors);
-    }
-    let envelope = claim_inherited_descriptor(envelope_raw, "envelope");
-    let directory = claim_inherited_descriptor(directory_raw, "artifact directory");
-    let acknowledgment = claim_inherited_descriptor(ack_raw, "acknowledgment");
-    let envelope = envelope?;
-    let directory = directory?;
-    let acknowledgment = acknowledgment?;
-    let descriptor_identities =
-        snapshot_handoff_descriptor_identities(&directory, &envelope, &acknowledgment)?;
-    seal_descriptor_occurrences(&descriptor_identities)?;
-
-    let commitment = environment_text(
-        WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
-        environment[2].as_deref(),
-    )
-    .and_then(|value| {
-        WorkerV2ApplicationHandoffCommitmentV1::from_hex(&value)
-            .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Protocol)
-    })?;
-    let challenge = environment_text(
-        WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
-        environment[4].as_deref(),
-    )
-    .and_then(|value| {
-        WorkerV2ApplicationHandoffChallengeV1::from_hex(&value)
-            .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Protocol)
-    })?;
-
-    consume_worker_v2_application_handoff_descriptors_v1(
-        envelope,
-        directory,
-        acknowledgment,
-        commitment,
-        challenge,
-        compiler_transaction,
-        kernel_id,
-        observed,
-    )
 }
 
 /// Consumes Cargo's strict Worker V3 descriptor handoff and recovers its exact publication.
@@ -452,92 +285,6 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
     )
 }
 
-/// Consumes exact inherited descriptors without accepting an artifact path or envelope bytes.
-///
-/// This is the descriptor-level counterpart to
-/// [`consume_inherited_worker_v2_application_handoff_v1`]. The function takes ownership of caller
-/// supplied descriptor duplicates, validates the shared Cargo commitment against the current
-/// application image, reacquires the durable publication lease through the pinned directory
-/// descriptor, emits one canonical bounded liveness ACK, and retains the read descriptors. The
-/// ACK contains no secret and grants no recovery, load, or launch authority; only the returned
-/// non-forgeable descriptor carries the revalidated lease into later host transitions.
-#[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn consume_worker_v2_application_handoff_descriptors_v1(
-    envelope: OwnedFd,
-    artifact_directory: OwnedFd,
-    acknowledgment: OwnedFd,
-    commitment: WorkerV2ApplicationHandoffCommitmentV1,
-    challenge: WorkerV2ApplicationHandoffChallengeV1,
-    compiler_transaction: CompilerTransactionEvidenceCapsuleV2,
-    kernel_id: KernelId,
-    observed: &ObservedContext,
-) -> Result<RecoveredWorkerV2PinnedDescriptorV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let envelope_cloexec = set_close_on_exec(&envelope, "envelope");
-    let directory_cloexec = set_close_on_exec(&artifact_directory, "artifact directory");
-    let acknowledgment_cloexec = set_close_on_exec(&acknowledgment, "acknowledgment");
-    envelope_cloexec?;
-    directory_cloexec?;
-    acknowledgment_cloexec?;
-    let directory = File::from(artifact_directory);
-    let envelope = File::from(envelope);
-    let acknowledgment = File::from(acknowledgment);
-    let descriptor_identities =
-        snapshot_handoff_descriptor_identities(&directory, &envelope, &acknowledgment)?;
-    seal_descriptor_occurrences(&descriptor_identities)?;
-    let directory_snapshot = inspect_directory(&directory)?;
-    let InspectedEnvelopeV1 {
-        snapshot: envelope_snapshot,
-        exact_bytes: exact_envelope_bytes,
-        decoded,
-        canonical_name: envelope_name,
-    } = inspect_envelope(&directory, &envelope)?;
-    let application = current_application_identity()?;
-    let expectation = WorkerV2ApplicationHandoffExpectationV1::new(&decoded, application);
-    validate_application_commitment(expectation.commitment(), commitment)?;
-
-    let retained = RetainedWorkerV2ApplicationDescriptorsV1 {
-        directory,
-        envelope,
-        directory_snapshot,
-        envelope_snapshot,
-        envelope_name,
-        exact_envelope_bytes,
-        expectation,
-        challenge,
-    };
-    retained.revalidate()?;
-    let output = descriptor_directory_path(&retained.directory);
-    #[cfg(test)]
-    let recovered = recover_worker_v2_load_envelope_for_test(
-        &output,
-        &retained.exact_envelope_bytes,
-        compiler_transaction,
-        kernel_id,
-        observed,
-    )
-    .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Recovery)?;
-    #[cfg(not(test))]
-    let recovered = recover_worker_v2_load_envelope_v1(
-        &output,
-        &retained.exact_envelope_bytes,
-        compiler_transaction,
-        kernel_id,
-        observed,
-    )
-    .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Recovery)?;
-    seal_descriptor_occurrences(&descriptor_identities)?;
-    retained.revalidate()?;
-    #[cfg(test)]
-    let recovered_currentness = recovered.revalidate_currentness_for_test();
-    #[cfg(not(test))]
-    let recovered_currentness = recovered.revalidate_currentness();
-    recovered_currentness
-        .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::RecoveryCurrentness)?;
-    emit_acknowledgment(&acknowledgment, expectation.acknowledgment(challenge))?;
-    Ok(recovered.retain_application_descriptors(retained))
-}
-
 /// Descriptor-level strict V3 application recovery used by the public startup boundary.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
@@ -627,18 +374,6 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     Ok(recovered.retain_application_descriptors(retained))
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn validate_application_commitment(
-    expected: WorkerV2ApplicationHandoffCommitmentV1,
-    supplied: WorkerV2ApplicationHandoffCommitmentV1,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    if expected == supplied {
-        Ok(())
-    } else {
-        Err(WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch)
-    }
-}
-
 fn worker_v2_handoff_environment_names() -> [&'static str; 5] {
     [
         WORKER_V2_APPLICATION_ENVELOPE_FD_ENV_V1,
@@ -708,40 +443,6 @@ fn close_environment_handoff_descriptors(environment: &InheritedHandoffEnvironme
     ]);
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn environment_text(
-    name: &'static str,
-    value: Option<&OsStr>,
-) -> Result<String, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let value = value
-        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::MissingEnvironment(name))?
-        .to_os_string();
-    let value = value
-        .into_string()
-        .map_err(|_| WorkerV2ApplicationDescriptorHandoffErrorV1::InvalidEnvironment(name))?;
-    Ok(value)
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn environment_fd(
-    name: &'static str,
-    value: Option<&OsStr>,
-) -> Result<RawFd, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let value = environment_text(name, value)?;
-    let canonical = value == "0"
-        || value
-            .as_bytes()
-            .first()
-            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
-            && value.as_bytes().iter().all(u8::is_ascii_digit);
-    let descriptor = canonical
-        .then(|| value.parse::<RawFd>().ok())
-        .flatten()
-        .filter(|descriptor| *descriptor > libc::STDERR_FILENO)
-        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::InvalidEnvironment(name))?;
-    Ok(descriptor)
-}
-
 fn worker_v3_environment_text(
     name: &'static str,
     value: Option<&OsStr>,
@@ -806,7 +507,7 @@ fn worker_v3_environment_wire(
 fn claim_inherited_descriptor(
     descriptor: RawFd,
     kind: &'static str,
-) -> Result<OwnedFd, WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<OwnedFd, ApplicationDescriptorHandoffErrorV1> {
     // Raw `fcntl` rejects stale integers without manufacturing a `BorrowedFd` first.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
     if flags < 0 {
@@ -817,7 +518,7 @@ fn claim_inherited_descriptor(
     let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
     set_close_on_exec(&descriptor, kind)?;
     if flags & libc::FD_CLOEXEC != 0 {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DescriptorFlags(kind));
+        return Err(ApplicationDescriptorHandoffErrorV1::DescriptorFlags(kind));
     }
     Ok(descriptor)
 }
@@ -841,7 +542,7 @@ fn close_available_handoff_descriptors<const N: usize>(descriptors: [Option<RawF
 fn set_close_on_exec(
     descriptor: &OwnedFd,
     kind: &'static str,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
     if flags < 0 {
         return Err(descriptor_io(kind, io::Error::last_os_error()));
@@ -863,7 +564,7 @@ fn snapshot_handoff_descriptor_identities<D: AsFd, E: AsFd, A: AsFd>(
     directory: &D,
     envelope: &E,
     acknowledgment: &A,
-) -> Result<[DescriptorIdentityV1; 3], WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<[DescriptorIdentityV1; 3], ApplicationDescriptorHandoffErrorV1> {
     let directory = fstat(directory)
         .map(|stat| DescriptorIdentityV1::from_stat(&stat))
         .map_err(|error| descriptor_io("artifact directory identity", error));
@@ -933,19 +634,19 @@ fn validate_worker_v3_application_commitment(
 }
 
 fn worker_v3_descriptor_error(
-    error: WorkerV2ApplicationDescriptorHandoffErrorV1,
+    error: ApplicationDescriptorHandoffErrorV1,
 ) -> WorkerV3ApplicationDescriptorHandoffErrorV1 {
     match error {
-        WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeEnvelope => {
+        ApplicationDescriptorHandoffErrorV1::UnsafeEnvelope => {
             WorkerV3ApplicationDescriptorHandoffErrorV1::UnsafeEnvelope
         }
-        WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked => {
+        ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked => {
             WorkerV3ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked
         }
-        WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged => {
+        ApplicationDescriptorHandoffErrorV1::EnvelopeChanged => {
             WorkerV3ApplicationDescriptorHandoffErrorV1::EnvelopeChanged
         }
-        WorkerV2ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema => {
+        ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema => {
             WorkerV3ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema
         }
         error => WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor(error),
@@ -974,7 +675,7 @@ fn validate_worker_v3_recovered_occurrence(
 
 fn seal_descriptor_occurrences(
     expected: &[DescriptorIdentityV1],
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     for entry in std::fs::read_dir("/proc/self/fd")
         .map_err(|error| descriptor_io("process descriptor table", error))?
     {
@@ -1017,7 +718,7 @@ fn seal_descriptor_occurrences(
 
 fn inspect_directory(
     directory: &File,
-) -> Result<DirectorySnapshotV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<DirectorySnapshotV1, ApplicationDescriptorHandoffErrorV1> {
     let flags =
         fcntl_getfl(directory).map_err(|error| descriptor_io("artifact directory", error))?;
     let stat = fstat(directory).map_err(|error| descriptor_io("artifact directory", error))?;
@@ -1026,7 +727,7 @@ fn inspect_directory(
         || stat.st_uid != unsafe { libc::geteuid() }
         || stat.st_mode & 0o077 != 0
     {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeDirectory);
+        return Err(ApplicationDescriptorHandoffErrorV1::UnsafeDirectory);
     }
     Ok(DirectorySnapshotV1::from_stat(&stat))
 }
@@ -1034,54 +735,11 @@ fn inspect_directory(
 fn validate_directory(
     directory: &File,
     expected: DirectorySnapshotV1,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     if inspect_directory(directory)? != expected {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryChanged);
+        return Err(ApplicationDescriptorHandoffErrorV1::DirectoryChanged);
     }
     Ok(())
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn inspect_envelope(
-    directory: &File,
-    envelope: &File,
-) -> Result<InspectedEnvelopeV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let flags = fcntl_getfl(envelope).map_err(|error| descriptor_io("envelope", error))?;
-    let initial = fstat(envelope).map_err(|error| descriptor_io("envelope", error))?;
-    let snapshot = EnvelopeSnapshotV1::from_stat(&initial);
-    if flags & OFlags::ACCMODE != OFlags::RDONLY
-        || FileType::from_raw_mode(initial.st_mode) != FileType::RegularFile
-        || initial.st_uid != unsafe { libc::geteuid() }
-        || initial.st_nlink != 1
-        || initial.st_mode & 0o077 != 0
-    {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeEnvelope);
-    }
-    let size = usize::try_from(initial.st_size)
-        .ok()
-        .filter(|size| (1..=MAX_WORKER_V2_LOAD_ENVELOPE_BYTES).contains(size))
-        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeSize {
-            actual: initial.st_size,
-        })?;
-    let bytes = read_exact_at(envelope, size)?;
-    let final_stat = fstat(envelope).map_err(|error| descriptor_io("envelope", error))?;
-    if EnvelopeSnapshotV1::from_stat(&final_stat) != snapshot {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
-    }
-    let decoded = WorkerV2LoadEnvelopeV1::from_bytes(&bytes)
-        .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::Decode)?;
-    if decoded.to_bytes() != bytes {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::NonCanonicalEnvelope);
-    }
-    let envelope_name =
-        worker_v2_load_envelope_name_v1(decoded.published_claim().receipt().publication_identity());
-    require_canonical_envelope_link(directory, snapshot, &envelope_name)?;
-    Ok(InspectedEnvelopeV1 {
-        snapshot,
-        exact_bytes: bytes.into_boxed_slice(),
-        decoded,
-        canonical_name: envelope_name,
-    })
 }
 
 fn inspect_worker_v3_envelope(
@@ -1150,14 +808,14 @@ fn validate_envelope(
     expected: EnvelopeSnapshotV1,
     expected_bytes: &[u8],
     expected_name: &str,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     let stat = fstat(envelope).map_err(|error| descriptor_io("envelope", error))?;
     if EnvelopeSnapshotV1::from_stat(&stat) != expected {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
+        return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
     }
     require_canonical_envelope_link(directory, expected, expected_name)?;
     if read_exact_at(envelope, expected_bytes.len())? != expected_bytes {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
+        return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
     }
     Ok(())
 }
@@ -1166,7 +824,7 @@ fn require_canonical_envelope_link(
     directory: &File,
     expected: EnvelopeSnapshotV1,
     expected_name: &str,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     let mut entries = 0_usize;
     let mut links = 0_usize;
     let mut canonical_entries = 0_usize;
@@ -1193,7 +851,7 @@ fn require_canonical_envelope_link(
         }
     }
     if links != 1 || canonical_entries != 1 || canonical_links != 1 {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
+        return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
     }
     Ok(())
 }
@@ -1201,7 +859,7 @@ fn require_canonical_envelope_link(
 fn require_worker_v3_envelope_link(
     directory: &File,
     expected: EnvelopeSnapshotV1,
-) -> Result<String, WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<String, ApplicationDescriptorHandoffErrorV1> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
 
@@ -1215,8 +873,8 @@ fn require_worker_v3_envelope_link(
         let entry = entry.map_err(|error| descriptor_io("artifact directory entry", error))?;
         let name = entry.file_name();
         let name_bytes = name.as_bytes();
-        if name_bytes.starts_with(WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes()) {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema);
+        if name_bytes.starts_with(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.as_bytes()) {
+            return Err(ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema);
         }
         let metadata = entry
             .path()
@@ -1231,7 +889,7 @@ fn require_worker_v3_envelope_link(
             && metadata.nlink() == 1
         {
             if canonical_link.is_some() {
-                return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
+                return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
             }
             canonical_link = Some(
                 name.into_string()
@@ -1240,9 +898,9 @@ fn require_worker_v3_envelope_link(
         }
     }
     if links != 1 {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
+        return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked);
     }
-    canonical_link.ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked)
+    canonical_link.ok_or(ApplicationDescriptorHandoffErrorV1::EnvelopeNotLinked)
 }
 
 fn is_canonical_worker_v3_envelope_name(name: &[u8]) -> bool {
@@ -1256,7 +914,7 @@ fn is_canonical_worker_v3_envelope_name(name: &[u8]) -> bool {
 
 fn reject_worker_v2_envelope_coexistence(
     directory: &File,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     use std::os::unix::ffi::OsStrExt;
 
     let mut entries = 0_usize;
@@ -1268,9 +926,9 @@ fn reject_worker_v2_envelope_coexistence(
         if entry
             .file_name()
             .as_bytes()
-            .starts_with(WORKER_V2_LOAD_ENVELOPE_NAME_PREFIX_V1.as_bytes())
+            .starts_with(RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.as_bytes())
         {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema);
+            return Err(ApplicationDescriptorHandoffErrorV1::MixedEnvelopeSchema);
         }
     }
     Ok(())
@@ -1278,18 +936,15 @@ fn reject_worker_v2_envelope_coexistence(
 
 fn count_handoff_artifact_entry(
     entries: &mut usize,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     *entries = entries
         .checked_add(1)
-        .filter(|entries| *entries <= MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1)
-        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)?;
+        .filter(|entries| *entries <= MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1)
+        .ok_or(ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)?;
     Ok(())
 }
 
-fn read_exact_at(
-    file: &File,
-    size: usize,
-) -> Result<Vec<u8>, WorkerV2ApplicationDescriptorHandoffErrorV1> {
+fn read_exact_at(file: &File, size: usize) -> Result<Vec<u8>, ApplicationDescriptorHandoffErrorV1> {
     let mut bytes = vec![0_u8; size];
     let mut offset = 0_usize;
     while offset < bytes.len() {
@@ -1297,7 +952,7 @@ fn read_exact_at(
             .read_at(&mut bytes[offset..], offset as u64)
             .map_err(|error| descriptor_io("envelope", error))?;
         if read == 0 {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
+            return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
         }
         offset += read;
     }
@@ -1307,27 +962,9 @@ fn read_exact_at(
         .map_err(|error| descriptor_io("envelope", error))?
         != 0
     {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
+        return Err(ApplicationDescriptorHandoffErrorV1::EnvelopeChanged);
     }
     Ok(bytes)
-}
-
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn current_application_identity()
--> Result<WorkerV2ApplicationIdentityV1, WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    let exact = current_application_exact_bytes()?;
-    match WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&exact) {
-        Ok(identity) => Ok(identity),
-        #[cfg(test)]
-        Err(_) => {
-            WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&sealed_static_test_elf_v1())
-                .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::InvalidStaticApplication)
-        }
-        #[cfg(not(test))]
-        Err(error) => {
-            Err(WorkerV2ApplicationDescriptorHandoffErrorV1::InvalidStaticApplication(error))
-        }
-    }
 }
 
 fn current_application_identity_v3()
@@ -1346,12 +983,11 @@ fn current_application_identity_v3()
     }
 }
 
-fn current_application_exact_bytes() -> Result<Vec<u8>, WorkerV2ApplicationDescriptorHandoffErrorV1>
-{
+fn current_application_exact_bytes() -> Result<Vec<u8>, ApplicationDescriptorHandoffErrorV1> {
     let mut executable = File::open("/proc/self/exe")
-        .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutable)?;
+        .map_err(ApplicationDescriptorHandoffErrorV1::ApplicationExecutable)?;
     let initial = fstat(&executable).map_err(|error| {
-        WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutable(error.into())
+        ApplicationDescriptorHandoffErrorV1::ApplicationExecutable(error.into())
     })?;
     if FileType::from_raw_mode(initial.st_mode) != FileType::RegularFile
         || initial.st_size <= 0
@@ -1359,7 +995,7 @@ fn current_application_exact_bytes() -> Result<Vec<u8>, WorkerV2ApplicationDescr
             .ok()
             .is_none_or(|size| size == 0 || size > MAX_APPLICATION_EXECUTABLE_BYTES_V1)
     {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeApplicationExecutable);
+        return Err(ApplicationDescriptorHandoffErrorV1::UnsafeApplicationExecutable);
     }
     let expected = EnvelopeSnapshotV1::from_stat(&initial);
     let size = u64::try_from(initial.st_size).expect("validated application size");
@@ -1367,28 +1003,28 @@ fn current_application_exact_bytes() -> Result<Vec<u8>, WorkerV2ApplicationDescr
     let mut exact = Vec::new();
     exact
         .try_reserve_exact(usize::try_from(size).expect("bounded application size"))
-        .map_err(|_| WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeApplicationExecutable)?;
+        .map_err(|_| ApplicationDescriptorHandoffErrorV1::UnsafeApplicationExecutable)?;
     let mut buffer = [0_u8; 64 * 1024];
     while remaining != 0 {
         let limit = usize::try_from(remaining.min(buffer.len() as u64)).expect("bounded buffer");
         let read = executable
             .read(&mut buffer[..limit])
-            .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutable)?;
+            .map_err(ApplicationDescriptorHandoffErrorV1::ApplicationExecutable)?;
         if read == 0 {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutableChanged);
+            return Err(ApplicationDescriptorHandoffErrorV1::ApplicationExecutableChanged);
         }
         exact.extend_from_slice(&buffer[..read]);
         remaining -= read as u64;
     }
     if executable
         .read(&mut buffer[..1])
-        .map_err(WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutable)?
+        .map_err(ApplicationDescriptorHandoffErrorV1::ApplicationExecutable)?
         != 0
         || EnvelopeSnapshotV1::from_stat(&fstat(&executable).map_err(|error| {
-            WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutable(error.into())
+            ApplicationDescriptorHandoffErrorV1::ApplicationExecutable(error.into())
         })?) != expected
     {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::ApplicationExecutableChanged);
+        return Err(ApplicationDescriptorHandoffErrorV1::ApplicationExecutableChanged);
     }
     Ok(exact)
 }
@@ -1452,52 +1088,45 @@ mod static_identity_tests {
     #[test]
     fn host_test_identity_uses_the_shared_static_application_domain() {
         let identity =
-            WorkerV2ApplicationIdentityV1::from_sealed_static_elf_v1(&sealed_static_test_elf_v1())
+            WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(&sealed_static_test_elf_v1())
                 .unwrap();
         assert_eq!(
-            identity.as_bytes(),
+            identity.sha256(),
             [
-                0x1c, 0x1f, 0x80, 0x10, 0x16, 0xa0, 0xe0, 0x7e, 0xbc, 0x20, 0xae, 0x1e, 0xc6, 0xc7,
-                0x0f, 0xf4, 0x0f, 0x91, 0x1a, 0x4e, 0xab, 0xab, 0x88, 0xe6, 0xbd, 0x21, 0x0b, 0xc4,
-                0x7e, 0x68, 0xfa, 0x93,
+                0xf5, 0xae, 0x74, 0xbd, 0xd1, 0x06, 0x49, 0x3c, 0x90, 0x14, 0x56, 0x97, 0x2a, 0x8d,
+                0x15, 0x9d, 0x42, 0x7d, 0x11, 0xf9, 0xe8, 0x20, 0xa2, 0x62, 0xce, 0x3a, 0x1a, 0x0d,
+                0xe5, 0xed, 0x15, 0xec,
             ]
         );
+        assert_eq!(identity.byte_len(), 4_097);
     }
 
     #[test]
     fn child_handoff_scan_accepts_exact_entry_bound_and_rejects_limit_plus_one() {
         let mut entries = 0_usize;
-        for _ in 0..MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1 {
+        for _ in 0..MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1 {
             count_handoff_artifact_entry(&mut entries).unwrap();
         }
-        assert_eq!(entries, MAX_WORKER_V2_ARTIFACT_DIRECTORY_ENTRIES_V1);
+        assert_eq!(entries, MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1);
         assert!(matches!(
             count_handoff_artifact_entry(&mut entries),
-            Err(WorkerV2ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)
+            Err(ApplicationDescriptorHandoffErrorV1::DirectoryTooLarge)
         ));
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-fn emit_acknowledgment(
-    acknowledgment: &File,
-    ack: fe2o3_worker_v2_bundle::WorkerV2ApplicationHandoffAckV1,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
-    emit_acknowledgment_bytes(acknowledgment, &ack.encode_canonical())
-}
-
 fn inspect_acknowledgment(
     acknowledgment: &File,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     let stat = fstat(acknowledgment).map_err(|error| descriptor_io("acknowledgment", error))?;
     let kind = stat.st_mode & libc::S_IFMT;
     if kind != libc::S_IFIFO && kind != libc::S_IFSOCK {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeAcknowledgment);
+        return Err(ApplicationDescriptorHandoffErrorV1::UnsafeAcknowledgment);
     }
     let flags =
         fcntl_getfl(acknowledgment).map_err(|error| descriptor_io("acknowledgment", error))?;
     if flags & OFlags::ACCMODE != OFlags::WRONLY {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::UnsafeAcknowledgment);
+        return Err(ApplicationDescriptorHandoffErrorV1::UnsafeAcknowledgment);
     }
     Ok(())
 }
@@ -1505,7 +1134,7 @@ fn inspect_acknowledgment(
 fn emit_acknowledgment_bytes(
     acknowledgment: &File,
     bytes: &[u8],
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     inspect_acknowledgment(acknowledgment)?;
     let flags =
         fcntl_getfl(acknowledgment).map_err(|error| descriptor_io("acknowledgment", error))?;
@@ -1523,7 +1152,7 @@ fn emit_acknowledgment_bytes(
         return Err(descriptor_io("acknowledgment", io::Error::last_os_error()));
     }
     if usize::try_from(written).ok() != Some(bytes.len()) {
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::PartialAcknowledgment);
+        return Err(ApplicationDescriptorHandoffErrorV1::PartialAcknowledgment);
     }
     Ok(())
 }
@@ -1531,14 +1160,14 @@ fn emit_acknowledgment_bytes(
 fn wait_writable(
     descriptor: RawFd,
     timeout: Duration,
-) -> Result<(), WorkerV2ApplicationDescriptorHandoffErrorV1> {
+) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
     let deadline = Instant::now()
         .checked_add(timeout)
-        .ok_or(WorkerV2ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout)?;
+        .ok_or(ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout)?;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout);
+            return Err(ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout);
         }
         let millis = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
         let mut poll = libc::pollfd {
@@ -1548,7 +1177,7 @@ fn wait_writable(
         };
         let result = unsafe { libc::poll(&mut poll, 1, millis) };
         if result == 0 {
-            return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout);
+            return Err(ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout);
         }
         if result < 0 {
             let error = io::Error::last_os_error();
@@ -1560,7 +1189,7 @@ fn wait_writable(
         if poll.revents & libc::POLLOUT != 0 {
             return Ok(());
         }
-        return Err(WorkerV2ApplicationDescriptorHandoffErrorV1::AcknowledgmentClosed);
+        return Err(ApplicationDescriptorHandoffErrorV1::AcknowledgmentClosed);
     }
 }
 
@@ -1571,17 +1200,17 @@ fn descriptor_directory_path(directory: &File) -> PathBuf {
 fn descriptor_io(
     kind: &'static str,
     error: impl Into<io::Error>,
-) -> WorkerV2ApplicationDescriptorHandoffErrorV1 {
-    WorkerV2ApplicationDescriptorHandoffErrorV1::DescriptorIo {
+) -> ApplicationDescriptorHandoffErrorV1 {
+    ApplicationDescriptorHandoffErrorV1::DescriptorIo {
         kind,
         error: error.into(),
     }
 }
 
-/// Failure while consuming Cargo's bounded Worker V2 application descriptor handoff.
+/// Shared descriptor, executable, and acknowledgment failure at application handoff.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum WorkerV2ApplicationDescriptorHandoffErrorV1 {
+pub enum ApplicationDescriptorHandoffErrorV1 {
     AlreadyConsumed,
     MixedSchema,
     MissingEnvironment(&'static str),
@@ -1602,25 +1231,18 @@ pub enum WorkerV2ApplicationDescriptorHandoffErrorV1 {
     EnvelopeNotLinked,
     MixedEnvelopeSchema,
     EnvelopeChanged,
-    Decode(fe2o3_worker_v2_bundle::EnvelopeDecodeError),
     NonCanonicalEnvelope,
-    Protocol(ApplicationHandoffProtocolErrorV1),
     UnsafeApplicationExecutable,
     ApplicationExecutable(io::Error),
     ApplicationExecutableChanged,
-    InvalidStaticApplication(fe2o3_worker_v2_bundle::SealedStaticApplicationErrorV1),
-    CommitmentMismatch,
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    Recovery(RecoveredWorkerV2AdmissionError),
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    RecoveryCurrentness(crate::FinalizedWorkerV2BundleAdmissionError),
+    InvalidStaticApplication(fe2o3_runtime_protocol::SealedStaticApplicationErrorV1),
     UnsafeAcknowledgment,
     AcknowledgmentTimeout,
     AcknowledgmentClosed,
     PartialAcknowledgment,
 }
 
-impl fmt::Display for WorkerV2ApplicationDescriptorHandoffErrorV1 {
+impl fmt::Display for ApplicationDescriptorHandoffErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyConsumed => {
@@ -1650,30 +1272,20 @@ impl fmt::Display for WorkerV2ApplicationDescriptorHandoffErrorV1 {
             Self::DirectoryTooLarge => {
                 formatter.write_str("inherited artifact directory exceeds its scan bound")
             }
-            Self::UnsafeEnvelope => {
-                formatter.write_str("inherited Worker V2 envelope descriptor is unsafe")
+            Self::UnsafeEnvelope => formatter.write_str("inherited envelope descriptor is unsafe"),
+            Self::EnvelopeSize { actual } => {
+                write!(formatter, "inherited envelope size {actual} is invalid")
             }
-            Self::EnvelopeSize { actual } => write!(
-                formatter,
-                "inherited Worker V2 envelope size {actual} is invalid"
-            ),
             Self::EnvelopeNotLinked => formatter.write_str(
-                "inherited Worker V2 envelope is not linked exactly once in the artifact directory",
+                "inherited envelope is not linked exactly once in the artifact directory",
             ),
             Self::MixedEnvelopeSchema => {
                 formatter.write_str("Worker V2 and Worker V3 application envelopes coexist")
             }
-            Self::EnvelopeChanged => formatter.write_str("inherited Worker V2 envelope changed"),
-            Self::Decode(error) => {
-                write!(formatter, "invalid inherited Worker V2 envelope: {error}")
-            }
+            Self::EnvelopeChanged => formatter.write_str("inherited envelope changed"),
             Self::NonCanonicalEnvelope => {
-                formatter.write_str("inherited Worker V2 envelope is not canonical")
+                formatter.write_str("inherited envelope is not canonical")
             }
-            Self::Protocol(error) => write!(
-                formatter,
-                "invalid application handoff protocol value: {error}"
-            ),
             Self::UnsafeApplicationExecutable => formatter
                 .write_str("current application executable is unsafe or outside its size bound"),
             Self::ApplicationExecutable(error) => write!(
@@ -1689,19 +1301,6 @@ impl fmt::Display for WorkerV2ApplicationDescriptorHandoffErrorV1 {
                     "current application image is not an admitted static ELF: {error}"
                 )
             }
-            Self::CommitmentMismatch => formatter.write_str(
-                "application handoff commitment does not bind the envelope and current executable",
-            ),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::Recovery(error) => write!(
-                formatter,
-                "failed to recover inherited Worker V2 envelope: {error}"
-            ),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::RecoveryCurrentness(error) => write!(
-                formatter,
-                "inherited Worker V2 publication is not current: {error}"
-            ),
             Self::UnsafeAcknowledgment => {
                 formatter.write_str("inherited application acknowledgment descriptor is unsafe")
             }
@@ -1718,17 +1317,11 @@ impl fmt::Display for WorkerV2ApplicationDescriptorHandoffErrorV1 {
     }
 }
 
-impl Error for WorkerV2ApplicationDescriptorHandoffErrorV1 {
+impl Error for ApplicationDescriptorHandoffErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::DescriptorIo { error, .. } | Self::ApplicationExecutable(error) => Some(error),
-            Self::Decode(error) => Some(error),
-            Self::Protocol(error) => Some(error),
             Self::InvalidStaticApplication(error) => Some(error),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::Recovery(error) => Some(error),
-            #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-            Self::RecoveryCurrentness(error) => Some(error),
             _ => None,
         }
     }
@@ -1743,7 +1336,7 @@ pub enum WorkerV3ApplicationDescriptorHandoffErrorV1 {
     MissingEnvironment(&'static str),
     InvalidEnvironment(&'static str),
     AliasedDescriptors,
-    Descriptor(WorkerV2ApplicationDescriptorHandoffErrorV1),
+    Descriptor(ApplicationDescriptorHandoffErrorV1),
     Protocol(WorkerV3ApplicationHandoffProtocolErrorV1),
     Envelope(WorkerV3LoadEnvelopeErrorV1),
     EnvelopeSize { actual: i64 },
@@ -1854,23 +1447,6 @@ impl Error for WorkerV3ApplicationDescriptorHandoffErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn substituted_application_commitment_is_rejected_before_acknowledgment() {
-        let expected = WorkerV2ApplicationHandoffCommitmentV1::from_hex(&"11".repeat(32)).unwrap();
-        let supplied = WorkerV2ApplicationHandoffCommitmentV1::from_hex(&"22".repeat(32)).unwrap();
-
-        let error = validate_application_commitment(expected, supplied).unwrap_err();
-        assert!(matches!(
-            error,
-            WorkerV2ApplicationDescriptorHandoffErrorV1::CommitmentMismatch
-        ));
-        assert_eq!(
-            error.to_string(),
-            "application handoff commitment does not bind the envelope and current executable"
-        );
-        assert!(validate_application_commitment(expected, expected).is_ok());
-    }
 
     #[test]
     fn worker_v3_environment_wire_requires_bounded_lowercase_canonical_hex() {

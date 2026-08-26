@@ -80,11 +80,10 @@ The following infrastructure is implemented:
 - `fe2o3-mir-model` owns the canonical, Pliron-independent MIR semantic model,
   executable schema, wire validation, control-flow analysis, and mem2reg
   implementation that previously lived behind `dialect-mir`.
-- `fe2o3-compiler-api` defines bounded target-neutral requests, snapshots,
-  receipts, diagnostics, outputs, and the `PlironShadow` and `PlironV1`
-  selectors. `fe2o3-compiler-driver` routes exactly one configured backend and
-  revalidates its output. Shadow remains inspect-only and `PlironV1` is the
-  only candidate-producing compiler API route.
+- `fe2o3-compiler-api` defines bounded target-neutral production requests,
+  snapshots, receipts, diagnostics, and outputs. `fe2o3-compiler-driver` owns
+  exactly one configured backend and revalidates its output. There is no
+  implementation selector, shadow slot, or fallback.
 - `fe2o3-proof-contracts` defines solver-neutral property, status, obligation,
   TCB, and correspondence records. Structural validation does not authenticate
   evidence, run a solver, or promote proof authority.
@@ -148,7 +147,7 @@ The following infrastructure is implemented:
 
 These components make later implementation and parallel ownership possible.
 They do not connect general rustc MIR extraction to the Pliron ladder, complete
-the D1-D11 gates, replace the current compiler selector, publish an artifact,
+the D1-D11 gates, own the rustc production composition, publish an artifact,
 execute a general host operation, or create a persistent GPU scheduler. The
 bounded #159 finalization and #161 MI300X execution slices are closed. Existing
 low-level HSA adapters were reused, but the old runtime route was not

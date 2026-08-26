@@ -34,6 +34,7 @@ mod general_gemm_proof_v1;
 mod general_gemm_property_closure_v1;
 mod general_gemm_runtime_closure_v2;
 mod generated_verus_proof_input_v3;
+mod mir_pliron_per_compilation_verus_v1;
 mod model;
 mod moe_expert_compact_plan_v1;
 mod moe_routing_memory_v1;
@@ -158,6 +159,13 @@ pub use general_gemm_runtime_closure_v2::*;
 pub use generated_verus_proof_input_v3::{
     CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3,
     GeneratedVerusProofInputIdentityV3, MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
+};
+pub use mir_pliron_per_compilation_verus_v1::{
+    MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
+    ProductionMirPlironPerCompilationVerusErrorV1, ProductionMirPlironPerCompilationVerusReportV1,
+    ProductionVerusVerifiedMirPlironKernelV1,
+    execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
+    execute_mir_pliron_semantic_contract_per_compilation_v1,
 };
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,

@@ -1,5 +1,0 @@
-error[E0599]: no method named `unload` found for struct `LoadedMoeTop2V1<'logits, 'top2, 'requested, 'admitted, 'offsets, 'slots, 'permutation, 'inverse, A>` in the current scope
- --> tests/ui/generated_moe_top2_v1/early_unload_is_unavailable.rs:6:20
-  |
-6 |     let _ = loaded.unload();
-  |                    ^^^^^^ method not found in `LoadedMoeTop2V1<'_, '_, '_, '_, '_, '_, '_, '_, A>`

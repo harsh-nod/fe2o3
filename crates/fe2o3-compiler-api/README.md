@@ -7,8 +7,7 @@ Pliron, LLVM, HSA, a target runtime, or another fe2o3 crate.
 
 The V1 API provides:
 
-- bounded compile requests with an explicit `PlironShadow` or `PlironV1`
-  selector;
+- bounded compile requests for the sole production compiler pipeline;
 - domain-specific, fixed-width identity commitments;
 - bounded opaque stage snapshots and deterministic stage receipts;
 - stable numeric diagnostics without paths or process-local handles; and
@@ -19,10 +18,10 @@ All collection, message, snapshot, and candidate sizes are checked against
 hard V1 limits and caller-selected limits. Receipt and diagnostic sequences
 must be contiguous. Snapshot order must match receipt order, and both snapshot
 and obligation-set commitments must chain exactly across transformations. A
-rejection must carry an error and cannot carry a candidate. `PlironShadow` is
-inspect-only and can never return a candidate. Successful artifact-producing
-output must end at an HSACO snapshot and bind its candidate to that snapshot.
-`PlironV1` is the only selector permitted to produce such a candidate.
+rejection must carry an error and cannot carry a candidate. Successful
+production output must end at an HSACO snapshot and bind its candidate to that
+snapshot. Inspection is a stage observation of this pipeline, not a second
+compiler implementation or a caller-selectable output disposition.
 
 ## Authority boundary
 
@@ -36,8 +35,6 @@ separately reviewed artifact and runtime layers.
 This crate deliberately defines no wire format. A future canonical codec must
 be versioned separately, enforce exact framing and bounds before allocation,
 and receive golden compatibility tests before any bytes become durable.
-The surviving selector tags remain `2` and `3`, preserving existing in-memory
-request commitments that include the numeric selector.
 
 ## Integration
 

@@ -24,6 +24,7 @@ readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_TEST_DRIVER_PACKAGE="cargo-fe2o3"
 readonly RUSTC_CODEGEN_QUALIFICATION_FEATURE="qualification-oracles-test-only"
 readonly CARGO_FE2O3_QUALIFICATION_FEATURE="qualification-oracles-test-only"
+readonly CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE="worker-v3-envelope-integration-test-only"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
 readonly WORKSPACE_DEPENDENCY_POLICY="${REPO_ROOT}/scripts/workspace-dependency-policy.json"
@@ -504,12 +505,20 @@ ensure_production_cargo_fe2o3_driver() {
   esac
 }
 
-cleanup_cargo_fe2o3_driver() {
+retire_cargo_fe2o3_driver() {
   if [[ -n "${CARGO_FE2O3_DRIVER_ROOT}" && -d "${CARGO_FE2O3_DRIVER_ROOT}" &&
     ! -L "${CARGO_FE2O3_DRIVER_ROOT}" ]]; then
     chmod 700 -- "${CARGO_FE2O3_DRIVER_ROOT}" || true
     rm -rf -- "${CARGO_FE2O3_DRIVER_ROOT}"
   fi
+  CARGO_FE2O3_BINARY=
+  CARGO_FE2O3_SHA256=
+  CARGO_FE2O3_DRIVER_ROOT=
+  CARGO_FE2O3_DRIVER_PROFILE=
+}
+
+cleanup_cargo_fe2o3_driver() {
+  retire_cargo_fe2o3_driver
   if [[ -n "${CI_PRIVATE_TMP_ROOT}" && -n "${CARGO_TARGET_DIRECTORY}" &&
     -d "${CI_PRIVATE_TMP_ROOT}" && ! -L "${CI_PRIVATE_TMP_ROOT}" &&
     "$(dirname -- "${CI_PRIVATE_TMP_ROOT}")" == "${CARGO_TARGET_DIRECTORY}" &&
@@ -529,10 +538,6 @@ cleanup_cargo_fe2o3_driver() {
       "$(id -u)" ]]; then
     rm -rf -- "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}"
   fi
-  CARGO_FE2O3_BINARY=
-  CARGO_FE2O3_SHA256=
-  CARGO_FE2O3_DRIVER_ROOT=
-  CARGO_FE2O3_DRIVER_PROFILE=
   CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY=
 }
 
@@ -697,6 +702,10 @@ run_cpu_tests() {
   run_step cargo-fe2o3-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}"
+  run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
+    cargo test --locked -p cargo-fe2o3 \
+      --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \
+      --test worker_v3_load_envelope_vertical -- --test-threads=1
   run_step cpu-tests env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
@@ -854,20 +863,19 @@ run_rustc_codegen_lib_tests() {
 }
 
 run_rustc_codegen_test_driver() {
-  # Integration targets invoke cargo-fe2o3 from inside the test process. Build
-  # that shared driver once, with bounded parallelism, before any nested Cargo
-  # invocation can compete with the test harness on a small hosted runner.
-  run_step rustc-codegen-driver-bootstrap \
-    env CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=1 \
-      cargo build --locked -p "${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}" \
-        --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}" \
-        --bin "${RUSTC_CODEGEN_TEST_DRIVER_PACKAGE}"
+  # Qualification tests must never execute Cargo's shared unversioned driver
+  # path: another nested build can replace it between validation and exec.
+  retire_cargo_fe2o3_driver
+  prepare_cargo_fe2o3_driver rustc-codegen-driver qualification
 }
 
 run_rustc_codegen_target() {
   local test_target="$1"
+  validate_cargo_fe2o3_driver
   local -a command=(
     env CARGO_PROFILE_DEV_DEBUG=1
+    FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}"
+    FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}"
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}"
     --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"
     --test "${test_target}"
@@ -958,8 +966,8 @@ run_verus() {
     "${REPO_ROOT}/examples/verus_vecadd/run-verus.sh" --require
   run_step scalar-gemm-verus \
     "${REPO_ROOT}/examples/scalar_gemm_v1/run-verus.sh" --require
-  run_step mir-pliron-semantic-refinement-verus \
-    "${REPO_ROOT}/scripts/test-mir-pliron-semantic-refinement-verus.sh"
+  run_step mir-pliron-per-compilation-verus \
+    "${REPO_ROOT}/scripts/test-mir-pliron-per-compilation-verus.sh"
 }
 
 run_authority_launcher_tests() {

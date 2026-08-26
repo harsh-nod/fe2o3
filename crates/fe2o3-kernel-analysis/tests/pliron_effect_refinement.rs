@@ -148,7 +148,7 @@ fn effect_function(
     context: &mut Context,
     case: FormulaCase,
     ownership: bool,
-    proof_evidence: bool,
+    policy_checked_staging: bool,
     extent: ExtentCase,
     orphan: bool,
     unmodeled_write: bool,
@@ -157,7 +157,7 @@ fn effect_function(
         context,
         case,
         ownership,
-        proof_evidence,
+        policy_checked_staging,
         extent,
         orphan,
         unmodeled_write,
@@ -170,7 +170,7 @@ fn effect_function_with_coverage(
     context: &mut Context,
     case: FormulaCase,
     ownership: bool,
-    proof_evidence: bool,
+    policy_checked_staging: bool,
     extent: ExtentCase,
     orphan: bool,
     unmodeled_write: bool,
@@ -257,13 +257,13 @@ fn effect_function_with_coverage(
         PropertyAttr::FunctionalRefinement,
     );
     append(context, entry, &obligation);
-    if proof_evidence {
+    if policy_checked_staging {
         let evidence = EvidenceRefOp::new(
             context,
             ProofIdAttr::new([13, 14, 15, 16]),
             ProofIdAttr::new(OBLIGATION),
             PropertyAttr::FunctionalRefinement,
-            EvidenceStatusAttr::Proved,
+            EvidenceStatusAttr::Checked,
             CoveredBoundaryAttr::Mir,
         );
         append(context, entry, &evidence);

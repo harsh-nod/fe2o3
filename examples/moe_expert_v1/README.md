@@ -39,58 +39,29 @@ VERUS=/absolute/path/to/pinned/verus examples/moe_expert_v1/run-verus.sh
 the expert GEMM and deterministic combine. It contains no `macro_rules!`
 kernel facade.
 
-## Integrated bounded bridge
+## Production integration status
 
-The repository's [bounded MoE V1 checkpoint](../../docs/bounded-moe-v1.md) adds
-support around this crate without turning these expert kernels into an
-executable GPU path:
+The former MoE V1/V2 host bridges and generated workload-specific adapters were
+qualification-only alternatives and have been removed. This crate remains the
+ordinary attributed Rust kernel, independent host schedule/oracle, and Verus
+memory-model source for the fixed expert GEMM and combine algorithms.
 
-- the router compiler profile produces a private, inert same-session structural
-  record from rustc-loaded source, the complete checked `FnAbi` identity and
-  bounded projection, full imported-MIR diagnostics, and the canonical
-  KIR/profile table; it is not a MIR-to-KIR refinement proof;
-- a separate exact `E4/C4/routes16/width16/tile256` compact-plan model verifies
-  19 Verus obligations, rejects seven negative mutations, and passes all 625
-  valid count vectors; it is not bound to this host implementation, runtime
-  copies, or machine addresses; and
-- a host-observed bridge checks the internal relation among caller-supplied
-  top-2 IDs, counts, offsets, slots, permutation, and inverse, then uploads and
-  retains offsets plus inverse together. Its `gfx942` test reads those uploaded
-  arrays back but does not execute or authenticate the router.
+Production integration must emit a normal Worker V3 descriptor and use the
+single generic application handoff, generated argument packing, alias
+admission, HSA load/resolve/dispatch/unload lifecycle, and physical-resource
+checks. That Worker V3 MoE hardware slice is not complete, so this example
+currently grants no artifact, runtime, GPU-execution, or parity authority.
+Direct Cargo compilation is intentionally not a supported substitute: the
+typed router dependency requires the per-crate binding issued by the fe2o3
+wrapper. The rustc-codegen integration test below owns that compiler boundary.
 
-The host adapter manually pins the exact eight-region expert ABI and checks
-their typed lengths, access, context, target, and non-aliasing. It derives an
-inert compact-copy plan from the retained offsets. Expert preparation then
-terminates at `deny_moe_expert_execution_v1`; no copy plan, kernel load, or
-dispatch can begin through the safe API.
-
-The typed V2 follow-on binds exact request/batch identity, dispatch completion
-and readback order, route-weight policy, packed activations, model weight
-artifact identity, lifecycle context/stream, typed regions, and fixed ABI
-mechanics through private move-only stages. Its checked upload retains packed
-activations, offsets, inverse, and route weights together; its generated adapter
-requires the matching weight binding and checks all eight region extents,
-access roles, contexts, alignments, and alias pairs.
-
-Those V2 mechanics do not create an executable path. There is no production
-issuer for completion/readback provenance or the expert-weight binding, making
-safe upload and preparation constructively unreachable. V2 grants no artifact,
-copy, load, or dispatch authority and proves no routing/expert semantics,
-source/model-to-machine refinement, generalized memory safety or race freedom, or
-numerical correctness. The V1 `gfx942` offsets/inverse upload-readback test is
-not V2 evidence; no V2 GPU observation or parity promotion is claimed.
-
-Run the focused non-hardware checks from the repository root:
+Run the retained checks from the repository root:
 
 ```sh
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
-cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
-cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
-cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
-cargo test --locked -p fe2o3-host --features hardware-test-hooks \
-  --test generated_moe_expert_v2_ui
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --features qualification-oracles-test-only --test moe_top2_v1
 ```

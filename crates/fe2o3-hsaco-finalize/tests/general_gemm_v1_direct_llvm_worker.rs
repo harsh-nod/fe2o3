@@ -12,8 +12,8 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
-    KernelInstanceIdentityV1, PipelineSelectorV1, RequestIdentityV1, SnapshotFormatIdentityV1,
-    SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
+    KernelInstanceIdentityV1, RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1,
+    StageSnapshotV1, TargetProfileIdentityV1,
 };
 use fe2o3_compiler_ffi::CompilerModuleHandoffV2;
 use fe2o3_general_gemm_compiler::{
@@ -99,7 +99,6 @@ fn request(
         TargetProfileIdentityV1::from_untrusted_bytes(identity(0x14)),
         general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
         obligations,
-        PipelineSelectorV1::PlironV1,
         input,
         CompileLimitsV1::new(16, 16, 16, 4096, 16_384, 4096).expect("bounded measurement limits"),
     )

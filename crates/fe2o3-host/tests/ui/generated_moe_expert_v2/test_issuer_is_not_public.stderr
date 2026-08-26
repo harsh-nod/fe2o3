@@ -1,5 +1,0 @@
-error[E0432]: unresolved import `fe2o3_host::issue_test_only_moe_routing_completion_readback_v2`
- --> tests/ui/generated_moe_expert_v2/test_issuer_is_not_public.rs:1:5
-  |
-1 | use fe2o3_host::issue_test_only_moe_routing_completion_readback_v2;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `issue_test_only_moe_routing_completion_readback_v2` in the root

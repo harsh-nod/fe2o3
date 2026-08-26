@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `CurrentRecoveredLaunchKernelMetadataV2<'recovered>` in the current scope
- --> tests/ui/launch_kernel_v2_bridge/cannot_clone.rs:4:30
-  |
-4 |     let _duplicate = binding.clone();
-  |                              ^^^^^ method not found in `CurrentRecoveredLaunchKernelMetadataV2<'_>`

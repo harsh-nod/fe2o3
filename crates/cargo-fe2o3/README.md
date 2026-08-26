@@ -37,7 +37,7 @@ process cannot continue when their respective admitted parent dies.
 Release starts from a cleared environment. The complete allowlist is `CARGO`;
 the backend, Cargo, binding-trampoline, rustc-path, rustc, and rustc-runtime
 `FE2O3_AUTHORITY_*_V1` inputs; `FE2O3_BACKEND`, `FE2O3_TARGET`, optional
-`FE2O3_WORKER_V2_CONFIG_V2`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
+`FE2O3_PRODUCTION_BUILD_CONFIG_V1`, `LANG=C`, `LC_ALL=C`, and `TZ=UTC`.
 Aliases, extra variables or descriptors, loader variables, rustup/tool
 selectors, noncanonical paths, changed backing objects, replayed attempts, and
 closure/runtime-tree drift fail closed. Tool digests are operator-provisioned
@@ -49,6 +49,21 @@ oracles such as simulation and migration equivalence checks. Those oracles
 exist only in `cargo-fe2o3` and `rustc-codegen-fe2o3` builds made with each
 package's `qualification-oracles-test-only` feature. Feature-free binaries
 reject the environment variable.
+
+Production requires `FE2O3_PRODUCTION_BUILD_CONFIG_V1` to name a canonical
+`fe2o3-production-build-config-v1` JSON recipe. The recipe pins the selected
+Rust compilation units, upstream-LLVM worker image, typed link providers,
+link options, output bound, and execution limits. Cargo authenticates its
+transitive identity and passes only `FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1` to
+the wrapper. Production rejects the Worker V2 config and expected-identity
+variables; qualification rejects the production variables. Envelope,
+source-debug, exact-workload, and restart-oracle fields are not part of the
+production schema.
+
+The rustc wrapper owns production work directly as a `ManagedProductionBuild`
+transaction. Enabling qualification tests does not wrap that transaction in a
+route enum or change its state type; compatibility work occupies a separate
+cfg-gated slot and cannot be selected by production configuration.
 
 Cargo dependency units that are not the selected kernel root are host-only
 rustc compilations, not another fe2o3 route. The wrapper removes all managed
@@ -93,13 +108,26 @@ receive no fd 199 invocation capability.
 ## External Cargo projects
 
 `cargo fe2o3 build` and `cargo fe2o3 run` operate from standalone Cargo
-projects and workspace members. Cargo receives the original platform argument
-vector without shell construction or UTF-8 conversion. A separate bounded
-`cargo metadata --no-deps` probe resolves the selected `--manifest-path`,
-workspace root, and configured target directory. An explicit `--target-dir`
-has the same invocation-directory-relative interpretation as Cargo and takes
-precedence over metadata; `CARGO_TARGET_DIR`, repeated `--config`/`-Z`
-arguments, and locked/offline/frozen routing are reflected by metadata.
+projects and workspace members. Production constructs one fixed two-phase
+plan: it first runs Cargo `build` for `amdgcn-amd-amdhsa` through the fe2o3
+device compiler, commits the exact generated-artifact generation, and then
+runs the requested `build` or `run` for the pinned rustc host target with
+ordinary rustc. The host phase has no fe2o3 backend, wrapper, capability
+broker, device target, build manifest, qualification, or simulation controls.
+Package, feature, profile, manifest, and target-directory arguments apply to
+both phases. Arguments after `--` on `run` apply only to the host application;
+`build` does not accept an application argument suffix.
+
+The orchestrator owns both targets. Callers must not pass `--target`; target
+configuration cannot create another compiler route because each phase receives
+its exact target on the Cargo command line. Cargo receives all other original
+platform arguments without shell construction or UTF-8 conversion. A separate
+bounded `cargo metadata --no-deps` probe resolves the selected
+`--manifest-path`, workspace root, and configured target directory. An
+explicit `--target-dir` has the same invocation-directory-relative
+interpretation as Cargo and takes precedence over metadata;
+`CARGO_TARGET_DIR`, repeated `--config`/`-Z` arguments, and
+locked/offline/frozen routing are reflected by metadata.
 
 The invocation directory, workspace root, target directory, and
 `<target>/fe2o3` output directory are opened without following path-component
@@ -110,7 +138,7 @@ fixed child descriptor, so the measured bytes are the bytes selected for
 rustc. Path substitution is checked before and after Cargo runs.
 
 Generated output carries an atomic deletion guard and a bounded generation
-marker that binds the sealed backend digest, transitive Worker V2 inputs,
+marker that binds the sealed backend digest, transitive build inputs,
 target, effective Cargo build/target/profile configuration, inherited codegen
 environment, rustflags, and a snapshot of the generated artifact tree. Cargo's
 own environment and configured rustflags remain intact. fe2o3 passes its
@@ -172,11 +200,10 @@ Simulation sets the existing `FE2O3_HIP_SYS_DISABLE` build boundary and the
 default `cargo-fe2o3` dependency and ELF closures exclude `fe2o3-core`,
 `fe2o3-host`, `fe2o3-hsa-runtime`, HIP, HSA, KFD, DRM, and ROCm libraries.
 It does not enumerate a GPU or initialize a GPU runtime. Hardware commands
-remain explicit and never fall back to simulation. The existing legacy direct
-row-softmax HSA runtime and related hardware test fixtures are compiled only
-with the explicit `legacy-hsa-runtime` feature; a default command image fails
-closed before that compatibility boundary. New runtime work remains KFD-only.
-Simulation has no HSA, HIP, KFD, or ROCm runtime.
+remain explicit and never fall back to simulation. The legacy direct
+row-softmax HSA runtime, hardware fixtures, and `legacy-hsa-runtime` feature are
+deleted; row-softmax runtime work must use the generic Worker V3 application
+path. Simulation has no HSA, HIP, KFD, or ROCm runtime.
 
 `cargo fe2o3 simulate` is compiled only with
 `qualification-oracles-test-only`; it is absent from normal command dispatch
@@ -215,7 +242,7 @@ Process ancestry cannot
 distinguish either case from an intended compiler invocation without trusted
 Cargo or rustc cooperation. Same-UID process inspection or injection may also
 cross the boundary where host policy permits it. The broker compares a request
-with the expected build session, profile, and Worker V2 configuration identity.
+with the expected build session, profile, and build-configuration identity.
 The client and broker also verify Linux peer credentials and exact
 `cargo-fe2o3` executable object and bytes, then authenticate the exchange with a
 fresh challenge bound to a separate 256-bit broker secret. These checks reject
@@ -245,16 +272,17 @@ ordinary `target`. Packaged deployments without that source tree must provide
 a built backend through `FE2O3_BACKEND`.
 
 `cargo fe2o3 run` places a narrow application boundary in front of Cargo's
-effective exact-target runner. Every application or configured runner starts
-with an empty environment; no `PATH`, `TMPDIR`, build control, or arbitrary
-inherited variable is retained. The configured runner command, application
-path, and arguments remain byte-preserving. String and array runners from
-target configuration and target-runner environment variables are supported,
-including non-UTF-8 Unix values while Cargo resolves the runner.
-Recursive cargo-fe2o3 runners, including aliases and hardlinks to the same
-executable inode, and runner selections that cannot be resolved unambiguously
-fail closed. In particular, a `cfg(...)` runner must currently be made explicit
-as `target.<triple>.runner` for `cargo fe2o3 run`.
+exact-target application. Production always requires the authorized locked
+compiler closure and canonical Worker V3 load envelope; it has no no-envelope
+mode and rejects an intermediate Cargo runner. Qualification builds retain
+configured-runner and ordinary-application coverage while those test oracles
+are migrated. Every application or qualification runner starts with an empty
+environment; no `PATH`, `TMPDIR`, build control, or arbitrary inherited
+variable is retained. Runner commands, application paths, and arguments remain
+byte-preserving. Recursive cargo-fe2o3 runners, including aliases and hardlinks
+to the same executable inode, and runner selections that cannot be resolved
+unambiguously fail closed. In particular, a `cfg(...)` runner must currently be
+made explicit as `target.<triple>.runner` for qualification coverage.
 
 ## Cleanup
 
@@ -312,26 +340,35 @@ the canonical Worker V3 load envelope, pins a sealed static application and its
 V3 identity, binds the envelope, artifact-directory, and ACK descriptors into a
 fresh occurrence, validates the challenge-bound ACK, and retains the
 current-publication lease until the application exits. Worker V2 envelope
-decoding, lease recovery, child environment, challenge, and ACK validation are
-compiled only for qualification-oracle and test builds. The V3 transfer carries
-inert descriptor custody; it does not itself authenticate prerequisites or grant
-HSA load or launch authority.
+decoding, lease recovery, child environment, challenge, and ACK validation have
+been removed from the Cargo application boundary in every build. Stale V2
+envelope names are recognized only for fail-closed rejection before child
+spawn. The V3 transfer carries inert descriptor custody; it does not itself
+authenticate prerequisites or grant HSA load or launch authority.
 
 The same boundary is enforced by `fe2o3-host`: feature-free builds export only
 the Worker V3 application, admission, verification, load, and generated
-dispatch route. Worker V2 application recovery, bundle admission,
-prerequisite authentication, HSA loading, launch metadata, and its
-alpha/zeta, scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
+dispatch route. Worker V2 application recovery and retained-descriptor support
+have been deleted; only stale V2 environment and envelope names remain as
+fail-closed rejection sentinels. Independent Worker V2 bundle admission,
+prerequisite authentication, HSA loading, launch metadata, and its alpha/zeta,
+scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
 `qualification-oracles-test-only` feature. General `#[kernel(typed)]`
-expansion emits only Worker V3 host code unless an oracle fixture explicitly
-requests `qualification_worker_v2`. The exact embedded vecadd compatibility
-API is the remaining generated host island to migrate to this V3 route.
+expansion emits only Worker V3 host code. The retired
+`qualification_worker_v2` option is rejected, and the embedded vecadd
+compatibility API has been deleted.
 
-The application integration fixtures are protocol-specific. The V3 fixture
-has no runtime selector and its feature graph enables `fe2o3-host` only with
-`hardware-test-hooks`; it does not enable the host qualification feature. The
-separate V2 fixture requires `worker-v2-host-consumer-fixture` and cannot be
-built through the V3 integration feature.
+The application integration fixture is V3-only. It has no runtime selector and
+its feature graph enables `fe2o3-host` only with `hardware-test-hooks`; it does
+not enable the host qualification feature. The old V2 host-consumer binary,
+input adapter, and Cargo feature have been deleted.
+
+The shared hostile application fixture also speaks only Worker V3. Its active
+vertical tests cover descriptor quarantine, commitment and descriptor
+substitution, missing/truncated/extended acknowledgments, public-ACK
+non-authority, process and exec containment, stalled-ACK cleanup, envelope
+mutation, generation replacement, and stale-publication turnover. The suite is
+a mandatory generic-core CI step.
 
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only
@@ -418,10 +455,11 @@ READY. The inherited slot's open-file-description lock survives that adoption.
 
 The supervisor becomes the application's actual parent, starts the seccomp
 worker for required-envelope launches, and owns every application authority and
-ACK descriptor. Immediately before every application or configured-runner exec,
-including the no-envelope path, `close_range(CLOSE_RANGE_CLOEXEC)` protects all
-non-stdio descriptors. Required-envelope launch then clears `FD_CLOEXEC` only
-for its exact envelope, artifact-directory, ACK, and test-only readiness ABI.
+ACK descriptor. Immediately before every application exec, and before the
+qualification-only configured-runner or no-envelope exec,
+`close_range(CLOSE_RANGE_CLOEXEC)` protects all non-stdio descriptors.
+Required-envelope launch then clears `FD_CLOEXEC` only for its exact envelope,
+artifact-directory, ACK, and test-only readiness ABI.
 The protocol channel, admission slot, seccomp-parent socket, evidence and build
 directories, and unrelated Cargo descriptors cannot survive exec. Consequently
 an application or orphan descendant cannot release or retain a slot. Saturated

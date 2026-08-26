@@ -173,6 +173,13 @@ pub(crate) struct PublishedWorkerV3Fixture {
 }
 
 #[allow(dead_code)]
+pub(crate) struct PublishedWorkerV3InDirectory {
+    pub(crate) producer: ProducerIdentity,
+    pub(crate) attempt: fe2o3_artifact_transaction::BuildAttempt,
+    pub(crate) published: fe2o3_hsaco_finalize::PublishedProtectedWorkerV3HsacoV1,
+}
+
+#[allow(dead_code)]
 pub(crate) fn published_worker_v3_fixture() -> PublishedWorkerV3Fixture {
     let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
     published_worker_v3_fixture_from_raw_hsaco(fixture.bytes, "vecadd", "vecadd.kd")
@@ -228,6 +235,46 @@ fn published_worker_v3_fixture_from_raw_hsaco_with_config(
     config: EvidenceConfig,
 ) -> PublishedWorkerV3Fixture {
     let directory = TestDirectory::new();
+    let staged = publish_worker_v3_fixture_in_directory_with_config(
+        &directory,
+        raw_hsaco,
+        entry_symbol,
+        descriptor_symbol,
+        config,
+    );
+    PublishedWorkerV3Fixture {
+        directory,
+        producer: staged.producer,
+        attempt: staged.attempt,
+        published: staged.published,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn publish_worker_v3_fixture_in_directory(
+    directory: &TestDirectory,
+    attempt_seed: u8,
+) -> PublishedWorkerV3InDirectory {
+    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
+    publish_worker_v3_fixture_in_directory_with_config(
+        directory,
+        fixture.bytes,
+        "vecadd",
+        "vecadd.kd",
+        EvidenceConfig {
+            attempt_seed,
+            ..EvidenceConfig::BASE
+        },
+    )
+}
+
+fn publish_worker_v3_fixture_in_directory_with_config(
+    directory: &TestDirectory,
+    raw_hsaco: Vec<u8>,
+    entry_symbol: &str,
+    descriptor_symbol: &str,
+    config: EvidenceConfig,
+) -> PublishedWorkerV3InDirectory {
     let producer = producer();
     let provider = WorkerInputV1::new(
         WorkerInputKindV1::AmdGpuRelocatable,
@@ -235,7 +282,7 @@ fn published_worker_v3_fixture_from_raw_hsaco_with_config(
     )
     .unwrap();
     let (attempt, source) = evidence_in_directory_for_kernel_and_providers(
-        &directory,
+        directory,
         raw_hsaco,
         config,
         entry_symbol,
@@ -262,8 +309,7 @@ fn published_worker_v3_fixture_from_raw_hsaco_with_config(
         persisted,
     )
     .unwrap();
-    PublishedWorkerV3Fixture {
-        directory,
+    PublishedWorkerV3InDirectory {
         producer,
         attempt,
         published,
@@ -1437,7 +1483,7 @@ fn producer() -> ProducerIdentity {
 pub(crate) struct TestDirectory(pub(crate) PathBuf);
 
 impl TestDirectory {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let path = std::env::temp_dir().join(format!(

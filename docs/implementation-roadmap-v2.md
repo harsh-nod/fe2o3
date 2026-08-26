@@ -33,9 +33,9 @@ but both issues remain open.
 - Canonical, Pliron-independent ownership now exists for the MIR model,
   compiler API, solver-neutral proof contracts, target-neutral host-operation
   contracts, and executable-free persistent-service model.
-- `fe2o3-compiler-driver` provides fail-closed single-route API dispatch for
-  inspect-only `PlironShadow` evidence and candidate-producing `PlironV1`.
-  It is not wired into production compiler selection; the current
+- `fe2o3-compiler-driver` provides a fail-closed single-backend API contract
+  with no implementation selector or fallback. It is not yet the owner of the
+  rustc production composition; the current
   implementation remains in `rustc-codegen-fe2o3`.
 - `fe2o3-pliron` provides the pinned D0 context, private context identity,
   registration, bounded pass-plan shell, and owner-held textual bridge. The
@@ -61,9 +61,9 @@ but both issues remain open.
   analysis also enforces one aggregate 512-call and 32-terminal budget before
   the positive boundary. Finalization freshly
   derives distinct graph, Worker V2, and finalized-machine axes from the
-  retained concrete owners. The production selector remains fail-closed until
-  the #174 authenticated MIR-to-KIR receipt and the rustc-owned final authority
-  join consume this #173 structural and late-machine route.
+  retained concrete owners. Production remains fail-closed until the #174
+  authenticated MIR-to-KIR receipt and the rustc-owned final authority join
+  consume this #173 structural and late-machine route.
 - `fe2o3-service-host` consumes the service and host models through
   authority-free, borrow-retaining typestates. It has no HSA/HIP handles and
   performs no allocation, publication, load, launch, execution, wait,
@@ -303,8 +303,9 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   edges, unsupported targets/pipelines, and untrusted call lookalikes fail
   closed;
 - host argument binding validates canonical scalar and slice identities,
-  retains allocation borrows in lifetime-branded packed values, and requires a
-  backend-issued semantic witness before general V3 authority can exist;
+  retains allocation borrows in lifetime-branded packed values, checks the
+  generated marker binding against the admitted Worker V3 descriptor before
+  verification, and checks the complete generated layout before dispatch;
 - checked shared and exclusive `DeviceBuffer` views preserve parent allocation
   and selected-region provenance, reject invalid ranges, and enforce exclusive
   parent borrowing;
@@ -318,9 +319,10 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   carry that exact region into packing and alias admission. UI tests retain the
   allocation borrow and reject writable use of an immutable view;
 - the witness wire contract, reserved symbols, parser, and rustc backend
-  host-object emitter are implemented. The genuine Worker V2 fixture emits,
-  links, and validates deterministic private witness accessors for both alpha
-  and zeta;
+  host-object emitter remain qualification-only. The genuine Worker V2 fixture
+  emits, links, and validates deterministic private witness accessors for both
+  alpha and zeta; production Worker V3 host compilation uses ordinary rustc and
+  emits no witness accessor dependency;
 - Worker V2 canonically finalizes descriptor-bearing COV6 before publication,
   preserves descriptor-free COV5 compatibility, and recovers exact raw and
   finalized publications across process crashes with legacy-marker migration;
@@ -348,97 +350,46 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   The opt-in raw MI300X harness loads one executable and runs both kernels for
   lengths `1`, `255`, `256`, `257`, and `1023`; independent CPU oracles and
   all prefix/suffix canaries pass; and
-- a second ignored MI300X harness passes the same digest and matrix through
+- a now-retired second MI300X harness passed the same digest and matrix through
   generated checked slice capabilities, typed alpha/zeta selection and
   preparation, the reviewed load/resolve/dispatch/unload lifecycle, and safe
   `dispatch`. Its semantic witnesses and prerequisite authenticator are
   explicit test fixtures, so this is runtime-composition evidence only.
 
-This checkpoint supplies exact-digest source, compiler, direct LLVM/LLD,
-COV6, raw hardware, and generated-safe runtime-composition evidence. Both
-harnesses still inject the exported HSACO, and the safe harness uses an
-explicitly fake authenticator. Follow-on work now provides canonical durable
+This historical checkpoint supplied exact-digest source, compiler, direct
+LLVM/LLD, COV6, raw hardware, and generated-safe runtime-composition evidence.
+Both host harnesses and their workload-specific adapters have since been
+deleted. Follow-on work provides canonical durable
 lease reacquisition, sealed finalizer intent, a bounded Worker V2 envelope,
-Cargo publication and reconstruction of that inert envelope, cooperative
-descriptor handoff, recovered inert host admission, and one-history persistent
-multi-kernel proof admission. Bounded alpha/zeta proof records and physical
-machine-effect records also exist. The handoff is not protected production
+Cargo publication and reconstruction of that inert envelope, the production V3
+descriptor handoff, and one-history persistent multi-kernel proof admission.
+The recovered Worker V2 host route is deleted. Bounded alpha/zeta proof records
+and physical machine-effect records also exist. The handoff is not protected production
 authority, the records are not production-bound to compiler origin and the
-exact payload, and no production `WorkerV2PrerequisiteAuthenticatorV1` exists.
+exact payload, and no production `WorkerV3VerifierV1` exists.
 Therefore this is not production proof-authenticated safe
 dispatch, no parity row is promoted solely by this checkpoint,
 repository-wide CUDA-Oxide parity is not claimed, and Complete remains `0`.
 
-## Typed MoE V2 fail-closed checkpoint: `10e5f90ec`
+## Retired MoE host alternatives
 
-The implementation through
-`10e5f90ece1937aaee77492e8e4e4742863d013b` adds a production-shaped but
-constructively unreachable host boundary for the fixed `T8/E4/K2/C4/I16/O16`
-MoE slice:
+The host-side MoE V1/V2 bridges, generated adapters, denial boundary, exact
+top-2 lifecycle, and workload-specific HSA launcher were never part of the
+production application route. They duplicated pieces of argument admission,
+resource observation, lifecycle ownership, and dispatch around Worker V3 and
+have been removed.
 
-- one private move-only request/batch capability binds exact routing-request,
-  logits, token-activation, caller route-weight-policy, and model expert-weight
-  artifact identities;
-- one private move-only completion/readback capability binds the exact request,
-  context and stream, dispatch, completion and readback events,
-  completion-before-readback order, profile, and complete payload;
-- checked inputs join concrete finite nonnegative per-token route weights and
-  the exact zero-padded packed-activation layout to that completed readback;
-- the completed upload validates the exact lifecycle stream/context, all four
-  destination extents and allocation identities, and every alias pair while
-  retaining typed activation, offsets, inverse, and route-weight regions;
-- a separate private weight binding ties one typed weight region to the model
-  artifact and request/batch transcript; and
-- the generated adapter validates all eight typed region ranges, alignments,
-  contexts, access roles and alias pairs, then forms only the fixed four-GEMM
-  and one-combine ABI records.
+The fixed attributed Rust kernels, rustc source/ABI/KIR diagnostics, 31-entry
+canonical profile, compact-plan verifier, 19-obligation Verus model, seven
+negative mutations, and 625-vector differential test remain useful compiler
+and proof evidence. They do not grant runtime authority.
 
-The corresponding unit tests exercise identity, transcript, ordering, packing,
-region, context/stream, and ABI mutations. Twenty-two compile-fail fixtures
-enforce private fields, move-only stages, issuer isolation, V1/synthetic/raw-
-weight rejection, and absence of copy/load/dispatch authority. No production
-or feature-gated issuer can construct the completion/readback provenance, and
-the artifact pipeline cannot construct the expert-weight binding. Safe
-production code therefore cannot reach V2 upload or preparation.
-
-This is host API and type-system evidence, not routing or expert semantics,
-compiler/finalizer authority, memory-safety or race-freedom proof, numerical
-correctness, or source-to-machine refinement. The V1 `gfx942` offsets/inverse
-upload-readback observation remains V1 evidence only; V2 has no hardware run
-and grants no artifact, copy, load, or dispatch authority. No parity row is
-promoted.
-
-## Historical bounded MoE V1 checkpoint: `1281f9748`
-
-The implementation through
-`1281f97487adfd4af32687b7705ba46e5c11152b` closes three structural and
-host-consistency gaps for the exact `T8/E4/K2/C4` slice without crossing an
-execution-authority boundary:
-
-- the top-2 router rustc admission now derives a private same-session
-  structural record from source retained in rustc's loaded `SourceFile`, a
-  complete checked `FnAbi` identity with a bounded readable projection, the
-  full imported portable-MIR module and complete-module diagnostics, and one
-  ordered 31-entry encoding of every current KIR/profile field;
-- an exact `E4/C4/routes16/width16/tile256` Verus model discharges 19 compact-
-  plan obligations, rejects seven named mutations, and has a Rust differential
-  check over all 625 capacity-bounded expert-count vectors; and
-- a host-observed routing bridge checks the internally consistent relation
-  among caller-supplied top-2 IDs, requested/admitted counts, offsets, slots,
-  permutation, and inverse. It uploads offsets and inverse together and retains
-  both exact device regions; an opt-in `gfx942` test reads those uploaded arrays
-  back before exercising the denial boundary.
-
-The rustc record is diagnostic and inert, not MIR-to-KIR semantic refinement.
-The compact proof is not bound to host code, runtime copies, machine addresses,
-or an authenticated proof receipt. The host bridge has no freshness or
-authenticated router provenance and does not connect logits/tie selection,
-route weights, or packed activations. The expert ABI remains manually pinned,
-and safe preparation exposes no copy, load, dispatch, completion, or expert GPU
-execution operation. See [Bounded MoE V1 evidence](bounded-moe-v1.md) for the
-canonical field table, exact commands, and remaining authority gates. No parity
-row is promoted by this checkpoint.
-
+The remaining MoE milestone is one Worker V3 vertical slice: collect and lower
+the attributed kernels, publish one authenticated multi-kernel descriptor,
+bind routing and expert arguments through the generic generated plan, validate
+aliases and physical resources, dispatch through the common HSA lifecycle, and
+join output evidence to the retained semantic oracle and proofs. No
+workload-specific host or HSA route may be added to complete that milestone.
 ## Ordered Critical Milestones
 
 These milestones are sequential authority gates. Work inside one milestone can
@@ -478,12 +429,12 @@ earlier authority transition.
    adapter is compiled outside tests and durably publishes and reconstructs the
    canonical envelope from sealed lineage before completing the build attempt.
    This was implemented ahead of W1 authority and deliberately grants none.
-7. **Implemented inert foundation: recovered host admission and cooperative
-   application handoff.** The host reacquires a fresh lease and rechecks the
-   envelope, lineage, semantic and physical ABI, currentness, and marker facts.
-   Cargo transfers only pinned read-only descriptors. A protected production
-   handoff and generated-safe MI300X replay without external HSACO injection
-   remain open.
+7. **Implemented production foundation: Worker V3 application handoff.** The
+   host reacquires a fresh lease and rechecks the envelope, lineage, semantic and
+   physical ABI, currentness, and marker facts. Cargo transfers only pinned
+   read-only descriptors. The separate recovered Worker V2 host admission and
+   launch bridge are deleted. A production verifier and generated-safe MI300X
+   replay without external HSACO injection remain open.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
    closed call graph and physical memory sites. Production admission must still
@@ -494,8 +445,8 @@ earlier authority transition.
    and executable-evidence records exist. They do not give Rust source an
    operational semantics, establish compiler/machine refinement, or bind
    production proof authority to the final payload.
-10. **Production prerequisite authentication.** Implement
-   `WorkerV2PrerequisiteAuthenticatorV1` only from reviewed immutable compiler,
+10. **Production verification authentication.** Implement a
+   `WorkerV3VerifierV1` only from reviewed immutable compiler,
    Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
    Every digest, identity, mutation, and stale-replay edge must fail closed.
 11. **Implemented API foundation: split mutable views.** Safe two-way and
@@ -711,14 +662,15 @@ Parallel ownership is split at frozen records:
 | G3.1-D: HSA dispatch | multi-symbol resolution, reviewed COV6 hidden arguments, queue submission, completion, unload ordering | Generic synchronous dispatch for an admitted kernel descriptor |
 | G3.1-E: adversarial tests | UI tests, mutation tests, CPU oracles, MI300X execution evidence | Reproducible positive and fail-closed evidence |
 
-Progress at `dc9738e` completes the bounded raw and generated-safe test
-vertical slices but not the production authority gate. G3.1-A has V3
+Progress at `dc9738e` recorded bounded raw and generated-safe Worker V2 test
+vertical slices but did not close the production authority gate. Those host
+harnesses are now deleted. G3.1-A has V3
 registration, rustc-semantic
 reconstruction, authenticated alpha/zeta role and ABI naming, guarded typed
 lowering, exact descriptors, and linked backend witnesses. G3.1-C has checked
-buffer views, allocation-relative capabilities, generated exact `Arguments`,
+buffer views, allocation-relative capabilities, generic Worker V3 `Arguments`,
 safe preparation, retained packing/alias lifetimes, and linear synchronous
-dispatch. Worker V2 supplies canonical COV6 publication and restart recovery to
+dispatch. Versioned compiler transaction records supply canonical COV6 publication and restart recovery to
 G3.1-B; explicit/complete kernarg reconciliation and post-optimization implicit
 ABI canonicalization now permit the genuine two-entry build to publish.
 G3.1-E records the exact SHA-256 and passing raw and generated-safe MI300X runs
@@ -726,12 +678,12 @@ of alpha and zeta at lengths `1`, `255`, `256`, `257`, and `1023`, including
 independent oracles and canaries. The safe run uses an explicitly fake
 prerequisite authenticator and test-only witnesses.
 
-Durable publication, finalized-bundle admission, currentness lease
-revalidation, the authenticated load state machine, generated alpha/zeta safe
-dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, Cargo
+Durable publication, Worker V3 verification admission, currentness lease
+revalidation, the generic authenticated load/dispatch state machine, the
+reviewed runtime adapter, durable lease reacquisition, Cargo
 publication of the canonical load envelope, V3-only production descriptor
-handoff, recovered inert host admission, and safe split mutable views already
-exist. Still missing is a production `WorkerV2PrerequisiteAuthenticatorV1` that
+handoff, and safe split mutable views already exist. The recovered Worker V2
+host route is deleted. Still missing is a production `WorkerV3VerifierV1` that
 can promote the carried evidence into authorized HSA load and launch custody.
 Bounded machine-effect and Verus proof records are not production-bound to
 compiler origin and the exact artifact. These are the ordered critical

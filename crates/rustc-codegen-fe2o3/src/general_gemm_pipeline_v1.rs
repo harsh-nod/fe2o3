@@ -26,8 +26,8 @@ use fe2o3_artifact_transaction::{
 };
 use fe2o3_compiler_api::{
     CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
-    KernelInstanceIdentityV1, PipelineSelectorV1, RequestIdentityV1, SnapshotFormatIdentityV1,
-    SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
+    KernelInstanceIdentityV1, RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1,
+    StageSnapshotV1, TargetProfileIdentityV1,
 };
 use fe2o3_general_gemm_compiler::{
     GeneralGemmFrontendSemanticBindingV1, GeneralGemmLoweringLimitsV1, GeneralGemmScheduleV1,
@@ -772,7 +772,6 @@ fn derive_general_gemm_symbolic_pair_v1(
             TargetProfileIdentityV1::from_untrusted_bytes(target_profile),
             general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
             obligations,
-            PipelineSelectorV1::PlironV1,
             input,
             compile_limits,
         )
@@ -845,7 +844,6 @@ fn validate_general_gemm_pair_inputs_v1(
         || reference.input_obligations_identity() != vectorized.input_obligations_identity()
         || reference.compiler_profile_identity() != vectorized.compiler_profile_identity()
         || reference.target_profile_identity() != vectorized.target_profile_identity()
-        || reference.selector() != vectorized.selector()
         || reference.limits() != vectorized.limits()
         || units[0].toolchain_route_identity() != units[1].toolchain_route_identity()
         || units[0].limits() != units[1].limits()

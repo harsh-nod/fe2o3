@@ -67,24 +67,10 @@ evidence. The child receives its challenge, commitment, and ACK descriptor and
 can reproduce the canonical bytes; ACK validation therefore proves no recovery
 provenance and grants no host, publication, load, or launch authority.
 
-The native Worker V3 application handoff V1 protocol is defined side by side
-with that legacy Worker V2 protocol. It hashes exact opaque V3 load-envelope
-bytes without decoding or depending on a V3 envelope schema. A canonical
-application occurrence binds the exact sealed-static application identity, a
-nonzero spawn identity, and a bounded set of distinctly slotted, non-aliasing
-input occurrences. Its expectation and ACK bind that complete occurrence and
-the opaque envelope identity under Worker V3 V1-only magic, version, commitment,
-and checksum domains.
-
-Worker V3 V1 decoders reject Worker V2 values, stale challenges, substituted
-applications or input occurrences, aliased or noncanonical inputs, hostile
-counts and lengths, truncation, trailing bytes, checksums, and explicit codec
-budget exhaustion. Construction and decoding remain inert. A separate strict
-`WorkerV3LoadEnvelopeV1` implementation now transfers completed publication
-custody and supports exact durable restart recovery, but the application
-protocol treats its bytes as opaque and grants no schema validation. No
-serialized identity, occurrence, challenge, expectation, commitment, ACK, or
-recovered envelope grants host, load, launch, or process authority.
+Production Worker V3 records live in `fe2o3-runtime-protocol`, outside this
+qualification crate. Production consumers and cross-version tests depend on
+that crate directly. This crate does not re-export the production protocol and
+cannot act as a second production route.
 
 `DurablePublishedHsacoClaimV1` preserves the exact publication plan, receipt,
 output-directory identity, record identity, artifact identity, and artifact

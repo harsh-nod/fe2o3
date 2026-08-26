@@ -1,5 +1,0 @@
-error[E0599]: no method named `exact_finalized_bytes` found for reference `&JoinedWave64CollectivesV1<'_, '_, '_, '_>` in the current scope
- --> tests/ui/generated_wave64_collectives_v1/joined_bytes_are_unavailable.rs:4:19
-  |
-4 |     let _ = value.exact_finalized_bytes();
-  |                   ^^^^^^^^^^^^^^^^^^^^^ method not found in `&JoinedWave64CollectivesV1<'_, '_, '_, '_>`

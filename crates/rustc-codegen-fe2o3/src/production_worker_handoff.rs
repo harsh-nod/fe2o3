@@ -58,7 +58,7 @@ impl PreparedProductionWorkerHandoff {
 /// code-object envelope, and constructs canonical coordination bytes. It does
 /// not invoke LLVM, link, publish an artifact, load, or launch.
 pub(crate) fn prepare_production_worker_handoff(
-    authenticated: crate::production_pipeline_v1::AuthenticatedProductionGfx942ModuleV1,
+    authenticated: crate::production_pipeline::AuthenticatedProductionGfx942Module,
 ) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
     let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
     let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
@@ -104,7 +104,6 @@ pub(crate) fn prepare_production_worker_handoff(
 
 #[derive(Debug)]
 pub(crate) enum ProductionWorkerHandoffError {
-    MissingBuildAttempt,
     MissingProductionBindings,
     MissingExternalDeclaration(String),
     MissingCompilerDefinition(String),
@@ -122,9 +121,6 @@ pub(crate) enum ProductionWorkerHandoffError {
 impl fmt::Display for ProductionWorkerHandoffError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingBuildAttempt => {
-                formatter.write_str("production compiler handoff requires a managed build attempt")
-            }
             Self::MissingProductionBindings => formatter
                 .write_str("production compiler handoff lost its exact LLVM identity binding"),
             Self::MissingExternalDeclaration(symbol) => write!(
@@ -178,8 +174,7 @@ impl Error for ProductionWorkerHandoffError {
             Self::CompilerDescriptor(error) => Some(error),
             Self::SymbolManifest(error) => Some(error),
             Self::Handoff(error) => Some(error),
-            Self::MissingBuildAttempt
-            | Self::MissingProductionBindings
+            Self::MissingProductionBindings
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
             | Self::TargetBindingMismatch { .. } => None,

@@ -9,8 +9,7 @@ use fe2o3_core::GpuContext;
 use fe2o3_host::{
     HsaCodeObjectLoadObservationV1, HsaEnvironmentObservationV1, HsaLaunchGeometryV1,
     HsaUnloadObservationV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1, ReviewedWorkgroupSyncRuntimeAdapterV1,
-    WorkgroupSyncProfileKindV1,
+    ReviewedHsaImplicitKernargAdapterV1,
 };
 use fe2o3_hsa_runtime::{
     HsaRuntimeAdapterError, ReviewedHsaHardwareTestBufferV1, ReviewedHsaRuntimeAdapterV1,
@@ -632,18 +631,13 @@ fn execute_with_adapter(
             RuntimeObservationFieldV1::KernelIdentity,
         ))?;
         let resolution = &resolutions[0];
+        let static_group_segment =
+            u32::try_from(resolution.group_segment_size()).map_err(|_| {
+                RuntimeExecutionErrorV1::Internal("static group segment does not fit u32")
+            })?;
+        let private_segment = u32::try_from(resolution.private_segment_size())
+            .map_err(|_| RuntimeExecutionErrorV1::Internal("private segment does not fit u32"))?;
 
-        // The generic resolution record intentionally omits static resources.
-        // This reviewed observation reads them from the same private objects.
-        // `ScopedAtomic` is only a zero-resource observation tag here; no
-        // workgroup-sync semantic or verification claim is imported.
-        let resources = unsafe {
-            adapter.observe_workgroup_sync_resources_v1(
-                WorkgroupSyncProfileKindV1::ScopedAtomic,
-                &executable,
-                kernel,
-            )
-        }?;
         validate_kernel(
             KernelFactsV1 {
                 executable: *resolution.executable_object().as_bytes(),
@@ -651,12 +645,9 @@ fn execute_with_adapter(
                 symbol_is_exact: resolution.export_symbol() == PLIRON_SCALAR_ADD_V1_KERNEL,
                 kernarg_size: resolution.kernarg_segment_size(),
                 kernarg_alignment: resolution.kernarg_segment_alignment(),
-                static_group_segment: resources.static_group_segment_bytes(),
-                private_segment: resources.private_segment_bytes(),
-                resource_observation_is_exact: resources.profile()
-                    == WorkgroupSyncProfileKindV1::ScopedAtomic
-                    && resources.executable() == resolution.executable_object()
-                    && resources.kernel() == resolution.kernel_object(),
+                static_group_segment,
+                private_segment,
+                resource_observation_is_exact: true,
             },
             executable_identity,
         )?;
@@ -723,8 +714,8 @@ fn execute_with_adapter(
             kernarg_alignment: resolution.kernarg_segment_alignment(),
             explicit_kernarg_bytes: PLIRON_SCALAR_ADD_V1_EXPLICIT_KERNARG_BYTES,
             implicit_kernarg_bytes: PLIRON_SCALAR_ADD_V1_IMPLICIT_KERNARG_BYTES,
-            static_group_segment: resources.static_group_segment_bytes(),
-            private_segment: resources.private_segment_bytes(),
+            static_group_segment,
+            private_segment,
             grid: geometry.grid(),
             workgroup: geometry.workgroup(),
             dynamic_lds: geometry.dynamic_shared_memory_bytes(),

@@ -341,6 +341,8 @@ fn run_relocated_exact(workspace: &Path, target: &Path) -> Output {
         .args([
             "-p",
             "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
             "--test",
             "moe_top2_v1",
             "--target-dir",

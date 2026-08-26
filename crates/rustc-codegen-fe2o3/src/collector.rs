@@ -468,16 +468,16 @@ pub(crate) fn count_production_roots_before_monomorphization_v1(tcx: TyCtxt<'_>)
 
 /// Collects compatibility evidence for an explicitly selected qualification
 /// oracle. The caller must supply both the resolved target and its explicit
-/// route token; process environment cannot silently alter collection.
+/// oracle token; process environment cannot silently alter collection.
 #[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn collect_qualification_device_functions<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
     target: &crate::AmdGpuTarget,
-    pipeline: crate::qualification_selection::SelectedQualificationOracle,
+    qualification: crate::qualification_selection::SelectedQualificationOracle,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
-    let extended_helper_edges = pipeline.requires_extended_collector_edges();
+    let extended_helper_edges = qualification.requires_extended_collector_edges();
     collect_device_functions_for_purpose(
         tcx,
         cgus,
@@ -519,7 +519,8 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
         .collect::<Vec<_>>();
     if roots.is_empty() {
         return Err(CollectError {
-            message: "production-v1 collected no authenticated external device root".to_owned(),
+            message: "production compilation collected no authenticated external device root"
+                .to_owned(),
         });
     }
     Ok(AuthenticatedCollectedKernelClosureV1 {
@@ -4963,7 +4964,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "qualification-oracles-test-only")]
-    fn qualification_entry_requires_resolved_target_and_explicit_route_token() {
+    fn qualification_entry_requires_resolved_target_and_explicit_oracle_token() {
         let source = include_str!("collector.rs");
         let qualification = source
             .split_once("pub(crate) fn collect_qualification_device_functions")

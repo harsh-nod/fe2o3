@@ -1,19 +1,17 @@
 # General Typed Dispatch V1
 
-Status: living interface contract for a bounded CUDA-Oxide parity vertical
-slice. The compiler-to-HSACO and test-authority execution slice is implemented;
-the production-safe exit gate remains open.
+Status: living interface contract for the sole Worker V3 production route. The
+compiler-to-HSACO slice and generic host lifecycle are implemented; production
+verification authority and end-to-end hardware replay remain open.
 
 This milestone connects the existing general scalar/slice ABI model and
-packing plan to a second typed kernel selected from one authenticated Worker V2
-executable. It does not make arbitrary artifact metadata authoritative and it
-does not make the historical exact vecadd artifact profile authoritative.
+packing plan to typed kernels selected from one authenticated Worker V3
+executable. It does not make arbitrary artifact metadata authoritative.
 
 At current head, exact vecadd is no longer a production macro or host-API
 exception: ordinary `#[kernel(typed)]` emits its Worker V3 expectation and
-`Arguments` surface. The byte-compatible V2 registration and embedded launch
-API described by this historical milestone are available only through explicit
-qualification features while differential coverage is retained.
+`Arguments` surface. Historical Worker V2 host admission and workload-specific
+launch APIs have been deleted, including from qualification builds.
 
 Implementation through `dc9738e367c392f7716eacb8459ca73fa32abbbb` completes
 the bounded alpha/zeta `gfx942` compiler-to-HSACO slice. It includes V3 lexical
@@ -21,21 +19,18 @@ registration, rustc-semantic reconstruction, authenticated logical/export role
 selection, exact named ABI identity, guarded typed lowering, COV6
 explicit/implicit ABI canonicalization, checked device-buffer views,
 lifetime-branded packing, backend-witness emission and validation, and
-signature-specific generated `Arguments`, `prepare`, and linear `dispatch`
-adapters. One genuine Worker V2 build publishes both kernels in one inspected
+the generic generated `Arguments`, `prepare`, and linear `dispatch` contract.
+One genuine compiler build publishes both kernels in one inspected
 COV6 HSACO. The exact exported payload then executes both kernels on MI300X for
 lengths `1`, `255`, `256`, `257`, and `1023`, with independent CPU oracles and
 canaries.
 
-Two execution tests now exist. One deliberately calls the reviewed raw unsafe
-HSA adapter. The other exercises generated slice capabilities, typed
-alpha/zeta selection and preparation, the reviewed executable lifecycle, and
-safe `dispatch`, but uses test-only semantic witnesses and an explicitly fake
-prerequisite authenticator. Both accept the same externally supplied
-SHA-256-pinned HSACO.
+Two retired Worker V2 execution tests recorded raw and generated-safe hardware
+observations for that digest. They are historical evidence, not selectable
+routes or current production coverage.
 
-The remaining composition is larger than implementing
-`WorkerV2PrerequisiteAuthenticatorV1`. Cargo now durably publishes the bounded
+The remaining composition requires a production Worker V3 verifier. Cargo now
+durably publishes the bounded
 Worker V3 load-readiness envelope, recovers it from exact retained inputs, and
 transfers the canonical envelope and artifact-directory descriptors to the application
 while retaining a fresh current-publication lease. The accepted host consumer
@@ -72,7 +67,7 @@ LDS, asynchronous launch, or caller-constructed ABI descriptions.
 
 ```text
 macro-generated Rust expectation
-        + backend-issued semantic witness
+        + independently admitted compiler descriptor
         + authenticated artifact entry
         + exact finalized executable occurrence
         + observed context/device
@@ -98,19 +93,18 @@ No descriptive manifest, proof record, HSA observation, or packed byte buffer
 grants authority by itself. Every transition consumes or borrows the exact
 upstream evidence that it validates.
 
-At `dc9738e`, the deterministic two-entry `ArtifactContainerV1` candidate,
-exact generated alpha/zeta adapter, and raw and generated-safe HSA execution
-harnesses are landed.
-The adapter validates compiler and host identities, checked packing, alias
-registration, geometry, physical kernarg, and synchronous completion. The
+At `dc9738e`, the deterministic two-entry `ArtifactContainerV1` candidate and
+retired raw and generated-safe HSA execution harnesses recorded a bounded
+composition result. Those workload-specific adapters are no longer present.
+The generic Worker V3 adapter validates compiler and host identities, checked
+packing, alias registration, geometry, physical kernarg, and synchronous completion. The
 Cargo artifact-container adapter remains inert and exposes no authority
 accessor. Cargo's canonical envelope crosses the application boundary through
 pinned descriptors while Cargo retains and revalidates its recovered lease.
 The accepted host consumer composes that handoff with recovered admission and
-fails at the missing genuine prerequisite authority. No production
-`WorkerV2PrerequisiteAuthenticatorV1` currently satisfies the unsafe
-authentication contract. The raw harness bypasses that gap; the generated-safe
-harness exercises the state machine with explicit test authority there.
+fails at the missing genuine verification authority. No production Worker V3
+verifier currently satisfies that authentication contract. Retired Worker V2
+test authority is not an alternate route.
 
 Cargo validates and pins the exact initial ELF64 x86-64 static image. One valid
 PT_TLS owned by a writable, non-executable load is accepted; malformed,
@@ -128,10 +122,11 @@ of scope.
 The macro supplies an independent bounded lexical expectation for the kernel's
 logical ABI, physical components, effects, launch contract, kernel binding, and
 generated host-contract identity. Lexical matching is not semantic authority:
-the expectation must obtain a versioned, identity-bound witness from private
-backend-defined pointer/length accessors. Host validation rejects missing,
-malformed, substituted, wrong-profile, wrong-binding, wrong-contract, and
-trailing witness bytes before artifact admission can use the expectation.
+production Worker V3 compares the marker binding to the independently admitted
+compiler descriptor before verification, and compares the complete generated
+argument layout to that descriptor before dispatch. The reviewed verifier must
+bind the generated host-contract identity to the exact compiler handoff and
+final executable lineage.
 
 Rustc independently validates aliases and monomorphized layouts against
 semantic primitive types and genuine trusted `DisjointSlice<T, Index1D>`
@@ -142,16 +137,17 @@ both names and the complete semantic signature match. Renamed roots,
 logical/export disagreement, reordered arguments, or type lookalikes retain
 positional `argN` names and produce a different host contract identity.
 
-Worker V2 derives one bounded witness payload from each accepted V3 descriptor
-root, emits private binding-derived pointer/length accessors in host objects,
-and adds those objects to the host link. The alpha/zeta integration validates
-both linked witnesses and requires exactly both COV6 entries. The finalizer
-reconciles the descriptor's complete sizes (`296` for alpha and `312` for zeta)
-with metadata's explicit prefixes (`40` and `56`), while the LLVM worker
+The compiler derives one bounded witness payload from each accepted V3
+descriptor root. Production Worker V3 rejects marker/descriptor binding
+substitution before verification and validates every generated argument field
+against the admitted descriptor before dispatch. The alpha/zeta compiler
+integration validates both linked witnesses and requires exactly both COV6
+entries. The finalizer reconciles the descriptor's complete sizes (`296` for
+alpha and `312` for zeta) with metadata's explicit prefixes (`40` and `56`),
+while the LLVM worker
 canonicalizes the optimized kernels to the complete 256-byte implicit block.
 The witness authenticates the compiler expectation only. It does not grant
-artifact currency, load, or launch authority. The exact vecadd V2 profile
-remains byte-compatible only as a qualification oracle.
+artifact currency, load, or launch authority.
 
 ### Artifact and bundle binding
 
@@ -181,9 +177,9 @@ exclusive `DeviceBuffer` views retain allocation identity and selected-region
 provenance while rejecting invalid ranges and borrow violations. The macro emits
 an opaque signature-specific `Arguments` holder whose fields are typed scalars
 and source-index-bound slice capabilities. General lookalike holders remain
-inert. For the exact authenticated alpha/zeta roles, the macro also emits the
-unsafe host-SPI implementation and a safe `prepare` wrapper from the same ABI
-model used to derive the generated host contract identity. Preparation packs
+inert. The generic Worker V3 contract emits the unsafe host-SPI implementation
+and a safe `prepare` wrapper from the same ABI model used to derive the generated
+host contract identity. Preparation packs
 the exact `40`- or `56`-byte explicit prefix, registers allocation-relative
 regions for alias and in-flight admission, derives 256-thread geometry, and
 retains the values in a non-`Clone` prepared invocation through synchronous
@@ -216,7 +212,7 @@ size, alignment, kernel, executable, queue, or geometry substitution.
 V1 dispatch is synchronous. The resolved kernel, prepared arguments, geometry,
 allocation witnesses, and queue resources remain live until exact completion.
 
-The ignored `hardware-test-hooks` harnesses have executed on MI300X with the
+Retired `hardware-test-hooks` harnesses executed on MI300X with the
 Worker V2-produced COV6 HSACO whose SHA-256 is
 `3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
 Each loaded one executable, resolved both symbols, packed the frozen layouts,
@@ -227,8 +223,9 @@ calls the reviewed unsafe HSA adapter directly. At commit
 the same matrix using checked generated slice capabilities, typed preparation,
 safe dispatch, and one reviewed loaded executable. It still uses test-only
 semantic witnesses and an explicitly fake prerequisite authenticator. The
-results are exact-digest `gfx942` hardware and runtime-composition evidence,
-not production proof-authenticated safe dispatch or parity evidence.
+results are historical exact-digest `gfx942` observations, not current
+production proof-authenticated safe dispatch or parity evidence. The harnesses
+and exact alpha/zeta host adapters have been deleted.
 
 ## Required Rejection Tests
 
@@ -246,21 +243,21 @@ not production proof-authenticated safe dispatch or parity evidence.
 
 ## Exit Gate
 
-The milestone passes only when:
+The replacement milestone passes only when:
 
 1. one external Cargo command compiles two real Rust kernels with different
    scalar/slice signatures and one shared helper into one deterministic
-   `gfx942` Worker V2 artifact;
-2. independent typed generated adapters select both entries and derive packing
-   plans from their own compiler-generated expectations;
-3. both symbols resolve from one loaded HSA executable and cannot cross ABI,
+   `gfx942` artifact;
+2. the production Worker V3 verifier authenticates compiler, Verus/proof,
+   Rust-layout, and machine-effect evidence for the exact payload;
+3. generic generated contracts select both entries and derive packing plans
+   from their own compiler-generated expectations;
+4. both symbols resolve through one Worker V3 executable and cannot cross ABI,
    proof, or executable identities;
-4. both kernels execute on MI300X with independent CPU oracles and canary
-   checks;
-5. source/unit, compile-fail, malformed-input, native-worker, and hardware
-   tests pass at one recorded commit; and
-6. the parity dashboard records the evidence without promoting a row beyond
-   its CUDA-Oxide acceptance contract.
+5. both kernels execute on MI300X with independent CPU oracles and canary
+   checks through the production route; and
+6. all rejection, crash-recovery, compile-fail, compiler, runtime, and hardware
+   gates pass at one recorded commit.
 
 Passing this gate advances rows 12, 33, 35-39, 48-49, and 78-81, but does not
 by itself complete general Rust lowering, asynchronous execution, Verus
@@ -276,12 +273,13 @@ refinement, or repository-wide CUDA-Oxide parity.
 3. Implemented: Cargo durably publishes and reconstructs the canonical bounded
    Worker V3 load-readiness envelope containing the container, bundle/proof
    index, descriptor lineage, raw/finalized identities, and published claim.
-4. Implemented inert foundation: recovered host admission consumes that
-   envelope with a freshly reacquired lease. The production V3 application
-   handoff transfers read-only pinned descriptors to an identity-pinned sealed
-   application and binds them to a fresh occurrence. Prerequisite
-   authentication and a generated-safe MI300X replay without the external
-   HSACO test handoff remain open.
+4. Implemented production foundation: the V3 application handoff consumes that
+   envelope with a freshly reacquired lease, transfers read-only pinned
+   descriptors to an identity-pinned sealed application, and binds them to a
+   fresh occurrence. The separate recovered Worker V2 host admission and launch
+   bridge are deleted. A production `WorkerV3VerifierV1` implementation and a
+   generated-safe MI300X replay without the external HSACO test handoff remain
+   open.
 5. Implemented inert foundation: bounded physical machine-effect evidence and
    executable-evidence records bind reviewed mechanics and identities. Direct
    extraction of each final alpha/zeta entry's complete machine effects and
@@ -290,9 +288,9 @@ refinement, or repository-wide CUDA-Oxide parity.
    proof inputs, tools, identities, and freshness. They grant no proof authority,
    are not compiler or machine-code refinement, and are not production-bound to
    the final payload.
-7. Implement a production `WorkerV2PrerequisiteAuthenticatorV1` only after the
-   compiler, Verus, proof-to-executable, Rust-layout, and machine-effect inputs
-   are reviewed and immutable; reject mutation and stale replay.
+7. Implement a production `WorkerV3VerifierV1` only after the compiler, Verus,
+   proof-to-executable, Rust-layout, and machine-effect inputs are reviewed and
+   immutable; reject mutation and stale replay.
 8. Implemented API foundation: safe mutable splits retain exact disjoint
    allocation-relative regions with unit and compile-fail coverage. Mechanical
    Verus correspondence and general same-allocation MI300X execution remain.

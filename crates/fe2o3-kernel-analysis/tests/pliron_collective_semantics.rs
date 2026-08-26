@@ -144,7 +144,7 @@ fn fold_report(
             proof_id(71),
             proof_id(41),
             PropertyAttr::FunctionalRefinement,
-            EvidenceStatusAttr::Proved,
+            EvidenceStatusAttr::Checked,
             CoveredBoundaryAttr::Mir,
         );
         let refinement = RequireRefinementOp::new(
@@ -173,8 +173,8 @@ fn finite_fold_needs_both_coverage_and_an_independent_value_proof() {
     );
     assert!(report.is_clean(), "{report:?}");
     assert_eq!(report.collective_contract_count(), 1);
-    assert_eq!(report.proved_collective_contract_count(), 1);
-    assert!(report.all_collective_contracts_are_proved());
+    assert_eq!(report.policy_checked_collective_contract_count(), 1);
+    assert!(report.all_collective_contracts_are_policy_checked());
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn exactly_once_contributions_never_infer_the_fold_value() {
         false,
     );
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
-    assert_eq!(report.proved_collective_contract_count(), 0);
+    assert_eq!(report.policy_checked_collective_contract_count(), 0);
     assert!(report.findings().iter().any(|finding| matches!(
         finding,
         PlironSemanticRefinementFindingV1::CollectiveContractIncomplete { reason, .. }

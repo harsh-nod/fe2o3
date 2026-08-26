@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `GeneratedLdsGemmSlice1HostAdapterV1<'a, 'b, 'c>` in the current scope
- --> tests/ui/generated_lds_gemm/adapter_cannot_clone.rs:4:30
-  |
-4 |     let _duplicate = adapter.clone();
-  |                              ^^^^^ method not found in `GeneratedLdsGemmSlice1HostAdapterV1<'_, '_, '_>`

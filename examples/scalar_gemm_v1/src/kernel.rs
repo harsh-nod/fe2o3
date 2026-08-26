@@ -1,5 +1,7 @@
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
+// The compiler qualification profile authenticates this expanded recurrence syntax.
+#[allow(clippy::assign_op_pattern)]
 #[kernel(
     typed,
     namespace = "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",

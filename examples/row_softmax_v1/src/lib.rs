@@ -17,8 +17,6 @@
 #[allow(missing_docs, unsafe_code)]
 pub mod kernel;
 mod numerical_contract;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod production_release;
 mod source_model_correspondence;
 mod verification_certificate;
 
@@ -37,13 +35,6 @@ pub use numerical_contract::{
     GFX942_OCML_COMPARISON_POLICY_V1, HOST_ORACLE_EXPONENTIAL_V1, MAX_ROW_ELEMENTS_V1,
     RowSoftmaxOracleStateV1, SoftmaxComparisonErrorV1, SoftmaxComparisonPolicyV1,
     SoftmaxContractErrorV1, SoftmaxExponentialV1, compare_row_softmax_v1, row_softmax_oracle_v1,
-};
-#[cfg(feature = "qualification-oracles-test-only")]
-pub use production_release::{
-    AdmittedRowSoftmaxV1WorkloadV1, ExactRowSoftmaxV1CaseV1, RowSoftmaxV1MaskProfileV1,
-    RowSoftmaxV1ProductionErrorV1, RowSoftmaxV1ProductionReceiptV1, RowSoftmaxV1ReleaseWorkloadV1,
-    admit_row_softmax_v1_source_tested_artifact_v1, execute_row_softmax_v1_production_workload_v1,
-    preflight_row_softmax_v1_workload_v1,
 };
 pub use verification_certificate::{
     ROW_SOFTMAX_VERIFICATION_MANIFEST_V1, RowSoftmaxVerificationCertificateV1,

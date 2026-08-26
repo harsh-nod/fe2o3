@@ -1,5 +1,0 @@
-error[E0599]: no method named `exact_hsaco_bytes` found for reference `&RecoveredWorkerV2PinnedDescriptorV1` in the current scope
- --> tests/ui/recovered_worker_v2_admission/exact_bytes_are_unavailable.rs:4:19
-  |
-4 |     let _ = value.exact_hsaco_bytes();
-  |                   ^^^^^^^^^^^^^^^^^ method not found in `&RecoveredWorkerV2PinnedDescriptorV1`

@@ -90,9 +90,10 @@ source and artifact:
    accesses, one injective output, and strict multiply-then-add order.
 3. The standalone worker uses upstream LLVM and LLD library APIs to produce and
    inspect one COV6 HSACO. COMGR and command-line linking are forbidden.
-4. The reviewed direct-HSA lifecycle loads those exact bytes and checks a
-   boundary-shape matrix against an independent CPU oracle with allocation
-   canaries and read-only input comparisons.
+4. The production Worker V3 application path must load those exact bytes and
+   check a boundary-shape matrix against an independent CPU oracle with
+   allocation canaries and read-only input comparisons. The former recovered
+   Worker V2 HSA harness is deleted and grants no retained runtime evidence.
 
 The verification gate separately requires Verus proofs of flattened-index
 bounds, input initialization, output injectivity, loop invariants, and the

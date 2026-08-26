@@ -36,8 +36,7 @@ fn workspace() -> PathBuf {
 }
 
 #[test]
-#[ignore = "requires the configured ROCm LLVM toolchain"]
-fn same_logical_name_in_two_rlibs_resolves_distinct_artifacts() {
+fn explicit_namespaces_with_the_same_logical_name_resolve_distinct_v3_registrations() {
     let workspace = workspace();
     let fixture_root =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding");

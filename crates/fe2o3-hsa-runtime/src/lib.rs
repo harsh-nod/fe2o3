@@ -3,15 +3,7 @@
 mod api;
 mod dispatch;
 mod environment;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod flash_attention_resource_observation;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod lds_gemm_resource_observation;
 mod lifecycle;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod moe_top2_resource_observation;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod row_softmax_resource_observation;
 mod sys;
 #[cfg(test)]
 mod test_process_execution {
@@ -23,11 +15,6 @@ mod test_process_execution {
             .and_then(|mut child| child.wait())
     }
 }
-#[cfg(feature = "qualification-oracles-test-only")]
-mod wave64_collectives_resource_observation;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod workgroup_sync_resource_observation;
-
 #[cfg(feature = "hardware-test-hooks")]
 pub use dispatch::ReviewedHsaHardwareTestBufferV1;
 pub use environment::{HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};

@@ -62,23 +62,6 @@ MAX_RUNTIME_FILES = 256
 MAX_RUNTIME_BYTES = 512 * 1024 * 1024
 MAX_CAPTURE_BYTES = 16 * 1024 * 1024
 MAX_CGROUP_SAMPLES = 4096
-HARDWARE_ADDRESS_SPACE_BYTES = 4 * 1024 * 1024 * 1024 * 1024
-HARDWARE_DLOPEN_PATHS = (
-    Path("/opt/rocm-7.2.4/lib/libamd_comgr.so.3.0.0"),
-    Path("/opt/rocm-7.2.4/lib/libhsa-amd-aqlprofile64.so.1.0.70204"),
-)
-HARDWARE_RUNTIME_DATA_PATHS = (
-    Path("/etc/nsswitch.conf"),
-    Path("/etc/passwd"),
-    Path("/usr/share/zoneinfo/Etc/UTC"),
-    Path("/opt/amdgpu/share/libdrm/amdgpu.ids"),
-)
-HARDWARE_DEVICE_PATHS = (
-    Path("/dev/kfd"),
-    *(Path(f"/dev/dri/renderD{minor}") for minor in range(128, 192, 8)),
-    Path("/dev/null"),
-    Path("/dev/random"),
-)
 WORKER_V2_REQUEST_DOMAIN = b"FE2O3/DIRECT-LLVM-WORKER-REQUEST/V2\0"
 WORKER_V2_RESPONSE_DOMAIN = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -154,49 +137,6 @@ EXPECTED_ALIASES = {
 
 class EvidenceError(RuntimeError):
     pass
-
-
-def validate_hardware_runtime_configuration() -> None:
-    paths = (*HARDWARE_DLOPEN_PATHS, *HARDWARE_RUNTIME_DATA_PATHS)
-    if len(paths) != len(set(paths)):
-        raise EvidenceError("hardware runtime closure contains duplicate paths")
-    for path in paths:
-        if (
-            not path.is_absolute()
-            or path.is_symlink()
-            or path.resolve(strict=True) != path
-            or not path.is_file()
-        ):
-            raise EvidenceError(f"hardware runtime path is not canonical: {path}")
-
-
-def capture_hardware_device_identities() -> list[dict[str, Any]]:
-    records = []
-    for path in HARDWARE_DEVICE_PATHS:
-        if path.is_symlink() or path.resolve(strict=True) != path:
-            raise EvidenceError(f"hardware device path is not canonical: {path}")
-        metadata = os.stat(path, follow_symlinks=False)
-        if not stat.S_ISCHR(metadata.st_mode):
-            raise EvidenceError(f"hardware device is not a character node: {path}")
-        records.append(
-            {
-                "path": os.fspath(path),
-                "filesystem_device": metadata.st_dev,
-                "inode": metadata.st_ino,
-                "mode": metadata.st_mode,
-                "uid": metadata.st_uid,
-                "gid": metadata.st_gid,
-                "rdev_major": os.major(metadata.st_rdev),
-                "rdev_minor": os.minor(metadata.st_rdev),
-                "ctime_ns": metadata.st_ctime_ns,
-            }
-        )
-    return records
-
-
-def revalidate_hardware_device_identities(records: list[dict[str, Any]]) -> None:
-    if records != capture_hardware_device_identities():
-        raise EvidenceError("hardware device-node identity changed")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -276,67 +216,6 @@ def verify_transaction_capture(record: dict[str, Any]) -> None:
         or sha256_bytes(raw_output) != record.get("raw_output_identity")
     ):
         raise EvidenceError("compiler transaction raw bytes do not recompute their identities")
-
-
-def verify_hardware_capture(evidence_root: Path, observation: dict[str, Any]) -> None:
-    run = evidence_root / "run-1"
-    stdout = verify_bound_document(run / "hardware-stdout.bin", observation["stdout_document"])
-    stderr = verify_bound_document(run / "hardware-stderr.bin", observation["stderr_document"])
-    measurements_bytes = verify_bound_document(
-        run / "hardware-cgroup-measurements.json",
-        observation["cgroup_measurements_document"],
-    )
-    if (
-        len(stdout) + len(stderr) != observation.get("bounded_output_bytes")
-        or sha256_bytes(stdout + stderr) != observation.get("bounded_output_sha256")
-    ):
-        raise EvidenceError("raw hardware output does not reproduce its observation")
-    try:
-        measurements = json.loads(measurements_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError("cgroup measurements are not JSON") from error
-    if canonical_json(measurements) != measurements_bytes:
-        raise EvidenceError("cgroup measurements are not canonical JSON")
-    samples = measurements.get("samples")
-    final = measurements.get("final_files")
-    expected_names = {
-        "memory.current",
-        "memory.peak",
-        "memory.max",
-        "pids.current",
-        "pids.peak",
-        "pids.max",
-    }
-    if (
-        measurements.get("schema") != "fe2o3-cgroup-v2-command-measurement-v1"
-        or not isinstance(samples, list)
-        or not 1 <= len(samples) <= MAX_CGROUP_SAMPLES
-        or not isinstance(final, dict)
-        or set(final) != expected_names
-    ):
-        raise EvidenceError("cgroup measurement shape is invalid")
-    previous = -1
-    for sample in samples:
-        elapsed = sample.get("elapsed_nanoseconds")
-        files = sample.get("files")
-        if (
-            not isinstance(elapsed, int)
-            or elapsed <= previous
-            or not isinstance(files, dict)
-            or set(files) != expected_names
-        ):
-            raise EvidenceError("cgroup sample is invalid or reordered")
-        previous = elapsed
-        for value in files.values():
-            if value != "max" and (not isinstance(value, str) or not value.isdigit()):
-                raise EvidenceError("cgroup sample contains a non-numeric value")
-    if (
-        int(final["memory.peak"]) != observation.get("peak_memory_bytes")
-        or int(final["pids.peak"]) != observation.get("peak_processes")
-        or int(final["memory.max"]) != observation.get("physical_memory_limit_bytes")
-        or int(final["pids.max"]) != 256
-    ):
-        raise EvidenceError("cgroup final files do not reproduce peaks and limits")
 
 
 def reject_repository_python_bytecode(repo: Path) -> None:
@@ -2046,349 +1925,6 @@ def build_from_canonical_snapshot(
         source.relocate(archived_root)
 
 
-def elf_interpreter(executable: SealedExecutable) -> Path:
-    header = os.pread(executable.fd, 64, 0)
-    if len(header) != 64 or header[:6] != b"\x7fELF\x02\x01":
-        raise EvidenceError("generated executable is not little-endian ELF64")
-    program_offset = struct.unpack_from("<Q", header, 32)[0]
-    program_entry_bytes = struct.unpack_from("<H", header, 54)[0]
-    program_entries = struct.unpack_from("<H", header, 56)[0]
-    if program_entry_bytes != 56 or not 1 <= program_entries <= 1024:
-        raise EvidenceError("generated executable program-header table is invalid")
-    interpreters = []
-    for index in range(program_entries):
-        entry = os.pread(
-            executable.fd,
-            program_entry_bytes,
-            program_offset + index * program_entry_bytes,
-        )
-        if len(entry) != program_entry_bytes:
-            raise EvidenceError("generated executable program-header table truncated")
-        kind, _, offset, _, _, file_bytes, _, _ = struct.unpack("<IIQQQQQQ", entry)
-        if kind == 3:
-            if not 2 <= file_bytes <= 4096:
-                raise EvidenceError("ELF interpreter field is unbounded")
-            raw = os.pread(executable.fd, file_bytes, offset)
-            if len(raw) != file_bytes or raw[-1:] != b"\0" or b"\0" in raw[:-1]:
-                raise EvidenceError("ELF interpreter field is malformed")
-            interpreters.append(Path(raw[:-1].decode("utf-8", "strict")))
-    if len(interpreters) != 1:
-        raise EvidenceError("generated dynamic executable lacks one ELF interpreter")
-    interpreter = interpreters[0].resolve(strict=True)
-    if not interpreter.is_absolute() or interpreter.is_symlink():
-        raise EvidenceError("ELF interpreter did not resolve to a canonical file")
-    return interpreter
-
-
-def runtime_paths_for_executable(
-    executable: SealedExecutable,
-    dlopen_roots: tuple[RetainedFile, ...],
-    cwd: Path,
-    environment: dict[str, str],
-    tools: dict[str, PinnedTool],
-    supervisor: Supervisor,
-) -> tuple[list[Path], Path]:
-    paths: set[Path] = set()
-    targets = ((executable.proc_path, (executable.fd,), "hardware executable"),)
-    targets += tuple(
-        (f"/proc/self/fd/{root.fd}", (root.fd,), root.label)
-        for root in dlopen_roots
-    )
-    for target, inherited_fds, label in targets:
-        completed = run_command(
-            [os.fspath(tools["ldd"].path), target],
-            cwd,
-            environment,
-            tools,
-            supervisor,
-            capture=True,
-            extra_inherited_fds=inherited_fds,
-        )
-        output = (completed.stdout or b"").decode("utf-8", "strict")
-        if "not found" in output:
-            raise EvidenceError(f"{label} has an unresolved runtime dependency")
-        for line in output.splitlines():
-            match = re.search(r"=>\s+(/\S+)", line)
-            direct = re.match(r"\s*(/\S+)\s+\(", line)
-            candidate = match.group(1) if match else direct.group(1) if direct else None
-            if candidate is not None:
-                paths.add(Path(candidate).resolve(strict=True))
-    paths.update(root.path for root in dlopen_roots)
-    if not paths or len(paths) > MAX_RUNTIME_FILES:
-        raise EvidenceError("hardware executable runtime closure count is invalid")
-    interpreter = elf_interpreter(executable)
-    if interpreter not in paths:
-        raise EvidenceError("ldd closure did not bind the ELF interpreter")
-    return sorted(paths, key=os.fspath), interpreter
-
-
-def build_and_run_hardware_observation(
-    source: SnapshotClosure,
-    run: Path,
-    execution_root: Path,
-    evidence_root: Path,
-    tools: dict[str, PinnedTool],
-    golden: dict[str, Any],
-    supervisor: Supervisor,
-    retained_hsaco: RetainedFile,
-    retained_closures: list[RetainedClosure],
-) -> dict[str, Any]:
-    archived_root = source.root
-    if archived_root != run / "source":
-        raise EvidenceError("hardware source snapshot has an unexpected archive path")
-    source.relocate(execution_root)
-    generated_file = None
-    retained_test = None
-    sealed_test = None
-    shm_fixture: Path | None = None
-    shm_create: Path | None = None
-    try:
-        environment = run_environment(run, run / "tool-path")
-        hardware_target = run / "hardware-cargo-target"
-        if hardware_target.exists() or hardware_target.is_symlink():
-            raise EvidenceError("hardware CARGO_TARGET_DIR was not absent")
-        hardware_target.mkdir(mode=0o700)
-        environment["CARGO_TARGET_DIR"] = os.fspath(hardware_target)
-        environment["RUSTC"] = f"/proc/self/fd/{tools['rustc'].executable.fd}"
-        environment["CFLAGS"] = (
-            "-resource-dir=/opt/rocm-7.2.4/lib/llvm/lib/clang/22"
-        )
-        environment["CXXFLAGS"] = environment["CFLAGS"]
-        environment["ROCM_PATH"] = "/opt/rocm-7.2.4"
-        build = run_command(
-            [
-                os.fspath(tools["cargo"].path),
-                "test",
-                "--offline",
-                "--locked",
-                "-p",
-                "fe2o3-hsa-runtime",
-                "--features",
-                "hardware-test-hooks",
-                "--test",
-                "gfx942_two_kernel_hardware",
-                "--no-run",
-                "--message-format=json",
-            ],
-            source.root,
-            environment,
-            tools,
-            supervisor,
-            capture=True,
-            limits=CommandLimits(
-                timeout_seconds=600,
-                memory_bytes=16 * 1024 * 1024 * 1024,
-                processes=512,
-                cpu_seconds=600,
-            ),
-        )
-        executables: list[Path] = []
-        for line in (build.stdout or b"").splitlines():
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            target = message.get("target", {})
-            executable = message.get("executable")
-            if (
-                target.get("name") == "gfx942_two_kernel_hardware"
-                and target.get("kind") == ["test"]
-                and executable
-            ):
-                executables.append(Path(executable))
-        if len(executables) != 1:
-            raise EvidenceError("hardware build did not produce exactly one test executable")
-        generated_file, executable_record = measure_generated_executable(
-            executables[0], hardware_target, "run-1 gfx942 hardware test"
-        )
-        retained_test = RetainedFile.open(
-            "run-1-gfx942-hardware-test", executables[0], require_executable=True
-        )
-        sealed_test = SealedExecutable.from_retained(retained_test)
-        initial_dlopen_files: list[RetainedFile] = []
-        try:
-            for path in HARDWARE_DLOPEN_PATHS:
-                initial_dlopen_files.append(
-                    RetainedFile.open(
-                        f"hardware-dlopen:{path.name}", path.resolve(strict=True)
-                    )
-                )
-            initial_dlopen_roots = tuple(initial_dlopen_files)
-            runtime_paths, interpreter = runtime_paths_for_executable(
-                sealed_test,
-                initial_dlopen_roots,
-                source.root,
-                environment,
-                tools,
-                supervisor,
-            )
-            loader_cache = Path("/etc/ld.so.cache").resolve(strict=True)
-            runtime_data = tuple(
-                path.resolve(strict=True) for path in HARDWARE_RUNTIME_DATA_PATHS
-            )
-            runtime = capture_retained_closure(
-                "run-1-gfx942-hardware-runtime",
-                [
-                    *((f"runtime:{path.as_posix()}", path) for path in runtime_paths),
-                    ("loader-cache:/etc/ld.so.cache", loader_cache),
-                    *((f"runtime-data:{path.as_posix()}", path) for path in runtime_data),
-                ],
-                {
-                    "executable_sha256": sealed_test.sha256,
-                    "elf_interpreter": os.fspath(interpreter),
-                    "dlopen_policy": "retained roots plus transitive ldd closure",
-                    "dlopen_roots": [os.fspath(root.path) for root in initial_dlopen_roots],
-                },
-                max_total_bytes=MAX_RUNTIME_BYTES,
-            )
-        finally:
-            for root in initial_dlopen_files:
-                root.close()
-        retained_closures.append(runtime)
-        supervisor.guards.extend(runtime.files)
-        runtime_by_path = {retained.path: retained for retained in runtime.files}
-        try:
-            retained_dlopen_roots = tuple(
-                runtime_by_path[path.resolve(strict=True)] for path in HARDWARE_DLOPEN_PATHS
-            )
-        except KeyError as error:
-            raise EvidenceError("runtime closure omitted a retained dlopen root") from error
-        verified_paths, verified_interpreter = runtime_paths_for_executable(
-            sealed_test,
-            retained_dlopen_roots,
-            source.root,
-            environment,
-            tools,
-            supervisor,
-        )
-        if verified_paths != runtime_paths or verified_interpreter != interpreter:
-            raise EvidenceError("retained hardware runtime closure changed on verification")
-        (evidence_root / "run-1/hardware-runtime-manifest.json").write_bytes(
-            canonical_json(runtime.manifest)
-        )
-        device_identities = capture_hardware_device_identities()
-        shm_fixture = Path(f"/dev/shm/fe2o3-evidence-denied-{os.getpid()}.so")
-        shm_create = Path(f"/dev/shm/fe2o3-evidence-create-denied-{os.getpid()}")
-        if shm_fixture.exists() or shm_create.exists():
-            raise EvidenceError("device Landlock fixture path already exists")
-        fixture_source = min(runtime_paths, key=lambda path: path.stat().st_size)
-        shutil.copyfile(fixture_source, shm_fixture)
-        shm_fixture.chmod(0o444)
-        retained_hsaco.revalidate()
-        hardware_environment = dict(environment)
-        hardware_environment.update(
-            {
-                "FE2O3_RUN_GFX942_TWO_KERNEL": "1",
-                "FE2O3_GFX942_ALPHA_ZETA_HSACO": os.fspath(retained_hsaco.path),
-                "FE2O3_GFX942_ALPHA_ZETA_SHA256": retained_hsaco.sha256,
-                "FE2O3_GFX942_ALPHA_ZETA_RETAINED_FD": str(retained_hsaco.fd),
-                "FE2O3_VERIFY_DEVICE_LANDLOCK": "1",
-                "FE2O3_DEVICE_LANDLOCK_SHM_FIXTURE": os.fspath(shm_fixture),
-                "FE2O3_DEVICE_LANDLOCK_SHM_CREATE": os.fspath(shm_create),
-            }
-        )
-        result = run_command(
-            [
-                os.fspath(executables[0]),
-                golden["hardware_test"],
-                "--ignored",
-                "--exact",
-                "--nocapture",
-            ],
-            source.root,
-            hardware_environment,
-            tools,
-            supervisor,
-            capture=True,
-            executable=sealed_test,
-            extra_inherited_fds=(retained_hsaco.fd,),
-            limits=CommandLimits(
-                timeout_seconds=300,
-                address_space_bytes=HARDWARE_ADDRESS_SPACE_BYTES,
-                cpu_seconds=300,
-            ),
-            writable_paths=HARDWARE_DEVICE_PATHS,
-            readable_paths=tuple(
-                [
-                    *runtime_paths,
-                    loader_cache,
-                    *runtime_data,
-                    retained_hsaco.path,
-                    *HARDWARE_DEVICE_PATHS[:-1],
-                ]
-            ),
-            readable_roots=(Path("/proc"), Path("/sys")),
-        )
-        revalidate_hardware_device_identities(device_identities)
-        retained_hsaco.revalidate()
-        sealed_test.revalidate()
-        retained_test.revalidate()
-        revalidate_generated_executable(generated_file, executable_record)
-        output = result.stdout + result.stderr
-        if b"compiler-evidence /dev/shm create/read/dlopen denial: PASS" not in output:
-            raise EvidenceError("hardware process did not prove the /dev/shm denial fixture")
-        stdout_path = evidence_root / "run-1/hardware-stdout.bin"
-        stderr_path = evidence_root / "run-1/hardware-stderr.bin"
-        cgroup_path = evidence_root / "run-1/hardware-cgroup-measurements.json"
-        stdout_path.write_bytes(result.stdout)
-        stderr_path.write_bytes(result.stderr)
-        cgroup_bytes = canonical_json(result.cgroup_measurements)
-        cgroup_path.write_bytes(cgroup_bytes)
-        stdout_record = document_record(result.stdout)
-        stderr_record = document_record(result.stderr)
-        cgroup_record = document_record(cgroup_bytes)
-        observation = {
-            "schema": "fe2o3-non-production-gfx942-hardware-observation-v2",
-            "authority": "none",
-            "claim": "exact-artifact-hardware-observation-only",
-            "test": golden["hardware_test"],
-            "target": golden["target"],
-            "hsaco": retained_hsaco.record(),
-            "test_executable": executable_record,
-            "hardware_runtime_closure_manifest_sha256": runtime.manifest[
-                "manifest_sha256"
-            ],
-            "elf_interpreter": os.fspath(interpreter),
-            "regular_file_read_policy": "exact allowlist; /dev/shm denied",
-            "device_write_policy": "exact character-node allowlist",
-            "device_identities": device_identities,
-            "dev_shm_create_read_dlopen_denied": True,
-            "boundary_lengths": golden["boundary_lengths"],
-            "cpu_oracles_checked": True,
-            "prefix_suffix_canaries_checked": True,
-            "returncode": result.returncode,
-            "elapsed_seconds": result.elapsed_seconds,
-            "peak_memory_bytes": result.peak_memory_bytes,
-            "peak_processes": result.peak_processes,
-            "physical_memory_limit_bytes": CommandLimits().memory_bytes,
-            "address_space_limit_bytes": HARDWARE_ADDRESS_SPACE_BYTES,
-            "bounded_output_bytes": len(output),
-            "bounded_output_sha256": sha256_bytes(output),
-            "output_concatenation": "hardware-stdout.bin then hardware-stderr.bin",
-            "stdout_document": stdout_record,
-            "stderr_document": stderr_record,
-            "cgroup_measurements_document": cgroup_record,
-        }
-        (evidence_root / "run-1/hardware-observation.json").write_bytes(
-            canonical_json(observation)
-        )
-        return observation
-    finally:
-        for path in (shm_create, shm_fixture):
-            if path is not None:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-        if sealed_test is not None:
-            sealed_test.close()
-        if retained_test is not None:
-            retained_test.close()
-        if generated_file is not None:
-            generated_file.close()
-        source.relocate(archived_root)
-
-
 def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) -> None:
     require_absent_output(run_root, "run root")
     require_absent_output(evidence_root, "evidence root")
@@ -2402,7 +1938,6 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
-    validate_hardware_runtime_configuration()
     soft_files, hard_files = resource.getrlimit(resource.RLIMIT_NOFILE)
     if hard_files < 262144:
         raise EvidenceError("compiler evidence requires an RLIMIT_NOFILE hard limit of 262144")
@@ -2615,18 +2150,6 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                     f"independent compiler transaction stable field differed: {field}"
                 )
         reject_cross_run_reuse(first_executables, second_executables)
-        hardware_observation = build_and_run_hardware_observation(
-            prepared[0][1],
-            prepared[0][0],
-            canonical_source,
-            evidence_root,
-            tools,
-            golden,
-            supervisor,
-            first_hsaco,
-            retained_closures,
-        )
-        verify_hardware_capture(evidence_root, hardware_observation)
         first_hsaco.revalidate()
         second_hsaco.revalidate()
         git_clean(repo, bootstrap_environment, tools, supervisor)
@@ -2651,16 +2174,6 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                 "generated-worker-build-manifest.json",
                 "generated-cargo-build-manifest.json",
             ]
-            if index == 1:
-                document_names.extend(
-                    [
-                        "hardware-runtime-manifest.json",
-                        "hardware-observation.json",
-                        "hardware-stdout.bin",
-                        "hardware-stderr.bin",
-                        "hardware-cgroup-measurements.json",
-                    ]
-                )
             for name in document_names:
                 document = output_dir / name
                 value = document.read_bytes()
@@ -2728,17 +2241,6 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
                     )
                 },
             ],
-            "hardware_observation": {
-                "document_sha256": sha256_bytes(
-                    canonical_json(hardware_observation)
-                ),
-                "test": hardware_observation["test"],
-                "target": hardware_observation["target"],
-                "hsaco_sha256": hardware_observation["hsaco"]["sha256"],
-                "boundary_lengths": hardware_observation["boundary_lengths"],
-                "cpu_oracles_checked": True,
-                "prefix_suffix_canaries_checked": True,
-            },
         }
         (evidence_root / "summary.json").write_bytes(canonical_json(summary))
         verify_bound_document(
@@ -2747,12 +2249,8 @@ def controller(run_root: Path, evidence_root: Path, *, observe_candidate: bool) 
         )
         for transaction in (first_transaction_record, second_transaction_record):
             verify_transaction_capture(transaction)
-        verify_hardware_capture(evidence_root, hardware_observation)
         print(f"source commit: {commit}")
         print(f"artifact SHA-256: {sha256_bytes(first_bytes)}")
-        print(
-            "MI300X alpha/zeta CPU-oracle and canary hardware observation: PASS"
-        )
         print("independent pinned-tool Worker V2 compiler evidence: PASS")
     finally:
         for generated in generated_inputs:
@@ -2777,7 +2275,6 @@ def self_test(repo: Path) -> None:
     golden, _ = read_bounded_json(golden_path)
     validate_manifest_document(manifest)
     validate_golden(golden, manifest_path, manifest_bytes)
-    validate_hardware_runtime_configuration()
     configured_runtime, runtime_closure = retain_configured_tool_runtime(repo, manifest)
     try:
         if sha256_bytes(canonical_json(configured_runtime)) != manifest["runtime_manifest_sha256"]:

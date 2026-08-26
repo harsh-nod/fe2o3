@@ -106,126 +106,46 @@ copyable inert pins. They are not joined to the rustc structural record, host
 code, runtime copies, machine addresses, an authenticated proof receipt, or a
 GPU artifact.
 
-## Host-observed routing bridge
+## Retired host routes
 
-`MoeRoutingOutputCandidateV1` is caller-supplied data. Conditioned on its top-2
-expert IDs, the checker validates the internally consistent fixed relation
-across top-2 IDs, requested and admitted counts, exclusive-scan offsets, stable
-route slots, accepted permutation, inverse map, sentinels, and the compact plan.
-It returns an opaque non-`Clone` witness, but this is not freshness or replay
-protection: a caller can construct and check an equivalent candidate again.
+The former MoE V1/V2 host bridges, generated adapters, denial token, exact
+top-2 lifecycle, and workload-specific HSA launcher were qualification
+alternatives. They never granted production artifact, load, launch, or
+execution authority and duplicated the generic Worker V3 application path.
+They have been removed.
 
-The upload function consumes that witness and synchronously uploads its offsets
-and inverse together. The returned bridge retains immutable views of both exact
-device regions, and expert preparation can no longer splice an unrelated
-offset array and inverse view. The opt-in `gfx942` test uploads those
-caller-supplied arrays and reads the two destinations back. It does not run the
-router or read back router-produced output.
+The ordinary Rust MoE kernels, rustc collection and structural diagnostics,
+canonical KIR/profile data, compact-plan verifier model, Verus obligations,
+negative mutations, and independent source/oracle tests remain. They are
+compiler and proof evidence, not a second runtime pipeline.
 
-The bridge has no authenticated router-completion provenance and does not
-validate top-2 IDs against logits or a tie policy. It does not bind route
-weights, packed activations, a router artifact, dispatch, or expert GPU
-execution. Its payload digest excludes context, stream, allocation, and region
-identities; those are retained as separate observations.
+Any executable MoE integration must now publish a normal Worker V3 descriptor
+and use the same application handoff, descriptor recovery, HSA
+load/resolve/dispatch/unload lifecycle, generated argument packing, alias
+admission, physical-resource validation, and dynamic-LDS handling as every
+other kernel. Workload-specific host lifecycle or HSA adapter APIs must not be
+reintroduced.
 
-## Manually pinned expert ABI and denial
+Direct Cargo compilation of the standalone example is not an evidence lane:
+its typed router dependency requires the per-crate binding issued by the
+fe2o3 wrapper. The rustc-codegen integration test below exercises the retained
+compiler boundary.
 
-The expert host adapter retains exactly eight typed regions:
-
-| Role | Element type and count | Access |
-|:--|:--|:--|
-| activation tiles | `u16[1024]` | shared read-only |
-| expert weights | `u16[1024]` | shared read-only |
-| expert offsets | `u32[5]` | bridge-retained read-only |
-| inverse routing | `u32[16]` | bridge-retained read-only |
-| route weights | `f32[16]` | shared read-only |
-| expert output tiles | `f32[1024]` | unique read-write |
-| compact output | `f32[256]` | unique read-write |
-| combined output | `f32[128]` | unique read-write |
-
-The reviewed constants manually pin `gfx942:xnack-`, four GEMM dispatches with
-grid/workgroup `[1,1,1]/[64,1,1]`, and one combine dispatch with
-`[2,1,1]/[64,1,1]`. GEMM explicit/complete kernarg sizes are `48/304` bytes;
-combine sizes are `64/320` bytes; alignment is eight bytes. These facts are not
-compiler-derived, and no packed kernarg or device address is exposed. The
-expert ABI remains manually pinned, not compiler-derived.
-
-Preparation terminates in `deny_moe_expert_execution_v1`. The denial token
-retains all borrows and exposes no artifact, copy, load, dispatch, completion,
-or unload operation. The missing authority-bearing path must derive the expert
-ABI from authenticated compiler/finalizer output, authenticate router
-completion and readback, bind route weights and packed activations, execute the
-compact materialization plan, and then establish expert artifact and runtime
-authority.
-
-## Typed MoE V2 fail-closed boundary
-
-The implementation through
-`10e5f90ece1937aaee77492e8e4e4742863d013b` adds a production-shaped typed
-boundary without making the expert path executable. Its exact request/batch
-identity commits the routing request, logits source, token activations, caller
-route-weight policy, and model expert-weight artifact. Its lifecycle transcript
-separately commits dispatch and readback context/stream identity, dispatch,
-completion and readback event identities, the completion-before-readback order,
-the fixed profile, the complete routing payload, and the shared request/batch.
-The typed identity encoding is process-local and pinned to the current Rust
-toolchain; it is not a durable cross-toolchain serialization or semantic proof.
-
-The checked-input join consumes completed readback and validates the concrete
-route weights, token-activation identity, and exact zero-padded packed activation
-layout. The completed upload requires the lifecycle's exact context and stream,
-checks all four destination lengths and allocation identities, rejects every
-alias pair, and retains typed activation, offsets, inverse, and route-weight
-regions together. The generated adapter additionally requires a weight-device-
-region binding to the model artifact named by the same request/batch, validates
-all eight region lengths, ranges, alignment, contexts, access roles, and alias
-pairs, and constructs only the fixed four-GEMM/one-combine ABI records.
-
-Every capability that crosses a lifecycle stage has private fields and is
-move-only. The UI suite rejects direct construction, field access, cloning,
-reuse after move, synthetic conversion, V1 substitution, raw-weight
-substitution, public test-issuer access, and attempts to extract authority.
-There is no public or feature-gated production issuer for completion/readback
-provenance, and the artifact pipeline cannot issue the required expert-weight
-binding. V2 upload and adapter preparation are therefore constructively
-unreachable from safe production code.
-
-V2 grants no artifact, copy, load, or dispatch authority and proves no routing
-or expert semantics, memory safety, race freedom, numerical correctness, or
-source-to-machine refinement. The V1 `gfx942` test described above observed only
-caller-supplied offsets/inverse upload and readback through V1. It did not use
-V2, and there is no V2 GPU observation or parity promotion.
-
-## Reproduce the bounded checks
+## Reproduce the retained checks
 
 Run from the repository root with the pinned Rust toolchain:
 
 ```sh
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test moe_top2_v1
+cargo test --locked -p rustc-codegen-fe2o3 \
+  --features qualification-oracles-test-only --test moe_top2_v1
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
-cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
-cargo test --locked -p fe2o3-host --test generated_moe_expert_v1_ui
-cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
-cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
-cargo test --locked -p fe2o3-host --features hardware-test-hooks \
-  --test generated_moe_expert_v2_ui
 cargo test --locked -p fe2o3-host \
-  --test moe_expert_v1_upload_hardware --no-run
-cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
+  --test production_application_handoff_ui
 ```
 
-The opt-in hardware observation requires a `gfx942:xnack-` HIP device:
-
-```sh
-cargo test --locked -p fe2o3-host \
-  --test moe_expert_v1_upload_hardware \
-  gfx942_routing_bridge_upload_readback_and_denial_are_exact \
-  -- --ignored --exact --nocapture
-```
-
-Passing the last command proves only the V1 caller-supplied offsets/inverse
-upload-readback and denial behavior described above. It supplies no V2 hardware
-evidence.
+These checks establish only the retained source, compiler, proof, oracle, and
+production-route-absence claims above. No MoE hardware execution or
+source-to-machine refinement claim follows from them.

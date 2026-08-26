@@ -60,12 +60,13 @@ pub use semantic_contract::{
     SemanticExpressionCommitmentOp, SemanticScalarType, SemanticSymbolAttr, SemanticSymbolOp,
 };
 pub use semantic_typed_contract::{
-    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticOverflowAttr,
-    SemanticScalarKindAttr, SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp,
-    SemanticTypedCastKindAttr, SemanticTypedCastOp, SemanticTypedCompareKindAttr,
-    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
-    SemanticTypedScalarV1, SemanticTypedSelectOp, SemanticTypedSymbolOp,
-    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
+    MAX_TENSOR_RESULT_COMPONENTS_V1, SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr,
+    SemanticOverflowAttr, SemanticScalarKindAttr, SemanticTypedBinaryKindAttr,
+    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
+    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
+    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
+    SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
+    TensorResultComponentOp,
 };
 pub use semantic_typed_expression::{
     MAX_SEMANTIC_TYPED_EXPRESSION_DEPTH_V1, MAX_SEMANTIC_TYPED_EXPRESSION_NODES_V1,
@@ -462,6 +463,7 @@ pub fn register_dialect(
     SemanticExpressionCommitmentOp::register(context);
     SemanticBinaryOp::register(context);
     SemanticTypedSymbolOp::register(context);
+    TensorResultComponentOp::register(context);
     SemanticTypedConstantOp::register(context);
     SemanticTypedUnaryOp::register(context);
     SemanticTypedBinaryOp::register(context);

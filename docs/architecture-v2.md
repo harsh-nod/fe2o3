@@ -42,13 +42,27 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `RustcInvocationDescriptorV3` that preserves the exact V2 process and
   environment while adding the complete closure. Protected release and the
   broker-to-wrapper raw sealed closure transfer are implemented. The wrapper
-  constructs and seals V3 and installs it at fd 199 for rustc; backend
-  admission and live-process equality are not wired yet.
-- Closure-bound compiler-handoff V2 and Worker publication-intent V2 schemas
-  and APIs are implemented on shared V1/V2 engines. Protected production
-  producer/consumer call sites and restart-marker integration still use V1;
-  the V2 records do not yet establish end-to-end production provenance. V1
-  wire formats and APIs remain available for compatibility.
+  constructs and seals V3 and installs it at fd 199 for rustc; the backend
+  revalidates the exact process, target, role pins, and closure before
+  production publication.
+- Production has one unselected compilation transaction. Cargo owns it as
+  `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
+  restart states rather than pipeline variants. Legacy V1/V2 work state,
+  workload-specific paths, and source-debug execution compile only with
+  `qualification-oracles-test-only`; the Cargo and host Worker V2 application
+  transfer, consumer, retained descriptors, and compatibility error alias have
+  been deleted from every build.
+- Production orchestration has one fixed Cargo plan. The first phase always
+  builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
+  backend and commits its generated-artifact generation. The second phase
+  builds or runs the same selection for the pinned rustc host target with
+  ordinary rustc and no device compiler controls. Users cannot select either
+  target or choose a different ordering.
+- `fe2o3-runtime-protocol` owns the production load envelope, application
+  handoff, and sealed static-application identity. Feature-free `cargo-fe2o3`
+  and `fe2o3-host` do not depend on `fe2o3-worker-v2-bundle`; that crate is a
+  qualification-only compatibility boundary. V1/V2/V3 suffixes that remain on
+  records are frozen wire versions, not selectable compiler implementations.
 - Versioned artifact, descriptor, durable-publication, generated launch, HIP,
   and HSA layers exist. Safe generated dispatch is still profile-specific; an
   arbitrary manifest cannot manufacture a safe Rust signature or launch
@@ -67,20 +81,18 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact typed MIR/CFG graph for a return-only supported subset and rejects all
   other observed MIR semantics terminally.
 - The Pliron LLVM lane has a live graph-derived extractor, deterministic bounded
-  LLVM-assembly serializer, and inert Worker V2 request bridge.
+  LLVM-assembly serializer, and a workload-neutral production handoff. Its
+  Worker V2 request bridge is retained only as a qualification oracle.
   `pliron-llvm` v0.17.0 is used with
   `default-features = false` for its typed dialect only. The bridge binds the
   exact request but grants no object, link, publication, load, or launch
   authority.
-- The closed gfx942 General GEMM profile now retains target, module, global,
+- The closed gfx942 General GEMM profile retains target, module, global,
   function, CFG, instruction, type, and per-item policy on the live graph, with
   separately hashed bounded non-graph inputs for stage identities, device
-  libraries, origins, and obligations. Fresh owner-borrowing export is the sole
-  structural route into serialization and worker admission. The compiler
-  machine, prepared Worker V2 owner, finalized bytes, and post-link observation
-  remain move-only through finalization. The late graph, worker, and finalizer
-  axes are freshly derived from those retained owners and remain inert; the
-  existing final authority join does not consume them yet.
+  libraries, origins, and obligations. Its older Worker V2 realization is now
+  a differential qualification oracle while those bounded semantics migrate
+  through the workload-neutral production handoff.
 - The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
   exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
   `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated
@@ -206,8 +218,9 @@ The current implementation has a bounded realization of steps 1, 2, and 4 for
 one `gfx942` profile. An external Cargo fixture supplies two kernel roots and a
 shared helper. The frontend gives the helper one canonical source identity;
 Kernel IR lowering checks each internal call against the collected helper's
-declared signature; and the direct LLVM/LLD Worker V2 path emits one inspected,
-durably published HSACO. The canonical V1 artifact container then represents
+declared signature; and the direct upstream LLVM/LLD production transaction
+emits one inspected, durably published HSACO. The canonical V1 artifact
+container then represents
 two kernel entries over that one native payload, with an independently keyed
 proof binding for each entry.
 
@@ -243,13 +256,13 @@ continue to point downward according to the machine-checked
 | `fe2o3-amd-target` | Canonical AMD target identities, features, and capability contracts | Compiler execution and runtime observation |
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
-| `fe2o3-compiler-api` | Target-neutral request, selector, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
-| `fe2o3-compiler-driver` | Single-route fail-closed API dispatch for inspect-only shadow evidence or the candidate-producing Pliron route | Production selection, codegen ownership, artifact/runtime authority |
+| `fe2o3-compiler-api` | Target-neutral request, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
+| `fe2o3-compiler-driver` | Single-backend fail-closed execution and output revalidation for the production compiler contract | Codegen ownership, artifact/runtime authority |
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
 | `fe2o3-pliron-scalar-add-v1` | Feature-free exact backend-fixture source/lineage, repository policy and authority, Worker execution join, and scalar finalization; qualification-only sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
-| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, raw launch | Kernel type discovery |
+| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, capability observations; raw module and launch APIs only in qualification builds | Kernel type discovery |
 | `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
 | `fe2o3-service-model`, `fe2o3-service-host` | Executable-free service semantics and authority-free borrow-retaining host typestates | Persistent execution, runtime waits, progress proof, storage-release authority |
 | `fe2o3-contracts`, `fe2o3-proof-contracts` | Shared launch/spec vocabulary, erased proof markers, and solver-neutral property records | Solving proofs, code generation, proof promotion |
@@ -474,12 +487,13 @@ explicit unsafe obligation.
 
 Bounded generated declarations, finalized descriptors, multi-entry artifacts,
 and typed preparation exist for reviewed profiles. The general rule remains:
-the generated declaration and finalized entry descriptor are the only safe
-route from Rust arguments to kernarg bytes. The generated declaration is
-trusted compiler output compiled into the host object. The serialized manifest
-is untrusted input until it matches that declaration and independent
-code-object inspection. A loader must never create a safe Rust signature by
-interpreting manifest bytes alone. The exact V1 accepted argument profiles,
+the macro-generated declaration and finalized entry descriptor are the only
+safe route from Rust arguments to kernarg bytes. Ordinary rustc compiles that
+declaration without a custom-backend host object. Worker V3 independently
+matches its binding and complete argument layout to the admitted compiler
+descriptor. The serialized manifest is untrusted input until that match and
+independent code-object inspection succeed. A loader must never create a safe
+Rust signature by interpreting manifest bytes alone. The exact V1 accepted argument profiles,
 authority transitions, rejection suite, and remaining exit gate are specified
 by the
 [general typed dispatch contract](general-typed-dispatch-v1.md).
@@ -618,10 +632,9 @@ general memory-safety, or race-freedom claim.
 - host async APIs so Rust lifetimes cover queued device execution;
 - build caching around complete source/proof/target/toolchain identities.
 
-The legacy recognizer and the structured compiler paths remain side by side
-until the structured path passes every current example and the relevant parity
-gates. Removal of a bootstrap path is a deliberate compatibility gate, not an
-early cleanup task.
+The production backend has one structured compiler route. Frozen wire versions
+and qualification-only oracles remain for compatibility and evidence, but they
+are not selectable production compiler implementations.
 
 ## Architectural Invariants
 

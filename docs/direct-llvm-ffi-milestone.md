@@ -105,12 +105,13 @@ General V3 also has checked buffer views and safe mutable splits, typed
 binding/packing, generated alpha/zeta `Arguments`, safe preparation and dispatch
 SPI, and a rustc backend emitter for binding-derived semantic-witness host
 objects. Cargo's Worker V2 artifact-container adapter is compiled outside tests
-and durably publishes the inert canonical load envelope. A bounded cooperative
-application handoff and recovered host admission transfer pinned descriptors,
-reacquire currentness, and revalidate the envelope, but grant no prerequisite,
-load, or launch authority by themselves. No production implementation of
-`WorkerV2PrerequisiteAuthenticatorV1` authenticates the compiler, verifier, ABI,
-and executable-effect prerequisites required by the load state machine.
+and durably publishes the inert canonical load envelope. The Worker V3
+application handoff transfers pinned descriptors, reacquires currentness, and
+revalidates the envelope, but grants no load or launch authority before
+verification. The recovered Worker V2 host admission and launch bridge are
+deleted. No production implementation of `WorkerV3VerifierV1` authenticates the
+compiler, verifier, ABI, and executable-effect prerequisites required by the
+production load state machine.
 
 The hardware harnesses still accept the exported HSACO and digest through
 opt-in test boundaries: one calls the reviewed raw unsafe HSA adapter and one
@@ -361,11 +362,11 @@ Finalized Worker V2 bundle admission, currentness leases, the authenticated
 load state machine, generated alpha/zeta safe dispatch SPI, and the reviewed
 runtime adapter already exist. The generated-safe MI300X test exercises those
 runtime pieces with explicit test authority. Cargo envelope publication,
-canonical lease reacquisition, V3-only production descriptor handoff, and
-recovered inert host admission also exist. This gate still requires a
-production `WorkerV2PrerequisiteAuthenticatorV1`. Bidirectional external-device
-FFI, `gfx1151`, production-bound machine-code effect evidence, and
-Verus/compiler refinement also remain open.
+canonical lease reacquisition, and V3-only production descriptor handoff also
+exist. The recovered Worker V2 host route is deleted. This gate still requires
+a production `WorkerV3VerifierV1`. Bidirectional external-device FFI,
+`gfx1151`, production-bound machine-code effect evidence, and Verus/compiler
+refinement also remain open.
 
 ## G8: Reproducibility, Evidence, and Release Gate
 

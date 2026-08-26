@@ -193,7 +193,6 @@ fn require_pair_request_consistency(
             != vectorized_request.compiler_profile_identity()
         || reference_request.target_profile_identity()
             != vectorized_request.target_profile_identity()
-        || reference_request.selector() != vectorized_request.selector()
         || reference_request.limits() != vectorized_request.limits()
         || reference.toolchain_route_identity() != vectorized.toolchain_route_identity()
         || reference.limits() != vectorized.limits()
@@ -638,8 +637,8 @@ mod tests {
     use super::*;
     use fe2o3_compiler_api::{
         CompileLimitsV1, CompileRequestV1, CompilerProfileIdentityV1, CompilerStageV1,
-        KernelInstanceIdentityV1, PipelineSelectorV1, RequestIdentityV1, SnapshotFormatIdentityV1,
-        SnapshotIdentityV1, StageSnapshotV1, TargetProfileIdentityV1,
+        KernelInstanceIdentityV1, RequestIdentityV1, SnapshotFormatIdentityV1, SnapshotIdentityV1,
+        StageSnapshotV1, TargetProfileIdentityV1,
     };
     use fe2o3_general_gemm_compiler::{
         GeneralGemmFrontendSemanticBindingV1, GeneralGemmLoweringLimitsV1,
@@ -758,7 +757,6 @@ mod tests {
             TargetProfileIdentityV1::from_untrusted_bytes(identity(fixture.target_byte)),
             general_gemm_symbolic_pipeline_configuration_identity_v1(schedule),
             obligations,
-            PipelineSelectorV1::PlironV1,
             input,
             fixture.compile_limits,
         )

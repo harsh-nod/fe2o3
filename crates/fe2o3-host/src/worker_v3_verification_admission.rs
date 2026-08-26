@@ -7,10 +7,9 @@ use sha2::{Digest, Sha256};
 
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedSemanticWitnessErrorV1, DeviceIdentity, RecoveredWorkerV3AdmissionErrorV1,
-    RecoveredWorkerV3PinnedDescriptorV1, WorkerV3HostLineageIdentityV1,
-    validate_compiler_generated_semantic_witness_v1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1, DeviceIdentity,
+    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
+    WorkerV3HostLineageIdentityV1,
 };
 
 const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
@@ -359,9 +358,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             .acquire_retained_currentness_token()
             .map_err(WorkerV3VerificationAuthenticationErrorV1::CurrentPublication)?;
         let request = prepare_request::<K>(&admission, &current).map_err(|error| match error {
-            WorkerV3VerificationRequestPreparationErrorV1::SemanticWitness(error) => {
-                WorkerV3VerificationAuthenticationErrorV1::SemanticWitness(error)
-            }
             WorkerV3VerificationRequestPreparationErrorV1::Marker(field) => {
                 WorkerV3VerificationAuthenticationErrorV1::Marker(field)
             }
@@ -451,9 +447,6 @@ where
         .acquire_retained_currentness_token()
         .map_err(WorkerV3VerificationAuditErrorV1::CurrentPublication)?;
     let request = prepare_request::<K>(admission, &current).map_err(|error| match error {
-        WorkerV3VerificationRequestPreparationErrorV1::SemanticWitness(error) => {
-            WorkerV3VerificationAuditErrorV1::SemanticWitness(error)
-        }
         WorkerV3VerificationRequestPreparationErrorV1::Marker(field) => {
             WorkerV3VerificationAuditErrorV1::Marker(field)
         }
@@ -475,8 +468,6 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
     WorkerV3VerificationRequestV1<'admission, K>,
     WorkerV3VerificationRequestPreparationErrorV1,
 > {
-    validate_compiler_generated_semantic_witness_v1::<K>()
-        .map_err(WorkerV3VerificationRequestPreparationErrorV1::SemanticWitness)?;
     validate_marker::<K>(admission.descriptor())
         .map_err(WorkerV3VerificationRequestPreparationErrorV1::Marker)?;
     let lineage = admission.lineage_evidence();
@@ -500,7 +491,6 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
 }
 
 enum WorkerV3VerificationRequestPreparationErrorV1 {
-    SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
     Marker(&'static str),
     UnsupportedGeneratedProfile,
 }
@@ -513,6 +503,9 @@ fn validate_marker<K: CompilerGeneratedKernelExpectationV1>(
     }
     if descriptor.entry_name().as_str() != K::EXPORT_NAME {
         return Err("export name");
+    }
+    if descriptor.kernel_id() != KernelId::from_bytes(K::KERNEL_BINDING_ID_V1) {
+        return Err("binding identity");
     }
     Ok(())
 }
@@ -646,7 +639,6 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV3VerificationAuthenticationErrorV1<E> {
-    SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
     Marker(&'static str),
     UnsupportedGeneratedProfile,
     CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
@@ -657,7 +649,6 @@ pub enum WorkerV3VerificationAuthenticationErrorV1<E> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WorkerV3VerificationAuditErrorV1<E> {
-    SemanticWitness(CompilerGeneratedSemanticWitnessErrorV1),
     Marker(&'static str),
     UnsupportedGeneratedProfile,
     CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
@@ -675,7 +666,6 @@ pub enum WorkerV3VerificationDecisionErrorV1 {
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuthenticationErrorV1<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SemanticWitness(error) => write!(formatter, "invalid generated witness: {error}"),
             Self::Marker(field) => write!(formatter, "generated marker {field} mismatch"),
             Self::UnsupportedGeneratedProfile => formatter
                 .write_str("Worker V3 verification requires a generated host-contract identity"),
@@ -708,7 +698,6 @@ impl fmt::Display for WorkerV3VerificationDecisionErrorV1 {
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuditErrorV1<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SemanticWitness(error) => write!(formatter, "invalid generated witness: {error}"),
             Self::Marker(field) => write!(formatter, "generated marker {field} mismatch"),
             Self::UnsupportedGeneratedProfile => {
                 formatter.write_str("Worker V3 audit requires a generated host-contract identity")
@@ -730,7 +719,6 @@ where
 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::SemanticWitness(error) => Some(error),
             Self::CurrentPublication(error) => Some(error),
             Self::Verifier(error) => Some(error),
             Self::Decision(error) => Some(error),
@@ -747,7 +735,6 @@ where
 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::SemanticWitness(error) => Some(error),
             Self::CurrentPublication(error) => Some(error),
             Self::Auditor(error) => Some(error),
             Self::Marker(_) | Self::UnsupportedGeneratedProfile => None,

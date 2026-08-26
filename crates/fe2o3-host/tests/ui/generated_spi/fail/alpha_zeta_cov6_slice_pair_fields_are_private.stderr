@@ -1,7 +1,0 @@
-error[E0451]: fields `input` and `access` of struct `fe2o3_host::GeneratedSliceArgumentPairV1` are private
- --> tests/ui/generated_spi/fail/alpha_zeta_cov6_slice_pair_fields_are_private.rs:4:40
-  |
-4 |     let GeneratedSliceArgumentPairV1 { input, access } = pair;
-  |                                        ^^^^^  ^^^^^^ private field
-  |                                        |
-  |                                        private field

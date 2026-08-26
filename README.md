@@ -19,6 +19,14 @@ artifact, runtime, and proof boundaries described below. See the
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
 hardware execution lanes.
 
+Feature-free production has one compiler transaction and no pipeline selector.
+`cargo fe2o3 build` and `cargo fe2o3 run` first build the selected crate graph
+for the fixed AMDGPU target through fe2o3, commit the exact device artifact
+generation, and then build or run the same selection for the pinned host target
+with ordinary rustc. Callers do not pass `--target`. Remaining V1/V2/V3 names
+identify frozen records and protocols, while legacy behavior is compiled only
+as explicit qualification oracles; neither is a selectable production route.
+
 ## CUDA-Oxide status
 
 Against the pinned cuda-oxide baseline, the evidence ledger currently records
@@ -113,11 +121,11 @@ authority, or generalized memory/race safety. Their evidence is tracked in
 The fixed 64-element row-softmax slice uses one shared numerical oracle and an
 inert deterministic certificate that binds its exact Rust source, reviewed MIR
 profile, Kernel IR and LLVM identities, numerical policy, and Verus/Z3 closure.
-An exact finalizer join now consumes that certificate with the direct LLVM/LLD
+The exact compiler/finalizer lane still checks the direct upstream LLVM/LLD
 worker exchange, OCML closure, artifact, descriptor, ABI, geometry, and resource
-identities into a sealed linear host token. A fixed `gfx942:xnack-`, width-64,
-unmasked typed HSA path, guarded buffers, CPU comparison, and 25-pin terminal
-receipt are implemented behind that join.
+identities. Its workload-specific host token, typed HSA lifecycle, hardware
+launcher, and Cargo `legacy-hsa-runtime` switch are deleted. Row-softmax can
+return to hardware only through the generic Worker V3 application path.
 
 The row profile also has a host-specific compiler/code-object release gate. By
 protocol, implementation Commit A contains the gate but deliberately contains
@@ -133,17 +141,6 @@ evidence can be claimed only when a compliant B and two runs from distinct fresh
 build and Cargo directories reproduce the same caller-supplied manifest digest
 and byte-identical outputs. That combination establishes only operator-selected
 reviewed integrity, not origin authentication or GPU evidence.
-
-The typed runtime path remains unreachable from the production authority
-command. Candidate `2e5ad53bcb20f2a46e91128a42e838d918d61581` (tree
-`892f014381cd3e34f81cb05df3b9bbda4a412478`) is rejected and is not integrated
-or accepted. On MI300X it passed structural and hostile static-wrapper probes,
-crossed `stage=binding-wrapper`, authenticated Cargo and pinned rustc, loaded
-the backend, and collected the kernel. It then failed closed before the release
-main phase because `cargo-fe2o3` had no executable identity for broker
-authentication. The diagnostic run executed the Worker zero times and reached
-no artifact admission, GPU loading or dispatch, or `/dev/kfd` or `/dev/dri`
-access; COMGR opens were zero.
 
 W0/P0 is now accepted as a bounded host-link prerequisite. Its dedicated,
 genuinely static `fe2o3-host-lld` is built from pinned upstream LLVM/LLD
@@ -163,8 +160,8 @@ source-to-machine or Verus-to-machine refinement. W1/P0 Broker V4 is the next
 production blocker. The parity counts remain `0/82/0/12` normative,
 `0/15/0` supplemental, and `0/97/0/12` combined. The direct GPU link path
 remains separate and pinned to upstream LLVM 22 with in-process `lld::lldMain`,
-without COMGR or a shell GPU linker. The fixed row-softmax production slice
-remains tracked under [#120](https://github.com/harsh-nod/fe2o3/issues/120).
+without COMGR or a shell GPU linker. The replacement Worker V3 row-softmax
+slice remains tracked under [#120](https://github.com/harsh-nod/fe2o3/issues/120).
 The subsequent fixed FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through
 [#125](https://github.com/harsh-nod/fe2o3/issues/125).
@@ -185,36 +182,13 @@ compact-plan model verifies 19 Verus obligations, rejects seven mutations, and
 is differentially checked across all 625 valid count vectors. Neither is a
 MIR-to-KIR refinement proof or an authority-bearing proof receipt.
 
-On the host, a checked bridge validates internal consistency across one
-caller-supplied top-2/counts/offsets/slots/permutation/inverse snapshot, uploads
-offsets and inverse together, and retains both device regions. An opt-in
-`gfx942` test reads those two uploaded arrays back. It does not authenticate a
-router run, freshness, logits/tie selection, route weights, packed activations,
-dispatch, or expert GPU execution. The expert ABI remains manually pinned, and
-preparation still ends at a denial-only execution boundary. No expert GPU
-result, performance claim, or parity promotion is made.
-
-The typed MoE V2 host boundary through `10e5f90ec` closes only the mechanical
-joins that V1 deliberately omitted. Move-only private capabilities bind one
-exact request/batch identity to routing request and logits identities, token
-activations, caller route-weight policy, and the model expert-weight artifact.
-A separate lifecycle transcript binds the exact dispatch, completion, full
-readback, completion-before-readback order, profile, payload, context, and
-stream. Checked inputs then bind the concrete route weights and exact packed
-activation layout; upload checks four jointly retained destinations, and the
-generated adapter checks the weight-artifact binding plus all eight typed
-regions, non-aliasing, access roles, target, context, and fixed ABI mechanics.
-
-Those V2 types have private fields, are linear at each authority transition,
-and have compile-fail coverage against construction, cloning, conversion, test
-issuer access, and authority extraction. There is no production issuer for the
-completion/readback provenance or expert-weight artifact binding, so safe
-production code cannot reach V2 upload or preparation: the success path is
-constructively unreachable. The boundary grants no artifact, copy, load, or
-dispatch authority and proves neither routing nor expert semantics. The
-`gfx942` upload/readback observation above is V1 evidence only; there has been
-no V2 GPU observation and no parity promotion.
-
+The former MoE V1/V2 host bridges, generated adapters, exact top-2 lifecycle,
+and workload-specific HSA launcher were non-production qualification
+alternatives. They have been removed so MoE execution cannot bypass the sole
+Worker V3 application, descriptor, argument, HSA, and unload lifecycle. The
+ordinary Rust kernels, rustc/KIR diagnostics, compact-plan verifier and Verus
+evidence, and independent source/oracle tests remain. MoE hardware execution
+through Worker V3 is still pending and no parity promotion is claimed.
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
@@ -310,11 +284,11 @@ target lowering, and host execution into explicit ownership boundaries:
   These records validate representation and consistency. They do not prove a
   claim, compile a kernel, execute a service, or grant artifact/runtime
   authority.
-- Compiler composition: `fe2o3-compiler-driver` routes one explicit
-  `PlironShadow` or `PlironV1` request to one configured backend and never
-  falls back to a second route. Shadow is inspect-only and `PlironV1` is the
-  only candidate-producing compiler API route. The production rustc backend
-  has no selector. Temporary non-publishing migration oracles are compiled
+- Compiler composition: `fe2o3-compiler-driver` executes one production
+  request through one configured backend and has no selector or fallback slot.
+  Inspection is an observation of that transaction rather than another
+  compiler implementation. The production rustc backend likewise has no
+  selector. Temporary non-publishing migration oracles are compiled
   only by the `qualification-oracles-test-only` backend feature and selected
   by `FE2O3_QUALIFICATION_ORACLE_V1` in isolated integration tests.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
@@ -364,11 +338,13 @@ target lowering, and host execution into explicit ownership boundaries:
 - Artifact, build, proof, and evidence boundaries remain in
   `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`,
-  `fe2o3-worker-v2-bundle`, `fe2o3-build-authority`,
+  `fe2o3-runtime-protocol`, `fe2o3-build-authority`,
   `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
   `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`,
   `fe2o3-protected-publisher`, `fe2o3-verifier`, and
-  `fe2o3-differential`.
+  `fe2o3-differential`. `fe2o3-worker-v2-bundle` remains only for
+  qualification-oracle and compatibility tests; it is absent from the normal
+  feature-free dependency graphs of `cargo-fe2o3` and `fe2o3-host`.
 
 The machine-checked layer policy forbids dependencies that invert these
 ownership directions. The production-directed GPU finalizer continues to use
@@ -454,9 +430,15 @@ Safe ownership of resources used by asynchronous copies is documented in
 - The HIP runtime provides contexts, streams, device buffers, pinned host
   buffers, events, synchronous transfers, event-backed borrowed and owned
   asynchronous transfers, module loading, and kernel launch.
-- Raw module loading and raw launch are explicit `unsafe` escape hatches. The
-  caller remains responsible for artifact trust, target and ABI compatibility,
-  pointer validity, aliasing, launch geometry, and resource lifetimes.
+- The `fe2o3-host` raw launch macro and parameter pack are qualification-only
+  `unsafe` escape hatches. Production applications load and dispatch through
+  the authenticated Worker V3 transaction and compiler-generated typed
+  arguments. Feature-free `fe2o3-core` retains context, stream, memory, event,
+  and capability APIs but does not export raw modules, functions, parameter
+  packs, launch configurations, or launch functions. Those primitives require
+  `qualification-raw-hip-test-only`; qualification callers remain responsible
+  for artifact trust, target and ABI compatibility, pointer validity, aliasing,
+  launch geometry, and resource lifetimes.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 
@@ -535,10 +517,11 @@ turn the foundations below into end-to-end features.
   context-scoped allocation ranges and rejects overlapping mutable or
   mutable/shared aliases. The exact generated vecadd adapter assembles these
   pieces behind its safe API. The general doc-hidden generated-code SPI still
-  exposes an unsafe compiler boundary for legacy profiles: backend/linker
-  association of a marker, complete ABI and effects, and executable semantics
-  must be correct before its sealed launch can be treated as safe. General V3
-  adds the separate fail-closed semantic-witness requirement described below.
+  exposes an unsafe compiler boundary for legacy profiles: association of a
+  marker, complete ABI and effects, and executable semantics must be correct
+  before its sealed launch can be treated as safe. Production Worker V3 checks
+  the generated marker binding against the independently admitted descriptor,
+  then checks the complete generated argument layout before dispatch.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -552,7 +535,8 @@ turn the foundations below into end-to-end features.
   `i64`/`u64`, `f32`/`f64`, shared slices, and genuine trusted
   `DisjointSlice<T, Index1D>` arguments. The macro emits an expectation-only V3
   registration while rustc independently reconstructs semantic types, layouts,
-  effects, physical ABI, and backend semantic witnesses. Exact single-source
+  effects, and physical ABI. The ordinary host build has no custom-backend
+  object or private semantic-witness symbol dependency. Exact single-source
   typed Rust kernels named `alpha` and `zeta` form the first General-V3 vertical
   slice. Their source roles and argument names are authenticated as part of the
   ABI identity rather than inferred positionally: alpha binds
@@ -560,20 +544,13 @@ turn the foundations below into end-to-end features.
   descriptors have explicit/complete COV6 kernarg sizes `40/296` and `56/312`.
   Exact role, name, signature, mutability, or layout substitutions fail closed.
 
-  The macro generates signature-specific `Arguments` and exact alpha/zeta host
-  adapters from that same typed source model. The adapters retain allocation
-  borrows, reconstruct the named ABI, validate the selected Worker V2 entry,
-  pack the explicit prefix, admit aliases and geometry, allocate the complete
-  aligned COV6 kernarg, initialize the implicit region, and expose synchronous
-  preparation/dispatch. Other General-V3 signatures still receive inert
-  `Arguments` only. This generated path is implemented, but it is not yet a
-  usable production authority path. Durable Worker V2 publication,
-  finalized-bundle host admission, a currentness lease, the authenticated load
-  state machine, and the reviewed `fe2o3-hsa-runtime` adapter exist. The missing
-  bridge is a production implementation of
-  `WorkerV2PrerequisiteAuthenticatorV1`: only test/fake implementations can
-  currently promote compiler, Verus/proof, and effect evidence into the
-  generated safe preparation path.
+  The macro generates signature-specific `Arguments` for the workload-neutral
+  Worker V3 host contract. The generic adapter retains allocation borrows,
+  reconstructs the named ABI, validates the selected Worker V3 descriptor,
+  packs the explicit prefix, admits aliases and geometry, allocates the complete
+  aligned COV6 kernarg, initializes the implicit region, and exposes synchronous
+  preparation/dispatch. Production verifier implementations are still needed
+  to promote compiler, Verus/proof, and effect evidence into that path.
 
   The rustc path recognizes only the exact alpha/zeta MIR shapes and lowers
   their trusted thread index, `Option`-guarded `DisjointSlice::get_mut`, slice
@@ -581,24 +558,12 @@ turn the foundations below into end-to-end features.
   contract through canonical Kernel IR. Unsupported targets, float policy,
   names, signatures, branches, or payload provenance fail closed. This is an
   exact lowering profile, not general Rust GPU lowering.
-- The bounded Worker V2 host path can admit every manifest kernel that shares
-  one exact finalized payload and select two distinct compiler-generated marker
-  types from that admitted executable identity. Selection rechecks marker,
-  binding, target, ABI/effects, physical-layout, and executable identities and
-  retains a borrow of the admitted bundle. The reviewed HSA lifecycle can load
-  one code object and resolve a fixed set of distinct symbols into a non-clone
-  kernel set that borrows the executable; duplicate requests and native symbol,
-  kernel-object, or derived-identity aliases are rejected, and safe Rust cannot
-  unload the executable while the set is live. These are typed admission,
-  symbol-resolution, and lifetime foundations. Exact alpha/zeta generated
-  adapters add named-ABI packing and synchronous safe dispatch on top of this
-  state machine. General kernarg derivation remains absent, and the exact
-  adapters cannot enter their production safe path until a production
-  `WorkerV2PrerequisiteAuthenticatorV1` promotes the required evidence.
-  Recovery can independently reopen the exact durable publication, reacquire a
-  fresh currentness lease, revalidate finalized bytes and descriptor lineage,
-  and return an inert recovered-bundle descriptor. That descriptor carries no
-  bytes, authentication, load, launch, or prerequisite authority.
+- The recovered Worker V2 host descriptor, launch-metadata bridge, synchronous
+  HSA handoff, and Scalar GEMM Worker V2 hardware harness are deleted. The
+  reviewed HSA adapter and physical observations remain shared mechanics for
+  the production Worker V3 lifecycle. Qualification-only Worker V2 bundle and
+  exact generated dispatch code are being removed next; they grant no
+  production authority.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while
@@ -649,22 +614,20 @@ turn the foundations below into end-to-end features.
   artifact-directory descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
   the challenge-bound ACK and retains the current-publication lease through
-  application exit. Worker V2 application transfer is qualification-only.
+  application exit. Cargo has no Worker V2 application transfer branch in
+  either production or qualification builds; stale V2 envelope names are
+  recognized only so they can be rejected before application spawn.
   Feature-free `fe2o3-host` builds export only the Worker V3 application,
   admission, verification, HSA load, and generated dispatch route. Worker V2
   application recovery, bundle admission, prerequisite authentication, HSA
-  loading, launch metadata, and its alpha/zeta, scalar-GEMM, and Worker-V2
-  vecadd adapters require the host crate's
-  `qualification-oracles-test-only` feature. General
+  lifecycle, launch metadata, and workload-specific host adapters have been
+  deleted rather than retained behind a qualification feature. General
   `#[kernel(typed)]` expansion, including the exact `f32` vecadd signature,
-  emits only its Worker V3 adapter unless an oracle fixture explicitly requests
-  `qualification_worker_v2`. The old embedded vecadd artifact contract and
-  generated `Kernel`/`Prepared` API are absent from feature-free host builds.
-  They remain available only to differential tests through the host
-  qualification feature and the example's
-  `qualification-embedded-vecadd-test-only` feature.
-  Production prerequisite authentication, authorized HSA loading, and launch
-  remain open.
+  emits only the generic Worker V3 adapter. The old
+  `qualification_worker_v2` macro option, embedded vecadd artifact contract,
+  generated `Kernel`/`Prepared` API, and example feature have been deleted.
+  Production Worker V3 verification authority remains open; authorized Worker
+  V3 HSA loading and generated dispatch are the only host execution route.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper
@@ -769,24 +732,25 @@ turn the foundations below into end-to-end features.
   it is evidence for the generated artifact's code, ABI, and behavior, not an
   execution of the production generated adapter or a general safety proof.
 
-  At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, a second ignored
+  At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, a now-retired ignored
   MI300X test passed the same digest and boundary-length matrix through the
   generated alpha/zeta argument capabilities, selected-kernel preparation,
   reviewed load/resolve/dispatch/unload lifecycle, and safe `dispatch` SPI.
   It uses an explicitly fake prerequisite authenticator and test-only semantic
   witnesses, so it validates runtime composition and hardware behavior but is
   not production authentication, Verus evidence, or a machine-code safety
-  proof.
+  proof. That Worker V2 host harness and its workload-specific adapters are no
+  longer part of the source tree; the observation remains historical evidence.
 
   Compiler identity and origin are not authenticated, no Verus result or
   compiler/machine-code refinement proof is authenticated and bound to this
   executable, and the publication receipt grants no HSA load or launch
   authority. On the MI300X `gfx942:xnack-` lane, the ignored real-Cargo
   alpha/zeta Worker V2 publication test and the digest-pinned HSA hardware
-  tests pass alongside the earlier direct-source and external-bitcode-provider
-  publication tests. Both the raw and generated-safe hardware paths are now
-  exercised, but no production prerequisite authenticator can authorize the
-  safe SPI from authenticated compiler/proof/effect evidence.
+  tests passed alongside the earlier direct-source and external-bitcode-provider
+  publication tests. The retired runs do not constitute current production
+  execution coverage. A production Worker V3 verifier must authenticate and
+  join compiler, proof, and effect evidence before the sole safe SPI can run.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
@@ -831,8 +795,9 @@ turn the foundations below into end-to-end features.
   `Arguments` are implemented as source/unit foundations. At `d509ca5`, their
   generated slice capabilities can consume checked shared/exclusive subregions,
   retain allocation-relative region identity, and feed the existing alias and
-  packing foundations. Exact alpha/zeta `Arguments` now have macro-emitted
-  preparation/dispatch adapters; other signatures remain inert.
+  packing foundations. The macro emits the generic Worker V3 argument and
+  preparation contract for every accepted signature; exact alpha/zeta host
+  adapters have been deleted.
   Aggregates, return values, and arbitrary rustc layouts also remain outside V3.
   In required-envelope mode, the Cargo production path consumes a measured
   upstream canonical envelope-input capsule rather than synthesizing direct-link
@@ -852,12 +817,9 @@ turn the foundations below into end-to-end features.
   returning an inert descriptor. This is the sole protected production
   descriptor handoff, but it grants no prerequisite, load, or launch authority.
 
-  Separately, only fake/test implementations of
-  `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust
-  ABI, and machine-effect evidence cannot yet be authentically promoted into
-  safe dispatch. The generated-safe MI300X test proves that the existing host
-  and HSA state machines compose once supplied with test authority; it does not
-  close any of these production or proof gaps.
+  No production Worker V3 verifier yet promotes compiler, Verus/proof, Rust
+  ABI, and machine-effect evidence into safe dispatch. Retired Worker V2 test
+  authority is not an alternate route and cannot be selected in any build.
 - Checked mutable views now support simultaneously live disjoint subviews via
   `split_at_mut`, with exclusivity enforced by Rust borrowing. The mechanical
   Verus proof of that split and its allocation-relative region theorem remains

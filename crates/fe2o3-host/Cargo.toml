@@ -9,7 +9,9 @@ description = "Host-side launch helpers for fe2o3."
 
 [features]
 hardware-test-hooks = ["dep:rmpv", "fe2o3-artifact-transaction/test-hooks"]
-qualification-oracles-test-only = []
+qualification-oracles-test-only = [
+    "fe2o3-core/qualification-raw-hip-test-only",
+]
 
 [dependencies]
 fe2o3-amd-target.workspace = true
@@ -22,7 +24,7 @@ fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
-fe2o3-worker-v2-bundle.workspace = true
+fe2o3-runtime-protocol.workspace = true
 libc.workspace = true
 reserved-fe2o3-symbols.workspace = true
 rmpv = { version = "1.3.1", default-features = false, optional = true }
@@ -31,6 +33,7 @@ sha2.workspace = true
 
 [dev-dependencies]
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
+fe2o3-core = { workspace = true, features = ["qualification-raw-hip-test-only"] }
 fe2o3-rustc-invocation.workspace = true
 rmpv = { version = "1.3.1", default-features = false }
 serde = "1"

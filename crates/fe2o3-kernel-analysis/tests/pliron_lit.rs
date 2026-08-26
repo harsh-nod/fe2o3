@@ -58,11 +58,36 @@ fn total_coverage_textual_pliron_fixtures() {
 fn collective_semantics_textual_pliron_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lit");
     for fixture in [
-        "collective_fold_proved.pliron",
+        "collective_fold_policy_checked.pliron",
         "collective_fold_missing_value_proof.pliron",
         "collective_fold_coverage_mismatch.pliron",
-        "collective_recurrence_proved.pliron",
-        "collective_permutation_proved.pliron",
+        "collective_recurrence_policy_checked.pliron",
+        "ownership_total_multi_output_disjoint.pliron",
+        "ownership_total_multi_output_overlap.pliron",
+        "collective_permutation_policy_checked.pliron",
+    ] {
+        run_fixture(&root.join(fixture));
+    }
+}
+
+#[test]
+fn parallel_reference_prerequisite_mutation_fixtures() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lit");
+    for fixture in [
+        "ownership_hole.pliron",
+        "ownership_nonrectangular_subgroup.pliron",
+        "ownership_total_overwrite.pliron",
+        "collective_fold_policy_mismatch.pliron",
+        "collective_recurrence_witness_type_mismatch.pliron",
+        "collective_permutation_non_integer_map.pliron",
+        "tensor_layout_wrong_accumulator_permutation.pliron",
+        "tensor_layout_wrong_fragment_width.pliron",
+        "tensor_layout_wrong_role.pliron",
+        "tensor_layout_missing_tail.pliron",
+        "tensor_layout_partial_subgroup.pliron",
+        "tensor_layout_subgroup_scoped.pliron",
+        "tensor_layout_mixed_swizzle.pliron",
+        "tensor_layout_divergent_trace.pliron",
     ] {
         run_fixture(&root.join(fixture));
     }

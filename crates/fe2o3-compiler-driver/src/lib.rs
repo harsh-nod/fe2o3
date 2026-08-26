@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Explicit, fail-closed routing for bounded compiler transactions.
+//! Single-route, fail-closed execution of bounded compiler transactions.
 //!
-//! The driver invokes exactly one backend for a request's
-//! [`PipelineSelectorV1`]. Backend failures and outputs that do not validate
-//! against the original request become canonical rejected outputs. No route
-//! can fall back to another compiler implementation.
+//! The driver invokes exactly one production backend. Backend failures and
+//! outputs that do not validate against the original request become canonical
+//! rejected outputs. There is no alternate compiler implementation to select
+//! or fall back to.
 //!
 //! This crate grants no artifact publication, proof promotion, module loading,
 //! dispatch, or launch authority and contains no COMGR integration.
@@ -15,7 +15,7 @@ use core::fmt;
 
 use fe2o3_compiler_api::{
     CanonicalDiagnosticV1, CompileDispositionV1, CompileOutputV1, CompileRequestV1,
-    DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1, PipelineSelectorV1,
+    DiagnosticCodeV1, DiagnosticMessageV1, DiagnosticSeverityV1,
 };
 
 mod gemm_proof_required;
@@ -104,12 +104,8 @@ pub enum DriverDiagnosticV1 {
     BackendInternalFailure = 0x4644_0004,
     /// The backend output named a different request commitment.
     OutputRequestMismatch = 0x4644_0010,
-    /// The backend output named a different selector.
-    OutputSelectorMismatch = 0x4644_0011,
     /// The backend output failed validation against the routed request.
     InvalidBackendOutput = 0x4644_0012,
-    /// A `PlironShadow` backend attempted to return an executable candidate.
-    ShadowCandidateProhibited = 0x4644_0013,
 }
 
 impl DriverDiagnosticV1 {
@@ -142,66 +138,44 @@ impl DriverDiagnosticV1 {
             Self::OutputRequestMismatch => {
                 "selected compiler backend returned a different request identity"
             }
-            Self::OutputSelectorMismatch => {
-                "selected compiler backend returned a different pipeline selector"
-            }
             Self::InvalidBackendOutput => {
                 "selected compiler backend returned an invalid transaction"
             }
-            Self::ShadowCandidateProhibited => {
-                "PlironShadow backend attempted to return an executable candidate"
-            }
         }
     }
 }
 
-/// Compiler driver with isolated evidence and production backend slots.
+/// Compiler driver owning the sole production backend.
 ///
-/// Routing is a total match over [`PipelineSelectorV1`]. An error from the
-/// selected slot is terminal and never causes another slot to be invoked.
+/// An error from the backend is terminal. No alternate implementation exists.
 #[derive(Clone, Debug)]
-pub struct ExplicitPipelineDriverV1<Shadow, Pliron> {
-    pliron_shadow: Shadow,
-    pliron_v1: Pliron,
+pub struct ProductionCompilerDriverV1<Backend> {
+    backend: Backend,
 }
 
-impl<Shadow, Pliron> ExplicitPipelineDriverV1<Shadow, Pliron> {
-    /// Configures one backend for each explicit V1 selector.
-    pub const fn new(pliron_shadow: Shadow, pliron_v1: Pliron) -> Self {
-        Self {
-            pliron_shadow,
-            pliron_v1,
-        }
+impl<Backend> ProductionCompilerDriverV1<Backend> {
+    /// Configures the sole production backend.
+    pub const fn new(backend: Backend) -> Self {
+        Self { backend }
     }
 
-    /// Returns a shared reference to the `PlironShadow` backend slot.
-    pub const fn pliron_shadow_backend(&self) -> &Shadow {
-        &self.pliron_shadow
+    /// Returns a shared reference to the production backend.
+    pub const fn backend(&self) -> &Backend {
+        &self.backend
     }
 
-    /// Returns a shared reference to the `PlironV1` backend slot.
-    pub const fn pliron_v1_backend(&self) -> &Pliron {
-        &self.pliron_v1
-    }
-
-    /// Returns mutable access to both isolated backend slots.
-    pub fn backends_mut(&mut self) -> (&mut Shadow, &mut Pliron) {
-        (&mut self.pliron_shadow, &mut self.pliron_v1)
+    /// Returns mutable access to the production backend.
+    pub const fn backend_mut(&mut self) -> &mut Backend {
+        &mut self.backend
     }
 }
 
-impl<Shadow, Pliron> TransactionalCompilerDriverV1 for ExplicitPipelineDriverV1<Shadow, Pliron>
+impl<Backend> TransactionalCompilerDriverV1 for ProductionCompilerDriverV1<Backend>
 where
-    Shadow: TransactionalCompilerBackendV1,
-    Pliron: TransactionalCompilerBackendV1,
+    Backend: TransactionalCompilerBackendV1,
 {
     fn compile_transaction(&mut self, request: &CompileRequestV1) -> CompileOutputV1 {
-        let result = match request.selector() {
-            PipelineSelectorV1::PlironShadow => self.pliron_shadow.compile_transaction(request),
-            PipelineSelectorV1::PlironV1 => self.pliron_v1.compile_transaction(request),
-        };
-
-        match result {
+        match self.backend.compile_transaction(request) {
             Ok(output) => validate_backend_output(request, output)
                 .unwrap_or_else(|reason| rejected_output(request, reason)),
             Err(failure) => {
@@ -215,14 +189,8 @@ fn validate_backend_output(
     request: &CompileRequestV1,
     output: CompileOutputV1,
 ) -> Result<CompileOutputV1, DriverDiagnosticV1> {
-    if request.selector() == PipelineSelectorV1::PlironShadow && output.candidate().is_some() {
-        return Err(DriverDiagnosticV1::ShadowCandidateProhibited);
-    }
     if output.request_identity() != request.identity() {
         return Err(DriverDiagnosticV1::OutputRequestMismatch);
-    }
-    if output.selector() != request.selector() {
-        return Err(DriverDiagnosticV1::OutputSelectorMismatch);
     }
 
     CompileOutputV1::new(

@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -17,18 +20,9 @@ fn workspace() -> PathBuf {
 }
 
 fn backend_build(workspace: &Path, target: &str) -> Output {
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "-p",
-            "fe2o3-half-math-compiler-fixture",
-        ])
+        .args(["build", "-p", "fe2o3-half-math-compiler-fixture"])
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .output()

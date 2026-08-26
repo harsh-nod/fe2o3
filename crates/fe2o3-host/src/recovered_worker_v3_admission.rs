@@ -15,7 +15,7 @@ use fe2o3_kernel_descriptor::{
     CANONICAL_CODE_OBJECT_DIGEST_OFFSET, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId,
     encode_device_descriptor_table_v1,
 };
-use fe2o3_worker_v2_bundle::{RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1};
+use fe2o3_runtime_protocol::{RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1};
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]

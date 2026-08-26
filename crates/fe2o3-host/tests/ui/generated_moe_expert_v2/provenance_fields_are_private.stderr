@@ -1,5 +1,0 @@
-error[E0616]: field `transcript_sha256` of struct `MoeRoutingCompletionReadbackProvenanceV2` is private
- --> tests/ui/generated_moe_expert_v2/provenance_fields_are_private.rs:4:19
-  |
-4 |     let _ = value.transcript_sha256;
-  |                   ^^^^^^^^^^^^^^^^^ private field

@@ -40,7 +40,7 @@ pub const LDS_SLICE1_SOURCE_BLOCKERS_V1: [&str; 4] = [
     LDS_SLICE1_SOURCE_BLOCKER_V1,
     "the authenticated source path is not joined to the dedicated upstream-LLVM LDS lowering",
     "the reviewed source-to-IR correspondence is not a compiler-refinement proof",
-    "protected Worker V2 publication, HSACO load, and launch remain fail-closed",
+    "protected Worker V3 publication custody, HSACO load, and launch remain fail-closed",
 ];
 
 /// Computes one fixed `16x16x16` BF16 GEMM tile through XOR4-staged LDS.

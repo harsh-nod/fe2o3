@@ -177,17 +177,16 @@ The feature-gated hardware lane loaded that digest-pinned artifact once,
 resolved distinct raw alpha/zeta symbols, ran both kernels for lengths `1`,
 `255`, `256`, `257`, and `1023`, checked independent CPU oracles and
 prefix/suffix canaries, and unloaded the executable once. The hardware harness
-uses the reviewed unsafe raw HSA boundary. At `dc9738e`, a second ignored run
-passes the same digest and length matrix through generated checked slice
+uses the reviewed unsafe raw HSA boundary. At `dc9738e`, a now-retired second run
+passed the same digest and length matrix through generated checked slice
 capabilities, typed alpha/zeta preparation, the reviewed executable lifecycle,
 and safe `dispatch`. That test uses test-only semantic witnesses and an
 explicitly fake prerequisite authenticator, so it establishes runtime
 composition and hardware behavior but does not authenticate prerequisites.
 
-The evidence remains bounded. Durable Worker V2 publication, finalized-bundle
-host admission, currentness leasing, an authenticated load state machine, the
-generated alpha/zeta safe dispatch SPI, and the reviewed
-`fe2o3-hsa-runtime` adapter exist. Required-envelope mode consumes a measured
+The evidence remains bounded. Historical Worker V2 publication and hardware
+observations remain records, while their host admission, exact adapters, and
+hardware harness have been deleted. Required-envelope mode consumes a measured
 upstream canonical envelope-input capsule, binds and durably stages it, and can
 reconstruct the exact canonical envelope from durable input and HSACO claims
 after restart. Cargo does not synthesize or authenticate the capsule's compiler,
@@ -196,9 +195,8 @@ fresh lease and revalidates finalized bytes and descriptor lineage, but returns
 an inert descriptor with no bytes, authentication, load, launch, or prerequisite
 authority. Production now admits only the V3 application envelope and binds its
 pinned descriptors to a sealed application identity and fresh occurrence. A
-production implementation of `WorkerV2PrerequisiteAuthenticatorV1` remains
-absent, so the handoff cannot yet promote the carried evidence into load or
-launch authority.
+production `WorkerV3VerifierV1` remains absent, so the handoff cannot yet
+promote the carried evidence into load or launch authority.
 
 The new compiler-transaction capsule is inert caller-measured evidence. The
 pre-envelope proof capsule binds persistent ancestry but supplies neither
@@ -343,11 +341,10 @@ The detailed dependencies and exit criteria are in
   cross-kernel values. General V3 binding now accepts canonical scalar and slice
   identities, and generated slice capabilities consume checked subregions while
   retaining parent-allocation identity and exact allocation-relative intervals.
-  Exact alpha/zeta `Arguments` authenticate source role and field names, retain
-  those capabilities and borrows, and feed macro-generated packing and
-  preparation adapters. Other V3 signatures remain inert. Production artifact
+  Generic Worker V3 `Arguments` retain those capabilities and borrows and feed
+  macro-generated packing and preparation adapters. Production artifact
   publication/currentness/admission infrastructure exists, but no production
-  `WorkerV2PrerequisiteAuthenticatorV1` promotes authenticated
+  `WorkerV3VerifierV1` promotes authenticated
   compiler/proof/effect evidence into these adapters. General structs, closures,
   return values, and the full acceptance target are not complete.
 - Rows 17 and 20: authenticated control-flow records, canonical successor and
@@ -385,8 +382,9 @@ The detailed dependencies and exit criteria are in
   crate/kernel binding IDs are derived independently by the Cargo wrapper,
   macro, and backend and qualify private host/accessor symbols; a real two-rlib
   same-name link test rejects silent archive coalescing. The backend rejects
-  token aliases and local trusted-type lookalikes. V3 requires a backend-issued
-  semantic witness. The former exact-vecadd V2 registration, deterministic
+  token aliases and local trusted-type lookalikes. Production Worker V3 instead
+  matches the generated marker binding and complete argument layout to the
+  independently admitted compiler descriptor. The former exact-vecadd V2 registration, deterministic
   private embedded-artifact accessors, and generated `Kernel`/`Prepared` API are
   qualification-only; Worker V2 emits deterministic private host-object
   accessors, and the alpha/zeta native-worker integration links and validates
@@ -418,9 +416,8 @@ The detailed dependencies and exit criteria are in
   authentication, load, or launch authority. Project build scripts and
   procedural macros remain trusted; pipeline inspection is not stage-complete,
   broad Rust semantics and cross-crate finalization are absent. Application
-  handoff and a production `WorkerV2PrerequisiteAuthenticatorV1` are absent. The
-  generated-safe MI300X harness composes the runtime pieces only with a fake
-  prerequisite authenticator.
+  handoff exists, but a production `WorkerV3VerifierV1` is absent. The retired
+  generated-safe MI300X harness composed runtime pieces only with fake authority.
 - Rows 27, 28, and 39: bounded device FFI macros and compiler validation bind
   import/export direction, exact symbols, physical scalar/pointer ABI,
   address spaces, effects, target, code-object version, and semantic identity.
@@ -558,38 +555,38 @@ The detailed dependencies and exit criteria are in
   descriptors, backend-emitted witnesses, checked views, packing foundations,
   and signature-specific generated `Arguments`. At `d509ca5`, their slice
   capabilities preserve exact checked subregions through packing and alias
-  admission. Exact named alpha/zeta roles now receive macro-generated packing,
-  preparation, and synchronous dispatch adapters, while other signatures remain
-  inert. Durable publication, finalized-bundle admission, currentness leasing,
-  authenticated loading, required-envelope persistence/recovery, recovered host
-  admission, and the reviewed runtime adapter exist. The envelope and recovered
-  descriptor remain authority-free, and only test/fake
-  `WorkerV2PrerequisiteAuthenticatorV1` implementations can promote evidence
-  into the generated adapters. The generated-safe MI300X run uses fake
-  prerequisite authority. Arbitrary Rust layouts, authenticated machine-code
+  admission. The generic Worker V3 contract supplies packing, preparation, and
+  synchronous dispatch for accepted signatures. Durable publication, Worker V3
+  verification admission, currentness leasing,
+  authenticated loading, required-envelope persistence/recovery, and the
+  reviewed runtime adapter exist. The recovered Worker V2 host admission and
+  launch bridge are deleted; Worker V3 is the only production application
+  route. Only test/fake verifier implementations can currently promote evidence
+  into dispatch authority. The retired generated-safe MI300X run used fake
+  authority. Arbitrary Rust layouts, authenticated machine-code
   effect verification, architecture breadth, application handoff, and
   production authenticated dispatch are incomplete, so both rows remain
   Partial.
-- Row 80: the general `launch!` macro remains an explicit unsafe raw-ABI escape
-  hatch with compile-fail coverage. The generated vecadd module instead exposes
-  safe `prepare(...).launch(...)`; the example contains no raw parameter pack,
-  artifact pathname, or unsafe user launch. The two-entry Worker V2 path does
-  generate manifest-checked preparation and dispatch for the exact alpha/zeta
-  roles, and the production publication/admission/load state machines exist.
-  The missing production prerequisite authenticator prevents authenticated
+- Row 80: the general `launch!` macro is now a qualification-only unsafe raw-ABI
+  escape hatch with compile-fail coverage; feature-free `fe2o3-host` does not
+  export it, `KernelParams`, or `LaunchConfig`, and feature-free `fe2o3-core`
+  excludes its raw module/function and launch surface. Generated bindings instead
+  expose safe `prepare(...).launch(...)`; the example contains no raw parameter
+  pack, artifact pathname, or unsafe user launch. The generic Worker V3 path
+  generates manifest-checked preparation and dispatch, and the production
+  publication/admission/load state machines exist. The missing production verifier prevents authenticated
   compiler/proof/effect evidence from reaching that safe SPI. The generated-safe
-  MI300X alpha/zeta harness passes through the safe dispatch SPI only by using a
-  fake prerequisite authenticator. These fixed profiles are not a general
-  generated launch macro or production authority path, so the row remains
-  Partial.
+  MI300X alpha/zeta harness used fake authority and has been deleted. Broad
+  generated launch coverage and production authority remain incomplete, so the
+  row remains Partial.
 - Row 81 and supplemental row S03: the generated vecadd `launch_scoped` API
   retains typed resource borrows, loaded authority, alias admission, and packed
   parameters through event completion or stronger stream quiescence. Its
   higher-ranked callback cannot return the in-flight operation. Generalized
   returnable borrowed or owned generated async operations, cancellation, and
-  composition are incomplete. The linear HSA kernel set prevents executable
-  unload while resolved kernels are retained, and exact alpha/zeta have
-  synchronous generated adapters. They do not have generated asynchronous
+  composition are incomplete. The linear Worker V3 HSA path prevents executable
+  unload while prepared calls retain borrows. It has synchronous generated
+  dispatch but no generated asynchronous
   operations, so both rows remain Partial.
 - Supplemental rows S01 and S02: the V1 container, bundle index, direct-link
   evidence, descriptor finalization, transactional publication, and durable
@@ -602,10 +599,10 @@ The detailed dependencies and exit criteria are in
   reconciles the authenticated complete implicit-kernarg contract with AMDHSA
   metadata and produced the digest-pinned MI300X hardware artifact. Required
   mode now persists a measured upstream envelope-input capsule and reconstructs
-  the exact canonical envelope across restart; recovered host admission
-  revalidates the durable publication. Neither path authenticates compiler,
-  proof, or effect evidence or grants load/launch authority, and no production
-  prerequisite authenticator promotes that evidence into generated dispatch.
+  the exact canonical envelope across restart. The production Worker V3 handoff
+  revalidates the durable publication; the Worker V2 host recovery route is
+  deleted. No production verifier yet authenticates compiler, proof, or effect
+  evidence and promotes it into generated dispatch.
   This is not general compiler production, all-target loading, or machine-code
   refinement evidence.
 - Supplemental rows S04 and S05: bounded `DeviceCopy`, pinned-memory, event,
@@ -808,7 +805,7 @@ evidence remain absent.
 |:--|:--|:--|:--|:--|:--|:--|
 | 78 | `#[cuda_module]` Typed Launch | Full | Exact | Partial | A neutral module macro embeds bundles and generates typed sync/async methods from manifest entries | G3 |
 | 79 | `#[launch_contract]` / `PreparedLaunch<K>` | Full | Exact | Partial | Contracts check rank, exact/bounded block shape, resources, capabilities, context, and kernel identity | G0, G3, G5 |
-| 80 | `cuda_launch!` Macro | Full | Exact | Partial | `launch!` is explicitly unsafe for runtime-loaded raw functions and exposes complete obligations | G0, G3 |
+| 80 | `cuda_launch!` Macro | Full | Exact | Partial | Production uses compiler-generated typed Worker V3 dispatch; raw `launch!` is qualification-only | G0, G3 |
 | 81 | `cuda_launch_async!` Macro | Full | Exact | Partial | Raw lazy launch is unsafe; typed operations retain borrowed/owned resources through completion and cancellation | G3 |
 | 82 | `#[launch_bounds]` | Full | AMD-equivalent | Partial | Emit and validate AMD flat workgroup-size/occupancy metadata with architecture-specific limits | G4 |
 | 83 | `#[cluster_launch]` | Full | N/A | N/A | CUDA cluster dimensions are not accepted as portable AMD launch metadata | G6 |

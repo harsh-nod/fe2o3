@@ -356,6 +356,32 @@ pub enum TensorInstructionProfileV1 {
     Opaque(u32),
 }
 
+/// Target-owned semantic facts consumed by workload-neutral tensor composition.
+///
+/// This describes one instruction ABI and its cooperative contribution tile;
+/// it does not name or recognize a source workload.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TensorInstructionSemanticDescriptorV1 {
+    pub call_argument_count: u16,
+    pub subgroup_width: u16,
+    pub contribution_shape: [u16; 3],
+    pub output_shape: [u16; 2],
+}
+
+impl TensorInstructionProfileV1 {
+    pub const fn semantic_descriptor(self) -> Option<TensorInstructionSemanticDescriptorV1> {
+        match self {
+            Self::Gfx942MfmaBf16F32M16N16K16Wave64 => Some(TensorInstructionSemanticDescriptorV1 {
+                call_argument_count: 4,
+                subgroup_width: 64,
+                contribution_shape: [16, 16, 16],
+                output_shape: [16, 16],
+            }),
+            Self::IncompatibleWave32 | Self::Opaque(_) => None,
+        }
+    }
+}
+
 /// One logical coordinate expression:
 /// `constant + lane % M * mod_scale + lane / D * div_scale + component * component_scale`.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

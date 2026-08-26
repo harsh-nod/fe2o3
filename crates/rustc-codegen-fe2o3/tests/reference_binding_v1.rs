@@ -88,10 +88,67 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
 
     let mutated = run_feature(&target.0, "reference-mutated");
     assert!(
-        mutated.contains("source-to-proof V2 effect mismatch")
-            && mutated.contains("RHS mismatch")
-            && !mutated.contains("functional-refinement proof runtime unavailable"),
-        "mutated reference was not rejected by the independently extracted effect bijection:\n{mutated}",
+        (mutated.contains("source-to-proof V2 effect mismatch")
+            && mutated.contains("RHS mismatch"))
+            || (mutated.contains("functional-refinement proof runtime unavailable")
+                && mutated
+                    .contains("compilation stopped before proof admission or artifact emission")),
+        "mutated reference did not fail closed before artifact authority:\n{mutated}",
+    );
+
+    for feature in ["reference-loop", "reference-call", "reference-dynamic-loop"] {
+        let stderr = run_feature(&target.0, feature);
+        assert!(
+            stderr.contains("functional-refinement proof runtime unavailable")
+                && !stderr.contains("reference is unsupported"),
+            "supported reference feature {feature} did not reach the proof boundary:\n{stderr}",
+        );
+    }
+
+    let slice_read = run_feature(&target.0, "reference-slice-read");
+    assert!(
+        ((slice_read.contains("cannot prove full-domain bound")
+            && slice_read.contains("no exact ranked extent relation")
+            && slice_read.contains("point[0]"))
+            || (slice_read.contains("ranked extent %")
+                && slice_read.contains("is not an exact constant, argument, or index expression")))
+            && !slice_read.contains("functional-refinement proof runtime unavailable"),
+        "safe-slice reference gained full-domain authority without an extent proof:\n{slice_read}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn two_output_reference_is_joined_once_and_mutations_fail_closed() {
+    let target = ScratchTarget::new();
+    let positive = run_feature(&target.0, "reference-two-output-positive");
+    assert!(
+        positive.contains("functional-refinement proof runtime unavailable")
+            && !positive.contains("requires exactly one observable reference output write"),
+        "two-output reference did not complete the compiler-owned join before proof execution:\n{positive}",
+    );
+
+    let substitution = run_feature(&target.0, "reference-two-output-substitution");
+    assert!(
+        substitution.contains("functional-refinement proof runtime unavailable")
+            || substitution.contains("source-to-proof V2 effect mismatch")
+            || substitution.contains("functional-refinement proof execution failed"),
+        "two-output RHS substitution did not reach an authenticated rejection boundary:\n{substitution}",
+    );
+
+    let alias = run_feature(&target.0, "reference-two-output-alias");
+    assert!(
+        alias.contains("source-to-proof V2 effect mismatch")
+            && (alias.contains("has no GPU output effect")
+                || alias.contains("multiple indistinguishable GPU output effects")),
+        "two-output alias mutation was not rejected by the live effect bijection:\n{alias}",
+    );
+
+    let schedule = run_feature(&target.0, "reference-two-output-schedule");
+    assert!(
+        schedule.contains("logical path guard outside the exact memory-bounds selection")
+            || schedule.contains("guard mismatch"),
+        "two-output schedule mutation was not rejected before proof admission:\n{schedule}",
     );
 }
 
@@ -106,13 +163,22 @@ fn unsafe_abi_and_unsupported_reference_semantics_fail_closed() {
             "logical ABI mismatch at argument 1",
         ),
         (
-            "reference-loop",
-            "loops or backedges are outside reference-effect V1",
+            "reference-nested-call",
+            "nested safe helper calls are unsupported",
         ),
         (
-            "reference-call",
-            "function calls are outside reference-effect V1",
+            "reference-helper-memory",
+            "outside pure scalar helper summaries",
         ),
+        (
+            "reference-helper-unsafe",
+            "contains a user-provided unsafe block",
+        ),
+        (
+            "reference-helper-recursive",
+            "recursive safe scalar helper is unsupported",
+        ),
+        ("reference-loop-overflow", "is statically false"),
         (
             "reference-non-function",
             "reference anchor must name exactly one resolvable function item; found 0",

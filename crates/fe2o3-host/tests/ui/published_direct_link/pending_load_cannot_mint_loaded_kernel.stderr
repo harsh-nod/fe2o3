@@ -1,7 +1,0 @@
-error[E0277]: the trait bound `LoadedKernel<Kernel>: From<PendingPublishedDirectLinkLoadAdmissionV1>` is not satisfied
- --> tests/ui/published_direct_link/pending_load_cannot_mint_loaded_kernel.rs:6:13
-  |
-6 |     pending.into()
-  |             ^^^^ the trait `From<PendingPublishedDirectLinkLoadAdmissionV1>` is not implemented for `LoadedKernel<Kernel>`
-  |
-  = note: required for `PendingPublishedDirectLinkLoadAdmissionV1` to implement `Into<LoadedKernel<Kernel>>`

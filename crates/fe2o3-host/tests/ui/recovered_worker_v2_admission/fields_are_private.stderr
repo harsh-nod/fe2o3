@@ -1,9 +1,0 @@
-error[E0451]: fields `admission` and `descriptor` of struct `RecoveredWorkerV2PinnedDescriptorV1` are private
- --> tests/ui/recovered_worker_v2_admission/fields_are_private.rs:5:9
-  |
-4 |     let RecoveredWorkerV2PinnedDescriptorV1 {
-  |         ----------------------------------- in this type
-5 |         admission,
-  |         ^^^^^^^^^ private field
-6 |         descriptor,
-  |         ^^^^^^^^^^ private field

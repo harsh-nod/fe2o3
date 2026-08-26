@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 #[path = "support/artifact_path_guard.rs"]
 mod artifact_path_guard;
 
@@ -32,15 +35,10 @@ fn cargo_target_directory(workspace: &Path) -> PathBuf {
 }
 
 fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -> Output {
-    let mut command = Command::new(env!("CARGO"));
+    let mut command = cargo_fe2o3::non_production_command(workspace);
     command
         .current_dir(workspace)
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
             "build",
             "-p",
             "fe2o3-half-math-compiler-fixture",
@@ -60,25 +58,12 @@ fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -
 fn provider_impostor_build(workspace: &Path, package: &str, managed_target: &Path) -> Output {
     let fixture =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor");
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "--locked",
-            "--manifest-path",
-        ])
+        .args(["build", "--locked", "--manifest-path"])
         .arg(fixture.join("Cargo.toml"))
         .args(["-p", package, "--target-dir"])
         .arg(managed_target)
-        .env(
-            "FE2O3_BACKEND",
-            cargo_target_directory(workspace).join("debug/librustc_codegen_fe2o3.so"),
-        )
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .output()
@@ -182,7 +167,14 @@ fn same_name_dependency_alias_and_hostile_rust_abis_fail_at_provider_binding() {
     let _ = std::fs::remove_dir_all(&managed_target);
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+        ])
         .env("CARGO_PROFILE_DEV_DEBUG", "0")
         .output()
         .expect("build codegen backend");
@@ -235,8 +227,10 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
         "genuine matrix call did not reach verified kernel IR:\n{stderr}"
     );
     assert!(
-        stderr.contains("does not support kernel export \"tiled_gemm_frontend_v1\""),
-        "genuine matrix call missed the expected post-translation boundary:\n{stderr}"
+        stderr.contains(
+            "authenticated workgroup size WorkgroupSize { x: 64, y: 1, z: 1 } conflicts with the exact 256x1x1 executable profile"
+        ),
+        "genuine matrix call missed the executable-profile preflight boundary:\n{stderr}"
     );
     assert!(!stderr.contains("has no classified trusted device identity"));
     assert!(!stderr.contains("MIR is unavailable for a device-reachable item"));
@@ -312,7 +306,14 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
 
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+        ])
         .output()
         .expect("build codegen backend");
     assert!(

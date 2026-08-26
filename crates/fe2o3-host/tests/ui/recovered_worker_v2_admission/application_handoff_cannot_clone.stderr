@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>` in the current scope
- --> tests/ui/recovered_worker_v2_admission/application_handoff_cannot_clone.rs:9:23
-  |
-9 |     let _ = authority.clone();
-  |                       ^^^^^ method not found in `RecoveredWorkerV2SynchronousHsaHandoffV1<K, A>`

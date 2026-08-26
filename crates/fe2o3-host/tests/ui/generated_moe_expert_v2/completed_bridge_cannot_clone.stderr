@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `MoeCompletedRoutingExpertBridgeV2<'activations, 'offsets, 'inverse, 'route_weights>` in the current scope
- --> tests/ui/generated_moe_expert_v2/completed_bridge_cannot_clone.rs:4:19
-  |
-4 |     let _ = value.clone();
-  |                   ^^^^^ method not found in `MoeCompletedRoutingExpertBridgeV2<'_, '_, '_, '_>`

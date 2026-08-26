@@ -177,8 +177,8 @@ scripts/run-parity-snapshot.sh run \
 
 The raw alpha/zeta vertical slice landed through
 `daf0b459ced07a25376670c83b1474eaebcd1a68` is not a shard in this static
-snapshot plan. The generated-safe fake-authenticator execution added at
-`dc9738e367c392f7716eacb8459ca73fa32abbbb` has a separate optional shard.
+snapshot plan. The generated-safe fake-authenticator shard added at
+`dc9738e367c392f7716eacb8459ca73fa32abbbb` has also been retired and deleted.
 The following commands reproduce the measured Worker V2 build and export on a
 ROCm 7.2.4 system. The worker measurement is derived by CMake
 from its pinned LLVM/LLD configuration and worker sources, not from the output
@@ -218,153 +218,24 @@ Its AMDHSA metadata reported complete kernarg sizes of `296` bytes for `alpha`
 and `312` bytes for `zeta`, including each 256-byte COV6 implicit suffix. This
 confirms that the earlier explicit-versus-complete kernarg mismatch is fixed.
 
-The same digest-pinned artifact was then executed on an AMD Instinct MI300X,
-`gfx942:xnack-`, with ROCm 7.2.4:
+The same digest-pinned artifact was historically executed on MI300X through
+raw and fake-authority generated-safe Worker V2 harnesses. Both runs passed
+CPU-oracle and canary checks at lengths `1`, `255`, `256`, `257`, and `1023`.
+Those harnesses, exact host adapters, and the optional alpha/zeta parity shard
+have been deleted. Their observations remain historical and cannot be rerun as
+a current alternate application path.
 
-```bash
-FE2O3_RUN_GFX942_TWO_KERNEL=1 \
-FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
-FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
-cargo +nightly-2026-04-03 test --locked -p fe2o3-hsa-runtime \
-  --features hardware-test-hooks --test gfx942_two_kernel_hardware \
-  gfx942_cov6_alpha_then_zeta_one_executable \
-  -- --ignored --exact --nocapture
-```
+The repository-backed compiler-evidence controller still performs two isolated
+direct LLVM/LLD builds and requires byte-identical COV6 output. Its Worker V2
+names identify versioned compiler transaction records; the controller no
+longer builds or runs the retired hardware harness. It grants no application,
+verification, HSA load, or launch authority.
 
-That run passed independent CPU-oracle and canary checks at lengths `1`, `255`,
-`256`, `257`, and `1023`. It calls the reviewed raw unsafe packing path, not the
-landed generated alpha/zeta safe dispatch SPI, and it was not captured by the
-clean detached-checkout V1 snapshot runner. It is therefore an observed raw
-hardware result, not a dashboard `remote-hardware` strength or a parity row
-promotion.
-
-At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, the same host, toolchain,
-artifact digest, and length matrix also passed through the generated-safe SPI:
-
-```bash
-FE2O3_RUN_GFX942_TWO_KERNEL=1 \
-FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
-FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
-cargo +nightly-2026-04-03 test --locked -p fe2o3-hsa-runtime \
-  --features hardware-test-hooks --test gfx942_two_kernel_hardware \
-  gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
-  -- --ignored --exact --nocapture
-```
-
-That test uses checked generated slice capabilities, independent typed
-alpha/zeta preparation, safe dispatch, and one reviewed loaded executable. Its
-semantic witnesses and prerequisite authenticator are explicit test fixtures.
-It is observed runtime-composition and hardware evidence, not production
-authentication, a dashboard `remote-hardware` strength, or a parity promotion.
-
-The later repository-backed compiler-evidence controller is defined by
-`tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json` and
-`scripts/gfx942-cov6-compiler-evidence.sh`. It rebuilds the measured Worker and
-Rust test executable in two distinct empty Worker/Cargo roots, generates the
-alpha/zeta COV6 artifact through Worker V2 in each root, and checks both outputs
-against one bounded repository digest. The content-pinned host tool manifest,
-retained stat checks, cleared environment and generated PATH allowlist constrain
-this exact observation; they do not authenticate compiler causality. The
-checked artifact facts are:
-
-```text
-target=gfx942:xnack-
-code_object_version=6
-worker_build_identity=fe2o3-worker-v1-sha256-35cda985161f61e664ff46b46677d4e6fc5cea43fe8c080977db66b032b8605e
-worker_executable_sha256=2f1fea53545efa31ae719679836a7a2a4eb9e26b4bc435b77b04a6c4b80c57b2
-source_sha256=73c1ff5e2f29d245c8071bdb6c1a38af1c9ee1573b78d47a987633483b37e084
-hsaco_sha256=efe77ed0ac7f67531c46670a3c36030ed19e2d901f6858a8bee42cabd707c15b
-hsaco_bytes=9392
-```
-
-The launcher disables Python bytecode and rejects cache files in a clean tree.
-The controller retains its committed loader/DSO fixture before the first child,
-then snapshots the complete tracked repository, vendored Cargo registry, Rust
-sysroot, and retained LLVM/ROCm/OCML provider closure twice. The provider set
-includes GCC C++/target/system headers and records exact justified exclusions
-for unrelated large ROCm DSOs. It uses separate Worker and Cargo build roots,
-captures generated Worker and Cargo build-script/proc-macro/backend artifacts,
-runs commands under bounded cgroup, rlimit, and irreversible Landlock write
-confinement, executes generated native tests through sealed file descriptors,
-requires 3/3 CTest results, and retains the final HSACO descriptors through a
-stable-label comparison that rejects reorder and source-inode reuse. Hostile
-tests cover `setsid`, double-fork, and writable sibling/controller-cgroup
-migration attempts. It then retains the run-A HSACO descriptor through one
-MI300X hardware test. The test compares the inherited descriptor with the
-canonical direct dirent, consumes the descriptor bytes, loads one executable,
-and dispatches alpha/zeta across all five boundary lengths with CPU oracles and
-prefix/suffix canaries. The controller stores two bounded regenerated HSACOs
-and canonical manifests in its fresh external evidence directory; no binary is
-committed.
-
-The hardware child parses and retains its ELF interpreter, direct DSO closure,
-the transitive closures of exact ROCr-requested COMGR/AQL-profile dynamic
-roots, loader cache, NSS/passwd/timezone inputs, and exact libdrm GPU identity
-file. It verifies dependency discovery again while those files are retained.
-Landlock admits only those regular files plus the retained HSACO; other
-regular-file runtime and `dlopen` reads fail closed. `/proc` and `/sys` remain
-read-only kernel observation roots. `/dev` is not authorized as a root: the
-child receives read/write access only to the stat-bound `/dev/kfd`, eight exact
-render nodes, `/dev/null`, and `/dev/random`. The same child proves that create, read, and
-`dlopen` under `/dev/shm` fail before it dispatches. Guarded inputs and outputs use host-visible HSA pool
-allocations rather than HIP `DeviceBuffer` compilation/linking. Physical memory
-is capped at 8 GiB; a separate bounded 4 TiB address-space limit admits the
-host's eight MI300X GPU mappings.
-
-The root summary separately binds the configured tool-runtime fixture and the
-observed tool-runtime document. Each compiler transaction retains bounded
-canonical Worker V2 request, response, and raw output bytes. The controller
-recomputes their protocol identities. The hardware observation binds raw
-stdout/stderr and canonical cgroup samples/final files, allowing its output
-digest, memory/process peaks, and limits to be recomputed independently.
-
-The accepted digest is bound to a checked Ed25519-signed transition fixture
-that records the old/new Worker and HSACO identities and both independent
-reproduction-manifest digests. The key, signature, and transition are explicitly
-non-production review fixtures with `authority=none`. They prevent an unsigned
-mutable-checkout update from silently replacing this golden; they do not
-authenticate compiler causality, reviewer identity outside the fixture, source
-refinement, production authority, a compiler receipt, or a parity promotion.
-The hardware result is an exact-artifact observation only. Linking uses direct
-LLVM/LLD library APIs, with no COMGR or command-line HSACO
-linker/disassembler in artifact generation. The hardware HSA loader may load
-the retained ROCm COMGR DSO as a code-object runtime dependency, but it does not
-relink the checked HSACO.
-
-To archive that exact test in an isolated parity snapshot, first place the
-HSACO as a regular non-symlink file under the external archive root, then run:
-
-```bash
-scripts/run-parity-snapshot.sh run \
-  --repo "$PWD" \
-  --archive-root /evidence/snapshot-001 \
-  --shard Q5 \
-  --gfx942-alpha-zeta-hardware \
-  --alpha-zeta-hsaco artifacts/alpha-zeta-cov6.hsaco \
-  --alpha-zeta-sha256 3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4
-```
-
-The shard name is `GFX942-ALPHA-ZETA-HARDWARE`. It records the expected digest,
-the artifact's independently computed record digest, and the exact test name.
-Its name and command preserve the fake-authenticator boundary; the resulting
-record does not upgrade production-authentication evidence.
-
-Durable Worker V2 publication, finalized-bundle host admission, currentness
-leases, the authenticated HSA load state machine, generated alpha/zeta safe
-dispatch SPI, and the reviewed `fe2o3-hsa-runtime` adapter are production code.
-Canonical lease reacquisition and a Worker V3 load-readiness envelope with
-complete bundle/proof and raw/finalized lineage are implemented foundations. Cargo now
-durably publishes and reconstructs that envelope, a cooperative application
-handoff transfers pinned descriptors, and recovered host admission reacquires
-currentness and revalidates the handoff. Those paths remain inert without
-prerequisite authority. The application boundary now admits only the V3
-protocol and binds pinned descriptors to a sealed application identity and
-fresh occurrence. The blocking production gap is a production
-`WorkerV2PrerequisiteAuthenticatorV1`. Current authenticator implementations
-are tests/fakes, so compiler, Verus, proof, ABI, and effect evidence cannot yet
-be authentically promoted into safe load/launch authority.
-Neither adapter nor either hardware observation may restamp a declaration
-without an updated shard and archived clean-checkout result record.
+Current hardware evidence must pass through the sole Worker V3 application
+handoff, production verifier, retained publication currentness, generic HSA
+load, generated dispatch, completion, and unload path. Until a production
+`WorkerV3VerifierV1` joins compiler, Verus/proof, Rust ABI, and machine-effect
+evidence for the exact artifact, that hardware evidence remains open.
 
 Snapshot orchestration creates result evidence only. It does not update a row
 link, restamp a declaration, promote a parity status, regenerate the matrix or

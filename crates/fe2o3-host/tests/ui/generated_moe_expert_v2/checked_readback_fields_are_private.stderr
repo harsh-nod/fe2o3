@@ -1,5 +1,0 @@
-error[E0616]: field `lifecycle_transcript_sha256` of struct `CheckedMoeCompletedRoutingReadbackV2` is private
- --> tests/ui/generated_moe_expert_v2/checked_readback_fields_are_private.rs:4:19
-  |
-4 |     let _ = value.lifecycle_transcript_sha256;
-  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^ private field

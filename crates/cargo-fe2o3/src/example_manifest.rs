@@ -2403,12 +2403,27 @@ impl<'ast> Visit<'ast> for SourceArtifactVisitor {
 }
 
 fn is_typed_kernel_attribute(attribute: &Attribute) -> bool {
-    let Meta::List(list) = &attribute.meta else {
+    is_typed_kernel_meta(&attribute.meta)
+}
+
+fn is_typed_kernel_meta(meta: &Meta) -> bool {
+    let Meta::List(list) = meta else {
         return false;
     };
     let Some(segment) = list.path.segments.last() else {
         return false;
     };
+    if segment.ident == "cfg_attr" && segment.arguments.is_empty() {
+        let Ok(arguments) =
+            Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone())
+        else {
+            return false;
+        };
+        return arguments
+            .into_iter()
+            .skip(1)
+            .any(|meta| is_typed_kernel_meta(&meta));
+    }
     if segment.ident != "kernel" || !segment.arguments.is_empty() {
         return false;
     }
@@ -3499,6 +3514,15 @@ pub fn unknown_option() {}
 #[kernel]
 pub fn ordinary() {}
 
+#[cfg_attr(
+    not(feature = "qualification"),
+    kernel(
+        typed,
+        namespace = "7c0e8b256bc76d2d17529f43ca8e2ee3480c40dfd019491bd4fb1fc22c4f5f2d"
+    )
+)]
+pub fn configured() {}
+
 fn inspect(root: &std::path::Path, dynamic: &str) {
     // root.join("commented.hsaco");
     // #[kernel(typed)] pub fn commented() {}
@@ -3521,6 +3545,7 @@ fn inspect(root: &std::path::Path, dynamic: &str) {
             [
                 "alpha.hsaco",
                 "beta.hsaco",
+                "configured.hsaco",
                 "namespaced.hsaco",
                 "nested.hsaco",
                 "reordered.hsaco",

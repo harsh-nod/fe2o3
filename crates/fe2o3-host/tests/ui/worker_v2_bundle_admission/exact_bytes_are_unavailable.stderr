@@ -1,5 +1,0 @@
-error[E0599]: no method named `exact_artifact_bytes` found for reference `&'a CurrentFinalizedWorkerV2BundleAdmissionV1<'a>` in the current scope
- --> tests/ui/worker_v2_bundle_admission/exact_bytes_are_unavailable.rs:4:11
-  |
-4 |     guard.exact_artifact_bytes()
-  |           ^^^^^^^^^^^^^^^^^^^^ method not found in `&'a CurrentFinalizedWorkerV2BundleAdmissionV1<'a>`

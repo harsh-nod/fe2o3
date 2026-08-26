@@ -1,0 +1,14 @@
+error[E0432]: unresolved import `fe2o3_host::LoadedKernel`
+ --> tests/ui/production_application_handoff/legacy_hip_loaded_kernel_route_is_unavailable.rs:1:5
+  |
+1 | use fe2o3_host::LoadedKernel;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^ no `LoadedKernel` in the root
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+  |          --------------------------------------------------- the item is gated here
+  | pub use loaded_kernel::{
+  |     LoadedArgumentAdmittedLaunch, LoadedKernel, LoadedKernelMatchError, LoadedLaunchError,
+  |                                   ^^^^^^^^^^^^

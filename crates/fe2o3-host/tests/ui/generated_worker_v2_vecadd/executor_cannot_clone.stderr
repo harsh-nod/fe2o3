@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `fe2o3_host::GeneratedWorkerV2VecAddExecutorV1<K, A>` in the current scope
-  --> tests/ui/generated_worker_v2_vecadd/executor_cannot_clone.rs:11:31
-   |
-11 |     let _duplicate = executor.clone();
-   |                               ^^^^^ method not found in `fe2o3_host::GeneratedWorkerV2VecAddExecutorV1<K, A>`

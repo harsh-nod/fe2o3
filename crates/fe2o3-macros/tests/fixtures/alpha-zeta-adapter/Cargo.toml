@@ -8,4 +8,4 @@ publish = false
 
 [dependencies]
 gpu-device = { package = "fe2o3-device", path = "../../../../fe2o3-device" }
-gpu-host = { package = "fe2o3-host", path = "../../../../fe2o3-host", features = ["qualification-oracles-test-only"] }
+gpu-host = { package = "fe2o3-host", path = "../../../../fe2o3-host" }

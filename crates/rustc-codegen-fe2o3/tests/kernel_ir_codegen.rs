@@ -14,8 +14,6 @@ mod s09_identity_v2;
 use s09_identity_v2::{decode_hsaco_identity_claims_v2, identity_section_v2};
 
 const PIPELINE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
-const VECADD_QUALIFICATION_ARGS: &[&str] =
-    &["--features", "qualification-embedded-vecadd-test-only"];
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
 const LLVM_DWARFDUMP_ENV: &str = "FE2O3_LLVM_DWARFDUMP";
 const PROVIDER_SYMBOL: &str = "external_device_add_v1";
@@ -882,7 +880,7 @@ fn assert_vecadd_publication(workspace: &Path, command: &str, expect_execution: 
         command,
         "fe2o3-vecadd",
         Some("kernel-ir-v1"),
-        VECADD_QUALIFICATION_ARGS,
+        &[],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

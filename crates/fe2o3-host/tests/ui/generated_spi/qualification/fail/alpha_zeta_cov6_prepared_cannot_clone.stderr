@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `fe2o3_host::GeneratedAlphaZetaCov6PreparedInvocationV1<'loaded, 'allocation, P, K, A, Arguments>` in the current scope
- --> tests/ui/generated_spi/qualification/fail/alpha_zeta_cov6_prepared_cannot_clone.rs:9:22
-  |
-9 |     let _ = prepared.clone();
-  |                      ^^^^^ method not found in `fe2o3_host::GeneratedAlphaZetaCov6PreparedInvocationV1<'_, '_, P, K, A, Arguments>`

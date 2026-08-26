@@ -23,7 +23,10 @@ use super::{
 
 mod middle_end_evidence_v4;
 mod middle_end_evidence_v5;
+mod mir_pliron_semantic_contract_derivation_v1;
 mod mir_pliron_semantic_contract_v1;
+mod noncanonical_loop_proof_v1;
+mod parallel_reference_contract_v1;
 mod ranked;
 mod semantic_expression_v2;
 mod semantic_mir;
@@ -31,7 +34,10 @@ mod total_output_refinement_v2;
 
 pub use middle_end_evidence_v4::*;
 pub use middle_end_evidence_v5::*;
+pub use mir_pliron_semantic_contract_derivation_v1::*;
 pub use mir_pliron_semantic_contract_v1::*;
+pub use noncanonical_loop_proof_v1::*;
+pub use parallel_reference_contract_v1::*;
 pub use ranked::*;
 pub use semantic_expression_v2::*;
 pub use semantic_mir::*;
@@ -122,7 +128,7 @@ enum ProductionConstructionKindV1 {
     RankedKernel {
         root_name: String,
         kernel: ProductionRankedKernelV1,
-        authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+        policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     },
 }
 
@@ -462,8 +468,8 @@ impl ProductionPlironSessionV1 {
                 identity: root_identity,
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
-                authenticated_functional_refinement: materialized
-                    .authenticated_functional_refinement,
+                ranked_view_names: materialized.ranked_view_names,
+                policy_checked_refinement_staging: materialized.policy_checked_refinement_staging,
                 production_pipeline_report: None,
             },
         );

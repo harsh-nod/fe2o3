@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CollectionOutcome {
     CollectedThenLoweringGap {
@@ -118,15 +121,10 @@ fn run_frontend_check(workspace: &Path, case: SemanticCase) -> Output {
 }
 
 fn run_backend_build(workspace: &Path, case: SemanticCase) -> Output {
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
         .env("FE2O3_VERBOSE", "1")
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
             "build",
             "--manifest-path",
             fixture_manifest(workspace)

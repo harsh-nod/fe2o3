@@ -6,6 +6,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (a, b) = scalar_gemm_inputs(shape);
     let expected = scalar_gemm_oracle(shape, &a, &b);
     println!("scalar GEMM V1 CPU oracle: {expected:?}");
-    println!("GPU execution requires an authenticated Scalar GEMM V1 Worker V2 HSA capability");
+    println!("GPU execution requires the production Worker V3 application path");
     Ok(())
 }

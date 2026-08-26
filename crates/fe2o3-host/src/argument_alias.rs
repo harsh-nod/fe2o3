@@ -5,9 +5,11 @@ use crate::{
         GeneratedDeviceScalarV1,
     },
 };
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+use fe2o3_core::KernelParams;
 use fe2o3_core::{
     DeviceBuffer, DeviceBufferIdentity, DeviceBufferRegion, DeviceBufferView, DeviceBufferViewMut,
-    DeviceCopy, DevicePtr, KernelParams,
+    DeviceCopy, DevicePtr,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -225,16 +227,6 @@ impl GeneratedDeviceSliceMetadata {
         Self::from_region_with_empty_policy(observed, region, true)
     }
 
-    /// Retains metadata for profiles whose checked contract permits an empty
-    /// selected region.
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(super) fn from_region_allow_empty<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
-        observed: &ObservedContext,
-        region: &R,
-    ) -> Result<Self, RegionError> {
-        Self::from_region_with_empty_policy(observed, region, true)
-    }
-
     fn from_region_with_empty_policy<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
         observed: &ObservedContext,
         region: &R,
@@ -435,6 +427,7 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
     }
 
     /// Appends this slice's exact device pointer and element count.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
         params.push(self.pointer);
         params.push(self.len);
@@ -480,11 +473,6 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
             access: self.argument_access(),
         })
     }
-
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn device_pointer(&self) -> *const () {
-        self.pointer.as_raw().cast_const().cast()
-    }
 }
 
 /// Generated writable capability for one exclusive typed device-buffer region.
@@ -495,6 +483,10 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
 /// Empty regions retain their allocation provenance and describe no memory effects.
 #[doc(hidden)]
 pub struct GeneratedWriteDeviceSlice<'allocation, T: DeviceCopy> {
+    #[cfg_attr(
+        not(any(test, feature = "qualification-oracles-test-only")),
+        allow(dead_code)
+    )]
     pointer: DevicePtr<T>,
     len: usize,
     metadata: GeneratedDeviceSliceMetadata,
@@ -537,6 +529,7 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
     }
 
     /// Appends this slice's exact device pointer and element count.
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub fn push_pointer_and_len(&self, params: &mut KernelParams) {
         params.push(self.pointer);
         params.push(self.len);
@@ -548,11 +541,6 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
-    }
-
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn device_pointer(&self) -> *const () {
-        self.pointer.as_raw().cast_const().cast()
     }
 }
 
@@ -792,11 +780,7 @@ pub struct GeneratedSliceArgumentPairV1<'allocation> {
 }
 
 impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
-    #[cfg(any(
-        test,
-        feature = "hardware-test-hooks",
-        feature = "qualification-oracles-test-only"
-    ))]
+    #[cfg(feature = "hardware-test-hooks")]
     pub(crate) const fn new(
         input: GeneratedArgumentInputV1<'allocation>,
         access: ArgumentAccess<'allocation>,
@@ -812,14 +796,6 @@ impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
     ) {
         (self.input, self.access)
     }
-}
-
-#[cfg(test)]
-pub(crate) fn generated_slice_argument_pair_for_test<'allocation>(
-    input: GeneratedArgumentInputV1<'allocation>,
-    access: ArgumentAccess<'allocation>,
-) -> GeneratedSliceArgumentPairV1<'allocation> {
-    GeneratedSliceArgumentPairV1 { input, access }
 }
 
 impl fmt::Debug for ArgumentAccess<'_> {

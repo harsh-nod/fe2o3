@@ -16,15 +16,12 @@ use quote::{format_ident, quote};
 use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, GeneratedHostContractIdV3, KERNEL_PREFIX,
     KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
-    KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_MAGIC,
-    KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
+    KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
     KERNEL_REGISTRATION_VERSION_V3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
     REFERENCE_BINDING_REGISTRATION_KIND_V1, REFERENCE_BINDING_REGISTRATION_MAGIC_V1,
     REFERENCE_BINDING_REGISTRATION_PREFIX_V1, REFERENCE_BINDING_REGISTRATION_VERSION_V1,
-    RESERVED_ROOT, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
-    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
-    derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
-    semantic_witness_pointer_symbol_v1,
+    RESERVED_ROOT, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_kernel_binding_id_v1,
+    host_kernel_symbol_v1,
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
@@ -355,7 +352,6 @@ enum KernelMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct KernelOptions {
     mode: KernelMode,
-    qualification_worker_v2: bool,
     explicit_namespace: Option<CrateBindingIdV1>,
     reference: Option<String>,
     launch: Option<ParsedLaunchBoundsV1>,
@@ -417,7 +413,6 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     if attr.is_empty() {
         return Ok(KernelOptions {
             mode: KernelMode::Basic,
-            qualification_worker_v2: false,
             explicit_namespace: None,
             reference: None,
             launch: None,
@@ -428,7 +423,6 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
 
     let arguments = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr.clone())?;
     let mut typed = false;
-    let mut qualification_worker_v2 = false;
     let mut explicit_namespace = None;
     let mut reference = None;
     let mut launch = None;
@@ -437,11 +431,6 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
     for argument in arguments {
         match argument {
             Meta::Path(path) if path.is_ident("typed") && !typed => typed = true,
-            Meta::Path(path)
-                if path.is_ident("qualification_worker_v2") && !qualification_worker_v2 =>
-            {
-                qualification_worker_v2 = true;
-            }
             Meta::NameValue(value) if value.path.is_ident("namespace") => {
                 if explicit_namespace.is_some() {
                     return Err(syn::Error::new_spanned(
@@ -511,7 +500,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             _ => {
                 return Err(syn::Error::new_spanned(
                     argument,
-                    "#[kernel] accepts only #[kernel], #[kernel(typed)], qualification_worker_v2, namespace, reference, launch(...), unsafe_asm(...), and control_flow(...) declarations",
+                    "#[kernel] accepts only #[kernel], #[kernel(typed)], namespace, reference, launch(...), unsafe_asm(...), and control_flow(...) declarations",
                 ));
             }
         }
@@ -529,20 +518,12 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             "#[kernel] safe Rust reference bindings require typed mode",
         ));
     }
-    if qualification_worker_v2 && !typed {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "#[kernel] qualification_worker_v2 requires typed mode",
-        ));
-    }
-
     Ok(KernelOptions {
         mode: if typed {
             KernelMode::Typed
         } else {
             KernelMode::Basic
         },
-        qualification_worker_v2,
         explicit_namespace,
         reference,
         launch,
@@ -964,7 +945,6 @@ fn expand_kernel_with_device_import(
         input,
         KernelOptions {
             mode: KernelMode::Basic,
-            qualification_worker_v2: false,
             explicit_namespace: None,
             reference: None,
             launch: None,
@@ -987,20 +967,7 @@ fn expand_kernel_with_imports(
     crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if options.mode == KernelMode::Typed {
-        let exact_vecadd = validate_typed_kernel_signature(&input);
-        if options.qualification_worker_v2 && exact_vecadd.is_ok() {
-            return expand_legacy_kernel_with_imports(
-                input,
-                options,
-                device_import,
-                device_path,
-                host_import,
-                crate_binding,
-            );
-        }
-        if let Err(general_error) = validate_general_typed_signature_shape_v1(&input, &options) {
-            return Err(exact_vecadd.err().unwrap_or(general_error));
-        }
+        validate_general_typed_signature_shape_v1(&input, &options)?;
         return expand_general_typed_kernel_with_imports(
             input,
             options,
@@ -1011,25 +978,18 @@ fn expand_kernel_with_imports(
         );
     }
 
-    expand_legacy_kernel_with_imports(
-        input,
-        options,
-        device_import,
-        device_path,
-        host_import,
-        crate_binding,
-    )
+    debug_assert!(host_import.is_none());
+    debug_assert!(crate_binding.is_none());
+    expand_device_kernel_with_imports(input, options, device_import, device_path)
 }
 
-fn expand_legacy_kernel_with_imports(
+fn expand_device_kernel_with_imports(
     mut input: ItemFn,
     options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
     device_path: Option<&proc_macro2::TokenStream>,
-    host_import: Option<&proc_macro2::TokenStream>,
-    crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let mode = options.mode;
+    debug_assert_eq!(options.mode, KernelMode::Basic);
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if options.control_flow.is_some()
         && options
@@ -1040,10 +1000,6 @@ fn expand_legacy_kernel_with_imports(
             &input.sig,
             "unsafe assembly with control_flow effects cannot participate in a structured control_flow V1 contract",
         ));
-    }
-    if mode == KernelMode::Typed {
-        validate_typed_kernel_signature(&input)?;
-        validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
     validate_kernel_signature(&input)?;
@@ -1061,25 +1017,11 @@ fn expand_legacy_kernel_with_imports(
         ));
     }
 
-    let kernel_binding = crate_binding.map(|crate_binding| {
-        derive_kernel_binding_id_v1(
-            crate_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            &original_name,
-            &original_name,
-        )
-    });
-    let internal_ident = match kernel_binding {
-        Some(binding) => format_ident!("__fe2o3_host_kernel_v1_{}", binding.to_hex()),
-        None => format_ident!("{KERNEL_PREFIX}{original_name}"),
-    };
+    let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
     let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
-    let registration_kind = match mode {
-        KernelMode::Basic => KERNEL_REGISTRATION_KIND_KERNEL,
-        KernelMode::Typed => KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
-    };
+    let registration_kind = KERNEL_REGISTRATION_KIND_KERNEL;
     let marker_value = syn::LitStr::new(&original_name, original_ident.span());
     let export_value = syn::LitStr::new(&original_name, original_ident.span());
     let argument_types = input
@@ -1102,71 +1044,15 @@ fn expand_legacy_kernel_with_imports(
     let fallback_device_import = device_path.is_none().then_some(device_import);
     input.sig.ident = internal_ident.clone();
 
-    let (registration_type, registration_value) = match (mode, crate_binding, kernel_binding) {
-        (KernelMode::Basic, None, None) => (
-            quote!((u64, u16, u16, &'static str, &'static str, #function_pointer)),
-            quote!((
-                #KERNEL_REGISTRATION_MAGIC,
-                #KERNEL_REGISTRATION_VERSION_V1,
-                #registration_kind,
-                #marker_value,
-                #export_value,
-                #internal_ident,
-            )),
-        ),
-        (KernelMode::Typed, Some(crate_binding), Some(kernel_binding)) => {
-            let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
-            let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
-            (
-                quote!((
-                    u64,
-                    u16,
-                    u16,
-                    &'static str,
-                    &'static str,
-                    &'static str,
-                    &'static str,
-                    #function_pointer,
-                )),
-                quote!((
-                    #KERNEL_REGISTRATION_MAGIC,
-                    #KERNEL_REGISTRATION_VERSION_V2,
-                    #registration_kind,
-                    #marker_value,
-                    #export_value,
-                    #crate_binding,
-                    #kernel_binding,
-                    #internal_ident,
-                )),
-            )
-        }
-        _ => unreachable!("kernel mode and binding identity must agree"),
-    };
-    let cross_crate_typed_impl = match (mode, crate_binding, kernel_binding) {
-        (KernelMode::Typed, Some(crate_binding), Some(kernel_binding)) => {
-            let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
-            let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
-            quote! {
-                unsafe impl #device_api::CrossCrateTypedKernelV1
-                    for #type_marker_ident
-                {
-                    const REGISTRATION_VERSION: u16 = #KERNEL_REGISTRATION_VERSION_V2;
-                    const REGISTRATION_KIND: u16 =
-                        #KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
-                    const CRATE_BINDING: &'static str = #crate_binding;
-                    const KERNEL_BINDING: &'static str = #kernel_binding;
-                }
-            }
-        }
-        _ => quote! {},
-    };
-    let export_attribute = match kernel_binding {
-        Some(binding) => {
-            let symbol = syn::LitStr::new(&host_kernel_symbol_v1(binding), original_ident.span());
-            quote!(#[unsafe(export_name = #symbol)])
-        }
-        None => quote!(#[unsafe(no_mangle)]),
-    };
+    let registration_type = quote!((u64, u16, u16, &'static str, &'static str, #function_pointer));
+    let registration_value = quote!((
+        #KERNEL_REGISTRATION_MAGIC,
+        #KERNEL_REGISTRATION_VERSION_V1,
+        #registration_kind,
+        #marker_value,
+        #export_value,
+        #internal_ident,
+    ));
     let frontend_registration = encode_kernel_frontend_contract_v1(&options).map(|bytes| {
         let registration_ident =
             format_ident!("{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{original_name}");
@@ -1231,71 +1117,10 @@ fn expand_legacy_kernel_with_imports(
         options.reference.as_ref(),
     );
 
-    let typed_module = if let (Some(kernel_binding), Some(host_import)) =
-        (kernel_binding, host_import)
-    {
-        let module_ident = format_ident!("{original_name}_gpu");
-        let artifact_pointer_ident =
-            format_ident!("{}", artifact_pointer_symbol_v1(kernel_binding));
-        let artifact_length_ident = format_ident!("{}", artifact_length_symbol_v1(kernel_binding));
-        let binding_bytes = kernel_binding.as_bytes().into_iter();
-
-        quote! {
-            #[cfg(not(target_arch = "amdgpu"))]
-            pub mod #module_ident {
-                unsafe extern "C" {
-                    fn #artifact_pointer_ident() -> *const u8;
-                    fn #artifact_length_ident() -> usize;
-                }
-
-                #host_import
-
-                pub type Kernel =
-                    __fe2o3_kernel_host::__generated::GeneratedVecAddKernelV1<
-                        super::#type_marker_ident,
-                    >;
-                pub type Prepared<'loaded, 'allocation> =
-                    __fe2o3_kernel_host::__generated::GeneratedVecAddPreparedV1<
-                        'loaded,
-                        'allocation,
-                        super::#type_marker_ident,
-                    >;
-
-                const _: () = {
-                    // SAFETY: the fe2o3 backend owns these reserved symbols and
-                    // binds them to the artifact for this exact generated marker.
-                    unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelContractV1
-                        for super::#type_marker_ident
-                    {
-                        const PROFILE:
-                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
-                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
-
-                        const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
-
-                        fn artifact_container_bytes() -> &'static [u8] {
-                            // SAFETY: the generated unsafe trait implementation relies
-                            // on the backend/linker contract that this accessor pair
-                            // returns one exact, immutable, program-lifetime artifact.
-                            unsafe {
-                                __fe2o3_kernel_host::__generated::artifact_bytes_from_backend_v1(
-                                    #artifact_pointer_ident(),
-                                    #artifact_length_ident(),
-                                )
-                            }
-                        }
-                    }
-                };
-            }
-        }
-    } else {
-        quote! {}
-    };
-
     Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        #export_attribute
+        #[unsafe(no_mangle)]
         #input
 
         #[doc(hidden)]
@@ -1330,10 +1155,7 @@ fn expand_legacy_kernel_with_imports(
                 const REGISTRATION: &'static Self::Registration = &#registration_ident;
             }
 
-            #cross_crate_typed_impl
         };
-
-        #typed_module
     })
 }
 
@@ -1384,34 +1206,8 @@ fn expand_general_typed_kernel_with_imports(
     let model = model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes())?;
     let generated_host_contract =
         GeneratedHostContractIdV3::from_bytes(*model.generated_host_contract_identity.as_bytes());
-    let generated_host_arguments = generated_general_typed_arguments_v1(
-        &input,
-        &model.arguments,
-        options.qualification_worker_v2,
-    );
+    let generated_host_arguments = generated_general_typed_arguments_v1(&input, &model.arguments);
     let generated_worker_v3_adapter = generated_worker_v3_adapter_v1(&input, &model);
-    let (generated_alpha_zeta_cov6_adapter, generated_scalar_gemm_v1_adapter) =
-        if options.qualification_worker_v2 {
-            (
-                generated_alpha_zeta_cov6_adapter_v1(
-                    &input,
-                    &model,
-                    kernel_binding.as_bytes(),
-                    generated_host_contract.as_bytes(),
-                )?,
-                generated_scalar_gemm_v1_adapter(
-                    &input,
-                    &model,
-                    kernel_binding.as_bytes(),
-                    generated_host_contract.as_bytes(),
-                )?,
-            )
-        } else {
-            (
-                proc_macro2::TokenStream::new(),
-                proc_macro2::TokenStream::new(),
-            )
-        };
     let control_flow_contract =
         analyze_kernel_control_flow_v1(&input, options.control_flow.as_ref())?;
     lower_bounded_for_loops_v1(&mut input, options.control_flow.as_ref())?;
@@ -1589,13 +1385,8 @@ fn expand_general_typed_kernel_with_imports(
         options.reference.as_ref(),
     );
     let module_ident = format_ident!("{original_name}_gpu");
-    let semantic_witness_pointer_ident =
-        format_ident!("{}", semantic_witness_pointer_symbol_v1(kernel_binding));
-    let semantic_witness_length_ident =
-        format_ident!("{}", semantic_witness_length_symbol_v1(kernel_binding));
     let binding_bytes = kernel_binding.as_bytes().into_iter();
     let generated_host_contract_profile_bytes = generated_host_contract.as_bytes().into_iter();
-    let generated_host_contract_witness_bytes = generated_host_contract.as_bytes().into_iter();
     let typed_module = host_import.map_or_else(
         || quote! {},
         |host_import| quote! {
@@ -1605,24 +1396,18 @@ fn expand_general_typed_kernel_with_imports(
 
             use __fe2o3_kernel_alloc::vec;
 
-            unsafe extern "C" {
-                fn #semantic_witness_pointer_ident() -> *const u8;
-                fn #semantic_witness_length_ident() -> usize;
-            }
-
             #host_import
 
             pub type Marker = super::#type_marker_ident;
 
             #generated_host_arguments
             #generated_worker_v3_adapter
-            #generated_alpha_zeta_cov6_adapter
-            #generated_scalar_gemm_v1_adapter
 
             const _: () = {
-                // SAFETY: the associated constants are only a lexical
-                // declaration. Semantic authority is obtained separately from
-                // the backend-issued, identity-bound witness accessors below.
+                // SAFETY: these constants and the generated argument adapter
+                // come from one parsed signature. Worker V3 independently
+                // matches the marker binding and complete argument layout to
+                // the admitted compiler descriptor before load or dispatch.
                 unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelExpectationV1
                     for super::#type_marker_ident
                 {
@@ -1633,24 +1418,6 @@ fn expand_general_typed_kernel_with_imports(
                         };
 
                     const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
-
-                    fn semantic_witness_v1() -> Result<
-                        __fe2o3_kernel_host::__generated::ValidatedCompilerGeneratedSemanticWitnessV1,
-                        __fe2o3_kernel_host::__generated::CompilerGeneratedSemanticWitnessErrorV1,
-                    > {
-                        // SAFETY: the backend owns this exact binding-derived
-                        // accessor pair. The host parser validates every byte
-                        // against both generated identities before issuing the
-                        // opaque authority token.
-                        unsafe {
-                            __fe2o3_kernel_host::__generated::semantic_witness_from_backend_v1(
-                                #semantic_witness_pointer_ident(),
-                                #semantic_witness_length_ident(),
-                                Self::KERNEL_BINDING_ID_V1,
-                                [#(#generated_host_contract_witness_bytes),*],
-                            )
-                        }
-                    }
                 }
             };
         }
@@ -2093,10 +1860,8 @@ struct GeneralTypedSignatureModelV1 {
 fn generated_general_typed_arguments_v1(
     input: &ItemFn,
     arguments: &[GeneralTypedArgumentKindV1],
-    qualification_worker_v2: bool,
 ) -> proc_macro2::TokenStream {
     debug_assert_eq!(input.sig.inputs.len(), arguments.len());
-    let scalar_gemm_v1 = qualification_worker_v2 && exact_scalar_gemm_v1(input, arguments);
     let fields = input
         .sig
         .inputs
@@ -2113,27 +1878,8 @@ fn generated_general_typed_arguments_v1(
         .collect::<Vec<_>>();
     let field_types = arguments
         .iter()
-        .enumerate()
-        .map(|(index, argument)| match argument {
+        .map(|argument| match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
-            GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32)
-                if scalar_gemm_v1 && index < 2 =>
-            {
-                quote!(
-                    __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ReadDeviceSlice<
-                        'allocation,
-                    >
-                )
-            }
-            GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32)
-                if scalar_gemm_v1 && index == 2 =>
-            {
-                quote!(
-                    __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ReadWriteDeviceSlice<
-                        'allocation,
-                    >
-                )
-            }
             GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
                 let scalar = scalar.rust_type_tokens();
                 quote!(
@@ -2610,182 +2356,6 @@ fn exact_scalar_gemm_v1(input: &ItemFn, arguments: &[GeneralTypedArgumentKindV1]
             ]
 }
 
-fn generated_scalar_gemm_v1_adapter(
-    input: &ItemFn,
-    model: &GeneralTypedSignatureModelV1,
-    kernel_binding: [u8; 32],
-    generated_host_contract: [u8; 32],
-) -> syn::Result<proc_macro2::TokenStream> {
-    if !exact_scalar_gemm_v1(input, &model.arguments) {
-        return Ok(quote! {});
-    }
-
-    let layout = generated_scalar_gemm_v1_layout(model);
-    let kernel_binding_identity = kernel_binding;
-    let generated_host_contract_identity = generated_host_contract;
-
-    Ok(quote! {
-        // SAFETY: this implementation is emitted only for the exact Scalar
-        // GEMM V1 name, argument names, source types, effects, ABI, and launch
-        // profile. Every pointer/length pair and access record comes from the
-        // same retained generated capability, and the scalar dimensions are
-        // bound from this non-cloneable `Arguments` value.
-        unsafe impl<'allocation>
-            __fe2o3_kernel_host::__generated::CompilerGeneratedScalarGemmV1Arguments<
-                'allocation,
-                Marker,
-            > for Arguments<'allocation>
-        {
-            fn dispatch_identity_v1(
-            ) -> __fe2o3_kernel_host::__generated::ScalarGemmV1DispatchIdentity {
-                __fe2o3_kernel_host::__generated::ScalarGemmV1DispatchIdentity::new(
-                    [#(#kernel_binding_identity),*],
-                    [#(#generated_host_contract_identity),*],
-                )
-            }
-
-            fn generated_argument_layout_v1() -> Result<
-                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
-                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
-            > {
-                #layout
-            }
-
-            fn bind_arguments_v1(
-                &self,
-                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
-            ) -> Result<
-                __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ArgumentBinding<
-                    'allocation,
-                >,
-                __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
-            > {
-                let inputs = [
-                    self.a.bind_input_v1(plan, 0)?,
-                    self.b.bind_input_v1(plan, 1)?,
-                    self.c.bind_input_v1(plan, 2)?,
-                    plan.scalar_u32(3, self.m)?,
-                    plan.scalar_u32(4, self.n)?,
-                    plan.scalar_u32(5, self.k)?,
-                ].into_iter().collect();
-                let accesses = [
-                    self.a.argument_access_v1(),
-                    self.b.argument_access_v1(),
-                    self.c.argument_access_v1(),
-                ].into_iter().collect();
-                // SAFETY: inputs contain each exact source argument once and
-                // access records are regenerated from the same retained slice
-                // capabilities in source order.
-                Ok(unsafe {
-                    __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1ArgumentBinding::
-                        from_compiler_generated_parts_v1(
-                            inputs,
-                            accesses,
-                            [self.m, self.n, self.k],
-                        )
-                })
-            }
-        }
-
-        pub type Prepared<'loaded, 'allocation, P, A> =
-            __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1PreparedInvocation<
-                'loaded,
-                'allocation,
-                P,
-                Marker,
-                A,
-                Arguments<'allocation>,
-            >;
-
-        impl<'allocation> Arguments<'allocation> {
-            /// Safely prepares this exact generated Scalar GEMM V1 invocation.
-            #[allow(clippy::type_complexity)]
-            pub fn prepare<'loaded, P, A, Authenticator>(
-                self,
-                executable: &'loaded mut __fe2o3_kernel_host::LoadedHsaExecutableV1<P, A>,
-                observed: &__fe2o3_kernel_host::ObservedContext,
-                authenticator: &mut Authenticator,
-            ) -> __fe2o3_kernel_host::__generated::GeneratedScalarGemmV1PrepareResult<
-                'loaded,
-                'allocation,
-                P,
-                Marker,
-                A,
-                Self,
-                Authenticator::Error,
-            >
-            where
-                A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
-                Authenticator:
-                    __fe2o3_kernel_host::WorkerV2PrerequisiteAuthenticatorV1<Marker>,
-            {
-                executable.prepare_generated_scalar_gemm_v1::<
-                    Marker,
-                    Authenticator,
-                    Self,
-                >(observed, authenticator, self)
-            }
-        }
-    })
-}
-
-fn generated_scalar_gemm_v1_layout(
-    model: &GeneralTypedSignatureModelV1,
-) -> proc_macro2::TokenStream {
-    let fields = model
-        .arguments
-        .iter()
-        .zip(model.abi.fields())
-        .map(|(kind, field)| generated_scalar_gemm_v1_field(field.name().as_str(), *kind, field))
-        .collect::<Vec<_>>();
-    let size = model.abi.size();
-    let alignment = model.abi.alignment();
-
-    quote! {
-        __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
-            #size,
-            #alignment,
-            __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            [#(#fields),*].into_iter().collect(),
-        )
-    }
-}
-
-fn generated_scalar_gemm_v1_field(
-    source_name: &str,
-    kind: GeneralTypedArgumentKindV1,
-    field: &AbiField,
-) -> proc_macro2::TokenStream {
-    if kind != GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32) {
-        return generated_alpha_zeta_cov6_field_v1(source_name, kind, field);
-    }
-
-    let offset = field.offset();
-    let size = field.size();
-    let alignment = field.alignment();
-    quote! {
-        __fe2o3_kernel_host::__generated::AbiField::new(
-            __fe2o3_kernel_host::__generated::Name::new(#source_name)
-                .expect("generated Scalar GEMM V1 argument name is valid"),
-            #offset,
-            #size,
-            #alignment,
-            __fe2o3_kernel_host::__generated::AbiKind::Scalar(
-                __fe2o3_kernel_host::__generated::ScalarType::U32,
-            ),
-            __fe2o3_kernel_host::__generated::Mutability::Immutable,
-            __fe2o3_kernel_host::__generated::Access::ByValue,
-            __fe2o3_kernel_host::__generated::AddressSpace::Value,
-            <u32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
-                scalar_type_identity_v1(
-                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-                ),
-            __fe2o3_kernel_host::__generated::ArgumentOwnership::ByValue,
-            __fe2o3_kernel_host::__generated::AliasClass::Value,
-        ).expect("generated Scalar GEMM V1 ABI field is valid")
-    }
-}
-
 impl AlphaZetaCov6MacroRoleV1 {
     const fn argument_names(self) -> &'static [&'static str] {
         match self {
@@ -2841,240 +2411,6 @@ fn exact_alpha_zeta_cov6_role_v1(
             Some(AlphaZetaCov6MacroRoleV1::Zeta)
         }
         _ => None,
-    }
-}
-
-fn generated_alpha_zeta_cov6_adapter_v1(
-    input: &ItemFn,
-    model: &GeneralTypedSignatureModelV1,
-    kernel_binding: [u8; 32],
-    generated_host_contract: [u8; 32],
-) -> syn::Result<proc_macro2::TokenStream> {
-    let Some(role) = exact_alpha_zeta_cov6_role_v1(input, &model.arguments) else {
-        return Ok(quote! {});
-    };
-    let role = match role {
-        AlphaZetaCov6MacroRoleV1::Alpha => {
-            quote!(__fe2o3_kernel_host::__generated::AlphaZetaCov6KernelRoleV1::Alpha)
-        }
-        AlphaZetaCov6MacroRoleV1::Zeta => {
-            quote!(__fe2o3_kernel_host::__generated::AlphaZetaCov6KernelRoleV1::Zeta)
-        }
-    };
-    let kernel_binding_identity = kernel_binding;
-    let generated_host_contract_identity = generated_host_contract;
-    let layout = generated_alpha_zeta_cov6_layout_v1(model);
-    let (scalar_inputs, slice_arguments) =
-        match exact_alpha_zeta_cov6_role_v1(input, &model.arguments)
-            .expect("role was checked above")
-        {
-            AlphaZetaCov6MacroRoleV1::Alpha => (
-                quote!([plan.scalar_f32(0, self.scale)?].into_iter().collect()),
-                quote!(
-                    [
-                        self.input.bind_argument_pair(plan, 1)?,
-                        self.output.bind_argument_pair(plan, 2)?,
-                    ]
-                    .into_iter()
-                    .collect()
-                ),
-            ),
-            AlphaZetaCov6MacroRoleV1::Zeta => (
-                quote!([plan.scalar_f32(2, self.bias)?].into_iter().collect()),
-                quote!(
-                    [
-                        self.a.bind_argument_pair(plan, 0)?,
-                        self.b.bind_argument_pair(plan, 1)?,
-                        self.output.bind_argument_pair(plan, 3)?,
-                    ]
-                    .into_iter()
-                    .collect()
-                ),
-            ),
-        };
-
-    Ok(quote! {
-        // SAFETY: this implementation is emitted only for the exact source
-        // role, names, scalar types, slice effects, ABI, and launch contract
-        // checked above. Every slice input/access pair comes from the retained
-        // capability stored in this non-cloneable `Arguments` value.
-        unsafe impl<'allocation>
-            __fe2o3_kernel_host::__generated::CompilerGeneratedAlphaZetaCov6ArgumentsV1<
-                'allocation,
-                Marker,
-            > for Arguments<'allocation>
-        {
-            fn dispatch_identity_v1(
-            ) -> __fe2o3_kernel_host::__generated::AlphaZetaCov6DispatchIdentityV1 {
-                __fe2o3_kernel_host::__generated::AlphaZetaCov6DispatchIdentityV1::new(
-                    #role,
-                    [#(#kernel_binding_identity),*],
-                    [#(#generated_host_contract_identity),*],
-                )
-            }
-
-            fn generated_argument_layout_v1() -> Result<
-                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
-                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
-            > {
-                #layout
-            }
-
-            fn bind_arguments_v1(
-                &self,
-                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
-            ) -> Result<
-                __fe2o3_kernel_host::__generated::GeneratedAlphaZetaCov6ArgumentBindingV1<
-                    'allocation,
-                >,
-                __fe2o3_kernel_host::__generated::GeneratedArgumentPackError,
-            > {
-                let scalar_inputs = #scalar_inputs;
-                let slice_arguments = #slice_arguments;
-                // SAFETY: the generated vectors contain every exact source
-                // scalar and capability-derived slice pair once at its source
-                // index. `self` retains all capabilities through completion.
-                Ok(unsafe {
-                    __fe2o3_kernel_host::__generated::GeneratedAlphaZetaCov6ArgumentBindingV1::
-                        from_compiler_generated_parts_v1(scalar_inputs, slice_arguments)
-                })
-            }
-        }
-
-        impl<'allocation> Arguments<'allocation> {
-            /// Safely prepares this exact generated alpha/zeta COV6 invocation.
-            #[allow(clippy::type_complexity)]
-            pub fn prepare<'loaded, P, A, Authenticator>(
-                self,
-                executable: &'loaded mut __fe2o3_kernel_host::LoadedHsaExecutableV1<P, A>,
-                observed: &__fe2o3_kernel_host::ObservedContext,
-                authenticator: &mut Authenticator,
-            ) -> __fe2o3_kernel_host::__generated::GeneratedAlphaZetaCov6PrepareResultV1<
-                'loaded,
-                'allocation,
-                P,
-                Marker,
-                A,
-                Self,
-                Authenticator::Error,
-            >
-            where
-                A: __fe2o3_kernel_host::ReviewedHsaImplicitKernargAdapterV1,
-                Authenticator:
-                    __fe2o3_kernel_host::WorkerV2PrerequisiteAuthenticatorV1<Marker>,
-            {
-                executable.prepare_generated_alpha_zeta_cov6_selected_kernel_v1::<
-                    Marker,
-                    Authenticator,
-                    Self,
-                >(observed, authenticator, self)
-            }
-        }
-    })
-}
-
-fn generated_alpha_zeta_cov6_layout_v1(
-    model: &GeneralTypedSignatureModelV1,
-) -> proc_macro2::TokenStream {
-    let fields = model
-        .arguments
-        .iter()
-        .zip(model.abi.fields())
-        .map(|(kind, field)| {
-            generated_alpha_zeta_cov6_field_v1(field.name().as_str(), *kind, field)
-        })
-        .collect::<Vec<_>>();
-    let size = model.abi.size();
-    let alignment = model.abi.alignment();
-
-    quote! {
-        __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
-            #size,
-            #alignment,
-            __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            [#(#fields),*].into_iter().collect(),
-        )
-    }
-}
-
-fn generated_alpha_zeta_cov6_field_v1(
-    source_name: &str,
-    kind: GeneralTypedArgumentKindV1,
-    field: &AbiField,
-) -> proc_macro2::TokenStream {
-    let offset = field.offset();
-    let size = field.size();
-    let alignment = field.alignment();
-    let (abi_kind, mutability, access, address_space, type_identity, ownership, alias_class) =
-        match kind {
-            GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::F32) => (
-                quote!(__fe2o3_kernel_host::__generated::AbiKind::Scalar(
-                    __fe2o3_kernel_host::__generated::ScalarType::F32
-                )),
-                quote!(__fe2o3_kernel_host::__generated::Mutability::Immutable),
-                quote!(__fe2o3_kernel_host::__generated::Access::ByValue),
-                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Value),
-                quote!(
-                <f32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
-                    scalar_type_identity_v1(
-                        __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-                    )
-            ),
-                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::ByValue),
-                quote!(__fe2o3_kernel_host::__generated::AliasClass::Value),
-            ),
-            GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32) => (
-                quote!(__fe2o3_kernel_host::__generated::AbiKind::Slice {
-                    element_size: 4,
-                    element_alignment: 4,
-                }),
-                quote!(__fe2o3_kernel_host::__generated::Mutability::Immutable),
-                quote!(__fe2o3_kernel_host::__generated::Access::ReadOnly),
-                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Global),
-                quote!(
-                <f32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
-                    shared_slice_type_identity_v1(
-                        __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-                    )
-            ),
-                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::SharedBorrow),
-                quote!(__fe2o3_kernel_host::__generated::AliasClass::SharedReadOnly),
-            ),
-            GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32) => (
-                quote!(__fe2o3_kernel_host::__generated::AbiKind::Slice {
-                    element_size: 4,
-                    element_alignment: 4,
-                }),
-                quote!(__fe2o3_kernel_host::__generated::Mutability::Mutable),
-                quote!(__fe2o3_kernel_host::__generated::Access::ReadWrite),
-                quote!(__fe2o3_kernel_host::__generated::AddressSpace::Global),
-                quote!(
-                <f32 as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
-                    disjoint_slice_type_identity_v1(
-                        __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-                    )
-            ),
-                quote!(__fe2o3_kernel_host::__generated::ArgumentOwnership::UniqueBorrow),
-                quote!(__fe2o3_kernel_host::__generated::AliasClass::Exclusive),
-            ),
-            _ => unreachable!("exact alpha/zeta recognition permits only f32 fields"),
-        };
-
-    quote! {
-        __fe2o3_kernel_host::__generated::AbiField::new(
-            __fe2o3_kernel_host::__generated::Name::new(#source_name)
-                .expect("generated alpha/zeta argument name is valid"),
-            #offset,
-            #size,
-            #alignment,
-            #abi_kind,
-            #mutability,
-            #access,
-            #address_space,
-            #type_identity,
-            #ownership,
-            #alias_class,
-        ).expect("generated alpha/zeta ABI field is valid")
     }
 }
 
@@ -4814,10 +4150,10 @@ mod tests {
         device_import_for, device_path_for, expand_device_copy_with_core_import,
         expand_device_export_with_import, expand_device_import_with_import,
         expand_kernel_with_device_import, expand_kernel_with_imports,
-        expand_legacy_kernel_with_imports, general_typed_global_mut_pointer_type_identity_v1,
-        generated_general_typed_arguments_v1, generated_worker_v3_adapter_v1, host_import_for,
-        model_general_typed_signature_v1, parse_device_ffi_options, parse_kernel_options,
-        reconcile_crate_binding_v1, simulation_attempt_value_v1, simulation_mode_value_v1,
+        general_typed_global_mut_pointer_type_identity_v1, generated_general_typed_arguments_v1,
+        generated_worker_v3_adapter_v1, host_import_for, model_general_typed_signature_v1,
+        parse_device_ffi_options, parse_kernel_options, reconcile_crate_binding_v1,
+        simulation_attempt_value_v1, simulation_mode_value_v1,
         validate_generated_device_ffi_contract_grammar, validate_kernel_assembly_boundary,
         validate_kernel_source_safety, validate_typed_kernel_profile_v1,
         validate_typed_kernel_signature, validate_typed_kernel_symbol_stem,
@@ -4832,10 +4168,8 @@ mod tests {
     use quote::{ToTokens, quote};
     use reserved_fe2o3_symbols::{
         CrateBindingIdV1, GeneratedHostContractIdV3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-        artifact_length_symbol_v1, artifact_pointer_symbol_v1, derive_crate_binding_id_v1,
-        derive_kernel_binding_id_v1, host_kernel_symbol_v1, semantic_witness_length_symbol_v1,
-        semantic_witness_pointer_symbol_v1,
+        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_crate_binding_id_v1,
+        derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
     use syn::{Expr, FnArg, Item, ItemFn, ItemForeignMod, Type, Visibility, parse_quote};
 
@@ -5176,7 +4510,6 @@ mod tests {
             parse_kernel_options(quote::quote!()).unwrap(),
             KernelOptions {
                 mode: KernelMode::Basic,
-                qualification_worker_v2: false,
                 explicit_namespace: None,
                 reference: None,
                 launch: None,
@@ -5188,7 +4521,6 @@ mod tests {
             parse_kernel_options(quote::quote!(typed)).unwrap(),
             KernelOptions {
                 mode: KernelMode::Typed,
-                qualification_worker_v2: false,
                 explicit_namespace: None,
                 reference: None,
                 launch: None,
@@ -5205,11 +4537,7 @@ mod tests {
         assert!(parse_kernel_options(quote::quote!(reference = cpu_reference)).is_err());
         assert!(parse_kernel_options(quote::quote!(typed, reference = |value| value)).is_err());
         assert!(parse_kernel_options(quote::quote!(qualification_worker_v2)).is_err());
-        assert!(
-            parse_kernel_options(quote::quote!(typed, qualification_worker_v2))
-                .unwrap()
-                .qualification_worker_v2
-        );
+        assert!(parse_kernel_options(quote::quote!(typed, qualification_worker_v2)).is_err());
 
         let explicit = parse_kernel_options(quote::quote!(
             typed,
@@ -5484,85 +4812,6 @@ mod tests {
     }
 
     #[test]
-    fn qualification_vecadd_emits_guarded_embedded_artifact_contract() {
-        let input = parse_quote! {
-            pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
-                let _ = (a, b, &mut c);
-            }
-        };
-        let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
-        let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
-        let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
-        let kernel_binding = derive_kernel_binding_id_v1(
-            crate_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            "vecadd",
-            "vecadd",
-        );
-
-        let expansion = expand_kernel_with_imports(
-            input,
-            KernelOptions {
-                mode: KernelMode::Typed,
-                qualification_worker_v2: true,
-                explicit_namespace: None,
-                reference: Some("crate :: cpu_reference".to_owned()),
-                launch: None,
-                unsafe_assembly: None,
-                control_flow: None,
-            },
-            &device_import,
-            None,
-            Some(&host_import),
-            Some(crate_binding),
-        )
-        .unwrap()
-        .to_string();
-
-        assert!(expansion.contains("pub mod vecadd_gpu"));
-        assert!(expansion.contains("fn __fe2o3_kernel_reference_anchor_v1_vecadd"));
-        assert!(expansion.contains("core :: hint :: black_box (crate :: cpu_reference)"));
-        assert!(expansion.contains("static __fe2o3_kernel_reference_binding_v1_vecadd"));
-        assert!(expansion.contains("2u16 , 3u16"));
-        assert!(expansion.contains(&format!(
-            "fn {} () -> * const u8",
-            artifact_pointer_symbol_v1(kernel_binding)
-        )));
-        assert!(expansion.contains(&format!(
-            "fn {} () -> usize",
-            artifact_length_symbol_v1(kernel_binding)
-        )));
-        assert!(expansion.contains(&host_kernel_symbol_v1(kernel_binding)));
-        assert!(expansion.contains(&crate_binding.to_hex()));
-        assert!(expansion.contains(&kernel_binding.to_hex()));
-        assert!(expansion.contains("extern crate gpu_host as __fe2o3_kernel_host"));
-        assert!(expansion.contains(
-            "pub type Kernel = __fe2o3_kernel_host :: __generated :: GeneratedVecAddKernelV1"
-        ));
-        assert!(expansion.contains(
-            "pub type Prepared < 'loaded , 'allocation > = __fe2o3_kernel_host :: __generated :: GeneratedVecAddPreparedV1"
-        ));
-        assert!(expansion.contains(
-            "unsafe impl __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelContractV1"
-        ));
-        assert!(expansion.contains(
-            "const PROFILE : __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 = __fe2o3_kernel_host :: __generated :: CompilerGeneratedKernelProfileV1 :: TypedVecAddF32RustcLayoutV2"
-        ));
-        assert!(expansion.contains("const KERNEL_BINDING_ID_V1 : [u8 ; 32]"));
-        assert!(expansion.contains("fn artifact_container_bytes () -> & 'static [u8]"));
-        assert!(
-            expansion
-                .contains("__fe2o3_kernel_host :: __generated :: artifact_bytes_from_backend_v1")
-        );
-        assert!(!expansion.contains("artifact_vecadd_start"));
-        assert!(!expansion.contains("artifact_vecadd_end"));
-        assert!(!expansion.contains("from_raw_parts"));
-        assert!(!expansion.contains("checked_sub"));
-        assert!(!expansion.contains("KernelParams"));
-        assert!(!expansion.contains("launch_unchecked"));
-    }
-
-    #[test]
     fn simulation_mode_selector_is_closed_to_exact_one() {
         assert!(simulation_mode_value_v1("1"));
         for hostile in ["", "0", "true", "TRUE", "01", "attacker", "1 "] {
@@ -5646,101 +4895,40 @@ mod tests {
     }
 
     #[test]
-    fn exact_vecadd_uses_v3_unless_the_v2_qualification_oracle_is_explicit() {
+    fn exact_vecadd_uses_the_single_worker_v3_host_contract() {
         let input: ItemFn = parse_quote! {
             pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
                 let _ = (a, b, &mut c);
             }
         };
-        let production_options = parse_kernel_options(quote!(typed)).unwrap();
-        let qualification_options =
-            parse_kernel_options(quote!(typed, qualification_worker_v2)).unwrap();
         let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
         let host_import = host_import_for(FoundCrate::Name("gpu_host".to_string()));
-        let crate_binding = derive_crate_binding_id_v1("fixture", ["legacy-token-golden"]);
+        let crate_binding = derive_crate_binding_id_v1("fixture", ["worker-v3-token-golden"]);
 
-        let production = expand_kernel_with_imports(
-            input.clone(),
-            production_options,
-            &device_import,
-            None,
-            Some(&host_import),
-            Some(crate_binding),
-        )
-        .unwrap();
-        let selected = expand_kernel_with_imports(
-            input.clone(),
-            qualification_options.clone(),
-            &device_import,
-            None,
-            Some(&host_import),
-            Some(crate_binding),
-        )
-        .unwrap();
-        let legacy = expand_legacy_kernel_with_imports(
+        let expansion = expand_kernel_with_imports(
             input,
-            qualification_options,
+            parse_kernel_options(quote!(typed)).unwrap(),
             &device_import,
             None,
             Some(&host_import),
             Some(crate_binding),
         )
-        .unwrap();
+        .unwrap()
+        .to_string();
 
-        assert_eq!(selected.to_string(), legacy.to_string());
-        let production = production.to_string();
-        assert!(production.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
-        assert!(production.contains("prepare_worker_v3"));
-        assert!(production.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
-        assert!(!production.contains("CompilerGeneratedKernelContractV1"));
-        assert!(!production.contains("artifact_container_bytes"));
-        assert!(!production.contains("pub type Kernel"));
-        assert!(!production.contains("pub type Prepared"));
-
-        let file: syn::File = syn::parse2(selected.clone()).unwrap();
-        let registration = file
-            .items
-            .iter()
-            .find_map(|item| match item {
-                Item::Static(item) if item.ident == "__fe2o3_kernel_registration_vecadd" => {
-                    Some(item)
-                }
-                _ => None,
-            })
-            .expect("exact vecadd V2 registration static");
-        let Type::Tuple(registration_type) = registration.ty.as_ref() else {
-            panic!("V2 registration type must be a tuple");
-        };
-        let Expr::Tuple(registration_value) = registration.expr.as_ref() else {
-            panic!("V2 registration value must be a tuple");
-        };
-        let kernel_binding = derive_kernel_binding_id_v1(
-            crate_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            "vecadd",
-            "vecadd",
-        );
-        assert_eq!(registration_type.elems.len(), 8);
-        assert_eq!(registration_value.elems.len(), 8);
-        assert_eq!(
-            registration_value.elems[1].to_token_stream().to_string(),
-            "2u16"
-        );
-        assert_eq!(
-            registration_value.elems[2].to_token_stream().to_string(),
-            "3u16"
-        );
-        assert_eq!(
-            registration_value.elems[7].to_token_stream().to_string(),
-            format!("__fe2o3_host_kernel_v1_{}", kernel_binding.to_hex())
-        );
-        let selected = selected.to_string();
-        assert!(selected.contains("CompilerGeneratedKernelContractV1"));
-        assert!(selected.contains("artifact_container_bytes"));
-        assert!(selected.contains("pub type Kernel"));
-        assert!(selected.contains("pub type Prepared"));
-        assert!(!selected.contains("pub struct Arguments"));
-        assert!(!selected.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
+        assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(expansion.contains("prepare_worker_v3"));
+        assert!(expansion.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
+        assert!(expansion.contains("pub struct Arguments"));
+        for retired in [
+            "CompilerGeneratedKernelContractV1",
+            "artifact_container_bytes",
+            "GeneratedVecAddKernelV1",
+            "GeneratedVecAddPreparedV1",
+            "qualification_worker_v2",
+        ] {
+            assert!(!expansion.contains(retired), "retained `{retired}`");
+        }
     }
 
     #[test]
@@ -5754,7 +4942,7 @@ mod tests {
         };
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let model = model_general_typed_signature_v1(&mixed, &options, [0x31; 32]).unwrap();
-        let generated = generated_general_typed_arguments_v1(&mixed, &model.arguments, false);
+        let generated = generated_general_typed_arguments_v1(&mixed, &model.arguments);
         let generated_text = generated.to_string();
         assert!(!generated_text.contains("* const"));
         assert!(!generated_text.contains("* mut"));
@@ -5846,7 +5034,7 @@ mod tests {
             ) {}
         };
         let model = model_general_typed_signature_v1(&scalars, &options, [0x32; 32]).unwrap();
-        let generated = generated_general_typed_arguments_v1(&scalars, &model.arguments, false);
+        let generated = generated_general_typed_arguments_v1(&scalars, &model.arguments);
         let file: syn::File = syn::parse2(generated).unwrap();
         let arguments = file
             .items
@@ -6179,17 +5367,9 @@ mod tests {
             assert!(expansion.contains(&binding.to_hex()));
             assert!(expansion.contains(&contract.to_hex()));
             assert!(expansion.contains(&host_kernel_symbol_v1(binding)));
-            assert!(expansion.contains(&format!(
-                "fn {} () -> * const u8",
-                semantic_witness_pointer_symbol_v1(binding)
-            )));
-            assert!(expansion.contains(&format!(
-                "fn {} () -> usize",
-                semantic_witness_length_symbol_v1(binding)
-            )));
-            assert!(expansion.contains("fn semantic_witness_v1"));
-            assert!(expansion.contains("semantic_witness_from_backend_v1"));
-            assert!(expansion.contains("ValidatedCompilerGeneratedSemanticWitnessV1"));
+            assert!(!expansion.contains("__fe2o3_semantic_witness_v1_"));
+            assert!(!expansion.contains("fn semantic_witness_v1"));
+            assert!(!expansion.contains("semantic_witness_from_backend_v1"));
             assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
             assert!(expansion.contains("pub fn prepare_worker_v3"));
             assert!(expansion.contains("prepare_generated_worker_v3_v1"));
@@ -6380,7 +5560,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_gemm_v1_qualification_oracle_emits_only_the_narrow_v2_adapter() {
+    fn scalar_gemm_v1_emits_only_the_generic_worker_v3_adapter() {
         let input: ItemFn = parse_quote! {
             pub fn scalar_gemm_v1(
                 a: &[f32],
@@ -6400,17 +5580,9 @@ mod tests {
             "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
         )
         .unwrap();
-        let kernel_binding = derive_kernel_binding_id_v1(
-            crate_binding,
-            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-            "scalar_gemm_v1",
-            "scalar_gemm_v1",
-        );
-        let model =
-            model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes()).unwrap();
-        let production = expand_kernel_with_imports(
-            input.clone(),
-            options.clone(),
+        let expansion = expand_kernel_with_imports(
+            input,
+            options,
             &device_import_for(FoundCrate::Name("gpu_device".to_owned())),
             None,
             Some(&host_import_for(FoundCrate::Name("gpu_host".to_owned()))),
@@ -6418,99 +5590,19 @@ mod tests {
         )
         .unwrap()
         .to_string();
-        assert!(production.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
-        assert!(production.contains("prepare_worker_v3"));
-        assert!(production.contains("GeneratedReadDeviceSlice"));
-        assert!(production.contains("GeneratedReadWriteDeviceSlice"));
-        assert!(!production.contains("GeneratedScalarGemmV1ReadDeviceSlice"));
-        assert!(!production.contains("GeneratedScalarGemmV1ReadWriteDeviceSlice"));
-        assert!(!production.contains("CompilerGeneratedScalarGemmV1Arguments"));
-        assert!(!production.contains("prepare_generated_scalar_gemm_v1"));
-
-        let qualification_options = parse_kernel_options(quote!(
-            typed,
-            qualification_worker_v2,
-            launch(required = [256, 1, 1], max = [256, 1, 1])
-        ))
-        .unwrap();
-        let qualification = expand_kernel_with_imports(
-            input.clone(),
-            qualification_options,
-            &device_import_for(FoundCrate::Name("gpu_device".to_owned())),
-            None,
-            Some(&host_import_for(FoundCrate::Name("gpu_host".to_owned()))),
-            Some(crate_binding),
-        )
-        .unwrap()
-        .to_string();
-        assert!(qualification.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
-        assert!(qualification.contains("CompilerGeneratedScalarGemmV1Arguments"));
-        assert!(qualification.contains("prepare_generated_scalar_gemm_v1"));
-
-        let arguments =
-            generated_general_typed_arguments_v1(&input, &model.arguments, true).to_string();
-        let adapter = super::generated_scalar_gemm_v1_adapter(
-            &input,
-            &model,
-            kernel_binding.as_bytes(),
-            *model.generated_host_contract_identity.as_bytes(),
-        )
-        .unwrap()
-        .to_string();
-
-        assert!(arguments.contains("GeneratedScalarGemmV1ReadDeviceSlice"));
-        assert!(arguments.contains("GeneratedScalarGemmV1ReadWriteDeviceSlice"));
-        for required in [
+        assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(expansion.contains("prepare_worker_v3"));
+        assert!(expansion.contains("GeneratedReadDeviceSlice"));
+        assert!(expansion.contains("GeneratedReadWriteDeviceSlice"));
+        for retired in [
+            "GeneratedScalarGemmV1ReadDeviceSlice",
+            "GeneratedScalarGemmV1ReadWriteDeviceSlice",
             "CompilerGeneratedScalarGemmV1Arguments",
-            "ScalarGemmV1DispatchIdentity :: new",
-            "GeneratedScalarGemmV1ArgumentBinding",
-            "plan . scalar_u32 (3 , self . m)",
-            "plan . scalar_u32 (4 , self . n)",
-            "plan . scalar_u32 (5 , self . k)",
-            "pub type Prepared",
             "prepare_generated_scalar_gemm_v1",
+            "WorkerV2PrerequisiteAuthenticatorV1",
         ] {
-            assert!(
-                adapter.contains(required),
-                "missing `{required}` in {adapter}"
-            );
+            assert!(!expansion.contains(retired), "retained `{retired}`");
         }
-        for forbidden in ["from_raw", "device_pointer", "GeneratedAlphaZeta", "COMGR"] {
-            assert!(
-                !adapter.contains(forbidden),
-                "found forbidden `{forbidden}` in {adapter}"
-            );
-        }
-
-        let renamed: ItemFn = parse_quote! {
-            pub fn scalar_gemm_lookalike(
-                a: &[f32],
-                b: &[f32],
-                c: DisjointSlice<f32>,
-                m: u32,
-                n: u32,
-                k: u32,
-            ) {}
-        };
-        let renamed_binding = derive_kernel_binding_id_v1(
-            crate_binding,
-            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-            "scalar_gemm_lookalike",
-            "scalar_gemm_lookalike",
-        );
-        let renamed_model =
-            model_general_typed_signature_v1(&renamed, &options, renamed_binding.as_bytes())
-                .unwrap();
-        assert!(
-            super::generated_scalar_gemm_v1_adapter(
-                &renamed,
-                &renamed_model,
-                renamed_binding.as_bytes(),
-                *renamed_model.generated_host_contract_identity.as_bytes(),
-            )
-            .unwrap()
-            .is_empty()
-        );
     }
 
     #[test]
@@ -7029,8 +6121,7 @@ mod tests {
         assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
         assert_eq!(field.alias_class(), AliasClass::Exclusive);
 
-        let generated =
-            generated_general_typed_arguments_v1(&input, &model.arguments, false).to_string();
+        let generated = generated_general_typed_arguments_v1(&input, &model.arguments).to_string();
         for marker in [
             "pub struct GlobalMut",
             "GeneratedReadWriteDeviceSlice",

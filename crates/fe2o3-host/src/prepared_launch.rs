@@ -589,8 +589,8 @@ impl PreparedResources {
 /// Checked launch identity, geometry, and resources for exactly one kernel `K`.
 ///
 /// This G0 type intentionally does not contain a module or function handle and
-/// exposes no launch operation. It cannot make the existing raw [`crate::launch!`]
-/// macro safe. Artifact authentication, ABI validation, loading, argument
+/// exposes no launch operation. It cannot make the qualification-only raw
+/// launch macro safe. Artifact authentication, ABI validation, loading, argument
 /// binding, and asynchronous resource lifetimes remain future work.
 pub struct PreparedLaunch<K> {
     kernel: KernelId,
@@ -658,6 +658,7 @@ impl<K> PreparedLaunch<K> {
         })
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn observed_context(&self) -> &ObservedContext {
         &self.context
     }
@@ -706,6 +707,7 @@ impl<K> ArgumentAdmittedLaunch<'_, K> {
         self.admission.len()
     }
 
+    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn prepared(&self) -> &PreparedLaunch<K> {
         &self.prepared
     }
