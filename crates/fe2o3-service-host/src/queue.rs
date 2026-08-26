@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::fmt;
 
-use fe2o3_aql::{AQL_MAX_FIXED_BATCH_PACKETS_V2, AqlRingCapacityV1};
+use fe2o3_aql::{AqlRingCapacityV1, AQL_MAX_FIXED_BATCH_PACKETS_V2};
 use fe2o3_kfd::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
@@ -921,6 +921,42 @@ impl ServiceQueueUnboundSessionV1 {
     /// Returns a redacted observation of the still-live native queue.
     pub const fn observation(&self) -> ComputeAqlQueueObservationV1 {
         self.owner.observation()
+    }
+
+    /// Reissues the exact addressless ranges for a retained device-local
+    /// partition at its current detached-data ordinal.
+    ///
+    /// Device allocation insertion or removal can shift the ordinal of every
+    /// later retained allocation without changing its allocation generation or
+    /// logical partition. This operation validates the move-only partition
+    /// witness against the live queue ledger and returns ranges carrying the
+    /// current ordinal. It neither mutates nor exposes the native allocation.
+    pub fn reissue_partitioned_device_local<R, const N: usize>(
+        &self,
+        subleases: &ServiceAllocationSubleaseSetV1<R, DeviceLocalAllocationV1, N>,
+    ) -> Result<[ServiceDeviceDispatchRangeV1; N], ServiceAllocationErrorV1>
+    where
+        R: DeviceAllocationRoleMarkerV1,
+    {
+        self.owner
+            .ledger
+            .reissue_partitioned_device_local(subleases)
+    }
+
+    /// Reissues one retained host-visible range at its current detached-data
+    /// ordinal after device allocation insertion or removal.
+    ///
+    /// The allocation generation, role, byte interval, and optional sublease
+    /// member remain unchanged. A stale, foreign, or role-drifted range is
+    /// rejected without mutating queue custody.
+    pub fn reissue_host_visible<R>(
+        &self,
+        range: ServiceHostDispatchRangeV1,
+    ) -> Result<ServiceHostDispatchRangeV1, ServiceAllocationErrorV1>
+    where
+        R: crate::HostAllocationRoleMarkerV1,
+    {
+        self.owner.ledger.reissue_host_visible::<R>(range)
     }
 
     /// Destroys the live queue and releases its exact detached allocation set.
