@@ -1922,7 +1922,9 @@ pub(crate) fn canonical_family_for_recovered_launch_bridge_test(
         OccupancyVerifierIdentityV2,
     };
 
-    let current = recovered.acquire_launch_kernel_v2_currentness().unwrap();
+    let current = recovered
+        .acquire_launch_kernel_v2_currentness_for_test()
+        .unwrap();
     let admission = current.admission();
     let derived = derive_metadata(
         admission.target(),

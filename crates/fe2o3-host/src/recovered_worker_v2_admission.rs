@@ -4578,7 +4578,9 @@ mod tests {
                 &model_recovered,
             );
 
-        let current = recovered.acquire_launch_kernel_v2_currentness().unwrap();
+        let current = recovered
+            .acquire_launch_kernel_v2_currentness_for_test()
+            .unwrap();
         assert!(
             current
                 .admission()
