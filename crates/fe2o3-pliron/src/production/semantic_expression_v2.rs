@@ -11,6 +11,8 @@ use super::ranked::ProductionRankedValueV1;
 
 pub const MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2: usize = 8_192;
 pub const MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2: usize = 128;
+/// Symbols at or above this value are reserved for exact ranked load leaves.
+pub const PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2: u32 = 0xc000_0000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProductionSemanticScalarTypeV2 {
@@ -198,7 +200,7 @@ pub struct ProductionSemanticLoadV2 {
 impl ProductionSemanticLoadV2 {
     /// Collision-free namespace within the production ranked resource limits.
     pub const fn proof_symbol(&self) -> u32 {
-        0xc000_0000 | (self.block << 16) | self.operation
+        PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 | (self.block << 16) | self.operation
     }
 }
 
@@ -472,7 +474,12 @@ impl ProductionSemanticExpressionV2 {
             return Err(ProductionSemanticExpressionErrorV2::ResourceLimit);
         }
         let child_depth = match self {
-            Self::Symbol { .. } => depth,
+            Self::Symbol { symbol, .. } => {
+                if *symbol >= PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 {
+                    return Err(ProductionSemanticExpressionErrorV2::ReservedSymbol);
+                }
+                depth
+            }
             Self::Constant { scalar, bits } => {
                 if scalar.bit_width() < 64 && *bits >= (1_u64 << scalar.bit_width()) {
                     return Err(ProductionSemanticExpressionErrorV2::ConstantOutOfRange);
@@ -688,6 +695,7 @@ pub enum ProductionSemanticExpressionErrorV2 {
     UnsupportedNumericalContract,
     IncompleteDomain,
     UnboundLoad,
+    ReservedSymbol,
 }
 
 impl fmt::Display for ProductionSemanticExpressionErrorV2 {
@@ -708,6 +716,9 @@ impl fmt::Display for ProductionSemanticExpressionErrorV2 {
             }
             Self::UnboundLoad => {
                 "semantic load is not a bounded exact ranked read transcript"
+            }
+            Self::ReservedSymbol => {
+                "semantic symbol overlaps the compiler-reserved ranked-load namespace"
             }
         })
     }
@@ -1289,5 +1300,28 @@ mod tests {
                 },
             ),
         );
+    }
+
+    #[test]
+    fn ordinary_symbols_cannot_alias_exact_ranked_load_leaves() {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let last_ordinary = ProductionSemanticExpressionV2::Symbol {
+            symbol: PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 - 1,
+            scalar,
+        };
+        assert!(last_ordinary.validate().is_ok());
+        for symbol in [
+            PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2,
+            PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 | 0x0001_0002,
+            u32::MAX,
+        ] {
+            assert_eq!(
+                ProductionSemanticExpressionV2::Symbol { symbol, scalar }.validate(),
+                Err(ProductionSemanticExpressionErrorV2::ReservedSymbol),
+            );
+        }
     }
 }

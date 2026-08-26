@@ -16,7 +16,8 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::{TensorInstructionProfileV1, TensorLayoutContractV1, TensorSymbolicMapV1};
 use fe2o3_pliron::{
-    DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionConstructionV1,
+    DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS,
+    PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2, ProductionConstructionV1,
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
     ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
     ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
@@ -2615,5 +2616,27 @@ fn dense_value_and_exact_tree_work_bounds_reject_before_materialization() {
             limit: HARD_MAX_SESSION_OPERATION_TREE_ITEMS,
             actual: HARD_MAX_SESSION_OPERATION_TREE_ITEMS + 1,
         })
+    );
+}
+
+#[test]
+fn ranked_semantic_symbols_cannot_enter_the_exact_load_namespace() {
+    let result = ProductionRankedValueIdV1::new(0);
+    let build = |symbol| {
+        ProductionRankedKernelV1::new(
+            "semantic_symbol_namespace",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![ProductionRankedOperationV1::SemanticSymbol { result, symbol }],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+    };
+    assert!(build(PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 - 1).is_ok());
+    assert_eq!(
+        build(PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2),
+        Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+            ProductionSemanticExpressionErrorV2::ReservedSymbol,
+        )),
     );
 }

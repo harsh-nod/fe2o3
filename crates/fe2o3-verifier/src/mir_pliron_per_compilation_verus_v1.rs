@@ -18,12 +18,13 @@ use fe2o3_functional_proof::{
     VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionMiddleEndEvidenceV5,
-    ProductionMirPlironSemanticContractErrorV1, ProductionMirPlironSemanticContractReportV1,
-    ProductionParallelReferenceContractErrorV1, ProductionParallelReferenceContractReportV1,
-    ProductionRankedKernelLoweringInputV1, ProductionTotalOutputRefinementErrorV2,
-    ProductionVerifiedMirPlironKernelV1, require_mir_pliron_semantic_contract_v1,
-    require_parallel_reference_contract_v1, require_total_output_refinement_v2,
+    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionFunctionalRefinementTrustPolicyV2,
+    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractErrorV1,
+    ProductionMirPlironSemanticContractReportV1, ProductionParallelReferenceContractErrorV1,
+    ProductionParallelReferenceContractReportV1, ProductionRankedKernelLoweringInputV1,
+    ProductionTotalOutputRefinementErrorV2, ProductionVerifiedMirPlironKernelV1,
+    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
+    require_total_output_refinement_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -36,6 +37,9 @@ use crate::{
 
 const AGGREGATE_OBLIGATION_DOMAIN_V1: &[u8] =
     b"FE2O3/MIR-PLIRON/PER-COMPILATION-VERUS-OBLIGATION/V1\0";
+pub const MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1: usize = 64;
+const MAX_PRODUCTION_AGGREGATE_FORMULA_SCAN_WORK_V1: usize =
+    MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1 * HARD_MAX_SESSION_OPERATION_TREE_ITEMS;
 
 /// Exact authenticated identities produced by one aggregate Verus execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -493,6 +497,7 @@ fn append_contract_instantiations_v1(
     contract: &fe2o3_functional_proof::MirPlironSemanticContractV1,
     parallel_contract: &ParallelReferenceContractV1,
 ) -> Result<(), ProductionMirPlironPerCompilationVerusErrorV1> {
+    require_aggregate_output_limit_v1(contract.outputs().len())?;
     if parallel_contract.relations().len() != contract.outputs().len() {
         return Err(
             ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(
@@ -637,6 +642,28 @@ fn append_contract_instantiations_v1(
                 "aggregate effect-formula replay exceeds the generated-source byte limit"
                     .to_owned(),
             ),
+        );
+    }
+    Ok(())
+}
+
+fn require_aggregate_output_limit_v1(
+    outputs: usize,
+) -> Result<(), ProductionMirPlironPerCompilationVerusErrorV1> {
+    let scan_work = outputs
+        .checked_mul(HARD_MAX_SESSION_OPERATION_TREE_ITEMS)
+        .ok_or_else(|| {
+            ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(
+                "aggregate effect-formula scan work overflowed".to_owned(),
+            )
+        })?;
+    if outputs > MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+        || scan_work > MAX_PRODUCTION_AGGREGATE_FORMULA_SCAN_WORK_V1
+    {
+        return Err(
+            ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(format!(
+                "aggregate effect-formula replay has {outputs} outputs; the production limit is {MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1}",
+            )),
         );
     }
     Ok(())
@@ -1055,6 +1082,318 @@ mod tests {
             proof,
         )
     }
+
+    fn bound_two_effect_kernel() -> (ProductionRankedKernelV1, [DigestV1; 2]) {
+        let local = |value| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(value));
+        let first = ProductionEffectRefinementContractV2::new(
+            73,
+            ProductionGpuWriteSiteV2::new(0, 12),
+            ProductionReferenceOutputSiteV2::new(0, 0, 0),
+            local(0),
+            vec![local(2)],
+            vec![local(8)],
+            vec![local(8)],
+            local(7),
+            local(7),
+            local(7),
+            local(7),
+            local(3),
+            local(4),
+        )
+        .unwrap();
+        let second = ProductionEffectRefinementContractV2::new(
+            74,
+            ProductionGpuWriteSiteV2::new(0, 14),
+            ProductionReferenceOutputSiteV2::new(0, 1, 0),
+            local(1),
+            vec![local(2)],
+            vec![local(8)],
+            vec![local(8)],
+            local(7),
+            local(7),
+            local(7),
+            local(7),
+            local(5),
+            local(6),
+        )
+        .unwrap();
+        let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let exact = ProductionNumericalContractV2::ExactBitVectorOperatorCongruence;
+        let skeleton = ProductionRankedKernelV1::new(
+            "aggregate_two_output_formula_replay",
+            0,
+            vec![ProductionRankedBlockV1::new(
+                vec![
+                    ProductionRankedOperationV1::ExecutionLayout {
+                        grid_identity: 1,
+                        global_extents: [1, 1, 1],
+                        workgroup_extents: [1, 1, 1],
+                        subgroup_size: 1,
+                        full_physical_workgroups: true,
+                    },
+                    ProductionRankedOperationV1::View {
+                        result: ProductionRankedValueIdV1::new(0),
+                        element_width: 32,
+                        writable: true,
+                        shape: vec![1],
+                        dynamic_extents: vec![],
+                        allocation_origin: 1,
+                        noalias_class: 1,
+                    },
+                    ProductionRankedOperationV1::View {
+                        result: ProductionRankedValueIdV1::new(1),
+                        element_width: 32,
+                        writable: true,
+                        shape: vec![1],
+                        dynamic_extents: vec![],
+                        allocation_origin: 2,
+                        noalias_class: 2,
+                    },
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(2),
+                        value: 0,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(3),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u32,
+                            bits: 7,
+                        },
+                        numerical_contract: exact,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(4),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u32,
+                            bits: 7,
+                        },
+                        numerical_contract: exact,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(5),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u32,
+                            bits: 9,
+                        },
+                        numerical_contract: exact,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(6),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: scalar_u32,
+                            bits: 9,
+                        },
+                        numerical_contract: exact,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(7),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: ProductionSemanticScalarTypeV2::Bool,
+                            bits: 1,
+                        },
+                        numerical_contract: exact,
+                    },
+                    ProductionRankedOperationV1::SemanticExpression {
+                        result: ProductionRankedValueIdV1::new(8),
+                        expression: ProductionSemanticExpressionV2::Constant {
+                            scalar: ProductionSemanticScalarTypeV2::Integer {
+                                signed: false,
+                                bits: 64,
+                            },
+                            bits: 0,
+                        },
+                        numerical_contract: exact,
+                    },
+                    ProductionRankedOperationV1::OwnershipContract {
+                        view: local(0),
+                        coverage: OwnershipCoverageAttr::TotalView,
+                        partition: OwnershipPartitionAttr::ExactSets,
+                    },
+                    ProductionRankedOperationV1::OwnershipContract {
+                        view: local(1),
+                        coverage: OwnershipCoverageAttr::TotalView,
+                        partition: OwnershipPartitionAttr::ExactSets,
+                    },
+                    ProductionRankedOperationV1::ValueAccess {
+                        kind: AccessKindAttr::Write,
+                        view: local(0),
+                        indices: vec![local(2)],
+                        value: local(3),
+                    },
+                    ProductionRankedOperationV1::RequestEffectRefinement {
+                        contract: first,
+                        subjects: replay_subjects(),
+                    },
+                    ProductionRankedOperationV1::ValueAccess {
+                        kind: AccessKindAttr::Write,
+                        view: local(1),
+                        indices: vec![local(2)],
+                        value: local(5),
+                    },
+                    ProductionRankedOperationV1::RequestEffectRefinement {
+                        contract: second,
+                        subjects: replay_subjects(),
+                    },
+                ],
+                ProductionRankedTerminatorV1::Return,
+            )],
+        )
+        .unwrap();
+        let (first_request, first_proof) = test_effect_request(&skeleton, 13, 81);
+        let (second_request, second_proof) = test_effect_request(&skeleton, 15, 91);
+        (
+            skeleton
+                .bind_functional_refinement_request_v2(0, 13, first_request)
+                .unwrap()
+                .bind_functional_refinement_request_v2(0, 15, second_request)
+                .unwrap(),
+            [first_proof, second_proof],
+        )
+    }
+
+    fn test_effect_request(
+        kernel: &ProductionRankedKernelV1,
+        operation: usize,
+        seed: u8,
+    ) -> (ProductionReferenceProofV2, DigestV1) {
+        let ProductionRankedOperationV1::RequestEffectRefinement { contract, .. } =
+            &kernel.blocks()[0].operations()[operation]
+        else {
+            unreachable!()
+        };
+        let obligation = normalized_effect_refinement_hash_for_kernel_v2(
+            kernel,
+            0,
+            operation,
+            contract,
+            replay_subjects(),
+        )
+        .unwrap();
+        let binding =
+            FunctionalRefinementBindingV2::from_subjects(replay_subjects(), obligation).unwrap();
+        let signing = SigningKey::from_bytes(&[seed; 32]);
+        let toolchain = VerusToolchainIdentityV2::new(
+            digest(seed.wrapping_add(1)),
+            digest(seed.wrapping_add(2)),
+            digest(seed.wrapping_add(3)),
+            digest(seed.wrapping_add(4)),
+            digest(seed.wrapping_add(5)),
+        )
+        .unwrap();
+        let policy = FunctionalRefinementImportPolicyV2::new(
+            signing.verifying_key().to_bytes(),
+            toolchain,
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        )
+        .unwrap();
+        let unsigned = UnsignedFunctionalRefinementReceiptV2::from_verified_execution_join(
+            policy.signer_identity(),
+            binding,
+            toolchain,
+            digest(seed.wrapping_add(6)),
+            FunctionalRefinementResultV2::Proved,
+            FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
+        )
+        .unwrap();
+        let wire = unsigned
+            .clone()
+            .attach_signature(signing.sign(unsigned.signing_bytes()).to_bytes());
+        let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+        let imported = importer
+            .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
+            .unwrap();
+        (
+            ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
+            imported.receipt_identity().digest(),
+        )
+    }
+
+    fn two_output_contract() -> MirPlironSemanticContractV1 {
+        let first_domain = digest(101);
+        let second_domain = digest(102);
+        let root = |identity, domain| {
+            SemanticTypedRootV1::new(
+                digest(identity),
+                digest(identity.wrapping_add(10)),
+                domain,
+                SemanticScalarTypeV1::Unsigned(32),
+                SemanticNumericalPolicyV1::ExactBitVector,
+            )
+            .unwrap()
+        };
+        MirPlironSemanticContractV1::new(
+            digest(18),
+            digest(19),
+            digest(20),
+            vec![
+                SemanticFiniteDomainV1::new(first_domain, vec![SemanticFiniteExtentV1::Static(1)])
+                    .unwrap(),
+                SemanticFiniteDomainV1::new(second_domain, vec![SemanticFiniteExtentV1::Static(1)])
+                    .unwrap(),
+            ],
+            vec![
+                root(103, first_domain),
+                root(104, first_domain),
+                root(105, second_domain),
+                root(106, second_domain),
+            ],
+            vec![],
+            vec![],
+            vec![
+                SemanticOutputContractV1::new(
+                    production_effect_contract_identity_v1(73),
+                    digest(107),
+                    first_domain,
+                    digest(103),
+                    digest(104),
+                    vec![],
+                )
+                .unwrap(),
+                SemanticOutputContractV1::new(
+                    production_effect_contract_identity_v1(74),
+                    digest(108),
+                    second_domain,
+                    digest(105),
+                    digest(106),
+                    vec![],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn two_output_parallel_contract(
+        contract: &MirPlironSemanticContractV1,
+        proofs: [DigestV1; 2],
+    ) -> ParallelReferenceContractV1 {
+        let relations = contract
+            .outputs()
+            .iter()
+            .zip(proofs)
+            .enumerate()
+            .map(|(index, (output, proof))| {
+                ParallelOutputRelationV1::new(
+                    digest(110 + index as u8),
+                    output.identity(),
+                    output.output_domain(),
+                    digest(112 + index as u8),
+                    digest(114 + index as u8),
+                    digest(116 + index as u8),
+                    ParallelScheduleRelationV1::PointwiseBijection,
+                    ParallelNumericalPolicyV1::ExactBitVector,
+                    COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                    proof,
+                )
+                .unwrap()
+            })
+            .collect();
+        ParallelReferenceContractV1::new(contract.canonical_sha256(), digest(118), relations)
+            .unwrap()
+    }
     fn relation_contract(
         contract: &MirPlironSemanticContractV1,
         schedule: ParallelScheduleRelationV1,
@@ -1099,6 +1438,38 @@ mod tests {
             assert!(!text.to_ascii_lowercase().contains(workload));
         }
         assert!(!source.authenticates_verus_execution());
+    }
+
+    #[test]
+    fn aggregate_formula_replay_has_a_conservative_whole_compilation_output_limit() {
+        assert!(require_aggregate_output_limit_v1(64).is_ok());
+        let error = require_aggregate_output_limit_v1(65).unwrap_err();
+        assert!(error.to_string().contains("production limit is 64"));
+    }
+
+    #[test]
+    fn generated_two_output_replay_and_output_one_substitution_match_pinned_fixtures() {
+        let (kernel, proofs) = bound_two_effect_kernel();
+        let contract = two_output_contract();
+        let parallel = two_output_parallel_contract(&contract, proofs);
+        let mut generated = GENERATED_COMPOSITION_THEOREM_V1.to_owned();
+        append_contract_instantiations_v1(&mut generated, &kernel, &contract, &parallel).unwrap();
+        assert_eq!(
+            generated,
+            include_str!(
+                "../verus/mir_pliron_per_compilation_generated_multi_output_fixture_v1.rs"
+            )
+        );
+
+        let needle = "let v6: int = fe2o3_bv_norm_v2(9, 32);";
+        assert_eq!(generated.matches(needle).count(), 1);
+        let substituted = generated.replacen(needle, "let v6: int = fe2o3_bv_norm_v2(10, 32);", 1);
+        assert_eq!(
+            substituted,
+            include_str!(
+                "../verus/negative/mir_pliron_per_compilation_multi_output_substitution_v1.rs"
+            )
+        );
     }
 
     #[test]

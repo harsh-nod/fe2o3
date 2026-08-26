@@ -2492,8 +2492,15 @@ fn validate_operation(
         ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. } => Ok(None),
-        ProductionRankedOperationV1::SemanticSymbol { result, .. }
-        | ProductionRankedOperationV1::SemanticConstant { result, .. } => {
+        ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
+            if *symbol >= super::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 {
+                return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
+                    ProductionSemanticExpressionErrorV2::ReservedSymbol,
+                ));
+            }
+            Ok(Some((*result, RecipeValueKindV1::Semantic)))
+        }
+        ProductionRankedOperationV1::SemanticConstant { result, .. } => {
             Ok(Some((*result, RecipeValueKindV1::Semantic)))
         }
         ProductionRankedOperationV1::SemanticBinary {

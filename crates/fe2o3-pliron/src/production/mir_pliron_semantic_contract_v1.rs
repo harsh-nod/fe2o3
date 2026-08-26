@@ -104,6 +104,11 @@ pub enum ProductionMirPlironSemanticContractErrorV1 {
         header: u32,
         latch: u32,
     },
+    FiniteLoopExtentUnproved {
+        header: u32,
+        latch: u32,
+        detail: &'static str,
+    },
     CollectiveCountMismatch,
     CollectiveMismatch {
         index: usize,
@@ -156,6 +161,14 @@ impl fmt::Display for ProductionMirPlironSemanticContractErrorV1 {
             Self::DynamicLoopStepUnproved { header, latch } => write!(
                 formatter,
                 "dynamic loop <header={header}, latch={latch}> does not have a constant unit step, so overflow-free progress to its u64 upper bound is unproved",
+            ),
+            Self::FiniteLoopExtentUnproved {
+                header,
+                latch,
+                detail,
+            } => write!(
+                formatter,
+                "finite loop <header={header}, latch={latch}> is not proved: {detail}",
             ),
             Self::CollectiveCountMismatch => formatter.write_str(
                 "semantic contract collective count differs from the live PLIRON graph",
@@ -924,12 +937,13 @@ fn require_live_loop_contract(
         live.transition,
         variant,
     )
-    .map_err(
-        |_| ProductionMirPlironSemanticContractErrorV1::DynamicLoopStepUnproved {
+    .map_err(|detail| {
+        ProductionMirPlironSemanticContractErrorV1::FiniteLoopExtentUnproved {
             header: declared.header_block(),
             latch: declared.latch_block(),
-        },
-    )?;
+            detail,
+        }
+    })?;
     let Some(domain) = contract
         .domains()
         .iter()
@@ -1438,7 +1452,12 @@ fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1
 
 #[cfg(test)]
 mod tests {
-    use super::require_overflow_free_static_latch_v1;
+    use super::{canonical_finite_loop_v1, require_overflow_free_static_latch_v1};
+    use crate::{
+        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
+        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
+        ProductionRankedValueV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    };
 
     #[test]
     fn static_loop_latch_requires_an_overflow_free_final_transition() {
@@ -1451,6 +1470,89 @@ mod tests {
         assert_eq!(
             require_overflow_free_static_latch_v1(1, u64::MAX, 2),
             Err("the final increasing-loop latch transition can overflow u64"),
+        );
+    }
+
+    #[test]
+    fn compiled_static_loop_with_overflowing_latch_is_rejected_by_canonical_extraction() {
+        let lower = ProductionRankedValueIdV1::new(0);
+        let upper = ProductionRankedValueIdV1::new(1);
+        let step = ProductionRankedValueIdV1::new(2);
+        let local = ProductionRankedValueV1::Local;
+        let kernel = ProductionRankedKernelV1::new(
+            "overflowing_static_latch",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::ExecutionLayout {
+                            grid_identity: 1,
+                            global_extents: [1, 1, 1],
+                            workgroup_extents: [1, 1, 1],
+                            subgroup_size: 1,
+                            full_physical_workgroups: true,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: lower,
+                            value: u64::MAX - 1,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: upper,
+                            value: u64::MAX,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: step,
+                            value: 2,
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::BranchArgs {
+                        arguments: vec![local(lower)],
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThanArgs {
+                        lhs: ProductionRankedValueV1::BlockArgument {
+                            block: 1,
+                            argument: 0,
+                        },
+                        rhs: local(upper),
+                        true_arguments: vec![ProductionRankedValueV1::BlockArgument {
+                            block: 1,
+                            argument: 0,
+                        }],
+                        false_arguments: vec![],
+                        true_block: 2,
+                        false_block: 3,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::BranchArgsAdd {
+                        value: ProductionRankedValueV1::BlockArgument {
+                            block: 2,
+                            argument: 0,
+                        },
+                        step: local(step),
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+            ],
+        )
+        .unwrap();
+        let construction = ProductionConstructionV1::ranked_kernel("module", kernel).unwrap();
+        let ranked = compile_ranked_kernel_for_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            canonical_finite_loop_v1(&ranked, 1, 2).err(),
+            Some("the final increasing-loop latch transition can overflow u64"),
         );
     }
 }

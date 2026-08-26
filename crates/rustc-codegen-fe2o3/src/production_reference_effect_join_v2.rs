@@ -1,6 +1,9 @@
-//! Compiler-private join from authenticated Rust reference MIR to one ranked GPU write.
+//! Compiler-private join from authenticated Rust reference MIR to bounded ranked GPU writes.
 
-use std::fmt;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use dialect_kernel::{
     DYNAMIC_EXTENT, IndexBinaryKindAttr, OwnershipCoverageAttr, OwnershipPartitionAttr,
@@ -33,6 +36,7 @@ use crate::reference_effect_v1::{
 
 const ROOT_NAME_V2: &str = "semantic_safety_module";
 const LOCAL_PROOF_TIMEOUT_SECONDS_V2: u32 = 60;
+const WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2: u32 = 120;
 const RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
     "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 
@@ -78,6 +82,15 @@ pub(crate) fn reserved_reference_output_ranks_v2(
             ),
         );
     }
+    if binding.observable_output_writes.len()
+        > fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+    {
+        return Err(
+            crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1::Unsupported(
+                "reference-effect output count exceeds the production aggregate proof limit",
+            ),
+        );
+    }
     binding
         .observable_output_writes
         .iter()
@@ -97,6 +110,7 @@ pub(crate) fn reserved_reference_output_ranks_v2(
 pub(crate) struct CompilerOwnedReferenceEffectRequestV2 {
     kernel: ProductionRankedKernelV1,
     requests: Vec<CompilerOwnedReferenceEffectSiteV2>,
+    proof_timeout_seconds: u32,
 }
 
 struct CompilerOwnedReferenceEffectSiteV2 {
@@ -140,7 +154,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                     request.block,
                     request.operation,
                     request.subjects,
-                    LOCAL_PROOF_TIMEOUT_SECONDS_V2,
+                    self.proof_timeout_seconds,
                 )
                 .map_err(|error| {
                     ProductionReferenceEffectJoinErrorV2::ProofExecution(error.to_string())
@@ -186,6 +200,27 @@ impl CompilerOwnedReferenceEffectRequestV2 {
     }
 }
 
+fn per_output_proof_timeout_v2(
+    output_count: usize,
+) -> Result<u32, ProductionReferenceEffectJoinErrorV2> {
+    let output_count_u32 = u32::try_from(output_count).map_err(|_| {
+        ProductionReferenceEffectJoinErrorV2::ProofOutputLimit {
+            actual: output_count,
+            limit: fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
+        }
+    })?;
+    if output_count == 0
+        || output_count > fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+    {
+        return Err(ProductionReferenceEffectJoinErrorV2::ProofOutputLimit {
+            actual: output_count,
+            limit: fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1,
+        });
+    }
+    Ok((WHOLE_COMPILE_PROOF_TIMEOUT_SECONDS_V2 / output_count_u32)
+        .min(LOCAL_PROOF_TIMEOUT_SECONDS_V2))
+}
+
 pub(crate) fn prepare_reference_effect_request_v2(
     kernel: ProductionRankedKernelV1,
     bindings: &AuthenticatedReferenceEffectBindingsV1,
@@ -202,6 +237,8 @@ pub(crate) fn prepare_reference_effect_request_v2(
             binding.observable_output_writes.len(),
         ));
     }
+    let proof_timeout_seconds =
+        per_output_proof_timeout_v2(binding.observable_output_writes.len())?;
     if binding.observable_output_writes.iter().any(|write| {
         !matches!(
             write.coordinate,
@@ -227,38 +264,40 @@ pub(crate) fn prepare_reference_effect_request_v2(
         ));
     }
 
+    let mut writes_by_location = BTreeMap::new();
+    for write in writes {
+        if writes_by_location
+            .insert((write.block, write.operation), write)
+            .is_some()
+        {
+            return Err(ProductionReferenceEffectJoinErrorV2::WriteLocation);
+        }
+    }
+    let mut output_relations = BTreeMap::new();
+    for relation in &binding.effect_ir.relations {
+        if let ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element } =
+            relation
+            && output_relations.insert(*argument, *element).is_some()
+        {
+            return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+                "logical output argument has multiple per-coordinate ABI relations",
+            ));
+        }
+    }
+
     let mut prepared = Vec::with_capacity(pairs.len());
     let mut reserved_cursor = 0_usize;
     for (reference_write, pair) in binding.observable_output_writes.iter().zip(pairs.iter()) {
-        let mut output_relations =
-            binding
-                .effect_ir
-                .relations
-                .iter()
-                .filter_map(|relation| match relation {
-                    ReferenceArgumentRelationV1::DisjointOutputCoordinate { argument, element }
-                        if *argument == reference_write.argument =>
-                    {
-                        Some((*argument, *element))
-                    }
-                    _ => None,
-                });
-        let (output_argument, element) = output_relations.next().ok_or(
-            ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
+        let element = output_relations
+            .get(&reference_write.argument)
+            .copied()
+            .ok_or(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
                 "observable reference write has no per-coordinate logical ABI relation",
-            ),
-        )?;
-        if output_relations.next().is_some() {
-            return Err(ProductionReferenceEffectJoinErrorV2::UnsupportedReference(
-                "observable reference write has multiple per-coordinate logical ABI relations",
-            ));
-        }
-        let write = writes
-            .iter()
-            .find(|write| {
-                write.block == pair.gpu_block as usize
-                    && write.operation == pair.gpu_operation as usize
-            })
+            ))?;
+        let output_argument = reference_write.argument;
+        let write = writes_by_location
+            .get(&(pair.gpu_block as usize, pair.gpu_operation as usize))
+            .copied()
             .cloned()
             .ok_or(ProductionReferenceEffectJoinErrorV2::WriteLocation)?;
         let gpu_expression = write.value.clone().map_err(|detail| {
@@ -332,16 +371,20 @@ pub(crate) fn prepare_reference_effect_request_v2(
     .map_err(|error| ProductionReferenceEffectJoinErrorV2::Subjects(error.to_string()))?;
 
     let mut blocks = kernel.blocks().to_vec();
-    let mut owned_views = Vec::with_capacity(prepared.len());
+    let mut owned_views = BTreeSet::new();
+    let existing_ownership = blocks
+        .iter()
+        .flat_map(|block| block.operations())
+        .filter_map(|operation| match operation {
+            ProductionRankedOperationV1::OwnershipContract { view, .. } => Some(*view),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     for output in &prepared {
-        if owned_views.contains(&output.write.view)
-            || blocks.iter().flat_map(|block| block.operations()).any(
-                |operation| matches!(operation, ProductionRankedOperationV1::OwnershipContract { view, .. } if *view == output.write.view),
-            )
+        if !owned_views.insert(output.write.view) || existing_ownership.contains(&output.write.view)
         {
             return Err(ProductionReferenceEffectJoinErrorV2::AmbiguousOwnership);
         }
-        owned_views.push(output.write.view);
     }
     let entry = blocks
         .first_mut()
@@ -489,14 +532,11 @@ pub(crate) fn prepare_reference_effect_request_v2(
     let kernel =
         ProductionRankedKernelV1::new(kernel.function_name(), kernel.argument_count(), blocks)
             .map_err(ProductionReferenceEffectJoinErrorV2::Recipe)?;
-    Ok(CompilerOwnedReferenceEffectRequestV2 { kernel, requests })
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ReferenceBoundsAccessV2 {
-    block: u32,
-    reference_argument: u32,
-    index: ReferenceEffectExpressionV1,
+    Ok(CompilerOwnedReferenceEffectRequestV2 {
+        kernel,
+        requests,
+        proof_timeout_seconds,
+    })
 }
 
 fn discharge_reference_bounds_checks_v2(
@@ -508,136 +548,38 @@ fn discharge_reference_bounds_checks_v2(
             "a retained safe-slice bounds assertion cannot be normalized",
         )
     })?;
-    let mut accesses = Vec::new();
-    for output in outputs {
-        collect_reference_bounds_accesses_v2(output.block, &output.rhs, &mut accesses);
-        if let ReferenceOutputCoordinateV1::Dynamic(index) = &output.coordinate {
-            let output_relations = effect_ir
-                .relations
-                .iter()
-                .filter(|relation| {
-                    matches!(
-                        relation,
-                        ReferenceArgumentRelationV1::DisjointOutputSlice { argument, .. }
-                            if *argument == output.argument
-                    )
-                })
-                .count();
-            if output_relations != 1 {
-                return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-                    block: output.block,
-                    detail: "dynamic output access has no unique exact output-slice ABI relation",
-                });
-            }
-            let reference_argument = effect_ir
-                .reference_argument_for_kernel_argument_v1(output.argument)
-                .map_err(|_| {
-                ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-                    block: output.block,
-                    detail: "output-slice ABI relation cannot be mapped to its exact reference argument",
-                }
-            })?;
-            accesses.push(ReferenceBoundsAccessV2 {
-                block: output.block,
-                reference_argument,
-                index: index.clone(),
-            });
-        }
-    }
-
-    let mut used = vec![false; accesses.len()];
-    for check in checks {
-        if !check.expected {
-            return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-                block: check.block,
-                detail: "safe-slice bounds assertion does not require the in-bounds condition",
-            });
-        }
-        let ReferenceEffectExpressionV1::InputLength { reference_argument } = check.length else {
-            return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-                block: check.block,
-                detail: "bounds length is not the exact length of one logical slice argument",
-            });
-        };
-        if !matches!(
-            &check.condition,
-            ReferenceEffectExpressionV1::Binary {
-                operation: ReferenceBinaryOpV1::LessThan,
-                lhs,
-                rhs,
-                checked: false,
-            } if **lhs == check.index && **rhs == check.length
-        ) {
-            return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-                block: check.block,
-                detail: "retained assertion condition is not the exact index-less-than-length comparison",
-            });
-        }
-        let matching = accesses
-            .iter()
-            .enumerate()
-            .filter(|(index, access)| {
-                !used[*index]
-                    && access.reference_argument == reference_argument
-                    && access.index == check.index
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        let [access] = matching.as_slice() else {
-            let detail = if matching.is_empty() {
-                "bounds assertion has no exact retained reference load or output access"
-            } else {
-                "bounds assertion ambiguously matches multiple retained reference accesses"
-            };
-            return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-                block: check.block,
-                detail,
-            });
-        };
-        used[*access] = true;
-    }
-    if let Some((_, access)) = used
-        .iter()
-        .zip(accesses.iter())
-        .find(|(matched, _)| !**matched)
-    {
+    if let Some(check) = checks.first() {
         return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
-            block: access.block,
-            detail: "retained safe-slice reference access has no unique bounds assertion",
+            block: check.block,
+            detail: "no compiler-owned extent relation proves this bounds condition over the complete output domain",
+        });
+    }
+    if let Some(output) = outputs.iter().find(|output| {
+        matches!(output.coordinate, ReferenceOutputCoordinateV1::Dynamic(_))
+            || contains_reference_slice_access_v2(&output.rhs)
+    }) {
+        return Err(ProductionReferenceEffectJoinErrorV2::ReferenceBoundsCheck {
+            block: output.block,
+            detail: "a safe-slice access has no retained bounds assertion and no compiler-owned extent relation proves it over the complete output domain",
         });
     }
     Ok(())
 }
 
-fn collect_reference_bounds_accesses_v2(
-    block: u32,
-    expression: &ReferenceEffectExpressionV1,
-    accesses: &mut Vec<ReferenceBoundsAccessV2>,
-) {
+fn contains_reference_slice_access_v2(expression: &ReferenceEffectExpressionV1) -> bool {
     match expression {
-        ReferenceEffectExpressionV1::InputLoad {
-            reference_argument,
-            index,
-        } => {
-            accesses.push(ReferenceBoundsAccessV2 {
-                block,
-                reference_argument: *reference_argument,
-                index: (**index).clone(),
-            });
-            collect_reference_bounds_accesses_v2(block, index, accesses);
-        }
+        ReferenceEffectExpressionV1::InputLoad { .. } => true,
         ReferenceEffectExpressionV1::Binary { lhs, rhs, .. } => {
-            collect_reference_bounds_accesses_v2(block, lhs, accesses);
-            collect_reference_bounds_accesses_v2(block, rhs, accesses);
+            contains_reference_slice_access_v2(lhs) || contains_reference_slice_access_v2(rhs)
         }
         ReferenceEffectExpressionV1::Unary { operand, .. }
         | ReferenceEffectExpressionV1::Cast { operand, .. } => {
-            collect_reference_bounds_accesses_v2(block, operand, accesses);
+            contains_reference_slice_access_v2(operand)
         }
         ReferenceEffectExpressionV1::PointCoordinate { .. }
         | ReferenceEffectExpressionV1::KernelScalarArgument { .. }
         | ReferenceEffectExpressionV1::InputLength { .. }
-        | ReferenceEffectExpressionV1::Constant(_) => {}
+        | ReferenceEffectExpressionV1::Constant(_) => false,
     }
 }
 
@@ -1552,6 +1494,10 @@ pub(crate) enum ProductionReferenceEffectJoinErrorV2 {
         actual: usize,
     },
     ReservedValueCountOverflow,
+    ProofOutputLimit {
+        actual: usize,
+        limit: usize,
+    },
     InvalidReservedValue(u32),
     SemanticExpression(fe2o3_pliron::ProductionSemanticExpressionErrorV2),
     Subjects(String),
@@ -1574,7 +1520,7 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             ),
             Self::ReferenceWriteCount(actual) => write!(
                 formatter,
-                "source-to-proof V2 requires exactly one observable reference output write; found {actual}"
+                "source-to-proof V2 found {actual} matched observable reference output writes; at least one and exactly one match per retained output are required"
             ),
             Self::UnsupportedReference(detail) => {
                 write!(formatter, "source-to-proof V2 reference is unsupported: {detail}")
@@ -1607,7 +1553,7 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             ),
             Self::ReferenceBoundsCheck { block, detail } => write!(
                 formatter,
-                "source-to-proof V2 cannot discharge the safe Rust bounds assertion in reference block {block}: {detail}"
+                "source-to-proof V2 cannot establish safe Rust slice bounds authority in reference block {block}: {detail}"
             ),
             Self::AmbiguousOwnership => formatter.write_str(
                 "source-to-proof V2 output view already has an ownership contract; one compiler-owned contract is required",
@@ -1621,6 +1567,10 @@ impl fmt::Display for ProductionReferenceEffectJoinErrorV2 {
             ),
             Self::ReservedValueCountOverflow => formatter.write_str(
                 "source-to-proof V2 logical point rank overflows the reserved semantic value domain",
+            ),
+            Self::ProofOutputLimit { actual, limit } => write!(
+                formatter,
+                "source-to-proof V2 has {actual} output proofs; the production limit is {limit} under the fixed whole-compilation proof-time budget",
             ),
             Self::InvalidReservedValue(identity) => write!(
                 formatter,
@@ -1658,10 +1608,66 @@ impl std::error::Error for ProductionReferenceEffectJoinErrorV2 {}
 mod tests {
     use super::*;
     use crate::reference_effect_v1::{
-        ReferenceAssignmentV1, ReferenceBlockV1, ReferenceBoundsCheckV1, ReferenceOperandV1,
-        ReferencePlaceV1, ReferenceTerminatorV1, ReferenceValueV1,
+        AuthenticatedReferenceEffectBindingV1, ReferenceAssignmentV1, ReferenceBlockV1,
+        ReferenceBoundsCheckV1, ReferenceFunctionIdentityV1, ReferenceOperandV1, ReferencePlaceV1,
+        ReferenceTerminatorV1, ReferenceValueV1,
     };
     use dialect_kernel::{AccessKindAttr, MemorySpaceAttr};
+
+    #[test]
+    fn output_proofs_share_one_fixed_compilation_timeout_budget() {
+        assert_eq!(per_output_proof_timeout_v2(1).unwrap(), 60);
+        assert_eq!(per_output_proof_timeout_v2(2).unwrap(), 60);
+        assert_eq!(per_output_proof_timeout_v2(3).unwrap(), 40);
+        assert_eq!(per_output_proof_timeout_v2(64).unwrap(), 1);
+        assert!(matches!(
+            per_output_proof_timeout_v2(0),
+            Err(ProductionReferenceEffectJoinErrorV2::ProofOutputLimit { .. })
+        ));
+        assert!(matches!(
+            per_output_proof_timeout_v2(65),
+            Err(ProductionReferenceEffectJoinErrorV2::ProofOutputLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn prepare_rejects_output_limit_before_gpu_effect_extraction() {
+        let (effect_ir, outputs) = bounds_discharge_fixture();
+        let output_count = fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1 + 1;
+        let identity = ReferenceFunctionIdentityV1 {
+            def_path_hash: [1; 16],
+            function_sha256: [2; 32],
+            item_definition_sha256: [3; 32],
+            monomorphization_sha256: [4; 32],
+            generic_type_arguments_sha256: [5; 32],
+            const_generic_arguments_sha256: [6; 32],
+            rustc_mir_body_sha256: [7; 32],
+        };
+        let bindings = AuthenticatedReferenceEffectBindingsV1::new(vec![
+            AuthenticatedReferenceEffectBindingV1 {
+                registration_path: "test".to_owned(),
+                logical_kernel_name: "test".to_owned(),
+                kernel: identity,
+                reference: identity,
+                effect_ir_sha256: [8; 32],
+                effect_ir,
+                observable_output_writes: vec![outputs[0].clone(); output_count].into_boxed_slice(),
+            },
+        ]);
+        let (kernel, _) = dynamic_point_kernel(false);
+        let error = match prepare_reference_effect_request_v2(kernel, &bindings, &[], Vec::new()) {
+            Ok(_) => panic!("output limit unexpectedly reached GPU effect extraction"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            ProductionReferenceEffectJoinErrorV2::ProofOutputLimit {
+                actual,
+                limit
+            } if actual == output_count
+                && limit == fe2o3_verifier::MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1
+        ));
+    }
 
     fn dynamic_point_kernel(logical_guard: bool) -> (ProductionRankedKernelV1, RankedGpuWriteV2) {
         let invocation = ProductionRankedValueIdV1::new(0);
@@ -2028,29 +2034,30 @@ mod tests {
     }
 
     #[test]
-    fn exact_slice_bounds_assertion_is_discharged_once() {
+    fn exact_slice_bounds_assertion_requires_a_compiler_owned_extent_relation() {
         let (effect_ir, outputs) = bounds_discharge_fixture();
-        discharge_reference_bounds_checks_v2(&effect_ir, &outputs).unwrap();
+        assert_bounds_rejection(
+            &effect_ir,
+            &outputs,
+            "no compiler-owned extent relation proves this bounds condition over the complete output domain",
+        );
     }
 
     #[test]
-    fn dynamic_output_bounds_use_the_exact_point_prefixed_abi_argument() {
+    fn slice_access_without_a_retained_assertion_also_fails_closed() {
+        let (mut effect_ir, outputs) = bounds_discharge_fixture();
+        effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 1 };
+        assert_bounds_rejection(
+            &effect_ir,
+            &outputs,
+            "has no retained bounds assertion and no compiler-owned extent relation",
+        );
+    }
+
+    #[test]
+    fn dynamic_output_access_without_an_extent_relation_fails_closed() {
         let (mut effect_ir, mut outputs) = bounds_discharge_fixture();
-        effect_ir.relations = vec![
-            ReferenceArgumentRelationV1::PointCoordinate {
-                reference_argument: 0,
-                axis: 0,
-            },
-            ReferenceArgumentRelationV1::DisjointOutputSlice {
-                argument: 0,
-                element: ReferenceScalarTypeV1::U32,
-            },
-        ]
-        .into_boxed_slice();
-        effect_ir.blocks[0].assignments[0].value = ReferenceValueV1::InputLength {
-            reference_argument: 1,
-        };
-        outputs[0].argument = 0;
+        effect_ir.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 1 };
         outputs[0].coordinate = ReferenceOutputCoordinateV1::Dynamic(
             ReferenceEffectExpressionV1::Constant(usize_constant(0)),
         );
@@ -2058,117 +2065,10 @@ mod tests {
             scalar: ReferenceScalarTypeV1::U32,
             bits: 17,
         });
-        discharge_reference_bounds_checks_v2(&effect_ir, &outputs).unwrap();
-
-        effect_ir.blocks[0].assignments[0].value = ReferenceValueV1::InputLength {
-            reference_argument: 0,
-        };
         assert_bounds_rejection(
             &effect_ir,
             &outputs,
-            "has no exact retained reference load or output access",
+            "has no retained bounds assertion and no compiler-owned extent relation",
         );
-    }
-
-    #[test]
-    fn missing_or_unrelated_bounds_assertion_cannot_discharge_a_slice_access() {
-        let (mut missing, outputs) = bounds_discharge_fixture();
-        missing.blocks[0].terminator = ReferenceTerminatorV1::Goto { target: 1 };
-        assert_bounds_rejection(&missing, &outputs, "has no unique bounds assertion");
-
-        let (mut unrelated, outputs) = bounds_discharge_fixture();
-        let ReferenceTerminatorV1::Assert { bounds_check, .. } =
-            &mut unrelated.blocks[0].terminator
-        else {
-            unreachable!()
-        };
-        *bounds_check = None;
-        assert_bounds_rejection(&unrelated, &outputs, "has no unique bounds assertion");
-    }
-
-    #[test]
-    fn extra_and_duplicate_bounds_assertions_fail_closed() {
-        let (effect_ir, mut outputs) = bounds_discharge_fixture();
-        outputs[0].rhs = ReferenceEffectExpressionV1::Constant(ReferenceConstantV1::Scalar {
-            scalar: ReferenceScalarTypeV1::U32,
-            bits: 0,
-        });
-        assert_bounds_rejection(&effect_ir, &outputs, "has no exact retained reference load");
-
-        let (mut duplicate, mut outputs) = bounds_discharge_fixture();
-        let duplicate_assert = ReferenceBlockV1 {
-            block: 1,
-            assignments: Box::default(),
-            terminator: duplicate.blocks[0].terminator.clone(),
-        };
-        duplicate.blocks = vec![
-            duplicate.blocks[0].clone(),
-            duplicate_assert,
-            ReferenceBlockV1 {
-                block: 2,
-                assignments: Box::default(),
-                terminator: ReferenceTerminatorV1::Return,
-            },
-        ]
-        .into_boxed_slice();
-        outputs[0].block = 2;
-        assert_bounds_rejection(&duplicate, &outputs, "has no exact retained reference load");
-    }
-
-    #[test]
-    fn duplicate_identical_accesses_are_not_guessed() {
-        let (effect_ir, mut outputs) = bounds_discharge_fixture();
-        let load = outputs[0].rhs.clone();
-        outputs[0].rhs = ReferenceEffectExpressionV1::Binary {
-            operation: ReferenceBinaryOpV1::Add,
-            lhs: Box::new(load.clone()),
-            rhs: Box::new(load),
-            checked: false,
-        };
-        assert_bounds_rejection(&effect_ir, &outputs, "ambiguously matches multiple");
-    }
-
-    #[test]
-    fn wrong_bounds_length_index_and_expectation_fail_closed() {
-        let (mut wrong_length, outputs) = bounds_discharge_fixture();
-        let ReferenceTerminatorV1::Assert {
-            bounds_check: Some(bounds_check),
-            ..
-        } = &mut wrong_length.blocks[0].terminator
-        else {
-            unreachable!()
-        };
-        bounds_check.length = ReferenceOperandV1::Constant(usize_constant(1));
-        assert_bounds_rejection(&wrong_length, &outputs, "length is not the exact length");
-
-        let (mut wrong_index, outputs) = bounds_discharge_fixture();
-        let wrong = ReferenceOperandV1::Constant(usize_constant(1));
-        let ReferenceTerminatorV1::Assert {
-            bounds_check: Some(bounds_check),
-            ..
-        } = &mut wrong_index.blocks[0].terminator
-        else {
-            unreachable!()
-        };
-        bounds_check.index = wrong.clone();
-        let ReferenceValueV1::Binary { lhs, .. } = &mut wrong_index.blocks[0].assignments[1].value
-        else {
-            unreachable!()
-        };
-        *lhs = wrong;
-        assert_bounds_rejection(
-            &wrong_index,
-            &outputs,
-            "has no exact retained reference load",
-        );
-
-        let (mut wrong_expected, outputs) = bounds_discharge_fixture();
-        let ReferenceTerminatorV1::Assert { expected, .. } =
-            &mut wrong_expected.blocks[0].terminator
-        else {
-            unreachable!()
-        };
-        *expected = false;
-        assert_bounds_rejection(&wrong_expected, &outputs, "does not require the in-bounds");
     }
 }

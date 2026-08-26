@@ -96,12 +96,7 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
         "mutated reference did not fail closed before artifact authority:\n{mutated}",
     );
 
-    for feature in [
-        "reference-loop",
-        "reference-call",
-        "reference-slice-read",
-        "reference-dynamic-loop",
-    ] {
+    for feature in ["reference-loop", "reference-call", "reference-dynamic-loop"] {
         let stderr = run_feature(&target.0, feature);
         assert!(
             stderr.contains("functional-refinement proof runtime unavailable")
@@ -109,6 +104,14 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
             "supported reference feature {feature} did not reach the proof boundary:\n{stderr}",
         );
     }
+
+    let slice_read = run_feature(&target.0, "reference-slice-read");
+    assert!(
+        slice_read.contains(
+            "no compiler-owned extent relation proves this bounds condition over the complete output domain"
+        ) && !slice_read.contains("functional-refinement proof runtime unavailable"),
+        "safe-slice reference gained full-domain authority without an extent proof:\n{slice_read}",
+    );
 }
 
 #[test]
