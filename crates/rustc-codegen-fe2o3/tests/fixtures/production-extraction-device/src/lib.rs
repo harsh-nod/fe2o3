@@ -22,6 +22,10 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
     feature = "reference-no-output",
     feature = "reference-duplicate",
     feature = "reference-orphan",
+    feature = "reference-two-output-positive",
+    feature = "reference-two-output-substitution",
+    feature = "reference-two-output-alias",
+    feature = "reference-two-output-schedule",
 )))]
 #[kernel(typed)]
 pub fn fill(mut output: DisjointSlice<u32>) {
@@ -102,6 +106,17 @@ fn inner_helper(value: u32) -> u32 {
 #[cfg(feature = "reference-slice-read")]
 fn cpu_reference(point: usize, input: &[u32], output: &mut u32) {
     *output = input[point];
+}
+
+#[cfg(any(
+    feature = "reference-two-output-positive",
+    feature = "reference-two-output-substitution",
+    feature = "reference-two-output-alias",
+    feature = "reference-two-output-schedule",
+))]
+fn cpu_reference(_point: usize, first: &mut u32, second: &mut u32) {
+    *first = 17;
+    *second = 23;
 }
 
 #[cfg(feature = "reference-helper-memory")]
@@ -208,6 +223,68 @@ pub fn fill(input: &[u32], mut output: DisjointSlice<u32>) {
     let offset = index.get();
     if let Some(element) = output.get_mut(index) {
         *element = input[offset];
+    }
+}
+
+#[cfg(feature = "reference-two-output-positive")]
+#[kernel(
+    typed,
+    reference = cpu_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn fill(mut first: DisjointSlice<u32>, mut second: DisjointSlice<u32>) {
+    if let Some(element) = first.get_mut(thread::index_1d()) {
+        *element = 17;
+    }
+    if let Some(element) = second.get_mut(thread::index_1d()) {
+        *element = 23;
+    }
+}
+
+#[cfg(feature = "reference-two-output-substitution")]
+#[kernel(
+    typed,
+    reference = cpu_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn fill(mut first: DisjointSlice<u32>, mut second: DisjointSlice<u32>) {
+    if let Some(element) = first.get_mut(thread::index_1d()) {
+        *element = 23;
+    }
+    if let Some(element) = second.get_mut(thread::index_1d()) {
+        *element = 17;
+    }
+}
+
+#[cfg(feature = "reference-two-output-alias")]
+#[kernel(
+    typed,
+    reference = cpu_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn fill(mut first: DisjointSlice<u32>, _second: DisjointSlice<u32>) {
+    if let Some(element) = first.get_mut(thread::index_1d()) {
+        *element = 17;
+    }
+    if let Some(element) = first.get_mut(thread::index_1d()) {
+        *element = 23;
+    }
+}
+
+#[cfg(feature = "reference-two-output-schedule")]
+#[kernel(
+    typed,
+    reference = cpu_reference,
+    launch(required = [64, 1, 1], max = [64, 1, 1])
+)]
+pub fn fill(mut first: DisjointSlice<u32>, mut second: DisjointSlice<u32>) {
+    if let Some(element) = first.get_mut(thread::index_1d()) {
+        *element = 17;
+    }
+    if thread::index_1d().get() % 2 == 0
+        && let Some(element) = second.get_mut(thread::index_1d())
+    {
+        *element = 23;
     }
 }
 

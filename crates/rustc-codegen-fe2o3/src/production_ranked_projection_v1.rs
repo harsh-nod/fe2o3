@@ -814,28 +814,34 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
         None
     } else {
+        let output_ranks =
+            crate::production_reference_effect_join_v2::reserved_reference_output_ranks_v2(
+                reference_bindings,
+            )?;
         let count = crate::production_reference_effect_join_v2::reserved_reference_value_count_v2(
             reference_bindings,
         )?;
         let mut values = Vec::with_capacity(count);
-        for _ in 0..count {
-            values.push(next_value_id(&mut next_value)?);
+        for rank in output_ranks {
+            for _ in 0..3 {
+                let result = next_value_id(&mut next_value)?;
+                values.push(result);
+                entry_operations
+                    .push(ProductionRankedOperationV1::SemanticConstant { result, value: 0 });
+            }
+            for axis in 0..rank {
+                let symbol = u32::try_from(axis).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "reference-effect logical point rank does not fit the semantic symbol domain",
+                    )
+                })?;
+                let result = next_value_id(&mut next_value)?;
+                values.push(result);
+                entry_operations
+                    .push(ProductionRankedOperationV1::SemanticSymbol { result, symbol });
+            }
         }
-        entry_operations.extend(
-            values
-                .iter()
-                .take(3)
-                .copied()
-                .map(|result| ProductionRankedOperationV1::SemanticConstant { result, value: 0 }),
-        );
-        for (axis, result) in values.iter().skip(3).copied().enumerate() {
-            let symbol = u32::try_from(axis).map_err(|_| {
-                ProductionRankedProjectionErrorV1::Unsupported(
-                    "reference-effect logical point rank does not fit the semantic symbol domain",
-                )
-            })?;
-            entry_operations.push(ProductionRankedOperationV1::SemanticSymbol { result, symbol });
-        }
+        debug_assert_eq!(values.len(), count);
         Some(values)
     };
     let mut incomplete = None;

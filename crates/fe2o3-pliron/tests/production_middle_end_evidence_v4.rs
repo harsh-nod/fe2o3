@@ -24,11 +24,11 @@ use fe2o3_pliron::{
     PRODUCTION_MIDDLE_END_EVIDENCE_DOMAIN_V4, PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4,
     PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
     ProductionCollectiveSemanticContractV1, ProductionCollectiveSemanticKindV1,
-    ProductionConstructionV1, ProductionEffectRefinementContractV2,
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
-    ProductionMiddleEndAssuranceV4, ProductionMiddleEndEvidenceCodecErrorV4,
-    ProductionMiddleEndEvidencePassV4, ProductionMiddleEndEvidenceV4,
-    ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
+    ProductionConstructionV1, ProductionCooperativeTensorBindingV1,
+    ProductionEffectRefinementContractV2, ProductionFunctionalRefinementTrustPolicyV2,
+    ProductionGpuWriteSiteV2, ProductionMiddleEndAssuranceV4,
+    ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidencePassV4,
+    ProductionMiddleEndEvidenceV4, ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
     ProductionNumericalRefinementContractV2, ProductionRankedBlockV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
@@ -339,15 +339,20 @@ fn total_coverage_ranked_input() -> ProductionRankedKernelLoweringInputV1 {
 }
 
 fn total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
-    total_output_refinement_input_with_collective(false)
+    total_output_refinement_input_with_options(false, false)
 }
 
 fn collective_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
-    total_output_refinement_input_with_collective(true)
+    total_output_refinement_input_with_options(true, false)
 }
 
-fn total_output_refinement_input_with_collective(
+fn tensor_total_output_refinement_input() -> ProductionRankedKernelLoweringInputV1 {
+    total_output_refinement_input_with_options(false, true)
+}
+
+fn total_output_refinement_input_with_options(
     with_collective: bool,
+    with_tensor: bool,
 ) -> ProductionRankedKernelLoweringInputV1 {
     let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
     let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
@@ -382,24 +387,32 @@ fn total_output_refinement_input_with_collective(
             vec![
                 ProductionRankedOperationV1::ExecutionLayout {
                     grid_identity: 9,
-                    global_extents: [1, 1, 1],
-                    workgroup_extents: [1, 1, 1],
-                    subgroup_size: 1,
+                    global_extents: [if with_tensor { 64 } else { 1 }, 1, 1],
+                    workgroup_extents: [if with_tensor { 64 } else { 1 }, 1, 1],
+                    subgroup_size: if with_tensor { 64 } else { 1 },
                     full_physical_workgroups: true,
                 },
                 ProductionRankedOperationV1::ViewInSpace {
                     result: ProductionRankedValueIdV1::new(0),
                     element_width: 32,
                     writable: true,
-                    shape: vec![1],
+                    shape: vec![if with_tensor { 64 } else { 1 }],
                     dynamic_extents: vec![],
                     allocation_origin: 9,
                     noalias_class: 9,
                     memory_space: MemorySpaceAttr::Global,
                 },
-                ProductionRankedOperationV1::IndexConstant {
-                    result: ProductionRankedValueIdV1::new(1),
-                    value: 0,
+                if with_tensor {
+                    ProductionRankedOperationV1::InvocationIndex {
+                        result: ProductionRankedValueIdV1::new(1),
+                        dimension: 0,
+                        launch_extent: 64,
+                    }
+                } else {
+                    ProductionRankedOperationV1::IndexConstant {
+                        result: ProductionRankedValueIdV1::new(1),
+                        value: 0,
+                    }
                 },
                 ProductionRankedOperationV1::SemanticExpression {
                     result: ProductionRankedValueIdV1::new(2),
@@ -486,6 +499,39 @@ fn total_output_refinement_input_with_collective(
                 subjects: functional_subjects(),
             },
         );
+        ProductionRankedKernelV1::new(
+            skeleton.function_name(),
+            skeleton.argument_count(),
+            vec![ProductionRankedBlockV1::new(
+                operations,
+                block.terminator().clone(),
+            )],
+        )
+        .unwrap()
+    } else {
+        skeleton
+    };
+    let skeleton = if with_tensor {
+        let block = &skeleton.blocks()[0];
+        let mut operations = block.operations().to_vec();
+        operations.push(ProductionRankedOperationV1::TensorLayout {
+            contract:
+                fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
+            convergence: dialect_kernel::TensorConvergenceAttr::UniformSubgroup,
+            active_lanes: 64,
+            binding: Some(
+                ProductionCooperativeTensorBindingV1::new(
+                    proof_digest(101),
+                    proof_digest(102),
+                    proof_digest(103),
+                    proof_digest(104),
+                    proof_digest(105),
+                    proof_digest(106),
+                    4,
+                )
+                .unwrap(),
+            ),
+        });
         ProductionRankedKernelV1::new(
             skeleton.function_name(),
             skeleton.argument_count(),
@@ -775,10 +821,21 @@ fn numerical_total_output_refinement_input(
 fn two_output_refinement_input(
     second_noalias_class: u64,
 ) -> Result<ProductionRankedKernelLoweringInputV1, fe2o3_pliron::ProductionRankedCompileErrorV2> {
+    two_output_refinement_input_with_numerical_ambiguity(second_noalias_class, false)
+}
+
+fn two_output_refinement_input_with_numerical_ambiguity(
+    second_noalias_class: u64,
+    ambiguous_numerical_site: bool,
+) -> Result<ProductionRankedKernelLoweringInputV1, fe2o3_pliron::ProductionRankedCompileErrorV2> {
     let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
-    let scalar_u32 = ProductionSemanticScalarTypeV2::Integer {
-        signed: false,
-        bits: 32,
+    let scalar_value = if ambiguous_numerical_site {
+        ProductionSemanticScalarTypeV2::Float { bits: 32 }
+    } else {
+        ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        }
     };
     let scalar_u64 = ProductionSemanticScalarTypeV2::Integer {
         signed: false,
@@ -801,6 +858,11 @@ fn two_output_refinement_input(
         local(4),
     )
     .unwrap();
+    let (second_actual, second_reference) = if ambiguous_numerical_site {
+        (local(3), local(4))
+    } else {
+        (local(5), local(6))
+    };
     let second_contract = ProductionEffectRefinementContractV2::new(
         74,
         ProductionGpuWriteSiteV2::new(0, 15),
@@ -813,173 +875,186 @@ fn two_output_refinement_input(
         local(9),
         local(9),
         local(9),
-        local(5),
-        local(6),
+        second_actual,
+        second_reference,
     )
     .unwrap();
+    let ambiguous_numerical = ProductionNumericalRefinementContractV2::new(
+        75,
+        local(3),
+        local(4),
+        local(7),
+        local(7),
+        0.001_f64.to_bits(),
+        0.01_f64.to_bits(),
+    )
+    .unwrap();
+    let mut operations = vec![
+        ProductionRankedOperationV1::ExecutionLayout {
+            grid_identity: 11,
+            global_extents: [1, 1, 1],
+            workgroup_extents: [1, 1, 1],
+            subgroup_size: 1,
+            full_physical_workgroups: true,
+        },
+        ProductionRankedOperationV1::ViewInSpace {
+            result: ProductionRankedValueIdV1::new(0),
+            element_width: 32,
+            writable: true,
+            shape: vec![1],
+            dynamic_extents: vec![],
+            allocation_origin: 9,
+            noalias_class: 9,
+            memory_space: MemorySpaceAttr::Global,
+        },
+        ProductionRankedOperationV1::ViewInSpace {
+            result: ProductionRankedValueIdV1::new(1),
+            element_width: 32,
+            writable: true,
+            shape: vec![1],
+            dynamic_extents: vec![],
+            allocation_origin: 10,
+            noalias_class: second_noalias_class,
+            memory_space: MemorySpaceAttr::Global,
+        },
+        ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(2),
+            value: 0,
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(3),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_value,
+                bits: 7,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(scalar_value),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(4),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_value,
+                bits: 7,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(scalar_value),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(5),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_value,
+                bits: 11,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(scalar_value),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(6),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_value,
+                bits: 11,
+            },
+            numerical_contract: ProductionNumericalContractV2::exact_for(scalar_value),
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(7),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_bool,
+                bits: 1,
+            },
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(8),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_u64,
+                bits: 0,
+            },
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(9),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_bool,
+                bits: 1,
+            },
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        },
+        ProductionRankedOperationV1::SemanticExpression {
+            result: ProductionRankedValueIdV1::new(10),
+            expression: ProductionSemanticExpressionV2::Constant {
+                scalar: scalar_u64,
+                bits: 0,
+            },
+            numerical_contract: ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
+        },
+        ProductionRankedOperationV1::OwnershipContract {
+            view: local(0),
+            coverage: OwnershipCoverageAttr::TotalView,
+            partition: OwnershipPartitionAttr::ExactSets,
+        },
+        ProductionRankedOperationV1::OwnershipContract {
+            view: local(1),
+            coverage: OwnershipCoverageAttr::TotalView,
+            partition: OwnershipPartitionAttr::ExactSets,
+        },
+        ProductionRankedOperationV1::ValueAccess {
+            kind: AccessKindAttr::Write,
+            view: local(0),
+            indices: vec![local(2)],
+            value: local(3),
+        },
+        ProductionRankedOperationV1::ValueAccess {
+            kind: AccessKindAttr::Write,
+            view: local(1),
+            indices: vec![local(2)],
+            value: if ambiguous_numerical_site {
+                local(3)
+            } else {
+                local(5)
+            },
+        },
+        ProductionRankedOperationV1::RequestEffectRefinement {
+            contract: first_contract,
+            subjects: functional_subjects(),
+        },
+        ProductionRankedOperationV1::RequestEffectRefinement {
+            contract: second_contract,
+            subjects: functional_subjects(),
+        },
+        ProductionRankedOperationV1::CollectiveSemantics {
+            contract: ProductionCollectiveSemanticContractV1::new(
+                ProductionCollectiveSemanticKindV1::FiniteFold,
+                [21, 22, 23, 24],
+                [25, 26, 27, 28],
+                [25, 26, 27, 28],
+                1,
+                1,
+                SemanticEvaluationOrderAttr::Ascending,
+                ProductionNumericalContractV2::exact_for(scalar_value),
+                SemanticCoverageBindingAttr::TotalView,
+            )
+            .unwrap(),
+            view: local(1),
+            actual: local(5),
+            expected: local(6),
+            witness0: local(5),
+            witness1: local(6),
+        },
+        ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
+            actual: local(5),
+            expected: local(6),
+            subjects: functional_subjects(),
+        },
+    ];
+    if ambiguous_numerical_site {
+        operations.push(ProductionRankedOperationV1::RequestNumericalRefinement {
+            contract: ambiguous_numerical,
+            subjects: functional_subjects(),
+        });
+    }
     let skeleton = ProductionRankedKernelV1::new(
         "two_output_refinement",
         0,
         vec![ProductionRankedBlockV1::new(
-            vec![
-                ProductionRankedOperationV1::ExecutionLayout {
-                    grid_identity: 11,
-                    global_extents: [1, 1, 1],
-                    workgroup_extents: [1, 1, 1],
-                    subgroup_size: 1,
-                    full_physical_workgroups: true,
-                },
-                ProductionRankedOperationV1::ViewInSpace {
-                    result: ProductionRankedValueIdV1::new(0),
-                    element_width: 32,
-                    writable: true,
-                    shape: vec![1],
-                    dynamic_extents: vec![],
-                    allocation_origin: 9,
-                    noalias_class: 9,
-                    memory_space: MemorySpaceAttr::Global,
-                },
-                ProductionRankedOperationV1::ViewInSpace {
-                    result: ProductionRankedValueIdV1::new(1),
-                    element_width: 32,
-                    writable: true,
-                    shape: vec![1],
-                    dynamic_extents: vec![],
-                    allocation_origin: 10,
-                    noalias_class: second_noalias_class,
-                    memory_space: MemorySpaceAttr::Global,
-                },
-                ProductionRankedOperationV1::IndexConstant {
-                    result: ProductionRankedValueIdV1::new(2),
-                    value: 0,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(3),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_u32,
-                        bits: 7,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(4),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_u32,
-                        bits: 7,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(5),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_u32,
-                        bits: 11,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(6),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_u32,
-                        bits: 11,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(7),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_bool,
-                        bits: 1,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(8),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_u64,
-                        bits: 0,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(9),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_bool,
-                        bits: 1,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::SemanticExpression {
-                    result: ProductionRankedValueIdV1::new(10),
-                    expression: ProductionSemanticExpressionV2::Constant {
-                        scalar: scalar_u64,
-                        bits: 0,
-                    },
-                    numerical_contract:
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                },
-                ProductionRankedOperationV1::OwnershipContract {
-                    view: local(0),
-                    coverage: OwnershipCoverageAttr::TotalView,
-                    partition: OwnershipPartitionAttr::ExactSets,
-                },
-                ProductionRankedOperationV1::OwnershipContract {
-                    view: local(1),
-                    coverage: OwnershipCoverageAttr::TotalView,
-                    partition: OwnershipPartitionAttr::ExactSets,
-                },
-                ProductionRankedOperationV1::ValueAccess {
-                    kind: AccessKindAttr::Write,
-                    view: local(0),
-                    indices: vec![local(2)],
-                    value: local(3),
-                },
-                ProductionRankedOperationV1::ValueAccess {
-                    kind: AccessKindAttr::Write,
-                    view: local(1),
-                    indices: vec![local(2)],
-                    value: local(5),
-                },
-                ProductionRankedOperationV1::RequestEffectRefinement {
-                    contract: first_contract,
-                    subjects: functional_subjects(),
-                },
-                ProductionRankedOperationV1::RequestEffectRefinement {
-                    contract: second_contract,
-                    subjects: functional_subjects(),
-                },
-                ProductionRankedOperationV1::CollectiveSemantics {
-                    contract: ProductionCollectiveSemanticContractV1::new(
-                        ProductionCollectiveSemanticKindV1::FiniteFold,
-                        [21, 22, 23, 24],
-                        [25, 26, 27, 28],
-                        [25, 26, 27, 28],
-                        1,
-                        1,
-                        SemanticEvaluationOrderAttr::Ascending,
-                        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence,
-                        SemanticCoverageBindingAttr::TotalView,
-                    )
-                    .unwrap(),
-                    view: local(1),
-                    actual: local(5),
-                    expected: local(6),
-                    witness0: local(5),
-                    witness1: local(6),
-                },
-                ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
-                    actual: local(5),
-                    expected: local(6),
-                    subjects: functional_subjects(),
-                },
-            ],
+            operations,
             ProductionRankedTerminatorV1::Return,
         )],
     )
@@ -1023,9 +1098,29 @@ fn two_output_refinement_input(
     .unwrap();
     let (collective_proof, collective_receipt, _) = imported_reference(collective_obligation);
     imported.push(collective_receipt);
-    let bound = bound
+    let mut bound = bound
         .bind_functional_refinement_request_v2(0, 19, collective_proof)
         .unwrap();
+    if ambiguous_numerical_site {
+        let ProductionRankedOperationV1::RequestNumericalRefinement { contract, .. } =
+            &bound.blocks()[0].operations()[20]
+        else {
+            unreachable!()
+        };
+        let numerical_obligation = normalized_numerical_refinement_hash_for_kernel_v2(
+            &bound,
+            0,
+            20,
+            *contract,
+            functional_subjects(),
+        )
+        .unwrap();
+        let (numerical_proof, numerical_receipt, _) = imported_reference(numerical_obligation);
+        imported.push(numerical_receipt);
+        bound = bound
+            .bind_functional_refinement_request_v2(0, 20, numerical_proof)
+            .unwrap();
+    }
     compile_ranked_kernel_for_lowering_v2(
         ProductionConstructionV1::ranked_kernel("two_output_refinement", bound).unwrap(),
         ProductionSessionLimitsV1::default(),
@@ -1974,6 +2069,39 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
     assert!(error.to_string().contains("no retained authenticated"));
 }
 
+#[test]
+fn live_tensor_site_reaches_the_public_parallel_fail_closed_boundary() {
+    let input = tensor_total_output_refinement_input();
+    assert!(input.tensor_layout_report().is_clean());
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    let reconciled =
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap();
+    let semantics = require_mir_pliron_semantic_contract_v1(
+        &input,
+        &evidence,
+        reconciled.total_output_report(),
+        reconciled.contract(),
+    )
+    .unwrap();
+    let error = derive_and_require_parallel_reference_contract_v1(
+        &input,
+        &evidence,
+        semantics,
+        reconciled.contract(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        fe2o3_pliron::ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
+            live_sites: 1,
+            outputs: 1,
+        }
+    );
+    assert!(error.is_incomplete());
+    assert!(error.to_string().starts_with("error[FE2O3-PARALLEL-013]"));
+}
+
 fn numerical_parallel_contract(
     guard_fixture: NumericalGuardFixture,
     site_fixture: NumericalSiteFixture,
@@ -2281,6 +2409,17 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
                 index: 0,
             }
         )
+    );
+}
+
+#[test]
+fn two_output_numerical_ambiguity_is_rejected_before_parallel_mapping() {
+    let input = two_output_refinement_input_with_numerical_ambiguity(10, true).unwrap();
+    let evidence =
+        ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
+    assert_eq!(
+        derive_and_reconcile_mir_pliron_semantic_contract_v1(&input, &evidence).unwrap_err(),
+        fe2o3_pliron::ProductionMirPlironSemanticContractDerivationErrorV1::AmbiguousTypedRootDomain,
     );
 }
 

@@ -789,6 +789,7 @@ fn finite_loop_extent_v1(
             if maximum_steps == 0 {
                 return Err("the iteration domain is empty");
             }
+            require_overflow_free_static_latch_v1(lower, maximum_steps, step)?;
             Ok((maximum_steps, SemanticFiniteExtentV1::Static(maximum_steps)))
         }
         _ if step == 1 => Ok((
@@ -813,6 +814,18 @@ fn finite_loop_extent_v1(
             "a dynamic finite loop requires a constant unit step until a narrower range receipt is retained",
         ),
     }
+}
+
+fn require_overflow_free_static_latch_v1(
+    lower: u64,
+    maximum_steps: u64,
+    step: u64,
+) -> Result<(), &'static str> {
+    maximum_steps
+        .checked_mul(step)
+        .and_then(|distance| lower.checked_add(distance))
+        .ok_or("the final increasing-loop latch transition can overflow u64")?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1421,4 +1434,23 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> DigestV1 {
 
 fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1> {
     u64::try_from(value).map_err(|_| ProductionMirPlironSemanticContractErrorV1::CounterOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_overflow_free_static_latch_v1;
+
+    #[test]
+    fn static_loop_latch_requires_an_overflow_free_final_transition() {
+        assert!(require_overflow_free_static_latch_v1(4, 3, 2).is_ok());
+        assert!(require_overflow_free_static_latch_v1(u64::MAX - 2, 1, 2).is_ok());
+        assert_eq!(
+            require_overflow_free_static_latch_v1(u64::MAX - 1, 1, 2),
+            Err("the final increasing-loop latch transition can overflow u64"),
+        );
+        assert_eq!(
+            require_overflow_free_static_latch_v1(1, u64::MAX, 2),
+            Err("the final increasing-loop latch transition can overflow u64"),
+        );
+    }
 }

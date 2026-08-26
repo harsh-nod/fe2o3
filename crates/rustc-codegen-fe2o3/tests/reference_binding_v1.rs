@@ -113,6 +113,41 @@ fn annotated_reference_reaches_the_proof_runtime_boundary_and_mutation_is_reject
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn two_output_reference_is_joined_once_and_mutations_fail_closed() {
+    let target = ScratchTarget::new();
+    let positive = run_feature(&target.0, "reference-two-output-positive");
+    assert!(
+        positive.contains("functional-refinement proof runtime unavailable")
+            && !positive.contains("requires exactly one observable reference output write"),
+        "two-output reference did not complete the compiler-owned join before proof execution:\n{positive}",
+    );
+
+    let substitution = run_feature(&target.0, "reference-two-output-substitution");
+    assert!(
+        substitution.contains("functional-refinement proof runtime unavailable")
+            || substitution.contains("source-to-proof V2 effect mismatch")
+            || substitution.contains("functional-refinement proof execution failed"),
+        "two-output RHS substitution did not reach an authenticated rejection boundary:\n{substitution}",
+    );
+
+    let alias = run_feature(&target.0, "reference-two-output-alias");
+    assert!(
+        alias.contains("source-to-proof V2 effect mismatch")
+            && (alias.contains("has no GPU output effect")
+                || alias.contains("multiple indistinguishable GPU output effects")),
+        "two-output alias mutation was not rejected by the live effect bijection:\n{alias}",
+    );
+
+    let schedule = run_feature(&target.0, "reference-two-output-schedule");
+    assert!(
+        schedule.contains("logical path guard outside the exact memory-bounds selection")
+            || schedule.contains("guard mismatch"),
+        "two-output schedule mutation was not rejected before proof admission:\n{schedule}",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn unsafe_abi_and_unsupported_reference_semantics_fail_closed() {
     let target = ScratchTarget::new();
     for (feature, expected) in [

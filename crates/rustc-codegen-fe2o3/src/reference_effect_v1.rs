@@ -220,8 +220,26 @@ pub(crate) enum ReferenceTerminatorV1 {
         condition: ReferenceOperandV1,
         expected: bool,
         success: u32,
-        bounds_check: bool,
+        bounds_check: Option<ReferenceBoundsCheckV1>,
     },
+}
+
+/// Exact operands retained from one compiler-generated safe-slice bounds
+/// assertion. The assertion condition remains independently retained on the
+/// terminator and must normalize to `index < length` before it can be erased.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ReferenceBoundsCheckV1 {
+    pub(crate) index: ReferenceOperandV1,
+    pub(crate) length: ReferenceOperandV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedReferenceBoundsCheckV1 {
+    pub(crate) block: u32,
+    pub(crate) expected: bool,
+    pub(crate) condition: ReferenceEffectExpressionV1,
+    pub(crate) index: ReferenceEffectExpressionV1,
+    pub(crate) length: ReferenceEffectExpressionV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -366,6 +384,47 @@ pub(crate) struct ReferenceOutputWriteV1 {
 }
 
 impl ReferenceEffectIrV1 {
+    pub(crate) fn resolved_bounds_checks_v1(
+        &self,
+    ) -> Result<Vec<ResolvedReferenceBoundsCheckV1>, ReferenceBindingErrorV1> {
+        let resolver = ReferenceExpressionResolverV1::new(self)?;
+        let mut checks = Vec::new();
+        for block in &self.blocks {
+            let ReferenceTerminatorV1::Assert {
+                condition,
+                expected,
+                bounds_check: Some(bounds_check),
+                ..
+            } = &block.terminator
+            else {
+                continue;
+            };
+            checks.push(ResolvedReferenceBoundsCheckV1 {
+                block: block.block,
+                expected: *expected,
+                condition: resolver.resolve_operand_inner_v1(
+                    condition,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                    1,
+                )?,
+                index: resolver.resolve_operand_inner_v1(
+                    &bounds_check.index,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                    1,
+                )?,
+                length: resolver.resolve_operand_inner_v1(
+                    &bounds_check.length,
+                    &mut BTreeSet::new(),
+                    &mut 0,
+                    1,
+                )?,
+            });
+        }
+        Ok(checks)
+    }
+
     fn observable_output_writes_v1(
         &self,
     ) -> Result<Vec<ReferenceOutputWriteV1>, ReferenceBindingErrorV1> {
@@ -478,7 +537,7 @@ impl ReferenceEffectIrV1 {
         .map_err(|_| ReferenceBindingErrorV1::new("point coordinate count exceeds u32"))
     }
 
-    fn reference_argument_for_kernel_argument_v1(
+    pub(crate) fn reference_argument_for_kernel_argument_v1(
         &self,
         kernel_argument: u32,
     ) -> Result<u32, ReferenceBindingErrorV1> {
@@ -798,7 +857,7 @@ impl ReferenceEffectIrV1 {
                     success,
                     bounds_check,
                 } => {
-                    if *bounds_check {
+                    if bounds_check.is_some() {
                         dispatch_symbolic_edge_v2(
                             &mut pending,
                             state,
@@ -2514,12 +2573,21 @@ fn lower_reference_effect_ir_v1<'tcx>(
                 target,
                 unwind: UnwindAction::Unreachable,
                 msg,
-            } => ReferenceTerminatorV1::Assert {
-                condition: lower_operand_v1(tcx, body, cond, block_index)?,
-                expected: *expected,
-                success: target.as_u32(),
-                bounds_check: matches!(&**msg, AssertMessage::BoundsCheck { .. }),
-            },
+            } => {
+                let bounds_check = match &**msg {
+                    AssertMessage::BoundsCheck { len, index } => Some(ReferenceBoundsCheckV1 {
+                        index: lower_operand_v1(tcx, body, index, block_index)?,
+                        length: lower_operand_v1(tcx, body, len, block_index)?,
+                    }),
+                    _ => None,
+                };
+                ReferenceTerminatorV1::Assert {
+                    condition: lower_operand_v1(tcx, body, cond, block_index)?,
+                    expected: *expected,
+                    success: target.as_u32(),
+                    bounds_check,
+                }
+            }
             TerminatorKind::Call {
                 func,
                 args,
@@ -2835,7 +2903,7 @@ fn lower_safe_scalar_helper_summary_v2<'tcx>(
                     condition: lower_operand_v1(tcx, body, cond, block_index)?,
                     expected: *expected,
                     success: target.as_u32(),
-                    bounds_check: false,
+                    bounds_check: None,
                 }
             }
             TerminatorKind::SwitchInt { .. } | TerminatorKind::Assert { .. } => {
@@ -3426,7 +3494,7 @@ fn reference_guarded_edges_v1(
             bounds_check,
         } => Ok(vec![(
             *success,
-            if *bounds_check {
+            if bounds_check.is_some() {
                 None
             } else {
                 Some(ReferenceGuardAtomV1::Assert {
@@ -4121,9 +4189,13 @@ fn digest_terminator(digest: &mut Sha256, terminator: &ReferenceTerminatorV1) {
             success,
             bounds_check,
         } => {
-            digest.update([3, u8::from(*expected), u8::from(*bounds_check)]);
+            digest.update([3, u8::from(*expected), u8::from(bounds_check.is_some())]);
             digest_operand(digest, condition);
             digest.update(success.to_le_bytes());
+            if let Some(bounds_check) = bounds_check {
+                digest_operand(digest, &bounds_check.index);
+                digest_operand(digest, &bounds_check.length);
+            }
         }
     }
 }
@@ -4466,7 +4538,7 @@ mod tests {
                         condition: checked_field(6, 1),
                         expected: false,
                         success: 3,
-                        bounds_check: false,
+                        bounds_check: None,
                     },
                 },
                 ReferenceBlockV1 {
@@ -4489,7 +4561,7 @@ mod tests {
                         condition: checked_field(7, 1),
                         expected: false,
                         success: 4,
-                        bounds_check: false,
+                        bounds_check: None,
                     },
                 },
                 ReferenceBlockV1 {
@@ -4618,7 +4690,7 @@ mod tests {
                         condition: checked_field(5, 1),
                         expected: false,
                         success: 3,
-                        bounds_check: false,
+                        bounds_check: None,
                     },
                 },
                 ReferenceBlockV1 {
