@@ -74,7 +74,6 @@ pub(crate) enum ProductionSemanticImportErrorV1 {
         actual: usize,
         maximum: usize,
     },
-    #[cfg(feature = "qualification-oracles-test-only")]
     TargetNeutralLoweringPending {
         functions: usize,
         callables: usize,
@@ -127,7 +126,6 @@ impl fmt::Display for ProductionSemanticImportErrorV1 {
                 formatter,
                 "semantic importer {field} transcript uses {actual} bytes, exceeding the lineage receipt maximum {maximum}"
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
             Self::TargetNeutralLoweringPending {
                 functions,
                 callables,
@@ -159,7 +157,6 @@ impl std::error::Error for ProductionSemanticImportErrorV1 {
             | Self::LineageTranscriptTooLarge { .. }
             | Self::FunctionIdentityCollision
             | Self::RootIdentityMismatch => None,
-            #[cfg(feature = "qualification-oracles-test-only")]
             Self::TargetNeutralLoweringPending { .. } => None,
         }
     }
@@ -193,14 +190,12 @@ impl AuthenticatedRustcIdentityInventoryV3 {
 /// Move-only rustc-produced preflight-plan evidence retained by the
 /// production transaction. Public hashes cannot construct this owner.
 pub(crate) struct AuthenticatedRustcPreflightPlanV3 {
-    #[cfg(feature = "qualification-oracles-test-only")]
     sha256: [u8; 32],
     rustc_identity_inventory_sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
 }
 
 impl AuthenticatedRustcPreflightPlanV3 {
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn sha256(&self) -> [u8; 32] {
         self.sha256
     }
@@ -335,7 +330,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
-    let (_rustc_preflight_plan_sha256, rustc_preflight_plan_transcript) =
+    let (rustc_preflight_plan_sha256, rustc_preflight_plan_transcript) =
         plan.into_identity_and_canonical_transcript();
     drop(collection);
     Ok((
@@ -345,8 +340,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
             canonical_transcript: rustc_identity_inventory_transcript,
         },
         AuthenticatedRustcPreflightPlanV3 {
-            #[cfg(feature = "qualification-oracles-test-only")]
-            sha256: _rustc_preflight_plan_sha256,
+            sha256: rustc_preflight_plan_sha256,
             rustc_identity_inventory_sha256,
             canonical_transcript: rustc_preflight_plan_transcript,
         },

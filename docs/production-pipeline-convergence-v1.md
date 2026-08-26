@@ -69,39 +69,32 @@ and backend digests.
 | Compiler module handoff | Production has one mandatory protected-custody path and one V3 publication/consumption transaction. Before monomorphization, a device transaction must retain one admission containing both the authenticated gfx942 target and exact managed build attempt; preflight roots and post-monomorphization device work must agree exactly. The attempt and protected rustc invocation then move as one publication custody value, so no optional or late direct-publication branch remains. The ordinary publication branch and runtime schema selector are deleted. | Keep V1/V2 consumers confined to explicit qualification code until their oracles retire. |
 | Worker publication restart | `ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states. It performs strict V3 preflight, one-shot consumption, direct LLVM/LLD execution, independent inspection, durable publication, and load-readiness recovery. | Join generated host interfaces and runtime authorization to the recovered production artifact. |
 | Application handoff | Production admits only the canonical Worker V3 load envelope. `cargo fe2o3 run` requires the authorized locked compiler closure, injects the required-envelope marker directly, rejects intermediate Cargo runners, and has no compiled no-envelope fallback. The neutral `fe2o3-runtime-protocol` crate owns the load-envelope custody transition, application handoff wire, and sealed static-application identity used by Cargo and the host. Cargo pins the application and V3 identity, binds the envelope, artifact directory, and ACK descriptors into a fresh occurrence, validates the challenge-bound ACK, and retains the current-publication lease through application exit. `fe2o3-host` exposes one `load_inherited_worker_v3_application_v1` transaction that performs exact descriptor recovery, reviewed compiler/Verus authentication, environment authorization, exact HSA load, and compiler-generated typed dispatch without returning intermediate authority. The host raw HIP `launch!`, module/function loader, parameter pack, launch configuration, cooperative launch, and embedded-artifact route are deleted in every feature configuration. Shared descriptor failures use the neutral `ApplicationDescriptorHandoffErrorV1`; the Worker V2 consumer, retained-descriptor path, and compatibility error alias are deleted. | Supply production verifier implementations and generated dispatch applications whose authenticated proof/effect evidence closes the kernel-specific obligations. |
-| Qualification isolation | Backend workload oracles and extraction drivers require `qualification-oracles-test-only`. The feature-free backend compiles a dedicated workload-neutral `production_worker_handoff`; the legacy Worker V2 producer, S09 identity model, scalar MIR V2 model, and semantic type V2 adapter are absent from its module graph. Cargo V1/V2 work state, restart modules, workload parsers, and V2 intake require the same package-local feature, but application transfer is V3-only in every build: Cargo and host V2 decode, lease recovery, child environment, descriptor retention, challenge, ACK, and error-alias branches are deleted, and stale V2 names are recognized only for rejection. The feature-free normal dependency graphs of both `cargo-fe2o3` and `fe2o3-host` exclude `fe2o3-worker-v2-bundle`; they depend on `fe2o3-runtime-protocol` for production records. The exact FlashAttention, LDS GEMM, Wave64, workgroup, MoE, and protected row-softmax host/HSA routes are deleted; the row-softmax Cargo `legacy-hsa-runtime` feature is also gone. Their Rust sources, compiler/finalizer checks, semantic oracles, and proof evidence remain without runtime authority. The standalone raw-HIP gfx942 OCML launcher is deleted; upstream LLVM device-library linking remains compiler-side and runtime use must enter through Worker V3. General typed macro expansion, including exact vecadd and Scalar GEMM, now has one workload-neutral Worker V3 host contract: the `qualification_worker_v2` selector, profile-specific V2 adapters, embedded vecadd artifact contract, and example feature are deleted. Empty Rust slices are handled by the generic capability instead of a GEMM-only wrapper. Feature-free Cargo prepares a concrete `PreparedProductionBuildConfig` through `prepare_production_managed_attempt` and receives one mandatory `ManagedProductionBuild` from the shared V3 recovery helper. Completion consumes that transaction exactly once; it has no optional empty-work state or missing-custody branch. `PreparedManagedWork`, optional production or qualification work, `ManagedQualificationWork`, Worker V1/V2 recovery decisions, and empty managed attempts compile only in the qualification harness. Source-debug executable and process measurement is likewise absent from feature-free compilation. Host-only dependency units use rustc's built-in LLVM backend and receive no fe2o3 route selector, managed compiler arguments, backend descriptor, or artifact custody. | Replace the remaining compiler and finalizer qualification oracles with Worker V3 differential coverage, then delete their executable code. |
+| Qualification isolation | Backend-only workload oracles and extraction drivers still require their package-local `qualification-oracles-test-only` feature, but they grant no production authority. `cargo-fe2o3` has no qualification feature, V1/V2 work state, restart module, workload parser, V2 fixture binary, simulation command, S09 broker profile, or `fe2o3-worker-v2-bundle` dependency. Cargo always prepares one concrete `PreparedProductionBuildConfig`, receives one mandatory `ManagedProductionBuild`, and completes the same Worker V3 transaction under every feature set. Application transfer is V3-only; stale V2 names remain only as rejection sentinels. Host-only dependency units use rustc's built-in LLVM backend and receive no fe2o3 route selector, managed compiler arguments, backend descriptor, or artifact custody. | Replace the remaining backend-only V2/exact-profile oracles with Worker V3 differential fixtures, then delete the backend qualification feature. |
 
-The feature-free Cargo path also resolves its build-configuration API directly
+The Cargo package resolves its build-configuration API directly
 to `PreparedProductionBuildConfig`, with no feature-dependent compatibility
 type alias and no no-op qualification conversion methods. It parses only
 `FE2O3_PRODUCTION_BUILD_CONFIG_V1`; the profile enum, Worker V2 schema parser,
-envelope controls, source-debug controls, and workload fields are not compiled.
-Qualification-enabled tests retain their multi-profile parser, but production
-manifest cases call the same dedicated production parser used by the release
-binary. The release path always uses the production expected-identity namespace
-and ordinary compiler-capability profile; route-dependent identity and S09
-selection logic is compiled only into the qualification harness. The
-feature-free binding wrapper admits every managed kernel root through protected
+envelope controls, source-debug controls, and workload fields are deleted. The
+release path always uses the production expected-identity namespace and
+ordinary compiler-capability profile; route-dependent identity and S09
+selection logic no longer exists in Cargo. The binding wrapper admits every
+managed kernel root through protected
 rustc and requires compiler-closure custody directly; it does not compile the
 qualification-oracle predicates or qualification command preparation path.
-The feature-free Cargo driver also binds the fixed gfx942 target profile and
-production semantic-generation identity directly. Its backend preparation
-context has no production-route boolean and compiles no simulation selection;
-those controls exist only in the qualification harness.
+The Cargo driver also binds the fixed gfx942 target profile and production
+semantic-generation identity directly. Its backend preparation context has no
+production-route boolean or simulation selection.
 Once a compile is selected as a production kernel root, the binding wrapper
 requires the concrete production manifest before it can begin an artifact
 attempt. Production preparation and completion contain no Worker V1/V2,
-in-rustc oracle, simulation, row-softmax, or empty-attempt dispatch. The
-qualification harness calls the same V3 recovery/preparation helper when it
-tests production behavior, so recovery semantics still have one owner.
-Production capability intake also releases the broker's one-shot invocation
+in-rustc oracle, simulation, row-softmax, or empty-attempt dispatch. Production
+capability intake also releases the broker's one-shot invocation
 authority immediately after authenticating the transfer. The release
 `CompilerCapabilities` shape has no retained invocation-authority field or
-child-inheritance API; those compile only for the row-softmax qualification
-oracle. The S09 broker profile and pinned-Cargo transfer image are likewise
-absent from feature-free compilation. Shared closure, backend, Cargo-image,
-and artifact validation remains implementation-neutral and runs before either
-constructor receives custody.
+child-inheritance API. The S09 broker profile and pinned-Cargo transfer image
+are deleted. Shared closure, backend, Cargo-image, and artifact validation
+remains implementation-neutral and runs before production receives custody.
 
 The feature-free rustc backend likewise does not compile
 `QualificationSelection`, `SelectedQualificationOracle`, or
@@ -113,16 +106,19 @@ has an optional non-publishing oracle token and an invocation-policy enum for
 differential testing, but no compiler-route enum or release implementation
 choice.
 
-Cargo exposes no simulation command. The standalone `fe2o3-kir-sim-cli`
-consumes existing canonical KIR V7 without source-compilation, artifact,
-runtime, or GPU authority; production `build` and `run` cannot select it.
+The `cargo fe2o3 simulate` command and its Cargo-side oracle graph are deleted.
+On Linux, the standalone `fe2o3-kir-sim-cli` consumes exact verified canonical
+KIR V7 without source, compiler, refinement-proof, artifact, load, launch, GPU,
+timing, or performance authority. `fe2o3-kir-sim-trace` independently maps
+ephemeral CPU-simulator events into collector-neutral Semantic Trace V1. These
+model and differential tools remain authority-free test programs; production
+`build` and `run` cannot select either one.
 
 The host-consumer and shared hostile application fixtures accept only V3
 inputs. The old V2 consumer binary, input adapter, Cargo feature, and hostile
 fixture protocol implementation are deleted. All application-boundary
 adversarial coverage now runs against the strict V3 path in generic-core CI;
-the V2 vertical retains only publication, restart, and explicit rejection
-oracles.
+the Cargo V2 publication/restart vertical and its fixture binaries are deleted.
 
 Version suffixes remain on serialized records, identity domains, receipts, and
 external protocol types. Private production methods and states are unversioned
@@ -319,21 +315,20 @@ device compatibility.
 
 ## Selector retirement
 
-Production has no selector. An unset qualification-oracle environment enters
-the sole production transaction; `production-v1` is rejected if supplied as
-either an obsolete pipeline value or an oracle name. Versioned `V1`/`V2`/`V3`
-suffixes identify frozen records and protocols, not selectable implementations.
-Production build inputs use only `FE2O3_PRODUCTION_BUILD_CONFIG_V1` with the
-`fe2o3-production-build-config-v1` schema. Worker V2 config, expected-identity,
-envelope, and source-debug controls are qualification-only and cannot be mixed
-with that production namespace. The qualification build carries an optional
-non-publishing oracle token; there is no production-or-qualification route
-enum that could acquire another production implementation.
+Cargo has no selector. It rejects both the obsolete pipeline and qualification
+oracle environments rather than interpreting absence as a route choice.
+Versioned `V1`/`V2`/`V3` suffixes identify frozen records and protocols, not
+selectable implementations. Production build inputs use only
+`FE2O3_PRODUCTION_BUILD_CONFIG_V1` with the
+`fe2o3-production-build-config-v1` schema. Worker V2 config,
+expected-identity, envelope, and source-debug controls are recognized only for
+fail-closed rejection.
 
-The stronger end state also removes the qualification feature and its
-executable branches. Keeping a route behind `cfg(feature)` is isolation, not
-convergence. Default tests already compile the feature-free production route;
-`cfg(test)` cannot activate Cargo qualification behavior.
+The Cargo qualification feature and executable branches are deleted. Keeping
+a route behind `cfg(feature)` would be isolation, not convergence. Default and
+all-feature tests compile the same production route; `cfg(test)` cannot
+activate alternate Cargo compiler behavior. Backend-only differential oracles
+remain temporary work under the backend deletion ledger below.
 
 ### Variant deletion ledger
 
@@ -341,8 +336,8 @@ convergence. Default tests already compile the feature-free production route;
 |---|---|---|
 | Host and HSA launch | Complete | Worker V2 host admission, workload launch adapters, raw HIP loading/packing/launch, and compatibility aliases are deleted. |
 | Cargo production tests | Complete | Default tests compile `PreparedProductionBuildConfig`, `ManagedProductionBuild`, Worker V3 application handoff, and the fixed device-then-host plan. |
-| Cargo qualification graph | Open | CPU simulation has moved to offline standalone tools and the Cargo route is deleted. Retire the remaining Worker V2 build/restart modules, S09 routing, workload parsers, and qualification feature after differential evidence migrates. |
-| Backend qualification graph | Open | Preserve canonical input/output fixtures, then delete profile-selected producers and the backend qualification feature. |
+| Cargo qualification graph | Complete | The feature, simulation command, Worker V2 build/restart modules, S09 routing, workload parsers, fixture binaries, vertical tests, and Worker V2 bundle dependency are deleted. Worker V3 application fault coverage uses a compiler-neutral test feature. |
+| Backend qualification graph | In progress | Default and all-feature backend libraries are feature-invariant, selector-free, and enter only `ProductionCompilation`. Exact-profile and Worker V2 modules are restricted to feature-enabled unit-test fixtures and cannot be selected by a rustc invocation. Preserve the minimal canonical differential fixtures, then physically delete the remaining modules and backend feature. |
 | Finalizer and Worker execution | Open | Move shared protocol, request, admission, finalization, and executor mechanics to workload-neutral owners; migrate V3 callers; delete V2 executable APIs and workers. |
 | Artifact restart compatibility | Open | Retain only versioned records needed for canonical decode, explicit rejection, or migration; delete V2 publication/recovery actions once V3 differential coverage owns their hostile cases. |
 | Pliron and workload workers | Open | Replace Worker V2 executable bridges with production handoff fixtures or offline comparisons, then delete the worker crates and profile entry points. |
@@ -368,12 +363,12 @@ Migration follows these rules:
 Production became the sole unselected compiler transaction after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no
 selector. An incomplete production transaction now fails closed instead of silently
-entering legacy codegen. Retained oracles are absent from feature-free Cargo
-and backend builds. Each requires the package-local
-`qualification-oracles-test-only` feature and an explicit
-`FE2O3_QUALIFICATION_ORACLE_V1` value. Unselected host-only dependency units do
-not use this marker: the wrapper omits fe2o3's managed rustc arguments and
-backend descriptor so rustc uses its built-in LLVM backend directly.
+entering legacy codegen. Retained backend oracles are absent from both default
+and all-feature library builds; they can compile only as inert unit-test
+fixtures and no longer accept `FE2O3_QUALIFICATION_ORACLE_V1` as backend
+configuration. Unselected host-only dependency units omit fe2o3's managed rustc
+arguments and backend descriptor so rustc uses its built-in LLVM backend
+directly.
 
 The 2026-08-20 compiler review made this distinction structural. Qualification
 names come from one feature-gated table, while production has no corresponding
@@ -443,6 +438,14 @@ and hostile fixtures are frozen, preventing parallel work from creating new
 routes.
 
 ## Critical milestones
+
+The current checkpoint has completed the feature-invariant backend entry and a
+real extraction-only gfx942 vertical slice. Safe dynamic GEMM now traverses
+ordinary attributed Rust, semantic MIR, ranked PLIRON, verified Kernel IR, the
+composed formal/ranked memory checks, and deterministic gfx942 LLVM. The same
+driver has positive and hostile coverage for collection, ranked bounds, and
+reference bindings. This is compiler evidence only: extraction custody cannot
+publish, finalize HSACO, load, or launch.
 
 1. **Compiler middle end:** #140 pass execution plus one importer, general
    Kernel IR module, and deterministic scalar/control-flow transformations.

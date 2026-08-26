@@ -10,16 +10,20 @@ use crate::pliron_tensor_layout::{
     PlironTensorLayoutDataflowAnalysisV1, PlironTensorLayoutDataflowFailureV1,
     analyze_pliron_tensor_layout_dataflow_v1,
 };
-use crate::{SparseIndexAnalysisV1, SparseIndexFailureV1, analyze_pliron_sparse_indices_v1};
+use crate::{
+    PlironPresburgerAnalysisV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+    analyze_pliron_sparse_indices_v1,
+};
 
 /// The manager has a fixed number of cache roots. Each cached analysis has its
 /// own independent resource bounds, so a run cannot accumulate unbounded
 /// entries by querying different analysis keys.
-pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 4;
+pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PlironAnalysisComputationCountsV1 {
     pub(crate) sparse_indices: usize,
+    pub(crate) presburger: usize,
     pub(crate) execution_layout: usize,
     pub(crate) exact_trace: usize,
     pub(crate) tensor_layout_dataflow: usize,
@@ -34,6 +38,7 @@ pub(crate) struct PlironAnalysisComputationCountsV1 {
 pub(crate) struct PlironAnalysisManagerV1 {
     function: pliron::context::Ptr<Operation>,
     sparse_indices: Option<Result<SparseIndexAnalysisV1, SparseIndexFailureV1>>,
+    presburger: Option<Result<PlironPresburgerAnalysisV1, SparseIndexFailureV1>>,
     execution_layout: Option<Result<Option<PlironExecutionLayoutV1>, PlironTraceFailureV1>>,
     exact_trace: Option<Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1>>,
     tensor_layout_dataflow:
@@ -46,6 +51,7 @@ impl PlironAnalysisManagerV1 {
         Self {
             function: function.get_operation(),
             sparse_indices: None,
+            presburger: None,
             execution_layout: None,
             exact_trace: None,
             tensor_layout_dataflow: None,
@@ -74,6 +80,29 @@ impl PlironAnalysisManagerV1 {
         self.sparse_indices
             .as_ref()
             .expect("sparse indices must be prepared before access")
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    pub(crate) fn prepare_presburger(&mut self, context: &Context, function: &FuncOp) {
+        self.assert_function(function);
+        if self.presburger.is_some() {
+            return;
+        }
+        self.prepare_sparse_indices(context, function);
+        self.computations.presburger += 1;
+        self.presburger = Some(match &self.sparse_indices {
+            Some(Ok(sparse)) => Ok(PlironPresburgerAnalysisV1::from_sparse(sparse)),
+            Some(Err(failure)) => Err(failure.clone()),
+            None => unreachable!("sparse indices were prepared above"),
+        });
+        debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
+    }
+
+    pub(crate) fn presburger(&self) -> Result<&PlironPresburgerAnalysisV1, SparseIndexFailureV1> {
+        self.presburger
+            .as_ref()
+            .expect("Presburger analysis must be prepared before access")
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -153,6 +182,7 @@ impl PlironAnalysisManagerV1 {
 
     pub(crate) fn cached_entries(&self) -> usize {
         usize::from(self.sparse_indices.is_some())
+            + usize::from(self.presburger.is_some())
             + usize::from(self.execution_layout.is_some())
             + usize::from(self.exact_trace.is_some())
             + usize::from(self.tensor_layout_dataflow.is_some())

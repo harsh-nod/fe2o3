@@ -1,6 +1,6 @@
 # cargo-fe2o3
 
-`cargo-fe2o3` coordinates fe2o3 build, qualification, binding-only host
+`cargo-fe2o3` coordinates fe2o3 build, binding-only host
 checks/tests, inspection, and debugging workflows.
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
@@ -43,27 +43,24 @@ selectors, noncanonical paths, changed backing objects, replayed attempts, and
 closure/runtime-tree drift fail closed. Tool digests are operator-provisioned
 inputs and are remeasured; no machine-specific digest is compiled in.
 
-Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` is rejected, and
-`FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production
-compiler and finalizer test harnesses. Package-local test code that needs those
-oracles is compiled with `qualification-oracles-test-only`; the `cargo-fe2o3`
-CLI itself is feature-invariant and rejects the selector in every build. The
-standalone KIR simulator is not selected through this variable.
+Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` and
+`FE2O3_QUALIFICATION_ORACLE_V1` are rejected in every `cargo-fe2o3` build.
+The Cargo package has no qualification feature, simulation command, Worker V2
+compiler dependency, or feature-selected compiler behavior. Backend-only
+differential oracles must remain outside this executable transaction.
 
 Production requires `FE2O3_PRODUCTION_BUILD_CONFIG_V1` to name a canonical
 `fe2o3-production-build-config-v1` JSON recipe. The recipe pins the selected
 Rust compilation units, upstream-LLVM worker image, typed link providers,
 link options, output bound, and execution limits. Cargo authenticates its
 transitive identity and passes only `FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1` to
-the wrapper. Production rejects the Worker V2 config and expected-identity
-variables; qualification rejects the production variables. Envelope,
-source-debug, exact-workload, and restart-oracle fields are not part of the
-production schema.
+the wrapper. Production rejects the retired Worker V2 config and expected-identity
+variables. Envelope, source-debug, exact-workload, and restart-oracle fields
+are not part of the production schema.
 
-The rustc wrapper owns production work directly as a `ManagedProductionBuild`
-transaction. Enabling qualification tests does not wrap that transaction in a
-route enum or change its state type; compatibility work occupies a separate
-cfg-gated slot and cannot be selected by production configuration.
+The rustc wrapper owns all device work directly as a mandatory
+`ManagedProductionBuild` transaction. No route enum, optional work slot, or
+feature-gated alternate compiler transaction exists in the Cargo package.
 
 Cargo dependency units that are not the selected kernel root are host-only
 rustc compilations, not another fe2o3 route. The wrapper removes all managed
@@ -78,16 +75,6 @@ boundary into pinned Cargo and the existing transactional test backend, but
 its publication evidence carries only that fixture's existing downstream test
 authority. The release contract makes no stronger claims.
 
-The fixed row-softmax production action currently stops after this admitted
-launcher/handoff at `stage=binding-wrapper`. Its direct Rust workspace wrapper
-is dynamically linked to `librustc_driver`, but production clears loader
-variables and must reject Cargo's mutable target deps directory when Cargo
-prepares the wrapper environment. The non-integrated C trampoline is not an
-authority path, and no debug normalization is used. An exact static binding
-wrapper must be integrated and admitted before row-softmax can enter Cargo and
-the backend. Consequently the staged 25-pin finalizer/runtime path has no
-production compiler, artifact, launch, or GPU authority.
-
 ### Compiler provenance wiring
 
 For protected builds, the capability broker sends a sealed raw
@@ -99,11 +86,11 @@ the closure must match.
 
 The wrapper seals the canonical V3 bytes and installs that exact immutable
 image at fd 199 for the prepared rustc child. The raw brokered closure stops at
-the wrapper and is only an input to V3 construction. Backend admission of the
-inherited V3 descriptor is the next boundary and is not wired yet, so this
-transport remains coordination evidence rather than an execution receipt or
-compiler-authorship proof. Unprotected compatibility captures remain V2 and
-receive no fd 199 invocation capability.
+the wrapper and is only an input to V3 construction. The backend revalidates
+the inherited V3 descriptor against the live process before collection and
+moves the exact invocation custody into Worker V3 publication. This closes the
+Cargo-to-backend transport boundary; proof promotion and runtime authorization
+remain separate downstream gates.
 
 ## External Cargo projects
 
@@ -230,15 +217,11 @@ a built backend through `FE2O3_BACKEND`.
 `cargo fe2o3 run` places a narrow application boundary in front of Cargo's
 exact-target application. Production always requires the authorized locked
 compiler closure and canonical Worker V3 load envelope; it has no no-envelope
-mode and rejects an intermediate Cargo runner. Qualification builds retain
-configured-runner and ordinary-application coverage while those test oracles
-are migrated. Every application or qualification runner starts with an empty
-environment; no `PATH`, `TMPDIR`, build control, or arbitrary inherited
-variable is retained. Runner commands, application paths, and arguments remain
+mode and rejects an intermediate Cargo runner. Every application runner starts
+with an empty environment; no `PATH`, `TMPDIR`, build control, or arbitrary
+inherited variable is retained. Application paths and arguments remain
 byte-preserving. Recursive cargo-fe2o3 runners, including aliases and hardlinks
-to the same executable inode, and runner selections that cannot be resolved
-unambiguously fail closed. In particular, a `cfg(...)` runner must currently be
-made explicit as `target.<triple>.runner` for qualification coverage.
+to the same executable inode, fail closed.
 
 ## Cleanup
 
@@ -256,115 +239,52 @@ unambiguous fe2o3 directory capability.
 Destructive cleanup is supported only where descriptor-relative recursive
 removal is available; symlinked or substituted selected paths fail closed.
 
-## Narrow Worker V2 handoff flow
+## Production Worker V3 handoff flow
 
-In a backend built with `qualification-oracles-test-only`,
-`FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-worker-v2` requires
-`FE2O3_WORKER_V2_CONFIG_V2` to name an absolute path to a strict V2 JSON
-manifest. The manifest is an explicit operator policy input, not compiler
-attestation. It must be compact canonical JSON with sorted object keys and
-contains exact compilation-unit selectors, a measured worker, measured typed
-providers, all four supported link options, and explicit output and process
-limits. Unknown fields, defaults, relative paths, identity mismatches, and
-noncanonical collections are rejected before rustc is spawned.
+`cargo-fe2o3` contains one protected compiler handoff, worker transaction, and
+application protocol. `FE2O3_PRODUCTION_BUILD_CONFIG_V1` selects exact Rust
+compilation units and pins the upstream LLVM worker, typed providers, link
+options, output bound, and execution limits. The wrapper authenticates the
+manifest identity, protected rustc invocation, compiler closure, and managed
+build attempt before consuming one semantic compiler handoff.
 
-V2 has no operator-supplied `final_symbols` field. The verified compiler module
-emits a canonical role manifest covering kernel entries, `<kernel>.kd`
-descriptor symbols, device FFI exports, internal helpers, and contracted
-external imports. Worker requests derive the complete final dynamic-symbol
-closure from that manifest; unknown JSON fields are rejected, so an operator
-cannot inject or omit final symbols.
+`ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states.
+Fresh work performs strict Worker V3 preflight and one-shot handoff consumption;
+recovery reconstructs the same retained inputs without respawning rustc; ready
+work reuses only the exact durable load envelope. V1/V2 state machines, restart
+modules, workload parsers, fixture binaries, and `fe2o3-worker-v2-bundle`
+dependency have been deleted from this package.
 
-Each `units` selector binds `crate_name`, rustc's exact `source` path spelling,
-and the absolute `working_directory`. An unselected compilation receives no
-managed attempt, allowing inherited host and dependency compilations with no
-device kernels to proceed. If such a compilation unexpectedly contains a
-device kernel, the backend rejects it because the required managed attempt is
-absent. A selected compilation must publish exactly one attempt-scoped handoff;
-a missing handoff is an error and invalidates the attempt.
+The worker uses pinned upstream LLVM target-machine APIs and in-process LLD.
+It does not use COMGR or command-line `clang`, `llc`, or `ld.lld`. Independent
+inspection must agree with the exact target, exports, descriptors, AMDHSA
+metadata, compiler closure, and publication plan before finalization authority
+can be consumed.
 
-Production uses one protected V3 compiler handoff, strict worker preflight,
-one-shot consumption, durable HSACO publication, and load-readiness recovery.
-Its Cargo state machine has only `Fresh`, `Recovered`, and `Ready`; it cannot
-select V1 or V2 transport. Required-envelope recovery joins the exact compiler
-closure, attempt, handoff receipt, output, publication intent, and durable load
-envelope before resuming. Directory scans are bounded, and authoritative path
-and argument bytes are never compared through lossy UTF-8 conversion.
+`cargo fe2o3 run` accepts only the canonical Worker V3 load envelope. Stale
+Worker V2 filenames and environment variables remain recognizable solely so
+they can be rejected before child spawn. The application integration feature
+depends only on Worker V3/runtime fixtures; its fault-injection feature changes
+timeouts and readiness coordination, never compiler selection.
 
-`cargo fe2o3 run` also has one production application protocol. It accepts only
-the canonical Worker V3 load envelope, pins a sealed static application and its
-V3 identity, binds the envelope, artifact-directory, and ACK descriptors into a
-fresh occurrence, validates the challenge-bound ACK, and retains the
-current-publication lease until the application exits. Worker V2 envelope
-decoding, lease recovery, child environment, challenge, and ACK validation have
-been removed from the Cargo application boundary in every build. Stale V2
-envelope names are recognized only for fail-closed rejection before child
-spawn. The V3 transfer carries inert descriptor custody; it does not itself
-authenticate prerequisites or grant HSA load or launch authority.
-
-The same boundary is enforced by `fe2o3-host`: every build exports only the
-Worker V3 application, admission, verification, HSA load, and generated
-dispatch graph. Worker V2 recovery, bundle admission, prerequisite
-authentication, HSA lifecycle and metadata, workload adapters, embedded
-vecadd API, and the host qualification feature are deleted. Only stale V2
-names remain as fail-closed rejection sentinels. General `#[kernel(typed)]`
-expansion emits only Worker V3 host code, and the retired
-`qualification_worker_v2` option is rejected.
-
-The application integration fixture is V3-only. It has no runtime selector and
-its feature graph enables `fe2o3-host` only with `hardware-test-hooks`; it does
-not enable the host qualification feature. The old V2 host-consumer binary,
-input adapter, and Cargo feature have been deleted.
-
-The shared hostile application fixture also speaks only Worker V3. Its active
-vertical tests cover descriptor quarantine, commitment and descriptor
-substitution, missing/truncated/extended acknowledgments, public-ACK
-non-authority, process and exec containment, stalled-ACK cleanup, envelope
-mutation, generation replacement, and stale-publication turnover. The suite is
-a mandatory generic-core CI step.
-
-Legacy protected V2 and ordinary V1 state machines are qualification paths.
-Their work state, restart modules, workload parsers, and V2 intake compile only
-with `qualification-oracles-test-only`; they are absent from the normal binary
-and cannot enter production intake or recovery. They remain coordination
-evidence only and grant no compiler, proof, HSA load, or launch authority.
-
-For a selected unit, the wrapper pins and validates all configured inputs,
-binds a domain-separated identity of the exact manifest, sealed worker image,
-and provider bytes into both the Cargo generation and `BuildInvocation`,
-rereads that identity in the wrapper before use, runs rustc, consumes the
-handoff once, and invokes the reproducible GenericLink
-V1 plus compiler-aware Worker V2 workflow. It requires byte-identical output
-from two executions, independently inspects the raw HSACO target, exports,
-descriptors, and AMDHSA launch metadata, then selects descriptor-free COV5 raw
-compatibility or canonical finalization of a descriptor-bearing COV6 output.
-Required-envelope mode accepts only the finalized COV6 route. The production
-worker uses pinned upstream LLVM target-machine APIs and the in-process LLD
-library API, with no COMGR or command-line `clang`, `llc`, or `ld.lld` path.
 The typed publication plan is derived only from retained inspection evidence.
 Publication is attempt-scoped,
 durable, digest-bound, and followed by managed attempt completion; exact
 in-process retries recover the same publication without rebinding its inputs.
 
-Required-envelope mode additionally measures and canonical-decodes its bounded
-input capsule before Cargo starts, then revalidates and durably retains the
-exact capsule before a fresh selected attempt can become recoverable. After the
-finalized HSACO publication is committed, the wrapper reconstructs the
-container, descriptor lineage, bundle/direct-link evidence, proofs, exact raw
-and finalized identities, and durable publication claim from those retained
-inputs. It writes the canonical load envelope with create-new semantics, syncs
-the file and containing directory, verifies the exact bytes, and only then
-advances the restart marker to completed and clears the publication intent and
-attempt state. Recovery at every committed boundary repeats those joins from
-the durable intent and capsule without rereading the operator path or
-respawning rustc. Package, generation, receipt, capsule, proof, payload, and
+After finalized HSACO publication commits, the wrapper constructs the canonical
+Worker V3 load envelope directly from the retained protected publication owner.
+It persists exact replay custody, verifies load readiness, retires the matching
+publication intent, and only then finishes the build attempt. Recovery repeats
+those joins from durable V3 records without rereading an operator path or
+respawning rustc. Attempt, compiler closure, receipt, payload, publication, and
 envelope substitution fail closed; truncated or conflicting canonical files
 are never replaced implicitly.
 
-The published HSACO and load envelope remain inert. The envelope contains
-only a durable claim and explicitly contains no process-local currentness
-lease. This flow does not authenticate compiler origin or Verus proof evidence
-and grants no HSA loading or launch authority; downstream admission must
+The published HSACO and load envelope remain inert. The envelope contains no
+process-local currentness lease. Cargo binds the protected compiler closure and
+publication lineage, but no production verifier yet authenticates the carried
+Verus and machine-effect evidence for HSA use. Downstream admission must
 revalidate the durable claim and acquire fresh process-local authority.
 
 For required-envelope `cargo fe2o3 run`, Cargo retains the owner-controlled
@@ -408,8 +328,7 @@ READY. The inherited slot's open-file-description lock survives that adoption.
 
 The supervisor becomes the application's actual parent, starts the seccomp
 worker for required-envelope launches, and owns every application authority and
-ACK descriptor. Immediately before every application exec, and before the
-qualification-only configured-runner or no-envelope exec,
+ACK descriptor. Immediately before the required-envelope application exec,
 `close_range(CLOSE_RANGE_CLOEXEC)` protects all non-stdio descriptors.
 Required-envelope launch then clears `FD_CLOEXEC` only for its exact envelope,
 artifact-directory, ACK, and test-only readiness ABI.
@@ -499,19 +418,18 @@ The managed binding wrapper uses a pinned-executable primitive for native
 - constructs commands through a validated `/proc/self/fd/<fd>` reference whose
   lifetime is tied to the retained descriptor.
 
-The protected S09 path also pins the compilation cwd as a directory descriptor
-and performs `fchdir` immediately before exec. Its bounded V3 consistency
-record covers the exact executable object and bytes, raw argv including argv0,
-cwd object identity, one exact alpha-only source path/length/SHA observation,
-and the complete cleared child environment. The backend reconstructs the same
-record from the actual process and consumes a sealed parent expectation. The
-aggregate canonical encoding is limited to 8 MiB. The separate
-`fe2o3-rustc-wrapper` compile path remains disabled.
+The production path pins the compilation cwd as a directory descriptor and
+performs `fchdir` immediately before exec. Its bounded V3 consistency record
+covers the exact executable object and bytes, raw argv including argv0, cwd
+object identity, protected source-tree identity, and the complete cleared child
+environment. The backend reconstructs the same record from the actual process
+and consumes the sealed parent expectation. The aggregate canonical encoding
+is limited to 8 MiB.
 
 The inert prepared invocation capture binds the canonical cwd pathname supplied
-to rustc. Protected captures use `RustcInvocationDescriptorV3`, which contains
-the exact V2 process/environment and the canonical compiler closure;
-compatibility captures may remain V2. The process-consistency record above
+to rustc. Production captures use `RustcInvocationDescriptorV3`, which contains
+the exact process/environment and the canonical compiler closure. The
+process-consistency record above
 separately binds the pinned cwd object. No object-identity join between that
 object and the descriptor pathname is claimed. V3 is sealed and inherited by
 rustc at fd 199. Protected production routes consume it before collection and
@@ -546,9 +464,12 @@ artifact, Worker, or authority signals.
 
 The regression path is split along real ownership boundaries:
 
-- `external_project_cli::protected_release_build_reaches_authenticated_cargo_publication_fixture`
-  exercises the protected launcher, static binding trampoline, V3 capability
-  broker, selected rustc child, and authenticated publication boundary;
+- `production_build_config` structurally proves that Cargo has one fixed
+  device/host plan, one production manifest, one managed transaction, and no
+  Worker V2 feature or compiler implementation surface;
+- `worker_v3_load_envelope_vertical` exercises durable V3 publication,
+  verification admission, generated argument packing, application handoff,
+  and hostile runtime substitutions;
 - `production_extraction_driver_v1` rejects reachable unsafe Rust and verifies
   attributed-kernel collection in a real AMD dependency graph;
 - `production_ranked_bounds_driver_v1` projects ordinary Rust into ranked

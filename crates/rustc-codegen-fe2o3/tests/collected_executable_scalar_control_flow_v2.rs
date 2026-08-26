@@ -37,7 +37,6 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
-const INTERNAL_QUALIFICATION_HARNESS_ARG: &str = "__fe2o3-qualification-harness-v1";
 const FIXTURE: &str = include_str!("fixtures/executable-scalar-control-flow-v1.rs");
 const SCALAR_GEMM_PIPELINE: &str = "collected-scalar-gemm-v1";
 const SCALAR_GEMM_FIXTURE: &str = include_str!("../../../examples/scalar_gemm_v1/src/kernel.rs");
@@ -3459,7 +3458,6 @@ fn compile_external_row_softmax_crate_with_broker(
         .command()
         .expect("verify test-owned cargo-fe2o3 before launch");
     command
-        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(workspace)
         .args(["build", "--manifest-path"])
         .arg(&manifest)
@@ -3519,9 +3517,9 @@ fn build_and_pin_broker(
     command
         .current_dir(workspace)
         .args(["build", "--locked", "-p", "cargo-fe2o3"]);
-    configure_qualification_build(&mut command, None);
+    configure_cargo_fe2o3_build(&mut command, None);
     if handoff_observation {
-        configure_qualification_build(&mut command, Some("compiler-handoff-observation-test-only"));
+        configure_cargo_fe2o3_build(&mut command, Some("compiler-handoff-observation-test-only"));
     }
     command
         .args(["--bin", "cargo-fe2o3"])
@@ -3552,9 +3550,9 @@ fn build_and_pin_broker(
     backend_command
         .current_dir(workspace)
         .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"]);
-    configure_qualification_build(&mut backend_command, None);
+    configure_backend_qualification_build(&mut backend_command, None);
     if handoff_observation {
-        configure_qualification_build(
+        configure_backend_qualification_build(
             &mut backend_command,
             Some("row-softmax-metadata-mutation-test-only"),
         );
@@ -3588,7 +3586,13 @@ fn build_and_pin_broker(
     broker
 }
 
-fn configure_qualification_build(command: &mut Command, extra_feature: Option<&str>) {
+fn configure_cargo_fe2o3_build(command: &mut Command, extra_feature: Option<&str>) {
+    if let Some(feature) = extra_feature {
+        command.args(["--features", feature]);
+    }
+}
+
+fn configure_backend_qualification_build(command: &mut Command, extra_feature: Option<&str>) {
     command.args(["--features", "qualification-oracles-test-only"]);
     if let Some(feature) = extra_feature {
         command.args(["--features", feature]);
@@ -3596,27 +3600,26 @@ fn configure_qualification_build(command: &mut Command, extra_feature: Option<&s
 }
 
 #[test]
-fn private_broker_builds_are_explicitly_qualification_enabled() {
+fn private_broker_builds_keep_cargo_feature_invariant() {
     let mut base = Command::new("cargo");
-    configure_qualification_build(&mut base, None);
-    assert_eq!(
-        base.get_args().collect::<Vec<_>>(),
-        ["--features", "qualification-oracles-test-only"]
-    );
+    configure_cargo_fe2o3_build(&mut base, None);
+    assert!(base.get_args().next().is_none());
 
     let mut observation = Command::new("cargo");
-    configure_qualification_build(
+    configure_cargo_fe2o3_build(
         &mut observation,
         Some("compiler-handoff-observation-test-only"),
     );
     assert_eq!(
         observation.get_args().collect::<Vec<_>>(),
-        [
-            "--features",
-            "qualification-oracles-test-only",
-            "--features",
-            "compiler-handoff-observation-test-only",
-        ]
+        ["--features", "compiler-handoff-observation-test-only",]
+    );
+
+    let mut backend = Command::new("cargo");
+    configure_backend_qualification_build(&mut backend, None);
+    assert_eq!(
+        backend.get_args().collect::<Vec<_>>(),
+        ["--features", "qualification-oracles-test-only"]
     );
 }
 
@@ -3885,7 +3888,6 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         .command()
         .expect("verify pinned cargo-fe2o3 before launch");
     command
-        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(workspace)
         .args(["build", "--manifest-path"])
         .arg(&manifest)
@@ -5884,18 +5886,26 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
         source.display()
     );
     let cargo_output = TestOutputDir::new(&workspace);
-    let broker = build_and_pin_broker(&workspace, &cargo_output.0.join("cargo-target"), false);
+    let broker_target = cargo_output.0.join("cargo-target");
+    let broker = build_and_pin_broker(&workspace, &broker_target, false);
     let mut command = broker
         .command()
         .expect("verify test-owned cargo-fe2o3 before tiled launch");
     command
-        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(&workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env(
+            "FE2O3_BACKEND",
+            broker_target.join("debug/librustc_codegen_fe2o3.so"),
+        )
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
@@ -5941,18 +5951,26 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
         source.display()
     );
     let cargo_output = TestOutputDir::new(&workspace);
-    let broker = build_and_pin_broker(&workspace, &cargo_output.0.join("cargo-target"), false);
+    let broker_target = cargo_output.0.join("cargo-target");
+    let broker = build_and_pin_broker(&workspace, &broker_target, false);
     let mut command = broker
         .command()
         .expect("verify test-owned cargo-fe2o3 before LDS launch");
     command
-        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(&workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env(
+            "FE2O3_BACKEND",
+            broker_target.join("debug/librustc_codegen_fe2o3.so"),
+        )
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");

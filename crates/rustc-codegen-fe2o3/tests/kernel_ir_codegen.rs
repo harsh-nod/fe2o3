@@ -269,7 +269,7 @@ fn backend_with_options(
     worker_config: Option<&Path>,
     package_args: &[&str],
 ) -> Output {
-    let mut process = cargo_fe2o3::qualification_command(workspace);
+    let mut process = cargo_fe2o3::non_production_command(workspace);
     process
         .current_dir(workspace)
         .env_remove(PIPELINE_ENV)
@@ -1095,7 +1095,7 @@ fn worker_v2_real_source_publishes_inspected_gfx942_hsaco() {
         &llvm_build_identity,
     );
     let backend = build_codegen_backend(&workspace);
-    let output = cargo_fe2o3::qualification_rustc_wrapper_command(&workspace)
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .arg("rustc")
         .arg(&source)
@@ -1181,7 +1181,7 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
     );
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = cargo_fe2o3::qualification_command(&workspace)
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .arg("build")
         .arg("--manifest-path")
@@ -1277,7 +1277,7 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
     assert_eq!(config_json["link_options"][0]["value"], "6");
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = cargo_fe2o3::qualification_command(&workspace)
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .args([
             "build",
@@ -1358,7 +1358,7 @@ fn worker_v2_s09_feature_collects_and_links_only_alpha() {
     );
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = cargo_fe2o3::qualification_command(&workspace)
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .args([
             "build",
@@ -1430,7 +1430,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     }
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = cargo_fe2o3::qualification_command(&workspace)
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .args([
             "build",
@@ -1686,7 +1686,7 @@ fn worker_v2_real_source_links_an_external_bitcode_provider() {
     assert!(config_text.contains("\"kind\":\"llvm-bitcode\""));
 
     let backend = build_codegen_backend(&workspace);
-    let output = cargo_fe2o3::qualification_rustc_wrapper_command(&workspace)
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .arg("rustc")
         .arg(&source)

@@ -66,9 +66,14 @@ order:
    `index < extent` relation is usable only when it holds on every incoming CFG
    edge. Dynamic extents remain bound to the exact ranked view SSA value (or
    its exact runtime-shape operand), so a guard for another view cannot prove
-   the access.
+   the access. A shared bounded Presburger query discharges finite affine and
+   constant-modulus relations and reports the first unconditional invocation
+   witness for an affine violation as `FE2O3-BOUNDS-004`.
 5. `kernel-race-freedom-v1` reuses the same formal-memory extraction to report
-   alias requirements and possible inter-invocation write conflicts.
+   alias requirements and possible inter-invocation write conflicts. It first
+   uses sparse rank/injectivity rules, then the shared Presburger map engine to
+   prove empty cross-invocation intersections. Unsupported relations fall
+   through to the established exact trace; a solver limit is never Clean.
 6. `kernel-barrier-convergence-v1` rejects barriers controlled by values that
    are too varying for the participating scope.
 7. `kernel-workgroup-memory-v1` performs a forward must-analysis. A load is
@@ -84,6 +89,31 @@ coordinates, guards, values, effects, and numerical policy with the safe Rust
 reference contract. For tensor results it also requires the reference
 obligation to name the exact result root produced by layout dataflow, with the
 same component count and scalar contract.
+
+## Shared Presburger Analysis
+
+`pliron-presburger-v1` is an immutable analysis service cached once per
+function by `PlironAnalysisManagerV1`; it is not a ninth policy pass. Bounds,
+race, and hierarchy ownership query it from their existing fixed positions.
+This keeps pass order and diagnostic ownership stable while avoiding three
+independent implementations of integer-set reasoning.
+
+The admitted fragment is finite integer boxes, conjunctions of signed affine
+equalities and inequalities, constant-modulus congruences, and affine or
+remainder maps. Queries cover emptiness with a witness, range containment,
+injectivity/collision, cross-map intersection, total box coverage, and
+pointwise map equivalence. Path-sensitive traces can supply a finite image to
+the same coverage query when guards or loops are not affine.
+
+The engine is exact for this bounded fragment. Interval pruning rejects
+impossible partial assignments; remaining points are visited in deterministic
+lexicographic order, so diagnostics retain a stable first counterexample.
+Streaming range and collision queries stop at the first witness. Only coverage
+retains an image set. Rank, constraint, result, and work-unit limits are fixed.
+An unknown dynamic extent, nonlinear product, unsupported index fact, machine
+index overflow, malformed relation, or exhausted budget returns `Incomplete`.
+The compiler never substitutes mathematical `i128` arithmetic for an unproved
+machine-`u64` operation.
 
 No transformation may run between these passes. A structurally invalid module
 stops after pass 1. Otherwise all passes run so independent findings are
@@ -167,6 +197,12 @@ reported once in block/operation/dimension order. The production recipe
 requires dense local IDs and validates and materializes them with indexed
 vectors, so recipe work is linear in blocks, operations, and operands; sparse
 IDs cannot force proportional allocation.
+
+The shared Presburger engine caps a relation at 16 variables, 256 constraints,
+16 outputs, and 1,048,576 work units. Range and collision checks stream the
+finite domain; cross-map race queries retain at most two owners for each first
+map image; total coverage retains one deduplicated image set. The old exact
+invocation trace remains the bounded fallback for non-affine guards and loops.
 
 Structural verification and formal-memory extraction each traverse the relevant
 IR once. Control-flow and barrier algorithms have explicit storage/work limits.

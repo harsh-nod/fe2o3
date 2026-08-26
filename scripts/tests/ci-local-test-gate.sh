@@ -229,7 +229,6 @@ prepare_cargo_fe2o3_driver() {
       ;;
     qualification)
       root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
-      feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
       ;;
     *)
       printf 'mock received unknown driver profile: %s\n' \
@@ -353,26 +352,13 @@ assert_qualification_caller_source_policy() {
   local collected="${test_root}/collected_executable_scalar_control_flow_v2.rs"
   local kernel_ir="${test_root}/kernel_ir_codegen.rs"
 
-  assert_source_fixed_count 17 \
-    'cargo_fe2o3::qualification_command(' \
-    'qualification Cargo helper call-site inventory changed without review' \
+  assert_source_fixed_count 19 \
+    'cargo_fe2o3::non_production_command(' \
+    'sealed non-production driver call-site inventory changed without review' \
     "${test_root}"
   assert_source_fixed_count 1 \
-    'pub fn qualification_command(workspace: &Path) -> Command {' \
-    'qualification Cargo helper definition is missing or duplicated' \
-    "${support}"
-  assert_source_fixed_count 1 \
-    '.arg(INTERNAL_QUALIFICATION_HARNESS_ARG)' \
-    'qualification Cargo helper no longer enters the hidden harness' \
-    "${support}"
-
-  assert_source_fixed_count 2 \
-    'cargo_fe2o3::qualification_rustc_wrapper_command(' \
-    'reviewed direct rustc-wrapper caller inventory changed' \
-    "${test_root}"
-  assert_source_fixed_count 1 \
-    'pub fn qualification_rustc_wrapper_command(workspace: &Path) -> Command {' \
-    'direct rustc-wrapper helper definition is missing or duplicated' \
+    'pub fn non_production_command(workspace: &Path) -> Command {' \
+    'sealed non-production driver helper is missing or duplicated' \
     "${support}"
   assert_source_fixed_count 2 \
     '.arg("rustc")' \
@@ -388,24 +374,25 @@ assert_qualification_caller_source_policy() {
     "${kernel_ir}"
 
   assert_source_fixed_count 0 \
-    'non_production_command' \
-    'obsolete public qualification helper was restored' \
-    "${test_root}"
-  assert_source_fixed_count 4 \
     '.arg(INTERNAL_QUALIFICATION_HARNESS_ARG)' \
-    'bespoke pinned-broker hidden-harness caller inventory changed' \
+    'deleted Cargo qualification harness was restored' \
     "${collected}"
-  assert_source_fixed_count 1 \
+  assert_source_fixed_count 0 \
     'const INTERNAL_QUALIFICATION_HARNESS_ARG: &str = "__fe2o3-qualification-harness-v1";' \
-    'bespoke pinned-broker callers lost their reviewed hidden token' \
+    'deleted Cargo qualification token was restored' \
     "${collected}"
+  assert_source_fixed_count 0 \
+    'FE2O3_QUALIFICATION_BACKEND_V1' \
+    'deleted Cargo qualification backend namespace was restored' \
+    "${test_root}"
+  assert_source_fixed_count 0 \
+    'qualification-oracles-test-only' \
+    'sealed cargo-fe2o3 helper restored a deleted Cargo feature' \
+    "${support}"
 
-  # Qualification build/run enters through the helper token or one of the four
-  # pinned-broker token sites above. Direct construction would restore the
-  # forbidden public `cargo-fe2o3 build|run` qualification route.
   assert_source_fixed_count 0 \
     'Command::new(cargo_fe2o3::binary' \
-    'qualification tests directly constructed the public cargo-fe2o3 CLI' \
+    'tests bypassed the sealed cargo-fe2o3 command helper' \
     "${test_root}"
   assert_source_fixed_count 1 \
     'Command::new(binary(workspace))' \
@@ -424,9 +411,9 @@ assert_codegen_test_driver_once() {
   assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 1 \
     'codegen tests did not seal the qualification driver exactly once'
   assert_equals \
-    "cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features ${CARGO_FE2O3_QUALIFICATION_FEATURE} --message-format=json-render-diagnostics" \
+    "cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics" \
     "$(step_command rustc-codegen-driver-cargo-fe2o3-bootstrap)" \
-    'codegen test driver bootstrap is not sealed and qualification-enabled'
+    'codegen test driver bootstrap is not sealed and feature-invariant'
 }
 
 codegen_target_prefix() {
@@ -658,7 +645,7 @@ for core_step in \
     "generic core did not run ${core_step} exactly once"
 done
 assert_equals \
-  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_QUALIFICATION_FEATURE}" \
+  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3" \
   "$(step_command cargo-fe2o3-tests)" \
   'generic core did not gate the feature-invariant cargo-fe2o3 suite'
 assert_equals \
@@ -895,9 +882,7 @@ prepare_cargo_fe2o3_driver() {
   local -a feature_args=()
   case "${driver_profile}" in
     production) ;;
-    qualification)
-      feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
-      ;;
+    qualification) ;;
     *)
       printf 'mock received unknown driver profile: %s\n' \
         "${driver_profile}" >&2
@@ -956,9 +941,9 @@ for managed_package in \
     }
 done
 assert_equals \
-  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
   "$(step_command rocm-cargo-fe2o3-bootstrap)" \
-  'ROCm compile did not build the qualification-enabled shared driver once'
+  'ROCm compile did not build the feature-invariant shared driver once'
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
   "$(step_command rocm-doctor)" \
@@ -968,7 +953,7 @@ for index in "${!STEP_NAMES[@]}"; do
   step_command_value="${STEP_COMMANDS[index]}"
   if [[ "${step_name}" == rocm-qualification-tests-* ]] ||
     { [[ "${step_name}" == rocm-* ]] &&
-      [[ " ${step_command_value} " == *" --features ${CARGO_FE2O3_QUALIFICATION_FEATURE} "* ]] &&
+      [[ " ${step_command_value} " == *" --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} "* ]] &&
       { [[ " ${step_command_value} " == *" -p fe2o3-host "* ]] ||
         [[ " ${step_command_value} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; }; }; then
     printf 'deleted ROCm qualification test lane returned as %s\n' "${step_name}" >&2
@@ -1023,9 +1008,9 @@ export FE2O3_ALLOW_GPU_SMOKE=1
 export FE2O3_TARGET=gfx942:xnack-
 run_hardware_smoke
 assert_equals \
-  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
   "$(step_command hardware-cargo-fe2o3-bootstrap)" \
-  'hardware smoke did not build the qualification-enabled driver'
+  'hardware smoke did not build the feature-invariant driver'
 assert_equals \
   "cc -std=c11 -Wall -Wextra -Werror -D__HIP_PLATFORM_AMD__ -I /opt/rocm/include -I ${REPO_ROOT}/crates/fe2o3-hip-sys/native ${REPO_ROOT}/crates/fe2o3-hip-sys/native/device_properties_test.c -L /opt/rocm/lib -Wl\,-rpath\,/opt/rocm/lib -lamdhip64 -o ${TIMEOUT_TEST_ROOT}/external-target/ci-native/fe2o3-hip-device-properties-test" \
   "$(step_command hardware-hip-device-properties-build)" \
@@ -1053,9 +1038,9 @@ STEP_COMMANDS=()
 export FE2O3_S09_EVIDENCE_DIR="${TIMEOUT_TEST_ROOT}/s09-evidence"
 run_s09_debug_hardware
 assert_equals \
-  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --features qualification-oracles-test-only --message-format=json-render-diagnostics' \
+  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
   "$(step_command s09-cargo-fe2o3-bootstrap)" \
-  'S09 did not build the qualification-enabled driver'
+  'S09 did not build the feature-invariant driver'
 assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/s09-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} bash scripts/s09-debug-ci.sh ${TIMEOUT_TEST_ROOT}/s09-evidence" \
   "$(step_command s09-debug-hardware)" \

@@ -40,9 +40,9 @@ use crate::generation;
 use crate::project::{PinnedDirectory, is_synthetic_dot_entry};
 
 pub(crate) const RUNNER_CONTEXT_VERSION: &str = "3";
-#[cfg(feature = "worker-v2-fault-injection-test-only")]
+#[cfg(feature = "application-handoff-fault-injection-test-only")]
 pub(crate) const RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION: &str = "3-test-short-timeouts";
-#[cfg(feature = "worker-v2-fault-injection-test-only")]
+#[cfg(feature = "application-handoff-fault-injection-test-only")]
 pub(crate) const RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION: &str = "3-test-scheduler-tolerant";
 #[cfg(feature = "application-handoff-adversarial-fixture")]
 pub(crate) const RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION: &str = "3-test-fast-failures";
@@ -63,16 +63,16 @@ const MAX_PENDING_APPLICATION_REAPS: usize = 8;
 const REAPER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 // V3 performs durable recovery and semantic admission before acknowledging the transfer.
 const WORKER_V3_PRODUCTION_ACK_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+#[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
-#[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+#[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 const TEST_ACK_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ApplicationTimeouts {
     ack: Duration,
     cleanup: Duration,
-    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
     wait_for_test_ready: bool,
 }
 
@@ -80,7 +80,7 @@ impl ApplicationTimeouts {
     pub(crate) const PRODUCTION: Self = Self {
         ack: Duration::from_secs(5),
         cleanup: Duration::from_secs(2),
-        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         wait_for_test_ready: false,
     };
 
@@ -91,14 +91,14 @@ impl ApplicationTimeouts {
         self
     }
 
-    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
     pub(crate) const TEST_SHORT: Self = Self {
         ack: Duration::from_secs(2),
         cleanup: Duration::from_millis(500),
         wait_for_test_ready: true,
     };
 
-    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
     pub(crate) const TEST_SCHEDULER_TOLERANT: Self = Self {
         ack: Duration::from_secs(30),
         cleanup: Duration::from_secs(5),
@@ -109,7 +109,7 @@ impl ApplicationTimeouts {
     pub(crate) const TEST_FAST_FAILURES: Self = Self {
         ack: Duration::from_secs(2),
         cleanup: Duration::from_millis(500),
-        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         wait_for_test_ready: false,
     };
 }
@@ -748,7 +748,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let reaper = application_reaper().reserve()?;
         ensure_child_subreaper()?;
         let (ack_read, ack_write) = cloexec_pipe()?;
-        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         let (test_ready_read, test_ready_write) = if timeouts.wait_for_test_ready {
             let (read, write) = cloexec_pipe()?;
             command.env(TEST_ACK_READY_FD_ENV, write.as_raw_fd().to_string());
@@ -760,7 +760,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let envelope_fd = self.file.as_raw_fd();
         let artifact_directory_fd = self.artifact_directory_file.as_raw_fd();
         let ack_fd = ack_write.as_raw_fd();
-        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         let test_ready_fd = test_ready_write.as_ref().map(AsRawFd::as_raw_fd);
         let expected = self.snapshot;
         let directory_stat = fstat(&self.artifact_directory_file)
@@ -866,7 +866,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
                 {
                     return Err(io::Error::from_raw_os_error(libc::ESTALE));
                 }
-                #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+                #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
                 if let Some(test_ready_fd) = test_ready_fd {
                     let test_ready = BorrowedFd::borrow_raw(test_ready_fd);
                     let flags = rustix::io::fcntl_getfd(test_ready).map_err(io::Error::from)?;
@@ -892,9 +892,9 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
             sandbox: Some(sandbox),
             reaper: Some(reaper),
             timeouts,
-            #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+            #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
             test_ready_read,
-            #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+            #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
             test_ready_parent_write: test_ready_write,
         })
     }
@@ -1019,9 +1019,9 @@ pub(crate) struct PendingApplicationAck {
     sandbox: Option<PendingApplicationSandbox>,
     reaper: Option<ReaperReservation>,
     timeouts: ApplicationTimeouts,
-    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
     test_ready_read: Option<File>,
-    #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+    #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
     test_ready_parent_write: Option<File>,
 }
 
@@ -1050,7 +1050,7 @@ impl PendingApplicationAck {
         child: &mut Child,
     ) -> Result<ApplicationHandoffGuard, ApplicationHandoffFailure> {
         drop(self.parent_write.take());
-        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         drop(self.test_ready_parent_write.take());
         let sandbox = match self
             .sandbox
@@ -1064,7 +1064,7 @@ impl PendingApplicationAck {
                 return Err(self.failure(message, Some(sandbox)));
             }
         };
-        #[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+        #[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
         if let Some(mut ready) = self.test_ready_read.take()
             && let Err(message) = read_test_ack_ready(&mut ready)
         {
@@ -1145,7 +1145,7 @@ fn read_application_handoff_ack(
     Ok(bytes)
 }
 
-#[cfg(any(test, feature = "worker-v2-fault-injection-test-only"))]
+#[cfg(any(test, feature = "application-handoff-fault-injection-test-only"))]
 fn read_test_ack_ready(read: &mut File) -> Result<(), String> {
     let deadline = Instant::now()
         .checked_add(TEST_ACK_STARTUP_TIMEOUT)

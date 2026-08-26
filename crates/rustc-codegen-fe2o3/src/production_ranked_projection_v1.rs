@@ -554,37 +554,30 @@ impl std::error::Error for ProductionRankedVerificationErrorV1 {
 }
 
 impl ProductionRankedSemanticProgramV1 {
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn ranked_ir(&self) -> &str {
         self.receipt.ranked_ir()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn function_name(&self) -> &str {
         self.receipt.lowering().kernel().function_name()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn semantic_function_count(&self) -> usize {
         self.receipt.semantic().semantic().functions().len()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn semantic_callable_count(&self) -> usize {
         self.receipt.semantic().semantic().callables().len()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn bounds_are_clean(&self) -> bool {
         self.receipt.lowering().bounds_report().is_clean()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn all_kernel_checks_are_clean(&self) -> bool {
         self.receipt.lowering().all_mandatory_reports_are_clean()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
@@ -3303,8 +3296,8 @@ fn merge_capability_states_v1(
     let mut changed = false;
     for (&key, existing) in current.iter_mut() {
         let merged = match incoming.get(&key).copied() {
-            Some(candidate) if *existing == candidate => *existing,
-            Some(_) | None => ProjectedCapabilityValueV1::Invalid,
+            Some(candidate) => merge_capability_values_v1(*existing, candidate),
+            None => ProjectedCapabilityValueV1::Invalid,
         };
         if *existing != merged {
             *existing = merged;
@@ -3322,6 +3315,47 @@ fn merge_capability_states_v1(
         }
     }
     Ok(changed)
+}
+
+fn merge_capability_values_v1(
+    current: ProjectedCapabilityValueV1,
+    incoming: ProjectedCapabilityValueV1,
+) -> ProjectedCapabilityValueV1 {
+    if current == incoming {
+        return current;
+    }
+    let (
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(current)),
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(incoming)),
+    ) = (current, incoming)
+    else {
+        return ProjectedCapabilityValueV1::Invalid;
+    };
+    if current.contract != incoming.contract
+        || current.lane_root != incoming.lane_root
+        || current.value_root != incoming.value_root
+    {
+        return ProjectedCapabilityValueV1::Invalid;
+    }
+
+    // A loop-carried accumulator joins its authenticated zero initializer with
+    // the static MFMA site that feeds the backedge. Retain that site as the
+    // layout producer while the stable value root continues to identify the
+    // initialized semantic value. Two distinct non-initial producers remain an
+    // ambiguous join and fail closed.
+    let flow_root = if current.flow_root == current.value_root {
+        incoming.flow_root
+    } else if incoming.flow_root == incoming.value_root {
+        current.flow_root
+    } else {
+        return ProjectedCapabilityValueV1::Invalid;
+    };
+    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+        ProjectedMfmaAccumulatorV1 {
+            flow_root,
+            ..current
+        },
+    ))
 }
 
 fn try_clone_capability_state_v1(
@@ -8925,15 +8959,12 @@ fn format_ranked_cfg(
             .map(|argument| format!("%bb{block_index}_arg{argument}: index"))
             .collect::<Vec<_>>()
             .join(", ");
-        push_ranked_ir(
-            &mut output,
-            &format!(
-                "^bb{block_index}{}:\n",
-                (!arguments.is_empty())
-                    .then(|| format!("({arguments})"))
-                    .unwrap_or_default()
-            ),
-        )?;
+        let arguments = if arguments.is_empty() {
+            String::new()
+        } else {
+            format!("({arguments})")
+        };
+        push_ranked_ir(&mut output, &format!("^bb{block_index}{arguments}:\n"))?;
         for operation in block.operations() {
             push_ranked_ir(&mut output, &format_ranked_operation(operation))?;
         }
@@ -14839,6 +14870,40 @@ mod tests {
             "layout flow must not rewrite the semantic loop-carried value root",
         );
         assert!(tensor_site_binding_v1(authenticated, 40, 0).is_none());
+    }
+
+    #[test]
+    fn accumulator_join_preserves_one_authenticated_loop_carried_producer() {
+        let accumulator = |value_root, flow_root| {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                ProjectedMfmaAccumulatorV1 {
+                    contract: mfma_accumulator_contract(),
+                    lane_root: 20,
+                    value_root,
+                    flow_root,
+                },
+            ))
+        };
+        let initialized = accumulator(30, 30);
+        let loop_result = accumulator(30, 40);
+        for (current, incoming) in [(initialized, loop_result), (loop_result, initialized)] {
+            assert_eq!(
+                merge_capability_values_v1(current, incoming),
+                loop_result,
+                "the join must be deterministic regardless of predecessor order",
+            );
+        }
+
+        assert_eq!(
+            merge_capability_values_v1(accumulator(30, 40), accumulator(30, 50)),
+            ProjectedCapabilityValueV1::Invalid,
+            "two competing non-initial producers are not one loop recurrence",
+        );
+        assert_eq!(
+            merge_capability_values_v1(initialized, accumulator(31, 40)),
+            ProjectedCapabilityValueV1::Invalid,
+            "a changed stable semantic value root must fail closed",
+        );
     }
 
     #[test]

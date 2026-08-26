@@ -41,7 +41,8 @@ use pliron::{
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{
-    KernelCheckPassKindV1, KernelCheckStatusV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
+    KernelCheckPassKindV1, KernelCheckStatusV1, PlironPresburgerAnalysisV1,
+    PresburgerRangeDecisionV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
 };
 
 pub const MAX_RANKED_BOUNDS_BLOCKS: usize = 1_024;
@@ -86,6 +87,16 @@ pub enum RankedBoundsFindingV1 {
         index: u64,
         extent: u64,
     },
+    PresburgerOutOfBounds {
+        block: usize,
+        operation: usize,
+        access: AccessKindAttr,
+        view: String,
+        dimension: usize,
+        invocation: Vec<i128>,
+        index: i128,
+        extent: u64,
+    },
     UnprovedBound {
         block: usize,
         operation: usize,
@@ -100,7 +111,9 @@ pub enum RankedBoundsFindingV1 {
 impl RankedBoundsFindingV1 {
     pub const fn status(&self) -> KernelCheckStatusV1 {
         match self {
-            Self::StaticOutOfBounds { .. } => KernelCheckStatusV1::Rejected,
+            Self::StaticOutOfBounds { .. } | Self::PresburgerOutOfBounds { .. } => {
+                KernelCheckStatusV1::Rejected
+            }
             Self::StructuralVerificationFailed
             | Self::ResourceLimitExceeded { .. }
             | Self::UnreachableBlock { .. }
@@ -157,6 +170,19 @@ impl fmt::Display for RankedBoundsFindingV1 {
             } => write!(
                 formatter,
                 "error[FE2O3-BOUNDS-001]: statically out-of-bounds {access:?} at block {block} op {operation}; access: {view} dimension {dimension}; required: {index} < {extent}",
+            ),
+            Self::PresburgerOutOfBounds {
+                block,
+                operation,
+                access,
+                view,
+                dimension,
+                invocation,
+                index,
+                extent,
+            } => write!(
+                formatter,
+                "error[FE2O3-BOUNDS-004]: affine {access:?} is out of bounds at block {block} op {operation}; access: {view} dimension {dimension}; counterexample invocation {invocation:?} computes index {index}, violating {index} < {extent}; help: guard the access with the failed relation or reduce the launch domain",
             ),
             Self::UnprovedBound {
                 block,
@@ -693,7 +719,14 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     }
 
     analyses.prepare_sparse_indices(context, function);
+    analyses.prepare_presburger(context, function);
     let sparse_indices = match analyses.sparse_indices() {
+        Ok(analysis) => analysis,
+        Err(failure) => {
+            return finding_failure(sparse_index_failure(failure));
+        }
+    };
+    let presburger = match analyses.presburger() {
         Ok(analysis) => analysis,
         Err(failure) => {
             return finding_failure(sparse_index_failure(failure));
@@ -887,6 +920,7 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
                         fact_indices: &fact_indices,
                         context,
                         sparse_indices,
+                        presburger,
                         findings: &mut findings,
                         budget: &mut budget,
                     },
@@ -976,6 +1010,19 @@ mod status_tests {
         }
     }
 
+    fn presburger_out_of_bounds() -> RankedBoundsFindingV1 {
+        RankedBoundsFindingV1::PresburgerOutOfBounds {
+            block: 0,
+            operation: 0,
+            access: AccessKindAttr::Write,
+            view: "v0".to_owned(),
+            dimension: 0,
+            invocation: vec![3],
+            index: 7,
+            extent: 7,
+        }
+    }
+
     #[test]
     fn every_bounds_finding_has_the_shared_status() {
         let incomplete = [
@@ -1003,10 +1050,9 @@ mod status_tests {
         for finding in incomplete {
             assert_eq!(finding.status(), KernelCheckStatusV1::Incomplete);
         }
-        assert_eq!(
-            static_out_of_bounds().status(),
-            KernelCheckStatusV1::Rejected
-        );
+        for finding in [static_out_of_bounds(), presburger_out_of_bounds()] {
+            assert_eq!(finding.status(), KernelCheckStatusV1::Rejected);
+        }
     }
 
     #[test]
@@ -1083,6 +1129,7 @@ struct AccessCheck<'a> {
     fact_indices: &'a HashMap<LessThanFact, usize>,
     context: &'a Context,
     sparse_indices: &'a SparseIndexAnalysisV1,
+    presburger: &'a PlironPresburgerAnalysisV1,
     findings: &'a mut Vec<RankedBoundsFindingV1>,
     budget: &'a mut RankedBoundsBudget,
 }
@@ -1119,6 +1166,11 @@ fn verify_access(
         {
             continue;
         }
+        let static_extent = match extent_expr {
+            IndexExpr::Constant(extent) => Some(extent),
+            IndexExpr::Value(value) => check.sparse_indices.fact(value).constant_value(),
+            IndexExpr::Dimension { .. } => None,
+        };
         match (index_expr, extent_expr) {
             (IndexExpr::Constant(index), IndexExpr::Constant(extent)) => {
                 push_finding(
@@ -1135,19 +1187,49 @@ fn verify_access(
                     },
                 )?;
             }
-            _ => push_finding(
-                check.findings,
-                check.budget,
-                RankedBoundsFindingV1::UnprovedBound {
-                    block,
-                    operation,
-                    access: access_kind,
-                    view: view_name.clone(),
-                    dimension,
-                    index: index_expr.describe(check.context),
-                    extent: extent_expr.describe(check.context),
-                },
-            )?,
+            _ => {
+                let presburger_decision = static_extent.and_then(|extent| {
+                    check
+                        .presburger
+                        .map_for_facts(&[check.sparse_indices.fact(index).clone()])
+                        .ok()
+                        .map(|map| (extent, map.find_out_of_bounds(&[extent])))
+                });
+                match presburger_decision {
+                    Some((_, PresburgerRangeDecisionV1::Proved)) => continue,
+                    Some((extent, PresburgerRangeDecisionV1::Counterexample { domain, range }))
+                        if block == 0 =>
+                    {
+                        push_finding(
+                            check.findings,
+                            check.budget,
+                            RankedBoundsFindingV1::PresburgerOutOfBounds {
+                                block,
+                                operation,
+                                access: access_kind,
+                                view: view_name.clone(),
+                                dimension,
+                                invocation: domain,
+                                index: range[0],
+                                extent,
+                            },
+                        )?;
+                    }
+                    _ => push_finding(
+                        check.findings,
+                        check.budget,
+                        RankedBoundsFindingV1::UnprovedBound {
+                            block,
+                            operation,
+                            access: access_kind,
+                            view: view_name.clone(),
+                            dimension,
+                            index: index_expr.describe(check.context),
+                            extent: extent_expr.describe(check.context),
+                        },
+                    )?,
+                }
+            }
         }
     }
     Ok(())

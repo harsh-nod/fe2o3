@@ -24,16 +24,6 @@ const PROTOCOL_HEADER_BYTES: usize = 8 + 32 + 1 + 1 + 4 + 4;
 const MAX_PROTOCOL_MESSAGE_BYTES: usize = 64 * 1024;
 
 pub(crate) fn run_frontend(args: &[std::ffi::OsString]) -> Result<ExitStatus, String> {
-    run_frontend_with_supervisor_arg(args, INTERNAL_SUPERVISOR_ARG)
-}
-
-pub(crate) fn run_frontend_with_supervisor_arg(
-    args: &[std::ffi::OsString],
-    supervisor_arg: &str,
-) -> Result<ExitStatus, String> {
-    if supervisor_arg.is_empty() {
-        return Err("application supervisor entry argument may not be empty".to_owned());
-    }
     let admission = SupervisorAdmission::acquire()?;
     let (mut frontend, supervisor_channel) = UnixStream::pair()
         .map_err(|error| format!("create application supervisor channel: {error}"))?;
@@ -46,7 +36,7 @@ pub(crate) fn run_frontend_with_supervisor_arg(
     let slot_fd = admission.file.as_raw_fd();
     let mut command = Command::new(executable);
     command
-        .arg(supervisor_arg)
+        .arg(INTERNAL_SUPERVISOR_ARG)
         .arg(channel_fd.to_string())
         .arg(slot_fd.to_string())
         .arg(hex_encode(&challenge))

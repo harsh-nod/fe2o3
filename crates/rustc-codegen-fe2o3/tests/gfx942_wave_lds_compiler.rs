@@ -57,7 +57,7 @@ impl Drop for WorkerV2MissingEnvelope {
 
 fn backend_build(workspace: &Path, target: &str) -> Output {
     let config = WorkerV2MissingEnvelope::new(workspace);
-    let mut command = cargo_fe2o3::qualification_command(workspace);
+    let mut command = cargo_fe2o3::non_production_command(workspace);
     command
         .current_dir(workspace)
         .args([

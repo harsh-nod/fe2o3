@@ -35,7 +35,7 @@ fn cargo_target_directory(workspace: &Path) -> PathBuf {
 }
 
 fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -> Output {
-    let mut command = cargo_fe2o3::qualification_command(workspace);
+    let mut command = cargo_fe2o3::non_production_command(workspace);
     command
         .current_dir(workspace)
         .args([
@@ -58,7 +58,7 @@ fn genuine_build(workspace: &Path, target: &str, retained_llvm: Option<&Path>) -
 fn provider_impostor_build(workspace: &Path, package: &str, managed_target: &Path) -> Output {
     let fixture =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-provider-impostor");
-    cargo_fe2o3::qualification_command(workspace)
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(fixture.join("Cargo.toml"))

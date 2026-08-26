@@ -44,6 +44,38 @@ fn production_configuration_has_no_compatibility_type_alias() {
 }
 
 #[test]
+fn cargo_package_has_no_worker_v2_compiler_surface() {
+    let manifest = include_str!("../Cargo.toml");
+    for rejected in [
+        "qualification-oracles-test-only",
+        "worker-v2-fault-injection-test-only",
+        "fe2o3-worker-v2-bundle",
+        "cargo-fe2o3-worker-v2-fixture",
+        "cargo-fe2o3-envelope-input-fixture",
+    ] {
+        assert!(
+            !manifest.contains(rejected),
+            "Cargo package still exposes retired compiler surface {rejected}"
+        );
+    }
+    assert!(manifest.contains("application-handoff-fault-injection-test-only"));
+    assert!(manifest.contains("worker-v3-envelope-integration-test-only"));
+
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for retired in [
+        "src/worker_v2_artifact_container.rs",
+        "src/worker_v2_envelope_mode.rs",
+        "src/worker_v2_restart.rs",
+        "tests/worker_v2_vertical_slice.rs",
+    ] {
+        assert!(
+            !package.join(retired).exists(),
+            "retired Cargo compiler implementation remains at {retired}"
+        );
+    }
+}
+
+#[test]
 fn unit_test_configuration_cannot_select_qualification_code() {
     for (name, source) in [
         ("main", include_str!("../src/main.rs")),
@@ -97,9 +129,9 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .split("fn prepare_production_managed_attempt(")
         .nth(1)
         .expect("direct production preparation exists")
-        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\nfn prepare_managed_attempt(")
+        .split("fn complete_managed_attempt(")
         .next()
-        .expect("qualification preparation follows production preparation");
+        .expect("production completion follows production preparation");
     for rejected in [
         "PreparedManagedWork",
         "ManagedQualificationWork",
@@ -121,9 +153,9 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .split("fn complete_managed_attempt_inner(")
         .nth(1)
         .expect("direct production completion exists")
-        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\nfn complete_managed_attempt_inner(")
+        .split("fn complete_managed_production_build(")
         .next()
-        .expect("qualification completion follows production completion");
+        .expect("production build completion follows transaction dispatch");
     assert!(!completion.contains("finish_build_attempt"));
     assert!(!completion.contains("qualification_work"));
     assert!(completion.contains("managed.production_build"));
@@ -134,9 +166,9 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .split("fn materialize_production_child_environment(")
         .nth(1)
         .expect("direct production child environment exists")
-        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\nfn materialize_reviewed_child_environment(")
+        .split("fn materialize_closed_child_environment(")
         .next()
-        .expect("qualification child environment follows production environment");
+        .expect("closed child environment follows production selection");
     assert!(!environment.contains("GeneralGemm"));
     assert!(!environment.contains("WorkerV2"));
     assert!(!environment.contains("qualification"));
@@ -150,27 +182,21 @@ fn production_capability_intake_releases_oracle_authority_immediately() {
         .split("fn from_production_environment(")
         .nth(1)
         .expect("direct production capability intake exists")
-        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\n    fn from_qualification_environment(")
+        .split("fn output_dir(&self)")
         .next()
-        .expect("qualification capability intake follows production intake");
+        .expect("production capability API follows capability intake");
     assert!(intake.contains(".invocation_authority"));
     assert!(intake.contains(".release()"));
     assert!(!intake.contains("ROW_SOFTMAX"));
     assert!(!intake.contains("FE2O3_QUALIFICATION"));
     assert!(!intake.contains("Some(invocation_authority)"));
 
-    assert!(source.contains(
-        "#[cfg(feature = \"qualification-oracles-test-only\")]\n    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>"
-    ));
-    assert!(broker.contains(
-        "Ordinary,\n        #[cfg(feature = \"qualification-oracles-test-only\")]\n        S09,"
-    ));
-    assert!(broker.contains(
-        "#[cfg(feature = \"qualification-oracles-test-only\")]\n        pub(crate) fn inherit_for_child("
-    ));
-    assert!(broker.contains(
-        "#[cfg(feature = \"qualification-oracles-test-only\")]\n        pinned_cargo_image: File,"
-    ));
+    assert!(!source.contains("from_qualification_environment"));
+    assert!(!source.contains("ManagedQualificationWork"));
+    assert!(!source.contains("PreparedBuildConfig"));
+    assert!(!broker.contains("S09"));
+    assert!(!broker.contains("fn inherit_for_child("));
+    assert!(!broker.contains("pinned_cargo_image: File"));
 }
 
 #[test]

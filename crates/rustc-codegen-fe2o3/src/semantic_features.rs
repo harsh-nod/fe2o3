@@ -23,53 +23,6 @@ pub(crate) enum SessionRecognizedSemanticItem {
     ),
     #[cfg(feature = "qualification-oracles-test-only")]
     MoeTop2CompilerIntrinsic(crate::collected_moe_top2_v1::MoeTop2CompilerIntrinsicV1),
-    #[cfg(feature = "qualification-oracles-test-only")]
-    WorkgroupSyncCompilerIntrinsic(WorkgroupSyncCompilerIntrinsicV1),
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg(feature = "qualification-oracles-test-only")]
-pub(crate) enum WorkgroupSyncCompilerIntrinsicV1 {
-    ThreadIdxX,
-    ThreadIdxY,
-    ThreadIdxZ,
-    BlockIdxX,
-    BlockIdxY,
-    BlockIdxZ,
-    BlockDimX,
-    BlockDimY,
-    BlockDimZ,
-    LaunchExtent1d,
-    ScratchFromDynamicLds,
-    ColdPath,
-    AtomicXadd,
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-impl WorkgroupSyncCompilerIntrinsicV1 {
-    pub(crate) const fn canonical_path(self) -> &'static str {
-        match self {
-            Self::ThreadIdxX => "fe2o3_device::thread::thread_idx_x",
-            Self::ThreadIdxY => "fe2o3_device::thread::thread_idx_y",
-            Self::ThreadIdxZ => "fe2o3_device::thread::thread_idx_z",
-            Self::BlockIdxX => "fe2o3_device::thread::block_idx_x",
-            Self::BlockIdxY => "fe2o3_device::thread::block_idx_y",
-            Self::BlockIdxZ => "fe2o3_device::thread::block_idx_z",
-            Self::BlockDimX => "fe2o3_device::thread::block_dim_x",
-            Self::BlockDimY => "fe2o3_device::thread::block_dim_y",
-            Self::BlockDimZ => "fe2o3_device::thread::block_dim_z",
-            Self::LaunchExtent1d => "fe2o3_device::thread::launch_extent_1d",
-            Self::ScratchFromDynamicLds => {
-                "fe2o3_device::WorkgroupCollectiveScratch::from_dynamic_lds"
-            }
-            Self::ColdPath => "core::intrinsics::cold_path",
-            Self::AtomicXadd => "core::intrinsics::atomic_xadd",
-        }
-    }
-
-    pub(crate) const fn is_rustc_intrinsic(self) -> bool {
-        matches!(self, Self::ColdPath | Self::AtomicXadd)
-    }
 }
 
 impl SessionRecognizedSemanticItem {
@@ -80,8 +33,6 @@ impl SessionRecognizedSemanticItem {
             Self::FlashAttentionCompilerIntrinsic(item) => item.canonical_path(),
             #[cfg(feature = "qualification-oracles-test-only")]
             Self::MoeTop2CompilerIntrinsic(item) => item.canonical_path(),
-            #[cfg(feature = "qualification-oracles-test-only")]
-            Self::WorkgroupSyncCompilerIntrinsic(item) => item.canonical_path(),
         }
     }
 
@@ -89,9 +40,7 @@ impl SessionRecognizedSemanticItem {
         match self {
             Self::TrustedDevice(item) => Some(item),
             #[cfg(feature = "qualification-oracles-test-only")]
-            Self::FlashAttentionCompilerIntrinsic(_)
-            | Self::MoeTop2CompilerIntrinsic(_)
-            | Self::WorkgroupSyncCompilerIntrinsic(_) => None,
+            Self::FlashAttentionCompilerIntrinsic(_) | Self::MoeTop2CompilerIntrinsic(_) => None,
         }
     }
 
@@ -116,12 +65,7 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<SessionRecogniz
             crate::collected_moe_top2_v1::classify_exact_moe_top2_compiler_intrinsic(tcx, def_id)
                 .map(SessionRecognizedSemanticItem::MoeTop2CompilerIntrinsic)
         })
-        .or_else(|| {
-            crate::collected_workgroup_sync_v1::classify_exact_workgroup_sync_compiler_intrinsic(
-                tcx, def_id,
-            )
-            .map(SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic)
-        });
+        ;
     }
     #[cfg(not(feature = "qualification-oracles-test-only"))]
     trusted
@@ -165,24 +109,6 @@ mod tests {
                     crate::collected_moe_top2_v1::MoeTop2CompilerIntrinsicV1::FabsF32,
                 ),
                 "core::intrinsics::fabs::<f32>",
-            ),
-            (
-                SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
-                    super::WorkgroupSyncCompilerIntrinsicV1::ThreadIdxX,
-                ),
-                "fe2o3_device::thread::thread_idx_x",
-            ),
-            (
-                SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
-                    super::WorkgroupSyncCompilerIntrinsicV1::ColdPath,
-                ),
-                "core::intrinsics::cold_path",
-            ),
-            (
-                SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
-                    super::WorkgroupSyncCompilerIntrinsicV1::AtomicXadd,
-                ),
-                "core::intrinsics::atomic_xadd",
             ),
         ];
         for (recognized, expected_path) in compiler_only {

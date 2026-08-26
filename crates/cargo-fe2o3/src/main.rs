@@ -7,6 +7,7 @@ mod authorized_kernel_closure;
 mod binding_check_projection;
 mod binding_check_wrapper;
 mod binding_wrapper;
+mod build_config;
 mod capability_broker;
 mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
@@ -31,13 +32,6 @@ mod pinned_executable;
 mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod production_release_no_hardware;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod qualification_harness;
-#[cfg(feature = "qualification-oracles-test-only")]
-use production_release_no_hardware as production_release;
-mod build_config;
 mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
@@ -46,12 +40,6 @@ mod tool_commands;
 #[allow(dead_code)]
 #[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
 mod verification_certificate;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod worker_v2_artifact_container;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod worker_v2_envelope_mode;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod worker_v2_restart;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -142,27 +130,6 @@ const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
 
 fn main() -> ExitCode {
     let raw_args = env::args_os().skip(1).collect::<Vec<_>>();
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if raw_args
-        .first()
-        .is_some_and(|argument| argument == qualification_harness::INTERNAL_COMMAND_ARG)
-    {
-        return qualification_harness::command(&raw_args[1..]);
-    }
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if raw_args
-        .first()
-        .is_some_and(|argument| argument == qualification_harness::INTERNAL_RUNNER_ARG)
-    {
-        return qualification_harness::run_application_frontend(&raw_args[1..]);
-    }
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if raw_args
-        .first()
-        .is_some_and(|argument| argument == qualification_harness::INTERNAL_SUPERVISOR_ARG)
-    {
-        return qualification_harness::run_application_supervisor(&raw_args[1..]);
-    }
     if raw_args
         .first()
         .is_some_and(|argument| argument == authority_release::INTERNAL_CHILD_ARG)
@@ -2263,11 +2230,11 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         Some(application_handoff::RUNNER_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::PRODUCTION
         }
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        #[cfg(feature = "application-handoff-fault-injection-test-only")]
         Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::TEST_SHORT
         }
-        #[cfg(feature = "worker-v2-fault-injection-test-only")]
+        #[cfg(feature = "application-handoff-fault-injection-test-only")]
         Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => {
             application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT
         }
@@ -3436,7 +3403,7 @@ fn print_help() {
     );
 }
 
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 mod tests {
     use super::{
         BindingHostMode, TARGET_ENV, aggregate_post_spawn_results, binding_host_target_key,

@@ -1,6 +1,7 @@
-use std::env;
+#[cfg(test)]
 use std::ffi::OsStr;
 
+#[cfg(test)]
 use crate::amdgpu_llvm;
 
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -8,6 +9,7 @@ const SIMULATION_ORACLE_NAME_V1: &str = "simulation-v1";
 
 /// Rustc-process evidence required by production or a qualification oracle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) enum RustcInvocationPolicy {
     /// Publication-capable compilation requires the sealed V3 descriptor.
     ProtectedV3,
@@ -38,13 +40,12 @@ pub(crate) enum QualificationOracle {
     CollectedScalarGemmV1,
     CollectedTiledGemmV1,
     CollectedWave64CollectivesV1,
-    CollectedLdsReductionV1,
-    CollectedScopedAtomicV1,
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
 impl QualificationOracle {
-    pub(crate) const ALL: [Self; 13] = [
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 11] = [
         Self::SimulationV1,
         Self::KernelIrV1,
         Self::KernelIrWorkerV2,
@@ -56,8 +57,6 @@ impl QualificationOracle {
         Self::CollectedScalarGemmV1,
         Self::CollectedTiledGemmV1,
         Self::CollectedWave64CollectivesV1,
-        Self::CollectedLdsReductionV1,
-        Self::CollectedScopedAtomicV1,
     ];
 
     pub(crate) const fn oracle_name(self) -> &'static str {
@@ -89,15 +88,10 @@ impl QualificationOracle {
             Self::CollectedWave64CollectivesV1 => {
                 crate::collected_wave64_collectives_v1::COLLECTED_WAVE64_COLLECTIVES_PIPELINE_V1
             }
-            Self::CollectedLdsReductionV1 => {
-                crate::collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1
-            }
-            Self::CollectedScopedAtomicV1 => {
-                crate::collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1
-            }
         }
     }
 
+    #[cfg(test)]
     const fn rustc_invocation_policy(
         self,
         explicit_unprotected_qualification: bool,
@@ -119,9 +113,7 @@ impl QualificationOracle {
             | Self::CollectedMoeTop2V1
             | Self::CollectedScalarGemmV1
             | Self::CollectedTiledGemmV1
-            | Self::CollectedWave64CollectivesV1
-            | Self::CollectedLdsReductionV1
-            | Self::CollectedScopedAtomicV1 => {
+            | Self::CollectedWave64CollectivesV1 => {
                 if explicit_unprotected_qualification {
                     RustcInvocationPolicy::QualificationObserved
                 } else {
@@ -157,6 +149,7 @@ impl SelectedQualificationOracle {
         )
     }
 
+    #[cfg(test)]
     pub(crate) const fn rustc_invocation_policy(
         self,
         explicit_unprotected_qualification: bool,
@@ -166,6 +159,7 @@ impl SelectedQualificationOracle {
     }
 }
 
+#[cfg(test)]
 pub(crate) const fn rustc_invocation_policy(
     qualification: Option<SelectedQualificationOracle>,
     explicit_unprotected_qualification: bool,
@@ -197,6 +191,7 @@ pub(crate) fn validate_device_transaction(
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) enum QualificationSelection {
     #[default]
     NoOracle,
@@ -205,14 +200,8 @@ pub(crate) enum QualificationSelection {
     Invalid(String),
 }
 
+#[cfg(test)]
 impl QualificationSelection {
-    pub(crate) fn from_env() -> Self {
-        Self::from_values(
-            env::var_os(crate::OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref(),
-            env::var_os(crate::QUALIFICATION_ORACLE_ENV).as_deref(),
-        )
-    }
-
     pub(crate) fn from_values(
         obsolete_pipeline: Option<&OsStr>,
         qualification_oracle: Option<&OsStr>,

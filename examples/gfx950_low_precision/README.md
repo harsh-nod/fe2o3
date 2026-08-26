@@ -38,9 +38,23 @@ not `gfx950`.
 
 ## Validation evidence
 
-On 2026-08-26, `./build_and_test.sh --compile-only` passed through SSH host
-alias `mi350-2` (remote hostname `splinter-ctr-bj78-04`) with ROCm 6.4.1,
-HIP 6.4.43483, and AMD Clang 19.0.0git. Symbol-scoped disassembly reported:
+On 2026-08-26, the complete `./build_and_test.sh` path passed through SSH host
+alias `mi350` (remote hostname `smci350-rck-g03-b19-03`) with ROCm 7.2.1,
+HIP 7.2.53211, AMD Clang 22.0.0git, and an AMD Instinct MI350X reported as
+`gfx950`. All four deterministic CPU-oracle comparisons passed exactly:
+
+```text
+PASS FP4 GEMM       max_error=0
+PASS FP8 GEMM       max_error=0
+PASS FP4 attention  max_error=0
+PASS FP8 attention  max_error=0
+```
+
+The tested HIP source SHA-256 was
+`85309f8c20159293883c996830e8aa60fe8b1cce8e783bcf8d638cd07a3d9c81`.
+The resulting gfx950 HSACO SHA-256 for the retained final run was
+`f0fb73acb365b40fe08b7f534d4cada2bfa0559cdbfc1f37a991634ffdeeb096`.
+Symbol-scoped disassembly reported:
 
 | Kernel | Required gfx950 instructions |
 | --- | --- |
@@ -49,7 +63,6 @@ HIP 6.4.43483, and AMD Clang 19.0.0git. Symbol-scoped disassembly reported:
 | `gfx950_fp4_flash_attention` | FP4 MFMA above plus two `ds_read_b64_tr_b4` |
 | `gfx950_fp8_flash_attention` | FP8 MFMA above plus four `ds_read_b64_tr_b8` |
 
-The remote runtime exposed only `AMD Radeon Graphics (gfx1036)`, despite the
-host alias. The executable correctly refused that device. Therefore the CPU
-reference harness and GPU kernels were compiled and the gfx950 artifacts were
-validated, but numerical GPU execution was not possible in that environment.
+An earlier compile-only run on SSH host `mi350-2` used ROCm 6.4.1 and produced
+the same required instruction families, but that host exposed only
+`AMD Radeon Graphics (gfx1036)`. The executable correctly refused that device.

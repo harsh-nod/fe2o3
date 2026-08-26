@@ -20,7 +20,7 @@ fn workspace() -> PathBuf {
 }
 
 fn backend_build(workspace: &Path, target: &str) -> Output {
-    cargo_fe2o3::qualification_command(workspace)
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
         .args(["build", "-p", "fe2o3-half-math-compiler-fixture"])
         .env("FE2O3_TARGET", target)

@@ -53,6 +53,8 @@ fn safe_dynamic_matrix_kernel_uses_the_single_production_pipeline() {
         )
         .env("FE2O3_EXTRACT_CRATE_BINDING_PATH_V1", &binding_path)
         .env("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1", &llvm_path)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env(
             "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
             "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",

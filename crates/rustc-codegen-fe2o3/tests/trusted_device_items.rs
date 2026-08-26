@@ -85,7 +85,7 @@ fn backend_build(workspace: &Path, package: &str) -> Output {
 }
 
 fn backend_build_with_args(workspace: &Path, package: &str, args: &[&str]) -> Output {
-    let mut command = cargo_fe2o3::qualification_command(workspace);
+    let mut command = cargo_fe2o3::non_production_command(workspace);
     command
         .current_dir(workspace)
         .args(["build", "-p", package])
@@ -320,7 +320,7 @@ fn general_v3_rejects_local_disjoint_slice_and_index1d_lookalikes() {
         worker_bytes.len(),
     );
     std::fs::write(&config, json).expect("write spoof probe Worker V2 config");
-    let mut command = cargo_fe2o3::qualification_command(&workspace);
+    let mut command = cargo_fe2o3::non_production_command(&workspace);
     command
         .current_dir(&workspace)
         .args([

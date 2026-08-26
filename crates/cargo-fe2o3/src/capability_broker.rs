@@ -3,9 +3,9 @@
 //! Cargo receives a strict per-instance route and build-session binding. Both peers check Linux
 //! credentials, exact executable identity, the prepared profile/config identity, and a
 //! challenge-response bound to a separate 256-bit broker secret before transferring a
-//! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`. The
-//! explicit S09 profile additionally receives an observed pinned Cargo image. A protected release
-//! also receives one sealed descriptor carrying the complete admitted compiler-closure preimage.
+//! sealed backend image and a read-only artifact-directory descriptor with `SCM_RIGHTS`. A
+//! protected release also receives one sealed descriptor carrying the complete admitted
+//! compiler-closure preimage.
 //! Receivers validate the exact profile-specific descriptor count and positional types before
 //! installing capabilities in the caller-selected compiler process for a compile-shaped wrapper
 //! invocation.
@@ -28,27 +28,19 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     use std::collections::BTreeMap;
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    use std::fs::OpenOptions;
     use std::fs::{self, File};
     use std::io::{self, IoSlice, IoSliceMut, Read, Write};
     use std::mem::MaybeUninit;
     use std::net::Shutdown;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    use std::os::fd::IntoRawFd;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
     use std::path::PathBuf;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    use std::process::Command;
     use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
-    #[cfg(feature = "qualification-oracles-test-only")]
-    use fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1;
     use fe2o3_artifact_transaction::{
         BROKERED_INVOCATION_ADMITTED_V1, BROKERED_INVOCATION_PREPARED_V1,
         BROKERED_INVOCATION_REQUEST_BYTES_V1, BrokeredInvocationCapabilityRequestV1, BuildSession,
@@ -68,10 +60,6 @@ mod platform {
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
     const REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-V3\0";
-    #[cfg(feature = "qualification-oracles-test-only")]
-    const S09_REQUEST_MAGIC: &[u8] = b"FE2O3-CARGO-CAPABILITY-BROKER-10\0";
-    #[cfg(feature = "qualification-oracles-test-only")]
-    const _: () = assert!(REQUEST_MAGIC.len() == S09_REQUEST_MAGIC.len());
     const ROUTE_PREFIX: &str = "fe2o3-capability-route-v3";
     const ENDPOINT_BYTES: usize = 32;
     const ENDPOINT_HEX_BYTES: usize = ENDPOINT_BYTES * 2;
@@ -98,9 +86,6 @@ mod platform {
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
     const RECEIVED_DESCRIPTOR_FLOOR: i32 = 210;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
-        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
     const BROKER_CLIENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
     const _: () = assert!(
@@ -109,8 +94,6 @@ mod platform {
     );
     const BROKER_INVOCATION_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
     const BROKER_INVOCATION_LIFETIME: Duration = Duration::from_secs(6 * 60 * 60);
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    const BROKER_IO_TIMEOUT: Duration = BROKER_AUTHENTICATION_TIMEOUT;
     const MAX_ACTIVE_CONNECTIONS: usize = 64;
     const MAX_CONCURRENT_AUTHENTICATIONS: usize = 8;
 
@@ -132,48 +115,36 @@ mod platform {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
-        #[cfg(feature = "qualification-oracles-test-only")]
-        S09,
     }
 
     impl CapabilityProfileV1 {
         const fn request_magic(self) -> &'static [u8] {
             match self {
                 Self::Ordinary => REQUEST_MAGIC,
-                #[cfg(feature = "qualification-oracles-test-only")]
-                Self::S09 => S09_REQUEST_MAGIC,
             }
         }
 
         const fn descriptor_count(self) -> usize {
             match self {
                 Self::Ordinary => 2,
-                #[cfg(feature = "qualification-oracles-test-only")]
-                Self::S09 => 3,
             }
         }
 
         const fn name(self) -> &'static str {
             match self {
                 Self::Ordinary => "ordinary",
-                #[cfg(feature = "qualification-oracles-test-only")]
-                Self::S09 => "S09",
             }
         }
 
         const fn route_name(self) -> &'static str {
             match self {
                 Self::Ordinary => "ordinary",
-                #[cfg(feature = "qualification-oracles-test-only")]
-                Self::S09 => "s09",
             }
         }
 
         fn parse_route_name(value: &str) -> Option<Self> {
             match value {
                 "ordinary" => Some(Self::Ordinary),
-                #[cfg(feature = "qualification-oracles-test-only")]
-                "s09" => Some(Self::S09),
                 _ => None,
             }
         }
@@ -197,10 +168,6 @@ mod platform {
             rustc_executable_sha256: [u8; RUSTC_EXECUTABLE_ID_BYTES],
             retained_object_binding_sha256: [u8; RETAINED_OBJECT_BINDING_BYTES],
         ) -> Result<Self, String> {
-            #[cfg(feature = "qualification-oracles-test-only")]
-            if profile == CapabilityProfileV1::S09 && config_identity.is_none() {
-                return Err("S09 capability binding requires a Worker V2 config identity".into());
-            }
             if compiler_closure_sha256 == [0; COMPILER_CLOSURE_ID_BYTES]
                 || rustc_executable_sha256 == [0; RUSTC_EXECUTABLE_ID_BYTES]
                 || retained_object_binding_sha256 == [0; RETAINED_OBJECT_BINDING_BYTES]
@@ -527,68 +494,6 @@ mod platform {
         invocation_authorization: InvocationAuthorizationRegistryV1,
         shutdown: Arc<BrokerShutdown>,
         worker: Option<JoinHandle<()>>,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        _test_permit: TestBrokerPermit,
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    static TEST_BROKER_ACTIVE: Mutex<bool> = Mutex::new(false);
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    static TEST_BROKER_AVAILABLE: Condvar = Condvar::new();
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    struct TestBrokerPermit {
-        process_lock: File,
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    impl TestBrokerPermit {
-        fn acquire() -> Self {
-            let mut active = TEST_BROKER_ACTIVE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            while *active {
-                active = TEST_BROKER_AVAILABLE
-                    .wait(active)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
-            *active = true;
-            drop(active);
-
-            let process_lock = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open("/tmp/fe2o3-capability-broker-tests.lock")
-                .unwrap_or_else(|error| panic!("cannot open broker test process lock: {error}"));
-            if unsafe { libc::flock(process_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-                let error = io::Error::last_os_error();
-                let mut active = TEST_BROKER_ACTIVE
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                *active = false;
-                drop(active);
-                TEST_BROKER_AVAILABLE.notify_one();
-                panic!("cannot acquire broker test process lock: {error}");
-            }
-            Self { process_lock }
-        }
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    impl Drop for TestBrokerPermit {
-        fn drop(&mut self) {
-            if unsafe { libc::flock(self.process_lock.as_raw_fd(), libc::LOCK_UN) } != 0 {
-                std::process::abort();
-            }
-            let mut active = TEST_BROKER_ACTIVE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *active = false;
-            drop(active);
-            TEST_BROKER_AVAILABLE.notify_one();
-        }
     }
 
     #[derive(Default)]
@@ -605,26 +510,6 @@ mod platform {
         authentication_available: Condvar,
         max_concurrent_authentications: usize,
         max_active_connections: usize,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        accept_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        worker_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        dispatch_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        locked_dispatch_pause: Mutex<Option<Arc<TestPause>>>,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        begin_started: std::sync::atomic::AtomicBool,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        request_read_started: std::sync::atomic::AtomicBool,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        panic_next_worker: std::sync::atomic::AtomicBool,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fail_next_worker_spawn: std::sync::atomic::AtomicBool,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        caught_worker_panics: std::sync::atomic::AtomicUsize,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        admission_rejections: std::sync::atomic::AtomicUsize,
     }
 
     impl BrokerShutdown {
@@ -636,26 +521,6 @@ mod platform {
                 max_concurrent_authentications: max_active_connections
                     .min(MAX_CONCURRENT_AUTHENTICATIONS),
                 max_active_connections,
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                accept_pause: Mutex::new(None),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                worker_pause: Mutex::new(None),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                dispatch_pause: Mutex::new(None),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                locked_dispatch_pause: Mutex::new(None),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                begin_started: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                request_read_started: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                panic_next_worker: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                fail_next_worker_spawn: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                caught_worker_panics: std::sync::atomic::AtomicUsize::new(0),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                admission_rejections: std::sync::atomic::AtomicUsize::new(0),
             }
         }
 
@@ -680,9 +545,6 @@ mod platform {
                 return Ok(None);
             }
             if state.active.len() >= self.max_active_connections {
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                self.admission_rejections
-                    .fetch_add(1, std::sync::atomic::Ordering::Release);
                 let _ = stream.shutdown(Shutdown::Both);
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -690,9 +552,6 @@ mod platform {
                 ));
             }
             if let Err(error) = deadline.require_remaining() {
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                self.admission_rejections
-                    .fetch_add(1, std::sync::atomic::Ordering::Release);
                 let _ = stream.shutdown(Shutdown::Both);
                 return Err(error);
             }
@@ -751,9 +610,6 @@ mod platform {
         }
 
         fn begin(&self) {
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            self.begin_started
-                .store(true, std::sync::atomic::Ordering::Release);
             let mut state = self.state();
             state.stopping = true;
             for active in state.active.values() {
@@ -771,9 +627,6 @@ mod platform {
             descriptors: &[BorrowedFd<'_>],
             deadline: BrokerDeadline,
         ) -> io::Result<()> {
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            self.pause(&self.dispatch_pause, None);
-
             let state = self.state();
             if state.stopping {
                 return Err(io::Error::new(
@@ -781,8 +634,6 @@ mod platform {
                     "capability broker is shutting down",
                 ));
             }
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            self.pause(&self.locked_dispatch_pause, None);
             deadline.require_remaining()?;
             let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(3))];
             let mut ancillary = SendAncillaryBuffer::new(&mut space);
@@ -805,142 +656,6 @@ mod platform {
             drop(state);
             Ok(())
         }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn install_pause(slot: &Mutex<Option<Arc<TestPause>>>) -> TestPauseControl {
-            let (pause, control) = TestPause::new();
-            *slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pause);
-            control
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn pause(&self, slot: &Mutex<Option<Arc<TestPause>>>, socket_identity: Option<(u64, u64)>) {
-            let pause = {
-                slot.lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone()
-            };
-            if let Some(pause) = pause {
-                pause.server_wait(socket_identity);
-            }
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn install_accept_pause(&self) -> TestPauseControl {
-            Self::install_pause(&self.accept_pause)
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn pause_after_accept(&self, stream: &UnixStream) {
-            let socket_identity = fs::metadata(format!("/proc/self/fd/{}", stream.as_raw_fd()))
-                .ok()
-                .map(|metadata| (metadata.dev(), metadata.ino()));
-            let pause = self
-                .accept_pause
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(pause) = pause {
-                pause.server_wait(socket_identity);
-            }
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn install_dispatch_pause(&self) -> TestPauseControl {
-            Self::install_pause(&self.dispatch_pause)
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn install_worker_pause(&self) -> TestPauseControl {
-            Self::install_pause(&self.worker_pause)
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn remove_worker_pause(&self) {
-            self.worker_pause
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn install_locked_dispatch_pause(&self) -> TestPauseControl {
-            Self::install_pause(&self.locked_dispatch_pause)
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn wait_for_begin(&self) {
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while !self
-                .begin_started
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "capability broker shutdown did not start"
-                );
-                thread::yield_now();
-            }
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn wait_for_request_read(&self) {
-            let deadline = std::time::Instant::now() + BROKER_AUTHENTICATION_TIMEOUT;
-            while !self
-                .request_read_started
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "capability broker did not reach the request read"
-                );
-                thread::yield_now();
-            }
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn active_socket_identity(&self) -> Option<(u64, u64)> {
-            let state = self.state();
-            let active = state.active.values().next()?;
-            fs::metadata(format!("/proc/self/fd/{}", active.as_raw_fd()))
-                .ok()
-                .map(|metadata| (metadata.dev(), metadata.ino()))
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn active_connection_count(&self) -> usize {
-            self.state().active.len()
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn inject_worker_panic(&self) {
-            self.panic_next_worker
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn inject_worker_spawn_failure(&self) {
-            self.fail_next_worker_spawn
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn take_worker_spawn_failure(&self) -> bool {
-            self.fail_next_worker_spawn
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        fn maybe_inject_worker_panic(&self) {
-            if self
-                .panic_next_worker
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-            {
-                panic!("injected capability broker worker panic");
-            }
-        }
     }
 
     struct ConnectionRegistryGuard {
@@ -961,61 +676,6 @@ mod platform {
     impl Drop for AuthenticationRegistryGuard {
         fn drop(&mut self) {
             self.shutdown.finish_authentication();
-        }
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    struct TestPause {
-        reached: std::sync::mpsc::SyncSender<Option<(u64, u64)>>,
-        release: Mutex<std::sync::mpsc::Receiver<()>>,
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    struct TestPauseControl {
-        reached: std::sync::mpsc::Receiver<Option<(u64, u64)>>,
-        release: std::sync::mpsc::SyncSender<()>,
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    impl TestPause {
-        fn new() -> (Arc<Self>, TestPauseControl) {
-            let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(0);
-            let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
-            (
-                Arc::new(Self {
-                    reached: reached_tx,
-                    release: Mutex::new(release_rx),
-                }),
-                TestPauseControl {
-                    reached: reached_rx,
-                    release: release_tx,
-                },
-            )
-        }
-
-        fn server_wait(&self, socket_identity: Option<(u64, u64)>) {
-            if self.reached.send(socket_identity).is_ok() {
-                let _ = self
-                    .release
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .recv();
-            }
-        }
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    impl TestPauseControl {
-        fn wait_until_reached(&self) -> Option<(u64, u64)> {
-            self.reached
-                .recv_timeout(BROKER_AUTHENTICATION_TIMEOUT)
-                .expect("capability broker did not reach the test pause")
-        }
-
-        fn release(&self) {
-            self.release
-                .send(())
-                .expect("capability broker did not wait for dispatch release");
         }
     }
 
@@ -1111,8 +771,6 @@ mod platform {
                     CompilerClosureCapabilityV1::create(closure)
                 })
                 .transpose()?;
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            let test_permit = TestBrokerPermit::acquire();
             let endpoint = random_endpoint().map_err(|error| {
                 format!("failed to allocate capability broker endpoint: {error}")
             })?;
@@ -1128,13 +786,6 @@ mod platform {
             let artifact = artifact
                 .try_clone_for_transfer()
                 .map_err(|error| format!("failed to retain broker artifact directory: {error}"))?;
-            #[cfg(feature = "qualification-oracles-test-only")]
-            let pinned_cargo_image =
-                pinned_cargo_image
-                    .try_clone_for_transfer()
-                    .map_err(|error| {
-                        format!("failed to retain pinned Cargo image observation: {error}")
-                    })?;
             let executable = BrokerPeerIdentityV2::current().map_err(|error| {
                 format!("failed to identify capability broker executable: {error}")
             })?;
@@ -1162,15 +813,11 @@ mod platform {
                         executable,
                         backend,
                         artifact,
-                        #[cfg(feature = "qualification-oracles-test-only")]
-                        pinned_cargo_image,
                         compiler_closure,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
                         invocation_lifetime: limits.invocation_lifetime,
                         invocation_authorization: worker_invocation_authorization,
-                        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                        test_invocation_authorization: Mutex::new(()),
                         shutdown: worker_shutdown,
                     }
                     .serve();
@@ -1181,8 +828,6 @@ mod platform {
                 invocation_authorization,
                 shutdown,
                 worker: Some(worker),
-                #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                _test_permit: test_permit,
             })
         }
 
@@ -1207,8 +852,6 @@ mod platform {
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
-        #[cfg(feature = "qualification-oracles-test-only")]
-        pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }
@@ -1235,17 +878,6 @@ mod platform {
             )
         }
 
-        #[cfg(feature = "qualification-oracles-test-only")]
-        pub(crate) fn prepare(
-            &self,
-            claim: BrokeredInvocationCapabilityClaimV1,
-        ) -> Result<(), String> {
-            self.exchange(
-                BrokeredInvocationCapabilityRequestV1::Prepare(claim),
-                BROKERED_INVOCATION_PREPARED_V1,
-            )
-        }
-
         fn exchange(
             &self,
             request: BrokeredInvocationCapabilityRequestV1,
@@ -1261,48 +893,6 @@ mod platform {
                 .map_err(|error| format!("failed to read invocation capability: {error}"))?;
             if &response != expected {
                 return Err("invocation capability returned a malformed response".to_owned());
-            }
-            Ok(())
-        }
-
-        #[cfg(feature = "qualification-oracles-test-only")]
-        pub(crate) fn inherit_for_child(&self, command: &mut Command) -> Result<(), String> {
-            // SAFETY: this only probes the process-local reserved descriptor.
-            let target = unsafe { BorrowedFd::borrow_raw(INVOCATION_AUTHORITY_CHILD_FD_V1) };
-            match rustix::io::fcntl_getfd(target) {
-                Err(rustix::io::Errno::BADF) => {}
-                Err(error) => {
-                    return Err(format!(
-                        "cannot inspect reserved invocation-capability descriptor: {error}"
-                    ));
-                }
-                Ok(_) => {
-                    return Err(
-                        "reserved invocation-capability descriptor is already occupied".to_owned(),
-                    );
-                }
-            }
-            let source = self.stream.as_raw_fd();
-            // SAFETY: `self.stream` remains alive through the synchronous spawn. The callback
-            // duplicates only that authenticated connected socket onto the reserved child FD.
-            unsafe {
-                use std::os::unix::process::CommandExt as _;
-                command.pre_exec(move || {
-                    let installed = rustix::io::fcntl_dupfd_cloexec(
-                        BorrowedFd::borrow_raw(source),
-                        INVOCATION_AUTHORITY_CHILD_FD_V1,
-                    )
-                    .map_err(std::io::Error::from)?;
-                    if installed.as_raw_fd() != INVOCATION_AUTHORITY_CHILD_FD_V1 {
-                        return Err(std::io::Error::from_raw_os_error(
-                            rustix::io::Errno::BUSY.raw_os_error(),
-                        ));
-                    }
-                    rustix::io::fcntl_setfd(&installed, rustix::io::FdFlags::empty())
-                        .map_err(std::io::Error::from)?;
-                    let _ = installed.into_raw_fd();
-                    Ok(())
-                });
             }
             Ok(())
         }
@@ -1405,22 +995,6 @@ mod platform {
         } else {
             None
         };
-        #[cfg(feature = "qualification-oracles-test-only")]
-        let pinned_cargo_image = if binding.profile == CapabilityProfileV1::S09 {
-            let image = normalize_received_descriptor(
-                descriptors.pop().expect("S09 descriptor count checked"),
-                "pinned Cargo image observation",
-            )?;
-            Some(
-                PinnedExecutable::from_transferred_file(
-                    image,
-                    PathBuf::from("<brokered pinned Cargo image observation>"),
-                )
-                .map_err(|error| format!("invalid brokered pinned Cargo image: {error}"))?,
-            )
-        } else {
-            None
-        };
         let artifact = normalize_received_descriptor(
             descriptors.pop().expect("descriptor count checked"),
             "artifact directory",
@@ -1437,8 +1011,6 @@ mod platform {
         Ok(BrokeredCapabilities {
             backend,
             artifact,
-            #[cfg(feature = "qualification-oracles-test-only")]
-            pinned_cargo_image,
             compiler_closure,
             invocation_authority: None,
         })
@@ -1464,15 +1036,11 @@ mod platform {
         executable: BrokerPeerIdentityV2,
         backend: File,
         artifact: File,
-        #[cfg(feature = "qualification-oracles-test-only")]
-        pinned_cargo_image: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
         invocation_lifetime: Duration,
         invocation_authorization: InvocationAuthorizationRegistryV1,
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        test_invocation_authorization: Mutex<()>,
         shutdown: Arc<BrokerShutdown>,
     }
 
@@ -1486,56 +1054,18 @@ mod platform {
                             let accepted_at = Instant::now();
                             let deadline =
                                 BrokerDeadline::new(accepted_at, self.authentication_timeout);
-                            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                            self.shutdown.pause_after_accept(&stream);
                             match self.shutdown.register(&stream, deadline) {
                                 Ok(Some(registry_guard)) => {
                                     let server = &self;
                                     let worker = move || {
                                         let _registry_guard = registry_guard;
-                                        let outcome = std::panic::catch_unwind(
-                                            std::panic::AssertUnwindSafe(|| {
-                                                #[cfg(all(
-                                                    test,
-                                                    feature = "qualification-oracles-test-only"
-                                                ))]
-                                                server
-                                                    .shutdown
-                                                    .pause(&server.shutdown.worker_pause, None);
-                                                #[cfg(all(
-                                                    test,
-                                                    feature = "qualification-oracles-test-only"
-                                                ))]
-                                                server.shutdown.maybe_inject_worker_panic();
-                                                server.serve_one(&stream, deadline)
-                                            }),
-                                        );
-                                        if outcome.is_err() {
-                                            #[cfg(all(
-                                                test,
-                                                feature = "qualification-oracles-test-only"
-                                            ))]
-                                            server
-                                                .shutdown
-                                                .caught_worker_panics
-                                                .fetch_add(1, std::sync::atomic::Ordering::Release);
-                                        }
+                                        let _ =
+                                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                                || server.serve_one(&stream, deadline),
+                                            ));
                                     };
-                                    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-                                    let injected_spawn_failure =
-                                        self.shutdown.take_worker_spawn_failure();
-                                    #[cfg(not(all(
-                                        test,
-                                        feature = "qualification-oracles-test-only"
-                                    )))]
-                                    let injected_spawn_failure = false;
-                                    let spawned = if injected_spawn_failure {
-                                        Err(io::Error::other(
-                                            "injected capability broker worker spawn failure",
-                                        ))
-                                    } else {
-                                        thread::Builder::new().spawn_scoped(scope, worker)
-                                    };
+                                    let spawned =
+                                        thread::Builder::new().spawn_scoped(scope, worker);
                                     if spawned.is_err() {
                                         continue;
                                     }
@@ -1566,26 +1096,11 @@ mod platform {
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             drop(authentication);
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            let test_authorization = self
-                .test_invocation_authorization
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            self.invocation_authorization
-                .authorize_test_process(client)
-                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             self.invocation_authorization
                 .consume(client)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            drop(test_authorization);
             deadline.require_remaining()?;
             let mut request = vec![0_u8; REQUEST_BYTES];
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            self.shutdown
-                .request_read_started
-                .store(true, std::sync::atomic::Ordering::Release);
             deadline.read_exact(stream, &mut request)?;
             let challenge_start = REQUEST_MAGIC.len()
                 + 16
@@ -1612,26 +1127,8 @@ mod platform {
                 [REQUEST_BYTES - REQUEST_AUTH_BYTES..]
                 .try_into()
                 .expect("request authentication field has a fixed size");
-            #[cfg(feature = "qualification-oracles-test-only")]
-            let profile = self.binding.profile;
-            #[cfg(feature = "qualification-oracles-test-only")]
-            // SCM_RIGHTS preserves the open-file-description offset. Give each S09 wrapper an
-            // independently opened description of the retained pinned image. Ordinary clients
-            // retain their historical two-descriptor response.
-            let pinned_cargo_image = (profile == CapabilityProfileV1::S09)
-                .then(|| {
-                    File::open(format!(
-                        "/proc/self/fd/{}",
-                        self.pinned_cargo_image.as_raw_fd()
-                    ))
-                })
-                .transpose()?;
             deadline.require_remaining()?;
             let mut descriptors = vec![self.backend.as_fd(), self.artifact.as_fd()];
-            #[cfg(feature = "qualification-oracles-test-only")]
-            if let Some(pinned_cargo_image) = &pinned_cargo_image {
-                descriptors.push(pinned_cargo_image.as_fd());
-            }
             let compiler_closure = self
                 .compiler_closure
                 .as_ref()
@@ -1879,19 +1376,6 @@ mod platform {
 
     fn random_endpoint() -> io::Result<String> {
         let bytes = random_bytes()?;
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        let bytes = {
-            let mut bytes = bytes;
-            static NEXT_TEST_ENDPOINT: std::sync::atomic::AtomicU64 =
-                std::sync::atomic::AtomicU64::new(1);
-            bytes[..4].copy_from_slice(&std::process::id().to_le_bytes());
-            bytes[4..12].copy_from_slice(
-                &NEXT_TEST_ENDPOINT
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    .to_le_bytes(),
-            );
-            bytes
-        };
         Ok(hex(&bytes))
     }
 
@@ -2037,1421 +1521,6 @@ mod platform {
         }
         endpoint
     }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    mod tests {
-        use std::collections::BTreeSet;
-        use std::path::PathBuf;
-        use std::process::{Child, Command, Stdio};
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::sync::{Arc, Barrier};
-        use std::time::{Duration, Instant};
-
-        use fe2o3_artifact_transaction::{
-            BuildAttempt, BuildInvocation, ProducerIdentity, begin_build_attempt,
-        };
-
-        use super::*;
-
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        const MOCK_EXEC_READY_BOUND: Duration = Duration::from_secs(30);
-        const PROMPT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
-        const _: () = assert!(PROMPT_SHUTDOWN_BOUND.as_secs() < BROKER_IO_TIMEOUT.as_secs());
-
-        struct TestDirectory(PathBuf);
-
-        impl TestDirectory {
-            fn new() -> Self {
-                fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
-                let path = std::env::temp_dir().join(format!(
-                    "cargo-fe2o3-capability-broker-{}-{}",
-                    std::process::id(),
-                    NEXT.fetch_add(1, Ordering::Relaxed)
-                ));
-                fs::create_dir(&path).unwrap();
-                Self(path)
-            }
-        }
-
-        impl Drop for TestDirectory {
-            fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.0);
-            }
-        }
-
-        struct ReapedChild(Child);
-
-        impl Drop for ReapedChild {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-
-        struct SpawnedMockExecutable {
-            child: ReapedChild,
-            start_time_ticks: u64,
-            image: PinnedExecutable,
-            metadata: fs::Metadata,
-        }
-
-        impl SpawnedMockExecutable {
-            fn ready_shell() -> Self {
-                const READY: &[u8] = b"fe2o3-ready";
-
-                let shell = fs::canonicalize("/bin/sh").unwrap();
-                let expected = PinnedExecutable::open(&shell).unwrap();
-                let expected_object = expected.object_identity();
-                let expected_sha256 = *expected.sha256();
-                let (mut readiness, child_readiness) = UnixStream::pair().unwrap();
-                readiness
-                    .set_read_timeout(Some(MOCK_EXEC_READY_BOUND))
-                    .unwrap();
-                let mut command = Command::new(shell);
-                command
-                    .arg("-c")
-                    .arg("printf fe2o3-ready; read _")
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::from(OwnedFd::from(child_readiness)));
-                let child = ReapedChild(crate::process_execution::spawn(&mut command).unwrap());
-                let mut ready = [0_u8; READY.len()];
-                readiness.read_exact(&mut ready).unwrap();
-                assert_eq!(&ready, READY);
-
-                let pid = child.0.id();
-                let start_time_ticks = process_start_time_ticks(pid).unwrap();
-                let (image, metadata) = pin_process_executable(pid).unwrap();
-                assert_eq!(image.object_identity(), expected_object);
-                assert_eq!(image.sha256(), &expected_sha256);
-                assert_eq!(process_start_time_ticks(pid).unwrap(), start_time_ticks);
-                Self {
-                    child,
-                    start_time_ticks,
-                    image,
-                    metadata,
-                }
-            }
-
-            fn peer_identity(&self) -> BrokerPeerIdentityV2 {
-                BrokerPeerIdentityV2 {
-                    uid: unsafe { libc::geteuid() },
-                    pid: self.child.0.id(),
-                    start_time_ticks: self.start_time_ticks,
-                    device: self.metadata.dev(),
-                    inode: self.metadata.ino(),
-                    mode: self.metadata.mode(),
-                    executable_sha256: *self.image.sha256(),
-                }
-            }
-        }
-
-        struct ArbitraryRouteProbe {
-            endpoint: String,
-            listener: UnixListener,
-            route: BrokerRouteV3,
-            _mock: SpawnedMockExecutable,
-        }
-
-        impl ArbitraryRouteProbe {
-            fn new() -> Self {
-                let endpoint = random_endpoint().unwrap();
-                let address = endpoint_address(&endpoint).unwrap();
-                let listener = UnixListener::bind_addr(&address).unwrap();
-                listener.set_nonblocking(true).unwrap();
-                let mock = SpawnedMockExecutable::ready_shell();
-                let route = BrokerRouteV3 {
-                    endpoint: endpoint.clone(),
-                    secret: random_bytes().unwrap(),
-                    binding: ordinary_binding(),
-                    peer: mock.peer_identity(),
-                };
-                Self {
-                    endpoint,
-                    listener,
-                    route,
-                    _mock: mock,
-                }
-            }
-
-            fn assert_pre_connect_rejection(&self, session: BuildSession) {
-                let error = receive_from(&self.route, session, ordinary_binding())
-                    .err()
-                    .expect("an arbitrary executable route must fail closed");
-                assert_eq!(
-                    error,
-                    "capability broker route does not name the current cargo-fe2o3 executable"
-                );
-                match self.listener.accept() {
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(error) => panic!(
-                        "unexpected mock broker accept error for endpoint {}: {error}",
-                        self.endpoint
-                    ),
-                    Ok(_) => panic!(
-                        "arbitrary executable route reached uniquely marked endpoint {}",
-                        self.endpoint
-                    ),
-                }
-            }
-        }
-
-        fn fixture() -> (
-            TestDirectory,
-            PinnedCodegenBackend,
-            PinnedDirectory,
-            PinnedExecutable,
-            BuildSession,
-        ) {
-            let temp = TestDirectory::new();
-            let backend_path = temp.0.join("backend.so");
-            let artifact_path = temp.0.join("artifact");
-            fs::write(&backend_path, b"exact broker backend bytes").unwrap();
-            fs::create_dir(&artifact_path).unwrap();
-            let backend = PinnedCodegenBackend::open(&backend_path).unwrap();
-            let artifact =
-                PinnedDirectory::open_existing(artifact_path, "test artifact directory").unwrap();
-            let pinned_cargo_image =
-                PinnedExecutable::open(&std::env::current_exe().unwrap()).unwrap();
-            let session = BuildSession::from_bytes([0x42; 16]);
-            (temp, backend, artifact, pinned_cargo_image, session)
-        }
-
-        fn ordinary_binding() -> CapabilityBindingV3 {
-            CapabilityBindingV3::new(
-                CapabilityProfileV1::Ordinary,
-                None,
-                [0x70; 32],
-                [0x71; 32],
-                [0x72; 32],
-            )
-            .unwrap()
-        }
-
-        fn s09_binding() -> CapabilityBindingV3 {
-            CapabilityBindingV3::new(
-                CapabilityProfileV1::S09,
-                Some([0x91; 32]),
-                [0x70; 32],
-                [0x71; 32],
-                [0x72; 32],
-            )
-            .unwrap()
-        }
-
-        fn protected_closure(
-            backend: &PinnedCodegenBackend,
-            pinned_cargo_image: &PinnedExecutable,
-        ) -> fe2o3_build_authority::CompilerClosureV2 {
-            fe2o3_build_authority::CompilerClosureV2::new(
-                *pinned_cargo_image.sha256(),
-                [0x31; 32],
-                [0x32; 32],
-                [0x33; 32],
-                [0x34; 32],
-                *backend.sha256(),
-            )
-            .unwrap()
-        }
-
-        fn protected_binding(
-            profile: CapabilityProfileV1,
-            closure: fe2o3_build_authority::CompilerClosureV2,
-        ) -> CapabilityBindingV3 {
-            CapabilityBindingV3::new_protected(
-                profile,
-                (profile == CapabilityProfileV1::S09).then_some([0x91; 32]),
-                closure,
-                [0x72; 32],
-            )
-            .unwrap()
-        }
-
-        fn wait_for_active_socket(broker: &CapabilityBroker) -> (u64, u64) {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            loop {
-                if let Some(identity) = broker.shutdown.active_socket_identity() {
-                    return identity;
-                }
-                assert!(
-                    Instant::now() < deadline,
-                    "capability broker did not accept the test connection"
-                );
-                thread::sleep(Duration::from_millis(1));
-            }
-        }
-
-        fn wait_until(mut predicate: impl FnMut() -> bool, failure: &str) {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !predicate() {
-                assert!(Instant::now() < deadline, "{failure}");
-                thread::sleep(Duration::from_millis(1));
-            }
-        }
-
-        fn start_test_broker(
-            session: BuildSession,
-            binding: CapabilityBindingV3,
-            backend: &PinnedCodegenBackend,
-            artifact: &PinnedDirectory,
-            pinned_cargo_image: &PinnedExecutable,
-            max_active_connections: usize,
-            io_timeout: Duration,
-        ) -> CapabilityBroker {
-            CapabilityBroker::start_with_limits(
-                session,
-                binding,
-                backend,
-                artifact,
-                pinned_cargo_image,
-                BrokerLimits {
-                    max_active_connections,
-                    authentication_timeout: io_timeout,
-                    invocation_frame_timeout: io_timeout,
-                    invocation_lifetime: io_timeout,
-                },
-            )
-            .unwrap()
-        }
-
-        fn object_is_open(identity: (u64, u64)) -> bool {
-            fs::read_dir("/proc/self/fd")
-                .unwrap()
-                .filter_map(Result::ok)
-                .filter_map(|entry| fs::metadata(entry.path()).ok())
-                .any(|metadata| (metadata.dev(), metadata.ino()) == identity)
-        }
-
-        fn receive_raw_response(
-            stream: &UnixStream,
-        ) -> io::Result<(usize, [u8; RESPONSE_BYTES], Vec<OwnedFd>)> {
-            let mut response = [0_u8; RESPONSE_BYTES];
-            let mut iov = [IoSliceMut::new(&mut response)];
-            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
-            let mut ancillary = RecvAncillaryBuffer::new(&mut space);
-            let message = recvmsg(stream, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC)
-                .map_err(io::Error::from)?;
-            if message.flags.contains(ReturnFlags::CTRUNC) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "test capability response control data was truncated",
-                ));
-            }
-            let bytes = message.bytes;
-            let mut descriptors = Vec::new();
-            for message in ancillary.drain() {
-                if let RecvAncillaryMessage::ScmRights(received) = message {
-                    descriptors.extend(received);
-                }
-            }
-            Ok((bytes, response, descriptors))
-        }
-
-        fn received_descriptor_count(stream: &UnixStream) -> usize {
-            receive_raw_response(stream)
-                .map(|(_, _, descriptors)| descriptors.len())
-                .unwrap_or(0)
-        }
-
-        #[test]
-        fn transfers_exact_capabilities_after_path_substitution() {
-            let (temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let backend_sha = *backend.sha256();
-            let cargo_sha = *pinned_cargo_image.sha256();
-            let original_artifact = temp.0.join("artifact");
-            let moved_artifact = temp.0.join("moved-artifact");
-            let binding = s09_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-
-            fs::write(temp.0.join("backend.so"), b"replacement backend bytes").unwrap();
-            fs::rename(&original_artifact, &moved_artifact).unwrap();
-            fs::create_dir(&original_artifact).unwrap();
-
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let transferred = receive_from(&route, session, binding).unwrap();
-            let transferred_cargo = transferred
-                .pinned_cargo_image
-                .expect("S09 transfer has a pinned Cargo image");
-            assert_eq!(transferred_cargo.sha256(), &cargo_sha);
-            assert_eq!(transferred.backend.sha256(), &backend_sha);
-            let transferred_artifact = transferred.artifact;
-            let source = PathBuf::from("/src/broker_probe.rs");
-            let producer = ProducerIdentity::from_codegen("broker_probe", Some(&source)).unwrap();
-            begin_build_attempt(
-                &transferred_artifact.child_path(),
-                &producer,
-                BuildInvocation::from_bytes([0x41; 32]),
-                session,
-            )
-            .unwrap();
-            fs::write(transferred_artifact.child_path().join("proof"), b"retained").unwrap();
-            assert_eq!(fs::read(moved_artifact.join("proof")).unwrap(), b"retained");
-            assert!(!original_artifact.join("proof").exists());
-        }
-
-        #[test]
-        fn ordinary_profile_preserves_the_two_descriptor_contract() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let backend_sha = *backend.sha256();
-            let binding = ordinary_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let transferred = receive_from(&route, session, binding).unwrap();
-            assert_eq!(transferred.backend.sha256(), &backend_sha);
-            assert!(transferred.pinned_cargo_image.is_none());
-            assert!(transferred.compiler_closure.is_none());
-        }
-
-        #[test]
-        fn protected_profile_transfers_the_exact_full_compiler_closure() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let closure = protected_closure(&backend, &pinned_cargo_image);
-            let binding = protected_binding(CapabilityProfileV1::Ordinary, closure);
-            let broker = CapabilityBroker::start_protected(
-                session,
-                binding,
-                closure,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-            )
-            .unwrap();
-
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            assert!(route.binding.requires_compiler_closure_v2());
-            let mut transferred = receive_from(&route, session, binding).unwrap();
-            assert!(transferred.pinned_cargo_image.is_none());
-            let capability = transferred
-                .compiler_closure
-                .take()
-                .expect("protected response carries a compiler closure");
-            capability.revalidate().unwrap();
-            assert_eq!(capability.closure(), closure);
-
-            assert!(transferred.invocation_authority.is_some());
-            const TEST_COMPILER_CLOSURE_CHILD_FD: i32 = 511;
-            let mut command = Command::new("/bin/sh");
-            command.arg("-c").arg(format!(
-                "test -s /proc/self/fd/{TEST_COMPILER_CLOSURE_CHILD_FD}"
-            ));
-            capability
-                .inherit_for_child_at(&mut command, TEST_COMPILER_CLOSURE_CHILD_FD)
-                .unwrap();
-            assert!(
-                crate::process_execution::status(&mut command)
-                    .unwrap()
-                    .success()
-            );
-        }
-
-        #[test]
-        fn protected_broker_rejects_downgrades_and_retained_image_mismatches() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let closure = protected_closure(&backend, &pinned_cargo_image);
-            let protected = protected_binding(CapabilityProfileV1::Ordinary, closure);
-            assert!(
-                CapabilityBroker::start(
-                    session,
-                    protected,
-                    &backend,
-                    &artifact,
-                    &pinned_cargo_image,
-                )
-                .is_err()
-            );
-            assert!(
-                CapabilityBroker::start_protected(
-                    session,
-                    ordinary_binding(),
-                    closure,
-                    &backend,
-                    &artifact,
-                    &pinned_cargo_image,
-                )
-                .is_err()
-            );
-
-            let wrong_backend = fe2o3_build_authority::CompilerClosureV2::new(
-                closure.cargo_executable_sha256(),
-                closure.cargo_binding_trampoline_sha256(),
-                closure.cargo_fe2o3_binding_wrapper_sha256(),
-                closure.rustc_executable_sha256(),
-                closure.rustc_runtime_tree_sha256(),
-                [0x35; 32],
-            )
-            .unwrap();
-            assert!(
-                CapabilityBroker::start_protected(
-                    session,
-                    protected_binding(CapabilityProfileV1::Ordinary, wrong_backend),
-                    wrong_backend,
-                    &backend,
-                    &artifact,
-                    &pinned_cargo_image,
-                )
-                .is_err()
-            );
-
-            let wrong_cargo = fe2o3_build_authority::CompilerClosureV2::new(
-                [0x36; 32],
-                closure.cargo_binding_trampoline_sha256(),
-                closure.cargo_fe2o3_binding_wrapper_sha256(),
-                closure.rustc_executable_sha256(),
-                closure.rustc_runtime_tree_sha256(),
-                closure.codegen_backend_sha256(),
-            )
-            .unwrap();
-            assert!(
-                CapabilityBroker::start_protected(
-                    session,
-                    protected_binding(CapabilityProfileV1::Ordinary, wrong_cargo),
-                    wrong_cargo,
-                    &backend,
-                    &artifact,
-                    &pinned_cargo_image,
-                )
-                .is_err()
-            );
-        }
-
-        #[test]
-        fn invocation_authority_admits_only_the_exact_prepared_claim() {
-            fn attempt(invocation: u8) -> BuildAttempt {
-                BuildAttempt::from_env_value(&format!(
-                    "1:{}:{}",
-                    "42".repeat(16),
-                    format!("{invocation:02x}").repeat(32)
-                ))
-                .unwrap()
-            }
-
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let mut transferred = receive_from(&route, session, binding).unwrap();
-            let authority = transferred
-                .invocation_authority
-                .take()
-                .expect("authenticated invocation authority");
-            let exact =
-                BrokeredInvocationCapabilityClaimV1::new(attempt(0x22), [0x22; 32]).unwrap();
-            authority.prepare(exact).unwrap();
-            authority
-                .exchange(
-                    BrokeredInvocationCapabilityRequestV1::Consume(exact),
-                    BROKERED_INVOCATION_ADMITTED_V1,
-                )
-                .unwrap();
-
-            let mut transferred = receive_from(&route, session, binding).unwrap();
-            let authority = transferred
-                .invocation_authority
-                .take()
-                .expect("authenticated invocation authority");
-            authority.prepare(exact).unwrap();
-            let substituted =
-                BrokeredInvocationCapabilityClaimV1::new(attempt(0x23), [0x23; 32]).unwrap();
-            assert!(
-                authority
-                    .exchange(
-                        BrokeredInvocationCapabilityRequestV1::Consume(substituted),
-                        BROKERED_INVOCATION_ADMITTED_V1,
-                    )
-                    .is_err(),
-                "broker admitted an invocation other than its exact prepared claim"
-            );
-        }
-
-        #[test]
-        fn invocation_authority_refreshes_bounded_phases_for_slow_frontends() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = CapabilityBroker::start_with_limits(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                BrokerLimits {
-                    max_active_connections: 1,
-                    authentication_timeout: Duration::from_secs(5),
-                    invocation_frame_timeout: Duration::from_millis(50),
-                    invocation_lifetime: Duration::from_secs(1),
-                },
-            )
-            .unwrap();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let mut transferred = receive_from(&route, session, binding).unwrap();
-            let authority = transferred.invocation_authority.take().unwrap();
-            let attempt =
-                BuildAttempt::from_env_value(&format!("1:{}:{}", "42".repeat(16), "24".repeat(32)))
-                    .unwrap();
-            let claim = BrokeredInvocationCapabilityClaimV1::new(attempt, [0x24; 32]).unwrap();
-
-            thread::sleep(Duration::from_millis(150));
-            authority.prepare(claim).unwrap();
-            thread::sleep(Duration::from_millis(150));
-            authority
-                .exchange(
-                    BrokeredInvocationCapabilityRequestV1::Consume(claim),
-                    BROKERED_INVOCATION_ADMITTED_V1,
-                )
-                .unwrap();
-        }
-
-        fn raw_descriptor_set(
-            backend: &PinnedCodegenBackend,
-            artifact: &PinnedDirectory,
-            pinned_cargo_image: &PinnedExecutable,
-        ) -> Vec<OwnedFd> {
-            vec![
-                backend.try_clone_for_transfer().unwrap().into(),
-                artifact.try_clone_for_transfer().unwrap().into(),
-                pinned_cargo_image.try_clone_for_transfer().unwrap().into(),
-            ]
-        }
-
-        #[test]
-        fn descriptor_profiles_are_exact_and_fail_closed() {
-            let (_temp, backend, artifact, pinned_cargo_image, _session) = fixture();
-
-            let mut ordinary = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            ordinary.truncate(2);
-            let ordinary = decode_received_descriptors(ordinary, ordinary_binding()).unwrap();
-            assert!(ordinary.pinned_cargo_image.is_none());
-
-            let s09 = decode_received_descriptors(
-                raw_descriptor_set(&backend, &artifact, &pinned_cargo_image),
-                s09_binding(),
-            )
-            .unwrap();
-            assert!(s09.pinned_cargo_image.is_some());
-
-            let mut missing_s09 = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            missing_s09.truncate(2);
-            assert!(decode_received_descriptors(missing_s09, s09_binding()).is_err());
-
-            let ordinary_extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            assert!(decode_received_descriptors(ordinary_extra, ordinary_binding()).is_err());
-
-            let mut s09_extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            s09_extra.push(pinned_cargo_image.try_clone_for_transfer().unwrap().into());
-            assert!(decode_received_descriptors(s09_extra, s09_binding()).is_err());
-
-            let closure = protected_closure(&backend, &pinned_cargo_image);
-            let protected = protected_binding(CapabilityProfileV1::Ordinary, closure);
-            let closure_capability = CompilerClosureCapabilityV1::create(closure).unwrap();
-            let mut exact = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            exact.truncate(2);
-            exact.push(closure_capability.try_clone_for_transfer().unwrap().into());
-            assert_eq!(
-                decode_received_descriptors(exact, protected)
-                    .unwrap()
-                    .compiler_closure
-                    .unwrap()
-                    .closure(),
-                closure
-            );
-
-            let mut missing = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            missing.truncate(2);
-            assert!(decode_received_descriptors(missing, protected).is_err());
-
-            let mut extra = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            extra.truncate(2);
-            extra.push(closure_capability.try_clone_for_transfer().unwrap().into());
-            extra.push(pinned_cargo_image.try_clone_for_transfer().unwrap().into());
-            assert!(decode_received_descriptors(extra, protected).is_err());
-        }
-
-        #[test]
-        fn descriptor_order_is_part_of_each_profile() {
-            let (_temp, backend, artifact, pinned_cargo_image, _session) = fixture();
-
-            let mut ordinary = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            ordinary.truncate(2);
-            ordinary.swap(0, 1);
-            assert!(decode_received_descriptors(ordinary, ordinary_binding()).is_err());
-
-            let mut s09 = raw_descriptor_set(&backend, &artifact, &pinned_cargo_image);
-            s09.swap(1, 2);
-            assert!(decode_received_descriptors(s09, s09_binding()).is_err());
-        }
-
-        #[test]
-        fn prepared_profile_config_rustc_and_peer_identity_reject_substitution() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = s09_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-
-            let ordinary = ordinary_binding();
-            assert!(receive_from(&route, session, ordinary).is_err());
-            let wrong_config = CapabilityBindingV3::new(
-                CapabilityProfileV1::S09,
-                Some([0x92; CONFIG_ID_BYTES]),
-                [0x70; COMPILER_CLOSURE_ID_BYTES],
-                [0x71; RUSTC_EXECUTABLE_ID_BYTES],
-                [0x72; RETAINED_OBJECT_BINDING_BYTES],
-            )
-            .unwrap();
-            assert!(receive_from(&route, session, wrong_config).is_err());
-            let wrong_rustc = CapabilityBindingV3::new(
-                CapabilityProfileV1::S09,
-                Some([0x91; CONFIG_ID_BYTES]),
-                [0x71; COMPILER_CLOSURE_ID_BYTES],
-                [0x71; RUSTC_EXECUTABLE_ID_BYTES],
-                [0x72; RETAINED_OBJECT_BINDING_BYTES],
-            )
-            .unwrap();
-            assert!(receive_from(&route, session, wrong_rustc).is_err());
-
-            let mut wrong_uid = route.clone();
-            wrong_uid.peer.uid ^= 1;
-            assert!(receive_from(&wrong_uid, session, binding).is_err());
-
-            let mut wrong_pid = route.clone();
-            wrong_pid.peer.pid = wrong_pid.peer.pid.saturating_add(1);
-            assert!(receive_from(&wrong_pid, session, binding).is_err());
-
-            let mut stale_process = route.clone();
-            stale_process.peer.start_time_ticks += 1;
-            assert!(receive_from(&stale_process, session, binding).is_err());
-
-            let mut wrong_object = route.clone();
-            wrong_object.peer.inode ^= 1;
-            assert!(receive_from(&wrong_object, session, binding).is_err());
-
-            let mut substituted_executable = route.clone();
-            substituted_executable.peer.executable_sha256[0] ^= 1;
-            assert!(receive_from(&substituted_executable, session, binding).is_err());
-
-            let mut wrong_secret = route;
-            wrong_secret.secret[0] ^= 1;
-            assert!(receive_from(&wrong_secret, session, binding).is_err());
-        }
-
-        #[test]
-        fn endpoint_only_mock_cannot_forge_the_broker_response() {
-            let (_temp, backend, artifact, _pinned_cargo_image, session) = fixture();
-            let endpoint = random_endpoint().unwrap();
-            let address = endpoint_address(&endpoint).unwrap();
-            let listener = UnixListener::bind_addr(&address).unwrap();
-            let backend = backend.try_clone_for_transfer().unwrap();
-            let artifact = artifact.try_clone_for_transfer().unwrap();
-            let mock = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut request = [0_u8; REQUEST_BYTES];
-                stream.read_exact(&mut request).unwrap();
-                let descriptors = [backend.as_fd(), artifact.as_fd()];
-                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
-                let mut ancillary = SendAncillaryBuffer::new(&mut space);
-                assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
-                let mut forged = [0_u8; RESPONSE_BYTES];
-                forged[0] = 1;
-                sendmsg(
-                    &stream,
-                    &[IoSlice::new(&forged)],
-                    &mut ancillary,
-                    SendFlags::NOSIGNAL,
-                )
-                .unwrap();
-            });
-            let route = BrokerRouteV3 {
-                endpoint,
-                secret: random_bytes().unwrap(),
-                binding: ordinary_binding(),
-                peer: BrokerPeerIdentityV2::current().unwrap(),
-            };
-
-            assert!(receive_from(&route, session, ordinary_binding()).is_err());
-            mock.join().unwrap();
-        }
-
-        #[test]
-        fn self_consistent_arbitrary_executable_route_is_rejected_before_connect() {
-            let (_temp, _backend, _artifact, _pinned_cargo_image, session) = fixture();
-            ArbitraryRouteProbe::new().assert_pre_connect_rejection(session);
-        }
-
-        #[test]
-        fn arbitrary_executable_routes_reject_before_connect_under_concurrent_exec() {
-            const ROUNDS: usize = 8;
-            const PROBES_PER_ROUND: usize = 4;
-            let (_temp, _backend, _artifact, _pinned_cargo_image, session) = fixture();
-            let mut observed_endpoints = BTreeSet::new();
-            for _ in 0..ROUNDS {
-                let probes = (0..PROBES_PER_ROUND)
-                    .map(|_| ArbitraryRouteProbe::new())
-                    .collect::<Vec<_>>();
-                for probe in &probes {
-                    assert!(
-                        observed_endpoints.insert(probe.endpoint.clone()),
-                        "test endpoint marker was reused"
-                    );
-                }
-                thread::scope(|scope| {
-                    for probe in &probes {
-                        scope.spawn(move || probe.assert_pre_connect_rejection(session));
-                    }
-                });
-            }
-        }
-
-        #[test]
-        fn rejects_wrong_session_and_serves_concurrent_exact_clients() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let backend_sha = *backend.sha256();
-            let cargo_sha = *pinned_cargo_image.sha256();
-            let binding = s09_binding();
-            let broker = Arc::new(
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap(),
-            );
-            assert!(
-                receive_from(
-                    &BrokerRouteV3::parse(broker.route()).unwrap(),
-                    BuildSession::from_bytes([0x43; 16]),
-                    binding,
-                )
-                .is_err()
-            );
-
-            let clients = (0..8)
-                .map(|_| {
-                    let broker = Arc::clone(&broker);
-                    std::thread::spawn(move || {
-                        let route = BrokerRouteV3::parse(broker.route()).unwrap();
-                        let transferred = receive_from(&route, session, binding).unwrap();
-                        assert_eq!(transferred.backend.sha256(), &backend_sha);
-                        let cargo = transferred
-                            .pinned_cargo_image
-                            .expect("S09 transfer has a pinned Cargo image");
-                        assert_eq!(cargo.sha256(), &cargo_sha);
-                        drop(transferred.artifact);
-                    })
-                })
-                .collect::<Vec<_>>();
-            for client in clients {
-                client.join().unwrap();
-            }
-        }
-
-        #[test]
-        fn active_connection_limit_rejects_max_plus_one_and_recovers() {
-            const TEST_LIMIT: usize = 4;
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                TEST_LIMIT,
-                BROKER_IO_TIMEOUT,
-            );
-            let pause = broker.shutdown.install_worker_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let stalled = (0..TEST_LIMIT)
-                .map(|_| UnixStream::connect_addr(&address).unwrap())
-                .collect::<Vec<_>>();
-            for reached in 0..TEST_LIMIT {
-                assert!(
-                    pause
-                        .reached
-                        .recv_timeout(BROKER_IO_TIMEOUT)
-                        .unwrap_or_else(|_| {
-                            panic!(
-                                "only {reached} capacity workers paused; {} registered",
-                                broker.shutdown.active_connection_count()
-                            )
-                        })
-                        .is_none(),
-                    "capacity worker pause unexpectedly reported a socket"
-                );
-            }
-            assert_eq!(broker.shutdown.active_connection_count(), TEST_LIMIT);
-
-            let rejection_started = Instant::now();
-            let mut excess = UnixStream::connect_addr(&address).unwrap();
-            wait_until(
-                || broker.shutdown.admission_rejections.load(Ordering::Acquire) == 1,
-                "capability broker did not reject overload admission",
-            );
-            assert!(
-                rejection_started.elapsed() < PROMPT_SHUTDOWN_BOUND,
-                "limit-plus-one connection waited for an active slot"
-            );
-            excess
-                .set_read_timeout(Some(PROMPT_SHUTDOWN_BOUND))
-                .unwrap();
-            let mut byte = [0_u8; 1];
-            assert!(
-                !matches!(
-                    excess.read(&mut byte),
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                        )
-                ),
-                "limit-plus-one connection remained live"
-            );
-            assert!(
-                rejection_started.elapsed() < PROMPT_SHUTDOWN_BOUND,
-                "limit-plus-one connection was not rejected promptly"
-            );
-            assert!(broker.shutdown.active_connection_count() <= TEST_LIMIT);
-            assert_eq!(received_descriptor_count(&excess), 0);
-
-            drop(excess);
-            for _ in 0..TEST_LIMIT {
-                pause.release();
-            }
-            broker.shutdown.remove_worker_pause();
-            drop(stalled);
-            wait_until(
-                || broker.shutdown.active_connection_count() == 0,
-                "stalled connection slots were not released",
-            );
-            receive_from(&route, session, binding).unwrap();
-        }
-
-        #[test]
-        fn accepted_connection_deadline_rejects_slow_drip() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                4,
-                Duration::from_millis(500),
-            );
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let mut client = UnixStream::connect_addr(&address).unwrap();
-            let request = request_bytes(session, binding, [0x19; CHALLENGE_BYTES], &route.secret);
-            let mut sent = 0;
-            while sent < request.len() {
-                match client.write(&request[sent..sent + 1]) {
-                    Ok(1) => sent += 1,
-                    Ok(_) => break,
-                    Err(_) => break,
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            assert!(
-                sent < request.len(),
-                "a slow-drip request outlived the accepted-connection deadline"
-            );
-            wait_until(
-                || broker.shutdown.active_connection_count() == 0,
-                "expired slow-drip connection remained registered",
-            );
-        }
-
-        #[test]
-        fn caught_worker_panic_always_releases_registry_slot() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                2,
-                Duration::from_secs(5),
-            );
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            broker.shutdown.inject_worker_panic();
-            let failed = UnixStream::connect_addr(&address).unwrap();
-            wait_until(
-                || broker.shutdown.caught_worker_panics.load(Ordering::Acquire) == 1,
-                "injected worker panic was not caught",
-            );
-            wait_until(
-                || broker.shutdown.active_connection_count() == 0,
-                "panicking worker retained its registry slot",
-            );
-            drop(failed);
-            receive_from(&route, session, binding).unwrap();
-        }
-
-        #[test]
-        fn scoped_worker_spawn_failure_releases_registry_slot() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                1,
-                Duration::from_secs(5),
-            );
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            broker.shutdown.inject_worker_spawn_failure();
-            let failed = UnixStream::connect_addr(&address).unwrap();
-            wait_until(
-                || broker.shutdown.active_connection_count() == 0,
-                "failed worker spawn retained its registry slot",
-            );
-            assert_eq!(received_descriptor_count(&failed), 0);
-            drop(failed);
-            receive_from(&route, session, binding).unwrap();
-        }
-
-        #[test]
-        fn exactly_max_parallel_connections_admit_and_shutdown_cleanly() {
-            const CLIENTS: usize = MAX_ACTIVE_CONNECTIONS;
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                CLIENTS,
-                BROKER_IO_TIMEOUT,
-            );
-            let pause = broker.shutdown.install_worker_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let clients = (0..CLIENTS)
-                .map(|_| UnixStream::connect_addr(&address).unwrap())
-                .collect::<Vec<_>>();
-            for reached in 0..CLIENTS {
-                assert!(
-                    pause
-                        .reached
-                        .recv_timeout(BROKER_IO_TIMEOUT)
-                        .unwrap_or_else(|_| {
-                            panic!(
-                                "only {reached} capacity workers paused; {} registered",
-                                broker.shutdown.active_connection_count()
-                            )
-                        })
-                        .is_none(),
-                    "capacity worker pause unexpectedly reported a socket"
-                );
-                assert!(broker.shutdown.active_connection_count() > reached);
-            }
-            assert_eq!(broker.shutdown.active_connection_count(), CLIENTS);
-            assert_eq!(
-                broker.shutdown.admission_rejections.load(Ordering::Acquire),
-                0
-            );
-            let shutdown = Arc::clone(&broker.shutdown);
-            drop(clients);
-            drop(pause);
-            drop(broker);
-            assert_eq!(shutdown.active_connection_count(), 0);
-        }
-
-        #[test]
-        fn dispatch_lock_contention_past_deadline_sends_no_descriptors() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                2,
-                Duration::from_millis(250),
-            );
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let mut client = UnixStream::connect_addr(&address).unwrap();
-            client
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
-            wait_for_active_socket(&broker);
-
-            let shutdown = Arc::clone(&broker.shutdown);
-            let acquired = Arc::new(Barrier::new(2));
-            let holder_acquired = Arc::clone(&acquired);
-            let (release_tx, release_rx) = std::sync::mpsc::sync_channel(0);
-            let holder = thread::spawn(move || {
-                let _state = shutdown.state();
-                holder_acquired.wait();
-                release_rx.recv().unwrap();
-            });
-            acquired.wait();
-
-            let request = request_bytes(session, binding, [0x7a; CHALLENGE_BYTES], &route.secret);
-            client.write_all(&request).unwrap();
-            thread::sleep(Duration::from_millis(400));
-            release_tx.send(()).unwrap();
-            holder.join().unwrap();
-
-            assert_eq!(received_descriptor_count(&client), 0);
-            wait_until(
-                || broker.shutdown.active_connection_count() == 0,
-                "expired dispatch retained its registry slot",
-            );
-        }
-
-        #[test]
-        fn concurrent_requests_are_registered_before_dispatch_completes() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = s09_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let pause = broker.shutdown.install_dispatch_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let clients = (0..2)
-                .map(|_| {
-                    let route = route.clone();
-                    thread::spawn(move || receive_from(&route, session, binding))
-                })
-                .collect::<Vec<_>>();
-
-            assert!(pause.wait_until_reached().is_none());
-            let deadline = Instant::now() + BROKER_IO_TIMEOUT;
-            while broker.shutdown.active_connection_count() != clients.len() {
-                assert!(
-                    Instant::now() < deadline,
-                    "capability broker serialized accepted requests before dispatch"
-                );
-                thread::sleep(Duration::from_millis(1));
-            }
-            pause.release();
-            assert!(pause.wait_until_reached().is_none());
-            pause.release();
-
-            for client in clients {
-                client.join().unwrap().unwrap();
-            }
-        }
-
-        #[test]
-        fn shutdown_closes_every_connection_at_the_admission_limit() {
-            const TEST_LIMIT: usize = 6;
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                TEST_LIMIT,
-                Duration::from_secs(5),
-            );
-            let shutdown = Arc::clone(&broker.shutdown);
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let clients = (0..TEST_LIMIT)
-                .map(|_| {
-                    let client = UnixStream::connect_addr(&address).unwrap();
-                    client
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    client
-                })
-                .collect::<Vec<_>>();
-            wait_until(
-                || shutdown.active_connection_count() == TEST_LIMIT,
-                "capability broker did not register all shutdown test clients",
-            );
-
-            drop(broker);
-            assert_eq!(shutdown.active_connection_count(), 0);
-            for client in clients {
-                assert_eq!(received_descriptor_count(&client), 0);
-            }
-        }
-
-        #[test]
-        fn descriptor_pressure_does_not_disable_the_accept_loop() {
-            if std::env::var_os("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD").is_some() {
-                return;
-            }
-            let mut command = Command::new(std::env::current_exe().unwrap());
-            command
-                .args([
-                    "--exact",
-                    "capability_broker::platform::tests::descriptor_pressure_child",
-                    "--nocapture",
-                ])
-                .env("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD", "1");
-            let output = crate::process_execution::capture_output(&mut command).unwrap();
-            assert!(
-                output.status.success(),
-                "descriptor-pressure child failed:\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr),
-            );
-        }
-
-        #[test]
-        fn descriptor_pressure_child() {
-            if std::env::var_os("FE2O3_CAPABILITY_BROKER_FD_PRESSURE_CHILD").is_none() {
-                return;
-            }
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker = start_test_broker(
-                session,
-                binding,
-                &backend,
-                &artifact,
-                &pinned_cargo_image,
-                4,
-                Duration::from_secs(5),
-            );
-            let pause = broker.shutdown.install_accept_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let client = UnixStream::connect_addr(&address).unwrap();
-            assert!(pause.wait_until_reached().is_some());
-
-            let mut original = MaybeUninit::<libc::rlimit>::uninit();
-            assert_eq!(
-                unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, original.as_mut_ptr()) },
-                0
-            );
-            let original = unsafe { original.assume_init() };
-            let open_descriptors = fs::read_dir("/proc/self/fd").unwrap().count() as libc::rlim_t;
-            let reduced = libc::rlimit {
-                rlim_cur: (open_descriptors + 24).min(original.rlim_max),
-                rlim_max: original.rlim_max,
-            };
-            assert!(reduced.rlim_cur > open_descriptors + 4);
-            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &reduced) }, 0);
-            let mut fillers = Vec::new();
-            loop {
-                match File::open("/dev/null") {
-                    Ok(file) => fillers.push(file),
-                    Err(error) if error.raw_os_error() == Some(libc::EMFILE) => break,
-                    Err(error) => panic!("unexpected descriptor-pressure error: {error}"),
-                }
-            }
-
-            pause.release();
-            assert_eq!(received_descriptor_count(&client), 0);
-            drop(fillers);
-            assert_eq!(
-                unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &original) },
-                0
-            );
-            drop(client);
-
-            receive_from(&route, session, binding).unwrap();
-        }
-
-        #[test]
-        fn shutdown_wakes_stalled_and_partial_accepted_requests() {
-            for request_prefix_len in [0, REQUEST_BYTES / 2] {
-                let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-                let binding = ordinary_binding();
-                let broker = CapabilityBroker::start(
-                    session,
-                    binding,
-                    &backend,
-                    &artifact,
-                    &pinned_cargo_image,
-                )
-                .unwrap();
-                let route = BrokerRouteV3::parse(broker.route()).unwrap();
-                let address = endpoint_address(&route.endpoint).unwrap();
-                let mut client = UnixStream::connect_addr(&address).unwrap();
-                client
-                    .set_read_timeout(Some(Duration::from_secs(1)))
-                    .unwrap();
-                client.write_all(&vec![0_u8; request_prefix_len]).unwrap();
-                let active_identity = wait_for_active_socket(&broker);
-                assert!(object_is_open(active_identity));
-                broker.shutdown.wait_for_request_read();
-
-                let started = Instant::now();
-                drop(broker);
-                let elapsed = started.elapsed();
-                assert!(
-                    elapsed < PROMPT_SHUTDOWN_BOUND,
-                    "broker shutdown took {elapsed:?}, exceeding the {PROMPT_SHUTDOWN_BOUND:?} prompt bound"
-                );
-                assert_eq!(received_descriptor_count(&client), 0);
-                drop(client);
-                assert!(!object_is_open(active_identity));
-            }
-        }
-
-        #[test]
-        fn request_racing_shutdown_receives_no_descriptors() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = s09_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let pause = broker.shutdown.install_dispatch_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let mut client = UnixStream::connect_addr(&address).unwrap();
-            client
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
-            let active_identity = wait_for_active_socket(&broker);
-            let request = request_bytes(session, binding, [0x73; CHALLENGE_BYTES], &route.secret);
-            client.write_all(&request).unwrap();
-            let _ = pause.wait_until_reached();
-
-            let started = Instant::now();
-            broker.shutdown.begin();
-            pause.release();
-            drop(broker);
-            assert!(
-                started.elapsed() < Duration::from_secs(2),
-                "broker shutdown did not promptly cancel descriptor dispatch"
-            );
-            assert_eq!(received_descriptor_count(&client), 0);
-            drop(client);
-            assert!(!object_is_open(active_identity));
-        }
-
-        #[test]
-        fn shutdown_race_before_register_is_fail_closed() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let pause = broker.shutdown.install_accept_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let client = UnixStream::connect_addr(&address).unwrap();
-            client
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
-            let accepted_identity = pause
-                .wait_until_reached()
-                .expect("accept pause must report the accepted socket identity");
-            assert!(broker.shutdown.active_socket_identity().is_none());
-            assert!(object_is_open(accepted_identity));
-
-            let started = Instant::now();
-            broker.shutdown.begin();
-            pause.release();
-            drop(broker);
-            assert!(
-                started.elapsed() < Duration::from_secs(2),
-                "broker did not promptly reject an unregistered accepted connection"
-            );
-            assert_eq!(received_descriptor_count(&client), 0);
-            drop(client);
-            assert!(!object_is_open(accepted_identity));
-        }
-
-        #[test]
-        fn shutdown_race_after_send_lock_preserves_exact_response() {
-            let (temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let backend_sha = *backend.sha256();
-            let cargo_sha = *pinned_cargo_image.sha256();
-            let binding = s09_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let pause = broker.shutdown.install_locked_dispatch_pause();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            let address = endpoint_address(&route.endpoint).unwrap();
-            let mut client = UnixStream::connect_addr(&address).unwrap();
-            client
-                .set_read_timeout(Some(Duration::from_secs(1)))
-                .unwrap();
-            let active_identity = wait_for_active_socket(&broker);
-            let challenge = [0x74; CHALLENGE_BYTES];
-            let request = request_bytes(session, binding, challenge, &route.secret);
-            let request_auth = request[REQUEST_BYTES - REQUEST_AUTH_BYTES..]
-                .try_into()
-                .unwrap();
-            let expected_response = response_bytes(&route.secret, challenge, request_auth);
-            client.write_all(&request).unwrap();
-            assert!(pause.wait_until_reached().is_none());
-
-            let shutdown = Arc::clone(&broker.shutdown);
-            let shutdown_thread = thread::spawn(move || {
-                let started = Instant::now();
-                shutdown.begin();
-                started.elapsed()
-            });
-            broker.shutdown.wait_for_begin();
-            pause.release();
-
-            let (bytes, response, descriptors) = receive_raw_response(&client).unwrap();
-            assert_eq!(bytes, RESPONSE_BYTES);
-            assert_eq!(response, expected_response);
-            let transferred = decode_received_descriptors(descriptors, s09_binding()).unwrap();
-            assert_eq!(transferred.backend.sha256(), &backend_sha);
-            assert_eq!(
-                transferred
-                    .pinned_cargo_image
-                    .as_ref()
-                    .expect("S09 response must contain the pinned Cargo image")
-                    .sha256(),
-                &cargo_sha
-            );
-            fs::write(
-                transferred.artifact.child_path().join("send-wins-proof"),
-                b"exact retained artifact",
-            )
-            .unwrap();
-            assert_eq!(
-                fs::read(temp.0.join("artifact/send-wins-proof")).unwrap(),
-                b"exact retained artifact"
-            );
-            drop(transferred);
-
-            assert!(
-                shutdown_thread.join().unwrap() < Duration::from_secs(2),
-                "broker shutdown did not promptly follow the winning descriptor send"
-            );
-            drop(broker);
-            drop(client);
-            assert!(!object_is_open(active_identity));
-        }
-
-        #[test]
-        fn dropping_broker_closes_the_endpoint_before_post_build_work() {
-            let (_temp, backend, artifact, pinned_cargo_image, session) = fixture();
-            let binding = ordinary_binding();
-            let broker =
-                CapabilityBroker::start(session, binding, &backend, &artifact, &pinned_cargo_image)
-                    .unwrap();
-            let route = BrokerRouteV3::parse(broker.route()).unwrap();
-            drop(broker);
-
-            assert!(receive_from(&route, session, binding).is_err());
-        }
-
-        #[test]
-        fn endpoint_grammar_is_strict() {
-            for endpoint in ["", "01", &"A".repeat(ENDPOINT_HEX_BYTES), &"0".repeat(65)] {
-                assert!(endpoint_address(endpoint).is_err());
-            }
-        }
-    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -3459,11 +1528,7 @@ pub(crate) use platform::*;
 
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 mod unsupported {
-    #[cfg(feature = "qualification-oracles-test-only")]
-    use std::process::Command;
 
-    #[cfg(feature = "qualification-oracles-test-only")]
-    use fe2o3_artifact_transaction::BrokeredInvocationCapabilityClaimV1;
     use fe2o3_artifact_transaction::BuildSession;
 
     use crate::cargo_invocation_boundary::InvocationAuthorizationRegistryV1;
@@ -3473,15 +1538,10 @@ mod unsupported {
     use fe2o3_compiler_closure_capability::CompilerClosureCapabilityV1;
 
     pub(crate) const CAPABILITY_BROKER_ENV: &str = "FE2O3_CAPABILITY_BROKER_V1";
-    #[cfg(feature = "qualification-oracles-test-only")]
-    pub(crate) const INVOCATION_AUTHORITY_CHILD_FD_V1: i32 =
-        fe2o3_artifact_transaction::BROKERED_INVOCATION_AUTHORITY_CHILD_FD_V1;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum CapabilityProfileV1 {
         Ordinary,
-        #[cfg(feature = "qualification-oracles-test-only")]
-        S09,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3577,18 +1637,11 @@ mod unsupported {
         ) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
         }
-
-        #[cfg(feature = "qualification-oracles-test-only")]
-        pub(crate) fn inherit_for_child(&self, _command: &mut Command) -> Result<(), String> {
-            Err("Cargo capability transport requires Linux".to_owned())
-        }
     }
 
     pub(crate) struct BrokeredCapabilities {
         pub(crate) backend: PinnedCodegenBackend,
         pub(crate) artifact: PinnedDirectory,
-        #[cfg(feature = "qualification-oracles-test-only")]
-        pub(crate) pinned_cargo_image: Option<PinnedExecutable>,
         pub(crate) compiler_closure: Option<CompilerClosureCapabilityV1>,
         pub(crate) invocation_authority: Option<BrokeredInvocationAuthorityV1>,
     }

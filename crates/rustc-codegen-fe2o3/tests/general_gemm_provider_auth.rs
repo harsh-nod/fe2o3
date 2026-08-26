@@ -32,7 +32,7 @@ fn managed_build(
     artifacts: &Path,
 ) -> Output {
     let _ = std::fs::remove_dir_all(artifacts);
-    cargo_fe2o3::qualification_command(workspace)
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(

@@ -19,17 +19,17 @@ use fe2o3_kernel_descriptor::{
     KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1,
     ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
 };
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_descriptor::{AliasSemantics, OwnershipSemantics, PhysicalAbiComponentKind};
 use fe2o3_kernel_ir::{
     BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module, TargetCapability,
     WaveWidth, WorkgroupSize,
 };
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Signature, Terminator,
 };
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use reserved_fe2o3_symbols::{CrateBindingIdV1, derive_kernel_binding_id_v1};
 use reserved_fe2o3_symbols::{KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1};
 use rustc_middle::ty::TyCtxt;
@@ -42,7 +42,7 @@ use std::{
 const GFX942_PROCESSOR: &str = "gfx942";
 const EXPLICIT_ARGUMENT_BYTES: u32 = 48;
 const KERNARG_ALIGNMENT_BYTES: u32 = 8;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 const WORKGROUP_X: u32 = 256;
 
 const SOURCE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/RUSTC-DESCRIPTOR-SOURCE-IDENTITY/V1\0";
@@ -63,7 +63,7 @@ pub(crate) struct TypedDescriptorRootV1 {
 }
 
 impl TypedDescriptorRootV1 {
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn general_v3_semantic_identity(
         &self,
     ) -> Option<(
@@ -100,7 +100,7 @@ struct TypedDescriptorArgumentV1 {
 }
 
 /// Re-extracts exact rustc layout evidence instead of trusting retained identity bytes alone.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn typed_descriptor_roots_from_collection<'tcx>(
     tcx: TyCtxt<'tcx>,
     functions: &[CollectedFunction<'tcx>],
@@ -369,7 +369,7 @@ fn descriptor_scalar(value: fe2o3_artifacts::RustScalarElementTypeV1) -> ScalarT
 ///
 /// An all-raw module returns `None`. A mixed typed/raw module is rejected because publishing an
 /// incomplete descriptor table would create a misleading kernel closure.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 pub(crate) fn construct_compiler_descriptor_source_v1(
     envelope: &CompilerFfiEnvelopeV1,
     module: &Module,
@@ -847,7 +847,7 @@ fn descriptor_scalar_to_kernel_ir(scalar: ScalarTypeV1) -> Option<fe2o3_kernel_i
 /// The existing generic/scalar path remains fixed at WG256. This entry point
 /// admits WG64 and matrix capabilities only for the exact canonical tiled GEMM
 /// module; it does not relax descriptor policy for any caller-supplied graph.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn construct_tiled_gemm_v1_compiler_descriptor_source_v1(
     envelope: &CompilerFfiEnvelopeV1,
     module: &Module,
@@ -882,7 +882,7 @@ pub(crate) fn construct_tiled_gemm_v1_compiler_descriptor_source_v1(
 /// projects its already re-derived typed ABI onto the latter. The descriptor
 /// records the compiler-owned 1024-byte static LDS requirement; the attributed
 /// frontend contract remains a distinct zero-user-shared-memory record.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn construct_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
     envelope: &CompilerFfiEnvelopeV1,
     module: &Module,
@@ -936,7 +936,7 @@ pub(crate) fn construct_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
 ///
 /// The generic descriptor path remains WG256. This profile is reachable only
 /// for the private canonical row-softmax graph selected by rustc admission.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
     envelope: &CompilerFfiEnvelopeV1,
     module: &Module,
@@ -971,7 +971,7 @@ pub(crate) fn construct_row_softmax_v1_compiler_descriptor_source_v1(
 /// Constructs descriptor source only for the authenticated fixed Flash profile.
 /// The semantic sidecar is rechecked before projecting the freshly extracted
 /// rustc typed root onto the exact WG64/COV6 descriptor schema.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn construct_flash_attention_v1_compiler_descriptor_source_v1(
     envelope: &CompilerFfiEnvelopeV1,
     compiler_module: &InertCompilerModuleTextV1,
@@ -1043,7 +1043,7 @@ pub(crate) fn construct_flash_attention_v1_compiler_descriptor_source_v1(
     ))
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn flash_attention_descriptor_module_v1() -> Module {
     let mut block = BasicBlock::new(BlockId(0));
     block.terminator = Some(Terminator::Return { values: Vec::new() });
@@ -1075,7 +1075,7 @@ fn flash_attention_descriptor_module_v1() -> Module {
 }
 
 /// Builds the descriptor only for the consumed exact T8/E4/K2/C4 MoE profile.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn construct_moe_top2_v1_compiler_descriptor_source_v1(
     parts: &crate::collected_moe_top2_v1::AuthenticatedMoeTop2WorkerPartsV1,
     envelope: &CompilerFfiEnvelopeV1,
@@ -1204,7 +1204,7 @@ struct DescriptorConstructionProfileV1 {
     producer_version: &'static str,
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 const fn tiled_gemm_lds_slice1_descriptor_profile_v1() -> DescriptorConstructionProfileV1 {
     DescriptorConstructionProfileV1 {
         rank: 1,
@@ -1413,7 +1413,7 @@ fn construct_compiler_descriptor_source_with_profile_v1(
         .map_err(CompilerDescriptorError::Source)
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn validate_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
     source: &CompilerDescriptorSourceV1,
     envelope: &CompilerFfiEnvelopeV1,
@@ -1584,7 +1584,7 @@ fn validate_tiled_gemm_lds_slice1_compiler_descriptor_source_v1(
 
 /// Rechecks that the exact pre-section LLVM body is the body committed by the
 /// source-authenticated descriptor before Worker V2 sections are appended.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1(
     source: &CompilerDescriptorSourceV1,
     envelope: &CompilerFfiEnvelopeV1,
@@ -1624,7 +1624,7 @@ pub(crate) fn validate_tiled_gemm_lds_slice1_compiler_module_evidence_v1(
     Ok(())
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn recompute_projected_source_evidence_v1(
     authenticated_root: &TypedDescriptorRootV1,
     canonical_entry: &str,
@@ -1663,7 +1663,7 @@ fn recompute_projected_source_evidence_v1(
     )
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn recompute_projected_ir_evidence_v1(
     envelope: &CompilerFfiEnvelopeV1,
     compiler_module: &InertCompilerModuleTextV1,
@@ -1678,7 +1678,7 @@ fn recompute_projected_ir_evidence_v1(
     )
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn recompute_projected_ir_evidence_from_binding_v1(
     envelope: &CompilerFfiEnvelopeV1,
     compiler_module: &InertCompilerModuleTextV1,
@@ -1952,21 +1952,21 @@ pub(crate) enum CompilerDescriptorError {
         kernel: String,
         expected: [u32; 3],
     },
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     NonCanonicalTiledGemmModule,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     NonCanonicalTiledGemmLdsSlice1Module,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     UnexpectedAttributedSourceKernel(String),
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     TiledGemmLdsSlice1DescriptorMismatch(&'static str),
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     NonCanonicalRowSoftmaxModule,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     NonCanonicalFlashAttentionProfile,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     FlashAttentionDescriptorMismatch(&'static str),
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     NonCanonicalMoeTop2Module,
     ProductionFormalMemory(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     ProductionGeometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
@@ -2075,38 +2075,38 @@ impl fmt::Display for CompilerDescriptorError {
                 formatter,
                 "typed descriptor kernel `{kernel}` does not have the exact {expected:?} workgroup"
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::NonCanonicalTiledGemmModule => formatter.write_str(
                 "tiled GEMM descriptor construction requires the exact canonical tiled_gemm_v1 module",
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::NonCanonicalTiledGemmLdsSlice1Module => formatter.write_str(
                 "LDS Slice 1 descriptor construction requires the exact canonical tiled_gemm_lds_v1 module",
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::UnexpectedAttributedSourceKernel(kernel) => write!(
                 formatter,
                 "LDS Slice 1 descriptor construction requires the exact attributed source kernel, found `{kernel}`"
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::TiledGemmLdsSlice1DescriptorMismatch(field) => write!(
                 formatter,
                 "LDS Slice 1 compiler descriptor has an internal {field} mismatch"
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::NonCanonicalRowSoftmaxModule => formatter.write_str(
                 "row-softmax descriptor construction requires the exact canonical row_softmax_v1 module",
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::NonCanonicalFlashAttentionProfile => formatter.write_str(
                 "FlashAttention descriptor construction requires the exact authenticated B1/H1/N8/D16 profile",
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::FlashAttentionDescriptorMismatch(field) => write!(
                 formatter,
                 "FlashAttention compiler descriptor has an internal {field} mismatch"
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::NonCanonicalMoeTop2Module => formatter.write_str(
                 "MoE descriptor construction requires the exact authenticated T8/E4/K2/C4 module",
             ),
@@ -3244,7 +3244,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn semantic_witness_plans_select_only_general_v3_roots_in_binding_order() {
         assert!(
             crate::semantic_witness::plans_from_descriptor_roots(&[root(0x42)])
@@ -3362,7 +3362,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn exact_lds_slice1_descriptor_projects_source_name_and_binds_static_resources() {
         let source = tiled_gemm_lds_slice1_descriptor_source_for_test();
         let table = source.table();
@@ -3428,7 +3428,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn exact_row_softmax_descriptor_is_two_slices_cov6_wg64_and_288_bytes() {
         let source = row_softmax_v1_descriptor_source_for_test();
         let kernels = source.table().kernels();

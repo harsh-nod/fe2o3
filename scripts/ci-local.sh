@@ -23,7 +23,6 @@ readonly LOG_DIR
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_TEST_DRIVER_PACKAGE="cargo-fe2o3"
 readonly RUSTC_CODEGEN_QUALIFICATION_FEATURE="qualification-oracles-test-only"
-readonly CARGO_FE2O3_QUALIFICATION_FEATURE="qualification-oracles-test-only"
 readonly CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE="worker-v3-envelope-integration-test-only"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
@@ -370,9 +369,9 @@ prepare_cargo_fe2o3_driver() {
 
   case "${driver_profile}" in
     production) ;;
-    qualification)
-      feature_args=(--features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}")
-      ;;
+    # Qualification is a caller role, not a cargo-fe2o3 feature. The sealed
+    # driver remains byte-identical to the production-profile build.
+    qualification) ;;
     *)
       printf 'unknown cargo-fe2o3 driver profile: %s\n' \
         "${driver_profile}" >&2
@@ -664,8 +663,7 @@ run_cpu_tests() {
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
   run_step cargo-fe2o3-tests env FE2O3_HIP_SYS_DISABLE=1 \
-    cargo test --locked -p cargo-fe2o3 \
-      --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}"
+    cargo test --locked -p cargo-fe2o3
   run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \

@@ -121,7 +121,7 @@ fn run_frontend_check(workspace: &Path, case: SemanticCase) -> Output {
 }
 
 fn run_backend_build(workspace: &Path, case: SemanticCase) -> Output {
-    cargo_fe2o3::qualification_command(workspace)
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
