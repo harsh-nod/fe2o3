@@ -348,16 +348,16 @@ compiler-to-HSACO path and exercises the exact artifact on MI300X:
   The opt-in raw MI300X harness loads one executable and runs both kernels for
   lengths `1`, `255`, `256`, `257`, and `1023`; independent CPU oracles and
   all prefix/suffix canaries pass; and
-- a second ignored MI300X harness passes the same digest and matrix through
+- a now-retired second MI300X harness passed the same digest and matrix through
   generated checked slice capabilities, typed alpha/zeta selection and
   preparation, the reviewed load/resolve/dispatch/unload lifecycle, and safe
   `dispatch`. Its semantic witnesses and prerequisite authenticator are
   explicit test fixtures, so this is runtime-composition evidence only.
 
-This checkpoint supplies exact-digest source, compiler, direct LLVM/LLD,
-COV6, raw hardware, and generated-safe runtime-composition evidence. Both
-harnesses still inject the exported HSACO, and the safe harness uses an
-explicitly fake authenticator. Follow-on work now provides canonical durable
+This historical checkpoint supplied exact-digest source, compiler, direct
+LLVM/LLD, COV6, raw hardware, and generated-safe runtime-composition evidence.
+Both host harnesses and their workload-specific adapters have since been
+deleted. Follow-on work provides canonical durable
 lease reacquisition, sealed finalizer intent, a bounded Worker V2 envelope,
 Cargo publication and reconstruction of that inert envelope, the production V3
 descriptor handoff, and one-history persistent multi-kernel proof admission.
@@ -443,8 +443,8 @@ earlier authority transition.
    and executable-evidence records exist. They do not give Rust source an
    operational semantics, establish compiler/machine refinement, or bind
    production proof authority to the final payload.
-10. **Production prerequisite authentication.** Implement
-   `WorkerV2PrerequisiteAuthenticatorV1` only from reviewed immutable compiler,
+10. **Production verification authentication.** Implement a
+   `WorkerV3VerifierV1` only from reviewed immutable compiler,
    Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
    Every digest, identity, mutation, and stale-replay edge must fail closed.
 11. **Implemented API foundation: split mutable views.** Safe two-way and
@@ -660,14 +660,15 @@ Parallel ownership is split at frozen records:
 | G3.1-D: HSA dispatch | multi-symbol resolution, reviewed COV6 hidden arguments, queue submission, completion, unload ordering | Generic synchronous dispatch for an admitted kernel descriptor |
 | G3.1-E: adversarial tests | UI tests, mutation tests, CPU oracles, MI300X execution evidence | Reproducible positive and fail-closed evidence |
 
-Progress at `dc9738e` completes the bounded raw and generated-safe test
-vertical slices but not the production authority gate. G3.1-A has V3
+Progress at `dc9738e` recorded bounded raw and generated-safe Worker V2 test
+vertical slices but did not close the production authority gate. Those host
+harnesses are now deleted. G3.1-A has V3
 registration, rustc-semantic
 reconstruction, authenticated alpha/zeta role and ABI naming, guarded typed
 lowering, exact descriptors, and linked backend witnesses. G3.1-C has checked
-buffer views, allocation-relative capabilities, generated exact `Arguments`,
+buffer views, allocation-relative capabilities, generic Worker V3 `Arguments`,
 safe preparation, retained packing/alias lifetimes, and linear synchronous
-dispatch. Worker V2 supplies canonical COV6 publication and restart recovery to
+dispatch. Versioned compiler transaction records supply canonical COV6 publication and restart recovery to
 G3.1-B; explicit/complete kernarg reconciliation and post-optimization implicit
 ABI canonicalization now permit the genuine two-entry build to publish.
 G3.1-E records the exact SHA-256 and passing raw and generated-safe MI300X runs
@@ -675,9 +676,9 @@ of alpha and zeta at lengths `1`, `255`, `256`, `257`, and `1023`, including
 independent oracles and canaries. The safe run uses an explicitly fake
 prerequisite authenticator and test-only witnesses.
 
-Durable publication, finalized-bundle admission, currentness lease
-revalidation, the authenticated load state machine, generated alpha/zeta safe
-dispatch SPI, the reviewed runtime adapter, durable lease reacquisition, Cargo
+Durable publication, Worker V3 verification admission, currentness lease
+revalidation, the generic authenticated load/dispatch state machine, the
+reviewed runtime adapter, durable lease reacquisition, Cargo
 publication of the canonical load envelope, V3-only production descriptor
 handoff, and safe split mutable views already exist. The recovered Worker V2
 host route is deleted. Still missing is a production `WorkerV3VerifierV1` that

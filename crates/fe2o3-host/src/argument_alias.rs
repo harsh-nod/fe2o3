@@ -227,16 +227,6 @@ impl GeneratedDeviceSliceMetadata {
         Self::from_region_with_empty_policy(observed, region, true)
     }
 
-    /// Retains metadata for profiles whose checked contract permits an empty
-    /// selected region.
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(super) fn from_region_allow_empty<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
-        observed: &ObservedContext,
-        region: &R,
-    ) -> Result<Self, RegionError> {
-        Self::from_region_with_empty_policy(observed, region, true)
-    }
-
     fn from_region_with_empty_policy<T: DeviceCopy, R: DeviceBufferRegion<T> + ?Sized>(
         observed: &ObservedContext,
         region: &R,
@@ -790,11 +780,7 @@ pub struct GeneratedSliceArgumentPairV1<'allocation> {
 }
 
 impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
-    #[cfg(any(
-        test,
-        feature = "hardware-test-hooks",
-        feature = "qualification-oracles-test-only"
-    ))]
+    #[cfg(feature = "hardware-test-hooks")]
     pub(crate) const fn new(
         input: GeneratedArgumentInputV1<'allocation>,
         access: ArgumentAccess<'allocation>,
@@ -810,14 +796,6 @@ impl<'allocation> GeneratedSliceArgumentPairV1<'allocation> {
     ) {
         (self.input, self.access)
     }
-}
-
-#[cfg(test)]
-pub(crate) fn generated_slice_argument_pair_for_test<'allocation>(
-    input: GeneratedArgumentInputV1<'allocation>,
-    access: ArgumentAccess<'allocation>,
-) -> GeneratedSliceArgumentPairV1<'allocation> {
-    GeneratedSliceArgumentPairV1 { input, access }
 }
 
 impl fmt::Debug for ArgumentAccess<'_> {

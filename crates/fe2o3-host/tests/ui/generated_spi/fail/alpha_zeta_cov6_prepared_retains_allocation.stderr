@@ -1,8 +1,0 @@
-error: lifetime may not live long enough
-  --> tests/ui/generated_spi/fail/alpha_zeta_cov6_prepared_retains_allocation.rs:19:5
-   |
- 6 | fn escape<'loaded, 'allocation, P, K, A, Arguments>(
-   |                    ----------- lifetime `'allocation` defined here
-...
-19 |     prepared
-   |     ^^^^^^^^ returning this value requires that `'allocation` must outlive `'static`

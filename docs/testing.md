@@ -230,174 +230,39 @@ must also run the contract's generated-expectation, packing, alias, artifact,
 proof, HSA identity, hidden-kernarg, queue, and lifetime rejection suite.
 Compilation or symbol resolution alone does not pass this gate.
 
-## `daf0b45` alpha/zeta Worker V2 vertical slice
+## Historical alpha/zeta Worker V2 observation
 
-The following commands exercise the implementation landed through
-`daf0b459ced07a25376670c83b1474eaebcd1a68`. They cover source/unit,
-compile-fail, process-recovery, native-link, and raw-hardware boundaries. The
-hardware result is recorded separately below because it is not produced by the
-ordinary commands in this first block:
+Commits `daf0b459ced07a25376670c83b1474eaebcd1a68` and
+`dc9738e367c392f7716eacb8459ca73fa32abbbb` recorded compiler, raw HSA, and
+fake-authority generated-safe observations for one exact two-kernel COV6
+artifact. The Worker V2 host admission graph, exact alpha/zeta adapters,
+hardware harness, and optional parity shard have since been deleted. Those
+observations remain historical evidence and their commands are intentionally
+not current test instructions.
+
+Current host coverage uses the generic Worker V3 contract:
 
 ```text
-cargo test --locked -p fe2o3-core --all-targets
-cargo test --locked -p fe2o3-core --test device_buffer_view_ui
-cargo test --locked -p fe2o3-macros --all-targets
-cargo test --locked -p fe2o3-macros --test typed_kernel_fixtures
 cargo test --locked -p fe2o3-host --all-targets --all-features
 cargo test --locked -p fe2o3-host --test generated_spi_ui
-cargo test --locked -p fe2o3-host generated_alpha_zeta_cov6::tests
-cargo test --locked -p rustc-codegen-fe2o3 --lib
-cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test general_two_kernel_import
-cargo test --locked -p fe2o3-hsa-runtime --test gfx942_two_kernel_hardware
-cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
-  --test gfx942_two_kernel_hardware --no-run
-cargo test --locked -p cargo-fe2o3 --features qualification-oracles-test-only \
-  --test worker_v2_vertical_slice
-cargo test --locked -p cargo-fe2o3 --test worker_v2_vertical_slice \
-  --features worker-v2-fault-injection-test-only
-cargo test --locked -p cargo-fe2o3 --features qualification-oracles-test-only \
-  worker_v2_artifact_container::tests
-cargo test --locked -p fe2o3-hsaco-finalize --all-targets --all-features
-cargo test --locked -p fe2o3-artifact-transaction --all-targets --all-features
-scripts/tests/run-parity-snapshot.sh
-ctest --test-dir /absolute/path/to/llvm-link-worker-build --output-on-failure
+cargo test --locked -p fe2o3-host --test hsa_executable_lifecycle_ui
+cargo test --locked -p fe2o3-host --test worker_v3_verification_admission_ui
+cargo test --locked -p fe2o3-host --test production_application_handoff_ui
+cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-hooks --no-run
 ```
 
-The non-default Cargo feature is required for the raw/finalized 14-case process
-fault matrix. Without it, the production binary has no fault-switch path. The
-native worker CTests require a build configured against pinned LLVM and LLD,
-but do not require a GPU. Their COV6 case verifies protocol version 6, LLVM
-module flag 600, AMDHSA ELF ABI version 4, two metadata entries, both `.kd`
-symbols, one shared helper, deterministic producer-order output, and
-fail-closed descriptor mismatch handling. `.fe2o3.kd.v1` authentication and
-production `ArtifactContainerV1` publication are downstream and are not worker
-claims. A Release worker built on `mi300x` passes all three CTests and reports
-this measured identity:
-
-```text
-fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9
-```
-
-The exact reproducible CMake invocation and trust boundary are in
-[Evidence Record V1](evidence-record-v1.md). The native CTest observation is
-not itself GPU execution or an archived result record.
-
-The backend-witness link integration requires the same pinned Worker V2
-environment used by the publication tests:
-
-```text
-FE2O3_LLVM_LINK_WORKER=/absolute/path/to/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9 \
-FE2O3_LLVM_BUILD_ID=7.2.4 \
-FE2O3_GFX942_ALPHA_ZETA_OUTPUT=/absolute/path/to/alpha-zeta-cov6.hsaco \
-cargo test --locked -p rustc-codegen-fe2o3 \
-  --test kernel_ir_codegen \
-  worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses \
-  -- --ignored --exact --nocapture
-sha256sum /absolute/path/to/alpha-zeta-cov6.hsaco
-/opt/rocm/llvm/bin/llvm-readelf --notes \
-  /absolute/path/to/alpha-zeta-cov6.hsaco
-```
-
-This command builds the genuine Rust `alpha` and `zeta` kernels through the
-sealed Worker V2 path, links and validates both private backend witnesses,
-publishes one COV6 HSACO, and optionally exports it with create-new semantics.
-The measured output SHA-256 is
-`3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4`.
-Independent note inspection reports complete COV6 kernarg sizes of `296` bytes
-for `alpha` and `312` bytes for `zeta`; their explicit prefixes are `40` and
-`56` bytes respectively. The prior explicit-versus-complete finalization
-mismatch is fixed.
-
-Strict lint coverage for the Rust portions is:
-
-```text
-cargo clippy --locked -p fe2o3-macros --all-targets --all-features -- -D warnings
-cargo clippy --locked -p fe2o3-host --all-targets --all-features -- -D warnings
-cargo clippy --locked -p rustc-codegen-fe2o3 --all-targets --all-features -- -D warnings
-cargo clippy --locked -p cargo-fe2o3 --all-targets --all-features -- -D warnings
-```
-
-The landed production infrastructure includes durable Worker V2 publication,
-strict finalized-bundle host admission, currentness-lease revalidation, the
-authenticated HSA load/resolve/dispatch/unload state machine, macro-generated
-alpha/zeta argument and preparation adapters, generated safe dispatch SPI, and
-the reviewed `fe2o3-hsa-runtime` lifecycle and implicit-kernarg adapters. Unit,
-mutation, and UI tests cover the state transitions, retained borrows, packing,
-alias admission, currentness, identity substitution, and terminal completion.
-
-The production trust chain now has one protected V3 application descriptor
-handoff but still lacks prerequisite authentication. Cargo durably publishes
-and reconstructs the canonical load envelope, transfers pinned envelope and
-artifact-directory descriptors to an identity-pinned sealed application,
-binds them to a fresh occurrence and challenge-bound ACK, and retains a fresh
-current-publication lease through application exit. Recovered host admission
-revalidates that handoff and currentness but returns an inert descriptor. The
-`cargo-fe2o3` two-entry
-artifact-container adapter is compiled outside tests but remains inert.
-Separately, `WorkerV2PrerequisiteAuthenticatorV1` defines the reviewed boundary
-for compiler, Verus, proof, Rust ABI, and executable-effect evidence, but the
-repository has only test/fake implementations. Therefore the production safe
-path cannot yet authentically promote those prerequisites into load/launch
-authority.
-
-The raw alpha/zeta hardware harness has CPU/unit tests for exact `40`/`56` byte
-packing, equal-length rejection, boundary grids, independent oracles, and canary
-corruption. Its feature-gated ignored test was invoked on an AMD Instinct
-MI300X, `gfx942:xnack-`, with ROCm 7.2.4 as follows:
-
-```text
-FE2O3_RUN_GFX942_TWO_KERNEL=1 \
-FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
-FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
-cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
-  --test gfx942_two_kernel_hardware \
-  gfx942_cov6_alpha_then_zeta_one_executable \
-  -- --ignored --exact --nocapture
-```
-
-The digest-pinned run passed at lengths `1`, `255`, `256`, `257`, and `1023`,
-including independent CPU-oracle and prefix/suffix canary checks. This is real
-alpha/zeta raw-path GPU execution, but the harness manually packs arguments and
-calls the reviewed unsafe HSA adapter directly. It is not an end-to-end hardware
-test of the generated alpha/zeta safe path, and it was not archived by the V1
-snapshot runner. It therefore does not promote a parity row or dashboard
-hardware-evidence strength.
-
-The generated-safe composition test uses the same environment and artifact pin:
-
-```text
-FE2O3_RUN_GFX942_TWO_KERNEL=1 \
-FE2O3_GFX942_ALPHA_ZETA_HSACO=/absolute/path/to/alpha-zeta-cov6.hsaco \
-FE2O3_GFX942_ALPHA_ZETA_SHA256=3a916cdabca05ac74d340889aab2067221d6d1252a7cde13e61c1786252565c4 \
-cargo test --locked -p fe2o3-hsa-runtime --features hardware-test-hooks \
-  --test gfx942_two_kernel_hardware \
-  gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
-  -- --ignored --exact --nocapture
-```
-
-At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb` this passed on MI300X for
-all five lengths through generated checked slice capabilities, typed alpha/zeta
-preparation, safe dispatch, and one reviewed loaded executable. The test-only
-semantic witnesses and explicitly fake authenticator mean this is not
-production proof authentication or a dashboard hardware-evidence strength.
-Use the optional `GFX942-ALPHA-ZETA-HARDWARE` parity snapshot shard to archive
-this exact command and artifact pin; see [Evidence Record V1](evidence-record-v1.md).
+The next hardware evidence must enter through the production Worker V3
+application, verifier, HSA load, generated dispatch, completion, and unload
+path. A fake verifier or externally selected legacy route cannot satisfy that
+gate.
 
 ### Repository-backed compiler evidence controller
 
-The checked `tests/fixtures/compiler-evidence/gfx942-alpha-zeta-cov6.json` and
-`gfx942-mi300x-tools.json` contracts describe one exact-artifact observation
-on the configured MI300X host. They pin ROCm 7.2.4, LLVM `22.0.0git`, the
-nightly-2026-04-03 Cargo/rustc identities, the shell, Python, CMake, CTest,
-Ninja, C++/LLD tools, core utilities and their runtime closure, the measured
-Release Worker identity and executable digest, the Rust source digest, exact
-`gfx942:xnack-` COV6 metadata, the canonical descriptor section, the finalized
-HSACO digest and size, and the five MI300X boundary lengths. The 9 KiB binary
-is regenerated and is not committed.
-
-Run the complete controller from a clean committed checkout. Both output paths
-must be absent, absolute paths with existing canonical parents:
+The checked compiler-evidence fixtures pin the exact source, toolchain, direct
+LLVM/LLD worker, COV6 metadata, descriptor section, and finalized HSACO
+identity used by the bounded alpha/zeta compiler observation. The controller
+runs two independent clean builds and requires byte-identical worker and
+artifact outputs.
 
 ```text
 systemd-run --user --scope --quiet -p Delegate=yes \
@@ -406,87 +271,14 @@ systemd-run --user --scope --quiet -p Delegate=yes \
   /absolute/absent/evidence-root
 ```
 
-The launcher invokes Python with `-B` and `PYTHONDONTWRITEBYTECODE=1`, clears
-the inherited environment, and rejects Python cache files in a clean checkout.
-Before its first child, the
-controller retains the digest-pinned loader/DSO fixture and verifies every
-configured executable by canonical path, SHA-256, version output and retained
-stat identity. Every child is descriptor-executed under a bounded delegated
-cgroup, irreversible Landlock write confinement, and a generated PATH
-allowlist. The hostile tests exercise hangs, output and memory exhaustion,
-double forks, `setsid`, and attempted migration into writable sibling and
-controller cgroups. Run A and run B
-use separately copied immutable tracked sources, vendored registries, Rust
-sysroots, LLVM/ROCm/OCML closure records, initially empty Worker build trees,
-and `CARGO_TARGET_DIR`s. Generated native tests execute directly from sealed
-descriptors and CTest must report 3/3 through descriptor-backed commands. Each
-run independently builds the Worker and Rust integration-test executable,
-records request/response/raw/final identities, runs the real `rustc ->
-CompilerModuleHandoffV2 -> Worker V2` path, and must produce the checked
-byte-identical Worker and HSACO. After comparison, the controller retains the
-run-A HSACO descriptor, independently builds the ignored hardware test, retains
-its direct dynamic-runtime closure, and requires the hardware child to compare
-the direct HSACO dirent with the inherited descriptor before dispatching the
-descriptor bytes.
-
-The provider manifest includes the selected GCC C++ and target headers, system
-headers, Clang resource headers, CMake modules, LLVM libraries, ROCm headers and
-version files, and device bitcode. Large ROCm DSOs outside this compile path are
-listed by exact path, size, and dependency justification rather than silently
-omitted. Each run also retains its generated Worker objects, dependency graph,
-native tests, Cargo build-script outputs, proc-macro/backend shared objects, and
-the hardware test executable. Cross-run comparison is keyed by stable labels,
-rejects label reordering and source-inode reuse, and canonicalizes only the
-run-specific Cargo hash suffixes. Timing-only CTest and Ninja logs are excluded
-explicitly as non-input observations.
-
-For the final dispatch, the controller parses and retains the ELF interpreter,
-the direct `ldd` DSO closure, and the transitive closures of the exact
-ROCr-requested `libamd_comgr` and `libhsa-amd-aqlprofile64` dynamic roots. It
-also retains the loader cache, NSS/passwd/timezone inputs, and exact libdrm GPU
-identity file, then re-runs dependency discovery while every closure file is
-retained. Landlock admits only those regular files and the HSACO. Unlisted
-regular-file `dlopen` and data reads fail closed. `/proc`, `/sys`, and `/dev`
-do not share one policy: `/proc` and `/sys` remain read-only observation roots,
-while `/dev` has no root grant. Only stat-bound `/dev/kfd`, render nodes 128
-through 184 in steps of eight, `/dev/null`, and `/dev/random` are writable; GPU nodes are
-also readable. The hardware child verifies that `/dev/shm` create, read, and
-`dlopen` all fail before the exact GPU dispatch succeeds.
-
-The evidence directory retains bounded canonical Worker V2 request/response/raw
-output bytes, hardware stdout/stderr, and cgroup sample/final files. Their
-digests are bound through reproduction manifests and the root summary. Mutation,
-omission, and oversize self-tests exercise the corresponding verifier.
-
-The repository-golden test uses host-visible HSA pool allocations for guarded
-inputs and outputs; it does not use HIP `DeviceBuffer` compilation or linking.
-The hardware child remains physically capped at 8 GiB by cgroup while a
-separate bounded 4 TiB `RLIMIT_AS` admits the virtual GPU mappings required by
-the eight-device MI300X host.
-
-The golden update is accepted only through the committed canonical transition,
-public-key, and signature fixtures. That transition binds the old/new identities
-and both external reproduction-manifest digests. This is a fixture-only Ed25519
-review check with `authority=none`, not an authenticated human or production
-review service.
-
-This is only an observation of those exact artifact bytes under the recorded
-tools plus an exact-artifact MI300X observation. The hardware stage loads one
-executable and dispatches alpha/zeta at lengths `1`, `255`, `256`, `257`, and
-`1023` with CPU oracles and prefix/suffix canaries. It does not prove which
-compiler process caused the bytes, refine source semantics, authenticate the
-build, create production load or dispatch authority, or issue a compiler
-receipt.
+The controller is compiler evidence only. Its retired Worker V2 hardware
+capture has been removed, so it does not load or dispatch the artifact. The
+canonical transaction uses versioned Worker V2 serialization names, but those
+records grant no application, verifier, HSA load, or launch authority. Current
+hardware qualification must use the sole production Worker V3 route.
 
 The compiler-generation path uses LLVM and LLD library APIs only. It invokes
-neither COMGR nor a command-line HSACO linker/disassembler. The hardware HSA
-loader may dynamically load the retained ROCm COMGR library as a runtime code
-object dependency; it is outside artifact generation and is not used to link
-the checked HSACO. The controller output remains descriptive local evidence:
-it does not construct
-`AuthenticatedCompilerTransactionExecutionReceiptV1`, authenticate compiler
-causality, grant load/launch authority outside the test harness, archive signed
-production evidence, or promote parity.
+neither COMGR nor a command-line HSACO linker or disassembler.
 
 ## Verus proof coverage
 

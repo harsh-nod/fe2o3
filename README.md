@@ -619,16 +619,15 @@ turn the foundations below into end-to-end features.
   recognized only so they can be rejected before application spawn.
   Feature-free `fe2o3-host` builds export only the Worker V3 application,
   admission, verification, HSA load, and generated dispatch route. Worker V2
-  application recovery has been deleted. Independent bundle admission,
-  prerequisite authentication, HSA loading, launch metadata, and the old
-  workload-specific adapters still require the host crate's
-  `qualification-oracles-test-only` feature. General
+  application recovery, bundle admission, prerequisite authentication, HSA
+  lifecycle, launch metadata, and workload-specific host adapters have been
+  deleted rather than retained behind a qualification feature. General
   `#[kernel(typed)]` expansion, including the exact `f32` vecadd signature,
   emits only the generic Worker V3 adapter. The old
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
-  Production prerequisite authentication, authorized HSA loading, and launch
-  remain open.
+  Production Worker V3 verification authority remains open; authorized Worker
+  V3 HSA loading and generated dispatch are the only host execution route.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper
@@ -730,24 +729,25 @@ turn the foundations below into end-to-end features.
   it is evidence for the generated artifact's code, ABI, and behavior, not an
   execution of the production generated adapter or a general safety proof.
 
-  At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, a second ignored
+  At commit `dc9738e367c392f7716eacb8459ca73fa32abbbb`, a now-retired ignored
   MI300X test passed the same digest and boundary-length matrix through the
   generated alpha/zeta argument capabilities, selected-kernel preparation,
   reviewed load/resolve/dispatch/unload lifecycle, and safe `dispatch` SPI.
   It uses an explicitly fake prerequisite authenticator and test-only semantic
   witnesses, so it validates runtime composition and hardware behavior but is
   not production authentication, Verus evidence, or a machine-code safety
-  proof.
+  proof. That Worker V2 host harness and its workload-specific adapters are no
+  longer part of the source tree; the observation remains historical evidence.
 
   Compiler identity and origin are not authenticated, no Verus result or
   compiler/machine-code refinement proof is authenticated and bound to this
   executable, and the publication receipt grants no HSA load or launch
   authority. On the MI300X `gfx942:xnack-` lane, the ignored real-Cargo
   alpha/zeta Worker V2 publication test and the digest-pinned HSA hardware
-  tests pass alongside the earlier direct-source and external-bitcode-provider
-  publication tests. Both the raw and generated-safe hardware paths are now
-  exercised, but no production prerequisite authenticator can authorize the
-  safe SPI from authenticated compiler/proof/effect evidence.
+  tests passed alongside the earlier direct-source and external-bitcode-provider
+  publication tests. The retired runs do not constitute current production
+  execution coverage. A production Worker V3 verifier must authenticate and
+  join compiler, proof, and effect evidence before the sole safe SPI can run.
 - G8 adds deterministic model generation/reduction and a bounded conformance
   harness that executes fill, vecadd, and affine kernels against an independent
   HIP/CPU oracle. `cargo fe2o3 inspect` performs bounded read-only decoding.
@@ -792,8 +792,9 @@ turn the foundations below into end-to-end features.
   `Arguments` are implemented as source/unit foundations. At `d509ca5`, their
   generated slice capabilities can consume checked shared/exclusive subregions,
   retain allocation-relative region identity, and feed the existing alias and
-  packing foundations. Exact alpha/zeta `Arguments` now have macro-emitted
-  preparation/dispatch adapters; other signatures remain inert.
+  packing foundations. The macro emits the generic Worker V3 argument and
+  preparation contract for every accepted signature; exact alpha/zeta host
+  adapters have been deleted.
   Aggregates, return values, and arbitrary rustc layouts also remain outside V3.
   In required-envelope mode, the Cargo production path consumes a measured
   upstream canonical envelope-input capsule rather than synthesizing direct-link
@@ -813,12 +814,9 @@ turn the foundations below into end-to-end features.
   returning an inert descriptor. This is the sole protected production
   descriptor handoff, but it grants no prerequisite, load, or launch authority.
 
-  Separately, only fake/test implementations of
-  `WorkerV2PrerequisiteAuthenticatorV1` exist, so compiler, Verus/proof, Rust
-  ABI, and machine-effect evidence cannot yet be authentically promoted into
-  safe dispatch. The generated-safe MI300X test proves that the existing host
-  and HSA state machines compose once supplied with test authority; it does not
-  close any of these production or proof gaps.
+  No production Worker V3 verifier yet promotes compiler, Verus/proof, Rust
+  ABI, and machine-effect evidence into safe dispatch. Retired Worker V2 test
+  authority is not an alternate route and cannot be selected in any build.
 - Checked mutable views now support simultaneously live disjoint subviews via
   `split_at_mut`, with exclusivity enforced by Rust borrowing. The mechanical
   Verus proof of that split and its allocation-relative region theorem remains

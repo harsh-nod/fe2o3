@@ -1,13 +1,8 @@
-error[E0624]: method `device_pointer` is private
+error[E0599]: no method named `device_pointer` found for struct `fe2o3_host::GeneratedReadDeviceSlice<'allocation, T>` in the current scope
  --> tests/ui/generated_spi/fail/generated_slices_have_no_raw_pointer.rs:7:19
   |
 7 |     let _ = input.device_pointer();
-  |                   ^^^^^^^^^^^^^^ private method
-  |
- ::: src/argument_alias.rs
-  |
-  |     pub(crate) fn device_pointer(&self) -> *const () {
-  |     ------------------------------------------------ private method defined here
+  |                   ^^^^^^^^^^^^^^ method not found in `fe2o3_host::GeneratedReadDeviceSlice<'_, f32>`
 
 error[E0599]: no method named `device_pointer` found for struct `fe2o3_host::GeneratedReadWriteDeviceSlice<'allocation, T>` in the current scope
  --> tests/ui/generated_spi/fail/generated_slices_have_no_raw_pointer.rs:8:19

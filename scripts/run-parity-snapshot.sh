@@ -25,16 +25,12 @@ Options:
   --shard NAME             Select one Q1-Q7 shard; repeat to select several
   --gfx942-compile         Add the optional gfx942 compile shard
   --gfx942-hardware        Add the optional gfx942 hardware shard
-  --gfx942-alpha-zeta-hardware
-                           Add the generated-safe alpha/zeta hardware shard
   --llvm-link-worker PATH  Pinned direct LLVM Worker V2 executable
   --llvm-link-worker-build-id ID
                            Pinned direct LLVM Worker V2 build ID
   --llvm-build-id ID       Pinned LLVM build ID used by Worker V2
   --llvm-as PATH           Pinned llvm-as executable used by Worker V2
   --vecadd-hsaco PATH      Archive-relative HSACO for the hardware shard
-  --alpha-zeta-hsaco PATH  Archive-relative HSACO for the alpha/zeta shard
-  --alpha-zeta-sha256 HEX  Expected lowercase SHA-256 for that exact HSACO
   --verus PATH             Absolute Verus executable for Q7
   --timeout-seconds N      Per-shard bound, 1..86400 (default: 7200)
   --path PATH              Exact absolute-only PATH recorded for commands
@@ -56,7 +52,7 @@ die() {
 
 valid_shard() {
   case "$1" in
-    Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | GFX942-COMPILE | GFX942-HARDWARE | GFX942-ALPHA-ZETA-HARDWARE) return 0 ;;
+    Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | GFX942-COMPILE | GFX942-HARDWARE) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -249,12 +245,6 @@ build_shard_command() {
         safely_executes_generated_worker_v2_vecadd_end_to_end \
         -- --ignored --exact --nocapture
       ;;
-    GFX942-ALPHA-ZETA-HARDWARE)
-      append_command command "${cargo_bin}" test -p fe2o3-hsa-runtime \
-        --features hardware-test-hooks --test gfx942_two_kernel_hardware \
-        gfx942_cov6_alpha_then_zeta_generated_safe_spi_with_fake_authenticator \
-        -- --ignored --exact --nocapture
-      ;;
     *) die "unknown shard: ${shard}" ;;
   esac
   printf '%s' "${command}"
@@ -284,7 +274,6 @@ Q6	core	Cargo integration and differential conformance tests
 Q7	core	positive and negative Verus proof fixtures
 GFX942-COMPILE	optional	gfx942 ROCm compilation and two-kernel publication
 GFX942-HARDWARE	optional	gfx942 identity and generated vecadd execution
-GFX942-ALPHA-ZETA-HARDWARE	optional	gfx942 generated-safe alpha/zeta execution with explicit fake authentication
 EOF
 }
 
@@ -313,8 +302,6 @@ main() {
   local rustup_home="${RUSTUP_HOME:-${recorded_home}/.rustup}"
   local verus=""
   local vecadd_hsaco=""
-  local alpha_zeta_hsaco=""
-  local alpha_zeta_sha256=""
   local llvm_link_worker=""
   local llvm_link_worker_build_id=""
   local llvm_build_id=""
@@ -322,7 +309,6 @@ main() {
   local explicit_selection=false
   local want_gfx942_compile=false
   local want_gfx942_hardware=false
-  local want_gfx942_alpha_zeta_hardware=false
   local shard=""
   local commit=""
   local bash_bin=""
@@ -336,7 +322,6 @@ main() {
   local tmp_dir=""
   local output_dir=""
   local hsaco_absolute=""
-  local alpha_zeta_hsaco_absolute=""
   local index=0
   local -a selected=()
   local -a core_selection=()
@@ -345,7 +330,7 @@ main() {
 
   while (($# > 0)); do
     case "$1" in
-      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --vecadd-hsaco | --alpha-zeta-hsaco | --alpha-zeta-sha256 | --llvm-link-worker | --llvm-link-worker-build-id | --llvm-build-id | --llvm-as | --shard)
+      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --vecadd-hsaco | --llvm-link-worker | --llvm-link-worker-build-id | --llvm-build-id | --llvm-as | --shard)
         (($# >= 2)) || die "$1 requires a value"
         case "$1" in
           --repo) repo="$2" ;;
@@ -357,8 +342,6 @@ main() {
           --rustup-home) rustup_home="$2" ;;
           --verus) verus="$2" ;;
           --vecadd-hsaco) vecadd_hsaco="$2" ;;
-          --alpha-zeta-hsaco) alpha_zeta_hsaco="$2" ;;
-          --alpha-zeta-sha256) alpha_zeta_sha256="$2" ;;
           --llvm-link-worker) llvm_link_worker="$2" ;;
           --llvm-link-worker-build-id) llvm_link_worker_build_id="$2" ;;
           --llvm-build-id) llvm_build_id="$2" ;;
@@ -374,7 +357,6 @@ main() {
         ;;
       --gfx942-compile) want_gfx942_compile=true; shift ;;
       --gfx942-hardware) want_gfx942_hardware=true; shift ;;
-      --gfx942-alpha-zeta-hardware) want_gfx942_alpha_zeta_hardware=true; shift ;;
       -h | --help) usage; return 0 ;;
       *) die "unknown option: $1" ;;
     esac
@@ -401,7 +383,6 @@ main() {
   fi
   [[ "${want_gfx942_compile}" == false ]] || selected+=(GFX942-COMPILE)
   [[ "${want_gfx942_hardware}" == false ]] || selected+=(GFX942-HARDWARE)
-  [[ "${want_gfx942_alpha_zeta_hardware}" == false ]] || selected+=(GFX942-ALPHA-ZETA-HARDWARE)
   for shard in "${selected[@]}"; do
     [[ ! -v "seen[${shard}]" ]] || die "duplicate shard selection: ${shard}"
     seen["${shard}"]=1
@@ -443,18 +424,6 @@ main() {
     [[ -f "${hsaco_absolute}" && ! -L "${hsaco_absolute}" ]] ||
       die 'the hardware shard HSACO must be a regular non-symlink archive file'
   fi
-  if [[ -v 'seen[GFX942-ALPHA-ZETA-HARDWARE]' ]]; then
-    valid_relative_path "${alpha_zeta_hsaco}" ||
-      die 'the alpha/zeta hardware shard requires an archive-relative --alpha-zeta-hsaco path'
-    [[ "${alpha_zeta_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
-      die 'the alpha/zeta hardware shard requires a lowercase --alpha-zeta-sha256 digest'
-    alpha_zeta_hsaco_absolute="$(realpath -m -- "${archive_root}/${alpha_zeta_hsaco}")"
-    path_is_within "${alpha_zeta_hsaco_absolute}" "${archive_root}" ||
-      die 'alpha/zeta HSACO path escapes archive root'
-    [[ -f "${alpha_zeta_hsaco_absolute}" && ! -L "${alpha_zeta_hsaco_absolute}" ]] ||
-      die 'the alpha/zeta hardware shard HSACO must be a regular non-symlink archive file'
-  fi
-
   if [[ "${mode}" == dry-run ]]; then
     printf 'snapshot_plan_schema_version\t1\n'
     printf 'git_commit\t%s\n' "${commit}"
@@ -505,8 +474,7 @@ main() {
       printf 'environment\t%s\tRUSTUP_HOME\t%s\n' "${shard}" "$(hex_encode "${rustup_home}")"
       printf 'environment\t%s\tTMPDIR\t%s\n' "${shard}" "$(hex_encode "${tmp_dir}")"
       [[ "${shard}" != Q7 ]] || printf 'environment\t%s\tVERUS\t%s\n' "${shard}" "$(hex_encode "${verus}")"
-      [[ "${shard}" != GFX942-COMPILE && "${shard}" != GFX942-HARDWARE &&
-        "${shard}" != GFX942-ALPHA-ZETA-HARDWARE ]] ||
+      [[ "${shard}" != GFX942-COMPILE && "${shard}" != GFX942-HARDWARE ]] ||
         printf 'environment\t%s\tFE2O3_TARGET\t%s\n' "${shard}" "$(hex_encode gfx942)"
       if [[ "${shard}" == GFX942-COMPILE ]]; then
         printf 'environment\t%s\tFE2O3_LLVM_LINK_WORKER\t%s\n' \
@@ -523,16 +491,6 @@ main() {
           "${shard}" "$(hex_encode "${hsaco_absolute}")"
       [[ "${shard}" != GFX942-HARDWARE ]] ||
         printf 'artifact\t%s\tvecadd-hsaco\t%s\n' "${shard}" "${vecadd_hsaco}"
-      if [[ "${shard}" == GFX942-ALPHA-ZETA-HARDWARE ]]; then
-        printf 'environment\t%s\tFE2O3_RUN_GFX942_TWO_KERNEL\t%s\n' \
-          "${shard}" "$(hex_encode 1)"
-        printf 'environment\t%s\tFE2O3_GFX942_ALPHA_ZETA_HSACO\t%s\n' \
-          "${shard}" "$(hex_encode "${alpha_zeta_hsaco_absolute}")"
-        printf 'environment\t%s\tFE2O3_GFX942_ALPHA_ZETA_SHA256\t%s\n' \
-          "${shard}" "$(hex_encode "${alpha_zeta_sha256}")"
-        printf 'artifact\t%s\talpha-zeta-hsaco\t%s\n' \
-          "${shard}" "${alpha_zeta_hsaco}"
-      fi
       printf 'tool\t%s\tbash\t%s\n' "${shard}" "${bash_bin}"
       shard_uses_cargo "${shard}" && printf 'tool\t%s\tcargo\t%s\n' "${shard}" "${cargo_bin}"
       printf 'tool\t%s\tcommand\t%s\n' "${shard}" "${timeout_bin}"
@@ -569,8 +527,7 @@ main() {
     if [[ "${shard}" == Q7 ]]; then
       record_args+=(--env "VERUS=${verus}" --tool "verus=${verus}")
     fi
-    if [[ "${shard}" == GFX942-COMPILE || "${shard}" == GFX942-HARDWARE ||
-      "${shard}" == GFX942-ALPHA-ZETA-HARDWARE ]]; then
+    if [[ "${shard}" == GFX942-COMPILE || "${shard}" == GFX942-HARDWARE ]]; then
       record_args+=(--env FE2O3_TARGET=gfx942)
     fi
     if [[ "${shard}" == GFX942-COMPILE ]]; then
@@ -587,14 +544,6 @@ main() {
       record_args+=(
         --env "FE2O3_GFX942_VECADD_HSACO=${hsaco_absolute}"
         --artifact "vecadd-hsaco=${vecadd_hsaco}"
-      )
-    fi
-    if [[ "${shard}" == GFX942-ALPHA-ZETA-HARDWARE ]]; then
-      record_args+=(
-        --env FE2O3_RUN_GFX942_TWO_KERNEL=1
-        --env "FE2O3_GFX942_ALPHA_ZETA_HSACO=${alpha_zeta_hsaco_absolute}"
-        --env "FE2O3_GFX942_ALPHA_ZETA_SHA256=${alpha_zeta_sha256}"
-        --artifact "alpha-zeta-hsaco=${alpha_zeta_hsaco}"
       )
     fi
     record_args+=(-- "${outer_argv[@]}")

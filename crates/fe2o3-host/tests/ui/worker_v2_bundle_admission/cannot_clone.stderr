@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `AdmittedFinalizedWorkerV2BundleV1` in the current scope
- --> tests/ui/worker_v2_bundle_admission/cannot_clone.rs:9:12
-  |
-9 |     (token.clone(), token)
-  |            ^^^^^ method not found in `AdmittedFinalizedWorkerV2BundleV1`

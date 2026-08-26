@@ -972,7 +972,6 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
- "fe2o3-worker-v2-bundle",
  "libc",
  "reserved-fe2o3-symbols",
  "rmpv",

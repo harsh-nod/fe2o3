@@ -493,8 +493,6 @@ rg -q -- '--return-child-result' "${RUNNER}"
 rg -q 'FE2O3_S09_HARDWARE_PASS' "${RUNNER}"
 rg -q 'FE2O3_S09_HARNESS_RESULT_V1' "${RUNNER}"
 expect_fail rg -Fq -- "-ex 'if \$_exitcode" "${RUNNER}"
-expect_fail rg -q 'FE2O3_S09_HARNESS_RESULT_V1' \
-  "${ROOT}/crates/fe2o3-hsa-runtime/tests/gfx942_two_kernel_hardware.rs"
 rg -q 's09_gfx942_cov6_alpha_only_controller' "${RUNNER}"
 rg -q 'FE2O3_S09_GFX942_ALPHA_SHA256' "${RUNNER}"
 rg -q 'FE2O3_S09_GFX942_ALPHA_HSACO_DEVICE' "${RUNNER}"

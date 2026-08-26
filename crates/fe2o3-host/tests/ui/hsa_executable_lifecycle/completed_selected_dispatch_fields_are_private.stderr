@@ -1,5 +1,0 @@
-error[E0616]: field `completed` of struct `fe2o3_host::hsa_executable_lifecycle::HsaCompletedSelectedWorkerV2DispatchV1` is private
-  --> tests/ui/hsa_executable_lifecycle/completed_selected_dispatch_fields_are_private.rs:38:32
-   |
-38 |     let _authority = completed.completed;
-   |                                ^^^^^^^^^ private field

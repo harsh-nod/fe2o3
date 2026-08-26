@@ -783,27 +783,6 @@ fn validate_inspection(
     )
 }
 
-/// Reuses the strict physical inspection policy for another provenance-preserving host bridge.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn inspect_payload_against_artifact_identity(
-    exact_payload_bytes: &[u8],
-    identity: &ArtifactKernelIdentityV1,
-    expected: &[PublishedPayloadKernelV1],
-) -> Result<
-    (
-        InspectedKernelBindings,
-        Box<[PublishedKernelPhysicalLayoutV1]>,
-        usize,
-    ),
-    PublishedPhysicalLayoutInspectionError,
-> {
-    let inspected = inspect_and_bind_kernel_descriptors(exact_payload_bytes)
-        .map_err(PublishedPhysicalLayoutInspectionError::Inspection)?;
-    let (selected_kernel_index, kernels) =
-        validate_inspection_against(identity, expected, &inspected)?;
-    Ok((inspected, kernels, selected_kernel_index))
-}
-
 fn validate_inspection_against(
     identity: &ArtifactKernelIdentityV1,
     expected: &[PublishedPayloadKernelV1],
