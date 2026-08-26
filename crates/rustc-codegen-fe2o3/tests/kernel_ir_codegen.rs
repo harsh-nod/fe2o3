@@ -999,7 +999,7 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     // The pipeline selector is consumed by the rustc backend and is not part
     // of Cargo's package fingerprint. The preceding ROCm gate stages may have
     // compiled `copy` through another qualification pipeline, so force this negative case
-    // back through rustc before asserting selected-pipeline rejection.
+    // back through rustc before asserting selected-pipeline preflight rejection.
     clean_package(&workspace, "fe2o3-copy");
     let copy_artifacts = artifact_paths(&workspace, "copy");
     preseed(&copy_artifacts);
@@ -1010,14 +1010,17 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         "unsupported selected kernel unexpectedly compiled"
     );
     assert!(
-        unsupported_stderr.contains("does not support kernel export \"copy\""),
-        "missing exact admission diagnostic:\n{unsupported_stderr}"
+        unsupported_stderr
+            .contains("FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1 MIR translation failed"),
+        "missing selected-pipeline translation diagnostic:\n{unsupported_stderr}"
     );
     assert!(
-        unsupported_stderr
-            .contains("production-v1 does not fall back to a qualification-only lowering route"),
-        "diagnostic did not prohibit production fallback:\n{unsupported_stderr}"
+        unsupported_stderr.contains(
+            "UnsupportedCall: session-recognized AMDGPU operation `fe2o3_device::diagnostics::trap` requires the General V3 kernel profile"
+        ),
+        "missing exact kernel-profile diagnostic:\n{unsupported_stderr}"
     );
+    assert!(!unsupported_stderr.contains("selected kernel-ir-v1:"));
     assert!(!unsupported_stderr.contains("emitted copy"));
     for artifact in copy_artifacts {
         assert!(
