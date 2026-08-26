@@ -1597,16 +1597,22 @@ mod tests {
 
     impl Drop for TestClosure {
         fn drop(&mut self) {
-            for directory in ["", "bin", "empty", "lib", "lib/nested"] {
-                let _ = fs::set_permissions(
-                    self.root.join(directory),
-                    fs::Permissions::from_mode(0o755),
-                );
-            }
+            make_test_closure_removable(&self.root);
             let _ = fs::remove_dir_all(&self.root);
             for path in &self.outside {
-                let _ = fs::remove_file(path);
-                let _ = fs::remove_dir_all(path);
+                if fs::remove_file(path).is_err() {
+                    make_test_closure_removable(path);
+                    let _ = fs::remove_dir_all(path);
+                }
+            }
+        }
+    }
+
+    fn make_test_closure_removable(root: &Path) {
+        for directory in ["", "bin", "empty", "lib", "lib/nested"] {
+            let path = root.join(directory);
+            if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
             }
         }
     }
@@ -1764,15 +1770,19 @@ mod tests {
             GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
         );
 
-        let mut tree = TestClosure::new();
-        let retained = tree.open().unwrap();
-        let displaced_root = tree.root.with_extension("displaced");
-        fs::rename(&tree.root, &displaced_root).unwrap();
-        tree.outside.push(displaced_root);
-        assert_eq!(
-            retained.revalidate().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
-        );
+        let displaced_root = {
+            let mut tree = TestClosure::new();
+            let retained = tree.open().unwrap();
+            let displaced_root = tree.root.with_extension("displaced");
+            fs::rename(&tree.root, &displaced_root).unwrap();
+            tree.outside.push(displaced_root.clone());
+            assert_eq!(
+                retained.revalidate().unwrap_err().kind(),
+                GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
+            );
+            displaced_root
+        };
+        assert!(!displaced_root.exists());
     }
 
     #[test]
