@@ -18,8 +18,8 @@ use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionRankedKernelV1,
-    ProductionRankedTerminatorV1, ProductionRankedValueV1, production_ranked_value_identity_v1,
+    ProductionRankedKernelV1, ProductionRankedTerminatorV1, ProductionRankedValueV1,
+    ProductionRefinementStagingPolicyV2, production_ranked_value_identity_v1,
 };
 
 const NONCANONICAL_LOOP_OBLIGATION_DOMAIN_V1: &[u8] = b"FE2O3/NONCANONICAL-LOOP/OBLIGATION/V1\0";
@@ -358,11 +358,12 @@ pub fn derive_noncanonical_loop_proof_request_v1(
 
 /// Consumes one independently imported receipt and re-derives the request from
 /// the current graph before checking its exact binding and compiler policy.
+#[cfg(feature = "internal-proof-staging")]
 pub fn import_noncanonical_loop_proof_v1(
     kernel: &ProductionRankedKernelV1,
     request: ProductionNonCanonicalLoopProofRequestV1,
     imported: ImportedFunctionalRefinementProofV2,
-    policy: &ProductionFunctionalRefinementTrustPolicyV2,
+    policy: &ProductionRefinementStagingPolicyV2,
 ) -> Result<ProductionCheckedNonCanonicalLoopProofImportV1, ProductionNonCanonicalLoopProofErrorV1>
 {
     let current = derive_noncanonical_loop_proof_request_v1(

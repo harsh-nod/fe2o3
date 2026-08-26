@@ -18,13 +18,13 @@ use fe2o3_functional_proof::{
     VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
-    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionFunctionalRefinementTrustPolicyV2,
-    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractErrorV1,
-    ProductionMirPlironSemanticContractReportV1, ProductionParallelReferenceContractErrorV1,
-    ProductionParallelReferenceContractReportV1, ProductionRankedKernelLoweringInputV1,
-    ProductionTotalOutputRefinementErrorV2, ProductionVerifiedMirPlironKernelV1,
+    HARD_MAX_SESSION_OPERATION_TREE_ITEMS, ProductionMiddleEndEvidenceV5,
+    ProductionMirPlironSemanticContractErrorV1, ProductionMirPlironSemanticContractReportV1,
+    ProductionParallelReferenceContractErrorV1, ProductionParallelReferenceContractReportV1,
+    ProductionRankedKernelLoweringInputV1, ProductionReconciledMirPlironKernelV1,
+    ProductionRefinementStagingPolicyV2, ProductionTotalOutputStagingErrorV2,
     require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
-    require_total_output_refinement_v2,
+    require_total_output_staging_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -128,15 +128,15 @@ impl ProductionMirPlironPerCompilationVerusReportV1 {
 /// ```
 #[derive(Debug)]
 pub struct ProductionVerusVerifiedMirPlironKernelV1 {
-    structural: ProductionVerifiedMirPlironKernelV1,
+    structural: ProductionReconciledMirPlironKernelV1,
     parallel_contract: ParallelReferenceContractV1,
     parallel_report: ProductionParallelReferenceContractReportV1,
     aggregate: ProductionMirPlironPerCompilationVerusReportV1,
-    _compiler_owned_policy: ProductionFunctionalRefinementTrustPolicyV2,
+    _staging_policy: ProductionRefinementStagingPolicyV2,
 }
 
 impl ProductionVerusVerifiedMirPlironKernelV1 {
-    pub const fn structural(&self) -> &ProductionVerifiedMirPlironKernelV1 {
+    pub const fn structural(&self) -> &ProductionReconciledMirPlironKernelV1 {
         &self.structural
     }
     pub const fn per_compilation_verus_report(
@@ -171,7 +171,7 @@ impl ProductionVerusVerifiedMirPlironKernelV1 {
 
 #[derive(Debug)]
 pub enum ProductionMirPlironPerCompilationVerusErrorV1 {
-    TotalOutput(ProductionTotalOutputRefinementErrorV2),
+    TotalOutput(ProductionTotalOutputStagingErrorV2),
     SemanticContract(ProductionMirPlironSemanticContractErrorV1),
     ParallelContract(ProductionParallelReferenceContractErrorV1),
     ParallelReportMismatch,
@@ -252,7 +252,7 @@ impl Error for ProductionMirPlironPerCompilationVerusErrorV1 {
 /// receipt import failure all return `Err`.
 pub fn execute_mir_pliron_semantic_contract_per_compilation_v1(
     runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
-    structural: ProductionVerifiedMirPlironKernelV1,
+    structural: ProductionReconciledMirPlironKernelV1,
     parallel_contract: ParallelReferenceContractV1,
     timeout_seconds: u32,
 ) -> Result<ProductionVerusVerifiedMirPlironKernelV1, ProductionMirPlironPerCompilationVerusErrorV1>
@@ -280,7 +280,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_v1(
         parallel_contract,
         parallel_report,
         aggregate,
-        _compiler_owned_policy: policy,
+        _staging_policy: policy,
     })
 }
 
@@ -303,11 +303,11 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
 ) -> Result<
     (
         ProductionMirPlironPerCompilationVerusReportV1,
-        ProductionFunctionalRefinementTrustPolicyV2,
+        ProductionRefinementStagingPolicyV2,
     ),
     ProductionMirPlironPerCompilationVerusErrorV1,
 > {
-    let total_output = require_total_output_refinement_v2(ranked, evidence)
+    let total_output = require_total_output_staging_v2(ranked, evidence)
         .map_err(ProductionMirPlironPerCompilationVerusErrorV1::TotalOutput)?;
     let recomputed =
         require_mir_pliron_semantic_contract_v1(ranked, evidence, total_output, contract)
@@ -362,7 +362,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
         return Err(ProductionMirPlironPerCompilationVerusErrorV1::InconsistentRetainedSubjects);
     }
     let retained_refinement_receipts =
-        u64::try_from(ranked.retained_functional_refinement_receipts().len())
+        u64::try_from(ranked.retained_policy_checked_refinement_staging().len())
             .map_err(|_| ProductionMirPlironPerCompilationVerusErrorV1::CounterOverflow)?;
     let aggregate = ProductionMirPlironPerCompilationVerusReportV1 {
         contract_identity: structural_report.contract_identity(),
@@ -383,7 +383,7 @@ fn derive_compiler_subjects(
     ranked: &ProductionRankedKernelLoweringInputV1,
     contract: &fe2o3_functional_proof::MirPlironSemanticContractV1,
 ) -> Result<FunctionalRefinementSubjectsV2, ProductionMirPlironPerCompilationVerusErrorV1> {
-    let receipts = ranked.retained_functional_refinement_receipts();
+    let receipts = ranked.retained_policy_checked_refinement_staging();
     let first = receipts
         .first()
         .ok_or(ProductionMirPlironPerCompilationVerusErrorV1::MissingRetainedEffectReceipt)?;
@@ -460,7 +460,7 @@ fn generate_contract_source(
             hex(relation.ranked_view_identity()),
             hex(relation.ownership_identity()),
             hex(relation.frame_identity()),
-            hex(relation.authenticated_proof()),
+            hex(relation.policy_checked_staging_identity()),
         )
         .map_err(generated_format_error)?;
     }
@@ -575,7 +575,10 @@ fn append_contract_instantiations_v1(
             }
         }
         let candidates = effect_sites
-            .get(&(output.identity(), relation.authenticated_proof()))
+            .get(&(
+                output.identity(),
+                relation.policy_checked_staging_identity(),
+            ))
             .map(Vec::as_slice)
             .unwrap_or_default();
         let [(block, operation)] = candidates else {
@@ -690,7 +693,7 @@ fn aggregate_obligation_identity(
     subjects: FunctionalRefinementSubjectsV2,
 ) -> DigestV1 {
     let receipts = ranked
-        .retained_functional_refinement_receipts()
+        .retained_policy_checked_refinement_staging()
         .iter()
         .map(|receipt| AggregateReceiptBindingV1 {
             receipt: receipt.receipt_identity().digest(),
@@ -1660,7 +1663,7 @@ mod tests {
                     relation.numerical_policy(),
                     relation.hierarchy().to_vec(),
                     Some(digest(74)),
-                    relation.authenticated_proof(),
+                    relation.policy_checked_staging_identity(),
                 )
                 .unwrap(),
             ],

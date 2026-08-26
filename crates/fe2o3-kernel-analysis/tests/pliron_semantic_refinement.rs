@@ -496,8 +496,8 @@ fn exact_proved_mir_reference_is_joined_to_semantic_equality() {
     let report = run_pliron_semantic_refinement_check_v1(context, &function);
     assert!(report.is_clean(), "{:#?}", report.findings());
     assert_eq!(report.reference_obligation_count(), 1);
-    assert_eq!(report.proved_reference_obligation_count(), 1);
-    assert!(report.all_reference_obligations_are_proved());
+    assert_eq!(report.policy_checked_reference_obligation_count(), 1);
+    assert!(report.all_reference_obligations_are_policy_checked());
     assert!(!report.grants_compiler_refinement_authority());
 }
 
@@ -526,7 +526,10 @@ fn proved_reference_rejects_a_semantic_mismatch() {
         require_pliron_semantic_refinement_before_lowering_v1(context, &function).unwrap_err();
     assert!(error.to_string().contains("error[FE2O3-SEMANTIC-001]"));
     assert_eq!(error.report().reference_obligation_count(), 1);
-    assert_eq!(error.report().proved_reference_obligation_count(), 0);
+    assert_eq!(
+        error.report().policy_checked_reference_obligation_count(),
+        0
+    );
 }
 
 #[test]

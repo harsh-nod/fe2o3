@@ -606,7 +606,7 @@ impl ProductionRankedSemanticProgramV1 {
         let functional = if self
             .receipt
             .lowering()
-            .has_retained_functional_refinement_receipts()
+            .has_retained_policy_checked_refinement_staging()
         {
             let semantics = fe2o3_pliron::derive_and_reconcile_mir_pliron_semantic_contract_v1(
                 self.receipt.lowering(),

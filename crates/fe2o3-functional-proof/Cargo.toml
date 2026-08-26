@@ -9,6 +9,12 @@ description = "Workload-neutral authenticated functional-refinement proof receip
 readme = "README.md"
 publish = false
 
+[features]
+default = []
+# Low-level receipt construction/import for the workspace verifier and hostile tests.
+# Enabling this feature grants no compiler or artifact authority.
+internal-proof-staging = []
+
 [dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-proof-contracts.workspace = true

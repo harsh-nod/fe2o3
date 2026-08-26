@@ -14,31 +14,34 @@ use super::{
     typed_semantic_obligation_summary_v2,
 };
 
-/// Arithmetic strength represented by one admitted total-output refinement.
+/// Arithmetic categories present in non-authoritative total-output staging.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ProductionArithmeticAssuranceV2 {
-    /// Exact interpreted Boolean and fixed-width integer values at the MIR boundary.
+pub enum ProductionStagedArithmeticCoverageV2 {
+    /// Exact Boolean and fixed-width integer operator formulas are staged.
     ExactBitVectorValues,
     /// IEEE operator identity/congruence only, not a target IEEE value theorem.
     IeeeOperatorCongruenceOnly,
-    /// Exact bitvector values plus separately bounded IEEE operator congruence.
+    /// Exact bitvector formulas plus IEEE operator-congruence formulas are staged.
     ExactBitVectorsAndIeeeOperatorCongruence,
 }
 
-/// Non-forgeable-by-construction summary returned only by the aggregate gate.
+/// Non-authoritative structural staging summary consumed by aggregate Verus replay.
+///
+/// Caller-selected receipt policies can satisfy this gate. The report proves no
+/// functional refinement and grants no compiler or artifact authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProductionTotalOutputRefinementReportV2 {
+pub struct ProductionTotalOutputStagingReportV2 {
     total_view_contracts: u64,
     reference_obligations: u64,
     effect_contracts: u64,
     collective_contracts: u64,
     typed_expression_roots: u64,
     retained_receipts: u64,
-    arithmetic: ProductionArithmeticAssuranceV2,
+    arithmetic: ProductionStagedArithmeticCoverageV2,
     evidence_identity: [u8; 32],
 }
 
-impl ProductionTotalOutputRefinementReportV2 {
+impl ProductionTotalOutputStagingReportV2 {
     pub const fn total_view_contracts(self) -> u64 {
         self.total_view_contracts
     }
@@ -63,7 +66,7 @@ impl ProductionTotalOutputRefinementReportV2 {
         self.retained_receipts
     }
 
-    pub const fn arithmetic_assurance(self) -> ProductionArithmeticAssuranceV2 {
+    pub const fn staged_arithmetic_coverage(self) -> ProductionStagedArithmeticCoverageV2 {
         self.arithmetic
     }
 
@@ -71,9 +74,9 @@ impl ProductionTotalOutputRefinementReportV2 {
         &self.evidence_identity
     }
 
-    /// Every finite output coordinate is owned once and its unique global write
-    /// is related to the safe CPU reference at the MIR boundary.
-    pub const fn proves_total_output_refinement_at_mir_boundary(self) -> bool {
+    /// Reports only that policy-checked structural staging completed.
+    /// Aggregate exact-formula Verus execution has not occurred.
+    pub const fn is_policy_checked_non_authoritative_staging(self) -> bool {
         true
     }
 
@@ -99,7 +102,7 @@ impl ProductionTotalOutputRefinementReportV2 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ProductionTotalOutputRefinementErrorV2 {
+pub enum ProductionTotalOutputStagingErrorV2 {
     RankedKernel(ProductionRankedKernelErrorV1),
     CounterOverflow,
     EvidenceIdentityMismatch,
@@ -116,11 +119,11 @@ pub enum ProductionTotalOutputRefinementErrorV2 {
     CollectiveParticipationWithoutValueProof,
 }
 
-impl fmt::Display for ProductionTotalOutputRefinementErrorV2 {
+impl fmt::Display for ProductionTotalOutputStagingErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RankedKernel(error) => write!(formatter, "ranked kernel is invalid: {error}"),
-            Self::CounterOverflow => formatter.write_str("total-output proof counter overflow"),
+            Self::CounterOverflow => formatter.write_str("total-output staging counter overflow"),
             Self::EvidenceIdentityMismatch => formatter.write_str(
                 "V5 evidence does not identify the live ranked kernel or its canonical record",
             ),
@@ -137,13 +140,13 @@ impl fmt::Display for ProductionTotalOutputRefinementErrorV2 {
                 "total-output refinement requires at least one non-vacuous TotalView proof",
             ),
             Self::MissingEffectProof => formatter.write_str(
-                "total-output refinement requires a proved reference-effect contract for every global write",
+                "total-output staging requires a structurally checked reference-effect contract for every global write",
             ),
             Self::MissingRetainedReceipt => formatter.write_str(
-                "total-output refinement requires retained authenticated functional-refinement receipts",
+                "total-output staging requires retained policy-checked functional-refinement records",
             ),
             Self::MissingTypedSemanticProof => formatter.write_str(
-                "total-output refinement requires at least one typed semantic expression root",
+                "total-output staging requires at least one typed semantic expression root",
             ),
             Self::UndischargedTypedSemanticDomain => formatter.write_str(
                 "a typed semantic expression has an arithmetic domain that was not statically discharged",
@@ -158,7 +161,7 @@ impl fmt::Display for ProductionTotalOutputRefinementErrorV2 {
     }
 }
 
-impl Error for ProductionTotalOutputRefinementErrorV2 {
+impl Error for ProductionTotalOutputStagingErrorV2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::RankedKernel(error) => Some(error),
@@ -188,24 +191,25 @@ struct ObservedTotalOutputFactsV2 {
     evidence_identity: [u8; 32],
 }
 
-/// Composes total output coverage with independently proved CPU-reference effects.
-pub fn require_total_output_refinement_v2(
+/// Reconciles total-output structure with policy-checked CPU-reference staging.
+/// This is an input-validation gate for aggregate replay, not proof authority.
+pub fn require_total_output_staging_v2(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
-) -> Result<ProductionTotalOutputRefinementReportV2, ProductionTotalOutputRefinementErrorV2> {
+) -> Result<ProductionTotalOutputStagingReportV2, ProductionTotalOutputStagingErrorV2> {
     if derive_ranked_kernel_identity(ranked) != *evidence.ranked_kernel_identity()
         || !evidence
             .identity()
             .matches_canonical_bytes(evidence.canonical_bytes())
     {
-        return Err(ProductionTotalOutputRefinementErrorV2::EvidenceIdentityMismatch);
+        return Err(ProductionTotalOutputStagingErrorV2::EvidenceIdentityMismatch);
     }
 
     let coverage = ranked.ownership_report().coverage_summary();
     let semantic = ranked.semantic_report();
     let effects = semantic.effect_refinement();
     let typed = typed_semantic_obligation_summary_v2(ranked.kernel())
-        .map_err(ProductionTotalOutputRefinementErrorV2::RankedKernel)?;
+        .map_err(ProductionTotalOutputStagingErrorV2::RankedKernel)?;
     let reconciliation = evidence.typed_semantic_reconciliation();
     let facts = ObservedTotalOutputFactsV2 {
         reports_clean: ranked.all_mandatory_reports_are_clean(),
@@ -215,19 +219,21 @@ pub fn require_total_output_refinement_v2(
         collective_contributions_proved: as_u64(coverage.collective_contributions_proved())?,
         reference_declared: as_u64(semantic.reference_obligation_count())?
             .checked_add(as_u64(semantic.numerical_obligation_count())?)
-            .ok_or(ProductionTotalOutputRefinementErrorV2::CounterOverflow)?,
-        reference_proved: as_u64(semantic.proved_reference_obligation_count())?
-            .checked_add(as_u64(semantic.proved_numerical_obligation_count())?)
-            .ok_or(ProductionTotalOutputRefinementErrorV2::CounterOverflow)?,
+            .ok_or(ProductionTotalOutputStagingErrorV2::CounterOverflow)?,
+        reference_proved: as_u64(semantic.policy_checked_reference_obligation_count())?
+            .checked_add(as_u64(
+                semantic.policy_checked_numerical_obligation_count(),
+            )?)
+            .ok_or(ProductionTotalOutputStagingErrorV2::CounterOverflow)?,
         effect_declared: as_u64(effects.contract_count())?,
         effect_proved: as_u64(effects.proved_contract_count())?,
         collective_declared: as_u64(semantic.collective_contract_count())?,
-        collective_proved: as_u64(semantic.proved_collective_contract_count())?,
+        collective_proved: as_u64(semantic.policy_checked_collective_contract_count())?,
         typed,
         reconciliation_recipe_roots: reconciliation.recipe_expression_roots(),
         reconciliation_pliron_roots: reconciliation.pliron_commitment_roots(),
         reconciliation_exact: reconciliation.is_exact(),
-        retained_receipts: as_u64(ranked.retained_functional_refinement_receipts().len())?,
+        retained_receipts: as_u64(ranked.retained_policy_checked_refinement_staging().len())?,
         evidence_identity: *evidence.identity().sha256(),
     };
 
@@ -239,75 +245,75 @@ pub fn require_total_output_refinement_v2(
         || encoded_coverage.collective_contributions_proved()
             != facts.collective_contributions_proved
     {
-        return Err(ProductionTotalOutputRefinementErrorV2::CoverageSummaryMismatch);
+        return Err(ProductionTotalOutputStagingErrorV2::CoverageSummaryMismatch);
     }
     let encoded_semantics = evidence.semantic_summary();
     if encoded_semantics.reference_obligations_declared() != facts.reference_declared
-        || encoded_semantics.reference_obligations_proved() != facts.reference_proved
+        || encoded_semantics.reference_obligations_policy_checked() != facts.reference_proved
         || encoded_semantics.effect_contracts_declared() != facts.effect_declared
         || encoded_semantics.effect_contracts_proved() != facts.effect_proved
         || encoded_semantics.collective_contracts_declared() != facts.collective_declared
-        || encoded_semantics.collective_contracts_proved() != facts.collective_proved
+        || encoded_semantics.collective_contracts_policy_checked() != facts.collective_proved
     {
-        return Err(ProductionTotalOutputRefinementErrorV2::SemanticSummaryMismatch);
+        return Err(ProductionTotalOutputStagingErrorV2::SemanticSummaryMismatch);
     }
     if evidence.typed_semantic_summary() != facts.typed {
-        return Err(ProductionTotalOutputRefinementErrorV2::TypedSummaryMismatch);
+        return Err(ProductionTotalOutputStagingErrorV2::TypedSummaryMismatch);
     }
     validate_observed_facts_v2(facts)
 }
 
 fn validate_observed_facts_v2(
     facts: ObservedTotalOutputFactsV2,
-) -> Result<ProductionTotalOutputRefinementReportV2, ProductionTotalOutputRefinementErrorV2> {
+) -> Result<ProductionTotalOutputStagingReportV2, ProductionTotalOutputStagingErrorV2> {
     if !facts.reports_clean {
-        return Err(ProductionTotalOutputRefinementErrorV2::MandatoryReportNotClean);
+        return Err(ProductionTotalOutputStagingErrorV2::MandatoryReportNotClean);
     }
     if facts.total_view_declared == 0 || facts.total_view_declared != facts.total_view_proved {
-        return Err(ProductionTotalOutputRefinementErrorV2::MissingTotalViewProof);
+        return Err(ProductionTotalOutputStagingErrorV2::MissingTotalViewProof);
     }
     if facts.effect_declared == 0 || facts.effect_declared != facts.effect_proved {
-        return Err(ProductionTotalOutputRefinementErrorV2::MissingEffectProof);
+        return Err(ProductionTotalOutputStagingErrorV2::MissingEffectProof);
     }
     if facts.reference_declared != facts.reference_proved
         || facts.collective_declared != facts.collective_proved
     {
-        return Err(ProductionTotalOutputRefinementErrorV2::SemanticSummaryMismatch);
+        return Err(ProductionTotalOutputStagingErrorV2::SemanticSummaryMismatch);
     }
     if facts.retained_receipts == 0 {
-        return Err(ProductionTotalOutputRefinementErrorV2::MissingRetainedReceipt);
+        return Err(ProductionTotalOutputStagingErrorV2::MissingRetainedReceipt);
     }
     if !facts.typed.is_non_vacuous() {
-        return Err(ProductionTotalOutputRefinementErrorV2::MissingTypedSemanticProof);
+        return Err(ProductionTotalOutputStagingErrorV2::MissingTypedSemanticProof);
     }
     if facts.typed.statically_discharged_domain_roots != facts.typed.expression_roots {
-        return Err(ProductionTotalOutputRefinementErrorV2::UndischargedTypedSemanticDomain);
+        return Err(ProductionTotalOutputStagingErrorV2::UndischargedTypedSemanticDomain);
     }
     let typed_roots = as_u64(facts.typed.expression_roots)?;
     if !facts.reconciliation_exact
         || facts.reconciliation_recipe_roots != typed_roots
         || facts.reconciliation_pliron_roots != typed_roots
     {
-        return Err(ProductionTotalOutputRefinementErrorV2::TypedSemanticReconciliationMismatch);
+        return Err(ProductionTotalOutputStagingErrorV2::TypedSemanticReconciliationMismatch);
     }
     if facts.collective_contributions_declared != facts.collective_contributions_proved
         || (facts.collective_contributions_declared != 0 && facts.collective_declared == 0)
     {
-        return Err(
-            ProductionTotalOutputRefinementErrorV2::CollectiveParticipationWithoutValueProof,
-        );
+        return Err(ProductionTotalOutputStagingErrorV2::CollectiveParticipationWithoutValueProof);
     }
     let bitvector = facts.typed.exact_bitvector_operator_congruence_roots;
     let ieee = facts.typed.exact_ieee_operator_congruence_roots;
     let arithmetic = match (bitvector != 0, ieee != 0) {
-        (true, false) => ProductionArithmeticAssuranceV2::ExactBitVectorValues,
-        (false, true) => ProductionArithmeticAssuranceV2::IeeeOperatorCongruenceOnly,
-        (true, true) => ProductionArithmeticAssuranceV2::ExactBitVectorsAndIeeeOperatorCongruence,
+        (true, false) => ProductionStagedArithmeticCoverageV2::ExactBitVectorValues,
+        (false, true) => ProductionStagedArithmeticCoverageV2::IeeeOperatorCongruenceOnly,
+        (true, true) => {
+            ProductionStagedArithmeticCoverageV2::ExactBitVectorsAndIeeeOperatorCongruence
+        }
         (false, false) => {
-            return Err(ProductionTotalOutputRefinementErrorV2::MissingTypedSemanticProof);
+            return Err(ProductionTotalOutputStagingErrorV2::MissingTypedSemanticProof);
         }
     };
-    Ok(ProductionTotalOutputRefinementReportV2 {
+    Ok(ProductionTotalOutputStagingReportV2 {
         total_view_contracts: facts.total_view_declared,
         reference_obligations: facts.reference_declared,
         effect_contracts: facts.effect_declared,
@@ -319,8 +325,8 @@ fn validate_observed_facts_v2(
     })
 }
 
-fn as_u64(value: usize) -> Result<u64, ProductionTotalOutputRefinementErrorV2> {
-    u64::try_from(value).map_err(|_| ProductionTotalOutputRefinementErrorV2::CounterOverflow)
+fn as_u64(value: usize) -> Result<u64, ProductionTotalOutputStagingErrorV2> {
+    u64::try_from(value).map_err(|_| ProductionTotalOutputStagingErrorV2::CounterOverflow)
 }
 
 #[cfg(test)]
@@ -363,10 +369,10 @@ mod tests {
     #[test]
     fn accepts_non_vacuous_total_output_refinement() {
         let report = validate_observed_facts_v2(facts()).unwrap();
-        assert!(report.proves_total_output_refinement_at_mir_boundary());
+        assert!(report.is_policy_checked_non_authoritative_staging());
         assert_eq!(
-            report.arithmetic_assurance(),
-            ProductionArithmeticAssuranceV2::ExactBitVectorValues
+            report.staged_arithmetic_coverage(),
+            ProductionStagedArithmeticCoverageV2::ExactBitVectorValues
         );
         assert!(!report.grants_source_to_mir_authority());
         assert!(!report.grants_lowering_or_machine_code_authority());
@@ -402,7 +408,7 @@ mod tests {
         hostile.collective_contributions_proved = 1;
         assert_eq!(
             validate_observed_facts_v2(hostile),
-            Err(ProductionTotalOutputRefinementErrorV2::CollectiveParticipationWithoutValueProof)
+            Err(ProductionTotalOutputStagingErrorV2::CollectiveParticipationWithoutValueProof)
         );
 
         let mut proved = facts();
@@ -425,8 +431,8 @@ mod tests {
         mixed.typed.exact_ieee_operator_congruence_roots = 1;
         let report = validate_observed_facts_v2(mixed).unwrap();
         assert_eq!(
-            report.arithmetic_assurance(),
-            ProductionArithmeticAssuranceV2::ExactBitVectorsAndIeeeOperatorCongruence
+            report.staged_arithmetic_coverage(),
+            ProductionStagedArithmeticCoverageV2::ExactBitVectorsAndIeeeOperatorCongruence
         );
         assert!(!report.grants_target_ieee_value_authority());
         assert!(!report.grants_artifact_load_launch_or_hardware_authority());

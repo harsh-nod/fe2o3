@@ -1,3 +1,5 @@
+#![cfg(feature = "internal-proof-staging")]
+
 use std::ops::Range;
 
 use dialect_kernel::{
@@ -25,8 +27,7 @@ use fe2o3_pliron::{
     PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V5, PRODUCTION_MIDDLE_END_EVIDENCE_POLICY_V4,
     ProductionCollectiveSemanticContractV1, ProductionCollectiveSemanticKindV1,
     ProductionConstructionV1, ProductionCooperativeTensorBindingV1,
-    ProductionEffectRefinementContractV2, ProductionFunctionalRefinementTrustPolicyV2,
-    ProductionGpuWriteSiteV2, ProductionMiddleEndAssuranceV4,
+    ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2, ProductionMiddleEndAssuranceV4,
     ProductionMiddleEndEvidenceCodecErrorV4, ProductionMiddleEndEvidencePassV4,
     ProductionMiddleEndEvidenceV4, ProductionMiddleEndEvidenceV5,
     ProductionMirPlironSemanticContractDerivationErrorV1, ProductionNonCanonicalLoopClaimsV1,
@@ -34,18 +35,19 @@ use fe2o3_pliron::{
     ProductionRankedBlockV1, ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1,
     ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
     ProductionRankedValueV1, ProductionReferenceOutputSiteV2, ProductionReferenceProofV2,
-    ProductionSemanticExpressionV2, ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
-    ProductionSemanticScalarTypeV2, ProductionSessionLimitsV1, ShellLimits,
-    compile_ranked_kernel_for_lowering_v1, compile_ranked_kernel_for_lowering_v2,
+    ProductionRefinementStagingPolicyV2, ProductionSemanticExpressionV2,
+    ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1, ProductionSemanticScalarTypeV2,
+    ProductionSessionLimitsV1, ShellLimits, compile_ranked_kernel_for_lowering_v1,
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
     derive_and_reconcile_mir_pliron_semantic_contract_v1,
     derive_and_require_parallel_reference_contract_v1,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
     normalized_numerical_refinement_hash_for_kernel_v2, production_effect_contract_identity_v1,
     production_loop_transition_identity_v1, production_loop_variant_identity_v1,
-    production_ranked_value_identity_v1, require_mir_pliron_semantic_contract_v1,
-    require_parallel_reference_contract_v1, require_total_output_refinement_v2,
-    verify_ranked_kernel_against_safe_reference_mir_v1,
+    production_ranked_value_identity_v1, reconcile_ranked_kernel_with_safe_reference_mir_v1,
+    require_mir_pliron_semantic_contract_v1, require_parallel_reference_contract_v1,
+    require_total_output_staging_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 
@@ -76,7 +78,7 @@ fn imported_reference(
 ) -> (
     ProductionReferenceProofV2,
     fe2o3_functional_proof::ImportedFunctionalRefinementProofV2,
-    ProductionFunctionalRefinementTrustPolicyV2,
+    ProductionRefinementStagingPolicyV2,
 ) {
     let signing = SigningKey::from_bytes(&[91; 32]);
     let toolchain = VerusToolchainIdentityV2::new(
@@ -113,7 +115,7 @@ fn imported_reference(
         .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
         .unwrap();
     let production_policy =
-        ProductionFunctionalRefinementTrustPolicyV2::new([signer_identity], toolchain).unwrap();
+        ProductionRefinementStagingPolicyV2::new([signer_identity], toolchain).unwrap();
     (
         ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
         imported,
@@ -582,7 +584,7 @@ fn total_output_refinement_input_with_options(
     } else {
         bound
     };
-    compile_ranked_kernel_for_lowering_v2(
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         ProductionConstructionV1::ranked_kernel("total_output_refinement", bound).unwrap(),
         ProductionSessionLimitsV1::default(),
         imported,
@@ -810,7 +812,7 @@ fn numerical_total_output_refinement_input(
             .bind_functional_refinement_request_v2(0, operation_index, proof)
             .unwrap();
     }
-    compile_ranked_kernel_for_lowering_v2(
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         ProductionConstructionV1::ranked_kernel("numerical_total_output_refinement", bound)
             .unwrap(),
         ProductionSessionLimitsV1::default(),
@@ -1123,7 +1125,7 @@ fn two_output_refinement_input_with_numerical_ambiguity(
             .bind_functional_refinement_request_v2(0, 20, numerical_proof)
             .unwrap();
     }
-    compile_ranked_kernel_for_lowering_v2(
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         ProductionConstructionV1::ranked_kernel("two_output_refinement", bound).unwrap(),
         ProductionSessionLimitsV1::default(),
         imported,
@@ -1260,7 +1262,7 @@ fn dynamic_total_output_refinement_input() -> ProductionRankedKernelLoweringInpu
     let bound = skeleton
         .bind_functional_refinement_request_v2(0, 10, proof)
         .unwrap();
-    compile_ranked_kernel_for_lowering_v2(
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         ProductionConstructionV1::ranked_kernel("dynamic_total_output_refinement", bound).unwrap(),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1466,7 +1468,7 @@ fn loop_total_output_refinement_input_with_shape(
     let bound = skeleton
         .bind_functional_refinement_request_v2(3, 1, proof)
         .unwrap();
-    compile_ranked_kernel_for_lowering_v2(
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         ProductionConstructionV1::ranked_kernel("loop_total_output_refinement", bound).unwrap(),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1516,16 +1518,16 @@ fn live_v5_evidence_binds_non_vacuous_total_view_counts() {
 }
 
 #[test]
-fn live_v5_and_aggregate_gate_prove_one_total_typed_output_at_the_mir_boundary() {
+fn live_v5_total_output_gate_stages_one_typed_output_without_authority() {
     let input = total_output_refinement_input();
     let evidence =
         ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
-    let report = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let report = require_total_output_staging_v2(&input, &evidence).unwrap();
     assert_eq!(report.total_view_contracts(), 1);
     assert_eq!(report.effect_contracts(), 1);
     assert_eq!(report.typed_expression_roots(), 4);
     assert_eq!(report.retained_receipts(), 1);
-    assert!(report.proves_total_output_refinement_at_mir_boundary());
+    assert!(report.is_policy_checked_non_authoritative_staging());
     assert!(!report.grants_source_to_mir_authority());
     assert!(!report.grants_lowering_or_machine_code_authority());
     assert!(!report.grants_artifact_load_launch_or_hardware_authority());
@@ -1707,16 +1709,16 @@ fn exact_mir_pliron_contract_joins_live_typed_effect_evidence() {
         SemanticScalarTypeV1::Boolean,
     );
     let verified =
-        verify_ranked_kernel_against_safe_reference_mir_v1(input, evidence, &contract).unwrap();
+        reconcile_ranked_kernel_with_safe_reference_mir_v1(input, evidence, &contract).unwrap();
     let report = verified.semantic_contract_report();
     assert_eq!(report.typed_roots(), 4);
     assert_eq!(report.total_outputs(), 1);
     assert_eq!(report.finite_collectives(), 0);
-    assert!(report.binds_safe_reference_mir_to_live_pliron());
+    assert!(report.structurally_binds_safe_reference_mir_to_live_pliron());
     assert!(!report.proves_the_compiler_implementation_sound());
     assert!(!report.grants_llvm_or_later_authority());
 
-    assert!(verified.establishes_total_output_refinement_at_mir_pliron_boundary());
+    assert!(verified.has_policy_checked_total_output_staging());
     assert!(verified.compiler_projection_and_pass_soundness_remain_trusted());
     assert!(!verified.grants_llvm_or_later_authority());
 }
@@ -1888,7 +1890,7 @@ fn dynamic_loop_reconciliation_rejects_stale_symbols_and_narrowed_bounds() {
             continue;
         }
         let mutated = mutated.unwrap();
-        let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+        let total = require_total_output_staging_v2(&input, &evidence).unwrap();
         assert!(
             require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &mutated,).is_err()
         );
@@ -2057,10 +2059,10 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
         ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(0)),
         SemanticScalarTypeV1::Boolean,
     );
-    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let total = require_total_output_staging_v2(&input, &evidence).unwrap();
     let semantics =
         require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &contract).unwrap();
-    let receipt = input.retained_functional_refinement_receipts()[0]
+    let receipt = input.retained_policy_checked_refinement_staging()[0]
         .receipt_identity()
         .digest();
 
@@ -2072,7 +2074,10 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
         contract.canonical_sha256()
     );
     assert_eq!(derived.relations().len(), 1);
-    assert_eq!(derived.relations()[0].authenticated_proof(), receipt);
+    assert_eq!(
+        derived.relations()[0].policy_checked_staging_identity(),
+        receipt
+    );
     assert_eq!(derived_report.pointwise_relations(), 1);
     assert_eq!(derived_report.output_relations(), 1);
     assert_eq!(derived_report.output_frames(), 1);
@@ -2138,7 +2143,7 @@ fn live_tensor_site_reaches_the_public_parallel_fail_closed_boundary() {
         error,
         fe2o3_pliron::ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
             live_sites: 1,
-            proved_sites: 0,
+            policy_checked_sites: 0,
         }
     );
     assert!(error.is_incomplete());
@@ -2298,8 +2303,8 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
         parallel.relations()[1].frame_identity()
     );
     assert_ne!(
-        parallel.relations()[0].authenticated_proof(),
-        parallel.relations()[1].authenticated_proof()
+        parallel.relations()[0].policy_checked_staging_identity(),
+        parallel.relations()[1].policy_checked_staging_identity()
     );
 
     let missing = ParallelReferenceContractV1::new(
@@ -2320,7 +2325,7 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
 
     let rebuild = |relation: &ParallelOutputRelationV1,
                    ranked_view_identity: DigestV1,
-                   authenticated_proof: DigestV1| {
+                   policy_checked_staging_identity: DigestV1| {
         ParallelOutputRelationV1::new(
             relation.identity(),
             relation.output_contract(),
@@ -2332,14 +2337,14 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             relation.numerical_policy(),
             relation.hierarchy().to_vec(),
             relation.tensor_refinement_identity(),
-            authenticated_proof,
+            policy_checked_staging_identity,
         )
         .unwrap()
     };
     let duplicate_view = rebuild(
         &parallel.relations()[1],
         parallel.relations()[0].ranked_view_identity(),
-        parallel.relations()[1].authenticated_proof(),
+        parallel.relations()[1].policy_checked_staging_identity(),
     );
     assert_eq!(
         ParallelReferenceContractV1::new(
@@ -2357,19 +2362,19 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             rebuild(
                 &parallel.relations()[0],
                 parallel.relations()[0].ranked_view_identity(),
-                parallel.relations()[1].authenticated_proof(),
+                parallel.relations()[1].policy_checked_staging_identity(),
             ),
             rebuild(
                 &parallel.relations()[1],
                 parallel.relations()[1].ranked_view_identity(),
-                parallel.relations()[0].authenticated_proof(),
+                parallel.relations()[0].policy_checked_staging_identity(),
             ),
         ],
     )
     .unwrap();
     assert!(matches!(
         require_parallel_reference_contract_v1(&input, &evidence, semantics, contract, &swapped),
-        Err(fe2o3_pliron::ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
+        Err(fe2o3_pliron::ProductionParallelReferenceContractErrorV1::PolicyCheckedStagingIncomplete {
             ..
         })
     ));
@@ -2388,7 +2393,7 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             relation.numerical_policy(),
             relation.hierarchy().to_vec(),
             relation.tensor_refinement_identity(),
-            relation.authenticated_proof(),
+            relation.policy_checked_staging_identity(),
         )
         .unwrap()
     };
@@ -2479,7 +2484,7 @@ fn semantic_contract_rejects_view_and_typed_root_substitution() {
     let input = total_output_refinement_input();
     let evidence =
         ProductionMiddleEndEvidenceV5::try_new(&semantic_owner(), &input, RANKED_IR).unwrap();
-    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let total = require_total_output_staging_v2(&input, &evidence).unwrap();
     let wrong_view = semantic_contract_for_total_output(
         &input,
         &evidence,
@@ -2515,7 +2520,7 @@ fn canonical_cfg_loop_is_bound_and_a_transition_substitution_is_rejected() {
         SemanticFiniteExtentV1::Static(4),
     );
     let verified =
-        verify_ranked_kernel_against_safe_reference_mir_v1(input, evidence, &contract).unwrap();
+        reconcile_ranked_kernel_with_safe_reference_mir_v1(input, evidence, &contract).unwrap();
     assert_eq!(verified.semantic_contract_report().bounded_loops(), 1);
 
     let input = loop_total_output_refinement_input();
@@ -2527,7 +2532,7 @@ fn canonical_cfg_loop_is_bound_and_a_transition_substitution_is_rejected() {
         true,
         SemanticFiniteExtentV1::Static(4),
     );
-    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let total = require_total_output_staging_v2(&input, &evidence).unwrap();
     assert!(matches!(
         require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &wrong),
         Err(
@@ -2553,7 +2558,7 @@ fn dynamic_loop_rejects_an_unproved_narrow_bound() {
             inclusive_upper_bound: 4,
         },
     );
-    let total = require_total_output_refinement_v2(&input, &evidence).unwrap();
+    let total = require_total_output_staging_v2(&input, &evidence).unwrap();
     let error =
         require_mir_pliron_semantic_contract_v1(&input, &evidence, total, &contract).unwrap_err();
     assert!(matches!(

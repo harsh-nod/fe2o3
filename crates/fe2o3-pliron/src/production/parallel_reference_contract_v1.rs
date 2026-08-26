@@ -110,7 +110,7 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     HierarchyCoverageIncomplete {
         level: ParallelHierarchyLevelV1,
     },
-    AuthenticatedProofIncomplete {
+    PolicyCheckedStagingIncomplete {
         identity: DigestV1,
     },
     ScheduleRelationIncomplete {
@@ -147,7 +147,7 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     },
     TensorFunctionalRefinementIncomplete {
         live_sites: usize,
-        proved_sites: usize,
+        policy_checked_sites: usize,
     },
     TensorOutputUnmatched {
         site: usize,
@@ -182,7 +182,7 @@ impl ProductionParallelReferenceContractErrorV1 {
                 | Self::StableRankedViewIdentityMissing { .. }
                 | Self::OutputSeparationIncomplete { .. }
                 | Self::OutputOwnershipMismatch { .. }
-                | Self::AuthenticatedProofIncomplete { .. }
+                | Self::PolicyCheckedStagingIncomplete { .. }
                 | Self::ScheduleRelationIncomplete { .. }
                 | Self::DynamicBoundProofIncomplete { .. }
                 | Self::NumericalProofIncomplete { .. }
@@ -203,17 +203,17 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::OutputOwnershipMismatch { index } => write!(formatter, "error[FE2O3-PARALLEL-020]: output {index} lacks an exact output-specific TotalView ownership and complete hierarchy binding"),
             Self::OutputProductMismatch => formatter.write_str("error[FE2O3-PARALLEL-021]: parallel output product does not match the compiler-derived ordered output frames"),
             Self::HierarchyCoverageIncomplete { level } => write!(formatter, "error[FE2O3-PARALLEL-004]: compiler could not derive nonempty {level:?} ownership while relating the sequential output domain to the complete GPU hierarchy"),
-            Self::AuthenticatedProofIncomplete { identity } => write!(formatter, "error[FE2O3-PARALLEL-005]: no retained authenticated per-compilation proof has identity {identity:?}"),
+            Self::PolicyCheckedStagingIncomplete { identity } => write!(formatter, "error[FE2O3-PARALLEL-005]: no retained policy-checked staging record has identity {identity:?}"),
             Self::ScheduleRelationIncomplete { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-006]: schedule relation {index} is incomplete: {detail}"),
             Self::FoldOrderRejected { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-007]: fold order for relation {index} is not justified: {detail}"),
             Self::DynamicBoundProofIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-008]: dynamic bounded recurrence {index} does not match the compiler-derived finite-bound identity for the live canonical loop"),
             Self::NumericalPolicyRejected { index, detail } => write!(formatter, "error[FE2O3-PARALLEL-009]: numerical policy for relation {index} is invalid: {detail}"),
-            Self::NumericalProofIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-010]: finite error policy for relation {index} lacks a live typed witness or retained authenticated proof"),
+            Self::NumericalProofIncomplete { index } => write!(formatter, "error[FE2O3-PARALLEL-010]: finite error policy for relation {index} lacks a live typed witness or policy-checked staging record"),
             Self::NumericalSiteUnmatched { site } => write!(formatter, "error[FE2O3-PARALLEL-023]: numerical refinement site {site} does not match any logical output actual/reference roots"),
             Self::NumericalSiteAmbiguous { site, outputs } => write!(formatter, "error[FE2O3-PARALLEL-024]: numerical refinement site {site} ambiguously matches {outputs} logical outputs"),
             Self::DuplicateNumericalSite { index } => write!(formatter, "error[FE2O3-PARALLEL-025]: logical output {index} has more than one numerical refinement site"),
             Self::NumericalCoverageIncomplete { index, component } => write!(formatter, "error[FE2O3-PARALLEL-026]: numerical refinement for logical output {index} is not total: {component} must be the canonical typed constant true"),
-            Self::TensorFunctionalRefinementIncomplete { live_sites, proved_sites } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor functional refinement is incomplete: {live_sites} live tensor site(s), but {proved_sites} exact result-component/output receipt binding(s)"),
+            Self::TensorFunctionalRefinementIncomplete { live_sites, policy_checked_sites } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor functional refinement is incomplete: {live_sites} live tensor site(s), but {policy_checked_sites} exact policy-checked result-component/output receipt binding(s)"),
             Self::TensorOutputUnmatched { site } => write!(formatter, "error[FE2O3-PARALLEL-027]: tensor refinement site {site} does not match any logical output view and actual/reference roots"),
             Self::TensorOutputAmbiguous { site, outputs } => write!(formatter, "error[FE2O3-PARALLEL-028]: tensor refinement site {site} ambiguously matches {outputs} logical outputs"),
             Self::DuplicateTensorOutput { index } => write!(formatter, "error[FE2O3-PARALLEL-029]: logical output {index} has more than one tensor refinement receipt"),
@@ -300,7 +300,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
         output_product_identity_v1(semantic_contract, evidence, &bindings);
     for (index, output) in semantic_contract.outputs().iter().enumerate() {
         let binding = &bindings[index];
-        let proof = binding.authenticated_proof;
+        let proof = binding.policy_checked_staging_identity;
         let (actual, reference) = output_roots(output, semantic_contract)
             .ok_or(ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index })?;
         let numerical_policy = match numerical.for_output(index) {
@@ -501,7 +501,7 @@ struct LiveOutputBindingV1 {
     live_view_name: String,
     allocation_origin: u64,
     noalias_class: u64,
-    authenticated_proof: DigestV1,
+    policy_checked_staging_identity: DigestV1,
     ownership_identity: DigestV1,
     frame_identity: DigestV1,
 }
@@ -594,12 +594,12 @@ fn derive_live_output_bindings_v1(
                 ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
             );
         };
-        let [(view, authenticated_proof)] = effect_matches.as_slice() else {
+        let [(view, policy_checked_staging_identity)] = effect_matches.as_slice() else {
             return Err(
                 ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
             );
         };
-        let (view, authenticated_proof) = (*view, *authenticated_proof);
+        let (view, policy_checked_staging_identity) = (*view, *policy_checked_staging_identity);
         let ranked_view_identity = super::production_ranked_value_identity_v1(view);
         if ranked_view_identity != output.view_identity() {
             return Err(
@@ -659,7 +659,7 @@ fn derive_live_output_bindings_v1(
             evidence,
             output,
             ranked_view_identity,
-            authenticated_proof,
+            policy_checked_staging_identity,
             allocation_origin,
             noalias_class,
             &live_view_name,
@@ -670,7 +670,7 @@ fn derive_live_output_bindings_v1(
             evidence,
             output,
             ranked_view_identity,
-            authenticated_proof,
+            policy_checked_staging_identity,
             ownership_identity,
         );
         bindings.push(LiveOutputBindingV1 {
@@ -678,7 +678,7 @@ fn derive_live_output_bindings_v1(
             live_view_name,
             allocation_origin,
             noalias_class,
-            authenticated_proof,
+            policy_checked_staging_identity,
             ownership_identity,
             frame_identity,
         });
@@ -727,7 +727,7 @@ fn output_ownership_identity_v1(
     evidence: &ProductionMiddleEndEvidenceV5,
     output: &SemanticOutputContractV1,
     ranked_view_identity: DigestV1,
-    authenticated_proof: DigestV1,
+    policy_checked_staging_identity: DigestV1,
     allocation_origin: u64,
     noalias_class: u64,
     live_view_name: &str,
@@ -739,7 +739,7 @@ fn output_ownership_identity_v1(
     digest.update(evidence.identity().sha256());
     digest.update(output.identity().as_bytes());
     digest.update(ranked_view_identity.as_bytes());
-    digest.update(authenticated_proof.as_bytes());
+    digest.update(policy_checked_staging_identity.as_bytes());
     digest.update(allocation_origin.to_le_bytes());
     digest.update(noalias_class.to_le_bytes());
     digest_blob(&mut digest, live_view_name.as_bytes());
@@ -759,7 +759,7 @@ fn output_frame_identity_v1(
     evidence: &ProductionMiddleEndEvidenceV5,
     output: &SemanticOutputContractV1,
     ranked_view_identity: DigestV1,
-    authenticated_proof: DigestV1,
+    policy_checked_staging_identity: DigestV1,
     ownership_identity: DigestV1,
 ) -> DigestV1 {
     let mut digest = Sha256::new();
@@ -768,7 +768,7 @@ fn output_frame_identity_v1(
     digest.update(evidence.identity().sha256());
     digest.update(output.identity().as_bytes());
     digest.update(ranked_view_identity.as_bytes());
-    digest.update(authenticated_proof.as_bytes());
+    digest.update(policy_checked_staging_identity.as_bytes());
     digest.update(ownership_identity.as_bytes());
     digest.update(
         evidence
@@ -798,7 +798,7 @@ fn output_product_identity_v1(
     for (output, binding) in semantic_contract.outputs().iter().zip(bindings) {
         digest.update(output.identity().as_bytes());
         digest.update(binding.ranked_view_identity.as_bytes());
-        digest.update(binding.authenticated_proof.as_bytes());
+        digest.update(binding.policy_checked_staging_identity.as_bytes());
         digest.update(binding.ownership_identity.as_bytes());
         digest.update(binding.frame_identity.as_bytes());
         digest.update(binding.allocation_origin.to_le_bytes());
@@ -903,11 +903,11 @@ pub fn require_parallel_reference_contract_v1(
                 ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
             );
         }
-        let output_proof = binding.authenticated_proof;
-        if relation.authenticated_proof() != output_proof {
+        let output_proof = binding.policy_checked_staging_identity;
+        if relation.policy_checked_staging_identity() != output_proof {
             return Err(
-                ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
-                    identity: relation.authenticated_proof(),
+                ProductionParallelReferenceContractErrorV1::PolicyCheckedStagingIncomplete {
+                    identity: relation.policy_checked_staging_identity(),
                 },
             );
         }
@@ -1098,7 +1098,7 @@ fn hierarchy_level(level: HierarchicalOwnershipLevelV1) -> ParallelHierarchyLeve
 struct LiveNumericalRefinementV1 {
     contract: super::ProductionNumericalRefinementContractV2,
     proof: DigestV1,
-    proof_is_admitted: bool,
+    staging_is_policy_checked: bool,
 }
 
 struct LiveNumericalRefinementIndexV1 {
@@ -1119,9 +1119,9 @@ impl LiveNumericalRefinementIndexV1 {
                 .push(index);
         }
 
-        let proof_is_admitted = ranked
+        let staging_is_policy_checked = ranked
             .semantic_report()
-            .all_numerical_obligations_are_proved();
+            .all_numerical_obligations_are_policy_checked();
         let mut by_output = vec![None; semantic_contract.outputs().len()];
         let mut site_count = 0_usize;
         for operation in ranked
@@ -1179,7 +1179,7 @@ impl LiveNumericalRefinementIndexV1 {
             by_output[*index] = Some(LiveNumericalRefinementV1 {
                 contract: *contract,
                 proof: proof.receipt_identity().digest(),
-                proof_is_admitted,
+                staging_is_policy_checked,
             });
         }
         Ok(Self {
@@ -1396,7 +1396,7 @@ fn require_numerical_policy(
                     && site.contract.relative_error_f64_bits() == relative_error_f64_bits
                     && site.contract.request_shape_hash() == witness_root
                     && site.proof == proof
-                    && site.proof_is_admitted =>
+                    && site.staging_is_policy_checked =>
             {
                 Ok(())
             }
@@ -1456,11 +1456,11 @@ fn require_tensor_site_bijection_v1(
         return Err(
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: live_tensor_sites.len(),
-                proved_sites: claimed_tensor_sites.len(),
+                policy_checked_sites: claimed_tensor_sites.len(),
             },
         );
     }
-    let mut proved_tensor_sites = BTreeSet::new();
+    let mut policy_checked_tensor_sites = BTreeSet::new();
     for tensor_site in claimed_tensor_sites {
         if !live_tensor_sites.contains(tensor_site) {
             return Err(
@@ -1470,7 +1470,7 @@ fn require_tensor_site_bijection_v1(
                 },
             );
         }
-        if !proved_tensor_sites.insert(*tensor_site) {
+        if !policy_checked_tensor_sites.insert(*tensor_site) {
             return Err(
                 ProductionParallelReferenceContractErrorV1::DuplicateTensorInstructionSite {
                     block: tensor_site.block(),
@@ -1479,15 +1479,15 @@ fn require_tensor_site_bijection_v1(
             );
         }
     }
-    if proved_tensor_sites != *live_tensor_sites {
+    if policy_checked_tensor_sites != *live_tensor_sites {
         return Err(
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: live_tensor_sites.len(),
-                proved_sites: proved_tensor_sites.len(),
+                policy_checked_sites: policy_checked_tensor_sites.len(),
             },
         );
     }
-    Ok(proved_tensor_sites)
+    Ok(policy_checked_tensor_sites)
 }
 
 impl LiveTensorRefinementIndexV1 {
@@ -1513,11 +1513,11 @@ impl LiveTensorRefinementIndexV1 {
             .iter()
             .map(|(contract, _)| contract.tensor_site())
             .collect::<Vec<_>>();
-        let proved_tensor_sites =
+        let policy_checked_tensor_sites =
             require_tensor_site_bijection_v1(&live_tensor_sites, &claimed_tensor_sites)?;
         let mut retained_receipts = BTreeMap::new();
-        for receipt in ranked.retained_functional_refinement_receipts() {
-            if receipt.is_retained_policy_verified_receipt() {
+        for receipt in ranked.retained_policy_checked_refinement_staging() {
+            if receipt.is_policy_checked_untrusted_staging() {
                 *retained_receipts
                     .entry((receipt.receipt_identity(), receipt.binding()))
                     .or_insert(0_usize) += 1;
@@ -1540,7 +1540,7 @@ impl LiveTensorRefinementIndexV1 {
                 return Err(
                     ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                         live_sites,
-                        proved_sites: site,
+                        policy_checked_sites: site,
                     },
                 );
             }
@@ -1574,7 +1574,7 @@ impl LiveTensorRefinementIndexV1 {
                 proof: proof.receipt_identity().digest(),
             });
         }
-        debug_assert_eq!(proved_tensor_sites, live_tensor_sites);
+        debug_assert_eq!(policy_checked_tensor_sites, live_tensor_sites);
         Ok(Self { by_output })
     }
 
@@ -1632,7 +1632,7 @@ mod tests {
                 second: 1,
             },
             ProductionParallelReferenceContractErrorV1::OutputOwnershipMismatch { index: 1 },
-            ProductionParallelReferenceContractErrorV1::AuthenticatedProofIncomplete {
+            ProductionParallelReferenceContractErrorV1::PolicyCheckedStagingIncomplete {
                 identity: digest(1),
             },
             ProductionParallelReferenceContractErrorV1::ScheduleRelationIncomplete {
@@ -1643,7 +1643,7 @@ mod tests {
             ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index: 5 },
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: 1,
-                proved_sites: 0,
+                policy_checked_sites: 0,
             },
         ] {
             assert!(error.is_incomplete(), "{error}");
@@ -1665,7 +1665,7 @@ mod tests {
             Err(
                 ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                     live_sites: 2,
-                    proved_sites: 1,
+                    policy_checked_sites: 1,
                 }
             )
         ));
@@ -1867,7 +1867,7 @@ mod tests {
         let error =
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: 1,
-                proved_sites: 0,
+                policy_checked_sites: 0,
             };
         assert!(error.is_incomplete());
         assert_eq!(

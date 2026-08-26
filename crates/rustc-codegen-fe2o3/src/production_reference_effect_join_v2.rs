@@ -10,16 +10,16 @@ use dialect_kernel::{
 };
 use fe2o3_functional_proof::{FunctionalRefinementSubjectsV2, SafeReferenceKindV2};
 use fe2o3_pliron::{
-    ProductionConstructionV1, ProductionEffectRefinementContractV2,
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
+    ProductionConstructionV1, ProductionEffectRefinementContractV2, ProductionGpuWriteSiteV2,
     ProductionNumericalContractV2, ProductionOverflowContractV2, ProductionRankedBlockV1,
     ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
     ProductionRankedKernelLoweringInputV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
-    ProductionReferenceOutputSiteV2, ProductionReferenceProofV2, ProductionSemanticBinaryOpV2,
-    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
-    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionLimitsV1,
-    compile_ranked_kernel_for_lowering_v2,
+    ProductionReferenceOutputSiteV2, ProductionReferenceProofV2,
+    ProductionRefinementStagingPolicyV2, ProductionSemanticBinaryOpV2, ProductionSemanticCastV2,
+    ProductionSemanticComparisonV2, ProductionSemanticExpressionV2, ProductionSemanticScalarTypeV2,
+    ProductionSemanticUnaryOpV2, ProductionSessionLimitsV1,
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
 };
 use fe2o3_proof_contracts::DigestV1;
 
@@ -178,7 +178,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
                 "compiler-owned reference request contains no output roles".to_owned(),
             )
         })?;
-        let policy = ProductionFunctionalRefinementTrustPolicyV2::new(signers, toolchain)
+        let policy = ProductionRefinementStagingPolicyV2::new(signers, toolchain)
             .map_err(ProductionReferenceEffectJoinErrorV2::Recipe)?;
         let mut bound = self.kernel;
         for (block, operation, request) in bindings {
@@ -190,7 +190,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
             ProductionConstructionV1::ranked_kernel(ROOT_NAME_V2, bound).map_err(|error| {
                 ProductionReferenceEffectJoinErrorV2::Construction(format!("{error:?}"))
             })?;
-        compile_ranked_kernel_for_lowering_v2(
+        compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
             construction,
             ProductionSessionLimitsV1::default(),
             imported_proofs,

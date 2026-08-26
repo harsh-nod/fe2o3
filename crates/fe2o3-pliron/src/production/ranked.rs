@@ -345,7 +345,7 @@ impl ProductionReferenceProofV1 {
 /// Exact receipt and semantic binding requested by one ranked recipe operation.
 ///
 /// This cloneable request is not evidence. Only
-/// [`compile_ranked_kernel_for_lowering_v2`] can reconcile it with a consumed,
+/// [`compile_ranked_kernel_with_policy_checked_refinement_staging_v2`] can reconcile it with a consumed,
 /// authenticated [`ImportedFunctionalRefinementProofV2`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProductionReferenceProofV2 {
@@ -1394,18 +1394,21 @@ fn atomic_scope_tag(scope: AtomicScopeAttr) -> u8 {
     }
 }
 
-/// Compiler-retained summary constructible only from strict V2 import output.
+/// Non-authoritative policy-checked staging summary for one imported receipt.
+///
+/// Signature and caller-selected policy checks do not establish proof execution or
+/// compiler authority. Only the private aggregate exact-formula replay may do so.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::ProductionFunctionalRefinementEvidenceV2;
+/// use fe2o3_pliron::ProductionPolicyCheckedRefinementStagingV2;
 ///
-/// fn duplicate(evidence: ProductionFunctionalRefinementEvidenceV2) {
+/// fn duplicate(evidence: ProductionPolicyCheckedRefinementStagingV2) {
 ///     let _first = evidence;
 ///     let _second = evidence;
 /// }
 /// ```
 #[derive(Debug, Eq, PartialEq)]
-pub struct ProductionFunctionalRefinementEvidenceV2 {
+pub struct ProductionPolicyCheckedRefinementStagingV2 {
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
     binding: FunctionalRefinementBindingV2,
     signer_identity: DigestV1,
@@ -1414,14 +1417,18 @@ pub struct ProductionFunctionalRefinementEvidenceV2 {
     boundary: FunctionalRefinementBoundaryV2,
 }
 
-/// Compiler-configuration trust root for production V2 admission.
+/// Caller-selected policy for non-authoritative receipt staging.
+///
+/// The policy is deliberately not a compiler trust root. Its constructor is exposed
+/// only to the workspace verifier and hostile tests through `internal-proof-staging`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductionFunctionalRefinementTrustPolicyV2 {
+pub struct ProductionRefinementStagingPolicyV2 {
     signer_identities: BTreeSet<DigestV1>,
     toolchain: VerusToolchainIdentityV2,
 }
 
-impl ProductionFunctionalRefinementTrustPolicyV2 {
+impl ProductionRefinementStagingPolicyV2 {
+    #[cfg(feature = "internal-proof-staging")]
     pub fn new(
         signer_identities: impl IntoIterator<Item = DigestV1>,
         toolchain: VerusToolchainIdentityV2,
@@ -1448,7 +1455,7 @@ impl ProductionFunctionalRefinementTrustPolicyV2 {
     }
 }
 
-impl ProductionFunctionalRefinementEvidenceV2 {
+impl ProductionPolicyCheckedRefinementStagingV2 {
     fn from_imported(proof: ImportedFunctionalRefinementProofV2) -> Self {
         Self {
             receipt_identity: proof.receipt_identity(),
@@ -1478,7 +1485,7 @@ impl ProductionFunctionalRefinementEvidenceV2 {
     pub const fn boundary(&self) -> FunctionalRefinementBoundaryV2 {
         self.boundary
     }
-    pub const fn is_retained_policy_verified_receipt(&self) -> bool {
+    pub const fn is_policy_checked_untrusted_staging(&self) -> bool {
         true
     }
     pub const fn grants_source_to_isa_authority(&self) -> bool {
@@ -3679,7 +3686,7 @@ pub(super) struct ConstructedRootV1 {
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
-    pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+    pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     pub(super) production_pipeline_report: Option<ProductionPlironPreloweringReportV2>,
 }
 
@@ -3688,7 +3695,7 @@ pub(super) struct MaterializedConstructionV1 {
     pub(super) ranked_function: Option<Ptr<Operation>>,
     pub(super) ranked_kernel: Option<ProductionRankedKernelV1>,
     pub(super) ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
-    pub(super) authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+    pub(super) policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
 }
 
 impl ProductionConstructionV1 {
@@ -3701,7 +3708,7 @@ impl ProductionConstructionV1 {
             kind: ProductionConstructionKindV1::RankedKernel {
                 root_name: root_name.to_owned(),
                 kernel,
-                authenticated_functional_refinement: Vec::new(),
+                policy_checked_refinement_staging: Vec::new(),
             },
         })
     }
@@ -3755,18 +3762,16 @@ impl ProductionPlironSessionV1 {
                     ranked_function: None,
                     ranked_kernel: None,
                     ranked_view_names: BTreeMap::new(),
-                    authenticated_functional_refinement: Vec::new(),
+                    policy_checked_refinement_staging: Vec::new(),
                 })
                 .map_err(ProductionSessionErrorV1::Operation),
             ProductionConstructionKindV1::RankedKernel {
                 kernel,
-                authenticated_functional_refinement,
+                policy_checked_refinement_staging,
                 ..
-            } => self.materialize_ranked_kernel(
-                root_name,
-                kernel,
-                authenticated_functional_refinement,
-            ),
+            } => {
+                self.materialize_ranked_kernel(root_name, kernel, policy_checked_refinement_staging)
+            }
         }));
         match result {
             Ok(result) => result,
@@ -3780,7 +3785,7 @@ impl ProductionPlironSessionV1 {
         &mut self,
         root_name: &str,
         kernel: ProductionRankedKernelV1,
-        authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+        policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     ) -> Result<MaterializedConstructionV1, ProductionSessionErrorV1> {
         if !self
             .inner
@@ -3914,7 +3919,7 @@ impl ProductionPlironSessionV1 {
                     &arguments,
                     &mut locals,
                     &block_arguments,
-                    &authenticated_functional_refinement,
+                    &policy_checked_refinement_staging,
                 )
                 .map_err(ProductionSessionErrorV1::RankedRecipe)?;
             }
@@ -3970,7 +3975,7 @@ impl ProductionPlironSessionV1 {
             ranked_function: Some(function.get_operation()),
             ranked_kernel: Some(kernel),
             ranked_view_names,
-            authenticated_functional_refinement,
+            policy_checked_refinement_staging,
         })
     }
 
@@ -4109,7 +4114,7 @@ impl ProductionPlironSessionV1 {
             kernel,
             production_pipeline_report: report,
             ranked_view_names: record.ranked_view_names,
-            authenticated_functional_refinement: record.authenticated_functional_refinement,
+            policy_checked_refinement_staging: record.policy_checked_refinement_staging,
             _session: self,
             _stage: stage,
             _root: root,
@@ -4170,10 +4175,10 @@ fn resolve_value(
     }
 }
 
-fn materialize_authenticated_refinement_header(
+fn materialize_policy_checked_refinement_header(
     context: &mut pliron::context::Context,
     block: Ptr<BasicBlock>,
-    retained: &[ProductionFunctionalRefinementEvidenceV2],
+    retained: &[ProductionPolicyCheckedRefinementStagingV2],
     proof: &ProductionReferenceProofV2,
 ) -> Result<ProofIdAttr, ProductionRankedKernelErrorV1> {
     let imported = retained
@@ -4181,10 +4186,10 @@ fn materialize_authenticated_refinement_header(
         .find(|candidate| candidate.receipt_identity() == proof.receipt_identity())
         .filter(|candidate| candidate.binding() == proof.binding())
         .ok_or(ProductionRankedKernelErrorV1::Materialization(
-            "authenticated functional-refinement evidence was not retained",
+            "policy-checked functional-refinement staging was not retained",
         ))?;
     let [obligation_words, subject_words, model_words, evidence_words] =
-        authenticated_proof_ids(imported)?;
+        policy_checked_proof_ids(imported)?;
     let obligation_id = ProofIdAttr::new(obligation_words);
     ObligationOp::new(
         context,
@@ -4200,7 +4205,7 @@ fn materialize_authenticated_refinement_header(
         ProofIdAttr::new(evidence_words),
         obligation_id.clone(),
         PropertyAttr::FunctionalRefinement,
-        EvidenceStatusAttr::Proved,
+        EvidenceStatusAttr::Checked,
         CoveredBoundaryAttr::Mir,
     )
     .get_operation()
@@ -4215,7 +4220,7 @@ fn materialize_operation(
     arguments: &[Value],
     locals: &mut Vec<Value>,
     block_arguments: &HashMap<(u32, u32), Value>,
-    authenticated_functional_refinement: &[ProductionFunctionalRefinementEvidenceV2],
+    policy_checked_refinement_staging: &[ProductionPolicyCheckedRefinementStagingV2],
 ) -> Result<(), ProductionRankedKernelErrorV1> {
     let (operation, result) = match recipe {
         ProductionRankedOperationV1::ExecutionLayout {
@@ -4728,10 +4733,10 @@ fn materialize_operation(
             expected,
             proof,
         } => {
-            let obligation_id = materialize_authenticated_refinement_header(
+            let obligation_id = materialize_policy_checked_refinement_header(
                 context,
                 block,
-                authenticated_functional_refinement,
+                policy_checked_refinement_staging,
                 proof,
             )?;
             let op = RequireRefinementOp::new(
@@ -4743,10 +4748,10 @@ fn materialize_operation(
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::RequireEffectRefinement { contract, proof } => {
-            let obligation_id = materialize_authenticated_refinement_header(
+            let obligation_id = materialize_policy_checked_refinement_header(
                 context,
                 block,
-                authenticated_functional_refinement,
+                policy_checked_refinement_staging,
                 proof,
             )?;
             let op = RequireEffectRefinementOp::new(
@@ -4798,10 +4803,10 @@ fn materialize_operation(
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::RequireNumericalRefinement { contract, proof } => {
-            let obligation_id = materialize_authenticated_refinement_header(
+            let obligation_id = materialize_policy_checked_refinement_header(
                 context,
                 block,
-                authenticated_functional_refinement,
+                policy_checked_refinement_staging,
                 proof,
             )?;
             let op = RequireNumericalRefinementOp::new(
@@ -4817,10 +4822,10 @@ fn materialize_operation(
             (op.get_operation(), None)
         }
         ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
-            let obligation_id = materialize_authenticated_refinement_header(
+            let obligation_id = materialize_policy_checked_refinement_header(
                 context,
                 block,
-                authenticated_functional_refinement,
+                policy_checked_refinement_staging,
                 proof,
             )?;
             let components = contract
@@ -5142,8 +5147,8 @@ fn materialize_typed_semantic_expression(
     Ok(result)
 }
 
-fn authenticated_proof_ids(
-    evidence: &ProductionFunctionalRefinementEvidenceV2,
+fn policy_checked_proof_ids(
+    evidence: &ProductionPolicyCheckedRefinementStagingV2,
 ) -> Result<[[u64; 4]; 4], ProductionRankedKernelErrorV1> {
     let inputs = [
         (
@@ -5397,7 +5402,7 @@ pub struct ProductionRankedKernelLoweringInputV1 {
     kernel: ProductionRankedKernelV1,
     production_pipeline_report: ProductionPlironPreloweringReportV2,
     ranked_view_names: BTreeMap<ProductionRankedValueV1, String>,
-    authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+    policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     _session: ProductionPlironSessionV1,
     _stage: ProductionStageHandleV1<KernelChecksVerifiedGraphStageV1>,
     _root: ProductionRootHandleV1<KernelChecksVerifiedGraphStageV1>,
@@ -5441,11 +5446,14 @@ impl ProductionRankedKernelLoweringInputV1 {
         &self.production_pipeline_report
     }
 
-    /// Exact signature- and policy-verified receipts retained for this graph.
-    pub fn retained_functional_refinement_receipts(
+    /// Policy-checked, non-authoritative receipt staging retained for aggregate replay.
+    ///
+    /// A caller-selected policy can satisfy this structural check. This accessor never
+    /// reports proof execution and the returned values grant no authority.
+    pub fn retained_policy_checked_refinement_staging(
         &self,
-    ) -> &[ProductionFunctionalRefinementEvidenceV2] {
-        &self.authenticated_functional_refinement
+    ) -> &[ProductionPolicyCheckedRefinementStagingV2] {
+        &self.policy_checked_refinement_staging
     }
 
     pub const fn bounds_report(&self) -> &RankedBoundsReportV1 {
@@ -5492,8 +5500,8 @@ impl ProductionRankedKernelLoweringInputV1 {
         false
     }
 
-    pub const fn has_retained_functional_refinement_receipts(&self) -> bool {
-        !self.authenticated_functional_refinement.is_empty()
+    pub const fn has_retained_policy_checked_refinement_staging(&self) -> bool {
+        !self.policy_checked_refinement_staging.is_empty()
     }
 }
 
@@ -5621,11 +5629,11 @@ impl Error for ProductionRankedCompileErrorV2 {
 fn admit_functional_refinement_v2(
     construction: &mut ProductionConstructionV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
-    policy: &ProductionFunctionalRefinementTrustPolicyV2,
+    policy: &ProductionRefinementStagingPolicyV2,
 ) -> Result<(), ProductionFunctionalRefinementAdmissionErrorV2> {
     let ProductionConstructionKindV1::RankedKernel {
         kernel,
-        authenticated_functional_refinement,
+        policy_checked_refinement_staging,
         ..
     } = &mut construction.kind
     else {
@@ -5681,7 +5689,7 @@ fn admit_functional_refinement_v2(
                 ),
             );
         }
-        retained.push(ProductionFunctionalRefinementEvidenceV2::from_imported(
+        retained.push(ProductionPolicyCheckedRefinementStagingV2::from_imported(
             proof,
         ));
         Ok(())
@@ -5774,7 +5782,7 @@ fn admit_functional_refinement_v2(
             ProductionFunctionalRefinementAdmissionErrorV2::UnusedImportedReceipt(identity),
         );
     }
-    *authenticated_functional_refinement = retained;
+    *policy_checked_refinement_staging = retained;
     Ok(())
 }
 
@@ -5810,17 +5818,18 @@ pub fn compile_ranked_kernel_for_lowering_v1(
         .map_err(ProductionRankedCompileErrorV1::Session)
 }
 
-/// Executes the ranked production path after consuming and exactly reconciling
-/// authenticated V2 functional-refinement proofs.
+/// Stages caller-policy-checked V2 receipts against exact ranked obligations.
 ///
-/// Only MIR-to-MIR functional-refinement authority is admitted. Source-to-MIR,
-/// lowering, ISA, artifact, load, launch, and hardware authority remain outside
-/// this transition.
-pub fn compile_ranked_kernel_for_lowering_v2(
+/// This workspace-internal transition is deliberately non-authoritative: signatures
+/// under a caller-selected policy do not prove verifier execution. Only the private
+/// aggregate exact-formula Verus replay may grant MIR-to-live-PLIRON refinement.
+/// It grants no compiler, lowering, ISA, artifact, load, launch, or hardware authority.
+#[cfg(feature = "internal-proof-staging")]
+pub fn compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
     mut construction: ProductionConstructionV1,
     limits: ProductionSessionLimitsV1,
     imported: Vec<ImportedFunctionalRefinementProofV2>,
-    policy: ProductionFunctionalRefinementTrustPolicyV2,
+    policy: ProductionRefinementStagingPolicyV2,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV2> {
     admit_functional_refinement_v2(&mut construction, imported, &policy)
         .map_err(ProductionRankedCompileErrorV2::Proof)?;

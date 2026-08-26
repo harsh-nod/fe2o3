@@ -131,7 +131,7 @@ pub struct ParallelOutputRelationV1 {
     numerical_policy: ParallelNumericalPolicyV1,
     hierarchy: Box<[ParallelHierarchyLevelV1]>,
     tensor_refinement_identity: Option<DigestV1>,
-    authenticated_proof: DigestV1,
+    policy_checked_staging_identity: DigestV1,
 }
 
 impl ParallelOutputRelationV1 {
@@ -147,7 +147,7 @@ impl ParallelOutputRelationV1 {
         numerical_policy: ParallelNumericalPolicyV1,
         hierarchy: Vec<ParallelHierarchyLevelV1>,
         tensor_refinement_identity: Option<DigestV1>,
-        authenticated_proof: DigestV1,
+        policy_checked_staging_identity: DigestV1,
     ) -> Result<Self, ParallelReferenceContractErrorV1> {
         if [
             identity,
@@ -156,7 +156,7 @@ impl ParallelOutputRelationV1 {
             ranked_view_identity,
             ownership_identity,
             frame_identity,
-            authenticated_proof,
+            policy_checked_staging_identity,
         ]
         .into_iter()
         .any(DigestV1::is_zero)
@@ -180,7 +180,7 @@ impl ParallelOutputRelationV1 {
             numerical_policy,
             hierarchy: hierarchy.into_boxed_slice(),
             tensor_refinement_identity,
-            authenticated_proof,
+            policy_checked_staging_identity,
         })
     }
 
@@ -216,8 +216,8 @@ impl ParallelOutputRelationV1 {
     pub const fn tensor_refinement_identity(&self) -> Option<DigestV1> {
         self.tensor_refinement_identity
     }
-    pub const fn authenticated_proof(&self) -> DigestV1 {
-        self.authenticated_proof
+    pub const fn policy_checked_staging_identity(&self) -> DigestV1 {
+        self.policy_checked_staging_identity
     }
 }
 
@@ -333,7 +333,7 @@ impl ParallelReferenceContractV1 {
                     }
                 }
             }
-            put_digest(&mut digest, relation.authenticated_proof);
+            put_digest(&mut digest, relation.policy_checked_staging_identity);
         }
         DigestV1::from_untrusted_bytes(digest.finalize().into())
     }
@@ -558,7 +558,7 @@ mod tests {
                 scalar.numerical_policy(),
                 scalar.hierarchy().to_vec(),
                 Some(identity),
-                scalar.authenticated_proof(),
+                scalar.policy_checked_staging_identity(),
             )
             .unwrap()
         };

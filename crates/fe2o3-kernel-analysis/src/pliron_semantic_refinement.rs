@@ -596,11 +596,11 @@ impl fmt::Display for PlironSemanticRefinementFindingV1 {
 pub struct PlironSemanticRefinementReportV1 {
     findings: Vec<PlironSemanticRefinementFindingV1>,
     reference_obligations: usize,
-    proved_reference_obligations: usize,
+    policy_checked_reference_obligations: usize,
     numerical_obligations: usize,
-    proved_numerical_obligations: usize,
+    policy_checked_numerical_obligations: usize,
     collective_contracts: usize,
-    proved_collective_contracts: usize,
+    policy_checked_collective_contracts: usize,
     typed_root_commitments: Vec<[u64; 4]>,
     effect_refinement: PlironEffectRefinementReportV1,
 }
@@ -633,34 +633,34 @@ impl PlironSemanticRefinementReportV1 {
         self.reference_obligations
     }
 
-    /// Number of reference-bound equalities with one exact proved source
-    /// evidence record and an equal target-neutral expression.
-    pub const fn proved_reference_obligation_count(&self) -> usize {
-        self.proved_reference_obligations
+    /// Number of reference-bound equalities with one exact policy-checked staging
+    /// record and an equal target-neutral expression. This is not proof authority.
+    pub const fn policy_checked_reference_obligation_count(&self) -> usize {
+        self.policy_checked_reference_obligations
     }
 
-    /// Whether at least one reference obligation was declared and every such
-    /// obligation was discharged by this pass.
-    pub fn all_reference_obligations_are_proved(&self) -> bool {
+    /// Whether every declared reference obligation has structurally consistent,
+    /// policy-checked staging. This does not report functional proof.
+    pub fn all_reference_obligations_are_policy_checked(&self) -> bool {
         self.is_clean()
             && self.reference_obligations != 0
-            && self.reference_obligations == self.proved_reference_obligations
+            && self.reference_obligations == self.policy_checked_reference_obligations
     }
 
-    /// Number of authenticated finite-error relations in the live graph.
+    /// Number of finite-error relations with policy-checked staging in the live graph.
     pub const fn numerical_obligation_count(&self) -> usize {
         self.numerical_obligations
     }
 
     /// Number whose typed roots, finite bounds, and exact evidence join passed.
-    pub const fn proved_numerical_obligation_count(&self) -> usize {
-        self.proved_numerical_obligations
+    pub const fn policy_checked_numerical_obligation_count(&self) -> usize {
+        self.policy_checked_numerical_obligations
     }
 
-    pub fn all_numerical_obligations_are_proved(&self) -> bool {
+    pub fn all_numerical_obligations_are_policy_checked(&self) -> bool {
         self.is_clean()
             && self.numerical_obligations != 0
-            && self.numerical_obligations == self.proved_numerical_obligations
+            && self.numerical_obligations == self.policy_checked_numerical_obligations
     }
 
     /// Number of closed finite fold, recurrence, and permutation contracts.
@@ -668,15 +668,15 @@ impl PlironSemanticRefinementReportV1 {
         self.collective_contracts
     }
 
-    /// Number independently joined to one proved MIR functional-refinement obligation.
-    pub const fn proved_collective_contract_count(&self) -> usize {
-        self.proved_collective_contracts
+    /// Number structurally joined to one policy-checked MIR staging obligation.
+    pub const fn policy_checked_collective_contract_count(&self) -> usize {
+        self.policy_checked_collective_contracts
     }
 
-    pub fn all_collective_contracts_are_proved(&self) -> bool {
+    pub fn all_collective_contracts_are_policy_checked(&self) -> bool {
         self.is_clean()
             && self.collective_contracts != 0
-            && self.collective_contracts == self.proved_collective_contracts
+            && self.collective_contracts == self.policy_checked_collective_contracts
     }
 
     /// Canonical typed-root commitments reconstructed and verified by the
@@ -926,7 +926,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
 
     let reference_count = reference_requirements.len() + tensor_requirements.len();
     let numerical_count = numerical_requirements.len();
-    let authenticated_requirements = reference_requirements
+    let policy_checked_requirements = reference_requirements
         .iter()
         .map(|&(block, operation, identity, actual, expected)| {
             (block, operation, identity, actual, expected)
@@ -945,7 +945,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let mut findings = Vec::new();
     let mut contract_valid = HashSet::new();
     let mut used_obligations = HashSet::new();
-    for (block, operation, identity, _, _) in &authenticated_requirements {
+    for (block, operation, identity, _, _) in &policy_checked_requirements {
         let identity = identity.unwrap_or([0; 4]);
         let matching = obligations
             .iter()
@@ -1036,14 +1036,14 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         }
-        if record.5 != Some(EvidenceStatusAttr::Proved) {
+        if record.5 != Some(EvidenceStatusAttr::Checked) {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::ReferenceContractIncomplete {
                     block: *block,
                     operation: *operation,
                     obligation: identity,
-                    reason: "functional refinement requires exact Proved evidence",
+                    reason: "policy-checked staging requires exact Checked evidence",
                 },
             );
             continue;
@@ -1125,7 +1125,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
         }
     }
-    let mut proved_reference_obligations = 0;
+    let mut policy_checked_reference_obligations = 0;
     let mut proved_reference_pairs = HashSet::new();
     for (block, operation, _, result_root, _, actual, reference, components) in tensor_requirements
     {
@@ -1171,7 +1171,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 },
             );
         } else if contract_valid.contains(&(block, operation)) {
-            proved_reference_obligations += 1;
+            policy_checked_reference_obligations += 1;
             proved_reference_pairs.insert((actual, reference));
         }
     }
@@ -1209,11 +1209,11 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 },
             );
         } else if contract_valid.contains(&(block, operation)) {
-            proved_reference_obligations += 1;
+            policy_checked_reference_obligations += 1;
             proved_reference_pairs.insert((actual, expected));
         }
     }
-    let mut proved_numerical_obligations = 0;
+    let mut policy_checked_numerical_obligations = 0;
     for (
         block,
         operation,
@@ -1300,11 +1300,11 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             continue;
         }
         if contract_valid.contains(&(block, operation)) {
-            proved_numerical_obligations += 1;
+            policy_checked_numerical_obligations += 1;
         }
     }
     let collective_count = collective_contracts.len();
-    let mut proved_collective_contracts = 0;
+    let mut policy_checked_collective_contracts = 0;
     let mut used_reference_pairs = HashSet::new();
     for collective in collective_contracts {
         let block = collective.block;
@@ -1487,7 +1487,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
             );
             continue;
         }
-        proved_collective_contracts += 1;
+        policy_checked_collective_contracts += 1;
     }
     let effect_refinement =
         run_pliron_effect_refinement_with_analyses_v1(context, function, analyses);
@@ -1495,11 +1495,11 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     PlironSemanticRefinementReportV1 {
         findings,
         reference_obligations: reference_count,
-        proved_reference_obligations,
+        policy_checked_reference_obligations,
         numerical_obligations: numerical_count,
-        proved_numerical_obligations,
+        policy_checked_numerical_obligations,
         collective_contracts: collective_count,
-        proved_collective_contracts,
+        policy_checked_collective_contracts,
         typed_root_commitments,
         effect_refinement,
     }
@@ -1548,11 +1548,11 @@ fn one(finding: PlironSemanticRefinementFindingV1) -> PlironSemanticRefinementRe
     PlironSemanticRefinementReportV1 {
         findings: vec![finding],
         reference_obligations: 0,
-        proved_reference_obligations: 0,
+        policy_checked_reference_obligations: 0,
         numerical_obligations: 0,
-        proved_numerical_obligations: 0,
+        policy_checked_numerical_obligations: 0,
         collective_contracts: 0,
-        proved_collective_contracts: 0,
+        policy_checked_collective_contracts: 0,
         typed_root_commitments: Vec::new(),
         effect_refinement: clean_effect_refinement_report_v1(),
     }
@@ -1607,11 +1607,11 @@ mod status_tests {
                 mismatch(),
             ],
             reference_obligations: 1,
-            proved_reference_obligations: 0,
+            policy_checked_reference_obligations: 0,
             numerical_obligations: 0,
-            proved_numerical_obligations: 0,
+            policy_checked_numerical_obligations: 0,
             collective_contracts: 0,
-            proved_collective_contracts: 0,
+            policy_checked_collective_contracts: 0,
             typed_root_commitments: Vec::new(),
             effect_refinement: clean_effect_refinement_report_v1(),
         };
@@ -1621,11 +1621,11 @@ mod status_tests {
             PlironSemanticRefinementReportV1 {
                 findings: vec![],
                 reference_obligations: 0,
-                proved_reference_obligations: 0,
+                policy_checked_reference_obligations: 0,
                 numerical_obligations: 0,
-                proved_numerical_obligations: 0,
+                policy_checked_numerical_obligations: 0,
                 collective_contracts: 0,
-                proved_collective_contracts: 0,
+                policy_checked_collective_contracts: 0,
                 typed_root_commitments: Vec::new(),
                 effect_refinement: clean_effect_refinement_report_v1(),
             }

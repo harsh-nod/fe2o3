@@ -949,7 +949,7 @@ impl RankedVerifiedProductionCompilation {
             ranked_verification.has_authenticated_functional_verification(),
             receipt
                 .lowering()
-                .has_retained_functional_refinement_receipts()
+                .has_retained_policy_checked_refinement_staging()
         );
         debug_assert!(ranked_verification.retained_functional_verification_is_coherent());
         let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {

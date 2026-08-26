@@ -223,11 +223,11 @@ impl ProductionMiddleEndCoverageSummaryV5 {
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ProductionMiddleEndSemanticSummaryV5 {
     reference_obligations_declared: u64,
-    reference_obligations_proved: u64,
+    reference_obligations_policy_checked: u64,
     effect_contracts_declared: u64,
     effect_contracts_proved: u64,
     collective_contracts_declared: u64,
-    collective_contracts_proved: u64,
+    collective_contracts_policy_checked: u64,
 }
 
 impl ProductionMiddleEndSemanticSummaryV5 {
@@ -235,8 +235,8 @@ impl ProductionMiddleEndSemanticSummaryV5 {
         self.reference_obligations_declared
     }
 
-    pub const fn reference_obligations_proved(self) -> u64 {
-        self.reference_obligations_proved
+    pub const fn reference_obligations_policy_checked(self) -> u64 {
+        self.reference_obligations_policy_checked
     }
 
     pub const fn effect_contracts_declared(self) -> u64 {
@@ -251,13 +251,13 @@ impl ProductionMiddleEndSemanticSummaryV5 {
         self.collective_contracts_declared
     }
 
-    pub const fn collective_contracts_proved(self) -> u64 {
-        self.collective_contracts_proved
+    pub const fn collective_contracts_policy_checked(self) -> u64 {
+        self.collective_contracts_policy_checked
     }
 
-    pub const fn has_non_vacuous_reference_proof(self) -> bool {
+    pub const fn has_non_vacuous_reference_staging(self) -> bool {
         self.reference_obligations_declared != 0
-            && self.reference_obligations_declared == self.reference_obligations_proved
+            && self.reference_obligations_declared == self.reference_obligations_policy_checked
     }
 
     pub const fn has_non_vacuous_effect_proof(self) -> bool {
@@ -265,9 +265,9 @@ impl ProductionMiddleEndSemanticSummaryV5 {
             && self.effect_contracts_declared == self.effect_contracts_proved
     }
 
-    pub const fn has_non_vacuous_collective_value_proof(self) -> bool {
+    pub const fn has_non_vacuous_collective_value_staging(self) -> bool {
         self.collective_contracts_declared != 0
-            && self.collective_contracts_declared == self.collective_contracts_proved
+            && self.collective_contracts_declared == self.collective_contracts_policy_checked
     }
 
     pub const fn grants_target_or_hardware_value_authority(self) -> bool {
@@ -487,11 +487,11 @@ impl InertProductionMiddleEndEvidenceV5 {
         validate_coverage_v5(coverage)?;
         let semantics = ProductionMiddleEndSemanticSummaryV5 {
             reference_obligations_declared: reader.u64()?,
-            reference_obligations_proved: reader.u64()?,
+            reference_obligations_policy_checked: reader.u64()?,
             effect_contracts_declared: reader.u64()?,
             effect_contracts_proved: reader.u64()?,
             collective_contracts_declared: reader.u64()?,
-            collective_contracts_proved: reader.u64()?,
+            collective_contracts_policy_checked: reader.u64()?,
         };
         validate_semantics_v5(semantics)?;
         let typed_summary = ProductionTypedSemanticObligationSummaryV2 {
@@ -694,24 +694,24 @@ impl ProductionMiddleEndEvidenceV5 {
             usize_to_u64(semantic_report.reference_obligation_count())?
                 .checked_add(usize_to_u64(semantic_report.numerical_obligation_count())?)
                 .ok_or(ProductionMiddleEndEvidenceCodecErrorV5::CounterOverflow)?;
-        let reference_obligations_proved =
-            usize_to_u64(semantic_report.proved_reference_obligation_count())?
+        let reference_obligations_policy_checked =
+            usize_to_u64(semantic_report.policy_checked_reference_obligation_count())?
                 .checked_add(usize_to_u64(
-                    semantic_report.proved_numerical_obligation_count(),
+                    semantic_report.policy_checked_numerical_obligation_count(),
                 )?)
                 .ok_or(ProductionMiddleEndEvidenceCodecErrorV5::CounterOverflow)?;
         let semantics = ProductionMiddleEndSemanticSummaryV5 {
             // V5 keeps one wire counter for authenticated scalar theorems;
             // exact equalities and finite-error relations are both included.
             reference_obligations_declared,
-            reference_obligations_proved,
+            reference_obligations_policy_checked,
             effect_contracts_declared: usize_to_u64(effect_report.contract_count())?,
             effect_contracts_proved: usize_to_u64(effect_report.proved_contract_count())?,
             collective_contracts_declared: usize_to_u64(
                 semantic_report.collective_contract_count(),
             )?,
-            collective_contracts_proved: usize_to_u64(
-                semantic_report.proved_collective_contract_count(),
+            collective_contracts_policy_checked: usize_to_u64(
+                semantic_report.policy_checked_collective_contract_count(),
             )?,
         };
         validate_semantics_v5(semantics)?;
@@ -1107,9 +1107,9 @@ fn validate_coverage_v5(
 fn validate_semantics_v5(
     summary: ProductionMiddleEndSemanticSummaryV5,
 ) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV5> {
-    if summary.reference_obligations_declared != summary.reference_obligations_proved
+    if summary.reference_obligations_declared != summary.reference_obligations_policy_checked
         || summary.effect_contracts_declared != summary.effect_contracts_proved
-        || summary.collective_contracts_declared != summary.collective_contracts_proved
+        || summary.collective_contracts_declared != summary.collective_contracts_policy_checked
     {
         return Err(ProductionMiddleEndEvidenceCodecErrorV5::InvalidSemanticSummary);
     }
@@ -1258,11 +1258,11 @@ fn encode_record_v5(
     }
     for counter in [
         semantics.reference_obligations_declared,
-        semantics.reference_obligations_proved,
+        semantics.reference_obligations_policy_checked,
         semantics.effect_contracts_declared,
         semantics.effect_contracts_proved,
         semantics.collective_contracts_declared,
-        semantics.collective_contracts_proved,
+        semantics.collective_contracts_policy_checked,
     ] {
         canonical.extend_from_slice(&counter.to_le_bytes());
     }
@@ -1420,11 +1420,11 @@ mod tests {
             coverage,
             ProductionMiddleEndSemanticSummaryV5 {
                 reference_obligations_declared: 1,
-                reference_obligations_proved: 1,
+                reference_obligations_policy_checked: 1,
                 effect_contracts_declared: 1,
                 effect_contracts_proved: 1,
                 collective_contracts_declared: 2,
-                collective_contracts_proved: 2,
+                collective_contracts_policy_checked: 2,
             },
             summary(),
             ProductionMiddleEndTypedSemanticReconciliationV5 {
@@ -1522,12 +1522,16 @@ mod tests {
         );
         assert_eq!(decoded.typed_semantic_summary(), summary());
         assert!(decoded.typed_semantic_reconciliation().is_exact());
-        assert!(decoded.semantic_summary().has_non_vacuous_reference_proof());
+        assert!(
+            decoded
+                .semantic_summary()
+                .has_non_vacuous_reference_staging()
+        );
         assert!(decoded.semantic_summary().has_non_vacuous_effect_proof());
         assert!(
             decoded
                 .semantic_summary()
-                .has_non_vacuous_collective_value_proof()
+                .has_non_vacuous_collective_value_staging()
         );
         assert_eq!(
             decoded

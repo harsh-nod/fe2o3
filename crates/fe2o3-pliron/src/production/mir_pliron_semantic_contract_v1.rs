@@ -17,7 +17,7 @@ use super::{
     ProductionIeeeRoundingModeV2, ProductionMiddleEndEvidenceV5, ProductionNumericalContractV2,
     ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1,
     ProductionRankedTerminatorV1, ProductionRankedValueV1, ProductionSemanticScalarTypeV2,
-    ProductionTotalOutputRefinementErrorV2, ProductionTotalOutputRefinementReportV2,
+    ProductionTotalOutputStagingErrorV2, ProductionTotalOutputStagingReportV2,
 };
 
 const EFFECT_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/MIR-PLIRON/EFFECT-IDENTITY/V1\0";
@@ -58,10 +58,10 @@ impl ProductionMirPlironSemanticContractReportV1 {
     pub const fn typed_roots(self) -> u64 {
         self.typed_roots
     }
-    /// The accepted statement is bound to the exact MIR subjects and PLIRON
+    /// The structurally reconciled statement is bound to the exact MIR subjects and PLIRON
     /// evidence. Soundness of the MIR projector and mandatory analyses remains
     /// in the compiler trusted base.
-    pub const fn binds_safe_reference_mir_to_live_pliron(self) -> bool {
+    pub const fn structurally_binds_safe_reference_mir_to_live_pliron(self) -> bool {
         true
     }
     pub const fn proves_the_compiler_implementation_sound(self) -> bool {
@@ -197,28 +197,28 @@ impl Error for ProductionMirPlironSemanticContractErrorV1 {}
 /// boundary.
 ///
 /// ```compile_fail
-/// use fe2o3_pliron::ProductionVerifiedMirPlironKernelV1;
+/// use fe2o3_pliron::ProductionReconciledMirPlironKernelV1;
 ///
 /// fn requires_clone<T: Clone>() {}
-/// requires_clone::<ProductionVerifiedMirPlironKernelV1>();
+/// requires_clone::<ProductionReconciledMirPlironKernelV1>();
 /// ```
 #[derive(Debug)]
-pub struct ProductionVerifiedMirPlironKernelV1 {
+pub struct ProductionReconciledMirPlironKernelV1 {
     ranked: ProductionRankedKernelLoweringInputV1,
     evidence: ProductionMiddleEndEvidenceV5,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     semantics: ProductionMirPlironSemanticContractReportV1,
     contract: MirPlironSemanticContractV1,
 }
 
-impl ProductionVerifiedMirPlironKernelV1 {
+impl ProductionReconciledMirPlironKernelV1 {
     pub const fn ranked(&self) -> &ProductionRankedKernelLoweringInputV1 {
         &self.ranked
     }
     pub const fn evidence(&self) -> &ProductionMiddleEndEvidenceV5 {
         &self.evidence
     }
-    pub const fn total_output_report(&self) -> ProductionTotalOutputRefinementReportV2 {
+    pub const fn total_output_report(&self) -> ProductionTotalOutputStagingReportV2 {
         self.total_output
     }
     pub const fn semantic_contract_report(&self) -> ProductionMirPlironSemanticContractReportV1 {
@@ -231,7 +231,7 @@ impl ProductionVerifiedMirPlironKernelV1 {
     pub const fn semantic_contract(&self) -> &MirPlironSemanticContractV1 {
         &self.contract
     }
-    pub const fn establishes_total_output_refinement_at_mir_pliron_boundary(&self) -> bool {
+    pub const fn has_policy_checked_total_output_staging(&self) -> bool {
         true
     }
     pub const fn compiler_projection_and_pass_soundness_remain_trusted(&self) -> bool {
@@ -243,12 +243,12 @@ impl ProductionVerifiedMirPlironKernelV1 {
 }
 
 #[derive(Debug)]
-pub enum ProductionMirPlironVerificationErrorV1 {
-    TotalOutput(ProductionTotalOutputRefinementErrorV2),
+pub enum ProductionMirPlironReconciliationErrorV1 {
+    TotalOutput(ProductionTotalOutputStagingErrorV2),
     SemanticContract(ProductionMirPlironSemanticContractErrorV1),
 }
 
-impl fmt::Display for ProductionMirPlironVerificationErrorV1 {
+impl fmt::Display for ProductionMirPlironReconciliationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TotalOutput(error) => {
@@ -261,19 +261,19 @@ impl fmt::Display for ProductionMirPlironVerificationErrorV1 {
     }
 }
 
-impl Error for ProductionMirPlironVerificationErrorV1 {}
+impl Error for ProductionMirPlironReconciliationErrorV1 {}
 
-pub fn verify_ranked_kernel_against_safe_reference_mir_v1(
+pub fn reconcile_ranked_kernel_with_safe_reference_mir_v1(
     ranked: ProductionRankedKernelLoweringInputV1,
     evidence: ProductionMiddleEndEvidenceV5,
     contract: &MirPlironSemanticContractV1,
-) -> Result<ProductionVerifiedMirPlironKernelV1, ProductionMirPlironVerificationErrorV1> {
-    let total_output = super::require_total_output_refinement_v2(&ranked, &evidence)
-        .map_err(ProductionMirPlironVerificationErrorV1::TotalOutput)?;
+) -> Result<ProductionReconciledMirPlironKernelV1, ProductionMirPlironReconciliationErrorV1> {
+    let total_output = super::require_total_output_staging_v2(&ranked, &evidence)
+        .map_err(ProductionMirPlironReconciliationErrorV1::TotalOutput)?;
     let semantics =
         require_mir_pliron_semantic_contract_v1(&ranked, &evidence, total_output, contract)
-            .map_err(ProductionMirPlironVerificationErrorV1::SemanticContract)?;
-    Ok(ProductionVerifiedMirPlironKernelV1 {
+            .map_err(ProductionMirPlironReconciliationErrorV1::SemanticContract)?;
+    Ok(ProductionReconciledMirPlironKernelV1 {
         ranked,
         evidence,
         total_output,
@@ -285,7 +285,7 @@ pub fn verify_ranked_kernel_against_safe_reference_mir_v1(
 pub fn require_mir_pliron_semantic_contract_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     contract: &MirPlironSemanticContractV1,
 ) -> Result<ProductionMirPlironSemanticContractReportV1, ProductionMirPlironSemanticContractErrorV1>
 {
@@ -295,7 +295,7 @@ pub fn require_mir_pliron_semantic_contract_v1(
     {
         return Err(ProductionMirPlironSemanticContractErrorV1::TotalOutputEvidenceMismatch);
     }
-    for receipt in ranked.retained_functional_refinement_receipts() {
+    for receipt in ranked.retained_policy_checked_refinement_staging() {
         let binding = receipt.binding();
         if binding.safe_reference_mir_hash() != contract.safe_reference_mir()
             || binding.kernel_mir_hash() != contract.kernel_mir()

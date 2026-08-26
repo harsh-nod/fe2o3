@@ -1,3 +1,5 @@
+#![cfg(feature = "internal-proof-staging")]
+
 use dialect_gpu::{AddressSpaceAttr, MemoryOrderAttr, MemoryScopeAttr};
 use ed25519_dalek::{Signer as _, SigningKey};
 use fe2o3_functional_proof::{
@@ -8,10 +10,10 @@ use fe2o3_functional_proof::{
     UnsignedFunctionalRefinementReceiptV2, VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionNonCanonicalLoopClaimsV1,
-    ProductionNonCanonicalLoopProofErrorV1, ProductionNonCanonicalLoopProofRequestV1,
-    ProductionRankedBlockV1, ProductionRankedKernelV1, ProductionRankedOperationV1,
-    ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionNonCanonicalLoopClaimsV1, ProductionNonCanonicalLoopProofErrorV1,
+    ProductionNonCanonicalLoopProofRequestV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
+    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
+    ProductionRankedValueV1, ProductionRefinementStagingPolicyV2,
     derive_noncanonical_loop_proof_request_v1, derive_noncanonical_loop_proof_requirement_v1,
     import_noncanonical_loop_proof_v1,
 };
@@ -196,7 +198,7 @@ fn imported(
     execution: u8,
 ) -> (
     ImportedFunctionalRefinementProofV2,
-    ProductionFunctionalRefinementTrustPolicyV2,
+    ProductionRefinementStagingPolicyV2,
 ) {
     let signing = SigningKey::from_bytes(&[91; 32]);
     let toolchain =
@@ -230,7 +232,7 @@ fn imported(
     let imported = importer
         .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
         .unwrap();
-    let policy = ProductionFunctionalRefinementTrustPolicyV2::new([signer], toolchain).unwrap();
+    let policy = ProductionRefinementStagingPolicyV2::new([signer], toolchain).unwrap();
     (imported, policy)
 }
 
@@ -457,7 +459,7 @@ fn wrong_boundary_and_digest_only_claims_never_become_authority() {
         34,
     );
     let wrong_signer =
-        ProductionFunctionalRefinementTrustPolicyV2::new([digest(90)], proof.toolchain()).unwrap();
+        ProductionRefinementStagingPolicyV2::new([digest(90)], proof.toolchain()).unwrap();
     assert!(matches!(
         import_noncanonical_loop_proof_v1(&kernel, request, proof, &wrong_signer),
         Err(ProductionNonCanonicalLoopProofErrorV1::WrongSigner(_))
@@ -472,11 +474,9 @@ fn wrong_boundary_and_digest_only_claims_never_become_authority() {
     let wrong_toolchain =
         VerusToolchainIdentityV2::new(digest(50), digest(51), digest(52), digest(53), digest(54))
             .unwrap();
-    let wrong_toolchain_policy = ProductionFunctionalRefinementTrustPolicyV2::new(
-        [proof.signer_identity()],
-        wrong_toolchain,
-    )
-    .unwrap();
+    let wrong_toolchain_policy =
+        ProductionRefinementStagingPolicyV2::new([proof.signer_identity()], wrong_toolchain)
+            .unwrap();
     assert!(matches!(
         import_noncanonical_loop_proof_v1(&kernel, request, proof, &wrong_toolchain_policy),
         Err(ProductionNonCanonicalLoopProofErrorV1::WrongToolchain(_))

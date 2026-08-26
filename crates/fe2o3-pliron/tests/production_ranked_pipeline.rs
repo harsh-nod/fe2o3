@@ -1,3 +1,5 @@
+#![cfg(feature = "internal-proof-staging")]
+
 use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeAttr};
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
@@ -19,20 +21,21 @@ use fe2o3_pliron::{
     DialectRegistration, HARD_MAX_SESSION_OPERATION_TREE_ITEMS,
     PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2, ProductionConstructionV1,
     ProductionEffectRefinementContractV2, ProductionFunctionalRefinementAdmissionErrorV2,
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionGpuWriteSiteV2,
-    ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
+    ProductionGpuWriteSiteV2, ProductionIeeeExceptionalValuePolicyV2, ProductionIeeeRoundingModeV2,
     ProductionNumericalContractV2, ProductionNumericalRefinementContractV2,
     ProductionOverflowContractV2, ProductionPlironSessionV1, ProductionRankedBlockV1,
     ProductionRankedCompileErrorV1, ProductionRankedCompileErrorV2, ProductionRankedKernelErrorV1,
     ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
     ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionReferenceOutputSiteV2,
-    ProductionReferenceProofV1, ProductionReferenceProofV2, ProductionSemanticBinaryOpV2,
-    ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionErrorV2,
-    ProductionSemanticExpressionV2, ProductionSemanticLoadV2, ProductionSemanticScalarTypeV2,
-    ProductionSemanticUnaryOpV2, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-    ProductionTensorInstructionSiteV1, ProductionTensorRefinementContractV1,
-    ProductionTensorResultComponentV1, compile_ranked_kernel_for_lowering_v1,
-    compile_ranked_kernel_for_lowering_v2, normalized_effect_refinement_hash_for_kernel_v2,
+    ProductionReferenceProofV1, ProductionReferenceProofV2, ProductionRefinementStagingPolicyV2,
+    ProductionSemanticBinaryOpV2, ProductionSemanticCastV2, ProductionSemanticComparisonV2,
+    ProductionSemanticExpressionErrorV2, ProductionSemanticExpressionV2, ProductionSemanticLoadV2,
+    ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
+    ProductionSessionLimitsV1, ProductionTensorInstructionSiteV1,
+    ProductionTensorRefinementContractV1, ProductionTensorResultComponentV1,
+    compile_ranked_kernel_for_lowering_v1,
+    compile_ranked_kernel_with_policy_checked_refinement_staging_v2,
+    normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
     normalized_numerical_refinement_hash_for_kernel_v2,
     normalized_tensor_refinement_hash_for_kernel_v1,
@@ -787,7 +790,7 @@ fn imported_reference(
 ) -> (
     ProductionReferenceProofV2,
     ImportedFunctionalRefinementProofV2,
-    ProductionFunctionalRefinementTrustPolicyV2,
+    ProductionRefinementStagingPolicyV2,
 ) {
     let signing = SigningKey::from_bytes(&[91; 32]);
     let toolchain = VerusToolchainIdentityV2::new(
@@ -822,7 +825,7 @@ fn imported_reference(
         .import(FunctionalRefinementImportExpectationV2::new(binding), &wire)
         .unwrap();
     let production_policy =
-        ProductionFunctionalRefinementTrustPolicyV2::new([signer_identity], toolchain).unwrap();
+        ProductionRefinementStagingPolicyV2::new([signer_identity], toolchain).unwrap();
     (
         ProductionReferenceProofV2::request_exact(imported.receipt_identity(), binding),
         imported,
@@ -1186,7 +1189,7 @@ fn two_tensor_sites_bind_two_outputs_through_independent_receipts() {
         receipts.push(imported);
         trust_policy = Some(policy);
     }
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(kernel),
         ProductionSessionLimitsV1::default(),
         receipts,
@@ -1194,7 +1197,7 @@ fn two_tensor_sites_bind_two_outputs_through_independent_receipts() {
     )
     .expect("two independent tensor sites and outputs must reach the production boundary");
     assert!(input.all_mandatory_reports_are_clean());
-    assert_eq!(input.retained_functional_refinement_receipts().len(), 2);
+    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 2);
 }
 
 #[test]
@@ -1222,7 +1225,7 @@ fn claim_specific_tensor_receipt_reaches_the_public_production_boundary() {
     let kernel = kernel
         .bind_functional_refinement_request_v2(0, operation, request)
         .unwrap();
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(kernel),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1233,9 +1236,9 @@ fn claim_specific_tensor_receipt_reaches_the_public_production_boundary() {
     assert!(
         input
             .semantic_report()
-            .all_reference_obligations_are_proved()
+            .all_reference_obligations_are_policy_checked()
     );
-    assert_eq!(input.retained_functional_refinement_receipts().len(), 1);
+    assert_eq!(input.retained_policy_checked_refinement_staging().len(), 1);
 }
 
 #[test]
@@ -1374,7 +1377,7 @@ fn stale_tensor_receipt_cannot_authorize_a_layout_or_capability_mutation() {
     let changed = changed
         .bind_functional_refinement_request_v2(0, changed_operation, request)
         .unwrap();
-    let error = compile_ranked_kernel_for_lowering_v2(
+    let error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(changed),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1440,11 +1443,15 @@ fn legacy_declared_proved_reference_is_not_authoritative() {
         error,
         ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(_))
     ));
-    assert!(error.to_string().contains("requires exact Proved evidence"));
+    assert!(
+        error
+            .to_string()
+            .contains("policy-checked staging requires exact Checked evidence")
+    );
 }
 
 #[test]
-fn authenticated_mir_reference_reaches_the_production_pipeline() {
+fn hostile_self_signed_receipt_stages_but_grants_no_authority() {
     let lhs = ProductionRankedValueIdV1::new(0);
     let rhs = ProductionRankedValueIdV1::new(1);
     let actual = ProductionRankedValueIdV1::new(2);
@@ -1513,7 +1520,7 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
         functional_binding(4, obligation),
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     );
-    let unbound_error = compile_ranked_kernel_for_lowering_v2(
+    let unbound_error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(kernel(ProductionRankedTerminatorV1::Return)),
         ProductionSessionLimitsV1::default(),
         vec![unbound_imported],
@@ -1533,7 +1540,7 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
     let bound = placeholder_kernel
         .bind_functional_refinement_request_v2(0, 4, proof)
         .unwrap();
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(bound),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1542,22 +1549,27 @@ fn authenticated_mir_reference_reaches_the_production_pipeline() {
     .unwrap();
     assert_eq!(input.semantic_report().reference_obligation_count(), 1);
     assert_eq!(
-        input.semantic_report().proved_reference_obligation_count(),
+        input
+            .semantic_report()
+            .policy_checked_reference_obligation_count(),
         1
     );
     assert!(
         input
             .semantic_report()
-            .all_reference_obligations_are_proved()
+            .all_reference_obligations_are_policy_checked()
     );
-    assert!(input.has_retained_functional_refinement_receipts());
+    assert!(input.has_retained_policy_checked_refinement_staging());
     assert!(
-        input.retained_functional_refinement_receipts()[0].is_retained_policy_verified_receipt()
+        input.retained_policy_checked_refinement_staging()[0].is_policy_checked_untrusted_staging()
     );
     assert!(!input.grants_compiler_refinement_authority());
-    assert!(!input.retained_functional_refinement_receipts()[0].grants_source_to_isa_authority());
     assert!(
-        !input.retained_functional_refinement_receipts()[0].grants_artifact_or_launch_authority()
+        !input.retained_policy_checked_refinement_staging()[0].grants_source_to_isa_authority()
+    );
+    assert!(
+        !input.retained_policy_checked_refinement_staging()[0]
+            .grants_artifact_or_launch_authority()
     );
 }
 
@@ -1619,7 +1631,7 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     let bound = kernel
         .bind_functional_refinement_request_v2(0, 2, proof)
         .unwrap();
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(bound),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1628,7 +1640,9 @@ fn typed_semantic_commitments_reach_all_mandatory_v2_passes() {
     .unwrap();
     assert!(input.all_mandatory_reports_are_clean());
     assert_eq!(
-        input.semantic_report().proved_reference_obligation_count(),
+        input
+            .semantic_report()
+            .policy_checked_reference_obligation_count(),
         1
     );
     assert_eq!(input.semantic_report().typed_root_commitments().len(), 2);
@@ -1747,7 +1761,7 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
     let bound = kernel
         .bind_functional_refinement_request_v2(0, 4, proof)
         .unwrap();
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(bound),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -1757,7 +1771,7 @@ fn finite_error_receipt_binds_roots_domain_precondition_and_exact_bounds() {
     assert!(
         input
             .semantic_report()
-            .all_numerical_obligations_are_proved()
+            .all_numerical_obligations_are_policy_checked()
     );
     assert_eq!(input.semantic_report().numerical_obligation_count(), 1);
 }
@@ -2024,7 +2038,7 @@ fn authenticated_reference_admission_rejects_missing_wrong_boundary_and_stale_bi
         functional_binding(4, proof_digest(5)),
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     );
-    let error = compile_ranked_kernel_for_lowering_v2(
+    let error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(kernel(request)),
         ProductionSessionLimitsV1::default(),
         vec![],
@@ -2042,7 +2056,7 @@ fn authenticated_reference_admission_rejects_missing_wrong_boundary_and_stale_bi
         functional_binding(4, proof_digest(5)),
         FunctionalRefinementBoundaryV2::SafeReferenceSourceToKernelMir,
     );
-    let error = compile_ranked_kernel_for_lowering_v2(
+    let error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(kernel(request)),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -2064,7 +2078,7 @@ fn authenticated_reference_admission_rejects_missing_wrong_boundary_and_stale_bi
         functional_binding(6, proof_digest(5)),
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     );
-    let error = compile_ranked_kernel_for_lowering_v2(
+    let error = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(kernel(ProductionReferenceProofV2::request_exact(
             stale.receipt_identity(),
             request.binding(),
@@ -2240,7 +2254,7 @@ fn authenticated_effect_refinement_reaches_the_same_production_pipeline() {
     let bound = skeleton
         .bind_functional_refinement_request_v2(0, 7, proof)
         .unwrap();
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(bound),
         ProductionSessionLimitsV1::default(),
         vec![imported],
@@ -2588,7 +2602,7 @@ fn v2_lowering_input_retains_non_vacuous_total_output_coverage() {
         functional_binding(4, proof_digest(5)),
         FunctionalRefinementBoundaryV2::SafeReferenceMirToKernelMir,
     );
-    let input = compile_ranked_kernel_for_lowering_v2(
+    let input = compile_ranked_kernel_with_policy_checked_refinement_staging_v2(
         construction(hierarchy_owned_output_kernel(false)),
         ProductionSessionLimitsV1::default(),
         vec![],

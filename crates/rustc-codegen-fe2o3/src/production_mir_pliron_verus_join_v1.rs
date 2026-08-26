@@ -4,9 +4,9 @@ use std::{error::Error, fmt};
 
 use fe2o3_functional_proof::{MirPlironSemanticContractV1, ParallelReferenceContractV1};
 use fe2o3_pliron::{
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionMiddleEndEvidenceV5,
-    ProductionMirPlironSemanticContractReportV1, ProductionParallelReferenceContractReportV1,
-    ProductionRankedKernelLoweringInputV1,
+    ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractReportV1,
+    ProductionParallelReferenceContractReportV1, ProductionRankedKernelLoweringInputV1,
+    ProductionRefinementStagingPolicyV2,
 };
 use fe2o3_verifier::{
     FunctionalRefinementVerusRuntimeLeaseV1, ProductionMirPlironPerCompilationVerusErrorV1,
@@ -22,7 +22,7 @@ const PER_COMPILATION_PROOF_TIMEOUT_SECONDS_V1: u32 = 120;
 #[must_use = "dropping this value abandons authenticated conditional-composition evidence"]
 pub(crate) struct AuthenticatedMirPlironPerCompilationVerificationV1 {
     report: ProductionMirPlironPerCompilationVerusReportV1,
-    _policy: ProductionFunctionalRefinementTrustPolicyV2,
+    _staging_policy: ProductionRefinementStagingPolicyV2,
 }
 
 impl AuthenticatedMirPlironPerCompilationVerificationV1 {
@@ -64,7 +64,7 @@ pub(crate) fn authenticate_mir_pliron_contract_per_compilation_v1(
     .map_err(ProductionMirPlironVerusJoinErrorV1::Verification)?;
     Ok(AuthenticatedMirPlironPerCompilationVerificationV1 {
         report,
-        _policy: policy,
+        _staging_policy: policy,
     })
 }
 

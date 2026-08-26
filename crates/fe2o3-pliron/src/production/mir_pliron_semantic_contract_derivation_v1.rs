@@ -24,10 +24,10 @@ use super::{
     ProductionMiddleEndEvidenceV5, ProductionMirPlironSemanticContractErrorV1,
     ProductionMirPlironSemanticContractReportV1, ProductionNonCanonicalLoopProofErrorV1,
     ProductionNonCanonicalLoopProofRequirementV1, ProductionRankedKernelLoweringInputV1,
-    ProductionRankedOperationV1, ProductionRankedValueV1, ProductionTotalOutputRefinementErrorV2,
-    ProductionTotalOutputRefinementReportV2, derive_noncanonical_loop_proof_requirement_v1,
+    ProductionRankedOperationV1, ProductionRankedValueV1, ProductionTotalOutputStagingErrorV2,
+    ProductionTotalOutputStagingReportV2, derive_noncanonical_loop_proof_requirement_v1,
     production_effect_contract_identity_v1, production_ranked_value_identity_v1,
-    require_mir_pliron_semantic_contract_v1, require_total_output_refinement_v2,
+    require_mir_pliron_semantic_contract_v1, require_total_output_staging_v2,
 };
 
 /// Compiler-derived contract data after independent reconciliation with the
@@ -38,7 +38,7 @@ use super::{
 #[derive(Debug)]
 pub struct ProductionReconciledMirPlironSemanticContractV1 {
     contract: MirPlironSemanticContractV1,
-    total_output: ProductionTotalOutputRefinementReportV2,
+    total_output: ProductionTotalOutputStagingReportV2,
     semantics: ProductionMirPlironSemanticContractReportV1,
 }
 
@@ -47,7 +47,7 @@ impl ProductionReconciledMirPlironSemanticContractV1 {
         &self.contract
     }
 
-    pub const fn total_output_report(&self) -> ProductionTotalOutputRefinementReportV2 {
+    pub const fn total_output_report(&self) -> ProductionTotalOutputStagingReportV2 {
         self.total_output
     }
 
@@ -66,7 +66,7 @@ impl ProductionReconciledMirPlironSemanticContractV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionMirPlironSemanticContractDerivationErrorV1 {
-    TotalOutput(ProductionTotalOutputRefinementErrorV2),
+    TotalOutput(ProductionTotalOutputStagingErrorV2),
     MissingRetainedReceipt,
     WrongRefinementBoundary,
     InconsistentMirSubjects,
@@ -197,7 +197,7 @@ pub fn derive_and_reconcile_mir_pliron_semantic_contract_v1(
     ProductionReconciledMirPlironSemanticContractV1,
     ProductionMirPlironSemanticContractDerivationErrorV1,
 > {
-    let total_output = require_total_output_refinement_v2(ranked, evidence)
+    let total_output = require_total_output_staging_v2(ranked, evidence)
         .map_err(ProductionMirPlironSemanticContractDerivationErrorV1::TotalOutput)?;
     let contract = derive_contract_data_v1(ranked, evidence)?;
     let semantics =
@@ -214,7 +214,7 @@ fn derive_contract_data_v1(
     ranked: &ProductionRankedKernelLoweringInputV1,
     evidence: &ProductionMiddleEndEvidenceV5,
 ) -> Result<MirPlironSemanticContractV1, ProductionMirPlironSemanticContractDerivationErrorV1> {
-    let receipts = ranked.retained_functional_refinement_receipts();
+    let receipts = ranked.retained_policy_checked_refinement_staging();
     let first = receipts
         .first()
         .ok_or(ProductionMirPlironSemanticContractDerivationErrorV1::MissingRetainedReceipt)?;

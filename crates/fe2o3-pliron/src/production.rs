@@ -128,7 +128,7 @@ enum ProductionConstructionKindV1 {
     RankedKernel {
         root_name: String,
         kernel: ProductionRankedKernelV1,
-        authenticated_functional_refinement: Vec<ProductionFunctionalRefinementEvidenceV2>,
+        policy_checked_refinement_staging: Vec<ProductionPolicyCheckedRefinementStagingV2>,
     },
 }
 
@@ -469,8 +469,7 @@ impl ProductionPlironSessionV1 {
                 ranked_function: materialized.ranked_function,
                 ranked_kernel: materialized.ranked_kernel,
                 ranked_view_names: materialized.ranked_view_names,
-                authenticated_functional_refinement: materialized
-                    .authenticated_functional_refinement,
+                policy_checked_refinement_staging: materialized.policy_checked_refinement_staging,
                 production_pipeline_report: None,
             },
         );

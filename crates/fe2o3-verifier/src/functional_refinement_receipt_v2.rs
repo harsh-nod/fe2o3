@@ -26,8 +26,8 @@ use fe2o3_functional_proof::{
     VerusToolchainIdentityV2,
 };
 use fe2o3_pliron::{
-    ProductionFunctionalRefinementTrustPolicyV2, ProductionRankedKernelV1,
-    ProductionRankedOperationV1, ProductionRankedValueIdV1, ProductionRankedValueV1,
+    ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
+    ProductionRankedValueV1, ProductionRefinementStagingPolicyV2,
     normalized_effect_refinement_hash_for_kernel_v2,
     normalized_functional_refinement_formula_hash_for_kernel_v2,
 };
@@ -195,7 +195,7 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     (
         FunctionalRefinementBindingV2,
         ImportedFunctionalRefinementProofV2,
-        ProductionFunctionalRefinementTrustPolicyV2,
+        ProductionRefinementStagingPolicyV2,
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
@@ -208,7 +208,7 @@ pub fn execute_and_import_ranked_functional_refinement_locally_v2(
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =
-        ProductionFunctionalRefinementTrustPolicyV2::new([policy.signer_identity()], toolchain)
+        ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
     let prepared = prepare_ranked_functional_refinement_receipt_v2(
         runtime,
@@ -245,7 +245,7 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
 ) -> Result<
     (
         ImportedFunctionalRefinementProofV2,
-        ProductionFunctionalRefinementTrustPolicyV2,
+        ProductionRefinementStagingPolicyV2,
     ),
     FunctionalRefinementVerusExecutionErrorV2,
 > {
@@ -258,7 +258,7 @@ pub(crate) fn execute_and_import_generated_mir_pliron_composition_locally_v1(
     )
     .map_err(FunctionalRefinementVerusExecutionErrorV2::receipt)?;
     let production_policy =
-        ProductionFunctionalRefinementTrustPolicyV2::new([policy.signer_identity()], toolchain)
+        ProductionRefinementStagingPolicyV2::new([policy.signer_identity()], toolchain)
             .map_err(|_| invalid_ranked_recipe())?;
     let unsigned = execute_functional_refinement_verus_and_prepare_receipt_v2(
         runtime,

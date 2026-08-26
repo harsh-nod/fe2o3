@@ -359,6 +359,7 @@ pub struct FunctionalRefinementImportPolicyV2 {
 }
 
 impl FunctionalRefinementImportPolicyV2 {
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn new(
         verifying_key: [u8; 32],
         toolchain: VerusToolchainIdentityV2,
@@ -392,8 +393,9 @@ impl FunctionalRefinementImportPolicyV2 {
 
 /// Canonical unsigned message builder for a functional-refinement receipt.
 ///
-/// This low-level constructor is public and non-authoritative: any caller can choose every field,
-/// construct a message, and attach bytes. A production signer must accept messages only from its
+/// This low-level constructor is available only to workspace verifier staging and tests.
+/// Even there, callers can choose every field, construct a message, and attach bytes;
+/// the result is non-authoritative. A production signer must accept messages only from its
 /// private verifier-owned successful-execution join, and a compiler must independently retain
 /// rustc custody before admitting the resulting receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -402,6 +404,7 @@ pub struct UnsignedFunctionalRefinementReceiptV2 {
 }
 
 impl UnsignedFunctionalRefinementReceiptV2 {
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
     pub fn from_verified_execution_join(
@@ -445,11 +448,13 @@ impl UnsignedFunctionalRefinementReceiptV2 {
         })
     }
 
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub const fn signing_bytes(&self) -> &[u8; SIGNED_MESSAGE_BYTES_V2] {
         &self.message
     }
 
     /// Attaches untrusted signature bytes. Only the strict importer authenticates them.
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn attach_signature(
         self,
         signature: [u8; FUNCTIONAL_REFINEMENT_SIGNATURE_BYTES_V2],
@@ -553,6 +558,7 @@ pub struct FunctionalRefinementReceiptImporterV2 {
 }
 
 impl FunctionalRefinementReceiptImporterV2 {
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn new(
         policy: FunctionalRefinementImportPolicyV2,
         max_receipts: usize,
@@ -570,6 +576,7 @@ impl FunctionalRefinementReceiptImporterV2 {
         })
     }
 
+    #[cfg(any(test, feature = "internal-proof-staging"))]
     pub fn import(
         &mut self,
         expectation: FunctionalRefinementImportExpectationV2,

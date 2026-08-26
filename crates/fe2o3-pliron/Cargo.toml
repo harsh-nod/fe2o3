@@ -12,6 +12,9 @@ publish = false
 [features]
 default = []
 internal-test-context-access = []
+# Exposes policy-checked receipt staging to the workspace verifier and hostile
+# tests. The staged graph remains non-authoritative until aggregate replay.
+internal-proof-staging = ["fe2o3-functional-proof/internal-proof-staging"]
 
 [dependencies]
 dialect-gpu.workspace = true
