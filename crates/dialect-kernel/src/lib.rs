@@ -74,8 +74,8 @@ pub use semantic_typed_expression::{
     SemanticTypedExpressionV1,
 };
 pub use tensor_layout::{
-    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutDialectError,
-    TensorLayoutOp,
+    TensorConvergenceAttr, TensorDataflowRootsV1, TensorFragmentAttr, TensorInstructionAttr,
+    TensorLayoutDialectError, TensorLayoutOp, TensorValueRootAttr,
 };
 
 /// The Pliron namespace owned by this crate.
@@ -478,6 +478,7 @@ pub fn register_dialect(
     TensorConvergenceAttr::register(context);
     TensorInstructionAttr::register(context);
     TensorFragmentAttr::register(context);
+    TensorValueRootAttr::register(context);
     TensorLayoutOp::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));

@@ -7,17 +7,100 @@ use fe2o3_kernel_ir::{
 };
 use pliron::{
     builtin::op_interfaces::{NOpdsInterface, NRegionsInterface, NResultsInterface},
+    combine::{Parser, count_min_max, parser::char::hex_digit},
     common_traits::Verify,
     context::Context,
     derive::{pliron_attr, pliron_op},
     op::Op,
     operation::Operation,
+    parsable::{Parsable, ParseResult, StateStream},
+    printable::{self, Printable},
     result::Result as PlironResult,
-    verify_err,
+    verify_err, verify_err_noloc,
 };
 
 const AFFINE_MAP_KIND_V1: u32 = 1;
 const OPAQUE_MAP_KIND_V1: u32 = 2;
+
+/// Stable compiler-derived identity for one tensor-capability value.
+///
+/// The identity carries no layout claim. The whole-function tensor-layout
+/// analysis uses equal roots to connect producers, control-flow joins, and
+/// consumers without depending on workload names.
+#[pliron_attr(name = "kernel.tensor_value_root")]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct TensorValueRootAttr([u64; 4]);
+
+impl TensorValueRootAttr {
+    pub const fn new(words: [u64; 4]) -> Self {
+        Self(words)
+    }
+
+    pub const fn words(&self) -> [u64; 4] {
+        self.0
+    }
+
+    const fn is_zero(&self) -> bool {
+        self.0[0] == 0 && self.0[1] == 0 && self.0[2] == 0 && self.0[3] == 0
+    }
+}
+
+impl Verify for TensorValueRootAttr {
+    fn verify(&self, _context: &Context) -> PlironResult<()> {
+        if self.is_zero() {
+            return verify_err_noloc!(
+                "kernel.tensor_value_root cannot be the reserved all-zero identity"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Printable for TensorValueRootAttr {
+    fn fmt(
+        &self,
+        _context: &Context,
+        _state: &printable::State,
+        formatter: &mut core::fmt::Formatter<'_>,
+    ) -> core::fmt::Result {
+        write!(
+            formatter,
+            "{:016x}{:016x}{:016x}{:016x}",
+            self.0[0], self.0[1], self.0[2], self.0[3]
+        )
+    }
+}
+
+impl Parsable for TensorValueRootAttr {
+    type Arg = ();
+    type Parsed = Self;
+
+    fn parse<'a>(
+        state_stream: &mut StateStream<'a>,
+        _arg: Self::Arg,
+    ) -> ParseResult<'a, Self::Parsed> {
+        let word = || {
+            count_min_max::<String, _, _>(16, 16, hex_digit())
+                .and_then(|digits| u64::from_str_radix(&digits, 16))
+        };
+        word()
+            .and(word())
+            .and(word())
+            .and(word())
+            .map(|(((first, second), third), fourth)| Self([first, second, third, fourth]))
+            .parse_stream(state_stream)
+            .into()
+    }
+}
+
+/// Compiler-derived producer/consumer identities retained on one tensor site.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TensorDataflowRootsV1 {
+    pub lhs: [u64; 4],
+    pub rhs: [u64; 4],
+    pub accumulator: [u64; 4],
+    pub result: [u64; 4],
+}
 
 /// Exact control-participation claim retained on a cooperative tensor operation.
 #[pliron_attr(name = "kernel.tensor_convergence", format, verifier = "succ")]
@@ -366,7 +449,11 @@ impl Error for TensorLayoutDialectError {}
         kernel_tensor_convergence: TensorConvergenceAttr,
         kernel_tensor_a: TensorFragmentAttr,
         kernel_tensor_b: TensorFragmentAttr,
-        kernel_tensor_accumulator: TensorFragmentAttr
+        kernel_tensor_accumulator: TensorFragmentAttr,
+        kernel_tensor_lhs_root: TensorValueRootAttr,
+        kernel_tensor_rhs_root: TensorValueRootAttr,
+        kernel_tensor_accumulator_root: TensorValueRootAttr,
+        kernel_tensor_result_root: TensorValueRootAttr
     )
 )]
 /// One cooperative tensor-instruction occurrence and its declared contract.
@@ -383,6 +470,26 @@ impl TensorLayoutOp {
         contract: &TensorLayoutContractV1,
         convergence: TensorConvergenceAttr,
         active_lanes: u32,
+    ) -> Self {
+        Self::new_impl(context, contract, convergence, active_lanes, None)
+    }
+
+    pub fn new_with_dataflow_roots(
+        context: &mut Context,
+        contract: &TensorLayoutContractV1,
+        convergence: TensorConvergenceAttr,
+        active_lanes: u32,
+        roots: TensorDataflowRootsV1,
+    ) -> Self {
+        Self::new_impl(context, contract, convergence, active_lanes, Some(roots))
+    }
+
+    fn new_impl(
+        context: &mut Context,
+        contract: &TensorLayoutContractV1,
+        convergence: TensorConvergenceAttr,
+        active_lanes: u32,
+        roots: Option<TensorDataflowRootsV1>,
     ) -> Self {
         let operation = Operation::new(
             context,
@@ -404,6 +511,15 @@ impl TensorLayoutOp {
             context,
             TensorFragmentAttr::from_fragment(contract.accumulator),
         );
+        if let Some(roots) = roots {
+            op.set_attr_kernel_tensor_lhs_root(context, TensorValueRootAttr::new(roots.lhs));
+            op.set_attr_kernel_tensor_rhs_root(context, TensorValueRootAttr::new(roots.rhs));
+            op.set_attr_kernel_tensor_accumulator_root(
+                context,
+                TensorValueRootAttr::new(roots.accumulator),
+            );
+            op.set_attr_kernel_tensor_result_root(context, TensorValueRootAttr::new(roots.result));
+        }
         op
     }
 
@@ -442,6 +558,30 @@ impl TensorLayoutOp {
             tail_mask: instruction.tail_mask()?,
         })
     }
+
+    pub fn dataflow_roots(
+        &self,
+        context: &Context,
+    ) -> Result<Option<TensorDataflowRootsV1>, TensorLayoutDialectError> {
+        let roots = [
+            self.get_attr_kernel_tensor_lhs_root(context),
+            self.get_attr_kernel_tensor_rhs_root(context),
+            self.get_attr_kernel_tensor_accumulator_root(context),
+            self.get_attr_kernel_tensor_result_root(context),
+        ];
+        match roots {
+            [None, None, None, None] => Ok(None),
+            [Some(lhs), Some(rhs), Some(accumulator), Some(result)] => {
+                Ok(Some(TensorDataflowRootsV1 {
+                    lhs: lhs.words(),
+                    rhs: rhs.words(),
+                    accumulator: accumulator.words(),
+                    result: result.words(),
+                }))
+            }
+            _ => Err(TensorLayoutDialectError::MalformedOperation),
+        }
+    }
 }
 
 impl Verify for TensorLayoutOp {
@@ -452,9 +592,10 @@ impl Verify for TensorLayoutOp {
             || operation.get_num_results() != 0
             || operation.get_num_successors() != 0
             || operation.num_regions() != 0
-            || operation.attributes.0.len() != 5
+            || !matches!(operation.attributes.0.len(), 5 | 9)
             || self.contract(context).is_err()
             || self.convergence(context).is_none()
+            || self.dataflow_roots(context).is_err()
         {
             return verify_err!(
                 self.loc(context),

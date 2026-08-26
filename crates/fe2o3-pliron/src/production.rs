@@ -249,6 +249,50 @@ pub enum ProductionSessionErrorV1 {
     Operation(OperationHandleError),
 }
 
+impl ProductionSessionErrorV1 {
+    /// Structured repairs for errors produced by the unified kernel-check
+    /// pipeline. Session bookkeeping and construction errors are not source
+    /// diagnostics and therefore do not fabricate kernel edits.
+    pub fn repair_hints(&self) -> Vec<fe2o3_kernel_analysis::KernelCheckRepairV1> {
+        use fe2o3_kernel_analysis::KernelCheckPassKindV1 as Pass;
+        match self {
+            Self::RankedTensorLayout(error) => {
+                vec![fe2o3_kernel_analysis::tensor_layout_repair_for_error_v1(
+                    error,
+                )]
+            }
+            Self::RankedBounds(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                Pass::MemoryBounds,
+            )],
+            Self::RankedAtomic(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                Pass::AtomicLegality,
+            )],
+            Self::RankedRace(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                Pass::RaceFreedom,
+            )],
+            Self::RankedOwnership(_) => {
+                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                    Pass::HierarchicalOwnership,
+                )]
+            }
+            Self::RankedBarrier(_) => vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                Pass::BarrierConvergence,
+            )],
+            Self::RankedWorkgroup(_) => {
+                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                    Pass::WorkgroupMemory,
+                )]
+            }
+            Self::RankedSemantic(_) => {
+                vec![fe2o3_kernel_analysis::kernel_check_repair_for_pass_v1(
+                    Pass::SemanticRefinement,
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl fmt::Display for ProductionSessionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -290,7 +334,11 @@ impl fmt::Display for ProductionSessionErrorV1 {
             Self::RankedWorkgroup(error) => error.fmt(formatter),
             Self::RankedSemantic(error) => error.fmt(formatter),
             Self::Operation(_) => formatter.write_str("production Pliron operation failed"),
+        }?;
+        for repair in self.repair_hints() {
+            write!(formatter, "\n{repair}")?;
         }
+        Ok(())
     }
 }
 

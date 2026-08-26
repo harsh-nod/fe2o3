@@ -238,6 +238,58 @@ fn tensor_kernel(contract: TensorLayoutContractV1) -> ProductionRankedKernelV1 {
     .expect("valid tensor recipe")
 }
 
+fn composed_tensor_kernel(result_used_as_lhs: bool) -> ProductionRankedKernelV1 {
+    let first = tensor_binding([1, 2, 3, 4, 5, 6]);
+    let second = fe2o3_pliron::ProductionCooperativeTensorBindingV1::new(
+        proof_digest(7),
+        proof_digest(8),
+        if result_used_as_lhs {
+            first.result_root()
+        } else {
+            proof_digest(9)
+        },
+        proof_digest(10),
+        if result_used_as_lhs {
+            proof_digest(11)
+        } else {
+            first.result_root()
+        },
+        proof_digest(12),
+        4,
+    )
+    .unwrap();
+    let contract = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    ProductionRankedKernelV1::new(
+        "composed_tensor_contract",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [64, 1, 1],
+                    workgroup_extents: [64, 1, 1],
+                    subgroup_size: 64,
+                    full_physical_workgroups: true,
+                },
+                ProductionRankedOperationV1::TensorLayout {
+                    contract,
+                    convergence: TensorConvergenceAttr::UniformSubgroup,
+                    active_lanes: 64,
+                    binding: Some(first),
+                },
+                ProductionRankedOperationV1::TensorLayout {
+                    contract,
+                    convergence: TensorConvergenceAttr::UniformSubgroup,
+                    active_lanes: 64,
+                    binding: Some(second),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .unwrap()
+}
+
 fn deterministic_tensor_kernel() -> ProductionRankedKernelV1 {
     let zero = ProductionRankedValueIdV1::new(0);
     let summary = ProductionRankedValueIdV1::new(1);
@@ -497,6 +549,29 @@ fn direct_and_independently_transformed_tensor_layouts_reach_production_lowering
                 .grants_artifact_or_launch_authority()
         );
     }
+}
+
+#[test]
+fn production_layout_dataflow_accepts_accumulator_chains_and_rejects_operand_reinterpretation() {
+    let compatible = compile_ranked_kernel_for_lowering_v1(
+        construction(composed_tensor_kernel(false)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("compatible accumulator chain");
+    assert!(compatible.tensor_layout_report().is_clean());
+
+    let error = compile_ranked_kernel_for_lowering_v1(
+        construction(composed_tensor_kernel(true)),
+        ProductionSessionLimitsV1::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedTensorLayout(_))
+    ));
+    let message = error.to_string();
+    assert!(message.contains("FE2O3-TENSOR-LAYOUT-005"));
+    assert!(message.contains("convert or checked-reload"));
 }
 
 #[test]
@@ -2814,10 +2889,12 @@ fn static_oob_is_a_terminal_compile_time_diagnostic_before_lowering() {
         panic!("static out-of-bounds access must stop in ranked bounds");
     };
     assert_eq!(bounds.report().status(), KernelCheckStatusV1::Rejected);
-    assert_eq!(
-        error.to_string(),
-        "error[FE2O3-BOUNDS-001]: statically out-of-bounds Read at block 0 op 3; access: v0 dimension 0; required: 64 < 64",
-    );
+    let diagnostic = error.to_string();
+    assert!(diagnostic.starts_with(
+        "error[FE2O3-BOUNDS-001]: statically out-of-bounds Read at block 0 op 3; access: v0 dimension 0; required: 64 < 64"
+    ));
+    assert!(diagnostic.contains("help[FE2O3-FIX-BOUNDS]"));
+    assert!(diagnostic.contains("guard every path"));
 }
 
 #[test]
