@@ -103,11 +103,11 @@ what GEMM, softmax, attention, or convolution means:
 Algorithmic equations are intentionally not generalized by name. Accumulator
 carry, tail values, and alpha/beta epilogues belong in fixed contract checkers
 selected by a declared algorithm schema after the general passes. No arbitrary
-callback or plugin API is added here. When those contract checkers enter the
-unified production route, integration must select them from a closed enum and
-must not let them weaken or skip the general sequence. A convolution contract
-can then describe its own halo or reduction equation without teaching the
-bounds pass that the kernel is a convolution.
+callback or plugin API is added here. The production transaction may select a
+contract checker from a closed schema enum, but that enum does not select a
+compiler implementation and cannot weaken or skip the general sequence. A
+convolution contract can then describe its own halo or reduction equation
+without teaching the bounds pass that the kernel is a convolution.
 
 The source-level diagnostic vocabulary is also shared. For example, a frontend
 may describe a two-dimensional read as `row < height` and `column < width`.
@@ -148,13 +148,13 @@ The production MIR-to-Kernel-IR translator invokes the Kernel IR pipeline for
 every translated kernel and stops on `Rejected`. The ranked-memory Pliron
 operations, local verifiers, and pre-lowering bounds gate are implemented and
 tested as the target-neutral projection contract. The closed
-`ProductionPlironSessionV1` now constructs bounded ranked recipes internally,
+`ProductionPlironSessionV1` constructs bounded ranked recipes internally,
 retains the exact function privately, runs the bounds pass, and issues a
-move-only lowering input only from the verified typestate. The existing
-detached Pliron-to-GPU lowering does not yet consume ranked-memory functions,
-and `production-v1` still stops before canonical semantic-MIR-to-ranked-memory
-projection. Those two missing stages must consume the closed result; they may
-not add a second unchecked route or reconstruct a clean report.
+move-only lowering input only from the verified typestate. The sole production
+transaction now consumes that ranked-memory result before target-neutral KIR
+and gfx942 lowering. Detached lowering remains a migration/conformance surface;
+it cannot publish and may not become a second unchecked compiler path or
+reconstruct a clean report.
 Dynamic launch sizes and unmodeled effects remain `Incomplete`; they are not
 silently accepted as proven. The general GEMM optimized-MIR mutation oracle
 continues to issue diagnostic-only source findings and cannot mint positive

@@ -3,6 +3,9 @@ use std::ffi::OsStr;
 
 use crate::amdgpu_llvm;
 
+#[cfg(feature = "qualification-oracles-test-only")]
+const SIMULATION_ORACLE_NAME_V1: &str = "simulation-v1";
+
 /// Rustc-process evidence required independently of a route's product role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RustcInvocationPolicy {
@@ -59,7 +62,7 @@ impl QualificationOracle {
 
     pub(crate) const fn oracle_name(self) -> &'static str {
         match self {
-            Self::SimulationV1 => crate::production_pipeline_v1::SIMULATION_PIPELINE_V1,
+            Self::SimulationV1 => SIMULATION_ORACLE_NAME_V1,
             Self::KernelIrV1 => "kernel-ir-v1",
             Self::KernelIrWorkerV2 => "kernel-ir-worker-v2",
             Self::CollectedExecutableScalarControlFlowV2 => {

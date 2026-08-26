@@ -62,7 +62,7 @@ mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod production_geometry_v1;
 mod production_mir_pliron_verus_join_v1;
-mod production_pipeline_v1;
+mod production_pipeline;
 #[cfg(not(feature = "qualification-oracles-test-only"))]
 mod production_policy;
 mod production_ranked_projection_v1;
@@ -296,7 +296,7 @@ impl BuildAttemptSelection {
     }
 }
 
-struct RetainedProductionDeviceAdmissionV1 {
+struct RetainedProductionDeviceAdmission {
     target: production_target_v1::RetainedProductionTargetV1,
     build_attempt: artifact_transaction::BuildAttempt,
 }
@@ -505,17 +505,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let mut production_device_admission = if production_root_count > 0 {
                 let build_attempt = build_attempt.unwrap_or_else(|| {
                     tcx.dcx().fatal(format!(
-                        "[rustc-codegen-fe2o3] production-v1 device compilation requires a managed {BUILD_ATTEMPT_ENV} before monomorphization"
+                        "[rustc-codegen-fe2o3] production compilation requires a managed {BUILD_ATTEMPT_ENV} before monomorphization"
                     ))
                 });
-                Some(RetainedProductionDeviceAdmissionV1 {
+                Some(RetainedProductionDeviceAdmission {
                     target: production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
                         tcx,
                         &self.config.target,
                     )
                     .unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] production-v1 target authentication failed before monomorphization without fallback: {error}"
+                            "[rustc-codegen-fe2o3] production target authentication failed before monomorphization without fallback: {error}"
                         ))
                     }),
                     build_attempt,
@@ -533,7 +533,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     "a device root appeared only after pre-monomorphization admission"
                 };
                 tcx.dcx().fatal(format!(
-                    "[rustc-codegen-fe2o3] production-v1 root custody changed across monomorphization: {reason}; compilation failed closed"
+                    "[rustc-codegen-fe2o3] production root custody changed across monomorphization: {reason}; compilation failed closed"
                 ));
             }
             let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
@@ -575,17 +575,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             let temporary_host_objects = TemporaryHostObjects::default();
             let mut production_device_transaction_complete = false;
             if production_compilation {
-                match production_pipeline_v1::disposition(kernel_count) {
-                    production_pipeline_v1::ProductionDispositionV1::HostOnly => {}
-                    production_pipeline_v1::ProductionDispositionV1::DeviceTransaction => {
-                        let RetainedProductionDeviceAdmissionV1 {
+                match production_pipeline::disposition(kernel_count) {
+                    production_pipeline::ProductionDisposition::HostOnly => {}
+                    production_pipeline::ProductionDisposition::DeviceTransaction => {
+                        let RetainedProductionDeviceAdmission {
                             target,
                             build_attempt,
                         } = production_device_admission.take().expect(
                             "device admission presence was validated after monomorphization",
                         );
                         let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
-                        if let Err(error) = production_pipeline_v1::reject_custom_llvm_configuration(
+                        if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
                             has_custom_llvm_configuration,
                         ) {
                             tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
@@ -598,7 +598,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         ) {
                             Ok(closure) => closure,
                             Err(error) => tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] production-v1 collection failed without fallback: {error}"
+                                "[rustc-codegen-fe2o3] production collection failed without fallback: {error}"
                             )),
                         };
                         let output_dir = output_dir
@@ -606,11 +606,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             .to_path_buf();
                         let invocation = protected_rustc_invocation.take().unwrap_or_else(|| {
                             tcx.dcx().fatal(
-                                "[rustc-codegen-fe2o3] production-v1 requires protected rustc invocation custody",
+                                "[rustc-codegen-fe2o3] production compilation requires protected rustc invocation custody",
                             )
                         });
                         let publication =
-                            production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure(
+                            production_pipeline::ProductionCompilation::from_collected_device_closure(
                                 tcx,
                                 closure,
                                 producer.clone(),
@@ -624,7 +624,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             Ok(publication_length) => {
                                 production_device_transaction_complete = true;
                                 eprintln!(
-                                    "[rustc-codegen-fe2o3] production-v1 published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
+                                    "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
                                     publication_length,
                                 );
                             }
@@ -2628,14 +2628,14 @@ mod tests {
     #[test]
     fn admitted_protected_modules_route_only_through_strict_v3_publication() {
         let backend = include_str!("lib.rs");
-        let production_pipeline = include_str!("production_pipeline_v1.rs");
+        let production_pipeline = include_str!("production_pipeline.rs");
         let production = backend
             .split("let mut production_device_transaction_complete")
             .nth(1)
             .expect("production transaction tracking exists")
             .split(".validate_device_transaction")
             .next()
-            .expect("bounded production route");
+            .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));
         assert!(production.contains("production_device_admission.take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));

@@ -17,25 +17,22 @@ use crate::protected_rustc_invocation::{
     AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1,
 };
 
-#[cfg(feature = "qualification-oracles-test-only")]
-pub(crate) const SIMULATION_PIPELINE_V1: &str = "simulation-v1";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProductionDispositionV1 {
+pub(crate) enum ProductionDisposition {
     HostOnly,
     DeviceTransaction,
 }
 
-pub(crate) const fn disposition(device_candidate_count: usize) -> ProductionDispositionV1 {
+pub(crate) const fn disposition(device_candidate_count: usize) -> ProductionDisposition {
     if device_candidate_count == 0 {
-        ProductionDispositionV1::HostOnly
+        ProductionDisposition::HostOnly
     } else {
-        ProductionDispositionV1::DeviceTransaction
+        ProductionDisposition::DeviceTransaction
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum ProductionPipelineErrorV1 {
+pub(crate) enum ProductionPipelineError {
     CustomLlvmConfiguration,
     EmptyCollectedDeviceClosure,
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
@@ -58,69 +55,69 @@ pub(crate) enum ProductionPipelineErrorV1 {
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
 }
 
-impl fmt::Display for ProductionPipelineErrorV1 {
+impl fmt::Display for ProductionPipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CustomLlvmConfiguration => formatter.write_str(
-                "production-v1 rejects caller-selected LLVM arguments or passes before transaction construction",
+                "production compilation rejects caller-selected LLVM arguments or passes before transaction construction",
             ),
             Self::EmptyCollectedDeviceClosure => formatter.write_str(
-                "production-v1 requires a nonempty collector-sealed device closure",
+                "production compilation requires a nonempty collector-sealed device closure",
             ),
-            Self::SemanticImport(error) => write!(formatter, "production-v1 {error}"),
+            Self::SemanticImport(error) => write!(formatter, "production compilation {error}"),
             Self::SemanticMiddleEnd(error) => {
-                write!(formatter, "production-v1 exact semantic middle end failed: {error}")
+                write!(formatter, "production compilation exact semantic middle end failed: {error}")
             }
             Self::RankedProjection(error) => {
-                write!(formatter, "production-v1 general kernel verification failed: {error}")
+                write!(formatter, "production compilation general kernel verification failed: {error}")
             }
             Self::RankedVerification(error) => {
-                write!(formatter, "production-v1 ranked verification failed: {error}")
+                write!(formatter, "production compilation ranked verification failed: {error}")
             }
             Self::TargetNeutralLowering(error) => {
-                write!(formatter, "production-v1 target-neutral lowering failed: {error}")
+                write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
             Self::FormalMemoryAdmission(error) => {
-                write!(formatter, "production-v1 formal memory admission failed: {error}")
+                write!(formatter, "production compilation formal memory admission failed: {error}")
             }
             Self::Geometry(error) => {
-                write!(formatter, "production-v1 geometry validation failed: {error}")
+                write!(formatter, "production compilation geometry validation failed: {error}")
             }
             Self::TargetBinding(error) => {
-                write!(formatter, "production-v1 gfx942 target binding failed: {error}")
+                write!(formatter, "production compilation gfx942 target binding failed: {error}")
             }
             Self::Gfx942Lowering(error) => {
-                write!(formatter, "production-v1 gfx942 LLVM lowering failed: {error}")
+                write!(formatter, "production compilation gfx942 LLVM lowering failed: {error}")
             }
             Self::UpstreamLlvmLayoutBinding(error) => {
-                write!(formatter, "production-v1 upstream LLVM layout binding failed: {error}")
+                write!(formatter, "production compilation upstream LLVM layout binding failed: {error}")
             }
             Self::DescriptorEvidence(error) => {
-                write!(formatter, "production-v1 descriptor evidence failed: {error}")
+                write!(formatter, "production compilation descriptor evidence failed: {error}")
             }
-            Self::SemanticLineage(error) => write!(formatter, "production-v1 {error}"),
+            Self::SemanticLineage(error) => write!(formatter, "production compilation {error}"),
             Self::RustcLineageMismatch => formatter.write_str(
-                "production-v1 rustc preflight plan is not bound to the retained identity inventory",
+                "production compilation rustc preflight plan is not bound to the retained identity inventory",
             ),
             Self::ProtectedRustcInvocation(error) => write!(
                 formatter,
-                "production-v1 final protected rustc invocation validation failed: {error}"
+                "production compilation final protected rustc invocation validation failed: {error}"
             ),
             #[cfg(feature = "qualification-oracles-test-only")]
             Self::ExtractionCannotPublish => formatter.write_str(
                 "production extraction custody cannot publish a compiler-module handoff",
             ),
             Self::WorkerHandoff(error) => {
-                write!(formatter, "production-v1 compiler-module handoff failed: {error}")
+                write!(formatter, "production compilation compiler-module handoff failed: {error}")
             }
             Self::StrictV3Publication(error) => {
-                write!(formatter, "production-v1 strict V3 publication failed: {error}")
+                write!(formatter, "production compilation strict V3 publication failed: {error}")
             }
         }
     }
 }
 
-impl std::error::Error for ProductionPipelineErrorV1 {
+impl std::error::Error for ProductionPipelineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::SemanticImport(error) => Some(error),
@@ -149,36 +146,36 @@ impl std::error::Error for ProductionPipelineErrorV1 {
 
 pub(crate) fn reject_custom_llvm_configuration(
     has_custom_llvm_configuration: bool,
-) -> Result<(), ProductionPipelineErrorV1> {
+) -> Result<(), ProductionPipelineError> {
     if has_custom_llvm_configuration {
-        Err(ProductionPipelineErrorV1::CustomLlvmConfiguration)
+        Err(ProductionPipelineError::CustomLlvmConfiguration)
     } else {
         Ok(())
     }
 }
 
-pub(super) struct CollectedRustStageV1<'tcx> {
+pub(super) struct CollectedRustStage<'tcx> {
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
-    transaction: ProductionTransactionBindingsV1,
+    transaction: ProductionTransactionBindings,
 }
 
-struct ProductionTransactionBindingsV1 {
+struct ProductionTransactionBindings {
     producer: ProducerIdentity,
     output_dir: PathBuf,
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
-    compiler_custody: ProductionCompilerCustodyV1,
+    compiler_custody: ProductionCompilerCustody,
 }
 
 #[cfg(not(feature = "qualification-oracles-test-only"))]
-struct ProductionCompilerCustodyV1 {
+struct ProductionCompilerCustody {
     invocation: Box<AdmittedProtectedRustcInvocationV1>,
     attempt: BuildAttempt,
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
-enum ProductionCompilerCustodyV1 {
+enum ProductionCompilerCustody {
     ProtectedV3 {
         invocation: Box<AdmittedProtectedRustcInvocationV1>,
         attempt: BuildAttempt,
@@ -186,7 +183,7 @@ enum ProductionCompilerCustodyV1 {
     ExtractionOnly,
 }
 
-impl ProductionCompilerCustodyV1 {
+impl ProductionCompilerCustody {
     fn protected(invocation: AdmittedProtectedRustcInvocationV1, attempt: BuildAttempt) -> Self {
         #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
@@ -222,7 +219,7 @@ impl ProductionCompilerCustodyV1 {
 
     fn into_publication_custody(
         self,
-    ) -> Result<(BuildAttempt, Box<AdmittedProtectedRustcInvocationV1>), ProductionPipelineErrorV1>
+    ) -> Result<(BuildAttempt, Box<AdmittedProtectedRustcInvocationV1>), ProductionPipelineError>
     {
         #[cfg(not(feature = "qualification-oracles-test-only"))]
         {
@@ -235,29 +232,29 @@ impl ProductionCompilerCustodyV1 {
                     invocation,
                     attempt,
                 } => Ok((attempt, invocation)),
-                Self::ExtractionOnly => Err(ProductionPipelineErrorV1::ExtractionCannotPublish),
+                Self::ExtractionOnly => Err(ProductionPipelineError::ExtractionCannotPublish),
             }
         }
     }
 }
 
-struct AuthenticatedProductionBindingsV1 {
+struct AuthenticatedProductionBindings {
     rustc_identity_inventory: crate::collector::AuthenticatedRustcIdentityInventoryV3,
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
-    transaction: ProductionTransactionBindingsV1,
+    transaction: ProductionTransactionBindings,
 }
 
-pub(super) struct AdmittedSemanticMirStageV1 {
+pub(super) struct AdmittedSemanticMirStage {
     semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
-    bindings: AuthenticatedProductionBindingsV1,
+    bindings: AuthenticatedProductionBindings,
 }
 
-pub(super) struct EquivalentSemanticMirStageV1 {
+pub(super) struct EquivalentSemanticMirStage {
     semantic_mir: fe2o3_pliron::ProductionSemanticMirOwnerV1,
-    bindings: AuthenticatedProductionBindingsV1,
+    bindings: AuthenticatedProductionBindings,
 }
 
 /// Move-only owner of one production compilation stage.
@@ -265,47 +262,47 @@ pub(super) struct EquivalentSemanticMirStageV1 {
 /// Its fields and stage types stay private so no caller can synthesize or
 /// bypass a transition. The transaction carries no artifact, publication,
 /// load, launch, or runtime authority.
-pub(crate) struct ProductionCompilationV1<'tcx, Stage> {
+pub(crate) struct ProductionCompilation<'tcx, Stage> {
     stage: Stage,
     invariant_session: PhantomData<fn(TyCtxt<'tcx>) -> TyCtxt<'tcx>>,
 }
 
 /// Move-only production stage retaining rustc identities, transaction
 /// bindings, admitted semantic MIR, and the owner-held verified PLIRON graph.
-pub(crate) struct RankedVerifiedProductionCompilationV1 {
+pub(crate) struct RankedVerifiedProductionCompilation {
     ranked: crate::production_ranked_projection_v1::ProductionRankedSemanticProgramV1,
-    bindings: AuthenticatedProductionBindingsV1,
+    bindings: AuthenticatedProductionBindings,
 }
 
 /// Move-only production stage retaining exact semantic ownership, verified
 /// Kernel IR, correspondence evidence, and the original transaction bindings.
-pub(crate) struct TargetNeutralProductionCompilationV1 {
+pub(crate) struct TargetNeutralProductionCompilation {
     lowered: fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
-    bindings: AuthenticatedProductionBindingsV1,
+    bindings: AuthenticatedProductionBindings,
 }
 
 /// Move-only production stage retaining exact semantic ownership, verified
 /// Kernel IR, composed formal/ranked memory evidence, and transaction bindings.
-pub(crate) struct FormalMemoryAdmittedProductionCompilationV1 {
+pub(crate) struct FormalMemoryAdmittedProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
-    bindings: AuthenticatedProductionBindingsV1,
+    bindings: AuthenticatedProductionBindings,
 }
 
 /// Move-only production stage retaining formal admission, exact target-bound
 /// Kernel IR, deterministic gfx942 LLVM text, and transaction bindings.
-pub(crate) struct Gfx942LoweredProductionCompilationV1 {
+pub(crate) struct Gfx942LoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
-    bindings: AuthenticatedProductionBindingsV1,
+    bindings: AuthenticatedProductionBindings,
 }
 
 /// Private handoff input that can only be constructed by the exact production
 /// target-lowering stage. It grants no publication or artifact authority.
-pub(crate) struct AuthenticatedProductionGfx942ModuleV1 {
+pub(crate) struct AuthenticatedProductionGfx942Module {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
@@ -313,7 +310,7 @@ pub(crate) struct AuthenticatedProductionGfx942ModuleV1 {
     compiler_ffi_envelope: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
 }
 
-struct PreparedProductionWorkerPublicationV1 {
+struct PreparedProductionWorkerPublication {
     producer: ProducerIdentity,
     output_dir: PathBuf,
     attempt: BuildAttempt,
@@ -323,7 +320,7 @@ struct PreparedProductionWorkerPublicationV1 {
     prepared: crate::production_worker_handoff::PreparedProductionWorkerHandoff,
 }
 
-impl AuthenticatedProductionGfx942ModuleV1 {
+impl AuthenticatedProductionGfx942Module {
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -343,18 +340,18 @@ impl AuthenticatedProductionGfx942ModuleV1 {
     }
 }
 
-impl TargetNeutralProductionCompilationV1 {
+impl TargetNeutralProductionCompilation {
     fn admit_formal_memory(
         self,
-    ) -> Result<FormalMemoryAdmittedProductionCompilationV1, ProductionPipelineErrorV1> {
+    ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
         let Self {
             lowered,
             ranked_verification,
             bindings,
         } = self;
         let admitted = fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered)
-            .map_err(ProductionPipelineErrorV1::FormalMemoryAdmission)?;
-        Ok(FormalMemoryAdmittedProductionCompilationV1 {
+            .map_err(ProductionPipelineError::FormalMemoryAdmission)?;
+        Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
             ranked_verification,
             bindings,
@@ -362,10 +359,8 @@ impl TargetNeutralProductionCompilationV1 {
     }
 }
 
-impl FormalMemoryAdmittedProductionCompilationV1 {
-    fn lower_gfx942(
-        self,
-    ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
+impl FormalMemoryAdmittedProductionCompilation {
+    fn lower_gfx942(self) -> Result<Gfx942LoweredProductionCompilation, ProductionPipelineError> {
         let Self {
             admitted,
             ranked_verification,
@@ -373,24 +368,24 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
         } = self;
         let semantic = admitted.semantic_kir().semantic().semantic();
         let [semantic_root] = semantic.roots() else {
-            return Err(ProductionPipelineErrorV1::Geometry(
+            return Err(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         };
         let semantic_function = semantic
             .functions()
             .get(semantic_root.index() as usize)
-            .ok_or(ProductionPipelineErrorV1::Geometry(
+            .ok_or(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ))?;
         let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineErrorV1::Geometry(
+            return Err(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         };
         let source_launch = typed_root
             .source_launch()
-            .ok_or(ProductionPipelineErrorV1::Geometry(
+            .ok_or(ProductionPipelineError::Geometry(
             crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
         ))?;
         crate::production_geometry_v1::derive_production_geometry_v1(
@@ -398,7 +393,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             semantic_function,
             source_launch,
         )
-        .map_err(ProductionPipelineErrorV1::Geometry)?;
+        .map_err(ProductionPipelineError::Geometry)?;
 
         let mut target_module = admitted.semantic_kir().module().clone();
         let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
@@ -406,7 +401,7 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
         target_module.required_capabilities.insert(target.clone());
         target_module.required_capabilities.insert(wave.clone());
         let [kernel] = target_module.kernels.as_mut_slice() else {
-            return Err(ProductionPipelineErrorV1::Geometry(
+            return Err(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         };
@@ -418,19 +413,19 @@ impl FormalMemoryAdmittedProductionCompilationV1 {
             .functions
             .iter_mut()
             .find(|function| function.id == entry_id)
-            .ok_or(ProductionPipelineErrorV1::Geometry(
+            .ok_or(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ))?;
         entry.required_capabilities.insert(target);
         entry.required_capabilities.insert(wave);
         fe2o3_kernel_ir::verify_module(&target_module)
-            .map_err(ProductionPipelineErrorV1::TargetBinding)?;
+            .map_err(ProductionPipelineError::TargetBinding)?;
         let dialect_llvm_ir =
             dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&target_module, &kernel_id)
-                .map_err(ProductionPipelineErrorV1::Gfx942Lowering)?;
+                .map_err(ProductionPipelineError::Gfx942Lowering)?;
         let llvm_ir = bind_production_upstream_llvm_layout_v1(dialect_llvm_ir)
-            .map_err(ProductionPipelineErrorV1::UpstreamLlvmLayoutBinding)?;
-        Ok(Gfx942LoweredProductionCompilationV1 {
+            .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
+        Ok(Gfx942LoweredProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
@@ -468,7 +463,7 @@ fn bind_production_upstream_llvm_layout_v1(dialect_llvm_ir: String) -> Result<St
     Ok(bound)
 }
 
-impl Gfx942LoweredProductionCompilationV1 {
+impl Gfx942LoweredProductionCompilation {
     pub(crate) fn module(&self) -> &fe2o3_kernel_ir::Module {
         &self.target_module
     }
@@ -554,9 +549,9 @@ impl Gfx942LoweredProductionCompilationV1 {
 
     fn prepare_worker_handoff(
         self,
-    ) -> Result<PreparedProductionWorkerPublicationV1, ProductionPipelineErrorV1> {
+    ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production-v1 lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
@@ -579,7 +574,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             llvm_ir,
             bindings,
         } = self;
-        let AuthenticatedProductionBindingsV1 {
+        let AuthenticatedProductionBindings {
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
@@ -587,7 +582,7 @@ impl Gfx942LoweredProductionCompilationV1 {
             typed_descriptor_roots,
             transaction,
         } = bindings;
-        let ProductionTransactionBindingsV1 {
+        let ProductionTransactionBindings {
             producer,
             output_dir,
             compiler_ffi_envelope,
@@ -596,7 +591,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         if rustc_preflight_plan.rustc_identity_inventory_sha256()
             != rustc_identity_inventory.sha256()
         {
-            return Err(ProductionPipelineErrorV1::RustcLineageMismatch);
+            return Err(ProductionPipelineError::RustcLineageMismatch);
         }
         drop(reference_effect_bindings);
         let (attempt, invocation) = compiler_custody.into_publication_custody()?;
@@ -609,8 +604,8 @@ impl Gfx942LoweredProductionCompilationV1 {
             &target_module,
             &llvm_ir,
         )
-        .map_err(ProductionPipelineErrorV1::SemanticLineage)?;
-        let compiler_module = AuthenticatedProductionGfx942ModuleV1 {
+        .map_err(ProductionPipelineError::SemanticLineage)?;
+        let compiler_module = AuthenticatedProductionGfx942Module {
             admitted,
             target_module,
             llvm_ir,
@@ -619,8 +614,8 @@ impl Gfx942LoweredProductionCompilationV1 {
         };
         let prepared =
             crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
-                .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
-        Ok(PreparedProductionWorkerPublicationV1 {
+                .map_err(ProductionPipelineError::WorkerHandoff)?;
+        Ok(PreparedProductionWorkerPublication {
             producer,
             output_dir,
             attempt,
@@ -633,14 +628,14 @@ impl Gfx942LoweredProductionCompilationV1 {
 
     fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineError>
     {
         let publication = self.prepare_worker_handoff()?;
         let invocation = (*publication.invocation)
             .finish_for_publication()
-            .map_err(ProductionPipelineErrorV1::ProtectedRustcInvocation)?;
+            .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
         invocation.revalidate().map_err(|detail| {
-            ProductionPipelineErrorV1::ProtectedRustcInvocation(
+            ProductionPipelineError::ProtectedRustcInvocation(
                 ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged(detail),
             )
         })?;
@@ -648,7 +643,7 @@ impl Gfx942LoweredProductionCompilationV1 {
         let (module_handoff, compiler_descriptor_source) = publication
             .prepared
             .into_validated_parts()
-            .map_err(ProductionPipelineErrorV1::WorkerHandoff)?;
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
         let strict_handoff = publication
             .semantic_lineage
             .finish(
@@ -657,19 +652,19 @@ impl Gfx942LoweredProductionCompilationV1 {
                 &compiler_descriptor_source,
                 module_handoff,
             )
-            .map_err(ProductionPipelineErrorV1::SemanticLineage)?;
+            .map_err(ProductionPipelineError::SemanticLineage)?;
         fe2o3_artifact_transaction::publish_compiler_module_handoff_v3(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
             &strict_handoff,
         )
-        .map_err(ProductionPipelineErrorV1::StrictV3Publication)
+        .map_err(ProductionPipelineError::StrictV3Publication)
     }
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
-impl RankedVerifiedProductionCompilationV1 {
+impl RankedVerifiedProductionCompilation {
     pub(crate) fn ranked_ir(&self) -> &str {
         self.ranked.ranked_ir()
     }
@@ -716,7 +711,7 @@ impl RankedVerifiedProductionCompilationV1 {
     }
 }
 
-impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
+impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// Retains the collector-sealed closure without granting semantic authority.
     /// The next transition must authenticate every imported MIR fact.
     pub(crate) fn from_collected_device_closure(
@@ -726,13 +721,13 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         output_dir: PathBuf,
         build_attempt: BuildAttempt,
         invocation: AdmittedProtectedRustcInvocationV1,
-    ) -> Result<Self, ProductionPipelineErrorV1> {
+    ) -> Result<Self, ProductionPipelineError> {
         Self::from_collected_device_closure_with_custody(
             tcx,
             closure,
             producer,
             output_dir,
-            ProductionCompilerCustodyV1::protected(invocation, build_attempt),
+            ProductionCompilerCustody::protected(invocation, build_attempt),
         )
     }
 
@@ -742,13 +737,13 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
-    ) -> Result<Self, ProductionPipelineErrorV1> {
+    ) -> Result<Self, ProductionPipelineError> {
         Self::from_collected_device_closure_with_custody(
             tcx,
             closure,
             producer,
             output_dir,
-            ProductionCompilerCustodyV1::extraction_only(),
+            ProductionCompilerCustody::extraction_only(),
         )
     }
 
@@ -757,21 +752,21 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
         producer: ProducerIdentity,
         output_dir: PathBuf,
-        compiler_custody: ProductionCompilerCustodyV1,
-    ) -> Result<Self, ProductionPipelineErrorV1> {
+        compiler_custody: ProductionCompilerCustody,
+    ) -> Result<Self, ProductionPipelineError> {
         if closure.function_count() == 0 {
-            return Err(ProductionPipelineErrorV1::EmptyCollectedDeviceClosure);
+            return Err(ProductionPipelineError::EmptyCollectedDeviceClosure);
         }
         let typed_descriptor_roots = closure
             .rederive_typed_descriptor_roots(tcx)
-            .map_err(ProductionPipelineErrorV1::DescriptorEvidence)?;
+            .map_err(ProductionPipelineError::DescriptorEvidence)?;
         let compiler_ffi_envelope = closure.compiler_ffi_observation().cloned();
         Ok(Self {
-            stage: CollectedRustStageV1 {
+            stage: CollectedRustStage {
                 tcx,
                 closure,
                 typed_descriptor_roots,
-                transaction: ProductionTransactionBindingsV1 {
+                transaction: ProductionTransactionBindings {
                     producer,
                     output_dir,
                     compiler_ffi_envelope,
@@ -784,9 +779,9 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
 
     fn import_semantic_mir(
         self,
-    ) -> Result<ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1>, ProductionPipelineErrorV1>
+    ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
     {
-        let CollectedRustStageV1 {
+        let CollectedRustStage {
             tcx,
             closure,
             typed_descriptor_roots,
@@ -799,11 +794,11 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
             rustc_target,
             reference_effect_bindings,
         ) = crate::collector::construct_production_semantic_mir_v1(tcx, closure)
-            .map_err(ProductionPipelineErrorV1::SemanticImport)?;
-        Ok(ProductionCompilationV1 {
-            stage: AdmittedSemanticMirStageV1 {
+            .map_err(ProductionPipelineError::SemanticImport)?;
+        Ok(ProductionCompilation {
+            stage: AdmittedSemanticMirStage {
                 semantic_mir,
-                bindings: AuthenticatedProductionBindingsV1 {
+                bindings: AuthenticatedProductionBindings {
                     rustc_identity_inventory,
                     rustc_preflight_plan,
                     rustc_target,
@@ -820,7 +815,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn verify_general_kernel_checks(
         self,
-    ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
+    ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
@@ -831,7 +826,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     /// formal memory admission, and exact gfx942 LLVM lowering.
     pub(crate) fn lower_gfx942(
         self,
-    ) -> Result<Gfx942LoweredProductionCompilationV1, ProductionPipelineErrorV1> {
+    ) -> Result<Gfx942LoweredProductionCompilation, ProductionPipelineError> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
@@ -846,7 +841,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     /// or launch authority.
     pub(crate) fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineErrorV1>
+    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineError>
     {
         self.lower_gfx942()?.publish_worker_handoff()
     }
@@ -854,7 +849,7 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     /// Retains the original extraction milestone while consuming the same
     /// transaction and importer as the production backend.
     #[cfg(feature = "qualification-oracles-test-only")]
-    pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineErrorV1 {
+    pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineError {
         match self.import_semantic_mir() {
             Ok(transaction) => match transaction.construct_semantic_middle_end() {
                 Ok(transaction) => transaction.require_target_neutral_lowering(),
@@ -865,14 +860,12 @@ impl<'tcx> ProductionCompilationV1<'tcx, CollectedRustStageV1<'tcx>> {
     }
 }
 
-impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
+impl<'tcx> ProductionCompilation<'tcx, AdmittedSemanticMirStage> {
     fn construct_semantic_middle_end(
         self,
-    ) -> Result<
-        ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1>,
-        ProductionPipelineErrorV1,
-    > {
-        let AdmittedSemanticMirStageV1 {
+    ) -> Result<ProductionCompilation<'tcx, EquivalentSemanticMirStage>, ProductionPipelineError>
+    {
+        let AdmittedSemanticMirStage {
             semantic_mir,
             bindings,
         } = self.stage;
@@ -880,9 +873,9 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
             semantic_mir,
             fe2o3_pliron::ProductionSemanticMirLimitsV1::default(),
         )
-        .map_err(ProductionPipelineErrorV1::SemanticMiddleEnd)?;
-        Ok(ProductionCompilationV1 {
-            stage: EquivalentSemanticMirStageV1 {
+        .map_err(ProductionPipelineError::SemanticMiddleEnd)?;
+        Ok(ProductionCompilation {
+            stage: EquivalentSemanticMirStage {
                 semantic_mir,
                 bindings,
             },
@@ -891,10 +884,10 @@ impl<'tcx> ProductionCompilationV1<'tcx, AdmittedSemanticMirStageV1> {
     }
 }
 
-impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
+impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
     #[cfg(feature = "qualification-oracles-test-only")]
-    fn require_target_neutral_lowering(self) -> ProductionPipelineErrorV1 {
-        let EquivalentSemanticMirStageV1 {
+    fn require_target_neutral_lowering(self) -> ProductionPipelineError {
+        let EquivalentSemanticMirStage {
             semantic_mir,
             bindings,
         } = self.stage;
@@ -907,13 +900,13 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
                 semantic_sha256: *semantic_mir.semantic().semantic_sha256().as_bytes(),
             };
         drop((semantic_mir, bindings));
-        ProductionPipelineErrorV1::SemanticImport(error)
+        ProductionPipelineError::SemanticImport(error)
     }
 
     fn verify_general_kernel_checks(
         self,
-    ) -> Result<RankedVerifiedProductionCompilationV1, ProductionPipelineErrorV1> {
-        let EquivalentSemanticMirStageV1 {
+    ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
+        let EquivalentSemanticMirStage {
             semantic_mir,
             bindings,
         } = self.stage;
@@ -921,15 +914,15 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
             &bindings.typed_descriptor_roots,
             semantic_mir.semantic(),
         )
-        .map_err(ProductionPipelineErrorV1::DescriptorEvidence)?;
+        .map_err(ProductionPipelineError::DescriptorEvidence)?;
         let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineErrorV1::Geometry(
+            return Err(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         };
         let source_rank = typed_root
             .source_launch()
-            .ok_or(ProductionPipelineErrorV1::Geometry(
+            .ok_or(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
             ))?
             .rank();
@@ -939,19 +932,19 @@ impl<'tcx> ProductionCompilationV1<'tcx, EquivalentSemanticMirStageV1> {
                 source_rank,
                 &bindings.reference_effect_bindings,
             )
-            .map_err(ProductionPipelineErrorV1::RankedProjection)?;
-        Ok(RankedVerifiedProductionCompilationV1 { ranked, bindings })
+            .map_err(ProductionPipelineError::RankedProjection)?;
+        Ok(RankedVerifiedProductionCompilation { ranked, bindings })
     }
 }
 
-impl RankedVerifiedProductionCompilationV1 {
+impl RankedVerifiedProductionCompilation {
     fn lower_target_neutral(
         self,
-    ) -> Result<TargetNeutralProductionCompilationV1, ProductionPipelineErrorV1> {
+    ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self;
         let (receipt, ranked_verification) = ranked
             .into_verified_receipt()
-            .map_err(ProductionPipelineErrorV1::RankedVerification)?;
+            .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert_eq!(
             ranked_verification.has_authenticated_functional_verification(),
             receipt
@@ -960,13 +953,13 @@ impl RankedVerifiedProductionCompilationV1 {
         );
         debug_assert!(ranked_verification.retained_functional_verification_is_coherent());
         let [typed_root] = bindings.typed_descriptor_roots.as_slice() else {
-            return Err(ProductionPipelineErrorV1::Geometry(
+            return Err(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         };
         let source_rank = typed_root
             .source_launch()
-            .ok_or(ProductionPipelineErrorV1::Geometry(
+            .ok_or(ProductionPipelineError::Geometry(
                 crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
             ))?
             .rank();
@@ -976,8 +969,8 @@ impl RankedVerifiedProductionCompilationV1 {
                 fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
                 source_rank,
             )
-            .map_err(ProductionPipelineErrorV1::TargetNeutralLowering)?;
-        Ok(TargetNeutralProductionCompilationV1 {
+            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        Ok(TargetNeutralProductionCompilation {
             lowered,
             ranked_verification,
             bindings,
@@ -991,12 +984,30 @@ mod tests {
 
     #[test]
     fn host_only_and_device_dispositions_are_exact() {
-        assert_eq!(disposition(0), ProductionDispositionV1::HostOnly);
-        assert_eq!(disposition(1), ProductionDispositionV1::DeviceTransaction);
+        assert_eq!(disposition(0), ProductionDisposition::HostOnly);
+        assert_eq!(disposition(1), ProductionDisposition::DeviceTransaction);
         assert_eq!(
             disposition(usize::MAX),
-            ProductionDispositionV1::DeviceTransaction
+            ProductionDisposition::DeviceTransaction
         );
+    }
+
+    #[test]
+    fn private_production_implementation_is_unversioned() {
+        let backend = include_str!("lib.rs");
+        let pipeline = include_str!("production_pipeline.rs");
+        assert!(backend.contains("mod production_pipeline;"));
+        for retired in [
+            concat!("production_pipeline", "_v1"),
+            concat!("ProductionPipelineError", "V1"),
+            concat!("ProductionCompilation", "V1"),
+            concat!("ProductionDisposition", "V1"),
+            concat!("ProductionCompilerCustody", "V1"),
+            concat!("RetainedProductionDeviceAdmission", "V1"),
+        ] {
+            assert!(!backend.contains(retired), "backend retains {retired}");
+            assert!(!pipeline.contains(retired), "pipeline retains {retired}");
+        }
     }
 
     #[test]
@@ -1004,7 +1015,7 @@ mod tests {
         assert!(reject_custom_llvm_configuration(false).is_ok());
         assert!(matches!(
             reject_custom_llvm_configuration(true),
-            Err(ProductionPipelineErrorV1::CustomLlvmConfiguration)
+            Err(ProductionPipelineError::CustomLlvmConfiguration)
         ));
     }
 
@@ -1040,19 +1051,19 @@ mod tests {
     }
 
     #[test]
-    fn worker_route_cannot_bypass_general_pliron_checks() {
-        let source = include_str!("production_pipeline_v1.rs");
-        let route = source
+    fn worker_publication_cannot_bypass_general_pliron_checks() {
+        let source = include_str!("production_pipeline.rs");
+        let transaction = source
             .split("pub(crate) fn lower_gfx942(")
             .nth(1)
-            .expect("gfx942 production route")
+            .expect("gfx942 production transaction")
             .split("pub(crate) fn publish_worker_handoff(")
             .next()
-            .expect("bounded route body");
-        let verify = route
+            .expect("bounded transaction body");
+        let verify = transaction
             .find(".verify_general_kernel_checks()?")
             .expect("mandatory general PLIRON checks");
-        let lower = route
+        let lower = transaction
             .find(".lower_target_neutral()?")
             .expect("target-neutral lowering");
         assert!(verify < lower, "lowering ran before general PLIRON checks");
@@ -1076,7 +1087,7 @@ mod tests {
             .expect("aggregate per-compilation Verus gate");
         assert!(semantic < parallel && parallel < aggregate);
 
-        let pipeline = include_str!("production_pipeline_v1.rs");
+        let pipeline = include_str!("production_pipeline.rs");
         let verification = pipeline
             .find(".into_verified_receipt()")
             .expect("ranked verification transition");
@@ -1091,7 +1102,7 @@ mod tests {
 
     #[test]
     fn production_publication_has_one_protected_custody_path() {
-        let pipeline = include_str!("production_pipeline_v1.rs");
+        let pipeline = include_str!("production_pipeline.rs");
         let worker = include_str!("production_worker_handoff.rs");
         for removed in [
             concat!("ProductionCompilerModule", "PublicationV1"),
@@ -1109,14 +1120,14 @@ mod tests {
                 "obsolete production publication variant remains: {removed}",
             );
         }
-        assert!(pipeline.contains("ProductionCompilerCustodyV1::protected(invocation)"));
+        assert!(pipeline.contains("ProductionCompilerCustody::protected(invocation)"));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
     }
 
     #[test]
     fn production_module_contains_no_profile_selection_vocabulary() {
         let sources = [
-            include_str!("production_pipeline_v1.rs"),
+            include_str!("production_pipeline.rs"),
             include_str!("collector/production_importer_v1.rs"),
             include_str!("rustc_semantic_adapter_v1.rs"),
             include_str!("rustc_semantic_plan_v1.rs"),
@@ -1205,7 +1216,7 @@ mod tests {
         let driver = include_str!("production_rustc_driver_v1.rs");
         for required in [
             "reject_custom_llvm_configuration",
-            "ProductionCompilationV1::from_collected_device_closure_for_extraction",
+            "ProductionCompilation::from_collected_device_closure_for_extraction",
             "require_semantic_mir_import",
         ] {
             assert!(

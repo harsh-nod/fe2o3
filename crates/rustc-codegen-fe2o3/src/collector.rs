@@ -519,7 +519,8 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
         .collect::<Vec<_>>();
     if roots.is_empty() {
         return Err(CollectError {
-            message: "production-v1 collected no authenticated external device root".to_owned(),
+            message: "production compilation collected no authenticated external device root"
+                .to_owned(),
         });
     }
     Ok(AuthenticatedCollectedKernelClosureV1 {

@@ -44,7 +44,7 @@ const FILL_KERNEL: &str = "fill";
 const VECADD_KERNEL: &str = "vecadd";
 #[cfg(feature = "qualification-oracles-test-only")]
 const NO_QUALIFICATION_FALLBACK_HINT: &str =
-    "production-v1 does not fall back to a qualification-only lowering route";
+    "production compilation does not fall back to a qualification-only lowering route";
 #[cfg(feature = "qualification-oracles-test-only")]
 const WORKGROUP_X: u32 = 256;
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -3104,7 +3104,7 @@ mod tests {
 
         let text = error.to_string();
         assert!(text.contains("does not support kernel export \"saxpy\""));
-        assert!(text.contains("production-v1 does not fall back"));
+        assert!(text.contains("production compilation does not fall back"));
     }
 
     #[test]

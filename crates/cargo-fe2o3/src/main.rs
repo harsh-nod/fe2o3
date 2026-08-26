@@ -85,7 +85,7 @@ const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
 pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-const SIMULATION_PIPELINE: &str = "simulation-v1";
+const SIMULATION_ORACLE_NAME: &str = "simulation-v1";
 #[cfg(feature = "qualification-oracles-test-only")]
 const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
     "cargo fe2o3 simulate emitted a structured simulation error";
@@ -1550,7 +1550,10 @@ fn configure_simulation_build_environment(
 ) {
     if let Some(attempt) = attempt {
         command
-            .env(build_config::QUALIFICATION_ORACLE_ENV, SIMULATION_PIPELINE)
+            .env(
+                build_config::QUALIFICATION_ORACLE_ENV,
+                SIMULATION_ORACLE_NAME,
+            )
             .env(SIMULATION_MODE_ENV, "1")
             .env(SIMULATION_ATTEMPT_ENV, attempt.to_hex())
             .env("FE2O3_HIP_SYS_DISABLE", "1");

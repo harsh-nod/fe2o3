@@ -127,6 +127,8 @@ fn production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics() 
                 "55".repeat(32),
             )
             .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
             .env(
                 "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
                 "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
@@ -199,6 +201,8 @@ fn run_extraction(target: &ScratchTarget) -> String {
             "55".repeat(32),
         )
         .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env(
             "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
             "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
@@ -226,7 +230,7 @@ fn run_extraction(target: &ScratchTarget) -> String {
     let preflight_sha256 = preflight_plan_sha256(&stderr);
     let semantic_sha256 = semantic_mir_sha256(&stderr);
     let expected_milestone = format!(
-        "production-v1 semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
+        "production compilation semantic importer authenticated rustc identity inventory {inventory_sha256} and bounded preflight plan {preflight_sha256}, then admitted one complete semantic MIR request with 1 function(s), 3 callable(s), and canonical identity {semantic_sha256}; an owner-held Pliron locator graph was recursively verified for exact semantic equivalence; target-neutral lowering remains pending; no fallback or artifact emission was entered",
     );
     assert!(
         stderr.contains(&expected_milestone),

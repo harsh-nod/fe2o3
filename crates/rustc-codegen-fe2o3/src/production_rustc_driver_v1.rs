@@ -31,9 +31,9 @@ impl Callbacks for ProductionExtractionCallbacksV1 {
 fn transaction_in_active_session_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> Result<
-    crate::production_pipeline_v1::ProductionCompilationV1<
+    crate::production_pipeline::ProductionCompilation<
         'tcx,
-        crate::production_pipeline_v1::CollectedRustStageV1<'tcx>,
+        crate::production_pipeline::CollectedRustStage<'tcx>,
     >,
     String,
 > {
@@ -52,7 +52,7 @@ fn transaction_in_active_session_v1<'tcx>(
                 .to_owned(),
         );
     }
-    crate::production_pipeline_v1::reject_custom_llvm_configuration(
+    crate::production_pipeline::reject_custom_llvm_configuration(
         crate::has_custom_llvm_configuration(tcx.sess),
     )
     .map_err(|error| format!("production extraction {error}"))?;
@@ -75,7 +75,7 @@ fn transaction_in_active_session_v1<'tcx>(
     .map_err(|error| format!("production extraction producer identity failed: {error}"))?;
     let output_dir = env::current_dir()
         .map_err(|error| format!("production extraction working directory failed: {error}"))?;
-    crate::production_pipeline_v1::ProductionCompilationV1::from_collected_device_closure_for_extraction(
+    crate::production_pipeline::ProductionCompilation::from_collected_device_closure_for_extraction(
         tcx, closure, producer, output_dir,
     )
     .map_err(|error| format!("production extraction transaction construction failed: {error}"))

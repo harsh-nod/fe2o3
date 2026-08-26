@@ -3146,7 +3146,7 @@ const fn require_production_compiler_closure(
         match compiler_closure {
             Some(compiler_closure) => Ok(Some(compiler_closure)),
             None => Err(
-                "production-v1 requires protected V3 compiler-closure custody before route selection",
+                "production compilation requires protected V3 compiler-closure custody before compiler admission",
             ),
         }
     } else {
