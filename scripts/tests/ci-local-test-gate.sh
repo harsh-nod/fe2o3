@@ -197,6 +197,13 @@ run_step() {
   local command
   shift
   printf -v command '%q ' "$@"
+  if [[ " ${command} " == *" FE2O3_QUALIFICATION_ORACLE_V1="* ]] &&
+    { [[ " ${command} " == *"/cargo-fe2o3 build "* ]] ||
+      [[ " ${command} " == *"/cargo-fe2o3 run "* ]]; }; then
+    printf 'captured lane restored obsolete cargo-fe2o3 qualification: %s\n' \
+      "${name}" >&2
+    exit 1
+  fi
   STEP_NAMES+=("${name}")
   STEP_COMMANDS+=("${command% }")
 }
@@ -328,6 +335,84 @@ assert_equals() {
   fi
 }
 
+assert_source_fixed_count() {
+  local expected_count="$1"
+  local needle="$2"
+  local context="$3"
+  shift 3
+  local actual_count
+  actual_count="$({
+    rg --fixed-strings --only-matching --glob '*.rs' -- "${needle}" "$@" || true
+  } | awk 'END { print NR + 0 }')"
+  assert_equals "${expected_count}" "${actual_count}" "${context}"
+}
+
+assert_qualification_caller_source_policy() {
+  local test_root="${REPO_ROOT}/crates/rustc-codegen-fe2o3/tests"
+  local support="${test_root}/support/cargo_fe2o3.rs"
+  local collected="${test_root}/collected_executable_scalar_control_flow_v2.rs"
+  local kernel_ir="${test_root}/kernel_ir_codegen.rs"
+
+  assert_source_fixed_count 17 \
+    'cargo_fe2o3::qualification_command(' \
+    'qualification Cargo helper call-site inventory changed without review' \
+    "${test_root}"
+  assert_source_fixed_count 1 \
+    'pub fn qualification_command(workspace: &Path) -> Command {' \
+    'qualification Cargo helper definition is missing or duplicated' \
+    "${support}"
+  assert_source_fixed_count 1 \
+    '.arg(INTERNAL_QUALIFICATION_HARNESS_ARG)' \
+    'qualification Cargo helper no longer enters the hidden harness' \
+    "${support}"
+
+  assert_source_fixed_count 2 \
+    'cargo_fe2o3::qualification_rustc_wrapper_command(' \
+    'reviewed direct rustc-wrapper caller inventory changed' \
+    "${test_root}"
+  assert_source_fixed_count 1 \
+    'pub fn qualification_rustc_wrapper_command(workspace: &Path) -> Command {' \
+    'direct rustc-wrapper helper definition is missing or duplicated' \
+    "${support}"
+  assert_source_fixed_count 2 \
+    '.arg("rustc")' \
+    'direct wrapper exceptions must remain exact rustc invocations' \
+    "${kernel_ir}"
+  assert_source_fixed_count 2 \
+    '.env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")' \
+    'direct wrapper exceptions lost or expanded binding-wrapper admission' \
+    "${kernel_ir}"
+  assert_source_fixed_count 2 \
+    '.env("FE2O3_BUILD_SESSION_V1",' \
+    'direct wrapper exceptions lost or expanded explicit build sessions' \
+    "${kernel_ir}"
+
+  assert_source_fixed_count 0 \
+    'non_production_command' \
+    'obsolete public qualification helper was restored' \
+    "${test_root}"
+  assert_source_fixed_count 4 \
+    '.arg(INTERNAL_QUALIFICATION_HARNESS_ARG)' \
+    'bespoke pinned-broker hidden-harness caller inventory changed' \
+    "${collected}"
+  assert_source_fixed_count 1 \
+    'const INTERNAL_QUALIFICATION_HARNESS_ARG: &str = "__fe2o3-qualification-harness-v1";' \
+    'bespoke pinned-broker callers lost their reviewed hidden token' \
+    "${collected}"
+
+  # Qualification build/run enters through the helper token or one of the four
+  # pinned-broker token sites above. Direct construction would restore the
+  # forbidden public `cargo-fe2o3 build|run` qualification route.
+  assert_source_fixed_count 0 \
+    'Command::new(cargo_fe2o3::binary' \
+    'qualification tests directly constructed the public cargo-fe2o3 CLI' \
+    "${test_root}"
+  assert_source_fixed_count 1 \
+    'Command::new(binary(workspace))' \
+    'authenticated driver construction escaped the reviewed support helper' \
+    "${support}"
+}
+
 assert_step_count() {
   local expected_name="$1"
   local expected_count="$2"
@@ -379,6 +464,7 @@ assert_all_codegen_targets_once() {
     'codegen integration target count differs from the manifest'
 }
 
+assert_qualification_caller_source_policy
 run_tests
 assert_codegen_test_driver_once
 assert_equals \
@@ -555,6 +641,7 @@ for core_step in \
   workspace-binding-projection-revalidation \
   backend-build \
   ci-local-test-gate \
+  cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
   cpu-tests \
   wrapper-managed-cpu-tests \
@@ -570,6 +657,10 @@ for core_step in \
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_QUALIFICATION_FEATURE}" \
+  "$(step_command cargo-fe2o3-tests)" \
+  'generic core did not gate the feature-invariant cargo-fe2o3 suite'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3 --features ${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE} --test worker_v3_load_envelope_vertical -- --test-threads=1" \
   "$(step_command cargo-fe2o3-worker-v3-envelope-tests)" \
@@ -872,10 +963,6 @@ assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
   "$(step_command rocm-doctor)" \
   'ROCm compile did not invoke the resolved driver directly for doctor'
-assert_equals \
-  'kernel-ir-v1' \
-  "${ROCM_ARTIFACT_QUALIFICATION_ROUTES[*]}" \
-  'ROCm artifact qualification route set changed without review'
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"
@@ -902,6 +989,12 @@ for index in "${!STEP_NAMES[@]}"; do
       }
       ;;
   esac
+  if [[ " ${step_command_value} " == *" FE2O3_QUALIFICATION_ORACLE_V1="* ]] &&
+    [[ " ${step_command_value} " == *"/cargo-fe2o3 build "* ]]; then
+    printf 'ROCm compile restored an obsolete Cargo qualification build: %s\n' \
+      "${step_name}" >&2
+    exit 1
+  fi
 done
 assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test trusted_device_items genuine_markers_emit_and_local_external_spoofs_fail_closed -- --ignored --exact" \
@@ -911,53 +1004,12 @@ assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test kernel_ir_codegen selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- --ignored --exact" \
   "$(step_command rocm-kernel-ir-codegen-rejection)" \
   'ROCm compile did not provide the direct driver contract to kernel-IR tests'
-assert_equals \
-  'cargo clean -p fe2o3-fill' \
-  "$(step_command rocm-clean-kernel-ir-v1-fe2o3-fill)" \
-  'ROCm compile did not invalidate the example host fingerprint'
-assert_equals \
-  "env -u FE2O3_WORKER_V2_CONFIG_V2 FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1 ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 build -p fe2o3-fill" \
-  "$(step_command rocm-build-kernel-ir-v1-fe2o3-fill)" \
-  'ROCm compile did not bind the example build to the closed qualification route'
-assert_equals \
-  "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 examples check-artifacts fe2o3-fill ${TIMEOUT_TEST_ROOT}/external-target/fe2o3" \
-  "$(step_command rocm-artifacts-kernel-ir-v1-fe2o3-fill)" \
-  'ROCm compile did not invoke the resolved driver directly for artifact inspection'
-assert_equals \
-  'rocm-clean-kernel-ir-v1-fe2o3-fill rocm-build-kernel-ir-v1-fe2o3-fill rocm-artifacts-kernel-ir-v1-fe2o3-fill' \
-  "$(printf '%s\n' "${STEP_NAMES[@]}" | rg '^rocm-(clean|build|artifacts)-kernel-ir-v1-fe2o3-fill$' | paste -sd ' ' -)" \
-  'ROCm compile did not clean, build, and inspect the example in order'
-assert_step_count rocm-build-fe2o3-fill 0 \
-  'ROCm compile retained the selector-free production example command'
-
-STEP_NAMES=()
-STEP_COMMANDS=()
-load_example_packages() {
-  local lane="$1"
-  local destination_name="$2"
-  local -n destination="${destination_name}"
-  case "${lane}" in
-    artifact-qualification)
-      destination=(fe2o3-fill fe2o3-unrouted)
-      ;;
-    *)
-      destination=(fe2o3-fill)
-      ;;
-  esac
-}
-set +e
-run_rocm_compile \
-  >"${TIMEOUT_TEST_ROOT}/rocm-route-mismatch.out" \
-  2>"${TIMEOUT_TEST_ROOT}/rocm-route-mismatch.err"
-route_mismatch_status=$?
-set -e
-assert_equals \
-  '2' \
-  "${route_mismatch_status}" \
-  'ROCm compile accepted an incomplete artifact qualification route union'
-rg -F \
-  'ROCm artifact qualification routes do not exactly cover the manifest projection' \
-  "${TIMEOUT_TEST_ROOT}/rocm-route-mismatch.err" >/dev/null
+assert_step_count rocm-clean-kernel-ir-v1-fe2o3-fill 0 \
+  'ROCm compile restored obsolete manifest-routed cleanup'
+assert_step_count rocm-build-kernel-ir-v1-fe2o3-fill 0 \
+  'ROCm compile restored obsolete Cargo qualification'
+assert_step_count rocm-artifacts-kernel-ir-v1-fe2o3-fill 0 \
+  'ROCm compile restored obsolete manifest-routed artifact inspection'
 
 STEP_NAMES=()
 STEP_COMMANDS=()

@@ -158,7 +158,22 @@ fn run_fixture(path: &Path) {
             assert!(report.is_clean());
             "PASS".to_owned()
         }
-        Err(error) => error.to_string(),
+        Err(error) => {
+            let repairs = error.repair_hints();
+            assert!(
+                !repairs.is_empty(),
+                "{} production error has no repair hint",
+                path.display()
+            );
+            assert!(repairs.iter().all(|repair| !repair.message().is_empty()));
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("help[FE2O3-FIX-"),
+                "{} production error does not render its structured repair: {rendered}",
+                path.display()
+            );
+            rendered
+        }
     };
     assert_eq!(
         result_is_rejected(&output),

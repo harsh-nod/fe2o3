@@ -3,13 +3,13 @@ use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME,
     DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexUnknownOp, InvocationIndexOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp,
-    register_dialect,
+    IndexType, IndexUnknownOp, InvocationIndexOp, ReturnOp, TensorConvergenceAttr,
+    TensorDataflowRootsV1, TensorLayoutOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1,
-    MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1, PlironTensorLayoutFindingV1,
-    run_pliron_tensor_layout_check_v1,
+    MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1, PlironTensorLayoutDataflowIssueV1,
+    PlironTensorLayoutFindingV1, run_pliron_tensor_layout_check_v1,
 };
 use fe2o3_kernel_ir::TensorLayoutContractV1;
 use pliron::{
@@ -108,6 +108,181 @@ fn tensor(context: &mut Context, active_lanes: u32) -> TensorLayoutOp {
         TensorConvergenceAttr::UniformSubgroup,
         active_lanes,
     )
+}
+
+fn root(identity: u64) -> [u64; 4] {
+    [identity, 0, 0, 0]
+}
+
+fn bound_tensor(
+    context: &mut Context,
+    contract: &TensorLayoutContractV1,
+    lhs: u64,
+    rhs: u64,
+    accumulator: u64,
+    result: u64,
+) -> TensorLayoutOp {
+    TensorLayoutOp::new_with_dataflow_roots(
+        context,
+        contract,
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+        TensorDataflowRootsV1 {
+            lhs: root(lhs),
+            rhs: root(rhs),
+            accumulator: root(accumulator),
+            result: root(result),
+        },
+    )
+}
+
+fn dataflow_issue(
+    finding: &PlironTensorLayoutFindingV1,
+) -> Option<&PlironTensorLayoutDataflowIssueV1> {
+    match finding {
+        PlironTensorLayoutFindingV1::Dataflow(issue) => Some(issue.as_ref()),
+        _ => None,
+    }
+}
+
+#[test]
+fn tensor_layout_dataflow_accepts_a_compatible_accumulator_chain() {
+    let context = &mut setup();
+    let (function, _) = function(context, "compatible_tensor_chain", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 64, 64, 64);
+    let contract = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    let producer = bound_tensor(context, &contract, 1, 2, 3, 10);
+    let consumer = bound_tensor(context, &contract, 4, 5, 10, 11);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &producer);
+    append(context, entry, &consumer);
+    append(context, entry, &ret);
+
+    assert!(run_pliron_tensor_layout_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn tensor_layout_dataflow_rejects_reinterpreting_an_accumulator_as_an_operand() {
+    let context = &mut setup();
+    let (function, _) = function(context, "incompatible_tensor_composition", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 64, 64, 64);
+    let contract = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    let producer = bound_tensor(context, &contract, 1, 2, 3, 10);
+    let consumer = bound_tensor(context, &contract, 10, 4, 5, 11);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &producer);
+    append(context, entry, &consumer);
+    append(context, entry, &ret);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(report.findings().iter().any(|finding| matches!(
+        dataflow_issue(finding),
+        Some(PlironTensorLayoutDataflowIssueV1::ConsumerMismatch {
+            operand: fe2o3_kernel_ir::TensorOperandRoleV1::A,
+            ..
+        })
+    )));
+    let message = report
+        .findings()
+        .iter()
+        .find(|finding| matches!(finding, PlironTensorLayoutFindingV1::Dataflow(_)))
+        .unwrap()
+        .to_string();
+    assert!(message.contains("FE2O3-TENSOR-LAYOUT-005"));
+    assert!(message.contains("insert a checked conversion/repack"));
+    assert!(message.contains("profile Gfx942MfmaBf16F32M16N16K16Wave64"));
+}
+
+#[test]
+fn different_tensor_instruction_profiles_are_diagnosed_at_the_composition_site() {
+    let context = &mut setup();
+    let (function, _) = function(context, "different_tensor_profiles", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 64, 64, 64);
+    let producer_contract = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    let mut consumer_contract = producer_contract;
+    consumer_contract.profile = fe2o3_kernel_ir::TensorInstructionProfileV1::IncompatibleWave32;
+    consumer_contract.subgroup_width = 32;
+    let producer = bound_tensor(context, &producer_contract, 1, 2, 3, 10);
+    let consumer = bound_tensor(context, &consumer_contract, 4, 5, 10, 11);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &producer);
+    append(context, entry, &consumer);
+    append(context, entry, &ret);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    let message = report
+        .findings()
+        .iter()
+        .find_map(|finding| match dataflow_issue(finding) {
+            Some(PlironTensorLayoutDataflowIssueV1::ConsumerMismatch {
+                consumer_profile: fe2o3_kernel_ir::TensorInstructionProfileV1::IncompatibleWave32,
+                operand: fe2o3_kernel_ir::TensorOperandRoleV1::Accumulator,
+                ..
+            }) => Some(finding.to_string()),
+            _ => None,
+        })
+        .expect("cross-profile composition finding");
+    assert!(message.contains("select a consumer instruction"));
+    assert!(message.contains("Gfx942MfmaBf16F32M16N16K16Wave64"));
+}
+
+#[test]
+fn an_unproduced_root_does_not_fabricate_a_layout_fact() {
+    let context = &mut setup();
+    let (function, _) = function(context, "checked_conversion_boundary", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 64, 64, 64);
+    let contract = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    let producer = bound_tensor(context, &contract, 1, 2, 3, 10);
+    // The standalone pass has no producer fact for root 12 and therefore does
+    // not invent one. Production accepts such a root only when authenticated
+    // source projection retained an external checked load or initializer.
+    let consumer = bound_tensor(context, &contract, 12, 4, 5, 11);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &producer);
+    append(context, entry, &consumer);
+    append(context, entry, &ret);
+
+    assert!(run_pliron_tensor_layout_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn tensor_layout_dataflow_rejects_incompatible_producer_join() {
+    let context = &mut setup();
+    let (function, _) = function(context, "incompatible_tensor_join", 0);
+    let entry = function.get_entry_block(context);
+    let execution = layout(context, 64, 64, 64);
+    let canonical = TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64();
+    let mut incompatible = canonical;
+    incompatible.accumulator.fragment_elements = 3;
+    let first = bound_tensor(context, &canonical, 1, 2, 3, 10);
+    let second = bound_tensor(context, &incompatible, 4, 5, 6, 10);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &ret);
+
+    let report = run_pliron_tensor_layout_check_v1(context, &function);
+    assert!(report.findings().iter().any(|finding| matches!(
+        dataflow_issue(finding),
+        Some(PlironTensorLayoutDataflowIssueV1::MergeConflict { .. })
+    )));
+    assert!(
+        report
+            .findings()
+            .iter()
+            .map(ToString::to_string)
+            .any(|message| message.contains("same fragment layout"))
+    );
 }
 
 #[test]

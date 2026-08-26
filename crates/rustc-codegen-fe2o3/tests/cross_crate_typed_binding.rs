@@ -126,7 +126,7 @@ fn build_kernel(
     label: &str,
 ) -> PathBuf {
     let manifest = package_root.join("Cargo.toml");
-    let build = cargo_fe2o3::non_production_command(workspace)
+    let build = cargo_fe2o3::qualification_command(workspace)
         .current_dir(package_root)
         .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)

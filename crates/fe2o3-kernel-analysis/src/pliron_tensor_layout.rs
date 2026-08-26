@@ -12,7 +12,10 @@ use dialect_kernel::{
     IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp,
     MAX_DETERMINISTIC_JOIN_INPUTS_V1, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
 };
-use fe2o3_kernel_ir::{TensorLayoutFindingV1, verify_tensor_layout_contract_v1};
+use fe2o3_kernel_ir::{
+    TensorFragmentLayoutV1, TensorInstructionProfileV1, TensorLayoutFindingV1, TensorOperandRoleV1,
+    verify_tensor_layout_contract_v1,
+};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -37,6 +40,203 @@ pub const MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1: usize = 16_384;
 pub const MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1: usize = 256;
 pub const MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1: usize = 65_536;
 pub const MAX_PLIRON_TENSOR_UNIFORMITY_WORK_UNITS_V1: usize = 1_048_576;
+pub const MAX_PLIRON_TENSOR_DATAFLOW_ROOTS_V1: usize = 16_384;
+pub const MAX_PLIRON_TENSOR_DATAFLOW_EDGES_V1: usize = 65_536;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PlironTensorLayoutLocationV1 {
+    pub block: usize,
+    pub operation: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlironTensorLayoutFactV1 {
+    pub layout: TensorFragmentLayoutV1,
+    pub subgroup_width: u16,
+    pub profile: TensorInstructionProfileV1,
+    pub producer: PlironTensorLayoutLocationV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlironTensorLayoutDataflowIssueV1 {
+    MergeConflict {
+        root: [u64; 4],
+        first: PlironTensorLayoutFactV1,
+        second: PlironTensorLayoutFactV1,
+    },
+    ConsumerMismatch {
+        root: [u64; 4],
+        producer: PlironTensorLayoutFactV1,
+        consumer: PlironTensorLayoutLocationV1,
+        consumer_profile: TensorInstructionProfileV1,
+        operand: TensorOperandRoleV1,
+        expected: TensorFragmentLayoutV1,
+        expected_subgroup_width: u16,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlironTensorLayoutDataflowFailureV1 {
+    ResourceLimit,
+    MalformedSite { block: usize, operation: usize },
+}
+
+/// Whole-function layout facts for compiler-derived cooperative-tensor roots.
+///
+/// A root may have multiple CFG producers. Equal layouts join; unequal layouts
+/// become an explicit conflict. Missing producer facts denote external checked
+/// loads or zero initializers, not proof of an arbitrary layout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlironTensorLayoutDataflowAnalysisV1 {
+    facts: BTreeMap<[u64; 4], PlironTensorLayoutFactV1>,
+    conflicted_roots: HashSet<[u64; 4]>,
+    issues: Vec<PlironTensorLayoutDataflowIssueV1>,
+    bound_sites: usize,
+}
+
+impl PlironTensorLayoutDataflowAnalysisV1 {
+    pub fn fact(&self, root: [u64; 4]) -> Option<PlironTensorLayoutFactV1> {
+        (!self.conflicted_roots.contains(&root))
+            .then(|| self.facts.get(&root).copied())
+            .flatten()
+    }
+
+    pub fn issues(&self) -> &[PlironTensorLayoutDataflowIssueV1] {
+        &self.issues
+    }
+
+    pub const fn bound_site_count(&self) -> usize {
+        self.bound_sites
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TensorDataflowSiteV1 {
+    location: PlironTensorLayoutLocationV1,
+    roots: dialect_kernel::TensorDataflowRootsV1,
+    contract: fe2o3_kernel_ir::TensorLayoutContractV1,
+}
+
+pub(crate) fn analyze_pliron_tensor_layout_dataflow_v1(
+    context: &Context,
+    function: &FuncOp,
+) -> Result<PlironTensorLayoutDataflowAnalysisV1, PlironTensorLayoutDataflowFailureV1> {
+    let mut sites = Vec::new();
+    let mut operation_count = 0usize;
+    for (block, block_ref) in function
+        .get_region(context)
+        .deref(context)
+        .iter(context)
+        .enumerate()
+    {
+        for (operation, operation_ref) in block_ref.deref(context).iter(context).enumerate() {
+            operation_count = operation_count.saturating_add(1);
+            if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
+                return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
+            }
+            let operation_ref = Operation::get_op_dyn(operation_ref, context);
+            let Some(tensor) = operation_ref.downcast_ref::<TensorLayoutOp>() else {
+                continue;
+            };
+            let roots = tensor.dataflow_roots(context).map_err(|_| {
+                PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation }
+            })?;
+            let Some(roots) = roots else {
+                continue;
+            };
+            let contract = tensor.contract(context).map_err(|_| {
+                PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation }
+            })?;
+            if sites.len() == MAX_PLIRON_TENSOR_DATAFLOW_ROOTS_V1 {
+                return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
+            }
+            sites.push(TensorDataflowSiteV1 {
+                location: PlironTensorLayoutLocationV1 { block, operation },
+                roots,
+                contract,
+            });
+        }
+    }
+
+    let mut facts = BTreeMap::new();
+    let mut conflicted_roots = HashSet::new();
+    let mut issues = Vec::new();
+    for site in &sites {
+        let fact = PlironTensorLayoutFactV1 {
+            layout: site.contract.accumulator,
+            subgroup_width: site.contract.subgroup_width,
+            profile: site.contract.profile,
+            producer: site.location,
+        };
+        match facts.get(&site.roots.result).copied() {
+            None => {
+                facts.insert(site.roots.result, fact);
+            }
+            Some(first)
+                if first.layout == fact.layout && first.subgroup_width == fact.subgroup_width => {}
+            Some(first) => {
+                conflicted_roots.insert(site.roots.result);
+                issues.push(PlironTensorLayoutDataflowIssueV1::MergeConflict {
+                    root: site.roots.result,
+                    first,
+                    second: fact,
+                });
+            }
+        }
+        if facts.len() > MAX_PLIRON_TENSOR_DATAFLOW_ROOTS_V1
+            || issues.len() > MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1
+        {
+            return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
+        }
+    }
+
+    let mut edge_count = 0usize;
+    for site in &sites {
+        for (root, operand, expected) in [
+            (site.roots.lhs, TensorOperandRoleV1::A, site.contract.a),
+            (site.roots.rhs, TensorOperandRoleV1::B, site.contract.b),
+            (
+                site.roots.accumulator,
+                TensorOperandRoleV1::Accumulator,
+                site.contract.accumulator,
+            ),
+        ] {
+            edge_count = edge_count.saturating_add(1);
+            if edge_count > MAX_PLIRON_TENSOR_DATAFLOW_EDGES_V1 {
+                return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
+            }
+            let Some(producer) = facts.get(&root).copied() else {
+                continue;
+            };
+            if conflicted_roots.contains(&root) {
+                continue;
+            }
+            if producer.layout != expected
+                || producer.subgroup_width != site.contract.subgroup_width
+            {
+                issues.push(PlironTensorLayoutDataflowIssueV1::ConsumerMismatch {
+                    root,
+                    producer,
+                    consumer: site.location,
+                    consumer_profile: site.contract.profile,
+                    operand,
+                    expected,
+                    expected_subgroup_width: site.contract.subgroup_width,
+                });
+            }
+            if issues.len() > MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
+                return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
+            }
+        }
+    }
+
+    Ok(PlironTensorLayoutDataflowAnalysisV1 {
+        facts,
+        conflicted_roots,
+        issues,
+        bound_sites: sites.len(),
+    })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironTensorLayoutFindingV1 {
@@ -87,6 +287,7 @@ pub enum PlironTensorLayoutFindingV1 {
     ConvergenceAnalysisIncomplete {
         detail: String,
     },
+    Dataflow(Box<PlironTensorLayoutDataflowIssueV1>),
     ResourceLimitExceeded,
 }
 
@@ -106,7 +307,8 @@ impl PlironTensorLayoutFindingV1 {
             | Self::MalformedContract { .. }
             | Self::DivergentInstructionTrace { .. }
             | Self::PartialSubgroupParticipation { .. }
-            | Self::DivergentSubgroupControl { .. } => KernelCheckStatusV1::Rejected,
+            | Self::DivergentSubgroupControl { .. }
+            | Self::Dataflow(_) => KernelCheckStatusV1::Rejected,
         }
     }
 }
@@ -191,10 +393,99 @@ impl fmt::Display for PlironTensorLayoutFindingV1 {
                 formatter,
                 "error[FE2O3-TENSOR-LAYOUT-002]: tensor convergence analysis is incomplete: {detail}",
             ),
+            Self::Dataflow(issue) => display_dataflow_issue(formatter, issue),
             Self::ResourceLimitExceeded => formatter.write_str(
-                "error[FE2O3-TENSOR-LAYOUT-003]: tensor layout analysis resource limit exceeded",
+                "error[FE2O3-TENSOR-LAYOUT-003]: tensor layout analysis resource limit exceeded; help: split the kernel or reduce tensor/control-flow graph size so the bounded analysis can complete",
             ),
         }
+    }
+}
+
+fn display_dataflow_issue(
+    formatter: &mut fmt::Formatter<'_>,
+    issue: &PlironTensorLayoutDataflowIssueV1,
+) -> fmt::Result {
+    match issue {
+        PlironTensorLayoutDataflowIssueV1::MergeConflict {
+            root,
+            first,
+            second,
+        } => write!(
+            formatter,
+            "error[FE2O3-TENSOR-LAYOUT-004]: incompatible tensor layouts reach value root {} from block {} op {} ({}) and block {} op {} ({}); help: make every control-flow producer use the same fragment layout, or insert an explicit checked conversion before the join",
+            display_root(*root),
+            first.producer.block,
+            first.producer.operation,
+            describe_layout(*first),
+            second.producer.block,
+            second.producer.operation,
+            describe_layout(*second),
+        ),
+        PlironTensorLayoutDataflowIssueV1::ConsumerMismatch {
+            root,
+            producer,
+            consumer,
+            consumer_profile,
+            operand,
+            expected,
+            expected_subgroup_width,
+        } => write!(
+            formatter,
+            "error[FE2O3-TENSOR-LAYOUT-005]: tensor value root {} is produced at block {} op {} as {}, but block {} op {} uses it as {operand:?} for profile {consumer_profile:?}, which requires {}; help: {}",
+            display_root(*root),
+            producer.producer.block,
+            producer.producer.operation,
+            describe_layout(*producer),
+            consumer.block,
+            consumer.operation,
+            describe_fragment(*expected, *expected_subgroup_width),
+            layout_mismatch_repair(*producer, *operand, *consumer_profile),
+        ),
+    }
+}
+
+fn display_root(root: [u64; 4]) -> String {
+    format!(
+        "{:016x}{:016x}{:016x}{:016x}",
+        root[0], root[1], root[2], root[3]
+    )
+}
+
+fn describe_layout(fact: PlironTensorLayoutFactV1) -> String {
+    format!(
+        "profile {:?}, {}",
+        fact.profile,
+        describe_fragment(fact.layout, fact.subgroup_width)
+    )
+}
+
+fn describe_fragment(layout: TensorFragmentLayoutV1, subgroup_width: u16) -> String {
+    format!(
+        "{:?} {:?} {}x{} fragment with {} components across wave{}",
+        layout.role,
+        layout.element,
+        layout.shape[0],
+        layout.shape[1],
+        layout.fragment_elements,
+        subgroup_width,
+    )
+}
+
+fn layout_mismatch_repair(
+    producer: PlironTensorLayoutFactV1,
+    operand: TensorOperandRoleV1,
+    consumer_profile: TensorInstructionProfileV1,
+) -> String {
+    if operand == TensorOperandRoleV1::Accumulator {
+        format!(
+            "select a consumer instruction whose accumulator ABI accepts profile {:?}, or explicitly convert the accumulator before profile {consumer_profile:?}",
+            producer.profile,
+        )
+    } else {
+        format!(
+            "insert a checked conversion/repack from the produced accumulator layout to the required {operand:?} fragment, or choose a consumer instruction whose {operand:?} ABI accepts profile {:?}",
+            producer.profile,
+        )
     }
 }
 
@@ -331,6 +622,28 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
                     finding,
                 });
             }
+        }
+    }
+    analyses.prepare_tensor_layout_dataflow(context, function);
+    match analyses.tensor_layout_dataflow() {
+        Ok(dataflow) => {
+            for issue in dataflow.issues() {
+                if findings.len() >= MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
+                    findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+                    return report(findings);
+                }
+                findings.push(PlironTensorLayoutFindingV1::Dataflow(Box::new(
+                    issue.clone(),
+                )));
+            }
+        }
+        Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit) => {
+            findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+            return report(findings);
+        }
+        Err(PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation }) => {
+            findings.push(PlironTensorLayoutFindingV1::MalformedContract { block, operation });
+            return report(findings);
         }
     }
     if !tensor_sites.is_empty() {

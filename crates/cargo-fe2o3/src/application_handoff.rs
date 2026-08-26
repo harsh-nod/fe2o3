@@ -52,8 +52,6 @@ const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &[u8] = b".fe2o3-worker-v2-load-enve
 const RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1: &[u8] = b".envelope";
 const RETIRED_WORKER_V2_ENVELOPE_ERROR: &str =
     "Worker V2 application envelopes are retired and unavailable";
-#[cfg(feature = "qualification-oracles-test-only")]
-pub(crate) const RUNNER_EXPECTS_NO_ENVELOPE: &str = "none";
 
 const RETIRED_WORKER_V2_ENVELOPE_NAME_BYTES_V1: usize =
     RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1.len() + 64 + RETIRED_WORKER_V2_ENVELOPE_SUFFIX_V1.len();

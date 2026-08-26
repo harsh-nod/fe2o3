@@ -82,7 +82,7 @@ fn managed_build(
     cargo_args: &[&str],
     artifacts: &Path,
 ) -> Output {
-    cargo_fe2o3::non_production_command(workspace)
+    cargo_fe2o3::qualification_command(workspace)
         .current_dir(workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(manifest)

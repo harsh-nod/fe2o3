@@ -1,5 +1,3 @@
-#![cfg(not(feature = "qualification-oracles-test-only"))]
-
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -64,6 +62,32 @@ fn unit_test_configuration_cannot_select_qualification_code() {
             "{name} still changes pipeline behavior under cfg(test)"
         );
     }
+}
+
+#[test]
+fn cargo_and_application_routes_are_feature_invariant() {
+    let source = include_str!("../src/main.rs");
+    let cargo_route = source
+        .split("fn cargo_with_backend_result(")
+        .nth(1)
+        .expect("Cargo production route exists")
+        .split("fn authority_sha256_from_environment(")
+        .next()
+        .expect("Cargo production route has a bounded body");
+    assert!(!cargo_route.contains("qualification-oracles-test-only"));
+    assert!(cargo_route.contains("PreparedProductionBuildConfig"));
+    assert!(cargo_route.contains("ProductionCargoPlan"));
+
+    let application_route = source
+        .split("fn run_application_boundary_result(")
+        .nth(1)
+        .expect("application production route exists")
+        .split("fn run_application_with_handoff(")
+        .next()
+        .expect("application production route has a bounded body");
+    assert!(!application_route.contains("qualification-oracles-test-only"));
+    assert!(application_route.contains("RUNNER_EXPECTS_ENVELOPE"));
+    assert!(application_route.contains("requires a canonical load envelope"));
 }
 
 #[test]
@@ -156,11 +180,9 @@ fn production_run_has_one_worker_v3_application_path() {
         .split("fn inject_production_application_runner(")
         .nth(1)
         .expect("production runner injection exists")
-        .split(
-            "#[cfg(feature = \"qualification-oracles-test-only\")]\nfn inject_qualification_application_runner(",
-        )
+        .split("fn application_runner_executable(")
         .next()
-        .expect("qualification runner injection follows production injection");
+        .expect("production runner injection has a bounded body");
     assert!(injection.contains("RUNNER_EXPECTS_ENVELOPE"));
     assert!(injection.contains("does not permit an intermediate Cargo runner"));
     assert!(!injection.contains("RUNNER_EXPECTS_NO_ENVELOPE"));
@@ -170,22 +192,18 @@ fn production_run_has_one_worker_v3_application_path() {
         .split("if runner_count != 0 || !original_runner.is_empty()")
         .nth(1)
         .expect("production runner execution exists")
-        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\n    {\n        let handoff")
+        .split("fn run_application_with_handoff(")
         .next()
-        .expect("qualification runner execution follows production execution");
+        .expect("production runner execution has a bounded body");
     assert!(execution.contains("requires a canonical load envelope"));
     assert!(execution.contains("run_application_with_handoff"));
     assert!(!execution.contains("RUNNER_EXPECTS_NO_ENVELOPE"));
     assert!(!execution.contains("run_qualification_application_without_handoff"));
 
     let handoff_source = include_str!("../src/application_handoff.rs");
-    assert!(handoff_source.contains(
-        "#[cfg(feature = \"qualification-oracles-test-only\")]\npub(crate) const RUNNER_EXPECTS_NO_ENVELOPE"
-    ));
+    assert!(!handoff_source.contains("RUNNER_EXPECTS_NO_ENVELOPE"));
     let exec_source = include_str!("../src/application_exec.rs");
-    assert!(exec_source.contains(
-        "#[cfg(feature = \"qualification-oracles-test-only\")]\npub(crate) fn configure_closed_descriptor_baseline"
-    ));
+    assert!(!exec_source.contains("configure_closed_descriptor_baseline"));
 }
 
 #[test]

@@ -350,7 +350,7 @@ HSACO, HIP, or GPU execution refines that model.
 
 ## ROCm compile coverage
 
-Set an explicit LLVM target and run the bounded artifact-qualification gates:
+Set an explicit LLVM target and run the bounded compiler-qualification gates:
 
 ```text
 FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
@@ -375,15 +375,14 @@ transactional invalidation of the complete artifact triplet. Markers identify
 compiler semantics; marker and executable authenticity plus full ABI semantics
 remain unsafe artifact-provenance and generated-binding responsibilities.
 
-The lane also compiles and inspects the hardened G1 fill code object, compiles
-the real three-slice vecadd through `kernel-ir-v1`, validates its exact ABI and
-bounds-control-flow LLVM shape, and checks that invalid selectors or
-unsupported inputs fail without fallback and remove stale artifacts.
-The route-aware manifest then compiles only entries selected for an exact
-qualification oracle; currently that projection is exactly `fe2o3-fill` on
-`kernel-ir-v1`. Other source-referenced HSACO names remain structurally checked
-inventory, not current compilation promises. Selector-free builds are protected
-production requests and are never substituted for qualification.
+The lane also compiles and inspects the hardened G1 code object, compiles the
+real three-slice vecadd through the isolated `kernel-ir-v1` backend test
+harness, validates its exact ABI and bounds-control-flow LLVM shape, and checks
+that invalid selectors or unsupported inputs fail without fallback and remove
+stale artifacts. Every nested compiler test is bound to the sealed driver path
+and SHA-256 identity. The feature-invariant `cargo-fe2o3` CLI receives no
+qualification selector; its `build` and `run` commands remain protected
+production requests in every feature configuration.
 
 ## Hardware smoke
 

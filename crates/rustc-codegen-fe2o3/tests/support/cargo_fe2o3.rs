@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const TEST_DRIVER_ENV: &str = "FE2O3_TEST_CARGO_FE2O3_BIN";
 pub(crate) const TEST_DRIVER_SHA256_ENV: &str = "FE2O3_TEST_CARGO_FE2O3_SHA256";
+const INTERNAL_QUALIFICATION_HARNESS_ARG: &str = "__fe2o3-qualification-harness-v1";
+const QUALIFICATION_BACKEND_ENV: &str = "FE2O3_QUALIFICATION_BACKEND_V1";
 const QUALIFICATION_DRIVER_BUILD_ARGUMENTS: [&str; 9] = [
     "build",
     "--locked",
@@ -486,8 +488,27 @@ pub(crate) fn binary(workspace: &Path) -> &'static Path {
     driver(workspace).path.as_path()
 }
 
-pub fn non_production_command(workspace: &Path) -> Command {
+fn authenticated_driver_command(workspace: &Path) -> Command {
     let mut command = Command::new(binary(workspace));
+    command.env(
+        "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+        "1",
+    );
+    scrub_dynamic_loader_environment(&mut command);
+    command
+}
+
+pub fn qualification_command(workspace: &Path) -> Command {
+    let mut command = authenticated_driver_command(workspace);
+    command.arg(INTERNAL_QUALIFICATION_HARNESS_ARG).env(
+        QUALIFICATION_BACKEND_ENV,
+        cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so"),
+    );
+    command
+}
+
+pub fn qualification_rustc_wrapper_command(workspace: &Path) -> Command {
+    let mut command = authenticated_driver_command(workspace);
     command
         .env(
             "FE2O3_BACKEND",
@@ -497,7 +518,6 @@ pub fn non_production_command(workspace: &Path) -> Command {
             "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
             "1",
         );
-    scrub_dynamic_loader_environment(&mut command);
     command
 }
 

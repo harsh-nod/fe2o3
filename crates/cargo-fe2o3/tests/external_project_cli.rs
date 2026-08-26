@@ -206,10 +206,11 @@ impl ProjectFixture {
     fn command_with_program(&self, program: &Path, args: &[OsString]) -> Command {
         let mut command = cargo_fe2o3_command_with_program(program);
         command
+            .arg("__fe2o3-qualification-harness-v1")
             .args(args)
             .current_dir(&self.cwd)
             .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
-            .env("FE2O3_BACKEND", &self.backend)
+            .env("FE2O3_QUALIFICATION_BACKEND_V1", &self.backend)
             .env("FE2O3_TARGET", "gfx942")
             .env("FE2O3_TEST_CARGO_LOG", &self.log)
             .env("FE2O3_TEST_WORKSPACE_ROOT", &self.workspace)
@@ -440,6 +441,12 @@ fn cargo_binding_trampoline(root: &Path) -> PathBuf {
 }
 
 fn cargo_fe2o3_command() -> Command {
+    let mut command = cargo_fe2o3_internal_command();
+    command.arg("__fe2o3-qualification-harness-v1");
+    command
+}
+
+fn cargo_fe2o3_internal_command() -> Command {
     cargo_fe2o3_command_with_program(Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3")))
 }
 
@@ -926,7 +933,7 @@ fn real_cargo_cooperatively_routes_capabilities_to_the_managed_rustc_child() {
         .env_remove("RUSTC")
         .env("FE2O3_TEST_REAL_RUSTC", real_rustc)
         .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", &report)
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
@@ -1006,7 +1013,7 @@ fn real_cargo_routes_workspace_dependencies_through_builtin_llvm() {
         .env("FE2O3_TEST_REAL_RUSTC", resolved_real_rustc())
         .env("FE2O3_TEST_RUSTC_ROUTE_REPORT", &route_report)
         .env("FE2O3_TEST_RUSTC_CAPABILITY_REPORT", capability_report)
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
@@ -1153,10 +1160,10 @@ fn substituted_multithreaded_image_cannot_replay_wrapper_from_non_leader_thread(
     let harness_loader = env::var_os("LD_LIBRARY_PATH")
         .expect("Cargo test harness must provide LD_LIBRARY_PATH for this regression");
     command
-        .arg("build")
+        .args(["__fe2o3-qualification-harness-v1", "build"])
         .current_dir(&fixture.cwd)
         .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_TEST_CARGO_LOG", &fixture.log)
         .env("FE2O3_TEST_WORKSPACE_ROOT", &fixture.workspace)
@@ -1267,7 +1274,7 @@ fn main() {
             "FE2O3_TEST_BUILD_SCRIPT_FIXTURE",
             env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
         )
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
@@ -1327,7 +1334,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_custom_build() {
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
         .env("PATH", rustc_fixture_path(&fixture.root))
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TEST_REAL_RUSTC", resolved_real_rustc())
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
@@ -1406,7 +1413,7 @@ fn authoritative_kernel_preflight_rejects_a_hostile_proc_macro() {
         .current_dir(&fixture.workspace)
         .env("CARGO", real_cargo)
         .env("PATH", rustc_fixture_path(&fixture.root))
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TEST_REAL_RUSTC", resolved_real_rustc())
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "collected-row-softmax-v1")
@@ -1533,7 +1540,7 @@ pub fn probe(_attribute: TokenStream, item: TokenStream) -> TokenStream {
             "FE2O3_TEST_BUILD_SCRIPT_FIXTURE",
             env!("CARGO_BIN_EXE_cargo-fe2o3-build-script-fixture"),
         )
-        .env("FE2O3_BACKEND", &fixture.backend)
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", &fixture.backend)
         .env("FE2O3_TARGET", "gfx942")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
@@ -2529,7 +2536,7 @@ fn authority_build_requires_an_independent_exact_backend_digest() {
             "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
             file_sha256(&wrong.backend),
         )
-        .env("FE2O3_BACKEND", substituted_backend);
+        .env("FE2O3_QUALIFICATION_BACKEND_V1", substituted_backend);
     let output = command.output().expect("run wrong backend pin probe");
     assert!(!output.status.success());
     assert!(
@@ -3318,7 +3325,7 @@ fn application_runner_scrubs_build_environment_and_preserves_non_utf8_argv() {
     let root = temp_root();
     let report = root.join("runner-report.json");
     let payload = OsString::from_vec(b"application-\xff".to_vec());
-    let mut command = cargo_fe2o3_command();
+    let mut command = cargo_fe2o3_internal_command();
     command
         .args(internal_runner_args(
             &root,
@@ -3387,7 +3394,7 @@ fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
             );
             arguments.push(OsString::from("--fe2o3-test-fork-fd-holder"));
             arguments.push(marker.as_os_str().to_owned());
-            let output = cargo_fe2o3_command()
+            let output = cargo_fe2o3_internal_command()
                 .args(arguments)
                 .output()
                 .expect("launch hostile no-envelope application");
@@ -3412,7 +3419,7 @@ fn hostile_orphan_descendants_cannot_retain_supervisor_slots() {
 
         let root = temp_root();
         let report = root.join("report.json");
-        let thirty_third = cargo_fe2o3_command()
+        let thirty_third = cargo_fe2o3_internal_command()
             .args(internal_runner_args(
                 &root,
                 Path::new(env!("CARGO_BIN_EXE_cargo-fe2o3-runner-app-fixture")),
@@ -3451,7 +3458,7 @@ fn hostile_application_cannot_forge_pending_supervisor_success() {
     arguments.push(OsString::from("--fe2o3-test-forge-supervisor-result"));
     arguments.push(marker.as_os_str().to_owned());
     let started = Instant::now();
-    let output = cargo_fe2o3_command()
+    let output = cargo_fe2o3_internal_command()
         .args(arguments)
         .output()
         .expect("launch supervisor forgery probe");
@@ -3495,7 +3502,7 @@ fn hostile_application_cannot_unlock_supervisor_admission() {
         OsString::from("probe"),
     );
     arguments.push(OsString::from("--fe2o3-test-unlock-supervisor-slot"));
-    let output = cargo_fe2o3_command()
+    let output = cargo_fe2o3_internal_command()
         .args(arguments)
         .output()
         .expect("launch slot unlock probe");
@@ -3519,7 +3526,7 @@ fn hidden_supervisor_rejects_malformed_descriptors_without_abort() {
     use std::time::{Duration, Instant};
 
     fn invoke(channel: i32, slot: i32, inherited: &[i32]) -> Output {
-        let mut command = cargo_fe2o3_command();
+        let mut command = cargo_fe2o3_internal_command();
         command.args([
             OsString::from("__fe2o3-application-supervisor-v1"),
             OsString::from(channel.to_string()),
@@ -3680,7 +3687,7 @@ fn internal_runner_args(
         .expect("make runner owner record private");
     let metadata = fs::metadata(&artifact).expect("inspect runner artifact directory");
     vec![
-        OsString::from("__fe2o3-runner-v1"),
+        OsString::from("__fe2o3-qualification-runner-v1"),
         OsString::from("3"),
         OsString::from(hex(os_bytes(artifact.as_os_str()))),
         OsString::from(metadata.dev().to_string()),

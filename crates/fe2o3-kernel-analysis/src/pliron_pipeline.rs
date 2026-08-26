@@ -17,11 +17,218 @@ use crate::{
     KernelCheckStatusV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
     PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
-    PlironTensorLayoutCheckErrorV1, PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1,
-    PlironWorkgroupMemoryReportV1, RankedBoundsCheckErrorV1, RankedBoundsReportV1,
-    RankedRaceCheckErrorV1, RankedRaceReportV1, require_pliron_atomic_legality_before_lowering_v1,
+    PlironTensorLayoutCheckErrorV1, PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1,
+    PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1,
+    RankedBoundsCheckErrorV1, RankedBoundsReportV1, RankedRaceCheckErrorV1, RankedRaceReportV1,
+    require_pliron_atomic_legality_before_lowering_v1,
     require_pliron_atomic_legality_with_target_before_lowering_v1,
 };
+
+/// Whether a compiler repair can be applied without another semantic choice.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum KernelCheckRepairApplicabilityV1 {
+    MachineApplicable,
+    HasPlaceholders,
+    Manual,
+}
+
+/// Stable category for a production kernel-check repair.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum KernelCheckRepairActionV1 {
+    RepairStructure,
+    RepairControlFlow,
+    RepairTensorLayout,
+    GuardMemoryAccess,
+    SelectSupportedAtomic,
+    PartitionOrSynchronizeAccess,
+    CorrectHierarchyOwnership,
+    MakeBarrierControlUniform,
+    InitializeAndPublishWorkgroupMemory,
+    MatchReferenceSemantics,
+}
+
+impl KernelCheckRepairActionV1 {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::RepairStructure => "FE2O3-FIX-STRUCTURE",
+            Self::RepairControlFlow => "FE2O3-FIX-CFG",
+            Self::RepairTensorLayout => "FE2O3-FIX-LAYOUT",
+            Self::GuardMemoryAccess => "FE2O3-FIX-BOUNDS",
+            Self::SelectSupportedAtomic => "FE2O3-FIX-ATOMIC",
+            Self::PartitionOrSynchronizeAccess => "FE2O3-FIX-RACE",
+            Self::CorrectHierarchyOwnership => "FE2O3-FIX-OWNERSHIP",
+            Self::MakeBarrierControlUniform => "FE2O3-FIX-BARRIER",
+            Self::InitializeAndPublishWorkgroupMemory => "FE2O3-FIX-WORKGROUP",
+            Self::MatchReferenceSemantics => "FE2O3-FIX-SEMANTIC",
+        }
+    }
+}
+
+/// One bounded structured repair attached to a production compiler error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelCheckRepairV1 {
+    pass: KernelCheckPassKindV1,
+    action: KernelCheckRepairActionV1,
+    applicability: KernelCheckRepairApplicabilityV1,
+    message: String,
+}
+
+impl KernelCheckRepairV1 {
+    fn new(
+        pass: KernelCheckPassKindV1,
+        action: KernelCheckRepairActionV1,
+        applicability: KernelCheckRepairApplicabilityV1,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            pass,
+            action,
+            applicability,
+            message: message.into(),
+        }
+    }
+
+    pub const fn pass(&self) -> KernelCheckPassKindV1 {
+        self.pass
+    }
+
+    pub const fn action(&self) -> KernelCheckRepairActionV1 {
+        self.action
+    }
+
+    pub const fn applicability(&self) -> KernelCheckRepairApplicabilityV1 {
+        self.applicability
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for KernelCheckRepairV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "help[{}] ({:?}): {}",
+            self.action().code(),
+            self.applicability(),
+            self.message(),
+        )
+    }
+}
+
+pub fn kernel_check_repair_for_pass_v1(pass: KernelCheckPassKindV1) -> KernelCheckRepairV1 {
+    let (action, message) = match pass {
+        KernelCheckPassKindV1::TensorLayout => (
+            KernelCheckRepairActionV1::RepairTensorLayout,
+            "keep each value in the fragment ABI required by its consumer; otherwise insert a checked conversion or reload whose source projection creates a new compiler-derived layout root",
+        ),
+        KernelCheckPassKindV1::MemoryBounds => (
+            KernelCheckRepairActionV1::GuardMemoryAccess,
+            "guard every path to the access with the failed index < extent relation, or use a checked access with a defined tail value",
+        ),
+        KernelCheckPassKindV1::AtomicLegality => (
+            KernelCheckRepairActionV1::SelectSupportedAtomic,
+            "use an ordering, scope, width, and address space supported by the target capability, or replace the atomic with an ownership-preserving non-atomic design",
+        ),
+        KernelCheckPassKindV1::RaceFreedom => (
+            KernelCheckRepairActionV1::PartitionOrSynchronizeAccess,
+            "give concurrent invocations disjoint coordinates, use a legal atomic for the conflicting access, or establish the required synchronization edge",
+        ),
+        KernelCheckPassKindV1::HierarchicalOwnership => (
+            KernelCheckRepairActionV1::CorrectHierarchyOwnership,
+            "make the lane, subgroup, workgroup, and grid ownership sets disjoint and cover the declared output domain exactly",
+        ),
+        KernelCheckPassKindV1::BarrierConvergence => (
+            KernelCheckRepairActionV1::MakeBarrierControlUniform,
+            "move the barrier to control flow uniform at its execution scope, or restructure the branch so every required participant reaches the same barrier",
+        ),
+        KernelCheckPassKindV1::WorkgroupMemory => (
+            KernelCheckRepairActionV1::InitializeAndPublishWorkgroupMemory,
+            "initialize each workgroup-memory element before reading it and publish producer writes with the required barrier and memory ordering",
+        ),
+        KernelCheckPassKindV1::SemanticRefinement => (
+            KernelCheckRepairActionV1::MatchReferenceSemantics,
+            "make GPU output coordinates, guards, values, and numerical policy match the safe Rust reference under its Verus preconditions and invariants, then regenerate exact-boundary proof evidence",
+        ),
+        KernelCheckPassKindV1::Structural => (
+            KernelCheckRepairActionV1::RepairStructure,
+            "repair the malformed Kernel IR operation, type, attribute, or ownership relation before running the production PLIRON checks",
+        ),
+        KernelCheckPassKindV1::ControlFlow => (
+            KernelCheckRepairActionV1::RepairControlFlow,
+            "repair undefined successors, edge arguments, unreachable executable regions, or irreducible control flow before running dataflow checks",
+        ),
+    };
+    KernelCheckRepairV1::new(
+        pass,
+        action,
+        KernelCheckRepairApplicabilityV1::HasPlaceholders,
+        message,
+    )
+}
+
+pub fn tensor_layout_repair_for_error_v1(
+    error: &PlironTensorLayoutCheckErrorV1,
+) -> KernelCheckRepairV1 {
+    let message = error
+        .report()
+        .findings()
+        .iter()
+        .find_map(|finding| {
+            let PlironTensorLayoutFindingV1::Dataflow(issue) = finding else {
+                return None;
+            };
+            match issue.as_ref() {
+                PlironTensorLayoutDataflowIssueV1::ConsumerMismatch {
+                    producer,
+                    consumer,
+                    consumer_profile,
+                    operand,
+                    ..
+                } if *operand == fe2o3_kernel_ir::TensorOperandRoleV1::Accumulator => Some(format!(
+                "at block {} op {}, use an accumulator ABI compatible with producer profile {:?} instead of consumer profile {:?}, or insert an explicit checked conversion before the consumer",
+                consumer.block, consumer.operation, producer.profile, consumer_profile,
+            )),
+                PlironTensorLayoutDataflowIssueV1::ConsumerMismatch {
+                    producer,
+                    consumer,
+                    consumer_profile,
+                    operand,
+                    ..
+                } => Some(format!(
+                "before block {} op {}, convert or checked-reload producer profile {:?}'s accumulator into the {:?} fragment ABI required by consumer profile {:?}; source projection must retain the conversion as a new compiler-derived root",
+                consumer.block, consumer.operation, producer.profile, operand, consumer_profile,
+            )),
+                PlironTensorLayoutDataflowIssueV1::MergeConflict { first, second, .. } => Some(format!(
+                "convert the value from block {} op {} or block {} op {} so both CFG producers reach the join with one identical fragment layout",
+                first.producer.block,
+                first.producer.operation,
+                second.producer.block,
+                second.producer.operation,
+            )),
+            }
+        })
+        .unwrap_or_else(|| {
+            kernel_check_repair_for_pass_v1(KernelCheckPassKindV1::TensorLayout).message
+        });
+    KernelCheckRepairV1::new(
+        KernelCheckPassKindV1::TensorLayout,
+        KernelCheckRepairActionV1::RepairTensorLayout,
+        KernelCheckRepairApplicabilityV1::HasPlaceholders,
+        message,
+    )
+}
+
+fn write_repairs(
+    formatter: &mut fmt::Formatter<'_>,
+    repairs: &[KernelCheckRepairV1],
+) -> fmt::Result {
+    for repair in repairs {
+        write!(formatter, "\n{repair}")?;
+    }
+    Ok(())
+}
 
 /// Complete mandatory production sequence. This is one indivisible production
 /// pipeline: no lowering may occur between its passes.
@@ -119,6 +326,21 @@ pub enum ProductionPlironPreloweringErrorV1 {
     Semantic(PlironSemanticRefinementCheckErrorV1),
 }
 
+impl ProductionPlironPreloweringErrorV1 {
+    pub fn repair_hints(&self) -> Vec<KernelCheckRepairV1> {
+        let repair = match self {
+            Self::TensorLayout(error) => return vec![tensor_layout_repair_for_error_v1(error)],
+            Self::Bounds(_) => KernelCheckPassKindV1::MemoryBounds,
+            Self::Atomic(_) => KernelCheckPassKindV1::AtomicLegality,
+            Self::Race(_) => KernelCheckPassKindV1::RaceFreedom,
+            Self::Barrier(_) => KernelCheckPassKindV1::BarrierConvergence,
+            Self::Workgroup(_) => KernelCheckPassKindV1::WorkgroupMemory,
+            Self::Semantic(_) => KernelCheckPassKindV1::SemanticRefinement,
+        };
+        vec![kernel_check_repair_for_pass_v1(repair)]
+    }
+}
+
 impl fmt::Display for ProductionPlironPreloweringErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -129,7 +351,8 @@ impl fmt::Display for ProductionPlironPreloweringErrorV1 {
             Self::Barrier(error) => error.fmt(formatter),
             Self::Workgroup(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
-        }
+        }?;
+        write_repairs(formatter, &self.repair_hints())
     }
 }
 
@@ -314,6 +537,25 @@ pub enum ProductionPlironPreloweringErrorV2 {
     Semantic(PlironSemanticRefinementCheckErrorV1),
 }
 
+impl ProductionPlironPreloweringErrorV2 {
+    /// Every error from the unified production pass pipeline has at least one
+    /// actionable repair. Suggestions remain non-authoritative and are never
+    /// applied silently.
+    pub fn repair_hints(&self) -> Vec<KernelCheckRepairV1> {
+        let repair = match self {
+            Self::TensorLayout(error) => return vec![tensor_layout_repair_for_error_v1(error)],
+            Self::Bounds(_) => KernelCheckPassKindV1::MemoryBounds,
+            Self::Atomic(_) => KernelCheckPassKindV1::AtomicLegality,
+            Self::Race(_) => KernelCheckPassKindV1::RaceFreedom,
+            Self::Ownership(_) => KernelCheckPassKindV1::HierarchicalOwnership,
+            Self::Barrier(_) => KernelCheckPassKindV1::BarrierConvergence,
+            Self::Workgroup(_) => KernelCheckPassKindV1::WorkgroupMemory,
+            Self::Semantic(_) => KernelCheckPassKindV1::SemanticRefinement,
+        };
+        vec![kernel_check_repair_for_pass_v1(repair)]
+    }
+}
+
 impl fmt::Display for ProductionPlironPreloweringErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -325,7 +567,8 @@ impl fmt::Display for ProductionPlironPreloweringErrorV2 {
             Self::Barrier(error) => error.fmt(formatter),
             Self::Workgroup(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
-        }
+        }?;
+        write_repairs(formatter, &self.repair_hints())
     }
 }
 
@@ -482,6 +725,7 @@ mod tests {
                 sparse_indices: 1,
                 execution_layout: 1,
                 exact_trace: 1,
+                tensor_layout_dataflow: 1,
             }
         );
         assert_eq!(

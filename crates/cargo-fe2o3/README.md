@@ -44,11 +44,11 @@ closure/runtime-tree drift fail closed. Tool digests are operator-provisioned
 inputs and are remeasured; no machine-specific digest is compiled in.
 
 Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` is rejected, and
-`FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production test
-compiler and finalizer oracles. Those oracles exist only in `cargo-fe2o3` and
-`rustc-codegen-fe2o3` builds made with each package's
-`qualification-oracles-test-only` feature. The standalone KIR simulator is not
-selected through this variable; feature-free binaries reject it.
+`FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production
+compiler and finalizer test harnesses. Package-local test code that needs those
+oracles is compiled with `qualification-oracles-test-only`; the `cargo-fe2o3`
+CLI itself is feature-invariant and rejects the selector in every build. The
+standalone KIR simulator is not selected through this variable.
 
 Production requires `FE2O3_PRODUCTION_BUILD_CONFIG_V1` to name a canonical
 `fe2o3-production-build-config-v1` JSON recipe. The recipe pins the selected

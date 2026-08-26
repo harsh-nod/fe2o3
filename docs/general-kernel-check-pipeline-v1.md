@@ -32,10 +32,12 @@ bounds, malformed CFG, and resource-limit failures are errors and cannot fall
 back to unchecked lowering. The Kernel IR runner and Pliron function stage are
 both closed and do not accept caller-registered executable passes.
 
-The ranked Pliron path has its own fixed workload-neutral suffix:
-`memory-bounds -> atomic-legality -> race-freedom -> barrier-convergence ->
-workgroup-memory -> semantic-refinement`. Atomic legality runs before race
-analysis because race analysis may classify two atomic effects as compatible
+The ranked PLIRON path has one fixed workload-neutral V2 sequence:
+`tensor-layout -> memory-bounds -> atomic-legality -> race-freedom ->
+hierarchical-ownership -> barrier-convergence -> workgroup-memory ->
+semantic-refinement`. Tensor layout runs first because later reference
+refinement consumes its exact propagated result-layout facts. Atomic legality
+runs before race analysis because race analysis may classify two atomic effects as compatible
 only after explicit ordering, scope, memory-space, and target-capability
 requirements have been checked. Missing or invalid ordering/scope is
 `Rejected`; an absent matching target capability or unauthenticated
@@ -51,21 +53,37 @@ order:
    token.
 2. `kernel-control-flow-v1` derives reachable blocks, predecessors, dominance,
    and reducibility.
-3. `kernel-memory-bounds-v1` derives formal accesses and the exact runtime
+3. `kernel-tensor-layout-v1` validates each target-owned instruction ABI,
+   propagates fragment layouts through compiler-derived value roots retained by
+   authenticated source projection, and checks every tensor consumer against
+   its producer fact. Equal producer facts for one root join. Conflicting facts
+   and incompatible operand or accumulator uses are compile-time errors. A
+   checked conversion or reload can create a new root only through source
+   projection; a detached PLIRON layout assertion grants no authority.
+4. `kernel-memory-bounds-v1` derives formal accesses and the exact runtime
    extents still needed to close each access. Its Pliron ranked-memory form
    constant-folds static dimensions and runs a forward must-analysis: a strict
    `index < extent` relation is usable only when it holds on every incoming CFG
    edge. Dynamic extents remain bound to the exact ranked view SSA value (or
    its exact runtime-shape operand), so a guard for another view cannot prove
    the access.
-4. `kernel-race-freedom-v1` reuses the same formal-memory extraction to report
+5. `kernel-race-freedom-v1` reuses the same formal-memory extraction to report
    alias requirements and possible inter-invocation write conflicts.
-5. `kernel-barrier-convergence-v1` rejects barriers controlled by values that
+6. `kernel-barrier-convergence-v1` rejects barriers controlled by values that
    are too varying for the participating scope.
-6. `kernel-workgroup-memory-v1` performs a forward must-analysis. A load is
+7. `kernel-workgroup-memory-v1` performs a forward must-analysis. A load is
    accepted only when every incoming path has written and published the same
    LDS region. Every new store starts a new epoch and invalidates the prior
    publication until another workgroup-memory barrier.
+
+The ranked V2 sequence uses the same tensor, bounds, race, barrier, and
+workgroup stages. It additionally places `kernel-atomic-legality-v1` before
+race analysis, `kernel-hierarchical-ownership-v1` after race analysis, and
+`kernel-semantic-refinement-v1` last. Semantic refinement compares GPU output
+coordinates, guards, values, effects, and numerical policy with the safe Rust
+reference contract. For tensor results it also requires the reference
+obligation to name the exact result root produced by layout dataflow, with the
+same component count and scalar contract.
 
 No transformation may run between these passes. A structurally invalid module
 stops after pass 1. Otherwise all passes run so independent findings are
@@ -87,6 +105,16 @@ Every pass returns one of three typed states:
 A clean report is still not proof of source correspondence or runtime safety.
 Those require the same retained frontend owner and authenticated runtime facts.
 
+Every error returned by the unified eight-pass production PLIRON pipeline also
+contains at least one `KernelCheckRepairV1`. A repair has a stable action code,
+the owning pass, an applicability classification, and an actionable message.
+The compiler prints the repair as `help[FE2O3-FIX-*]` at both the raw
+production-pipeline and production-session APIs. A suggestion is never applied
+silently. Layout dataflow diagnostics include both producer and consumer sites
+and profiles;
+when no unique edit is sound, the repair is marked `HasPlaceholders` rather
+than being presented as machine-applicable.
+
 ## General Checks And Algorithm Contracts
 
 Safety mechanics are kernel-independent. The shared pipeline does not know
@@ -94,11 +122,13 @@ what GEMM, softmax, attention, or convolution means:
 
 | Existing failure class | General owner |
 |---|---|
+| incompatible MFMA/tensor producer, CFG join, operand, accumulator, or wave layout | tensor-layout dataflow pass over authenticated value roots |
 | out-of-bounds loads/stores | memory-bounds pass plus a frontend-supplied dimensional description |
 | invalid atomic ordering/scope or unsupported atomic target requirement | atomic-legality pass plus target/coherence admission |
 | duplicate lane/workgroup writes and LDS write conflicts | race-freedom pass |
 | missing publish, read-before-wait, or stale/reused LDS data | workgroup-memory pass |
 | divergent barriers | barrier-convergence pass |
+| GPU output coordinates, values, effects, or numerical policy differ from a safe Rust/Verus reference | semantic-refinement pass joined to bounds, ownership, tensor-layout, and exact proof-boundary evidence |
 
 Algorithmic equations are intentionally not generalized by name. Accumulator
 carry, tail values, and alpha/beta epilogues belong in fixed contract checkers
@@ -121,7 +151,13 @@ multiple kernels. Bounds and race analysis share one formal-memory extraction.
 Control-flow successors are built once, and workgroup-memory facts use a
 descending worklist that revisits only successors of changed blocks.
 
-The Pliron ranked-memory stage performs one structural traversal, one CFG
+The PLIRON tensor-layout analysis performs one bounded operation traversal,
+one deterministic producer join per result root, and three consumer checks per
+tensor site. Facts are stored in an ordered root map; conflicted roots are
+tracked separately. Work is linear in tensor sites and dataflow edges apart
+from ordered-map lookup, and is capped at 16,384 roots and 65,536 edges.
+
+The PLIRON ranked-memory stage performs one structural traversal, one CFG
 construction, and one descending fixed point. It indexes at most one strict
 relation per block and stores must-facts in dense bitsets; predecessor
 intersection is word-wise rather than cloning hash sets. Its deterministic

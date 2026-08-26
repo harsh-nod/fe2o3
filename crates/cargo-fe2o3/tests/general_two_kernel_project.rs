@@ -47,10 +47,11 @@ impl ExternalProject {
     fn command(&self, args: &[OsString]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
         command
+            .arg("__fe2o3-qualification-harness-v1")
             .args(args)
             .current_dir(self.fixture.join("src"))
             .env("CARGO", env!("CARGO_BIN_EXE_cargo-fe2o3-cargo-fixture"))
-            .env("FE2O3_BACKEND", &self.backend)
+            .env("FE2O3_QUALIFICATION_BACKEND_V1", &self.backend)
             .env("FE2O3_TARGET", "gfx942")
             .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
             .env("FE2O3_TEST_CARGO_LOG", &self.log)

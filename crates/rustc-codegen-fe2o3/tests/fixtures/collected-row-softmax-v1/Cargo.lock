@@ -393,6 +393,7 @@ version = "0.1.0"
 name = "fe2o3-amdgcn-model"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
@@ -513,7 +514,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
- "fe2o3-worker-v2-bundle",
+ "fe2o3-runtime-protocol",
  "libc",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -650,6 +651,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-runtime-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco-finalize",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-rustc-front"
 version = "0.1.0"
 dependencies = [
@@ -687,20 +698,6 @@ dependencies = [
  "sha2 0.11.0",
  "syn 2.0.119",
  "toml",
-]
-
-[[package]]
-name = "fe2o3-worker-v2-bundle"
-version = "0.1.0"
-dependencies = [
- "fe2o3-artifact-transaction",
- "fe2o3-artifacts",
- "fe2o3-build-authority",
- "fe2o3-compiler-ffi",
- "fe2o3-hsaco-finalize",
- "fe2o3-kernel-descriptor",
- "fe2o3-rustc-invocation",
- "sha2 0.11.0",
 ]
 
 [[package]]

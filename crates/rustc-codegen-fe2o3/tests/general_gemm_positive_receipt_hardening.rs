@@ -24,7 +24,7 @@ fn cargo_target_directory(workspace: &Path) -> PathBuf {
 }
 
 fn managed_build(workspace: &Path, manifest: &Path, bin: &str, artifacts: &Path) -> Output {
-    cargo_fe2o3::non_production_command(workspace)
+    cargo_fe2o3::qualification_command(workspace)
         .current_dir(workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(manifest)

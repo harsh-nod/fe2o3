@@ -5,12 +5,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Pliron-independent AMDGPU target model and strict gfx942 lowering for fe2o3."
+description = "Pliron-independent AMDGPU target model and strict gfx942/gfx950 lowering for fe2o3."
 
 [lib]
 name = "fe2o3_amdgcn_model"
 
 [dependencies]
+fe2o3-amd-target.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-kernel-analysis = { workspace = true, default-features = false }

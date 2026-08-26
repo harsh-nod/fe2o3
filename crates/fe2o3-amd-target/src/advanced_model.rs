@@ -17,6 +17,9 @@ impl AdvancedCapabilityModelRevision {
     /// Atomic admission model with evidence-correct legalizability decisions.
     pub const V2: Self = Self(2);
 
+    /// Adds reviewed gfx950 low-precision MFMA and LDS-transpose decisions.
+    pub const V3: Self = Self(3);
+
     /// Returns the stable numeric revision for bounded encoders.
     pub const fn get(self) -> u16 {
         self.0
@@ -25,7 +28,7 @@ impl AdvancedCapabilityModelRevision {
 
 /// Current advanced capability model revision.
 pub const ADVANCED_CAPABILITY_MODEL_REVISION: AdvancedCapabilityModelRevision =
-    AdvancedCapabilityModelRevision::V2;
+    AdvancedCapabilityModelRevision::V3;
 
 /// Review state for one advanced target capability.
 ///

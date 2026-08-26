@@ -333,6 +333,7 @@ struct ProjectedMfmaAccumulatorV1 {
     contract: SemanticMfmaAccumulatorContractV1,
     lane_root: u64,
     value_root: u64,
+    flow_root: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3009,6 +3010,7 @@ fn transfer_capability_terminator_v1(
                             contract: *contract,
                             lane_root,
                             value_root: root,
+                            flow_root: root,
                         },
                     ))
                 }
@@ -3024,9 +3026,13 @@ fn transfer_capability_terminator_v1(
             ..
         } => match authenticate_tensor_instruction_v1(call, state, *lhs, *rhs, *accumulator) {
             Ok(authenticated) if destination.place().ty() == *accumulator_fragment => {
-                // Keep the accumulator-chain root stable across a loop backedge.
-                // The site result has its own retained root in the binding below.
-                let result = authenticated.accumulator;
+                // The semantic value root remains stable for loop refinement,
+                // while the flow root identifies this exact tensor result for
+                // layout propagation into a later instruction.
+                let result = ProjectedMfmaAccumulatorV1 {
+                    flow_root: root,
+                    ..authenticated.accumulator
+                };
                 let binding = tensor_site_binding_v1(
                     authenticated,
                     root,
@@ -3249,7 +3255,7 @@ fn tensor_site_binding_v1(
         tensor_capability_root_v1(2, &[authenticated.accumulator.lane_root]),
         tensor_operand_root_v1(authenticated.lhs),
         tensor_operand_root_v1(authenticated.rhs),
-        tensor_capability_root_v1(5, &[authenticated.accumulator.value_root]),
+        tensor_capability_root_v1(6, &[authenticated.accumulator.flow_root]),
         tensor_capability_root_v1(6, &[result_root]),
         argument_count,
     )
@@ -14757,6 +14763,7 @@ mod tests {
                         contract: mfma_accumulator_contract(),
                         lane_root: 20,
                         value_root: 30,
+                        flow_root: 30,
                     },
                 )),
             ),
@@ -14810,10 +14817,27 @@ mod tests {
         assert_eq!(binding.argument_count(), 4);
         assert_eq!(
             binding.accumulator_root(),
-            tensor_capability_root_v1(5, &[30])
+            tensor_capability_root_v1(6, &[30])
         );
         assert_eq!(binding.result_root(), tensor_capability_root_v1(6, &[40]));
         assert_ne!(binding.accumulator_root(), binding.result_root());
+        let chained = AuthenticatedTensorInstructionV1 {
+            accumulator: ProjectedMfmaAccumulatorV1 {
+                flow_root: 40,
+                ..authenticated.accumulator
+            },
+            ..authenticated
+        };
+        let chained_binding = tensor_site_binding_v1(chained, 50, 4).unwrap();
+        assert_eq!(
+            chained_binding.accumulator_root(),
+            binding.result_root(),
+            "the next MFMA must consume the exact prior-result layout root",
+        );
+        assert_eq!(
+            chained.accumulator.value_root, 30,
+            "layout flow must not rewrite the semantic loop-carried value root",
+        );
         assert!(tensor_site_binding_v1(authenticated, 40, 0).is_none());
     }
 

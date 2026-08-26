@@ -20,6 +20,7 @@ use dialect_proof::{
     RequireEffectRefinementOp, RequireNumericalRefinementOp, RequireRefinementOp,
     RequireTensorRefinementOp,
 };
+use fe2o3_kernel_ir::{MatrixElement, TensorOperandRoleV1};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     common_traits::Named,
@@ -1127,6 +1128,8 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     }
     let mut policy_checked_reference_obligations = 0;
     let mut proved_reference_pairs = HashSet::new();
+    analyses.prepare_tensor_layout_dataflow(context, function);
+    let tensor_layout_dataflow = analyses.tensor_layout_dataflow().ok();
     for (block, operation, _, result_root, _, actual, reference, components) in tensor_requirements
     {
         let actual_fact = expressions.typed_root_fact(actual);
@@ -1141,6 +1144,15 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 .count()
         });
         let mut seen = HashSet::new();
+        let propagated_layout = result_root
+            .and_then(|root| tensor_layout_dataflow.and_then(|dataflow| dataflow.fact(root)));
+        let valid_layout = propagated_layout.is_some_and(|fact| {
+            fact.layout.role == TensorOperandRoleV1::Accumulator
+                && usize::from(fact.layout.fragment_elements) == components.len()
+                && tensor_element_scalar(fact.layout.element)
+                    .zip(actual_fact.map(|actual| actual.scalar))
+                    .is_some_and(|(layout, actual)| layout == actual)
+        });
         let valid_components = result_root.is_some()
             && !components.is_empty()
             && root_component_count == components.len()
@@ -1160,7 +1172,17 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                             .zip(expressions.typed_root_fact(*sequential))
                             .is_some_and(|(aggregate, component)| aggregate == component)
                 });
-        if !valid_aggregate || !valid_components {
+        if !valid_layout {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "tensor refinement result is not the exact propagated accumulator layout and scalar contract named by the authenticated tensor site",
+                },
+            );
+        } else if !valid_aggregate || !valid_components {
             push(
                 &mut findings,
                 PlironSemanticRefinementFindingV1::ReferenceContractRejected {
@@ -1502,6 +1524,17 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         policy_checked_collective_contracts,
         typed_root_commitments,
         effect_refinement,
+    }
+}
+
+fn tensor_element_scalar(element: MatrixElement) -> Option<SemanticTypedScalarV1> {
+    match element {
+        MatrixElement::F32 => {
+            SemanticTypedScalarV1::new(dialect_kernel::SemanticScalarKindAttr::Float, 32)
+        }
+        // BF16 is currently an operand storage scalar, not a semantic result
+        // scalar in the typed-reference dialect.
+        MatrixElement::Bf16 => None,
     }
 }
 

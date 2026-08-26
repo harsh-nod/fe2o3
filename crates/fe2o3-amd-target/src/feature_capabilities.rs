@@ -193,6 +193,7 @@ impl Fp8Formats {
 
     pub(crate) const NONE: Self = Self(0);
     pub(crate) const FNUZ: Self = Self(Self::E4M3_FNUZ | Self::E5M2_FNUZ);
+    pub(crate) const OCP: Self = Self(Self::E4M3_OCP | Self::E5M2_OCP);
 
     /// Returns whether the exact scalar encoding is reviewed for the target.
     ///
@@ -219,6 +220,7 @@ impl Fp8Formats {
 pub enum MxFormat {
     Fp8,
     Bf8,
+    Fp4,
 }
 
 /// A compact set of block-scaled microscaling formats.
@@ -228,14 +230,17 @@ pub struct MxFormats(u8);
 impl MxFormats {
     const FP8: u8 = 1 << 0;
     const BF8: u8 = 1 << 1;
+    const FP4: u8 = 1 << 2;
 
     pub(crate) const NONE: Self = Self(0);
+    pub(crate) const GFX950_REVIEWED: Self = Self(Self::FP8 | Self::BF8 | Self::FP4);
 
     /// Returns whether the target has a reviewed native MX format contract.
     pub const fn contains(self, format: MxFormat) -> bool {
         let flag = match format {
             MxFormat::Fp8 => Self::FP8,
             MxFormat::Bf8 => Self::BF8,
+            MxFormat::Fp4 => Self::FP4,
         };
         self.0 & flag != 0
     }
@@ -254,21 +259,27 @@ pub enum MfmaFamily {
     F32FromBf16,
     F32FromFp8Fnuz,
     F32FromBf8Fnuz,
+    F32FromFp8Ocp,
+    F32FromBf8Ocp,
+    F32FromFp4Ocp,
     F64FromF64,
     I32FromI8,
 }
 
 /// A compact set of reviewed MFMA numerical families.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct MfmaFamilies(u8);
+pub struct MfmaFamilies(u16);
 
 impl MfmaFamilies {
-    const F32_FROM_F16: u8 = 1 << 0;
-    const F32_FROM_BF16: u8 = 1 << 1;
-    const F32_FROM_FP8_FNUZ: u8 = 1 << 2;
-    const F32_FROM_BF8_FNUZ: u8 = 1 << 3;
-    const F64_FROM_F64: u8 = 1 << 4;
-    const I32_FROM_I8: u8 = 1 << 5;
+    const F32_FROM_F16: u16 = 1 << 0;
+    const F32_FROM_BF16: u16 = 1 << 1;
+    const F32_FROM_FP8_FNUZ: u16 = 1 << 2;
+    const F32_FROM_BF8_FNUZ: u16 = 1 << 3;
+    const F64_FROM_F64: u16 = 1 << 4;
+    const I32_FROM_I8: u16 = 1 << 5;
+    const F32_FROM_FP8_OCP: u16 = 1 << 6;
+    const F32_FROM_BF8_OCP: u16 = 1 << 7;
+    const F32_FROM_FP4_OCP: u16 = 1 << 8;
 
     pub(crate) const NONE: Self = Self(0);
     pub(crate) const GFX942_REVIEWED: Self = Self(
@@ -277,6 +288,8 @@ impl MfmaFamilies {
             | Self::F32_FROM_FP8_FNUZ
             | Self::F32_FROM_BF8_FNUZ,
     );
+    pub(crate) const GFX950_REVIEWED: Self =
+        Self(Self::F32_FROM_FP8_OCP | Self::F32_FROM_BF8_OCP | Self::F32_FROM_FP4_OCP);
 
     /// Returns whether the numerical family has a reviewed target mapping.
     ///
@@ -288,6 +301,9 @@ impl MfmaFamilies {
             MfmaFamily::F32FromBf16 => Self::F32_FROM_BF16,
             MfmaFamily::F32FromFp8Fnuz => Self::F32_FROM_FP8_FNUZ,
             MfmaFamily::F32FromBf8Fnuz => Self::F32_FROM_BF8_FNUZ,
+            MfmaFamily::F32FromFp8Ocp => Self::F32_FROM_FP8_OCP,
+            MfmaFamily::F32FromBf8Ocp => Self::F32_FROM_BF8_OCP,
+            MfmaFamily::F32FromFp4Ocp => Self::F32_FROM_FP4_OCP,
             MfmaFamily::F64FromF64 => Self::F64_FROM_F64,
             MfmaFamily::I32FromI8 => Self::I32_FROM_I8,
         };
@@ -295,6 +311,43 @@ impl MfmaFamilies {
     }
 
     /// Returns whether no MFMA numerical family has been reviewed.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// One gfx950 LDS transpose-load instruction.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum LdsTransposeInstruction {
+    DsReadTr4B64,
+    DsReadTr8B64,
+    DsReadTr16B64,
+}
+
+/// A compact set of reviewed LDS transpose-load instructions.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LdsTransposeInstructions(u8);
+
+impl LdsTransposeInstructions {
+    const TR4_B64: u8 = 1 << 0;
+    const TR8_B64: u8 = 1 << 1;
+    const TR16_B64: u8 = 1 << 2;
+
+    pub(crate) const NONE: Self = Self(0);
+    pub(crate) const GFX950_REVIEWED: Self = Self(Self::TR4_B64 | Self::TR8_B64 | Self::TR16_B64);
+
+    /// Returns whether the exact transpose-load instruction is reviewed.
+    pub const fn contains(self, instruction: LdsTransposeInstruction) -> bool {
+        let flag = match instruction {
+            LdsTransposeInstruction::DsReadTr4B64 => Self::TR4_B64,
+            LdsTransposeInstruction::DsReadTr8B64 => Self::TR8_B64,
+            LdsTransposeInstruction::DsReadTr16B64 => Self::TR16_B64,
+        };
+        self.0 & flag != 0
+    }
+
+    /// Returns whether no LDS transpose-load instruction has been reviewed.
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
@@ -335,13 +388,24 @@ pub enum LaunchBoundsMetadata {
 pub(crate) struct AdvancedTargetCapabilities {
     pub(crate) profile_status: AdvancedCapabilityStatus,
     pub(crate) workgroup_limits: Option<WorkgroupLimits>,
+    pub(crate) workgroup_limits_status: AdvancedCapabilityStatus,
     pub(crate) standard_atomic_widths: AtomicWidths,
     pub(crate) standard_atomic_scopes: AtomicScopes,
     pub(crate) standard_atomic_orderings: AtomicOrderings,
+    pub(crate) standard_atomics_status: AdvancedCapabilityStatus,
     pub(crate) native_split_barriers: AdvancedCapabilityStatus,
     pub(crate) fp8_formats: Fp8Formats,
+    pub(crate) fp8_formats_status: AdvancedCapabilityStatus,
+    pub(crate) fp8_formats_nonmember_status: AdvancedCapabilityStatus,
     pub(crate) mx_formats: MxFormats,
+    pub(crate) mx_formats_status: AdvancedCapabilityStatus,
+    pub(crate) mx_formats_nonmember_status: AdvancedCapabilityStatus,
     pub(crate) mfma_families: MfmaFamilies,
+    pub(crate) mfma_families_status: AdvancedCapabilityStatus,
+    pub(crate) mfma_families_nonmember_status: AdvancedCapabilityStatus,
+    pub(crate) lds_transpose_instructions: LdsTransposeInstructions,
+    pub(crate) lds_transpose_instructions_status: AdvancedCapabilityStatus,
+    pub(crate) lds_transpose_instructions_nonmember_status: AdvancedCapabilityStatus,
     pub(crate) device_printf: AdvancedCapabilityStatus,
     pub(crate) device_trap: AdvancedCapabilityStatus,
     pub(crate) device_debug_trap: AdvancedCapabilityStatus,
@@ -359,13 +423,24 @@ impl AdvancedTargetCapabilities {
             Self {
                 profile_status: AdvancedCapabilityStatus::Supported,
                 workgroup_limits: Some(WorkgroupLimits::GFX942),
+                workgroup_limits_status: AdvancedCapabilityStatus::Supported,
                 standard_atomic_widths: AtomicWidths::GFX942_LEGALIZABLE,
                 standard_atomic_scopes: AtomicScopes::ALL,
                 standard_atomic_orderings: AtomicOrderings::ALL,
+                standard_atomics_status: AdvancedCapabilityStatus::Supported,
                 native_split_barriers: AdvancedCapabilityStatus::Unsupported,
                 fp8_formats: Fp8Formats::FNUZ,
+                fp8_formats_status: AdvancedCapabilityStatus::Supported,
+                fp8_formats_nonmember_status: AdvancedCapabilityStatus::Unsupported,
                 mx_formats: MxFormats::NONE,
+                mx_formats_status: AdvancedCapabilityStatus::Supported,
+                mx_formats_nonmember_status: AdvancedCapabilityStatus::Unsupported,
                 mfma_families: MfmaFamilies::GFX942_REVIEWED,
+                mfma_families_status: AdvancedCapabilityStatus::Supported,
+                mfma_families_nonmember_status: AdvancedCapabilityStatus::Unsupported,
+                lds_transpose_instructions: LdsTransposeInstructions::NONE,
+                lds_transpose_instructions_status: AdvancedCapabilityStatus::Supported,
+                lds_transpose_instructions_nonmember_status: AdvancedCapabilityStatus::Unsupported,
                 // Device printf additionally needs an allowlisted device
                 // library ABI and compatible host runtime.
                 device_printf: AdvancedCapabilityStatus::RequiresRuntimeEvidence,
@@ -381,6 +456,38 @@ impl AdvancedTargetCapabilities {
                 flat_workgroup_size_metadata: AdvancedCapabilityStatus::Supported,
                 waves_per_execution_unit_metadata: AdvancedCapabilityStatus::Supported,
             }
+        } else if processor == "gfx950" {
+            Self {
+                profile_status: AdvancedCapabilityStatus::Supported,
+                workgroup_limits: None,
+                workgroup_limits_status: AdvancedCapabilityStatus::Unreviewed,
+                standard_atomic_widths: AtomicWidths::NONE,
+                standard_atomic_scopes: AtomicScopes::NONE,
+                standard_atomic_orderings: AtomicOrderings::NONE,
+                standard_atomics_status: AdvancedCapabilityStatus::Unreviewed,
+                native_split_barriers: AdvancedCapabilityStatus::Unreviewed,
+                fp8_formats: Fp8Formats::OCP,
+                fp8_formats_status: AdvancedCapabilityStatus::Supported,
+                fp8_formats_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
+                mx_formats: MxFormats::GFX950_REVIEWED,
+                mx_formats_status: AdvancedCapabilityStatus::Supported,
+                mx_formats_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
+                mfma_families: MfmaFamilies::GFX950_REVIEWED,
+                mfma_families_status: AdvancedCapabilityStatus::Supported,
+                mfma_families_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
+                lds_transpose_instructions: LdsTransposeInstructions::GFX950_REVIEWED,
+                lds_transpose_instructions_status: AdvancedCapabilityStatus::Supported,
+                lds_transpose_instructions_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
+                device_printf: AdvancedCapabilityStatus::Unreviewed,
+                device_trap: AdvancedCapabilityStatus::Unreviewed,
+                device_debug_trap: AdvancedCapabilityStatus::Unreviewed,
+                device_clock_counter: AdvancedCapabilityStatus::Unreviewed,
+                device_profiling_marker: AdvancedCapabilityStatus::Unreviewed,
+                max_workgroup_size: AdvancedCapabilityStatus::Unreviewed,
+                min_workgroups_per_compute_unit: AdvancedCapabilityStatus::Unreviewed,
+                flat_workgroup_size_metadata: AdvancedCapabilityStatus::Unreviewed,
+                waves_per_execution_unit_metadata: AdvancedCapabilityStatus::Unreviewed,
+            }
         } else {
             Self::unreviewed()
         }
@@ -390,13 +497,24 @@ impl AdvancedTargetCapabilities {
         Self {
             profile_status: AdvancedCapabilityStatus::Unreviewed,
             workgroup_limits: None,
+            workgroup_limits_status: AdvancedCapabilityStatus::Unreviewed,
             standard_atomic_widths: AtomicWidths::NONE,
             standard_atomic_scopes: AtomicScopes::NONE,
             standard_atomic_orderings: AtomicOrderings::NONE,
+            standard_atomics_status: AdvancedCapabilityStatus::Unreviewed,
             native_split_barriers: AdvancedCapabilityStatus::Unreviewed,
             fp8_formats: Fp8Formats::NONE,
+            fp8_formats_status: AdvancedCapabilityStatus::Unreviewed,
+            fp8_formats_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
             mx_formats: MxFormats::NONE,
+            mx_formats_status: AdvancedCapabilityStatus::Unreviewed,
+            mx_formats_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
             mfma_families: MfmaFamilies::NONE,
+            mfma_families_status: AdvancedCapabilityStatus::Unreviewed,
+            mfma_families_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
+            lds_transpose_instructions: LdsTransposeInstructions::NONE,
+            lds_transpose_instructions_status: AdvancedCapabilityStatus::Unreviewed,
+            lds_transpose_instructions_nonmember_status: AdvancedCapabilityStatus::Unreviewed,
             device_printf: AdvancedCapabilityStatus::Unreviewed,
             device_trap: AdvancedCapabilityStatus::Unreviewed,
             device_debug_trap: AdvancedCapabilityStatus::Unreviewed,
@@ -409,13 +527,15 @@ impl AdvancedTargetCapabilities {
         }
     }
 
-    pub(crate) const fn reviewed_set_member(self, contains: bool) -> AdvancedCapabilityStatus {
-        if matches!(self.profile_status, AdvancedCapabilityStatus::Unreviewed) {
-            AdvancedCapabilityStatus::Unreviewed
-        } else if contains {
-            AdvancedCapabilityStatus::Supported
+    pub(crate) const fn reviewed_set_member(
+        member_status: AdvancedCapabilityStatus,
+        nonmember_status: AdvancedCapabilityStatus,
+        contains: bool,
+    ) -> AdvancedCapabilityStatus {
+        if contains {
+            member_status
         } else {
-            AdvancedCapabilityStatus::Unsupported
+            nonmember_status
         }
     }
 
@@ -423,6 +543,6 @@ impl AdvancedTargetCapabilities {
         self,
         query: StandardAtomicQuery,
     ) -> AtomicLegalizability {
-        evaluate_gfx942_atomic_query(self.profile_status, query)
+        evaluate_gfx942_atomic_query(self.standard_atomics_status, query)
     }
 }

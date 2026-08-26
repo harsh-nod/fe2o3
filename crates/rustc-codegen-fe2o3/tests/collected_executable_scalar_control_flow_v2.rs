@@ -37,6 +37,7 @@ use reserved_fe2o3_symbols::{
 use sha2::{Digest as _, Sha256};
 
 const PIPELINE: &str = "collected-executable-scalar-control-flow-v2";
+const INTERNAL_QUALIFICATION_HARNESS_ARG: &str = "__fe2o3-qualification-harness-v1";
 const FIXTURE: &str = include_str!("fixtures/executable-scalar-control-flow-v1.rs");
 const SCALAR_GEMM_PIPELINE: &str = "collected-scalar-gemm-v1";
 const SCALAR_GEMM_FIXTURE: &str = include_str!("../../../examples/scalar_gemm_v1/src/kernel.rs");
@@ -3458,6 +3459,7 @@ fn compile_external_row_softmax_crate_with_broker(
         .command()
         .expect("verify test-owned cargo-fe2o3 before launch");
     command
+        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(workspace)
         .args(["build", "--manifest-path"])
         .arg(&manifest)
@@ -3883,6 +3885,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         .command()
         .expect("verify pinned cargo-fe2o3 before launch");
     command
+        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(workspace)
         .args(["build", "--manifest-path"])
         .arg(&manifest)
@@ -5886,6 +5889,7 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
         .command()
         .expect("verify test-owned cargo-fe2o3 before tiled launch");
     command
+        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(&workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
@@ -5942,6 +5946,7 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
         .command()
         .expect("verify test-owned cargo-fe2o3 before LDS launch");
     command
+        .arg(INTERNAL_QUALIFICATION_HARNESS_ARG)
         .current_dir(&workspace)
         .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
