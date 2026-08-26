@@ -16,14 +16,12 @@ use quote::{format_ident, quote};
 use reserved_fe2o3_symbols::{
     CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, GeneratedHostContractIdV3, KERNEL_PREFIX,
     KERNEL_REGISTRATION_KIND_KERNEL, KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
-    KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_MAGIC,
-    KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
+    KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
     KERNEL_REGISTRATION_VERSION_V3, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
     REFERENCE_BINDING_REGISTRATION_KIND_V1, REFERENCE_BINDING_REGISTRATION_MAGIC_V1,
     REFERENCE_BINDING_REGISTRATION_PREFIX_V1, REFERENCE_BINDING_REGISTRATION_VERSION_V1,
-    RESERVED_ROOT, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
-    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, artifact_length_symbol_v1, artifact_pointer_symbol_v1,
-    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    RESERVED_ROOT, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_kernel_binding_id_v1,
+    host_kernel_symbol_v1,
 };
 use syn::{
     Data, DeriveInput, Expr, ExprArray, FnArg, ForeignItem, GenericArgument, ItemFn,
@@ -980,25 +978,18 @@ fn expand_kernel_with_imports(
         );
     }
 
-    expand_legacy_kernel_with_imports(
-        input,
-        options,
-        device_import,
-        device_path,
-        host_import,
-        crate_binding,
-    )
+    debug_assert!(host_import.is_none());
+    debug_assert!(crate_binding.is_none());
+    expand_device_kernel_with_imports(input, options, device_import, device_path)
 }
 
-fn expand_legacy_kernel_with_imports(
+fn expand_device_kernel_with_imports(
     mut input: ItemFn,
     options: KernelOptions,
     device_import: &proc_macro2::TokenStream,
     device_path: Option<&proc_macro2::TokenStream>,
-    host_import: Option<&proc_macro2::TokenStream>,
-    crate_binding: Option<CrateBindingIdV1>,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let mode = options.mode;
+    debug_assert_eq!(options.mode, KernelMode::Basic);
     validate_kernel_assembly_boundary(&input, options.unsafe_assembly)?;
     if options.control_flow.is_some()
         && options
@@ -1009,10 +1000,6 @@ fn expand_legacy_kernel_with_imports(
             &input.sig,
             "unsafe assembly with control_flow effects cannot participate in a structured control_flow V1 contract",
         ));
-    }
-    if mode == KernelMode::Typed {
-        validate_typed_kernel_signature(&input)?;
-        validate_typed_kernel_symbol_stem(&input.sig.ident)?;
     }
     validate_kernel_source_safety(&input, options.unsafe_assembly.is_some())?;
     validate_kernel_signature(&input)?;
@@ -1030,25 +1017,11 @@ fn expand_legacy_kernel_with_imports(
         ));
     }
 
-    let kernel_binding = crate_binding.map(|crate_binding| {
-        derive_kernel_binding_id_v1(
-            crate_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            &original_name,
-            &original_name,
-        )
-    });
-    let internal_ident = match kernel_binding {
-        Some(binding) => format_ident!("__fe2o3_host_kernel_v1_{}", binding.to_hex()),
-        None => format_ident!("{KERNEL_PREFIX}{original_name}"),
-    };
+    let internal_ident = format_ident!("{KERNEL_PREFIX}{original_name}");
     let name_marker_ident = format_ident!("__fe2o3_kernel_name_{original_name}");
     let type_marker_ident = format_ident!("__fe2o3_kernel_marker_{original_name}");
     let registration_ident = format_ident!("{KERNEL_REGISTRATION_PREFIX}{original_name}");
-    let registration_kind = match mode {
-        KernelMode::Basic => KERNEL_REGISTRATION_KIND_KERNEL,
-        KernelMode::Typed => KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
-    };
+    let registration_kind = KERNEL_REGISTRATION_KIND_KERNEL;
     let marker_value = syn::LitStr::new(&original_name, original_ident.span());
     let export_value = syn::LitStr::new(&original_name, original_ident.span());
     let argument_types = input
@@ -1071,71 +1044,15 @@ fn expand_legacy_kernel_with_imports(
     let fallback_device_import = device_path.is_none().then_some(device_import);
     input.sig.ident = internal_ident.clone();
 
-    let (registration_type, registration_value) = match (mode, crate_binding, kernel_binding) {
-        (KernelMode::Basic, None, None) => (
-            quote!((u64, u16, u16, &'static str, &'static str, #function_pointer)),
-            quote!((
-                #KERNEL_REGISTRATION_MAGIC,
-                #KERNEL_REGISTRATION_VERSION_V1,
-                #registration_kind,
-                #marker_value,
-                #export_value,
-                #internal_ident,
-            )),
-        ),
-        (KernelMode::Typed, Some(crate_binding), Some(kernel_binding)) => {
-            let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
-            let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
-            (
-                quote!((
-                    u64,
-                    u16,
-                    u16,
-                    &'static str,
-                    &'static str,
-                    &'static str,
-                    &'static str,
-                    #function_pointer,
-                )),
-                quote!((
-                    #KERNEL_REGISTRATION_MAGIC,
-                    #KERNEL_REGISTRATION_VERSION_V2,
-                    #registration_kind,
-                    #marker_value,
-                    #export_value,
-                    #crate_binding,
-                    #kernel_binding,
-                    #internal_ident,
-                )),
-            )
-        }
-        _ => unreachable!("kernel mode and binding identity must agree"),
-    };
-    let cross_crate_typed_impl = match (mode, crate_binding, kernel_binding) {
-        (KernelMode::Typed, Some(crate_binding), Some(kernel_binding)) => {
-            let crate_binding = syn::LitStr::new(&crate_binding.to_hex(), original_ident.span());
-            let kernel_binding = syn::LitStr::new(&kernel_binding.to_hex(), original_ident.span());
-            quote! {
-                unsafe impl #device_api::CrossCrateTypedKernelV1
-                    for #type_marker_ident
-                {
-                    const REGISTRATION_VERSION: u16 = #KERNEL_REGISTRATION_VERSION_V2;
-                    const REGISTRATION_KIND: u16 =
-                        #KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
-                    const CRATE_BINDING: &'static str = #crate_binding;
-                    const KERNEL_BINDING: &'static str = #kernel_binding;
-                }
-            }
-        }
-        _ => quote! {},
-    };
-    let export_attribute = match kernel_binding {
-        Some(binding) => {
-            let symbol = syn::LitStr::new(&host_kernel_symbol_v1(binding), original_ident.span());
-            quote!(#[unsafe(export_name = #symbol)])
-        }
-        None => quote!(#[unsafe(no_mangle)]),
-    };
+    let registration_type = quote!((u64, u16, u16, &'static str, &'static str, #function_pointer));
+    let registration_value = quote!((
+        #KERNEL_REGISTRATION_MAGIC,
+        #KERNEL_REGISTRATION_VERSION_V1,
+        #registration_kind,
+        #marker_value,
+        #export_value,
+        #internal_ident,
+    ));
     let frontend_registration = encode_kernel_frontend_contract_v1(&options).map(|bytes| {
         let registration_ident =
             format_ident!("{KERNEL_FRONTEND_REGISTRATION_PREFIX_V1}{original_name}");
@@ -1200,71 +1117,10 @@ fn expand_legacy_kernel_with_imports(
         options.reference.as_ref(),
     );
 
-    let typed_module = if let (Some(kernel_binding), Some(host_import)) =
-        (kernel_binding, host_import)
-    {
-        let module_ident = format_ident!("{original_name}_gpu");
-        let artifact_pointer_ident =
-            format_ident!("{}", artifact_pointer_symbol_v1(kernel_binding));
-        let artifact_length_ident = format_ident!("{}", artifact_length_symbol_v1(kernel_binding));
-        let binding_bytes = kernel_binding.as_bytes().into_iter();
-
-        quote! {
-            #[cfg(not(target_arch = "amdgpu"))]
-            pub mod #module_ident {
-                unsafe extern "C" {
-                    fn #artifact_pointer_ident() -> *const u8;
-                    fn #artifact_length_ident() -> usize;
-                }
-
-                #host_import
-
-                pub type Kernel =
-                    __fe2o3_kernel_host::__generated::GeneratedVecAddKernelV1<
-                        super::#type_marker_ident,
-                    >;
-                pub type Prepared<'loaded, 'allocation> =
-                    __fe2o3_kernel_host::__generated::GeneratedVecAddPreparedV1<
-                        'loaded,
-                        'allocation,
-                        super::#type_marker_ident,
-                    >;
-
-                const _: () = {
-                    // SAFETY: the fe2o3 backend owns these reserved symbols and
-                    // binds them to the artifact for this exact generated marker.
-                    unsafe impl __fe2o3_kernel_host::__generated::CompilerGeneratedKernelContractV1
-                        for super::#type_marker_ident
-                    {
-                        const PROFILE:
-                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
-                            __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2;
-
-                        const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
-
-                        fn artifact_container_bytes() -> &'static [u8] {
-                            // SAFETY: the generated unsafe trait implementation relies
-                            // on the backend/linker contract that this accessor pair
-                            // returns one exact, immutable, program-lifetime artifact.
-                            unsafe {
-                                __fe2o3_kernel_host::__generated::artifact_bytes_from_backend_v1(
-                                    #artifact_pointer_ident(),
-                                    #artifact_length_ident(),
-                                )
-                            }
-                        }
-                    }
-                };
-            }
-        }
-    } else {
-        quote! {}
-    };
-
     Ok(quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        #export_attribute
+        #[unsafe(no_mangle)]
         #input
 
         #[doc(hidden)]
@@ -1299,10 +1155,7 @@ fn expand_legacy_kernel_with_imports(
                 const REGISTRATION: &'static Self::Registration = &#registration_ident;
             }
 
-            #cross_crate_typed_impl
         };
-
-        #typed_module
     })
 }
 
