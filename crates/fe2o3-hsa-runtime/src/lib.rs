@@ -4,8 +4,6 @@ mod api;
 mod dispatch;
 mod environment;
 #[cfg(feature = "qualification-oracles-test-only")]
-mod flash_attention_resource_observation;
-#[cfg(feature = "qualification-oracles-test-only")]
 mod lds_gemm_resource_observation;
 mod lifecycle;
 #[cfg(feature = "qualification-oracles-test-only")]

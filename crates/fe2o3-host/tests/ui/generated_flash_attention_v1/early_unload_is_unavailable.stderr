@@ -1,5 +1,0 @@
-error[E0599]: no method named `unload` found for struct `LoadedFlashAttentionV1<'query, 'key, 'value, 'output, A>` in the current scope
- --> tests/ui/generated_flash_attention_v1/early_unload_is_unavailable.rs:6:20
-  |
-6 |     let _ = loaded.unload();
-  |                    ^^^^^^ method not found in `LoadedFlashAttentionV1<'_, '_, '_, '_, A>`

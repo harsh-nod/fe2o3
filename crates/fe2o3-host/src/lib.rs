@@ -5,12 +5,8 @@ mod artifact_binding;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod cooperative_launch;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod flash_attention_v1_lifecycle;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod generated_flash_attention_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_lds_gemm;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
@@ -207,13 +203,6 @@ pub use fe2o3_core::{KernelParams, LaunchConfig};
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use fe2o3_hsaco_finalize::WorkgroupSyncProfileKindV1;
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use flash_attention_v1_lifecycle::{
-    CompletedFlashAttentionV1, FlashAttentionV1DispatchErrorV1, FlashAttentionV1JoinErrorV1,
-    FlashAttentionV1KernelResourceObservationV1, FlashAttentionV1LoadErrorV1,
-    FlashAttentionV1UnloadIdentityV1, JoinedFlashAttentionV1, LoadedFlashAttentionV1,
-    ReviewedFlashAttentionV1RuntimeAdapterV1, UnloadedFlashAttentionV1, join_flash_attention_v1,
-};
 #[doc(hidden)]
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_alpha_zeta_cov6::{
@@ -230,11 +219,6 @@ pub use generated_argument_plan::{
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use generated_flash_attention_v1::{
-    FlashAttentionV1BufferAccessV1, FlashAttentionV1BufferRoleV1,
-    GeneratedFlashAttentionV1HostAdapterErrorV1, GeneratedFlashAttentionV1HostAdapterV1,
 };
 #[doc(hidden)]
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
