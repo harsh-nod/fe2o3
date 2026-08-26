@@ -396,6 +396,12 @@ def wait_child(pid, timeout=3.0):
     raise AssertionError("trampoline child exceeded broker harness timeout")
 
 
+def stop_child_after_hello(pid):
+    os.kill(pid, signal.SIGSTOP)
+    observed, status = os.waitpid(pid, os.WUNTRACED)
+    assert observed == pid and os.WIFSTOPPED(status), (observed, status)
+
+
 def expected_success_output(binding, bootstrap_identity):
     binding_identity = sha256(DOMAIN + struct.pack("<Q", BINDING_LEN) + binding)
     entries = [
@@ -591,30 +597,36 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
                 os.close(write_end)
                 descriptors = [read_end]
 
-            if scenario == "timeout":
-                time.sleep(0.7)
-            elif scenario == "peer-death":
-                rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
-                           array.array("i", descriptors))]
-                broker_socket.sendmsg([bootstrap], rights)
-                broker_socket.close()
-            else:
-                rights = []
-                if descriptors:
+            stopped_for_pre_exec_adversary = scenario in {
+                "peer-death", "replayed-frame"
+            }
+            if stopped_for_pre_exec_adversary:
+                stop_child_after_hello(pid)
+            try:
+                if scenario == "timeout":
+                    time.sleep(0.7)
+                elif scenario == "peer-death":
                     rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
                                array.array("i", descriptors))]
-                broker_socket.sendmsg([bootstrap], rights)
-                if scenario == "replayed-frame":
-                    try:
-                        broker_socket.sendmsg([bootstrap], rights)
-                    except (BrokenPipeError, OSError):
-                        pass
-                elif scenario == "delayed-replayed-frame":
-                    readable, _, _ = select.select([output_read], [], [], 1.0)
-                    assert readable, "post-exec replay gate did not become ready"
-                    early_output = os.read(output_read, 4096)
-                    assert early_output == b"POST_EXEC_BROKER_V3_GATE_READY\n", early_output
                     broker_socket.sendmsg([bootstrap], rights)
+                    broker_socket.close()
+                else:
+                    rights = []
+                    if descriptors:
+                        rights = [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                                   array.array("i", descriptors))]
+                    broker_socket.sendmsg([bootstrap], rights)
+                    if scenario == "replayed-frame":
+                        broker_socket.sendmsg([bootstrap], rights)
+                    elif scenario == "delayed-replayed-frame":
+                        readable, _, _ = select.select([output_read], [], [], 1.0)
+                        assert readable, "post-exec replay gate did not become ready"
+                        early_output = os.read(output_read, 4096)
+                        assert early_output == b"POST_EXEC_BROKER_V3_GATE_READY\n", early_output
+                        broker_socket.sendmsg([bootstrap], rights)
+            finally:
+                if stopped_for_pre_exec_adversary:
+                    os.kill(pid, signal.SIGCONT)
             for descriptor in descriptors:
                 os.close(descriptor)
 
