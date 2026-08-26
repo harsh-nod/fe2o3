@@ -14,6 +14,8 @@ mod s09_identity_v2;
 use s09_identity_v2::{decode_hsaco_identity_claims_v2, identity_section_v2};
 
 const PIPELINE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
+const VECADD_QUALIFICATION_ARGS: &[&str] =
+    &["--features", "qualification-embedded-vecadd-test-only"];
 const LLVM_AS_ENV: &str = "FE2O3_LLVM_AS";
 const LLVM_DWARFDUMP_ENV: &str = "FE2O3_LLVM_DWARFDUMP";
 const PROVIDER_SYMBOL: &str = "external_device_add_v1";
@@ -238,7 +240,17 @@ fn bytes_hex(bytes: &[u8]) -> String {
 }
 
 fn backend(workspace: &Path, command: &str, package: &str, pipeline: Option<&str>) -> Output {
-    backend_with_worker_config(workspace, command, package, pipeline, None)
+    backend_with_options(workspace, command, package, pipeline, None, &[])
+}
+
+fn backend_with_args(
+    workspace: &Path,
+    command: &str,
+    package: &str,
+    pipeline: Option<&str>,
+    package_args: &[&str],
+) -> Output {
+    backend_with_options(workspace, command, package, pipeline, None, package_args)
 }
 
 fn backend_with_worker_config(
@@ -248,11 +260,23 @@ fn backend_with_worker_config(
     pipeline: Option<&str>,
     worker_config: Option<&Path>,
 ) -> Output {
+    backend_with_options(workspace, command, package, pipeline, worker_config, &[])
+}
+
+fn backend_with_options(
+    workspace: &Path,
+    command: &str,
+    package: &str,
+    pipeline: Option<&str>,
+    worker_config: Option<&Path>,
+    package_args: &[&str],
+) -> Output {
     let mut process = cargo_fe2o3::non_production_command(workspace);
     process
         .current_dir(workspace)
         .env_remove(PIPELINE_ENV)
-        .args([command, "-p", package]);
+        .args([command, "-p", package])
+        .args(package_args);
     if let Some(pipeline) = pipeline {
         process.env(PIPELINE_ENV, pipeline);
     }
@@ -853,7 +877,13 @@ fn assert_exact_vecadd_llvm(llvm: &str) {
 }
 
 fn assert_vecadd_publication(workspace: &Path, command: &str, expect_execution: bool) {
-    let output = backend(workspace, command, "fe2o3-vecadd", Some("kernel-ir-v1"));
+    let output = backend_with_args(
+        workspace,
+        command,
+        "fe2o3-vecadd",
+        Some("kernel-ir-v1"),
+        VECADD_QUALIFICATION_ARGS,
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 

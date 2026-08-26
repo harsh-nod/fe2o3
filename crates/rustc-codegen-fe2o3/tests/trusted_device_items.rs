@@ -9,9 +9,13 @@ const ROCM_QUALIFICATION_ORACLE: &str = "kernel-ir-v1";
 #[path = "support/cargo_fe2o3.rs"]
 mod cargo_fe2o3;
 
-const GENUINE_CASES: &[(&str, &str)] = &[
-    ("fe2o3-vecadd", "vecadd"),
-    ("fe2o3-trusted-item-renamed-genuine", "renamed_genuine"),
+const GENUINE_CASES: &[(&str, &str, &[&str])] = &[
+    (
+        "fe2o3-vecadd",
+        "vecadd",
+        &["--features", "qualification-embedded-vecadd-test-only"],
+    ),
+    ("fe2o3-trusted-item-renamed-genuine", "renamed_genuine", &[]),
 ];
 
 const REJECTED_CASES: &[(&str, &str, &str)] = &[
@@ -109,8 +113,8 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
 }
 
 fn initialize_owned_artifact_directory(workspace: &Path) {
-    let (package, kernel) = GENUINE_CASES[0];
-    let accepted = backend_build(workspace, package);
+    let (package, kernel, args) = GENUINE_CASES[0];
+    let accepted = backend_build_with_args(workspace, package, args);
     let stderr = String::from_utf8_lossy(&accepted.stderr);
     assert!(
         accepted.status.success(),
@@ -158,12 +162,23 @@ fn renamed_genuine_fixture_uses_the_name_neutral_exact_fill_profile() {
 }
 
 #[test]
+fn legacy_vecadd_publication_uses_the_explicit_qualification_profile() {
+    let (package, kernel, args) = GENUINE_CASES[0];
+    assert_eq!(package, "fe2o3-vecadd");
+    assert_eq!(kernel, "vecadd");
+    assert_eq!(
+        args,
+        &["--features", "qualification-embedded-vecadd-test-only"]
+    );
+}
+
+#[test]
 #[ignore = "requires the configured ROCm LLVM toolchain"]
 fn genuine_markers_emit_and_local_external_spoofs_fail_closed() {
     let _lock = backend_test_lock();
     let workspace = workspace();
-    for &(package, kernel) in GENUINE_CASES {
-        let accepted = backend_build(&workspace, package);
+    for &(package, kernel, args) in GENUINE_CASES {
+        let accepted = backend_build_with_args(&workspace, package, args);
         let stderr = String::from_utf8_lossy(&accepted.stderr);
         assert!(
             accepted.status.success(),
