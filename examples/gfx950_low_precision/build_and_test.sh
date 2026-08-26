@@ -21,7 +21,8 @@ if [[ ${1:-} == --compile-only ]]; then
     exit 0
 fi
 
-if ! "$ROCM_PATH/bin/rocminfo" 2>/dev/null | grep -q 'Name:.*gfx950'; then
+RUNTIME_AGENTS=$("$ROCM_PATH/bin/rocminfo" 2>/dev/null)
+if ! grep -q 'Name:.*gfx950' <<<"$RUNTIME_AGENTS"; then
     echo "No gfx950 runtime device is visible; compilation and ISA validation passed." >&2
     echo "Re-run on a host/container exposing the MI350 GPU, or pass --compile-only." >&2
     exit 2
