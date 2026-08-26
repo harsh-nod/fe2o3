@@ -140,6 +140,70 @@ fn nonlinear_products_are_unknown_and_checked_overflow_has_a_witness() {
 }
 
 #[test]
+fn dynamic_launch_does_not_hide_an_axis_independent_overflow() {
+    let context = &mut setup();
+    let function = function(context, "dynamic_constant_overflow");
+    let entry = function.get_entry_block(context);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let static_invocation = InvocationIndexOp::new(context, 1, 3);
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let one = IndexConstantOp::new(context, 1);
+    let constant_overflow = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        maximum.result(context),
+        one.result(context),
+    );
+    let runtime_dependent = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        maximum.result(context),
+        invocation.result(context),
+    );
+    let static_dependent = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        maximum.result(context),
+        static_invocation.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    for operation in [
+        invocation.get_operation(),
+        static_invocation.get_operation(),
+        maximum.get_operation(),
+        one.get_operation(),
+        constant_overflow.get_operation(),
+        runtime_dependent.get_operation(),
+        static_dependent.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    let constant_overflow_fact = analysis.fact(constant_overflow.result(context));
+    let overflow = constant_overflow_fact
+        .machine_overflow()
+        .expect("constant overflow is independent of the dynamic launch axis");
+    assert_eq!(overflow.operands(), (u64::MAX, 1));
+    assert_eq!(overflow.invocation(), &[0, 2]);
+    assert!(
+        analysis
+            .fact(runtime_dependent.result(context))
+            .machine_overflow()
+            .is_none(),
+        "the unbounded invocation axis cannot supply a concrete witness"
+    );
+    let static_dependent_fact = analysis.fact(static_dependent.result(context));
+    let overflow = static_dependent_fact
+        .machine_overflow()
+        .expect("the expression is independent of the unbounded axis");
+    assert_eq!(overflow.operation(), IndexBinaryKindAttr::Multiply);
+    assert_eq!(overflow.operands(), (u64::MAX, 2));
+    assert_eq!(overflow.invocation(), &[0, 2]);
+}
+
+#[test]
 fn intermediate_overflow_is_not_erased_by_a_later_zero_scale() {
     let context = &mut setup();
     let function = function(context, "intermediate_overflow");

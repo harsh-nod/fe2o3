@@ -970,9 +970,7 @@ fn derive_binary(
     };
     match kind {
         Some(IndexBinaryKindAttr::Add) => match lhs.checked_add(&rhs) {
-            Some(result)
-                if launch_extents.contains(&0) || result.maximum(launch_extents).is_some() =>
-            {
+            Some(result) if affine_range_is_not_definitely_overflowing(&result, launch_extents) => {
                 SparseIndexFactV1::Affine(result)
             }
             _ => overflow_or_unknown(
@@ -986,7 +984,7 @@ fn derive_binary(
         Some(IndexBinaryKindAttr::Multiply) => match (lhs.is_constant(), rhs.is_constant()) {
             (Some(factor), _) => match rhs.checked_scale(factor) {
                 Some(result)
-                    if launch_extents.contains(&0) || result.maximum(launch_extents).is_some() =>
+                    if affine_range_is_not_definitely_overflowing(&result, launch_extents) =>
                 {
                     SparseIndexFactV1::Affine(result)
                 }
@@ -1000,7 +998,7 @@ fn derive_binary(
             },
             (_, Some(factor)) => match lhs.checked_scale(factor) {
                 Some(result)
-                    if launch_extents.contains(&0) || result.maximum(launch_extents).is_some() =>
+                    if affine_range_is_not_definitely_overflowing(&result, launch_extents) =>
                 {
                     SparseIndexFactV1::Affine(result)
                 }
@@ -1034,11 +1032,7 @@ fn overflow_or_unknown(
     launch_extents: &[u64],
     checked: fn(u64, u64) -> Option<u64>,
 ) -> SparseIndexFactV1 {
-    let Some(invocation) = launch_extents
-        .iter()
-        .map(|extent| extent.checked_sub(1))
-        .collect::<Option<Vec<_>>>()
-    else {
+    let Some(invocation) = maximum_known_invocation(&[lhs, rhs], launch_extents) else {
         return SparseIndexFactV1::Unknown;
     };
     let (Some(lhs), Some(rhs)) = (lhs.evaluate(&invocation), rhs.evaluate(&invocation)) else {
@@ -1053,6 +1047,37 @@ fn overflow_or_unknown(
         lhs,
         rhs,
     })
+}
+
+/// Uses zero for an unbounded axis only when every expression is independent
+/// of that axis. The resulting point is therefore a witness for every
+/// non-empty runtime extent, not an assumed upper bound.
+fn maximum_known_invocation(
+    expressions: &[&SparseAffineIndexV1],
+    launch_extents: &[u64],
+) -> Option<Vec<u64>> {
+    launch_extents
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(dimension, extent)| {
+            if extent != 0 {
+                return extent.checked_sub(1);
+            }
+            expressions
+                .iter()
+                .all(|expression| expression.coefficients[dimension] == 0)
+                .then_some(0)
+        })
+        .collect()
+}
+
+fn affine_range_is_not_definitely_overflowing(
+    expression: &SparseAffineIndexV1,
+    launch_extents: &[u64],
+) -> bool {
+    maximum_known_invocation(&[expression], launch_extents)
+        .is_none_or(|invocation| expression.evaluate(&invocation).is_some())
 }
 
 const fn limit(resource: &'static str, limit: usize, actual: usize) -> SparseIndexFailureV1 {
