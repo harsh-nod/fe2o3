@@ -49,7 +49,6 @@ pub(crate) enum ProductionPipelineError {
     SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
     RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
-    #[cfg(feature = "qualification-oracles-test-only")]
     ExtractionCannotPublish,
     WorkerHandoff(crate::production_worker_handoff::ProductionWorkerHandoffError),
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
@@ -103,7 +102,6 @@ impl fmt::Display for ProductionPipelineError {
                 formatter,
                 "production compilation final protected rustc invocation validation failed: {error}"
             ),
-            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ExtractionCannotPublish => formatter.write_str(
                 "production extraction custody cannot publish a compiler-module handoff",
             ),
@@ -138,7 +136,6 @@ impl std::error::Error for ProductionPipelineError {
             | Self::EmptyCollectedDeviceClosure
             | Self::RustcLineageMismatch
             | Self::UpstreamLlvmLayoutBinding(_) => None,
-            #[cfg(feature = "qualification-oracles-test-only")]
             Self::ExtractionCannotPublish => None,
         }
     }
@@ -168,13 +165,6 @@ struct ProductionTransactionBindings {
     compiler_custody: ProductionCompilerCustody,
 }
 
-#[cfg(not(feature = "qualification-oracles-test-only"))]
-struct ProductionCompilerCustody {
-    invocation: Box<AdmittedProtectedRustcInvocationV1>,
-    attempt: BuildAttempt,
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
 enum ProductionCompilerCustody {
     ProtectedV3 {
         invocation: Box<AdmittedProtectedRustcInvocationV1>,
@@ -185,55 +175,30 @@ enum ProductionCompilerCustody {
 
 impl ProductionCompilerCustody {
     fn protected(invocation: AdmittedProtectedRustcInvocationV1, attempt: BuildAttempt) -> Self {
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
-        {
-            Self {
-                invocation: Box::new(invocation),
-                attempt,
-            }
-        }
-        #[cfg(feature = "qualification-oracles-test-only")]
-        {
-            Self::ProtectedV3 {
-                invocation: Box::new(invocation),
-                attempt,
-            }
+        Self::ProtectedV3 {
+            invocation: Box::new(invocation),
+            attempt,
         }
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     const fn extraction_only() -> Self {
         Self::ExtractionOnly
     }
 
     fn has_publication_attempt(&self) -> bool {
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
-        {
-            true
-        }
-        #[cfg(feature = "qualification-oracles-test-only")]
-        {
-            matches!(self, Self::ProtectedV3 { .. })
-        }
+        matches!(self, Self::ProtectedV3 { .. })
     }
 
     fn into_publication_custody(
         self,
     ) -> Result<(BuildAttempt, Box<AdmittedProtectedRustcInvocationV1>), ProductionPipelineError>
     {
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
-        {
-            Ok((self.attempt, self.invocation))
-        }
-        #[cfg(feature = "qualification-oracles-test-only")]
-        {
-            match self {
-                Self::ProtectedV3 {
-                    invocation,
-                    attempt,
-                } => Ok((attempt, invocation)),
-                Self::ExtractionOnly => Err(ProductionPipelineError::ExtractionCannotPublish),
-            }
+        match self {
+            Self::ProtectedV3 {
+                invocation,
+                attempt,
+            } => Ok((attempt, invocation)),
+            Self::ExtractionOnly => Err(ProductionPipelineError::ExtractionCannotPublish),
         }
     }
 }
@@ -663,7 +628,6 @@ impl Gfx942LoweredProductionCompilation {
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
 impl RankedVerifiedProductionCompilation {
     pub(crate) fn ranked_ir(&self) -> &str {
         self.ranked.ranked_ir()
@@ -731,7 +695,6 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         )
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn from_collected_device_closure_for_extraction(
         tcx: TyCtxt<'tcx>,
         closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
@@ -812,7 +775,6 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     }
 
     /// Consumes the only production transaction through import and verification.
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn verify_general_kernel_checks(
         self,
     ) -> Result<RankedVerifiedProductionCompilation, ProductionPipelineError> {
@@ -848,7 +810,6 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 
     /// Retains the original extraction milestone while consuming the same
     /// transaction and importer as the production backend.
-    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) fn require_semantic_mir_import(self) -> ProductionPipelineError {
         match self.import_semantic_mir() {
             Ok(transaction) => match transaction.construct_semantic_middle_end() {
@@ -885,7 +846,6 @@ impl<'tcx> ProductionCompilation<'tcx, AdmittedSemanticMirStage> {
 }
 
 impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
-    #[cfg(feature = "qualification-oracles-test-only")]
     fn require_target_neutral_lowering(self) -> ProductionPipelineError {
         let EquivalentSemanticMirStage {
             semantic_mir,
@@ -1210,7 +1170,6 @@ mod tests {
         assert!(authentication < monomorphization);
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
     #[test]
     fn process_isolated_extraction_uses_the_production_transaction() {
         let driver = include_str!("production_rustc_driver_v1.rs");

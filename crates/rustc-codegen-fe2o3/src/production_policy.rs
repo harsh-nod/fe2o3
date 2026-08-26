@@ -23,7 +23,7 @@ fn rejection_from_values(
     }
     qualification_oracle.map(|value| {
         format!(
-            "{} is unavailable in the production backend; temporary qualification oracles require backend feature `qualification-oracles-test-only`; found {value:?}",
+            "{} has been removed from the rustc backend; qualification comparisons may run only as offline, non-authoritative fixtures; found {value:?}",
             crate::QUALIFICATION_ORACLE_ENV,
         )
     })
@@ -55,7 +55,7 @@ mod tests {
     fn qualification_oracle_is_absent_from_the_production_backend() {
         let rejection = rejection_from_values(None, Some(OsStr::new("kernel-ir-v1")))
             .expect("qualification oracle must be rejected");
-        assert!(rejection.contains("FE2O3_QUALIFICATION_ORACLE_V1 is unavailable"));
-        assert!(rejection.contains("qualification-oracles-test-only"));
+        assert!(rejection.contains("FE2O3_QUALIFICATION_ORACLE_V1 has been removed"));
+        assert!(rejection.contains("offline, non-authoritative fixtures"));
     }
 }

@@ -7042,8 +7042,8 @@ fn imported_flow(input: Wrapper<u32>) -> Wrapper<u64> {
             panic!("fixture call terminator");
         };
         *callee = Some(MirCallee::session_recognized(
-            SessionRecognizedSemanticItem::WorkgroupSyncCompilerIntrinsic(
-                crate::semantic_features::WorkgroupSyncCompilerIntrinsicV1::ColdPath,
+            SessionRecognizedSemanticItem::trusted_device_for_test(
+                crate::trusted_device_items::TrustedDeviceItem::MemoryVolatileLoad,
             ),
         ));
         assert_ne!(portable_digest(&changed, &environment), first);

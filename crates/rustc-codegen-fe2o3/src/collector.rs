@@ -42,7 +42,7 @@ pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
 };
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) use production_importer_v1::{
     rust_disjoint_tile_2d_v1, rust_index_witness_space_v1, rust_option_payload_v1,
 };
@@ -158,7 +158,7 @@ pub struct CollectedFunction<'tcx> {
 /// code can only receive this value after registration, session binding,
 /// function-pointer, symbol, and unique-root validation has completed.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct AuthenticatedKernelOwner<T> {
     target: T,
     crate_name: String,
@@ -173,19 +173,19 @@ pub(crate) struct AuthenticatedKernelOwner<T> {
 }
 
 #[derive(Clone, Debug)]
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) struct AuthenticatedKernelOwners<T> {
     owners: Vec<AuthenticatedKernelOwner<T>>,
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 impl<T> Default for AuthenticatedKernelOwners<T> {
     fn default() -> Self {
         Self { owners: Vec::new() }
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 impl<T> AuthenticatedKernelOwners<T> {
     fn push(&mut self, owner: AuthenticatedKernelOwner<T>) {
         self.owners.push(owner);
@@ -196,7 +196,7 @@ impl<T> AuthenticatedKernelOwners<T> {
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 impl<T: Copy> AuthenticatedKernelOwner<T> {
     pub(crate) const fn target(&self) -> T {
         self.target
@@ -261,17 +261,17 @@ pub(crate) struct ReachableAssemblySummaryV1 {
 }
 
 impl AuthenticatedKernelFrontendContractV1 {
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn registration_path(&self) -> &str {
         &self.registration_path
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn target_def_path_hash(&self) -> [u8; 16] {
         self.target_def_path_hash
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn target_symbol(&self) -> &str {
         &self.target_symbol
     }
@@ -318,7 +318,7 @@ impl ReachableAssemblySummaryV1 {
 #[derive(Clone, Debug, Default)]
 pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     // Private source state retained for compiler-envelope construction.
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
@@ -326,7 +326,7 @@ pub struct CollectionResult<'tcx> {
     pub(crate) compiler_ffi_observation: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 impl<'tcx> CollectionResult<'tcx> {
     pub(crate) fn authenticated_kernel_owners(
         &self,
@@ -344,7 +344,7 @@ impl<'tcx> CollectionResult<'tcx> {
 /// workload-neutral semantic-terminal registry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CollectorPurposeV1 {
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     QualificationOracle {
         extended_helper_edges: bool,
     },
@@ -354,7 +354,7 @@ enum CollectorPurposeV1 {
 impl CollectorPurposeV1 {
     const fn inspect_block(self, _qualification_includes_block: bool) -> bool {
         match self {
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::QualificationOracle { .. } => _qualification_includes_block,
             Self::Production => true,
         }
@@ -362,7 +362,7 @@ impl CollectorPurposeV1 {
 
     const fn accepts_extended_edges(self) -> bool {
         match self {
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::QualificationOracle {
                 extended_helper_edges,
             } => extended_helper_edges,
@@ -372,7 +372,7 @@ impl CollectorPurposeV1 {
 
     const fn is_qualification_oracle(self) -> bool {
         match self {
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             Self::QualificationOracle { .. } => true,
             Self::Production => false,
         }
@@ -469,7 +469,7 @@ pub(crate) fn count_production_roots_before_monomorphization_v1(tcx: TyCtxt<'_>)
 /// Collects compatibility evidence for an explicitly selected qualification
 /// oracle. The caller must supply both the resolved target and its explicit
 /// oracle token; process environment cannot silently alter collection.
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub(crate) fn collect_qualification_device_functions<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
@@ -588,7 +588,7 @@ fn collect_device_functions_for_purpose<'tcx>(
     collector.collect()
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunction<'tcx>]) {
     let mut rows = functions
         .iter()
@@ -677,7 +677,7 @@ struct KernelRoot<T> {
     export_name: String,
     typed_profile: Option<TypedKernelProfile>,
     kernel_binding: Option<KernelBindingIdV1>,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     authenticated_owner: Option<AuthenticatedKernelOwner<T>>,
     typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
     general_typed_contract: Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
@@ -858,15 +858,6 @@ fn kernel_roots<'tcx>(
             Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
                 generated_host_contract_identity,
             }) => {
-                #[cfg(feature = "qualification-oracles-test-only")]
-                if crate::collected_workgroup_sync_v1::quarantine_scoped_atomic_general_contract(
-                    &root.logical_name,
-                    &root.export_name,
-                ) {
-                    root.typed_layout_identities = None;
-                    root.general_typed_contract = None;
-                    continue;
-                }
                 let launch =
                     general_typed_launch_v3(root.frontend_contract.as_ref(), &registration_path)?;
                 let contract = crate::rust_type_layout_v3::extract_general_typed_kernel_v3(
@@ -2512,7 +2503,7 @@ fn validate_registration_records<T: Copy>(
             "target identity",
         )?;
 
-        #[cfg(feature = "qualification-oracles-test-only")]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         let authenticated_owner = match typed_profile {
             Some(typed_profile) => Some(AuthenticatedKernelOwner {
                 target: record.target,
@@ -2538,7 +2529,7 @@ fn validate_registration_records<T: Copy>(
             export_name: record.export_name,
             typed_profile,
             kernel_binding,
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             authenticated_owner,
             typed_layout_identities: None,
             general_typed_contract: None,
@@ -2609,7 +2600,7 @@ struct DeviceCollector<'tcx> {
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
@@ -2737,7 +2728,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             authenticated_kernel_owners: AuthenticatedKernelOwners::default(),
             ffi_declarations,
             reachable_ffi_imports: BTreeSet::new(),
@@ -2844,7 +2835,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             export_name,
             typed_profile,
             kernel_binding,
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             authenticated_owner,
             typed_layout_identities,
             general_typed_contract,
@@ -2867,7 +2858,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     label: self.instance_label(instance),
                 },
             );
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             if let Some(owner) = authenticated_owner {
                 debug_assert_eq!(owner.target, instance);
                 self.authenticated_kernel_owners.push(owner);
@@ -3013,7 +3004,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         let mut collection = CollectionResult {
             functions: self.result,
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             authenticated_kernel_owners: self.authenticated_kernel_owners,
             device_ffi,
             compiler_ffi_observation: None,
@@ -3618,16 +3609,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             return Ok(());
         }
 
-        #[cfg(feature = "qualification-oracles-test-only")]
-        if self.purpose.is_qualification_oracle()
-            && crate::collected_workgroup_sync_v1::is_exact_workgroup_sync_rustc_intrinsic(
-                self.tcx,
-                resolved.def_id(),
-            )
-        {
-            return Ok(());
-        }
-        #[cfg(feature = "qualification-oracles-test-only")]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         if self.purpose.is_qualification_oracle()
             && crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
                 self.tcx,
@@ -3637,7 +3619,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         {
             return Ok(());
         }
-        #[cfg(feature = "qualification-oracles-test-only")]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         if self.purpose.is_qualification_oracle()
             && crate::collected_moe_top2_v1::classify_exact_moe_top2_compiler_intrinsic(
                 self.tcx,
@@ -3663,28 +3645,13 @@ impl<'tcx> DeviceCollector<'tcx> {
         // repeated against the exact concrete implementation selected by
         // rustc. The classifier authenticates the implementation through the
         // diagnostic-item-marked device type and the exact lang-item trait.
-        #[cfg(feature = "qualification-oracles-test-only")]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         if self.purpose.is_qualification_oracle()
             && crate::trusted_device_items::classify(self.tcx, resolved.def_id()).is_some()
         {
             if self.verbose {
                 eprintln!(
                     "[collector] stopping at resolved trusted device item {}",
-                    self.tcx.def_path_str(resolved.def_id())
-                );
-            }
-            return Ok(());
-        }
-        #[cfg(feature = "qualification-oracles-test-only")]
-        if self.purpose.is_qualification_oracle()
-            && crate::collected_workgroup_sync_v1::is_exact_workgroup_sync_compiler_intrinsic(
-                self.tcx,
-                resolved.def_id(),
-            )
-        {
-            if self.verbose {
-                eprintln!(
-                    "[collector] stopping at exact workgroup-sync compiler intrinsic {}",
                     self.tcx.def_path_str(resolved.def_id())
                 );
             }
@@ -4349,7 +4316,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn authenticated_kernel_owner_exposes_stable_owner_and_exact_build_observation() {
         let registration = general_typed_registration(
             "general_genuine::__fe2o3_kernel_registration_alpha",
@@ -4910,7 +4877,7 @@ mod tests {
         assert!(!production.is_qualification_oracle());
         assert!(production.is_production());
 
-        #[cfg(feature = "qualification-oracles-test-only")]
+        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
         {
             let qualification = CollectorPurposeV1::QualificationOracle {
                 extended_helper_edges: false,
@@ -4963,7 +4930,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn qualification_entry_requires_resolved_target_and_explicit_oracle_token() {
         let source = include_str!("collector.rs");
         let qualification = source

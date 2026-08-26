@@ -16,59 +16,55 @@ extern crate rustc_target;
 
 mod amdgpu_llvm;
 mod closure_profile_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_executable_scalar_control_flow_v2;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_flash_attention_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_general_gemm_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_moe_top2_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_row_softmax_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_scalar_gemm_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_tiled_gemm_lds_slice1_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_tiled_gemm_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod collected_wave64_collectives_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod collected_workgroup_sync_v1;
 mod collector;
 mod compiler_descriptor;
 mod compiler_ffi_adapter;
 mod compiler_module_contract;
 mod device_ffi;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod frontend_record_bridge;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod general_gemm_final_join_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod general_gemm_intrinsic_semantics_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod general_gemm_pipeline_v1;
 mod host_object;
 mod kernel_ir_codegen;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod kernel_ir_lowering;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod mir_import;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod mir_import_v2;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod moe_top2_v1_codegen;
 mod monomorphization_dead;
 mod production_geometry_v1;
 mod production_mir_pliron_verus_join_v1;
 mod production_pipeline;
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 mod production_policy;
 mod production_ranked_projection_v1;
 mod production_reference_bounds_v2;
 mod production_reference_effect_join_v2;
-#[cfg(feature = "qualification-oracles-test-only")]
 mod production_rustc_driver_v1;
 mod production_rustc_drop_v1;
 mod production_semantic_body_v1;
@@ -80,7 +76,7 @@ mod production_target_lineage_v3;
 mod production_target_v1;
 mod production_worker_handoff;
 mod protected_rustc_invocation;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod qualification_selection;
 mod reference_effect_bijection_v1;
 mod reference_effect_v1;
@@ -89,32 +85,31 @@ mod rust_type_layout_general;
 mod rust_type_layout_v3;
 mod rustc_semantic_adapter_v1;
 mod rustc_semantic_plan_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub mod s09_identity_v2;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod same_session_rustc_v1;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub mod scalar_mir_v2;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod semantic_features;
 pub mod semantic_layout_bridge;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 pub mod semantic_type_adapter_v2;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod semantic_witness;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod source_debug;
 mod static_registration;
 #[cfg(test)]
 mod test_temp_dir;
 mod trusted_device_items;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod typed_artifact;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_producer;
 
 #[doc(hidden)]
-#[cfg(feature = "qualification-oracles-test-only")]
 pub use production_rustc_driver_v1::{
     run_production_extraction_driver_v1, run_production_gfx942_llvm_extraction_driver_v1,
     run_production_ranked_extraction_driver_v1,
@@ -134,26 +129,24 @@ use std::any::Any;
 use std::env;
 use std::fmt;
 use std::fs;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(feature = "qualification-oracles-test-only")]
-use qualification_selection::{
-    QualificationOracle, QualificationSelection, SelectedQualificationOracle,
-};
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+use qualification_selection::{QualificationOracle, SelectedQualificationOracle};
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 const MAX_FINALIZED_LLVM_IR_BYTES: usize = 16 * 1024 * 1024;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 const MAX_FINALIZED_HSACO_BYTES: usize = 4 * 1024 * 1024;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 const TEMP_DIRECTORY_ATTEMPTS: usize = 64;
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 static NEXT_HOST_OBJECT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 pub const TARGET_ENV: &str = "FE2O3_TARGET";
@@ -192,7 +185,7 @@ struct OngoingFe2o3Codegen {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 struct TypedKernelRootV1 {
     logical_name: String,
     export_name: String,
@@ -213,7 +206,7 @@ struct TemporaryHostObject {
 }
 
 impl TemporaryHostObjects {
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn reserve(&mut self, parent: &Path, artifact_id: &str) -> Result<PathBuf, TypedVerticalError> {
         let artifact_prefix = artifact_id
             .get(..16)
@@ -307,9 +300,6 @@ pub struct BackendConfig {
     pub verbose: bool,
     pub dump_mir: bool,
     pub dump_llvm: bool,
-    #[cfg(feature = "qualification-oracles-test-only")]
-    qualification_selection: QualificationSelection,
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     production_environment_rejection: Option<String>,
     build_attempt: BuildAttemptSelection,
     pub hsaco_output_dir: Option<PathBuf>,
@@ -322,9 +312,6 @@ impl BackendConfig {
             verbose: env_flag(VERBOSE_ENV),
             dump_mir: env_flag(DUMP_MIR_ENV),
             dump_llvm: env_flag(DUMP_LLVM_ENV),
-            #[cfg(feature = "qualification-oracles-test-only")]
-            qualification_selection: QualificationSelection::from_env(),
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
             production_environment_rejection: production_policy::environment_rejection(),
             build_attempt: BuildAttemptSelection::from_env(),
             hsaco_output_dir: env::var(HSACO_DIR_ENV).ok().map(PathBuf::from),
@@ -333,7 +320,7 @@ impl BackendConfig {
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn dump_authenticated_frontend_contracts(
     frontend: &frontend_record_bridge::CompilerFrontendRecordV1,
 ) {
@@ -394,7 +381,7 @@ fn has_custom_llvm_configuration(session: &Session) -> bool {
     !session.opts.cg.llvm_args.is_empty() || !session.opts.cg.passes.is_empty()
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn collect_qualification_oracle_input<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[rustc_middle::mir::mono::CodegenUnit<'tcx>],
@@ -467,47 +454,26 @@ impl CodegenBackend for Fe2o3CodegenBackend {
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>, crate_info: &CrateInfo) -> Box<dyn Any> {
         with_no_trimmed_paths!({
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
             if let Some(reason) = &self.config.production_environment_rejection {
                 let error = amdgpu_llvm::EmitError::Preflight {
                     reason: reason.clone(),
                 };
                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
             }
-            #[cfg(feature = "qualification-oracles-test-only")]
-            let selected_qualification = self
-                .config
-                .qualification_selection
-                .resolve()
-                .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
-            #[cfg(feature = "qualification-oracles-test-only")]
-            let mut protected_rustc_invocation =
-                protected_rustc_invocation::admit_for_codegen(selected_qualification)
-                    .unwrap_or_else(|error| {
-                        tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
-                        ))
-                    });
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
             let mut protected_rustc_invocation =
                 protected_rustc_invocation::admit_for_production_codegen().unwrap_or_else(|error| {
                     tcx.dcx().fatal(format!(
                         "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
                     ))
                 });
-            #[cfg(feature = "qualification-oracles-test-only")]
-            let production_compilation = selected_qualification.is_none();
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
-            let production_compilation = true;
             let build_attempt = match self.config.build_attempt.resolve() {
                 Ok(attempt) => attempt,
                 Err(reason) => tcx.dcx().fatal(format!(
                     "[rustc-codegen-fe2o3] invalid managed build attempt: {reason}"
                 )),
             };
-            let production_root_count = production_compilation
-                .then(|| collector::count_production_roots_before_monomorphization_v1(tcx))
-                .unwrap_or(0);
+            let production_root_count =
+                collector::count_production_roots_before_monomorphization_v1(tcx);
             let mut production_device_admission = if production_root_count > 0 {
                 let build_attempt = build_attempt.unwrap_or_else(|| {
                     tcx.dcx().fatal(format!(
@@ -531,8 +497,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             };
             let mono_partitions = tcx.collect_and_partition_mono_items(());
             let kernel_count = collector::count_kernels_in_cgus(tcx, mono_partitions.codegen_units);
-            if production_compilation && production_device_admission.is_some() != (kernel_count > 0)
-            {
+            if production_device_admission.is_some() != (kernel_count > 0) {
                 let reason = if production_device_admission.is_some() {
                     "authenticated device roots disappeared during monomorphization"
                 } else {
@@ -571,32 +536,31 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 );
             }
 
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             let mut generated_host_objects = host_object::GeneratedHostObjects::default();
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            #[cfg(not(all(test, feature = "qualification-oracles-test-only")))]
             let generated_host_objects = host_object::GeneratedHostObjects::default();
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             let mut temporary_host_objects = TemporaryHostObjects::default();
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
+            #[cfg(not(all(test, feature = "qualification-oracles-test-only")))]
             let temporary_host_objects = TemporaryHostObjects::default();
             let mut production_device_transaction_complete = false;
-            if production_compilation {
-                match production_pipeline::disposition(kernel_count) {
-                    production_pipeline::ProductionDisposition::HostOnly => {}
-                    production_pipeline::ProductionDisposition::DeviceTransaction => {
-                        let RetainedProductionDeviceAdmission {
-                            target,
-                            build_attempt,
-                        } = production_device_admission.take().expect(
-                            "device admission presence was validated after monomorphization",
-                        );
-                        let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
-                        if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
-                            has_custom_llvm_configuration,
-                        ) {
-                            tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
-                        }
-                        let closure = match collector::collect_authenticated_kernel_closure_v1(
+            match production_pipeline::disposition(kernel_count) {
+                production_pipeline::ProductionDisposition::HostOnly => {}
+                production_pipeline::ProductionDisposition::DeviceTransaction => {
+                    let RetainedProductionDeviceAdmission {
+                        target,
+                        build_attempt,
+                    } = production_device_admission
+                        .take()
+                        .expect("device admission presence was validated after monomorphization");
+                    let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
+                    if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
+                        has_custom_llvm_configuration,
+                    ) {
+                        tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
+                    }
+                    let closure = match collector::collect_authenticated_kernel_closure_v1(
                             tcx,
                             mono_partitions.codegen_units,
                             self.config.verbose,
@@ -607,42 +571,48 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 "[rustc-codegen-fe2o3] production collection failed without fallback: {error}"
                             )),
                         };
-                        let output_dir = output_dir
-                            .expect("device output was required above")
-                            .to_path_buf();
-                        let invocation = protected_rustc_invocation.take().unwrap_or_else(|| {
+                    let output_dir = output_dir
+                        .expect("device output was required above")
+                        .to_path_buf();
+                    let invocation = protected_rustc_invocation.take().unwrap_or_else(|| {
                             tcx.dcx().fatal(
                                 "[rustc-codegen-fe2o3] production compilation requires protected rustc invocation custody",
                             )
                         });
-                        let publication =
-                            production_pipeline::ProductionCompilation::from_collected_device_closure(
-                                tcx,
-                                closure,
-                                producer.clone(),
-                                output_dir,
-                                build_attempt,
-                                invocation,
-                            )
-                            .and_then(|transaction| transaction.publish_worker_handoff())
-                            .map(|receipt| receipt.length());
-                        match publication {
-                            Ok(publication_length) => {
-                                production_device_transaction_complete = true;
-                                eprintln!(
-                                    "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
-                                    publication_length,
-                                );
-                            }
-                            Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
+                    let publication =
+                        production_pipeline::ProductionCompilation::from_collected_device_closure(
+                            tcx,
+                            closure,
+                            producer.clone(),
+                            output_dir,
+                            build_attempt,
+                            invocation,
+                        )
+                        .and_then(|transaction| transaction.publish_worker_handoff())
+                        .map(|receipt| receipt.length());
+                    match publication {
+                        Ok(publication_length) => {
+                            production_device_transaction_complete = true;
+                            eprintln!(
+                                "[rustc-codegen-fe2o3] production compilation published {} canonical byte(s) of inert exact gfx942:xnack- LLVM handoff into the preselected managed compiler-module transaction; link, artifact, load, and launch authority remain false",
+                                publication_length,
+                            );
                         }
+                        Err(error) => tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")),
                     }
                 }
             }
-            #[cfg(feature = "qualification-oracles-test-only")]
+            if kernel_count > 0 && !production_device_transaction_complete {
+                tcx.dcx().fatal(
+                    "[rustc-codegen-fe2o3] production compilation did not complete its device transaction; qualification fallback is forbidden",
+                );
+            }
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
+            let selected_qualification: Option<SelectedQualificationOracle> = None;
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             let qualification_oracle =
                 selected_qualification.map(SelectedQualificationOracle::oracle);
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             if kernel_count == 0
                 && qualification_oracle == Some(QualificationOracle::CollectedGeneralGemmV1)
             {
@@ -651,21 +621,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     general_gemm_pipeline_v1::GENERAL_GEMM_PIPELINE_V1,
                 ));
             }
-            if kernel_count > 0 {
-                #[cfg(feature = "qualification-oracles-test-only")]
-                qualification_selection::validate_device_transaction(
-                    selected_qualification,
-                    production_device_transaction_complete,
-                )
-                .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
-                #[cfg(not(feature = "qualification-oracles-test-only"))]
-                if !production_device_transaction_complete {
-                    tcx.dcx().fatal(
-                        "[rustc-codegen-fe2o3] production compilation did not complete its device transaction; qualification fallback is forbidden",
-                    );
-                }
-            }
-            #[cfg(feature = "qualification-oracles-test-only")]
+            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
             if let Some(qualification) = selected_qualification {
                 let output_dir = output_dir.expect("kernel output was required above");
                 let qualification_oracle = qualification.oracle();
@@ -995,69 +951,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         Err(error) => tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] {} rejected the collected program without fallback: {error}",
                             collected_moe_top2_v1::COLLECTED_MOE_TOP2_PIPELINE_V1,
-                        )),
-                    }
-                } else if matches!(
-                    qualification_oracle,
-                    QualificationOracle::CollectedLdsReductionV1
-                        | QualificationOracle::CollectedScopedAtomicV1
-                ) {
-                    let kind = match qualification_oracle {
-                        QualificationOracle::CollectedLdsReductionV1 => {
-                            collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::LdsReduction
-                        }
-                        QualificationOracle::CollectedScopedAtomicV1 => {
-                            collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::ScopedAtomic
-                        }
-                        _ => unreachable!(),
-                    };
-                    let pipeline = match kind {
-                        collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::LdsReduction => {
-                            collected_workgroup_sync_v1::COLLECTED_LDS_REDUCTION_PIPELINE_V1
-                        }
-                        collected_workgroup_sync_v1::WorkgroupSyncProfileKindV1::ScopedAtomic => {
-                            collected_workgroup_sync_v1::COLLECTED_SCOPED_ATOMIC_PIPELINE_V1
-                        }
-                    };
-                    let admission = (|| -> Result<_, String> {
-                        let collection = collect_qualification_oracle_input(
-                            tcx,
-                            mono_partitions.codegen_units,
-                            self.config.verbose,
-                            &self.config.target,
-                            qualification,
-                        )?;
-                        let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
-                        let mut receipt =
-                            collected_workgroup_sync_v1::authenticate_collected_workgroup_sync_v1(
-                                tcx,
-                                &collection,
-                                &self.config.target,
-                                custom_llvm_pipeline,
-                                kind,
-                            )
-                            .map_err(|error| error.to_string())?;
-                        let root = receipt.root_instance_identity().to_owned();
-                        let portable_mir = receipt.portable_mir_hex();
-                        let authority = receipt.authority_hex();
-                        let authenticated = receipt.consume().map_err(|error| error.to_string())?;
-                        Ok((
-                            root,
-                            portable_mir,
-                            authority,
-                            authenticated.source_authority_hex(),
-                            authenticated.descriptor_hex(),
-                            authenticated.kind(),
-                        ))
-                    })();
-                    match admission {
-                        Ok((root, portable_mir, authority, consumed, descriptor, admitted_kind)) => {
-                            tcx.dcx().fatal(format!(
-                                "[rustc-codegen-fe2o3] {pipeline} authenticated exact source bytes plus a separate reviewed profile namespace, distinct compiler-derived ordinary #[kernel(typed)] root `{root}`, exact rustc FnAbi, frozen V4 provider-semantic definitions and reviewed semantic-terminal manifest, and complete reachable portable-MIR closure modulo those identity-bound terminals {portable_mir}; consumed sealed authority {authority} (bound value {consumed}) to select closed {admitted_kind:?} semantic KIR with descriptor/resource identity {descriptor}; reviewed source-to-profile and source-to-terminal correspondence only; no generic lowering, terminal-body refinement, compiler-refinement proof, LLVM lowering, Worker V2, finalizer, link, host, runtime, artifact, load, launch, or hardware authority was entered"
-                            ))
-                        }
-                        Err(error) => tcx.dcx().fatal(format!(
-                            "[rustc-codegen-fe2o3] {pipeline} rejected the collected program without fallback: {error}"
                         )),
                     }
                 } else if qualification_oracle == QualificationOracle::CollectedWave64CollectivesV1
@@ -1724,13 +1617,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                         .to_owned(),
                                 })
                             }
-                            QualificationOracle::CollectedLdsReductionV1
-                            | QualificationOracle::CollectedScopedAtomicV1 => {
-                                Err(amdgpu_llvm::EmitError::Preflight {
-                                    reason: "internal error: collected workgroup synchronization V1 entered the generic qualification artifact transaction"
-                                        .to_owned(),
-                                })
-                            }
                         }
                         },
                     ) {
@@ -1769,18 +1655,17 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
             if kernel_count == 0
                 && let Some(output_dir) = output_dir
-            {
-                if let Err(error) = amdgpu_llvm::emit_collection_after_preflight(
+                && let Err(error) = amdgpu_llvm::emit_collection_after_preflight(
                     &producer,
                     output_dir,
                     &self.config.target,
                     build_attempt,
                     || Ok(Vec::new()),
-                ) {
-                    tcx.dcx().fatal(format!(
-                        "[rustc-codegen-fe2o3] zero-kernel artifact reconciliation failed: {error}"
-                    ));
-                }
+                )
+            {
+                tcx.dcx().fatal(format!(
+                    "[rustc-codegen-fe2o3] zero-kernel artifact reconciliation failed: {error}"
+                ));
             }
 
             let llvm_codegen = self.llvm_backend.codegen_crate(tcx, crate_info);
@@ -1847,7 +1732,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn general_gemm_semantic_preflight_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     collection: &collector::CollectionResult<'tcx>,
@@ -1879,7 +1764,7 @@ fn general_gemm_semantic_preflight_v1<'tcx>(
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn typed_roots_from_collection(
     functions: &[collector::CollectedFunction<'_>],
 ) -> Result<Vec<TypedKernelRootV1>, TypedVerticalError> {
@@ -1939,7 +1824,7 @@ fn typed_roots_from_collection(
         .collect()
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn generate_typed_host_objects(
     roots: &[TypedKernelRootV1],
     artifacts: &[amdgpu_llvm::DeviceArtifact],
@@ -2010,7 +1895,7 @@ fn generate_typed_host_objects(
     Ok((objects, temporary))
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn generate_semantic_witness_host_objects(
     roots: &[compiler_descriptor::TypedDescriptorRootV1],
     output_dir: &Path,
@@ -2045,7 +1930,7 @@ fn generate_semantic_witness_host_objects(
     Ok((objects, temporary))
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn match_typed_artifacts(
     roots: &[TypedKernelRootV1],
     artifacts: &[amdgpu_llvm::DeviceArtifact],
@@ -2098,7 +1983,7 @@ fn match_typed_artifacts(
     Ok(matches)
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn valid_ascii_symbol_stem(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
@@ -2109,7 +1994,7 @@ fn valid_ascii_symbol_stem(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 fn finalized_artifact_bytes<'artifact>(
     snapshot: &'artifact artifact_transaction::FinalizedArtifactSnapshot,
     kind: &'static str,
@@ -2128,7 +2013,7 @@ fn finalized_artifact_bytes<'artifact>(
 }
 
 #[derive(Debug)]
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 enum TypedVerticalError {
     InvalidCollectedRoot {
         export_name: String,
@@ -2160,7 +2045,7 @@ enum TypedVerticalError {
     HostObject(host_object::HostObjectError),
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 impl fmt::Display for TypedVerticalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2222,7 +2107,7 @@ impl fmt::Display for TypedVerticalError {
     }
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 impl std::error::Error for TypedVerticalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
@@ -2602,34 +2487,32 @@ fn optional_tool(llvm_bin: &Path, name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "qualification-oracles-test-only")]
-    use super::QualificationSelection;
     use super::{
         AmdGpuTarget, BackendConfig, BuildAttemptSelection, RocmToolchain, llvm_compile_command,
         managed_artifact_output, validate_hsaco_metadata_text,
     };
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use super::{
         TemporaryHostObjects, TypedKernelRootV1, TypedVerticalError, finalized_artifact_bytes,
         generate_typed_host_objects, match_typed_artifacts,
     };
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use crate::amdgpu_llvm::DeviceArtifact;
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use crate::collector::TypedKernelProfile;
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use fe2o3_artifact_transaction::FinalizedArtifactSnapshot;
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use rustc_codegen_ssa::CompiledModules;
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use std::ffi::OsStr;
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use std::fs;
     use std::path::{Path, PathBuf};
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -2640,17 +2523,20 @@ mod tests {
             .split("let mut production_device_transaction_complete")
             .nth(1)
             .expect("production transaction tracking exists")
-            .split("qualification_selection::validate_device_transaction")
+            .split("let selected_qualification: Option<SelectedQualificationOracle> = None")
             .next()
             .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));
-        assert!(production.contains("production_device_admission.take()"));
+        assert!(production.contains("production_device_admission"));
+        assert!(production.contains(".take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
         assert!(production.contains("publish_worker_handoff()"));
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
         assert!(!production.contains("None =>"));
+        assert!(!production.contains("QualificationOracle"));
+        assert!(!production.contains("qualification_selection"));
         assert!(!production_pipeline.contains("Option<BuildAttempt>"));
         assert!(production_pipeline.contains("publish_compiler_module_handoff_v3"));
         let admission = backend
@@ -2662,10 +2548,27 @@ mod tests {
         assert!(admission < monomorphization);
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[test]
+    fn backend_configuration_is_feature_invariant_and_selector_free() {
+        let backend = include_str!("lib.rs");
+        let configuration = backend
+            .split("pub struct BackendConfig")
+            .nth(1)
+            .expect("backend configuration exists")
+            .split("#[cfg(all(test, feature = \"qualification-oracles-test-only\"))]\nfn dump_authenticated_frontend_contracts")
+            .next()
+            .expect("bounded backend configuration");
+        assert!(configuration.contains("production_environment_rejection"));
+        assert!(configuration.contains("production_policy::environment_rejection()"));
+        assert!(!configuration.contains("QualificationSelection"));
+        assert!(!configuration.contains("qualification_selection"));
+        assert!(!configuration.contains("qualification-oracles-test-only"));
+    }
+
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     struct TestDirectory(PathBuf);
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     impl TestDirectory {
         fn new() -> Self {
             fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
@@ -2679,14 +2582,14 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn typed_root(logical_name: &str, export_name: &str) -> TypedKernelRootV1 {
         let crate_binding =
             reserved_fe2o3_symbols::derive_crate_binding_id_v1("fixture", ["metadata"]);
@@ -2713,7 +2616,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn published_artifact(name: &str) -> DeviceArtifact {
         DeviceArtifact {
             kernel_name: name.to_owned(),
@@ -2763,7 +2666,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn ordinary_kernels_leave_generated_host_objects_empty() {
         let artifacts = [published_artifact("ordinary")];
         let (objects, temporary) = generate_typed_host_objects(
@@ -2785,7 +2688,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn typed_roots_match_finalized_artifacts_by_export_name() {
         let roots = [typed_root("add", "vecadd"), typed_root("sum", "vector_sum")];
         let artifacts = [
@@ -2798,7 +2701,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn typed_artifact_matching_rejects_missing_duplicates_and_invalid_symbols() {
         let missing = match_typed_artifacts(
             &[typed_root("vecadd", "vecadd")],
@@ -2841,7 +2744,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn finalized_artifact_snapshots_are_exact_and_bounded() {
         let directory = TestDirectory::new();
         let path = directory.0.join("vecadd.ll");
@@ -2873,7 +2776,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn temporary_host_objects_survive_until_their_owner_drops() {
         const ARTIFACT_ID: &str =
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2890,7 +2793,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn invalid_qualification_selection_is_versioned_and_strict() {
         for invalid in [
             "",
@@ -2910,7 +2813,9 @@ mod tests {
             "true",
             "1",
         ] {
-            let selection = QualificationSelection::from_value(Some(OsStr::new(invalid)));
+            let selection = crate::qualification_selection::QualificationSelection::from_value(
+                Some(OsStr::new(invalid)),
+            );
             let error = selection.resolve().expect_err("selector must be exact");
             let message = error.to_string();
             assert!(message.contains("FE2O3_QUALIFICATION_ORACLE_V1"));

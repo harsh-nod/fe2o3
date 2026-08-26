@@ -40,6 +40,8 @@ fn run_feature(target: &Path, feature: &str) -> String {
             "55".repeat(32),
         )
         .env("FE2O3_CRATE_BINDING_ID_V1", "77".repeat(32))
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env(
             "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
             "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32",
