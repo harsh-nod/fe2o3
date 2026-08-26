@@ -472,7 +472,6 @@ def _prepare_fixture(kernel: str, work_root: Path) -> Path:
     source_root = package_root / "src"
     source_root.mkdir(parents=True)
     shutil.copyfile(FIXTURE_DIR / f"{kernel}.rs", source_root / "main.rs")
-    shutil.copyfile(FIXTURE_DIR / "common.rs", source_root / "common.rs")
     manifest = f"""[package]
 name = "fe2o3-differential-{kernel}"
 version = "0.0.0"
@@ -480,9 +479,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-fe2o3-core = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-core"))} }}
 fe2o3-device = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-device"))} }}
-fe2o3-host = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-host"))}, features = ["qualification-oracles-test-only"] }}
+fe2o3-host = {{ path = {_toml_string(str(REPO_ROOT / "crates/fe2o3-host"))} }}
 
 [workspace]
 """
@@ -539,7 +537,6 @@ def _fe2o3_results(
         command_env.update(
             {
                 "FE2O3_BACKEND": str(backend),
-                "FE2O3_CODEGEN_PIPELINE": "legacy-v1",
                 "FE2O3_TARGET": settings.target or "",
                 "RUSTFLAGS": "-Zalways-encode-mir",
             }

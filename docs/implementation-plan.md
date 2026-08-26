@@ -176,9 +176,9 @@ authority. The backend fixture is not Rust user source.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
 - `fe2o3-core`: HIP-backed context, stream, memory, event, and capability
-  runtime; raw module and launch authority is qualification-only.
-- `fe2o3-host`: generated typed preparation and Worker V3 dispatch; the raw
-  launch macro is qualification-only.
+  runtime; raw module and launch mechanics are private to crate unit tests.
+- `fe2o3-host`: generated Worker V3 arguments, verification admission, reviewed
+  HSA load/dispatch, and no alternate launch graph.
 - `fe2o3-mir-model`: canonical Pliron-independent MIR semantics and
   transformations.
 - `dialect-mir`: compatibility facade over that model and a bounded
@@ -471,61 +471,28 @@ Acceptance:
 
 ### M5: First End-To-End Launch
 
-Status: historical elementwise MVP checkpoint. The current protected-production
-and explicit qualification contracts supersede the direct commands recorded in
-this section.
+Status: the historical direct-HIP application route has been removed.
 
-- `cargo-fe2o3 run` sets `FE2O3_HSACO_DIR`.
-- `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts first
-  so the backend reruns and refreshes sidecar HSACO files.
-- The manifest-wide `cargo-fe2o3 smoke` command used at this checkpoint is now
-  retired; current artifact generation uses explicit closed qualification
-  routes or protected authority release.
-- If `FE2O3_TARGET` is not set, `cargo-fe2o3` tries to infer the target from
-  `rocminfo`.
-- The `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`, `gather-odd`,
-  `scale`, `shift`, `previous`, `stencil`, `raw-add-index`,
-  `raw-const-minus`, `raw-parenthesized-sub`, `raw-disjoint-inplace-shift`,
-  `raw-disjoint-shift`, `raw-gather`, `raw-neighbors`, `raw-output-shift`,
-  `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
-  `vecadd-f64` examples load their HSACO files from that directory.
-- These historical raw-launch examples use `fe2o3-core` to load modules,
-  launch through HIP with the backend ABI, copy output back, and validate
-  results. They are qualification targets and require the explicit
-  `qualification-raw-launch-test-only` feature; they are not production-pipeline
-  acceptance evidence.
-- The path has run successfully on `gfx1201` with TheRock ROCm
-  `7.13.0a20260509`.
+- `cargo-fe2o3 build -p <package>` still compiles the kernel source through the
+  one production compiler pipeline.
+- Elementwise example binaries retain their kernel sources but fail closed at
+  the unwired Worker V3 application-verifier boundary.
+- No feature can restore raw module loading, ABI packing, or direct HIP launch
+  from an application package.
+- The old `gfx1201` raw-launch result remains historical evidence only.
 
 Remaining work:
 
-- Tighten runtime errors for missing HSACO, driver initialization failure, and
-  kernel metadata mismatches.
-- Add automated hardware coverage for at least one AMD GPU target.
+- Wire the generated Worker V3 host contract through descriptor recovery,
+  application verification, authenticated HSA loading, dispatch, and unload.
+- Add automated `gfx942` hardware coverage for that exact route.
 
 Acceptance:
 
-- Except for the generated `fe2o3-vecadd` path, the historical commands below
-  require `--features qualification-raw-launch-test-only`.
-- `cargo fe2o3 run -p fe2o3-vecadd`, `cargo fe2o3 run -p fe2o3-add-inplace`,
-  `cargo fe2o3 run -p fe2o3-copy`, `cargo fe2o3 run -p fe2o3-downsample`,
-  `cargo fe2o3 run -p fe2o3-fill`, `cargo fe2o3 run -p fe2o3-gather-odd`,
-  `cargo fe2o3 run -p fe2o3-scale`, `cargo fe2o3 run -p fe2o3-shift`,
-  `cargo fe2o3 run -p fe2o3-previous`, `cargo fe2o3 run -p fe2o3-stencil`,
-  `cargo fe2o3 run -p fe2o3-raw-add-index`,
-  `cargo fe2o3 run -p fe2o3-raw-const-minus`,
-  `cargo fe2o3 run -p fe2o3-raw-parenthesized-sub`,
-  `cargo fe2o3 run -p fe2o3-raw-disjoint-inplace-shift`,
-  `cargo fe2o3 run -p fe2o3-raw-disjoint-shift`,
-  `cargo fe2o3 run -p fe2o3-raw-gather`,
-  `cargo fe2o3 run -p fe2o3-raw-neighbors`,
-  `cargo fe2o3 run -p fe2o3-raw-output-shift`,
-  `cargo fe2o3 run -p fe2o3-saxpy`,
-  `cargo fe2o3 run -p fe2o3-axpy-inplace`, `cargo fe2o3 run -p fe2o3-negate`,
-  `cargo fe2o3 run -p fe2o3-normalize`, `cargo fe2o3 run -p fe2o3-pipeline`,
-  and `cargo fe2o3 run -p fe2o3-vecadd-f64` print success on an AMD GPU.
-- Historical acceptance used `cargo fe2o3 smoke` for this set. That command is
-  not part of the current CLI and is not current qualification evidence.
+- A supported application can execute only after the Worker V3 verifier has
+  authenticated its descriptor, generated host contract, artifact, target,
+  load envelope, dispatch arguments, and completion evidence.
+- Every example without that integration must reject execution explicitly.
 
 ### M6: Usability And Coverage
 

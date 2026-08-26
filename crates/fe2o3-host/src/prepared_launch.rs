@@ -657,11 +657,6 @@ impl<K> PreparedLaunch<K> {
             _registration: registration,
         })
     }
-
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) const fn observed_context(&self) -> &ObservedContext {
-        &self.context
-    }
 }
 
 /// A branded prepared launch whose argument regions are reserved in its exact
@@ -707,7 +702,7 @@ impl<K> ArgumentAdmittedLaunch<'_, K> {
         self.admission.len()
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(test)]
     pub(crate) const fn prepared(&self) -> &PreparedLaunch<K> {
         &self.prepared
     }

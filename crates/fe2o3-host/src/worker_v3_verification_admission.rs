@@ -7,9 +7,8 @@ use sha2::{Digest, Sha256};
 
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1, DeviceIdentity,
-    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
-    WorkerV3HostLineageIdentityV1,
+    CompilerGeneratedKernelExpectationV1, DeviceIdentity, RecoveredWorkerV3AdmissionErrorV1,
+    RecoveredWorkerV3PinnedDescriptorV1, WorkerV3HostLineageIdentityV1,
 };
 
 const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
@@ -511,13 +510,7 @@ fn validate_marker<K: CompilerGeneratedKernelExpectationV1>(
 }
 
 fn generated_host_contract<K: CompilerGeneratedKernelExpectationV1>() -> [u8; 32] {
-    match K::PROFILE {
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity,
-        } => generated_host_contract_identity,
-        CompilerGeneratedKernelProfileV1::TypedVecAddF32V1
-        | CompilerGeneratedKernelProfileV1::TypedVecAddF32RustcLayoutV2 => [0; 32],
-    }
+    K::PROFILE.generated_host_contract_identity()
 }
 
 fn derive_challenge<K: CompilerGeneratedKernelExpectationV1>(

@@ -1,5 +1,3 @@
-#![cfg(not(feature = "qualification-raw-hip-test-only"))]
-
 #[test]
 fn production_runtime_exposes_no_raw_module_or_launch_authority() {
     let tests = trybuild::TestCases::new();

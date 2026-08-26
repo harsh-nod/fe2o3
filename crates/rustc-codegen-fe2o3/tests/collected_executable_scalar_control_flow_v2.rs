@@ -3976,10 +3976,16 @@ pub mod __generated {
     pub struct GeneratedReadWriteDeviceSlice<'allocation, T>(PhantomData<&'allocation mut T>);
 
     #[derive(Clone, Copy)]
-    pub enum CompilerGeneratedKernelProfileV1 {
-        ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity: [u8; 32],
-        },
+    pub struct CompilerGeneratedKernelProfileV1 {
+        generated_host_contract_identity: [u8; 32],
+    }
+
+    impl CompilerGeneratedKernelProfileV1 {
+        pub const fn new(generated_host_contract_identity: [u8; 32]) -> Self {
+            Self {
+                generated_host_contract_identity,
+            }
+        }
     }
 
     pub struct ValidatedCompilerGeneratedSemanticWitnessV1;

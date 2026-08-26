@@ -7,17 +7,15 @@ This crate joins opaque source/request lineage, one exact measured worker
 execution, and a checkout-embedded approval profile. The profile is
 compiled from one canonical manifest and has no public raw constructor or
 decoder. The final receipt retains the execution privately and exposes neither
-HSACO bytes nor a generic payload consumer. With the
-`qualification-oracles-test-only` feature, the sole runtime transition consumes
-that receipt, loads only its privately retained bytes on one pinned MI300X lane,
-executes one fixed scalar operation, and returns bounded post-unload evidence.
-The exact runtime is absent from feature-free production builds. This crate does
-not claim general memory safety, race freedom, or CUDA-Oxide parity.
+HSACO bytes nor a generic payload consumer. The sole runtime transition
+consumes that receipt, loads only its privately retained bytes on one pinned
+MI300X lane, executes one fixed scalar operation, and returns bounded
+post-unload evidence. This crate does not claim general memory safety, race
+freedom, or CUDA-Oxide parity.
 "#]
 
 mod authority;
 mod manifest;
-#[cfg(feature = "qualification-oracles-test-only")]
 mod runtime;
 mod source;
 
@@ -28,7 +26,6 @@ pub use authority::{
     ScalarAddLineageIdentityV1, ScalarAddObservationIdentityV1, finalize_repository_scalar_add_v1,
 };
 pub use manifest::{RepositoryManifestFieldV1, RepositoryProfileErrorV1, repository_profile_v1};
-#[cfg(feature = "qualification-oracles-test-only")]
 pub use runtime::{
     QUALIFIED_MI300X_HSA_UUID_OBSERVATION_V1, REQUIRED_MI300X_PHYSICAL_DEVICE_IDENTITY_V1,
     RuntimeEvidenceIdentityV1, RuntimeEvidenceMarkerErrorV1, RuntimeEvidenceV1,

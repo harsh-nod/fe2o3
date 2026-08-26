@@ -1,10 +1,10 @@
 # Device operations
 
-`fe2o3-core` keeps raw pointer APIs unsafe and exposes raw HIP module and launch
-authority only with `qualification-raw-hip-test-only`. The device
-operation API adds a narrow safe layer for whole-buffer asynchronous copies.
-It does not schedule tasks, cancel work, infer kernel aliases, or make raw
-kernel launches safe.
+`fe2o3-core` keeps raw pointer APIs unsafe and exposes no raw HIP module or
+launch authority to downstream builds. Kernel execution belongs to the single
+Worker V3 host/HSA pipeline. The device operation API adds a narrow safe layer
+for whole-buffer asynchronous copies. It does not schedule tasks, cancel work,
+infer kernel aliases, or authorize kernel dispatch.
 
 ## Owned operations
 

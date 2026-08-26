@@ -21,6 +21,33 @@ Related documents:
 - [implementation roadmap](implementation-roadmap-v2.md)
 - [general typed dispatch V1](general-typed-dispatch-v1.md)
 
+## One Executable Architecture
+
+The permanent architecture has one executable route:
+
+```text
+Rust kernel collection -> semantic MIR -> verified middle end -> Kernel IR
+    -> typed AMDGPU/LLVM lowering -> upstream LLVM/LLD -> inspected HSACO
+    -> Worker V3 verification -> generated typed HSA dispatch
+```
+
+No Cargo feature, environment variable, macro option, workload profile, or
+test configuration may select another compiler, publication, load, or launch
+implementation. `Fresh`, `Recovered`, and `Ready` are restart states inside
+this transaction, not pipeline variants. Host compilation through ordinary
+rustc is a phase of the same Cargo plan and does not compile device kernels.
+
+Version suffixes remain only where bytes cross an ownership boundary: wire
+formats, canonical records, receipts, identities, and protocol messages. A new
+schema version migrates the same transaction; it does not add a route. Useful
+legacy comparisons may survive only as inert fixtures or offline differential
+tools with no artifact, load, or launch authority.
+
+The repository has not completed this deletion. `qualification-oracles-test-only`
+still exposes compiler-side Worker V2 and workload oracles in several crates,
+and `fe2o3-hsaco-finalize` still houses shared V3 mechanics under V2-named
+modules. These are migration debt, not supported architectural variants.
+
 ## Current Implementation Snapshot
 
 The repository has implemented a bounded vertical realization of the v2
@@ -52,6 +79,9 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `qualification-oracles-test-only`; the Cargo and host Worker V2 application
   transfer, consumer, retained descriptors, and compatibility error alias have
   been deleted from every build.
+- Default `cargo-fe2o3` unit and integration tests compile this same production
+  transaction. Qualification code is activated only by its explicit temporary
+  feature; `cfg(test)` no longer changes compiler or runtime routing.
 - Production orchestration has one fixed Cargo plan. The first phase always
   builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
   backend and commits its generated-artifact generation. The second phase
@@ -63,10 +93,10 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   and `fe2o3-host` do not depend on `fe2o3-worker-v2-bundle`; that crate is a
   qualification-only compatibility boundary. V1/V2/V3 suffixes that remain on
   records are frozen wire versions, not selectable compiler implementations.
-- Versioned artifact, descriptor, durable-publication, generated launch, HIP,
-  and HSA layers exist. Safe generated dispatch is still profile-specific; an
-  arbitrary manifest cannot manufacture a safe Rust signature or launch
-  authority.
+- Versioned artifact, descriptor, durable-publication, and HSA records exist.
+  Host execution has one workload-neutral Worker V3 graph. An arbitrary
+  manifest cannot manufacture a Rust signature, verifier decision, load
+  authorization, or dispatch authority.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
@@ -261,8 +291,8 @@ continue to point downward according to the machine-checked
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
 | `fe2o3-pliron-scalar-add-v1` | Feature-free exact backend-fixture source/lineage, repository policy and authority, Worker execution join, and scalar finalization; qualification-only sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
-| `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
-| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, capability observations; raw module and launch APIs only in qualification builds | Kernel type discovery |
+| `fe2o3-host` | Generated Worker V3 arguments, verifier admission, reviewed HSA load/dispatch, and argument ownership | MIR inspection, target lowering, or alternate launch graphs |
+| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, and capability observations; raw module and launch mechanics are private to crate tests | Kernel type discovery or downstream raw launch authority |
 | `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
 | `fe2o3-service-model`, `fe2o3-service-host` | Executable-free service semantics and authority-free borrow-retaining host typestates | Persistent execution, runtime waits, progress proof, storage-release authority |
 | `fe2o3-contracts`, `fe2o3-proof-contracts` | Shared launch/spec vocabulary, erased proof markers, and solver-neutral property records | Solving proofs, code generation, proof promotion |
@@ -498,30 +528,36 @@ authority transitions, rejection suite, and remaining exit gate are specified
 by the
 [general typed dispatch contract](general-typed-dispatch-v1.md).
 
-The transition is:
+The production transition is:
 
 ```text
-compiler-generated KernelDeclaration<K>
-                 +
-validated bundle entry + inspected code-object descriptor
-                 |
-                 v
-LoadedModule<M, C> --select K--> LoadedKernel<'module, K, C>
-                                      |
-                         typed arguments + geometry
-                                      |
-                                      v
-                           PreparedLaunch<'resources, K, C>
-                                      |
-                                      v
-                         submitted dispatch -> quiescence
+RecoveredWorkerV3PinnedDescriptorV1
+        + generated expectation + production verifier
+        |
+        v
+AuthenticatedWorkerV3ExecutableV1<K>
+        |
+        v
+AuthorizedWorkerV3HsaLoadV1<K, A>
+        |
+        v
+LoadedWorkerV3HsaExecutableV1<K, A>
+        + generated arguments + geometry
+        |
+        v
+GeneratedWorkerV3PreparedInvocationV1<K, A, Arguments>
+        |
+        v
+CompletedWorkerV3DispatchV1 -> unload
 ```
 
 The concrete type names may evolve, but these ownership rules do not:
 
-1. `LoadedModule` owns exactly one executable and its observed context.
-2. `LoadedKernel` borrows that module and binds one generated declaration to
-   one manifest entry, inspected descriptor, and resolved HSA symbol.
+1. Recovery pins one durable publication, descriptor, target, observed context,
+   and application handoff lineage before verification begins.
+2. Authentication binds one generated expectation to the recovered compiler,
+   proof, effect, and executable evidence. Authorization and load consume that
+   exact decision; no intermediate authority is cloneable or caller-created.
 3. Generated adapters bind values by source argument index to the existing
    `GeneratedArgumentPackingPlanV1`. The plan writes explicit fields by checked
    descriptor offsets, zeroes padding, preserves scalar bit patterns, and
@@ -534,13 +570,13 @@ The concrete type names may evolve, but these ownership rules do not:
    context, ABI, and launch-contract identities. Values from another entry or
    load generation are not interchangeable even when their bytes match.
 6. Dispatch consumes launch authority, publishes one AQL packet, and releases
-   resources only after quiescence. The module cannot unload while any child
-   kernel, preparation, or submitted operation is live.
+   resources only after quiescence. The executable cannot unload while a
+   prepared or submitted invocation is live.
 
-This design turns the exact vecadd bridge into one generated instance of the
-general rule. It does not make every Rust type device-safe: G2 still controls
-which layouts and language semantics the compiler accepts, and raw dispatch
-remains an explicit `unsafe` escape hatch.
+This design makes vecadd one generated instance of the same general rule. It
+does not make every Rust type device-safe: G2 still controls which layouts and
+language semantics the compiler accepts. The retired host raw-dispatch escape
+hatch is not part of any build.
 
 ## Verification Integration
 
@@ -620,9 +656,9 @@ general memory-safety, or race-freedom claim.
 - flat `MirOpRecord` streams with typed `mir.*` operations;
 - record sketches and elementwise expression recognition with general passes;
 - direct textual elementwise LLVM templates with `gpu.*` to AMDGPU lowering;
-- filename-based sidecar discovery with versioned embedded bundles;
-- safe-looking raw launch packing with typed prepared launches and explicit
-  unsafe raw methods.
+- filename-based sidecar discovery with authenticated Worker V3 envelopes;
+- every legacy raw or typed-prepared launch surface with generated Worker V3
+  arguments admitted by the one application verifier and runtime graph.
 
 ### Redesign
 

@@ -24,8 +24,13 @@ Feature-free production has one compiler transaction and no pipeline selector.
 for the fixed AMDGPU target through fe2o3, commit the exact device artifact
 generation, and then build or run the same selection for the pinned host target
 with ordinary rustc. Callers do not pass `--target`. Remaining V1/V2/V3 names
-identify frozen records and protocols, while legacy behavior is compiled only
-as explicit qualification oracles; neither is a selectable production route.
+identify frozen records and protocols, not implementations. The target
+architecture has exactly one executable compiler, publication, load, and launch
+route. Temporary qualification implementations are deletion backlog: their
+useful evidence must move to differential fixtures or offline tools, after
+which their features and code are removed rather than retained as alternate
+in-tree pipelines. Default `cargo-fe2o3` tests now compile the same production
+route as the feature-free binary; `cfg(test)` cannot select qualification code.
 
 ## CUDA-Oxide status
 
@@ -381,40 +386,15 @@ Safe ownership of resources used by asynchronous copies is documented in
   registration. The marker does not authenticate an executable or establish
   its full packed ABI and semantics; generated binding remains an unsafe
   compiler/runtime boundary.
-- `#[kernel(typed)]` implements one exact generated profile for a public, safe,
-  non-generic unit function with signature
-  `pub fn(&[f32], &[f32], DisjointSlice<f32>)`. It emits
-  `<kernel>_gpu::{Kernel, Prepared}`. The backend packages the finalized LLVM IR
-  identity, native HSACO payload, target, exact 48-byte read/read/write slice
-  ABI, canonical rustc-derived type/layout identities, and fixed
-  one-dimensional launch contract into a canonical `ArtifactContainerV1`, then
-  embeds those immutable bytes in the host link. Extraction uses normalized,
-  monomorphized rustc types, so token aliases such as `type f32 = f64` fail at
-  the compiler boundary.
-- The typed vecadd V2 profile records a domain-separated canonical source shape,
-  rustc ABI class, pointer width, size, alignment, and ordered physical
-  components for all three arguments. The host independently reconstructs the
-  same evidence from its actual slice and `DisjointSlice` layouts.
-  `Kernel::load` recomputes an identity over the profile, full kernel binding,
-  names, source and executable digests, ABI fields, effects, type/layout
-  identities, and launch contract before loading the embedded payload.
-- Before embedding, the backend parses the finalized HSACO and binds its ELF
-  entries to AMDHSA descriptors. The fixed profile requires one normal kernel,
-  the exact target and symbol, no printf/init/fini entry, and six 8-byte
-  pointer/length kernargs at offsets `0, 8, 16, 24, 32, 40`, followed by the
-  runtime-populated implicit argument region at offset 48.
-- Typed V2 registrations carry full SHA-256 crate and kernel binding IDs. The
-  Cargo wrapper derives the crate ID from rustc's crate name and ordered
-  `-C metadata` values; the macro and backend independently derive and validate
-  the kernel ID. Private host functions and artifact accessors use that ID, so
-  same-named kernels in separate rlibs cannot silently resolve to one archive
-  member. Direct compilation without the wrapper fails closed unless source
-  declares an explicit 256-bit fallback namespace.
-- The generated vecadd API safely prepares equal, nonempty `f32` buffers,
-  performs context, geometry, and alias admission, and retains all typed
-  resources through either synchronous `Prepared::launch` or non-escapable
-  `Prepared::launch_scoped`. The vecadd example uses only this generated API; it
-  contains no artifact pathname, raw parameter pack, or unsafe user launch.
+- `#[kernel(typed)]` emits a generic Worker V3 marker and typed argument plan.
+  The generated surface retains slice lifetimes, mutability, aliasing, and
+  canonical rustc-derived type/layout identities, but exposes no load or launch
+  method and no embedded artifact bytes.
+- The backend binds each kernel occurrence, target, descriptor, finalized
+  payload, proof records, and generated argument contract into the canonical
+  Worker V3 envelope. Production applications may dispatch only after the V3
+  verifier authenticates that complete graph; examples without that verifier
+  fail closed before runtime dispatch.
 - Production compilation is the only unselected compiler route and never
   falls back to a workload-specific implementation. Historical emitters and
   exact workload paths remain only as migration evidence until equivalent
@@ -427,26 +407,23 @@ Safe ownership of resources used by asynchronous copies is documented in
   ABI, witness dataflow, bounds control flow, and accepted kernel shapes are
   fail closed: invalid values and unsupported kernels remove stale generation
   artifacts and never fall back or acquire production publication authority.
-- The HIP runtime provides contexts, streams, device buffers, pinned host
-  buffers, events, synchronous transfers, event-backed borrowed and owned
-  asynchronous transfers, module loading, and kernel launch.
-- The `fe2o3-host` raw launch macro and parameter pack are qualification-only
-  `unsafe` escape hatches. Production applications load and dispatch through
-  the authenticated Worker V3 transaction and compiler-generated typed
-  arguments. Feature-free `fe2o3-core` retains context, stream, memory, event,
-  and capability APIs but does not export raw modules, functions, parameter
-  packs, launch configurations, or launch functions. Those primitives require
-  `qualification-raw-hip-test-only`; qualification callers remain responsible
-  for artifact trust, target and ABI compatibility, pointer validity, aliasing,
-  launch geometry, and resource lifetimes.
+- `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
+  host buffers, events, synchronous transfers, and event-backed borrowed and
+  owned asynchronous transfers. It exports no raw module, function, parameter
+  pack, launch configuration, or launch function in any downstream build.
+- Production applications load and dispatch only through the authenticated
+  Worker V3 transaction, compiler-generated typed arguments, and reviewed HSA
+  adapter. The former host `launch!` macro and the selectable raw-HIP core
+  feature are deleted; raw HIP module/launch mechanics remain private unit-test
+  implementation details.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 
-Hardware smoke coverage includes a local `gfx1151` Radeon 8060S and a remote
-`gfx942` MI300X. On both targets the suite generated and inspected real HSACO,
-launched every runnable example, copied results back, and compared them with
-CPU results. These runs cover the current narrow executable paths; they do not
-turn the foundations below into end-to-end features.
+Historical `gfx1151` and `gfx942` runs generated, inspected, and executed the
+then-runnable qualification paths. The current hardware lane runs focused
+runtime checks and fill/vecadd compiler qualification tests. Example binaries
+do not provide production Worker V3 execution until their verifier integration
+is complete, and the recorded runs grant no current production authority.
 
 ### Implemented foundations
 
@@ -511,17 +488,15 @@ turn the foundations below into end-to-end features.
   reaches only verified Kernel IR. Dynamic-LDS launch-byte plumbing, broad
   atomics and collectives, general source-to-HSACO finalization, and compiler
   refinement remain fail-closed gaps.
-- `fe2o3-host` has a `PreparedLaunch<K>` geometry/resource checker and a
-  `LoadedKernel<K>` authority that owns the exact HIP module and function and
-  can bind only matching prepared launches. Argument admission reserves
-  context-scoped allocation ranges and rejects overlapping mutable or
-  mutable/shared aliases. The exact generated vecadd adapter assembles these
-  pieces behind its safe API. The general doc-hidden generated-code SPI still
-  exposes an unsafe compiler boundary for legacy profiles: association of a
-  marker, complete ABI and effects, and executable semantics must be correct
-  before its sealed launch can be treated as safe. Production Worker V3 checks
-  the generated marker binding against the independently admitted descriptor,
-  then checks the complete generated argument layout before dispatch.
+- `fe2o3-host` exposes one Worker V3 execution graph. It consumes a recovered
+  pinned descriptor, authenticates compiler and verification evidence, grants
+  one exact HSA load authorization, resolves the selected kernel, validates
+  generated arguments and geometry against the admitted descriptor, packs the
+  complete COV6 kernarg, admits aliases, and dispatches through the reviewed HSA
+  adapter. The old HIP module/function loader, raw `KernelParams`, `launch!`,
+  cooperative-launch bridge, embedded-artifact contract, and profile-specific
+  vecadd host route are deleted. `PreparedLaunch<K>` and argument admission are
+  inert validation foundations; neither can load or dispatch an executable.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -561,9 +536,9 @@ turn the foundations below into end-to-end features.
 - The recovered Worker V2 host descriptor, launch-metadata bridge, synchronous
   HSA handoff, and Scalar GEMM Worker V2 hardware harness are deleted. The
   reviewed HSA adapter and physical observations remain shared mechanics for
-  the production Worker V3 lifecycle. Qualification-only Worker V2 bundle and
-  exact generated dispatch code are being removed next; they grant no
-  production authority.
+  the production Worker V3 lifecycle. Qualification-only compiler publication
+  records remain as isolated evidence inputs, but there is no Worker V2 or raw
+  HIP host execution authority in any feature configuration.
 - Compiler artifact publication is transactional and generation-owned. Typed
   generation results contain bounded immutable IR and HSACO snapshots captured
   through exact staged file descriptors and validated after publication while
@@ -837,14 +812,11 @@ turn the foundations below into end-to-end features.
   frontend projection plus authenticated compiler-refinement evidence.
   Trusted rustc diagnostic-item classification also remains part of the
   compiler TCB.
-- The generated vecadd API has synchronous launch and a scoped asynchronous
-  callback that cannot return the in-flight operation. Generalized returnable
-  borrowed or owned generated async APIs, cancellation, and composition are not
-  complete.
-- Generated artifact embedding currently supports only the
-  `x86_64-unknown-linux-gnu` host. V2 binding IDs close same-name cross-crate
-  archive aliasing, but marker-to-artifact association remains part of the
-  trusted compiler/linker contract and does not prove executable semantics.
+- Generated Worker V3 arguments retain the resources required for dispatch,
+  but generalized asynchronous application APIs, cancellation, and composition
+  remain incomplete.
+- Worker V3 marker-to-artifact association remains part of the trusted
+  compiler/linker contract and does not itself prove executable semantics.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
   current required Verus CI lane is invoked separately and does not prove the
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.

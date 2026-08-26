@@ -16,7 +16,7 @@ error[E0502]: cannot borrow `output` as immutable because it is also borrowed as
    |
 12 |     let view = output.view_mut(..).unwrap();
    |                ------ mutable borrow occurs here
-13 |     let capability = GeneratedWriteDeviceSlice::from_view_mut(observed, view).unwrap();
+13 |     let capability = GeneratedReadWriteDeviceSlice::from_view_mut(observed, view).unwrap();
 14 |     let _reuse = output.len();
    |                  ^^^^^^ immutable borrow occurs here
 15 |     drop(capability);

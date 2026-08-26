@@ -39,27 +39,6 @@ OWNED_TMP_PATH="$(
   exit 1
 }
 
-QUALIFICATION_TARGET="$(
-  env CI_LOG_DIR="${TIMEOUT_TEST_ROOT}/qualification-target-logs" \
-    bash -c '
-      source "$1"
-      CARGO_TARGET_DIRECTORY="$2"
-      prepare_cargo_fe2o3_qualification_target
-      printf "%s\n" "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}"
-    ' bash "${TEST_SCRIPT_DIR}/../ci-local.sh" "${OWNED_TMP_TARGET}"
-)"
-[[ "${QUALIFICATION_TARGET}" == \
-  "${OWNED_TMP_TARGET}/fe2o3-qualification-tests-"* ]] || {
-  printf 'ci-local created an unexpected qualification target: %s\n' \
-    "${QUALIFICATION_TARGET}" >&2
-  exit 1
-}
-[[ ! -e "${QUALIFICATION_TARGET}" && ! -L "${QUALIFICATION_TARGET}" ]] || {
-  printf 'ci-local did not trap-clean its qualification target: %s\n' \
-    "${QUALIFICATION_TARGET}" >&2
-  exit 1
-}
-
 set +e
 timeout 10s env \
   FE2O3_CI_STEP_TIMEOUT_SECONDS=1 \
@@ -423,10 +402,10 @@ done
   printf '%s\n' 'raw CPU tests omitted the computed ordinary example package' >&2
   exit 1
 }
-[[ " ${cpu_command} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]] || {
-  printf '%s\n' 'raw CPU tests omitted the scalar feature-free boundary suite' >&2
+if [[ " ${cpu_command} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; then
+  printf '%s\n' 'raw CPU tests restored the deleted scalar runtime lane' >&2
   exit 1
-}
+fi
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --all-targets -p fe2o3-managed-a -p fe2o3-managed-b" \
   "$(step_command wrapper-managed-cpu-tests)" \
@@ -894,23 +873,35 @@ assert_equals \
   "$(step_command rocm-doctor)" \
   'ROCm compile did not invoke the resolved driver directly for doctor'
 assert_equals \
-  'fe2o3-host fe2o3-pliron-scalar-add-v1' \
-  "${ROCM_QUALIFICATION_TEST_PACKAGES[*]}" \
-  'ROCm qualification test package set changed without review'
-assert_equals \
   'kernel-ir-v1' \
   "${ROCM_ARTIFACT_QUALIFICATION_ROUTES[*]}" \
   'ROCm artifact qualification route set changed without review'
-qualification_target="${TIMEOUT_TEST_ROOT}/external-target/fe2o3-qualification-tests-${BASHPID}"
-assert_equals \
-  "${qualification_target}" \
-  "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" \
-  'ROCm qualification tests did not use the fresh private target'
-for qualification_package in "${ROCM_QUALIFICATION_TEST_PACKAGES[@]}"; do
-  assert_equals \
-    "env -u FE2O3_TARGET CARGO_TARGET_DIR=${qualification_target} ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 test --locked --all-targets -p ${qualification_package} --features ${CARGO_FE2O3_QUALIFICATION_FEATURE}" \
-    "$(step_command "rocm-qualification-tests-${qualification_package}")" \
-    "ROCm compile did not run qualification tests for ${qualification_package}"
+for index in "${!STEP_NAMES[@]}"; do
+  step_name="${STEP_NAMES[index]}"
+  step_command_value="${STEP_COMMANDS[index]}"
+  if [[ "${step_name}" == rocm-qualification-tests-* ]] ||
+    { [[ "${step_name}" == rocm-* ]] &&
+      [[ " ${step_command_value} " == *" --features ${CARGO_FE2O3_QUALIFICATION_FEATURE} "* ]] &&
+      { [[ " ${step_command_value} " == *" -p fe2o3-host "* ]] ||
+        [[ " ${step_command_value} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; }; }; then
+    printf 'deleted ROCm qualification test lane returned as %s\n' "${step_name}" >&2
+    exit 1
+  fi
+  case "${step_name}" in
+    rocm-trusted-device-items | \
+      rocm-trusted-device-item-stale-cleanup | \
+      rocm-cross-crate-typed-binding | \
+      rocm-kernel-ir-codegen-rejection | \
+      rocm-kernel-ir-vecadd)
+      [[ " ${step_command_value} " == \
+        *" FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 "* ]] &&
+        [[ " ${step_command_value} " == \
+          *" FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} "* ]] || {
+        printf 'ROCm nested test lost the sealed driver binding: %s\n' "${step_name}" >&2
+        exit 1
+      }
+      ;;
+  esac
 done
 assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test trusted_device_items genuine_markers_emit_and_local_external_spoofs_fail_closed -- --ignored --exact" \
@@ -991,6 +982,16 @@ assert_equals \
   "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/hardware-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test kernel_ir_codegen opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- --ignored --exact" \
   "$(step_command hardware-kernel-ir-vecadd)" \
   'hardware smoke did not provide the direct driver contract to nested tests'
+for hardware_step in hardware-kernel-ir-fill hardware-kernel-ir-vecadd; do
+  hardware_command="$(step_command "${hardware_step}")"
+  [[ " ${hardware_command} " == \
+    *" FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/hardware-driver/cargo-fe2o3 "* ]] &&
+    [[ " ${hardware_command} " == \
+      *" FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} "* ]] || {
+    printf 'hardware nested test lost the sealed driver binding: %s\n' "${hardware_step}" >&2
+    exit 1
+  }
+done
 assert_step_count hardware-smoke 0 \
   'hardware smoke retained the selector-free manifest runner'
 unset FE2O3_ALLOW_GPU_SMOKE FE2O3_TARGET

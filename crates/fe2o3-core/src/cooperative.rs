@@ -2,14 +2,14 @@ use crate::{Error, GpuContext, Result, check};
 use core::fmt;
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+#[cfg(test)]
 use crate::{GpuFunction, KernelParams, LaunchConfig, Stream};
 
 trait CooperativeBackend {
     fn bind(&self, context: &GpuContext) -> Result<()>;
     fn cooperative_launch(&self, device: i32) -> Result<i32>;
 
-    #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+    #[cfg(test)]
     unsafe fn launch(
         &self,
         function: &GpuFunction,
@@ -38,7 +38,7 @@ impl CooperativeBackend for HipCooperativeBackend {
         Ok(supported)
     }
 
-    #[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+    #[cfg(test)]
     unsafe fn launch(
         &self,
         function: &GpuFunction,
@@ -132,7 +132,7 @@ fn observe_cooperative_launch<B: CooperativeBackend>(
 /// completion. The kernel must be valid for cooperative execution. A
 /// successful return does not prove race freedom, memory safety, completion,
 /// or kernel semantics.
-#[cfg(any(test, feature = "qualification-raw-hip-test-only"))]
+#[cfg(test)]
 pub unsafe fn launch_cooperative_kernel_on_stream(
     function: &GpuFunction,
     config: LaunchConfig,

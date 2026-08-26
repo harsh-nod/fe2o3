@@ -5,11 +5,11 @@ use crate::generated_argument_plan::{
 use crate::{
     AliasAdmissionError, ArgumentAccess, ArgumentAccessMode, ArgumentAliasAdmission,
     CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKernelProfileV1, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
-    GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedSliceArgumentPairV1,
-    HsaCompletedWorkerV3DispatchV1, HsaLaunchAuthorizationError, HsaLaunchGeometryV1,
-    LoadedWorkerV3HsaExecutableV1, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
-    ReviewedHsaImplicitKernargAdapterV1, WorkerV3GeneratedDispatchErrorV1,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
+    GeneratedArgumentPackingPlanV1, GeneratedSliceArgumentPairV1, HsaCompletedWorkerV3DispatchV1,
+    HsaLaunchAuthorizationError, HsaLaunchGeometryV1, LoadedWorkerV3HsaExecutableV1,
+    ObservedContext, RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaImplicitKernargAdapterV1,
+    WorkerV3GeneratedDispatchErrorV1,
 };
 use fe2o3_artifacts::Access;
 use std::alloc::{Layout, alloc_zeroed, dealloc, handle_alloc_error};
@@ -178,12 +178,6 @@ where
     where
         Arguments: CompilerGeneratedWorkerV3ArgumentsV1<'allocation, K>,
     {
-        if !matches!(
-            K::PROFILE,
-            CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 { .. }
-        ) {
-            return Err(GeneratedWorkerV3PrepareErrorV1::UnsupportedProfile);
-        }
         if !self.matches_observed_context(observed) {
             return Err(GeneratedWorkerV3PrepareErrorV1::ContextMismatch);
         }
@@ -358,7 +352,6 @@ impl Drop for WorkerV3AlignedKernargV1 {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GeneratedWorkerV3PrepareErrorV1 {
-    UnsupportedProfile,
     ContextMismatch,
     CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
     LaunchAuthorization(HsaLaunchAuthorizationError),

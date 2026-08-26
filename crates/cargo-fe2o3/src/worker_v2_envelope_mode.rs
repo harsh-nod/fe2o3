@@ -9,12 +9,12 @@ impl WorkerV2EnvelopeModeV1 {
         matches!(self, Self::Required)
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn grants_load_authority(self) -> bool {
         false
     }
 
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
+    #[cfg(feature = "qualification-oracles-test-only")]
     pub(crate) const fn grants_launch_authority(self) -> bool {
         false
     }

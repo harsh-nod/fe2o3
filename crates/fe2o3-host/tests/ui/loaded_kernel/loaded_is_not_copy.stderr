@@ -1,9 +1,0 @@
-error[E0382]: use of moved value: `loaded`
- --> tests/ui/loaded_kernel/loaded_is_not_copy.rs:7:19
-  |
-5 | fn duplicate(loaded: LoadedKernel<Kernel>) {
-  |              ------ move occurs because `loaded` has type `LoadedKernel<Kernel>`, which does not implement the `Copy` trait
-6 |     let _first = loaded;
-  |                  ------ value moved here
-7 |     let _second = loaded;
-  |                   ^^^^^^ value used here after move

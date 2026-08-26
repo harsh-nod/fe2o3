@@ -1,7 +1,7 @@
 # cargo-fe2o3
 
-`cargo-fe2o3` coordinates fe2o3 build, qualification, inspection, debugging,
-and deterministic CPU-simulation workflows.
+`cargo-fe2o3` coordinates fe2o3 build, qualification, binding-only host
+checks/tests, inspection, and debugging workflows.
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 
@@ -45,10 +45,10 @@ inputs and are remeasured; no machine-specific digest is compiled in.
 
 Production has no pipeline selector. `FE2O3_CODEGEN_PIPELINE` is rejected, and
 `FE2O3_QUALIFICATION_ORACLE_V1` is reserved for temporary non-production test
-oracles such as simulation and migration equivalence checks. Those oracles
-exist only in `cargo-fe2o3` and `rustc-codegen-fe2o3` builds made with each
-package's `qualification-oracles-test-only` feature. Feature-free binaries
-reject the environment variable.
+compiler and finalizer oracles. Those oracles exist only in `cargo-fe2o3` and
+`rustc-codegen-fe2o3` builds made with each package's
+`qualification-oracles-test-only` feature. The standalone KIR simulator is not
+selected through this variable; feature-free binaries reject it.
 
 Production requires `FE2O3_PRODUCTION_BUILD_CONFIG_V1` to name a canonical
 `fe2o3-production-build-config-v1` JSON recipe. The recipe pins the selected
@@ -152,69 +152,25 @@ fingerprint and remove only the opened
 closed without deletion. Successful incremental builds republish their exact
 snapshot. Unrelated host outputs remain available for normal Cargo reuse.
 
-### CPU simulation from source
+### Offline CPU simulation
 
-`cargo fe2o3 simulate` runs the ordinary Cargo/source frontend through the
-generic verified MIR-to-KIR lowering and then executes the exact canonical KIR
-V7 bytes with the bounded CPU simulator:
+`cargo-fe2o3` has no `simulate` command in any feature configuration and does
+not depend on `fe2o3-kir-sim-cli`. Hardware commands never fall back to CPU
+execution. Simulation is an offline operation over an existing canonical KIR
+V7 module and a bounded typed request:
 
 ```console
-cargo fe2o3 simulate \
-  --request request.json \
-  --output result.json \
-  -- --package my-kernel
+cargo run -p fe2o3-kir-sim-cli --bin fe2o3-kir-sim -- \
+  --kir-v7 kernel.kir --request request.json --output result.json
 ```
 
-The request uses `fe2o3-simulation-request-v1` and names one kernel, launch
-grid, workgroup, and typed scalar or buffer arguments. The result uses
-`fe2o3-simulation-result-v1`; its additive evidence fields explicitly report
-`simulated=true`, no hardware observation or validation, no performance
-prediction, the scalar target profile, deterministic scheduler, and exact KIR
-identity. Omitting `--output` writes exactly one JSON document to stdout.
-Output-file publication is private, durable, atomic, and no-replace.
+`fe2o3-kir-sim-trace` emits deterministic logical thread, wave, and workgroup
+observations for the same execution.
 
-The command securely reads and strictly admits the complete request before
-starting Cargo. It binds the byte length and SHA-256 and verifies both again
-immediately before execution, so request replacement during a long build fails
-without producing output when it changes any admitted byte. Byte-identical
-pathname or inode replacement is content-equivalent. Compiler completions
-publish inert, attempt-scoped canonical KIR. After Cargo exits, the parent
-requires exactly one kernel-bearing module. Zero or multiple modules are
-rejected deterministically; a module may contain multiple kernels, and the
-typed request selects exactly one of them. Use normal Cargo package/target
-selection after `--` to select the intended producer.
-
-Each invocation supplies a fresh, nonzero tracked simulation-attempt identity
-to every supported `#[kernel]` expansion. The identity changes Cargo's
-dependency observation without changing generated kernel tokens, so a reused
-Cargo target must rerun each kernel-bearing source crate and publish a new
-one-shot KIR handoff. The `<target>/fe2o3` simulation generation is never
-committed or cached: it is explicitly deleted after success, Cargo failure,
-request rejection, simulator rejection, or output-publication failure.
-Unrelated Cargo host outputs remain reusable. Manually forging reserved kernel
-registration symbols is not a supported source root; if a root does not pass
-through `#[kernel]` and therefore does not observe the fresh attempt, reuse
-produces no handoff and fails closed.
-
-Simulation sets the existing `FE2O3_HIP_SYS_DISABLE` build boundary and the
-default `cargo-fe2o3` dependency and ELF closures exclude `fe2o3-core`,
-`fe2o3-host`, `fe2o3-hsa-runtime`, HIP, HSA, KFD, DRM, and ROCm libraries.
-It does not enumerate a GPU or initialize a GPU runtime. Hardware commands
-remain explicit and never fall back to simulation. The legacy direct
-row-softmax HSA runtime, hardware fixtures, and `legacy-hsa-runtime` feature are
-deleted; row-softmax runtime work must use the generic Worker V3 application
-path. Simulation has no HSA, HIP, KFD, or ROCm runtime.
-
-`cargo fe2o3 simulate` is compiled only with
-`qualification-oracles-test-only`; it is absent from normal command dispatch
-and help, and `fe2o3-kir-sim-cli` is absent from the feature-free normal
-dependency graph. This is a qualification route, not the production compiler
-transaction. It
-provides exact KIR V7 custody from the current generic frontend and runs every
-kernel/type/operation admitted by both that lowering and the simulator. An
-unsupported source construct or simulator operation fails closed. It grants no
+This route is independent of source compilation and grants no source-to-KIR,
 compiler, refinement-proof, artifact, runtime, performance-prediction, or GPU
-authority.
+authority. It does not initialize HIP, HSA, KFD, DRM, or a GPU. Unsupported KIR
+types or operations fail closed.
 
 Deletion guards are structural accident and substitution defenses, not
 authentication. Their random tokens correlate an interrupted creation with
@@ -346,17 +302,14 @@ envelope names are recognized only for fail-closed rejection before child
 spawn. The V3 transfer carries inert descriptor custody; it does not itself
 authenticate prerequisites or grant HSA load or launch authority.
 
-The same boundary is enforced by `fe2o3-host`: feature-free builds export only
-the Worker V3 application, admission, verification, load, and generated
-dispatch route. Worker V2 application recovery and retained-descriptor support
-have been deleted; only stale V2 environment and envelope names remain as
-fail-closed rejection sentinels. Independent Worker V2 bundle admission,
-prerequisite authentication, HSA loading, launch metadata, and its alpha/zeta,
-scalar-GEMM, and Worker-V2 vecadd adapters require the host-local
-`qualification-oracles-test-only` feature. General `#[kernel(typed)]`
-expansion emits only Worker V3 host code. The retired
-`qualification_worker_v2` option is rejected, and the embedded vecadd
-compatibility API has been deleted.
+The same boundary is enforced by `fe2o3-host`: every build exports only the
+Worker V3 application, admission, verification, HSA load, and generated
+dispatch graph. Worker V2 recovery, bundle admission, prerequisite
+authentication, HSA lifecycle and metadata, workload adapters, embedded
+vecadd API, and the host qualification feature are deleted. Only stale V2
+names remain as fail-closed rejection sentinels. General `#[kernel(typed)]`
+expansion emits only Worker V3 host code, and the retired
+`qualification_worker_v2` option is rejected.
 
 The application integration fixture is V3-only. It has no runtime selector and
 its feature graph enables `fe2o3-host` only with `hardware-test-hooks`; it does

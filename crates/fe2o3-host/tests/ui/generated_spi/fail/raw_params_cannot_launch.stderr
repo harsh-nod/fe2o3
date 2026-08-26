@@ -1,8 +1,0 @@
-error[E0599]: no method named `launch_generated_scoped` found for struct `LoadedArgumentAdmittedLaunch<'loaded, 'allocation, K>` in the current scope
-  --> tests/ui/generated_spi/fail/raw_params_cannot_launch.rs:13:10
-   |
-12 | /     admitted
-13 | |         .launch_generated_scoped(stream, |_| {})
-   | |         -^^^^^^^^^^^^^^^^^^^^^^^ method not found in `LoadedArgumentAdmittedLaunch<'_, '_, Kernel>`
-   | |_________|
-   |

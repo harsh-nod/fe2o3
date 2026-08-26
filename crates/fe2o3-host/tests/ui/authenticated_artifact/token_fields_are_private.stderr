@@ -1,7 +1,0 @@
-error[E0451]: fields `validated` and `binding` of struct `fe2o3_host::AuthenticatedKernelArtifactV1` are private
- --> tests/ui/authenticated_artifact/token_fields_are_private.rs:4:41
-  |
-4 |     let AuthenticatedKernelArtifactV1 { validated, binding } = token;
-  |                                         ^^^^^^^^^  ^^^^^^^ private field
-  |                                         |
-  |                                         private field

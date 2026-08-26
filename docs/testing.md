@@ -216,9 +216,9 @@ Commits `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
 target is `gfx942:xnack-`; the qualifying device reports
 `gfx942:sramecc+:xnack-`. The backend fixture is not Rust user source. Source
 observation, policy/authority, Worker execution joining, and exact finalization
-remain feature-free; the MI300X/HSA consumer is a qualification oracle compiled
-only with `qualification-oracles-test-only`. Run the ignored test on `mi300x`
-with the exact qualified files and lane variables:
+remain bounded legacy qualification evidence. The MI300X/HSA consumer is not
+part of the standard generic or ROCm CI lanes. Run the ignored test explicitly
+on `mi300x` with the exact qualified files and lane variables:
 
 ```text
 cd /home/harsh/fe2o3-pliron-final-current
@@ -230,21 +230,15 @@ FE2O3_PLIRON_SCALAR_ADD_V1_WORKER=/home/harsh/fe2o3-pliron-integrated-worker-bui
 FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_WORKER_BUILD_ID_FILE=/home/harsh/fe2o3-pliron-integrated-worker-build/fe2o3-worker-build-id.txt \
 FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_LLVM_BUILD_ID_FILE=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/evidence-v6/upstream-llvm-build-id.txt \
 cargo test --locked -p fe2o3-pliron-scalar-add-v1 \
-  --features qualification-oracles-test-only \
   --test gfx942_repository_scalar_add_v1_hardware \
   repository_scalar_add_v1_isolated_mi300x \
   -- --ignored --exact --nocapture
 ```
 
-`generic-core` executes this crate's feature-free unit and UI boundary tests.
-`rocm-compile` uses the pinned `cargo-fe2o3` driver to run the
-qualification-enabled `fe2o3-host` and scalar-add unit/UI targets without
-running ignored hardware tests. Those guarded tests share a private Cargo
-target created for that CI run and removed at exit, so artifacts from another
-run cannot enter their trybuild cache. Nested Cargo tools such as trybuild
-receive the inherited fully sealed rustc image and read-only library-tree
-descriptor from the parent test. The live MI300X test above remains a separate,
-explicit opt-in.
+`generic-core` executes feature-free host boundary tests. `rocm-compile` builds
+the sealed qualification Cargo driver and runs bounded rustc-codegen artifact
+oracles; it does not enable an alternate host execution graph or a scalar-add
+runtime lane. The live MI300X test above remains a separate explicit opt-in.
 
 The qualified Worker executable has SHA-256
 `12c06e0da5d812c1db6f33450f99a8d70087c585eec552f7f8616077704361fd`
@@ -421,25 +415,26 @@ dispatch evidence and does not authorize a new runtime dependency.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated
-dispatch route. Worker V2 application recovery is deleted, while
-`qualification-oracles-test-only` retains independent bundle admission,
-prerequisite authentication, loading, launch metadata, and old
-workload-specific adapters for oracle fixtures.
+dispatch route. Worker V2 application recovery, embedded-artifact loading,
+direct HIP module/function loading, raw parameter packing, cooperative launch,
+and workload-specific host adapters are deleted in every feature configuration.
+The former host qualification feature is deleted and cannot restore an
+alternate execution path.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
-and runtime imports, including the embedded artifact contract and generated
-vecadd `Kernel`, to guard that public API boundary. The macro fixture also
+and runtime imports, including the retired embedded artifact contract, raw HIP
+surface, and generated vecadd `Kernel`, to guard that public API boundary. The macro fixture also
 proves that every supported `#[kernel(typed)]` signature, including exact
 vecadd and Scalar GEMM, emits only generic Worker V3 host code. It rejects the
 retired `qualification_worker_v2` option and verifies lifetime retention,
-private fields, non-cloneable arguments, marker binding, hidden pointers, and
-one-shot dispatch against the V3 API. The vecadd example has no embedded
+private fields, non-cloneable arguments, hidden pointers, and one-shot dispatch
+against the V3 API. The vecadd example has no embedded
 execution feature; it type-checks the V3 `Arguments` surface and fails closed
 before runtime dispatch until a production verifier is supplied.
 
 The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
 dependency graph contains `fe2o3-host/default` and
-`fe2o3-host/hardware-test-hooks`, but not
-`fe2o3-host/qualification-oracles-test-only`:
+`fe2o3-host/hardware-test-hooks`; the host crate has no qualification feature
+or alternate execution graph:
 
 ```text
 cargo test --locked -p cargo-fe2o3 \

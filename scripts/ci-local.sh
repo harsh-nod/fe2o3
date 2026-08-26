@@ -50,7 +50,6 @@ CARGO_FE2O3_SHA256=
 CARGO_FE2O3_DRIVER_ROOT=
 CARGO_FE2O3_DRIVER_PROFILE=
 CARGO_TARGET_DIRECTORY=
-CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY=
 CI_PRIVATE_TMP_ROOT=
 readonly -a ROCM_TRUSTED_DEVICE_ITEM_PACKAGES=(
   fe2o3-vecadd
@@ -67,10 +66,6 @@ readonly -a ROCM_TRUSTED_DEVICE_ITEM_PACKAGES=(
 # the compiler-derived binding.
 readonly -a ROCM_EXPLICIT_NAMESPACE_FALLBACK_PACKAGES=(
   fe2o3-typed-alias-spoof
-)
-readonly -a ROCM_QUALIFICATION_TEST_PACKAGES=(
-  fe2o3-host
-  fe2o3-pliron-scalar-add-v1
 )
 readonly -a ROCM_ARTIFACT_QUALIFICATION_ROUTES=(
   kernel-ir-v1
@@ -117,7 +112,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-mir-model
   fe2o3-pliron
   fe2o3-pliron-conformance
-  fe2o3-pliron-scalar-add-v1
   fe2o3-proof-contracts
   fe2o3-rustc-front
   fe2o3-rustc-invocation
@@ -306,20 +300,6 @@ validate_cargo_fe2o3_driver() {
       'cargo-fe2o3 qualification driver identity or private custody changed' >&2
     return 2
   fi
-}
-
-prepare_cargo_fe2o3_qualification_target() {
-  validate_private_directory 'Cargo target directory' "${CARGO_TARGET_DIRECTORY}"
-  CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY="${CARGO_TARGET_DIRECTORY}/fe2o3-qualification-tests-${BASHPID}"
-  [[ ! -e "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" &&
-    ! -L "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" ]] || {
-    printf 'qualification test target already exists: %s\n' \
-      "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" >&2
-    return 2
-  }
-  mkdir -m 700 -- "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}"
-  validate_private_directory 'Qualification test target' \
-    "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}"
 }
 
 resolve_cargo_fe2o3_artifact() {
@@ -526,19 +506,6 @@ cleanup_cargo_fe2o3_driver() {
     "$(stat -c '%u' -- "${CI_PRIVATE_TMP_ROOT}")" == "$(id -u)" ]]; then
     rm -rf -- "${CI_PRIVATE_TMP_ROOT}"
   fi
-  if [[ -n "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" &&
-    -n "${CARGO_TARGET_DIRECTORY}" &&
-    -d "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" &&
-    ! -L "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" &&
-    "$(dirname -- "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}")" == \
-      "${CARGO_TARGET_DIRECTORY}" &&
-    "$(basename -- "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}")" == \
-      "fe2o3-qualification-tests-${BASHPID}" &&
-    "$(stat -c '%u' -- "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}")" == \
-      "$(id -u)" ]]; then
-    rm -rf -- "${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}"
-  fi
-  CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY=
 }
 
 trap cleanup_cargo_fe2o3_driver EXIT
@@ -1043,7 +1010,6 @@ run_rocm_compile() {
   local package qualification_oracle route
 
   prepare_cargo_fe2o3_driver rocm qualification
-  prepare_cargo_fe2o3_qualification_target
   load_dynamic_loader_environment_removals loader_environment_removals
   validate_cargo_fe2o3_driver
   load_example_packages \
@@ -1078,14 +1044,6 @@ run_rocm_compile() {
   run_step rocm-doctor \
     env "${loader_environment_removals[@]}" \
       "${CARGO_FE2O3_BINARY}" doctor
-  for package in "${ROCM_QUALIFICATION_TEST_PACKAGES[@]}"; do
-    run_step "rocm-qualification-tests-${package}" \
-      env -u FE2O3_TARGET "${loader_environment_removals[@]}" \
-        CARGO_TARGET_DIR="${CARGO_FE2O3_QUALIFICATION_TARGET_DIRECTORY}" \
-        "${CARGO_FE2O3_BINARY}" test --locked --all-targets \
-        -p "${package}" \
-        --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}"
-  done
   run_step rocm-trusted-device-items \
     env "${loader_environment_removals[@]}" \
       FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \

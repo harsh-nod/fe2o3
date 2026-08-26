@@ -1,7 +1,4 @@
-use fe2o3_core::{DeviceBuffer, GpuContext, LaunchConfig};
 use fe2o3_device::{DisjointSlice, kernel, thread};
-use fe2o3_host::launch;
-use std::path::PathBuf;
 
 #[kernel]
 pub fn raw_add_index(x: &[f32], mut out: DisjointSlice<f32>) {
@@ -18,48 +15,10 @@ pub fn raw_add_index(x: &[f32], mut out: DisjointSlice<f32>) {
     *value = x[source];
 }
 
-fn main() -> fe2o3_core::Result<()> {
-    const N: usize = 1024;
-
-    let context = GpuContext::new(0)?;
-    let stream = context.default_stream();
-
-    let x_host: Vec<f32> = (0..(N * 2)).map(|i| i as f32 * 0.015625 + 2.0).collect();
-    let x_dev = DeviceBuffer::from_host(&stream, &x_host)?;
-    let out_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
-
-    let hsaco_dir = std::env::var_os("FE2O3_HSACO_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    // SAFETY: `raw_add_index.hsaco` is compiler-generated for the
-    // `raw_add_index` kernel here. The subsequent launch remains independently unsafe.
-    // This example requires that output to target this device and contain no init/fini kernels.
-    let module =
-        unsafe { context.load_module_from_file_unchecked(hsaco_dir.join("raw_add_index.hsaco")) }?;
-
-    // SAFETY: `raw_add_index` expects f32 slice ABIs; `x_dev` has 2 * N
-    // elements, `out_dev` has N, both live through sync, and the kernel guards
-    // the computed read index.
-    unsafe {
-        launch! {
-            kernel: raw_add_index,
-            stream: stream,
-            module: module,
-            config: LaunchConfig::for_num_elems(N as u32),
-            args: [slice(x_dev), slice_mut(out_dev)]
-        }
-    }?;
-
-    let out_host = out_dev.to_host_vec(&stream)?;
-    for i in 0..N {
-        let expected = x_host[i + i + 1];
-        assert!(
-            (out_host[i] - expected).abs() < 1e-5,
-            "mismatch at {i}: got {}, expected {expected}",
-            out_host[i]
-        );
-    }
-
-    println!("raw_add_index passed for {N} elements");
-    Ok(())
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "the production Worker V3 application verifier is not wired for fe2o3-raw_add_index",
+    )
+    .into())
 }

@@ -46,13 +46,34 @@ fn production_configuration_has_no_compatibility_type_alias() {
 }
 
 #[test]
+fn unit_test_configuration_cannot_select_qualification_code() {
+    for (name, source) in [
+        ("main", include_str!("../src/main.rs")),
+        (
+            "build configuration",
+            include_str!("../src/build_config.rs"),
+        ),
+        ("binding wrapper", include_str!("../src/binding_wrapper.rs")),
+        (
+            "capability broker",
+            include_str!("../src/capability_broker.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains("any(test, feature = \"qualification-oracles-test-only\")"),
+            "{name} still changes pipeline behavior under cfg(test)"
+        );
+    }
+}
+
+#[test]
 fn production_managed_transaction_has_no_qualification_dispatch() {
     let source = include_str!("../src/binding_wrapper.rs");
     let preparation = source
         .split("fn prepare_production_managed_attempt(")
         .nth(1)
         .expect("direct production preparation exists")
-        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn prepare_managed_attempt(")
+        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\nfn prepare_managed_attempt(")
         .next()
         .expect("qualification preparation follows production preparation");
     for rejected in [
@@ -76,7 +97,7 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .split("fn complete_managed_attempt_inner(")
         .nth(1)
         .expect("direct production completion exists")
-        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn complete_managed_attempt_inner(")
+        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\nfn complete_managed_attempt_inner(")
         .next()
         .expect("qualification completion follows production completion");
     assert!(!completion.contains("finish_build_attempt"));
@@ -89,7 +110,7 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .split("fn materialize_production_child_environment(")
         .nth(1)
         .expect("direct production child environment exists")
-        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn materialize_reviewed_child_environment(")
+        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\nfn materialize_reviewed_child_environment(")
         .next()
         .expect("qualification child environment follows production environment");
     assert!(!environment.contains("GeneralGemm"));
@@ -105,7 +126,7 @@ fn production_capability_intake_releases_oracle_authority_immediately() {
         .split("fn from_production_environment(")
         .nth(1)
         .expect("direct production capability intake exists")
-        .split("#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    fn from_qualification_environment(")
+        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\n    fn from_qualification_environment(")
         .next()
         .expect("qualification capability intake follows production intake");
     assert!(intake.contains(".invocation_authority"));
@@ -115,16 +136,16 @@ fn production_capability_intake_releases_oracle_authority_immediately() {
     assert!(!intake.contains("Some(invocation_authority)"));
 
     assert!(source.contains(
-        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>"
+        "#[cfg(feature = \"qualification-oracles-test-only\")]\n    invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>"
     ));
     assert!(broker.contains(
-        "Ordinary,\n        #[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        S09,"
+        "Ordinary,\n        #[cfg(feature = \"qualification-oracles-test-only\")]\n        S09,"
     ));
     assert!(broker.contains(
-        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        pub(crate) fn inherit_for_child("
+        "#[cfg(feature = \"qualification-oracles-test-only\")]\n        pub(crate) fn inherit_for_child("
     ));
     assert!(broker.contains(
-        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n        pinned_cargo_image: File,"
+        "#[cfg(feature = \"qualification-oracles-test-only\")]\n        pinned_cargo_image: File,"
     ));
 }
 
@@ -136,7 +157,7 @@ fn production_run_has_one_worker_v3_application_path() {
         .nth(1)
         .expect("production runner injection exists")
         .split(
-            "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\nfn inject_qualification_application_runner(",
+            "#[cfg(feature = \"qualification-oracles-test-only\")]\nfn inject_qualification_application_runner(",
         )
         .next()
         .expect("qualification runner injection follows production injection");
@@ -149,9 +170,7 @@ fn production_run_has_one_worker_v3_application_path() {
         .split("if runner_count != 0 || !original_runner.is_empty()")
         .nth(1)
         .expect("production runner execution exists")
-        .split(
-            "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\n    {\n        let handoff",
-        )
+        .split("#[cfg(feature = \"qualification-oracles-test-only\")]\n    {\n        let handoff")
         .next()
         .expect("qualification runner execution follows production execution");
     assert!(execution.contains("requires a canonical load envelope"));
@@ -161,11 +180,11 @@ fn production_run_has_one_worker_v3_application_path() {
 
     let handoff_source = include_str!("../src/application_handoff.rs");
     assert!(handoff_source.contains(
-        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\npub(crate) const RUNNER_EXPECTS_NO_ENVELOPE"
+        "#[cfg(feature = \"qualification-oracles-test-only\")]\npub(crate) const RUNNER_EXPECTS_NO_ENVELOPE"
     ));
     let exec_source = include_str!("../src/application_exec.rs");
     assert!(exec_source.contains(
-        "#[cfg(any(test, feature = \"qualification-oracles-test-only\"))]\npub(crate) fn configure_closed_descriptor_baseline"
+        "#[cfg(feature = \"qualification-oracles-test-only\")]\npub(crate) fn configure_closed_descriptor_baseline"
     ));
 }
 
@@ -190,9 +209,9 @@ fn ordinary_host_phase_has_no_device_compiler_controls() {
         .split("fn run_production_host_cargo(")
         .nth(1)
         .expect("host phase exists")
-        .split("fn configure_simulation_build_environment(")
+        .split("fn scrub_simulation_build_environment(")
         .next()
-        .expect("host phase ends before qualification configuration");
+        .expect("host phase ends before environment scrubbing helpers");
 
     for removed in [
         ".env_remove(BACKEND_ENV)",

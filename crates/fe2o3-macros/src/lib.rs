@@ -1413,9 +1413,9 @@ fn expand_general_typed_kernel_with_imports(
                 {
                     const PROFILE:
                         __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1 =
-                        __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-                            generated_host_contract_identity: [#(#generated_host_contract_profile_bytes),*],
-                        };
+                        __fe2o3_kernel_host::__generated::CompilerGeneratedKernelProfileV1::new(
+                            [#(#generated_host_contract_profile_bytes),*]
+                        );
 
                     const KERNEL_BINDING_ID_V1: [u8; 32] = [#(#binding_bytes),*];
                 }
@@ -5363,7 +5363,7 @@ mod tests {
             assert!(expansion.contains("pub struct Arguments < 'allocation >"));
             assert!(expansion.contains("pub fn new"));
             assert!(expansion.contains("CompilerGeneratedKernelExpectationV1"));
-            assert!(expansion.contains("ManifestDerivedScalarSliceV1"));
+            assert!(expansion.contains("CompilerGeneratedKernelProfileV1 :: new"));
             assert!(expansion.contains(&binding.to_hex()));
             assert!(expansion.contains(&contract.to_hex()));
             assert!(expansion.contains(&host_kernel_symbol_v1(binding)));

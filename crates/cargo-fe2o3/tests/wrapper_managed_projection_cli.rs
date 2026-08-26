@@ -234,7 +234,7 @@ fn literal_cli_computes_disjoint_exhaustive_cpu_test_partitions() {
     write(
         &workspace.0,
         "examples/regression-manifest-v2.txt",
-        "fe2o3-example-regressions-v2\npackage|rustc_check|artifact_qualification|source_artifacts\nignored|false|none|-\nmanaged|true|none|-\nraw-a|true|none|-\nraw-b|true|none|-\nrocm|true|kernel-ir-v1|rocm_kernel.hsaco\n",
+        "fe2o3-example-regressions-v2\npackage|rustc_check|artifact_qualification|source_artifacts\nignored|false|none|-\nmanaged|true|none|managed.hsaco\nraw-a|true|none|-\nraw-b|true|none|-\nrocm|true|kernel-ir-v1|rocm_kernel.hsaco\n",
     );
     for (package, source) in [
         ("ignored", "pub fn ignored() {}\n"),

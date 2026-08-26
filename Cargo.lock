@@ -314,7 +314,6 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
- "fe2o3-kir-sim-cli",
  "fe2o3-process-identity",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
@@ -329,14 +328,14 @@ dependencies = [
  "rustix",
  "serde_json",
  "sha2 0.11.0",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "cc"
-version = "1.4.0"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -468,7 +467,7 @@ checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -606,7 +605,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -678,9 +677,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 name = "fe2o3-add-inplace"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -749,9 +746,7 @@ dependencies = [
 name = "fe2o3-axpy-inplace"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -838,9 +833,7 @@ version = "0.1.0"
 name = "fe2o3-copy"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -872,9 +865,7 @@ version = "0.1.0"
 name = "fe2o3-downsample"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -896,9 +887,7 @@ dependencies = [
 name = "fe2o3-fill"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -914,9 +903,7 @@ dependencies = [
 name = "fe2o3-gather-odd"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1225,7 +1212,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "reserved-fe2o3-symbols",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1254,27 +1241,21 @@ dependencies = [
 name = "fe2o3-negate"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-normalize"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-pipeline"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1369,9 +1350,7 @@ dependencies = [
 name = "fe2o3-previous"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1431,72 +1410,56 @@ dependencies = [
 name = "fe2o3-raw-add-index"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-const-minus"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-disjoint-inplace-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-disjoint-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-gather"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-neighbors"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-output-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-raw-parenthesized-sub"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1533,9 +1496,7 @@ dependencies = [
 name = "fe2o3-saxpy"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1550,9 +1511,7 @@ dependencies = [
 name = "fe2o3-scale"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1595,18 +1554,14 @@ version = "0.1.0"
 name = "fe2o3-shift"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
 name = "fe2o3-stencil"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1675,9 +1630,7 @@ dependencies = [
 name = "fe2o3-vecadd-f64"
 version = "0.1.0"
 dependencies = [
- "fe2o3-core",
  "fe2o3-device",
- "fe2o3-host",
 ]
 
 [[package]]
@@ -1700,7 +1653,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rustix",
  "sha2 0.11.0",
- "syn 2.0.117",
+ "syn 2.0.119",
  "toml",
 ]
 
@@ -1739,9 +1692,9 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.9"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "foldhash"
@@ -2231,7 +2184,7 @@ checksum = "77060ebe535362c3da75682cd17b0431017b6e7c5661e714fc69a7ad017d1301"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2257,9 +2210,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lru-slab"
@@ -2371,9 +2324,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "once_vec"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a6298074a1742b584aaca148a6c61ecb27f0b55fdf237c235939c84924377a1"
+checksum = "0b61fbf7ec37342ce171d9f5e3b82be74bda6c4e84e3b28338a03d553913e6aa"
 
 [[package]]
 name = "pem"
@@ -2418,9 +2371,9 @@ dependencies = [
 
 [[package]]
 name = "pkg-config"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "pliron"
@@ -2460,7 +2413,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustc-hash",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2500,9 +2453,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.106"
+version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
@@ -2565,9 +2518,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
@@ -2921,7 +2874,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3092,9 +3045,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "syn"
-version = "2.0.117"
+version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3103,9 +3056,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3129,7 +3082,7 @@ checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3177,7 +3130,7 @@ checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3262,7 +3215,7 @@ checksum = "6e06d43f1345a3bcd39f6a56dbb7dcab2ba47e68e8ac134855e7e2bdbaf8cab8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3558,7 +3511,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
  "wasm-bindgen-shared",
 ]
 
@@ -3840,7 +3793,7 @@ checksum = "de844c262c8848816172cef550288e7dc6c7b7814b4ee56b3e1553f275f1858e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
  "synstructure",
 ]
 
@@ -3861,7 +3814,7 @@ checksum = "11532158c46691caf0f2593ea8358fed6bbf68a0315e80aae9bd41fbade684a1"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
  "synstructure",
 ]
 
@@ -3901,7 +3854,7 @@ checksum = "625dc425cab0dca6dc3c3319506e6593dcb08a9f387ea3b284dbd52a92c40555"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.117",
+ "syn 2.0.119",
 ]
 
 [[package]]

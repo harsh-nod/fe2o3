@@ -516,12 +516,12 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
 /// The type name is intentional: this is the strongest sound host-side state available before an
 /// authenticated compiler producer chain is connected to direct-link publication. It owns the
 /// exact inspected publication and pins the complete publication and kernel identity needed by the
-/// existing [`crate::LoadedKernel`] path. It has no public constructor, is neither `Clone` nor
-/// `Copy`, and exposes no load or launch operation.
+/// production Worker V3 verifier and loader. It has no public constructor, is neither `Clone` nor
+/// `Copy`, and exposes no load or dispatch operation.
 ///
 /// A future loading transition must consume this value together with all values returned by
 /// [`Self::missing_prerequisites`] and must hold a fresh
-/// [`CurrentPendingPublishedDirectLinkLoadAdmissionV1`] through HIP module loading.
+/// [`CurrentPendingPublishedDirectLinkLoadAdmissionV1`] through HSA executable loading.
 pub struct PendingPublishedDirectLinkLoadAdmissionV1 {
     inspection: InspectedPublishedDirectLinkPhysicalLayoutV1,
     published: PublishedLinkArtifactV1,

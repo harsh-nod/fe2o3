@@ -64,6 +64,7 @@ use fe2o3_verifier::{
     validate_scalar_gemm_compiler_kir_v3,
 };
 use fe2o3_worker_v3_authority::{
+    PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1,
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
     ProductionScalarGemmWorkerV3RequestAuditorV1, ProductionScalarGemmWorkerV3VerifierErrorV1,
     ProductionScalarGemmWorkerV3VerifierV1,
@@ -214,9 +215,7 @@ unsafe impl KernelMarkerV1 for WorkerV3VecAddMarker {
 
 unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity: TEST_HOST_CONTRACT,
-        };
+        CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
 }
 
@@ -234,9 +233,7 @@ unsafe impl KernelMarkerV1 for WorkerV3SubstitutedScalarMarker {
 
 unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SubstitutedScalarMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
-        CompilerGeneratedKernelProfileV1::ManifestDerivedScalarSliceV1 {
-            generated_host_contract_identity: TEST_HOST_CONTRACT,
-        };
+        CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
 }
 
@@ -1779,6 +1776,20 @@ fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
     assert!(!audit.establishes_proof_executable_binding());
     assert!(!audit.can_enter_worker_v3_gate());
     assert!(!audit.grants_artifact_or_runtime_authority());
+    let closure = audit.authority_closure();
+    assert_eq!(
+        closure.obligation_statuses(),
+        &PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1
+    );
+    assert!(
+        closure
+            .obligation_statuses()
+            .iter()
+            .all(|status| !status.is_closed())
+    );
+    assert!(!closure.is_complete());
+    assert!(!closure.can_enter_worker_v3_gate());
+    assert!(!closure.grants_artifact_or_runtime_authority());
     let proof = audit.proof();
     assert!(proof.authenticates_retained_verus_execution());
     assert!(proof.binds_worker_v3_challenge());

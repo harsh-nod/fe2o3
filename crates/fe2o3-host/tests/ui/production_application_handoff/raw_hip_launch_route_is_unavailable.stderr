@@ -7,32 +7,6 @@ error[E0432]: unresolved imports `fe2o3_host::KernelParams`, `fe2o3_host::Launch
   |                  |             no `LaunchConfig` in the root
   |                  no `KernelParams` in the root
   |
-  = help: consider importing this struct instead:
-          fe2o3_core::KernelParams
-note: found an item that was configured out
- --> src/lib.rs
-  |
-  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-  |          --------------------------------------------------- the item is gated here
-  | pub use fe2o3_core::{KernelParams, LaunchConfig};
-  |                      ^^^^^^^^^^^^
-  = help: consider importing this struct instead:
-          fe2o3_core::LaunchConfig
-note: found an item that was configured out
- --> src/lib.rs
-  |
-  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-  |          --------------------------------------------------- the item is gated here
-  | pub use fe2o3_core::{KernelParams, LaunchConfig};
-  |                                    ^^^^^^^^^^^^
-note: found an item that was configured out
- --> src/lib.rs
-  |
-  | #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-  |          --------------------------------------------------- the item is gated here
-  | #[macro_export]
-  | macro_rules! launch {
-  |              ^^^^^^
 help: a similar name exists in the module
   |
 1 - use fe2o3_host::{KernelParams, LaunchConfig, launch};

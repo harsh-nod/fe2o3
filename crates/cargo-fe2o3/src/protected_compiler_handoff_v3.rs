@@ -9,7 +9,7 @@ use fe2o3_artifact_transaction::{
     consume_compiler_module_handoff_with_currentness_v3,
     recover_compiler_module_handoff_receipt_v3,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 use fe2o3_artifact_transaction::{
     CompilerModuleHandoffErrorV2, ConsumedCompilerModuleHandoffV2,
     consume_compiler_module_handoff_v2,
@@ -129,14 +129,17 @@ pub(crate) struct ParentConsumedProductionHandoff {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl ParentConsumedProductionHandoff {
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn receipt(&self) -> CompilerModuleHandoffReceiptV3 {
         self.receipt
     }
 
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn consumed(&self) -> &ConsumedCompilerModuleHandoffV3 {
         &self.consumed
     }
 
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn compiler_closure(&self) -> CompilerClosureV2 {
         self.compiler_closure
     }
@@ -151,6 +154,7 @@ impl ParentConsumedProductionHandoff {
         (self.receipt, self.consumed, self.compiler_closure)
     }
 
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) const fn grants_compiler_authority(&self) -> bool {
         false
     }
@@ -168,6 +172,7 @@ impl ProductionCompilerModuleHandoffIntake {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     pub(crate) fn consume(
         &self,
         output_dir: &Path,
@@ -245,7 +250,7 @@ impl ProductionCompilerModuleHandoffIntake {
 
 /// Legacy protected V2 transport retained only for explicit qualification
 /// routes. It is not selectable from the production intake.
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn consume_qualification_compiler_module_handoff_v2(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -291,7 +296,7 @@ impl Error for ProductionCompilerModuleHandoffIntakeError {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod tests {
     use std::ffi::OsString;
     use std::fs;
