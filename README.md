@@ -19,6 +19,14 @@ artifact, runtime, and proof boundaries described below. See the
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
 hardware execution lanes.
 
+Feature-free production has one compiler transaction and no pipeline selector.
+`cargo fe2o3 build` and `cargo fe2o3 run` first build the selected crate graph
+for the fixed AMDGPU target through fe2o3, commit the exact device artifact
+generation, and then build or run the same selection for the pinned host target
+with ordinary rustc. Callers do not pass `--target`. Remaining V1/V2/V3 names
+identify frozen records and protocols, while legacy behavior is compiled only
+as explicit qualification oracles; neither is a selectable production route.
+
 ## CUDA-Oxide status
 
 Against the pinned cuda-oxide baseline, the evidence ledger currently records

@@ -107,13 +107,26 @@ receive no fd 199 invocation capability.
 ## External Cargo projects
 
 `cargo fe2o3 build` and `cargo fe2o3 run` operate from standalone Cargo
-projects and workspace members. Cargo receives the original platform argument
-vector without shell construction or UTF-8 conversion. A separate bounded
-`cargo metadata --no-deps` probe resolves the selected `--manifest-path`,
-workspace root, and configured target directory. An explicit `--target-dir`
-has the same invocation-directory-relative interpretation as Cargo and takes
-precedence over metadata; `CARGO_TARGET_DIR`, repeated `--config`/`-Z`
-arguments, and locked/offline/frozen routing are reflected by metadata.
+projects and workspace members. Production constructs one fixed two-phase
+plan: it first runs Cargo `build` for `amdgcn-amd-amdhsa` through the fe2o3
+device compiler, commits the exact generated-artifact generation, and then
+runs the requested `build` or `run` for the pinned rustc host target with
+ordinary rustc. The host phase has no fe2o3 backend, wrapper, capability
+broker, device target, build manifest, qualification, or simulation controls.
+Package, feature, profile, manifest, and target-directory arguments apply to
+both phases. Arguments after `--` on `run` apply only to the host application;
+`build` does not accept an application argument suffix.
+
+The orchestrator owns both targets. Callers must not pass `--target`; target
+configuration cannot create another compiler route because each phase receives
+its exact target on the Cargo command line. Cargo receives all other original
+platform arguments without shell construction or UTF-8 conversion. A separate
+bounded `cargo metadata --no-deps` probe resolves the selected
+`--manifest-path`, workspace root, and configured target directory. An
+explicit `--target-dir` has the same invocation-directory-relative
+interpretation as Cargo and takes precedence over metadata;
+`CARGO_TARGET_DIR`, repeated `--config`/`-Z` arguments, and
+locked/offline/frozen routing are reflected by metadata.
 
 The invocation directory, workspace root, target directory, and
 `<target>/fe2o3` output directory are opened without following path-component

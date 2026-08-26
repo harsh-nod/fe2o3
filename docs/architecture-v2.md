@@ -50,6 +50,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   restart states rather than pipeline variants. Legacy V1/V2 work state,
   workload-specific paths, source-debug execution, and Worker V2 application
   transfer compile only with `qualification-oracles-test-only`.
+- Production orchestration has one fixed Cargo plan. The first phase always
+  builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
+  backend and commits its generated-artifact generation. The second phase
+  builds or runs the same selection for the pinned rustc host target with
+  ordinary rustc and no device compiler controls. Users cannot select either
+  target or choose a different ordering.
 - `fe2o3-runtime-protocol` owns the production load envelope, application
   handoff, and sealed static-application identity. Feature-free `cargo-fe2o3`
   and `fe2o3-host` do not depend on `fe2o3-worker-v2-bundle`; that crate is a

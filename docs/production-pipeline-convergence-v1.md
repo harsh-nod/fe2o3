@@ -25,6 +25,16 @@ authenticated rustc kernel closure
     -> generated typed host interface
 ```
 
+`cargo fe2o3 build` and `cargo fe2o3 run` realize that transaction with one
+fixed orchestration plan. Cargo first performs a device `build` for the fixed
+AMDGPU target under the protected compiler closure. Only after the exact
+generated-artifact generation commits does a fresh Cargo process build or run
+the same package/feature/profile selection for the pinned host target using
+ordinary rustc. Run payload arguments are forwarded only to that host process.
+The caller cannot pass `--target`, and the host phase receives no fe2o3 backend,
+wrapper, broker, device, build-manifest, qualification, or simulation controls.
+This is phase separation inside one production build, not two compiler routes.
+
 Compiler provenance is one cross-cutting input to this transaction, not a
 second compiler route. The canonical `CompilerClosureV2` commits to six
 role-specific SHA-256 pins:

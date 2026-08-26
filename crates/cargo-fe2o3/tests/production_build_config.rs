@@ -69,7 +69,8 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         );
     }
     assert!(preparation.contains("prepare_managed_production_build"));
-    assert!(preparation.contains("production_build: Some(production_build)"));
+    assert!(preparation.contains("production_build,"));
+    assert!(!preparation.contains("production_build: Option"));
 
     let completion = source
         .split("fn complete_managed_attempt_inner(")
@@ -80,7 +81,8 @@ fn production_managed_transaction_has_no_qualification_dispatch() {
         .expect("qualification completion follows production completion");
     assert!(!completion.contains("finish_build_attempt"));
     assert!(!completion.contains("qualification_work"));
-    assert!(completion.contains("production_build.take().ok_or_else"));
+    assert!(completion.contains("managed.production_build"));
+    assert!(!completion.contains("production_build.take()"));
     assert!(completion.contains("complete_managed_production_build"));
 
     let environment = source
@@ -168,6 +170,45 @@ fn production_run_has_one_worker_v3_application_path() {
 }
 
 #[test]
+fn production_build_has_one_fixed_device_then_host_plan() {
+    let source = include_str!("../src/main.rs");
+    let plan = include_str!("../src/production_cargo_plan.rs");
+    assert!(source.contains("ProductionCargoPlan::new"));
+    assert!(source.contains("run_production_host_cargo"));
+    assert!(source.contains("host phase uses ordinary rustc"));
+    assert!(plan.contains("command: \"build\""));
+    assert!(plan.contains("PRODUCTION_GFX942_RUSTC_TARGET_V1"));
+    assert!(plan.contains("reject_caller_target"));
+    assert!(!plan.contains("enum Pipeline"));
+    assert!(!plan.contains("selector"));
+}
+
+#[test]
+fn ordinary_host_phase_has_no_device_compiler_controls() {
+    let source = include_str!("../src/main.rs");
+    let host_phase = source
+        .split("fn run_production_host_cargo(")
+        .nth(1)
+        .expect("host phase exists")
+        .split("fn configure_simulation_build_environment(")
+        .next()
+        .expect("host phase ends before qualification configuration");
+
+    for removed in [
+        ".env_remove(BACKEND_ENV)",
+        ".env_remove(TARGET_ENV)",
+        ".env_remove(build_config::PRODUCTION_BUILD_CONFIG_ENV)",
+        ".env_remove(build_config::QUALIFICATION_ORACLE_ENV)",
+        ".env_remove(capability_broker::CAPABILITY_BROKER_ENV)",
+    ] {
+        assert!(host_phase.contains(removed), "missing {removed}");
+    }
+    assert!(host_phase.contains("configure_pinned_rustc_child"));
+    assert!(host_phase.contains("generation.reject_if_substituted"));
+    assert!(!host_phase.contains("configure_production_target_environment"));
+}
+
+#[test]
 fn production_runner_rejects_no_envelope_marker() {
     let scratch = ScratchDirectory::new();
     fs::set_permissions(&scratch.0, fs::Permissions::from_mode(0o700))
@@ -225,7 +266,7 @@ fn production_driver_rejects_qualification_before_target_preparation() {
             && stderr.contains("production compilation has no selector"),
         "{stderr}"
     );
-    assert!(!stderr.contains("production-v1 requires exact FE2O3_TARGET"));
+    assert!(!stderr.contains("production compilation requires exact FE2O3_TARGET"));
 }
 
 #[test]
@@ -242,7 +283,7 @@ fn production_manifest_rejects_qualification_envelope_fields() {
         .env_clear()
         .env("FE2O3_TARGET", "gfx942")
         .env("FE2O3_PRODUCTION_BUILD_CONFIG_V1", &manifest)
-        .args(["build", "--target", "amdgcn-amd-amdhsa"])
+        .arg("build")
         .output()
         .expect("run cargo-fe2o3");
 
@@ -264,7 +305,7 @@ fn production_rejects_worker_v2_namespace_before_reading_its_manifest() {
             "FE2O3_WORKER_V2_CONFIG_V2",
             "/does/not/exist/worker-v2-config.json",
         )
-        .args(["build", "--target", "amdgcn-amd-amdhsa"])
+        .arg("build")
         .output()
         .expect("run cargo-fe2o3");
 
@@ -276,4 +317,21 @@ fn production_rejects_worker_v2_namespace_before_reading_its_manifest() {
         "{stderr}"
     );
     assert!(!stderr.contains("does/not/exist"), "{stderr}");
+}
+
+#[test]
+fn production_driver_rejects_caller_target_selection() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        .env_clear()
+        .env("FE2O3_TARGET", "gfx942")
+        .args(["build", "--target", "amdgcn-amd-amdhsa"])
+        .output()
+        .expect("run cargo-fe2o3");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("owns device and host target selection"),
+        "{stderr}"
+    );
 }
