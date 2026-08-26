@@ -109,88 +109,23 @@ host-specific compiler/code-object profile. It does not authenticate origin,
 run the GPU, establish source/Verus-to-machine refinement, prove memory safety
 or race freedom, or grant publication, load, launch, or parity authority.
 
-## `1281f9748` bounded MoE checkpoint
+## Retained bounded MoE evidence
 
-The following commands reproduce the source/unit, compiler structural,
-compact-plan proof, host-consistency, UI, and compile-only hardware boundaries
-landed through `1281f97487adfd4af32687b7705ba46e5c11152b`:
+The obsolete MoE V1/V2 host routes and their workload-specific hardware
+launchers have been removed. Validate the remaining compiler, proof, source,
+oracle, and production-route-absence evidence with:
 
 ```text
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked --manifest-path examples/moe_expert_v1/Cargo.toml
 cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test moe_top2_v1
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
-cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v1::tests
-cargo test --locked -p fe2o3-host --test generated_moe_expert_v1_ui
-cargo test --locked -p fe2o3-host \
-  --test moe_expert_v1_upload_hardware --no-run
+cargo test --locked -p fe2o3-host --test production_application_handoff_ui
 ```
 
-The rustc test runs live exact admission plus hostile source/profile and
-relocated-workspace cases. The private record binds rustc-loaded source, the
-complete checked `FnAbi` identity and bounded projection, the full imported-MIR
-diagnostic, same-session authority, and the canonical KIR/profile table. It is
-diagnostic and inert, not MIR-to-KIR semantic refinement or downstream
-authority.
-
-The Verus runner requires the digest-pinned `0.2026.08.02.b677dd5` executable
-and its pinned release closure. It fails rather than skips when the executable,
-closure, 19-obligation transcript, or any of the seven negative mutations
-drifts. The Rust verifier test also enumerates all 625 valid count vectors.
-Those proof values are not bound to the host implementation, runtime copies,
-machine addresses, or an authenticated proof receipt.
-
-The host tests cover the internal relation of caller-supplied top-2 IDs,
-counts, offsets, slots, permutation, and inverse; retained offsets-plus-inverse
-upload; exact typed region/alias checks; and denial-only expert preparation.
-They do not establish freshness, router provenance, logits/tie correctness,
-route weights, packed activations, dispatch, or expert GPU execution.
-
-The opt-in hardware test requires a `gfx942:xnack-` HIP device:
-
-```text
-cargo test --locked -p fe2o3-host \
-  --test moe_expert_v1_upload_hardware \
-  gfx942_routing_bridge_upload_readback_and_denial_are_exact \
-  -- --ignored --exact --nocapture
-```
-
-It uploads the caller-supplied offsets and inverse arrays, reads those two
-destinations back, prepares the manually pinned expert host ABI, and confirms
-execution remains denied. It does not run the router, execute the compact copy
-plan, dispatch either expert kernel, or promote parity. See
-[Bounded MoE V1 evidence](bounded-moe-v1.md) for the exact field and trust
-boundaries.
-
-## `10e5f90ec` typed MoE V2 fail-closed boundary
-
-Run the V2 unit and compile-fail suites separately so their evidence classes
-remain visible:
-
-```text
-cargo test --locked -p fe2o3-host --lib moe_routing_expert_bridge_v2::tests
-cargo test --locked -p fe2o3-host --lib generated_moe_expert_v2::tests
-cargo test --locked -p fe2o3-host --features hardware-test-hooks \
-  --test generated_moe_expert_v2_ui
-```
-
-The bridge tests mutate the exact request/batch identities, lifecycle
-completion/readback transcript and ordering, concrete route-weight and packed-
-activation join, and upload length/context/stream/alias facts. The adapter tests
-cover the eight typed regions, access roles, ABI packing, target, alignment,
-extent, and every alias pair. The 22 UI fixtures reject construction, field
-access, cloning, use after move, synthetic and V1 substitution, raw weight
-views, public test issuers, and copy/load/dispatch authority extraction.
-
-Passing these commands is unit and Rust type-system evidence only. No
-production component issues the completion/readback provenance or the
-expert-weight artifact binding, so the V2 success path remains constructively
-unreachable in safe production code. V2 grants no artifact, copy, load, or
-dispatch authority and has no GPU observation. The preceding `gfx942` command
-is a V1-only upload/readback observation and must not be attributed to V2.
-
+These commands do not execute MoE on the GPU. A production hardware claim must
+flow through the generic Worker V3 route.
 ## `90b6fe3` multi-kernel checkpoint
 
 The checkpoint at

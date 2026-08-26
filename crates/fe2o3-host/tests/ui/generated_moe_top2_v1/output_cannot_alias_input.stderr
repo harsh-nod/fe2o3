@@ -1,9 +1,0 @@
-error[E0499]: cannot borrow `*buffer` as mutable more than once at a time
- --> tests/ui/generated_moe_top2_v1/output_cannot_alias_input.rs:5:19
-  |
-4 |     let top2 = buffer.view_mut(..16).unwrap();
-  |                ------ first mutable borrow occurs here
-5 |     let inverse = buffer.view_mut(..16).unwrap();
-  |                   ^^^^^^ second mutable borrow occurs here
-6 |     drop((top2, inverse));
-  |           ---- first borrow later used here

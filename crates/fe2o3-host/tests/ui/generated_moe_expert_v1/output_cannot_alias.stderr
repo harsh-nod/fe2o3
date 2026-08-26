@@ -1,9 +1,0 @@
-error[E0499]: cannot borrow `*buffer` as mutable more than once at a time
- --> tests/ui/generated_moe_expert_v1/output_cannot_alias.rs:5:26
-  |
-4 |     let expert_output = buffer.view_mut(..1024).unwrap();
-  |                         ------ first mutable borrow occurs here
-5 |     let compact_output = buffer.view_mut(0..256).unwrap();
-  |                          ^^^^^^ second mutable borrow occurs here
-6 |     drop((expert_output, compact_output));
-  |           ------------- first borrow later used here

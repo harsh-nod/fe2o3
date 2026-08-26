@@ -193,36 +193,13 @@ compact-plan model verifies 19 Verus obligations, rejects seven mutations, and
 is differentially checked across all 625 valid count vectors. Neither is a
 MIR-to-KIR refinement proof or an authority-bearing proof receipt.
 
-On the host, a checked bridge validates internal consistency across one
-caller-supplied top-2/counts/offsets/slots/permutation/inverse snapshot, uploads
-offsets and inverse together, and retains both device regions. An opt-in
-`gfx942` test reads those two uploaded arrays back. It does not authenticate a
-router run, freshness, logits/tie selection, route weights, packed activations,
-dispatch, or expert GPU execution. The expert ABI remains manually pinned, and
-preparation still ends at a denial-only execution boundary. No expert GPU
-result, performance claim, or parity promotion is made.
-
-The typed MoE V2 host boundary through `10e5f90ec` closes only the mechanical
-joins that V1 deliberately omitted. Move-only private capabilities bind one
-exact request/batch identity to routing request and logits identities, token
-activations, caller route-weight policy, and the model expert-weight artifact.
-A separate lifecycle transcript binds the exact dispatch, completion, full
-readback, completion-before-readback order, profile, payload, context, and
-stream. Checked inputs then bind the concrete route weights and exact packed
-activation layout; upload checks four jointly retained destinations, and the
-generated adapter checks the weight-artifact binding plus all eight typed
-regions, non-aliasing, access roles, target, context, and fixed ABI mechanics.
-
-Those V2 types have private fields, are linear at each authority transition,
-and have compile-fail coverage against construction, cloning, conversion, test
-issuer access, and authority extraction. There is no production issuer for the
-completion/readback provenance or expert-weight artifact binding, so safe
-production code cannot reach V2 upload or preparation: the success path is
-constructively unreachable. The boundary grants no artifact, copy, load, or
-dispatch authority and proves neither routing nor expert semantics. The
-`gfx942` upload/readback observation above is V1 evidence only; there has been
-no V2 GPU observation and no parity promotion.
-
+The former MoE V1/V2 host bridges, generated adapters, exact top-2 lifecycle,
+and workload-specific HSA launcher were non-production qualification
+alternatives. They have been removed so MoE execution cannot bypass the sole
+Worker V3 application, descriptor, argument, HSA, and unload lifecycle. The
+ordinary Rust kernels, rustc/KIR diagnostics, compact-plan verifier and Verus
+evidence, and independent source/oracle tests remain. MoE hardware execution
+through Worker V3 is still pending and no parity promotion is claimed.
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
