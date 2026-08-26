@@ -21,6 +21,33 @@ Related documents:
 - [implementation roadmap](implementation-roadmap-v2.md)
 - [general typed dispatch V1](general-typed-dispatch-v1.md)
 
+## One Executable Architecture
+
+The permanent architecture has one executable route:
+
+```text
+Rust kernel collection -> semantic MIR -> verified middle end -> Kernel IR
+    -> typed AMDGPU/LLVM lowering -> upstream LLVM/LLD -> inspected HSACO
+    -> Worker V3 verification -> generated typed HSA dispatch
+```
+
+No Cargo feature, environment variable, macro option, workload profile, or
+test configuration may select another compiler, publication, load, or launch
+implementation. `Fresh`, `Recovered`, and `Ready` are restart states inside
+this transaction, not pipeline variants. Host compilation through ordinary
+rustc is a phase of the same Cargo plan and does not compile device kernels.
+
+Version suffixes remain only where bytes cross an ownership boundary: wire
+formats, canonical records, receipts, identities, and protocol messages. A new
+schema version migrates the same transaction; it does not add a route. Useful
+legacy comparisons may survive only as inert fixtures or offline differential
+tools with no artifact, load, or launch authority.
+
+The repository has not completed this deletion. `qualification-oracles-test-only`
+still exposes compiler-side Worker V2 and workload oracles in several crates,
+and `fe2o3-hsaco-finalize` still houses shared V3 mechanics under V2-named
+modules. These are migration debt, not supported architectural variants.
+
 ## Current Implementation Snapshot
 
 The repository has implemented a bounded vertical realization of the v2
@@ -52,6 +79,9 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `qualification-oracles-test-only`; the Cargo and host Worker V2 application
   transfer, consumer, retained descriptors, and compatibility error alias have
   been deleted from every build.
+- Default `cargo-fe2o3` unit and integration tests compile this same production
+  transaction. Qualification code is activated only by its explicit temporary
+  feature; `cfg(test)` no longer changes compiler or runtime routing.
 - Production orchestration has one fixed Cargo plan. The first phase always
   builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
   backend and commits its generated-artifact generation. The second phase

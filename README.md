@@ -24,8 +24,13 @@ Feature-free production has one compiler transaction and no pipeline selector.
 for the fixed AMDGPU target through fe2o3, commit the exact device artifact
 generation, and then build or run the same selection for the pinned host target
 with ordinary rustc. Callers do not pass `--target`. Remaining V1/V2/V3 names
-identify frozen records and protocols, while legacy behavior is compiled only
-as explicit qualification oracles; neither is a selectable production route.
+identify frozen records and protocols, not implementations. The target
+architecture has exactly one executable compiler, publication, load, and launch
+route. Temporary qualification implementations are deletion backlog: their
+useful evidence must move to differential fixtures or offline tools, after
+which their features and code are removed rather than retained as alternate
+in-tree pipelines. Default `cargo-fe2o3` tests now compile the same production
+route as the feature-free binary; `cfg(test)` cannot select qualification code.
 
 ## CUDA-Oxide status
 

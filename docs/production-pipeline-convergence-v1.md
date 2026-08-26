@@ -5,7 +5,9 @@ This document defines the implementation shape for
 work under [#134](https://github.com/harsh-nod/fe2o3/issues/134) to one
 production transaction. Existing scalar, GEMM, attention, collective, and MoE
 implementations remain qualification oracles while their evidence migrates.
-They are not additional production architectures.
+They are not additional production architectures, and the convergence target
+deletes their executable implementations. Differential evidence may remain as
+inert fixtures or offline tools, never as another route in production crates.
 
 ## One transaction
 
@@ -328,19 +330,38 @@ with that production namespace. The qualification build carries an optional
 non-publishing oracle token; there is no production-or-qualification route
 enum that could acquire another production implementation.
 
+The stronger end state also removes the qualification feature and its
+executable branches. Keeping a route behind `cfg(feature)` is isolation, not
+convergence. Default tests already compile the feature-free production route;
+`cfg(test)` cannot activate Cargo qualification behavior.
+
+### Variant deletion ledger
+
+| Area | State | Required deletion |
+|---|---|---|
+| Host and HSA launch | Complete | Worker V2 host admission, workload launch adapters, raw HIP loading/packing/launch, and compatibility aliases are deleted. |
+| Cargo production tests | Complete | Default tests compile `PreparedProductionBuildConfig`, `ManagedProductionBuild`, Worker V3 application handoff, and the fixed device-then-host plan. |
+| Cargo qualification graph | Open | Move useful simulation and differential cases out of the driver, then delete `qualification-oracles-test-only`, Worker V2 build/restart modules, S09 routing, and workload parsers. |
+| Backend qualification graph | Open | Preserve canonical input/output fixtures, then delete profile-selected producers and the backend qualification feature. |
+| Finalizer and Worker execution | Open | Move shared protocol, request, admission, finalization, and executor mechanics to workload-neutral owners; migrate V3 callers; delete V2 executable APIs and workers. |
+| Artifact restart compatibility | Open | Retain only versioned records needed for canonical decode, explicit rejection, or migration; delete V2 publication/recovery actions once V3 differential coverage owns their hostile cases. |
+| Pliron and workload workers | Open | Replace Worker V2 executable bridges with production handoff fixtures or offline comparisons, then delete the worker crates and profile entry points. |
+| Versioned schemas | Retained by design | V1/V2/V3 remains on frozen bytes, receipts, domains, and protocol records only. A suffix must not imply a selectable implementation. |
+
 Migration follows these rules:
 
 1. Add no workload-specific production implementation or selector.
-2. Move exact-profile entry points behind qualification-oracle tests or tools.
+2. Move exact-profile evidence into inert differential fixtures or offline
+   tools, then delete the executable entry points from production crates.
 3. Migrate a semantic slice only after ordinary attributed Rust passes the
    production transaction and differential tests match its existing oracle.
-4. Once a slice migrates, keep the old implementation only as a qualification
-   oracle until its differential coverage is no longer needed.
+4. Once a slice migrates, preserve only the smallest authority-free fixture
+   needed for differential coverage and delete the old implementation.
 5. For a kernel-containing crate, unsupported production behavior is terminal.
    `legacy-v1` and exact-profile selectors are never fallbacks.
 6. Host-only Rust code may continue through rustc LLVM; that is not a second
    device compiler implementation.
-7. Keep non-authoritative comparisons only in qualification tooling. The
+7. Keep non-authoritative comparisons only in offline qualification tooling. The
    compiler API has no implementation selector, and exact-profile qualification
    oracles retire as their differential coverage migrates.
 
