@@ -30,7 +30,18 @@ route. Temporary qualification implementations are deletion backlog: their
 useful evidence must move to differential fixtures or offline tools, after
 which their features and code are removed rather than retained as alternate
 in-tree pipelines. Default `cargo-fe2o3` tests now compile the same production
-route as the feature-free binary; `cfg(test)` cannot select qualification code.
+route as the feature-free binary. The backend is feature-invariant in normal
+builds: the remaining qualification feature can compile only inert unit-test
+fixtures, and neither `cfg(test)` nor an environment variable can select an
+alternate rustc route.
+
+The feature-independent extraction driver now enters the same production
+typestate transaction under a real `amdgcn-amd-amdhsa` rustc session. Its
+analysis-only custody has passed collection, dynamic ranked-bounds, reference
+binding, and loop-carried BF16/F32 MFMA GEMM lanes on gfx942 through semantic
+MIR, ranked PLIRON, verified Kernel IR, composed memory checks, and
+deterministic LLVM extraction. It cannot publish, finalize HSACO, load, or
+launch, so this checkpoint changes no parity status.
 
 ## CUDA-Oxide status
 
@@ -69,9 +80,11 @@ compiler machine, Worker V2 execution owner, finalized bytes, and post-link
 inspection for both schedules. Its late graph, worker, and finalizer axes are
 freshly derived from those retained owners. Build-policy admission is not
 worker-measurement authentication, and the axes grant no authority. Production
-positive General GEMM import remains disabled until #106 is consumed by the
-planned owner-carrying #174 receipt and the existing rustc-owned final authority
-join consumes that receipt together with the #173 late-machine binding.
+extraction now accepts one safe dynamic General GEMM and emits its deterministic
+gfx942 LLVM through the general semantic pipeline. Protected General GEMM
+publication remains disabled until #106 is consumed by the owner-carrying #174
+receipt and the rustc-owned final authority join consumes that receipt together
+with the #173 late-machine binding.
 `pliron-llvm` has default features disabled, and no COMGR,
 `llvm-sys`, or subprocess compiler/linker has artifact authority on this route.
 

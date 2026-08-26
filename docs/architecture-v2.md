@@ -43,10 +43,13 @@ schema version migrates the same transaction; it does not add a route. Useful
 legacy comparisons may survive only as inert fixtures or offline differential
 tools with no artifact, load, or launch authority.
 
-The repository has not completed this deletion. `qualification-oracles-test-only`
-still exposes compiler-side Worker V2 and workload oracles in several crates,
-and `fe2o3-hsaco-finalize` still houses shared V3 mechanics under V2-named
-modules. These are migration debt, not supported architectural variants.
+The repository has not completed this deletion. The normal backend is now
+feature-invariant: even an all-feature library build contains no qualification
+selector or executable oracle route. `qualification-oracles-test-only` remains
+only as a `cfg(test)` container for compiler-side Worker V2 and workload oracle
+fixtures that have not yet been physically removed. `fe2o3-hsaco-finalize`
+also still houses shared V3 mechanics under V2-named modules. These are
+migration debt, not supported architectural variants.
 
 ## Current Implementation Snapshot
 
@@ -74,14 +77,23 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   production publication.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
-  restart states rather than pipeline variants. Legacy V1/V2 work state,
-  workload-specific paths, and source-debug execution compile only with
-  `qualification-oracles-test-only`; the Cargo and host Worker V2 application
+  restart states rather than pipeline variants. The backend configuration and
+  kernel-containing codegen path are identical in default and all-feature
+  library builds. Legacy compiler workload modules can compile only inside a
+  feature-enabled unit-test binary; the Cargo and host Worker V2 application
   transfer, consumer, retained descriptors, and compatibility error alias have
   been deleted from every build.
 - Default `cargo-fe2o3` unit and integration tests compile this same production
-  transaction. Qualification code is activated only by its explicit temporary
-  feature; `cfg(test)` no longer changes compiler or runtime routing.
+  transaction. Backend unit tests may inspect temporary qualification fixtures,
+  but `cfg(test)` and Cargo features no longer change compiler or runtime
+  routing.
+- The explicit rustc extraction driver is feature-independent and enters the
+  same `ProductionCompilation` typestate as backend codegen. Its
+  `ExtractionOnly` custody can run general checks, semantic MIR import, ranked
+  projection, verified Kernel IR lowering, and deterministic gfx942 LLVM
+  extraction, but cannot publish a compiler-module handoff. Real AMDGPU tests
+  cover safe and unsafe collection, dynamic ranked bounds, reference binding,
+  and a loop-carried BF16/F32 MFMA GEMM.
 - Production orchestration has one fixed Cargo plan. The first phase always
   builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
   backend and commits its generated-artifact generation. The second phase
@@ -306,15 +318,17 @@ driver is not wired into that selection path.
 
 ### Explicit extraction driver
 
-V2 uses an explicit rustc driver invocation for device extraction. The driver
-collects the final application's monomorphized kernel roots and their reachable
-device call graphs, then converts them through `rustc_public` types. Normal
-host compilation does not run through fe2o3's codegen backend.
+The explicit rustc driver invokes the fixed AMDGPU rustc session, collects the
+final application's monomorphized kernel roots and reachable device closure,
+and enters the same production collector, semantic importer, checks, and
+typestate transaction as backend codegen. Normal host compilation still uses
+ordinary rustc and does not run through fe2o3's codegen backend.
 
-The current `CodegenBackend` integration remains available as a compatibility
-adapter until the extraction driver reaches feature parity. New compiler
-features must be implemented below a frontend trait so both entry paths feed
-the same importer during migration.
+The driver is an analysis and evidence entry, not another compiler pipeline.
+Its extraction-only custody cannot publish, finalize, or launch. The backend
+remains the authority-bearing integration point until publication and
+finalization are moved behind a workload-neutral transaction owner shared by
+the fixed production orchestration.
 
 ### Collection rules
 

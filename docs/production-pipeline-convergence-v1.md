@@ -333,7 +333,7 @@ remain temporary work under the backend deletion ledger below.
 | Host and HSA launch | Complete | Worker V2 host admission, workload launch adapters, raw HIP loading/packing/launch, and compatibility aliases are deleted. |
 | Cargo production tests | Complete | Default tests compile `PreparedProductionBuildConfig`, `ManagedProductionBuild`, Worker V3 application handoff, and the fixed device-then-host plan. |
 | Cargo qualification graph | Complete | The feature, simulation command, Worker V2 build/restart modules, S09 routing, workload parsers, fixture binaries, vertical tests, and Worker V2 bundle dependency are deleted. Worker V3 application fault coverage uses a compiler-neutral test feature. |
-| Backend qualification graph | Open | Preserve canonical input/output fixtures, then delete profile-selected producers and the backend qualification feature. |
+| Backend qualification graph | In progress | Default and all-feature backend libraries are feature-invariant, selector-free, and enter only `ProductionCompilation`. Exact-profile and Worker V2 modules are restricted to feature-enabled unit-test fixtures and cannot be selected by a rustc invocation. Preserve the minimal canonical differential fixtures, then physically delete the remaining modules and backend feature. |
 | Finalizer and Worker execution | Open | Move shared protocol, request, admission, finalization, and executor mechanics to workload-neutral owners; migrate V3 callers; delete V2 executable APIs and workers. |
 | Artifact restart compatibility | Open | Retain only versioned records needed for canonical decode, explicit rejection, or migration; delete V2 publication/recovery actions once V3 differential coverage owns their hostile cases. |
 | Pliron and workload workers | Open | Replace Worker V2 executable bridges with production handoff fixtures or offline comparisons, then delete the worker crates and profile entry points. |
@@ -359,12 +359,12 @@ Migration follows these rules:
 Production became the sole unselected compiler transaction after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no
 selector. An incomplete production transaction now fails closed instead of silently
-entering legacy codegen. Retained oracles are absent from feature-free Cargo
-and backend builds. Each requires the package-local
-`qualification-oracles-test-only` feature and an explicit
-`FE2O3_QUALIFICATION_ORACLE_V1` value. Unselected host-only dependency units do
-not use this marker: the wrapper omits fe2o3's managed rustc arguments and
-backend descriptor so rustc uses its built-in LLVM backend directly.
+entering legacy codegen. Retained backend oracles are absent from both default
+and all-feature library builds; they can compile only as inert unit-test
+fixtures and no longer accept `FE2O3_QUALIFICATION_ORACLE_V1` as backend
+configuration. Unselected host-only dependency units omit fe2o3's managed rustc
+arguments and backend descriptor so rustc uses its built-in LLVM backend
+directly.
 
 The 2026-08-20 compiler review made this distinction structural. Qualification
 names come from one feature-gated table, while production has no corresponding
@@ -434,6 +434,14 @@ and hostile fixtures are frozen, preventing parallel work from creating new
 routes.
 
 ## Critical milestones
+
+The current checkpoint has completed the feature-invariant backend entry and a
+real extraction-only gfx942 vertical slice. Safe dynamic GEMM now traverses
+ordinary attributed Rust, semantic MIR, ranked PLIRON, verified Kernel IR, the
+composed formal/ranked memory checks, and deterministic gfx942 LLVM. The same
+driver has positive and hostile coverage for collection, ranked bounds, and
+reference bindings. This is compiler evidence only: extraction custody cannot
+publish, finalize HSACO, load, or launch.
 
 1. **Compiler middle end:** #140 pass execution plus one importer, general
    Kernel IR module, and deterministic scalar/control-flow transformations.
