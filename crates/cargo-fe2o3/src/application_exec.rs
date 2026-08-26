@@ -2,10 +2,6 @@
 
 use std::io;
 use std::os::fd::RawFd;
-#[cfg(feature = "qualification-oracles-test-only")]
-use std::os::unix::process::CommandExt;
-#[cfg(feature = "qualification-oracles-test-only")]
-use std::process::Command;
 
 /// Marks every non-stdio descriptor close-on-exec without closing descriptors that trusted
 /// pre-exec setup still needs. Callers may subsequently expose only their exact application ABI.
@@ -34,15 +30,6 @@ pub(crate) fn expose_descriptor(fd: RawFd) -> io::Result<()> {
         return Err(io::Error::from_raw_os_error(libc::EIO));
     }
     Ok(())
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-pub(crate) fn configure_closed_descriptor_baseline(command: &mut Command) {
-    // SAFETY: the callback invokes one async-signal-safe raw syscall and retains no borrowed
-    // process state. No descriptor above stderr is part of this application ABI.
-    unsafe {
-        command.pre_exec(protect_all_nonstdio_descriptors);
-    }
 }
 
 fn get_descriptor_flags(fd: RawFd) -> io::Result<i32> {

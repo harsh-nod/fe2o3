@@ -15,7 +15,6 @@ impl CargoPhase {
         &self.args
     }
 
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     pub(crate) fn args_mut(&mut self) -> &mut Vec<OsString> {
         &mut self.args
     }
@@ -79,7 +78,6 @@ impl ProductionCargoPlan {
         &self.host
     }
 
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     pub(crate) fn host_mut(&mut self) -> &mut CargoPhase {
         &mut self.host
     }

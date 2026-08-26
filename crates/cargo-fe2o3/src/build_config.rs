@@ -441,17 +441,6 @@ impl PreparedBuildConfig {
         }
     }
 
-    pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, BuildConfigError> {
-        let mut prepared = Self::from_environment()?;
-        #[cfg(feature = "qualification-oracles-test-only")]
-        if let Some(config) = prepared.as_mut() {
-            config.pin_envelope_inputs()?;
-        }
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
-        let _ = &mut prepared;
-        Ok(prepared)
-    }
-
     fn from_selection(
         profile: Option<&OsStr>,
         config_path: Option<&OsStr>,
@@ -760,7 +749,7 @@ impl PreparedBuildConfig {
             .transpose()
     }
 
-    #[cfg(feature = "qualification-oracles-test-only")]
+    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
     fn pin_envelope_inputs(&mut self) -> Result<(), BuildConfigError> {
         let Some(configured) = self.envelope_inputs.as_mut() else {
             return Ok(());
@@ -825,7 +814,6 @@ impl PreparedBuildConfig {
     }
 }
 
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 impl PreparedProductionBuildConfig {
     pub(crate) fn from_environment() -> Result<Option<Self>, BuildConfigError> {
         if let Some(value) = std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV) {
@@ -835,7 +823,7 @@ impl PreparedProductionBuildConfig {
         }
         if let Some(value) = std::env::var_os(QUALIFICATION_ORACLE_ENV) {
             return Err(BuildConfigError::Invalid(format!(
-                "{QUALIFICATION_ORACLE_ENV} is unavailable in production builds; remove {value:?} or rebuild cargo-fe2o3 with the qualification-oracles-test-only feature"
+                "{QUALIFICATION_ORACLE_ENV} is unavailable; production compilation has no selector; found {value:?}"
             )));
         }
         if std::env::var_os(WORKER_V2_CONFIG_ENV).is_some() {
@@ -864,6 +852,7 @@ impl PreparedProductionBuildConfig {
         self.link.identity
     }
 
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
     pub(crate) fn compile_environment_profile(
         &self,
         crate_name: &str,
@@ -874,6 +863,7 @@ impl PreparedProductionBuildConfig {
             .then_some(BuildCompileEnvironmentProfileV1::ProductionGfx942)
     }
 
+    #[cfg(not(feature = "qualification-oracles-test-only"))]
     pub(crate) fn selects(
         &self,
         crate_name: &str,

@@ -28,7 +28,6 @@ mod pinned_executable;
 #[cfg(test)]
 mod pinned_executable_test_directory;
 mod process_execution;
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 mod production_cargo_plan;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod production_release_no_hardware;
@@ -84,8 +83,6 @@ const AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_ENV: &str =
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1";
 const NON_PRODUCTION_AUTHORITY_VALIDATION_ENV: &str =
     "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1";
-#[cfg(feature = "qualification-oracles-test-only")]
-const AUTHORITY_BEARING_ROW_PIPELINE: &str = "collected-row-softmax-v1";
 const INTERNAL_RUNNER_ARG: &str = "__fe2o3-runner-v1";
 const CARGO_BINDING_WRAPPER_CHILD_FD: std::os::fd::RawFd = 191;
 const CARGO_BINDING_TRAMPOLINE_CHILD_FD: std::os::fd::RawFd = 192;
@@ -365,46 +362,16 @@ fn cargo_with_backend_result(
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
 ) -> Result<(), String> {
     reject_obsolete_codegen_pipeline(env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref())?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let production_target_profile = production_compilation_selected(
-        protected_release.is_some(),
-        env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
-    )?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     validate_production_compilation_environment(
         env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
     )?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if authority_sensitive_request_selected(production_target_profile) {
-        reject_dynamic_loader_environment()?;
-    }
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     reject_dynamic_loader_environment()?;
     scrub_process_dynamic_loader_environment();
     reject_preexisting_compiler_environment()?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    validate_production_cargo_selection(
-        args,
-        production_target_profile,
-        env::var_os(TARGET_ENV).as_deref(),
-    )?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     validate_production_cargo_inputs(args, env::var_os(TARGET_ENV).as_deref())?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let build_config = build_config::PreparedBuildConfig::from_environment_for_cargo_setup()
-        .map_err(|error| format!("build configuration setup failed: {error}"))?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let build_config =
         build_config::PreparedProductionBuildConfig::from_environment_for_cargo_setup()
             .map_err(|error| format!("production build configuration setup failed: {error}"))?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let requires_authorized_closure = production_target_profile
-        || env::var("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
-            == Ok(AUTHORITY_BEARING_ROW_PIPELINE)
-        || build_config
-            .as_ref()
-            .is_some_and(build_config::PreparedBuildConfig::requires_source_debug_profile);
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let requires_authorized_closure = true;
     if requires_authorized_closure {
         require_protected_authority_launch(protected_release)?;
@@ -513,42 +480,11 @@ fn cargo_with_backend_result(
         cargo_binding_trampoline,
         protected_compiler_closure,
         authorized_closure,
-        #[cfg(feature = "qualification-oracles-test-only")]
-        production_target_profile,
     };
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let mut context = BackendRunContext::prepare(preparation, args)?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let mut context = BackendRunContext::prepare(preparation, args)?;
     run_cargo_with_backend(&mut context, command, args, protected_release)
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
-fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
-    production_compilation
-        || env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref()
-        == Some(OsStr::new(AUTHORITY_BEARING_ROW_PIPELINE))
-        // An unparsed build manifest can select an authority-sensitive profile, so its
-        // mutable contents must not downgrade the loader check before authentication.
-        || env::var_os(build_config::PRODUCTION_BUILD_CONFIG_ENV).is_some()
-        || env::var_os(build_config::WORKER_V2_CONFIG_ENV).is_some()
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn production_compilation_selected(
-    protected_release: bool,
-    selector: Option<&OsStr>,
-) -> Result<bool, String> {
-    if selector == Some(OsStr::new("production-v1")) {
-        return Err(format!(
-            "{} must be unset for production compilation; explicit `production-v1` selection has been removed",
-            build_config::QUALIFICATION_ORACLE_ENV,
-        ));
-    }
-    Ok(protected_release || selector.is_none())
-}
-
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 fn validate_production_compilation_environment(
     qualification_oracle: Option<&OsStr>,
 ) -> Result<(), String> {
@@ -569,18 +505,6 @@ fn reject_obsolete_codegen_pipeline(value: Option<&OsStr>) -> Result<(), String>
         "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector and temporary test oracles use {}; found {value:?}",
         build_config::QUALIFICATION_ORACLE_ENV,
     ))
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn validate_production_cargo_selection(
-    args: &[OsString],
-    production_target_profile: bool,
-    device_target: Option<&OsStr>,
-) -> Result<(), String> {
-    if !production_target_profile {
-        return Ok(());
-    }
-    validate_production_cargo_inputs(args, device_target)
 }
 
 fn validate_production_cargo_inputs(
@@ -682,16 +606,12 @@ fn pin_authority_cargo_binding_trampoline() -> Result<pinned_executable::PinnedE
 
 struct BackendRunContext {
     target: String,
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     host_target: String,
     project: project::CargoProject,
     backend: PathBuf,
     pinned_backend: pinned_codegen_backend::PinnedCodegenBackend,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
-    #[cfg(feature = "qualification-oracles-test-only")]
-    _build_config: Option<build_config::PreparedBuildConfig>,
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     _build_config: Option<build_config::PreparedProductionBuildConfig>,
     build_config_identity: Option<build_config::BuildConfigIdentity>,
     compiler_closure_sha256: [u8; 32],
@@ -705,15 +625,10 @@ struct BackendRunContext {
     build_session: fe2o3_artifact_transaction::BuildSession,
     requires_locked_closure: bool,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
-    #[cfg(feature = "qualification-oracles-test-only")]
-    production_target_profile: bool,
 }
 
 struct BackendRunPreparation {
     project: project::CargoProject,
-    #[cfg(feature = "qualification-oracles-test-only")]
-    build_config: Option<build_config::PreparedBuildConfig>,
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     build_config: Option<build_config::PreparedProductionBuildConfig>,
     pinned_cargo: pinned_executable::PinnedExecutable,
     pinned_rustc: PinnedRustc,
@@ -722,8 +637,6 @@ struct BackendRunPreparation {
     cargo_binding_trampoline: Option<pinned_executable::PinnedExecutable>,
     protected_compiler_closure: Option<fe2o3_build_authority::CompilerClosureV2>,
     authorized_closure: Option<authorized_kernel_closure::AuthorizedKernelClosureV1>,
-    #[cfg(feature = "qualification-oracles-test-only")]
-    production_target_profile: bool,
 }
 
 impl BackendRunContext {
@@ -738,16 +651,10 @@ impl BackendRunContext {
             cargo_binding_trampoline,
             protected_compiler_closure,
             authorized_closure,
-            #[cfg(feature = "qualification-oracles-test-only")]
-            production_target_profile,
         } = preparation;
-        #[cfg(feature = "qualification-oracles-test-only")]
-        let target = amd_gpu_target(false);
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
         let target = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1.to_owned();
         let target_dir = project.open_or_create_target()?;
         pinned_rustc.assert_lib_tree_unmutated()?;
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
         let host_target = pinned_rustc_host_target(&pinned_rustc)?;
         let (backend, pinned_backend) = match authority_backend {
             Some(prebuilt) => prebuilt,
@@ -830,11 +737,6 @@ impl BackendRunContext {
                 .extend_from_slice(&(authorized_closure.snapshot().len() as u64).to_le_bytes());
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
-        #[cfg(feature = "qualification-oracles-test-only")]
-        if production_target_profile {
-            append_production_target_semantic_configuration(&mut cargo_configuration);
-        }
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
         append_production_target_semantic_configuration(&mut cargo_configuration);
         let backend_reference = pinned_backend
             .fixed_child_descriptor_path(BACKEND_CHILD_FD)
@@ -850,7 +752,6 @@ impl BackendRunContext {
             generation::managed_rustc_args(&backend_reference, generation.token())?;
         Ok(Self {
             target,
-            #[cfg(not(feature = "qualification-oracles-test-only"))]
             host_target,
             project,
             backend,
@@ -870,8 +771,6 @@ impl BackendRunContext {
             build_session,
             requires_locked_closure: authorized_closure.is_some(),
             authorized_closure,
-            #[cfg(feature = "qualification-oracles-test-only")]
-            production_target_profile,
         })
     }
 }
@@ -903,17 +802,13 @@ fn run_cargo_with_backend_inner(
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let mut production_plan = production_cargo_plan::ProductionCargoPlan::new(
         command,
         args,
         &context.host_target,
         context.requires_locked_closure,
     )?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let cargo_command = production_plan.device().command();
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let cargo_command = command;
     eprintln!(
         "cargo fe2o3 {command}: device phase uses backend {} for target {}",
         context.backend.display(),
@@ -942,49 +837,8 @@ fn run_cargo_with_backend_inner(
         }
         None => context.binding_wrapper_path.clone(),
     };
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let forwarded_args = production_plan.device().args().to_vec();
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let mut forwarded_args = args.to_vec();
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if context.requires_locked_closure {
-        let position = forwarded_args
-            .iter()
-            .position(|argument| argument == "--")
-            .unwrap_or(forwarded_args.len());
-        for required in ["--offline", "--frozen"] {
-            if !forwarded_args.iter().any(|argument| argument == required) {
-                forwarded_args.insert(position, OsString::from(required));
-            }
-        }
-    }
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if command == "run" {
-        inject_qualification_application_runner(
-            &context.project,
-            &context.pinned_cargo,
-            &context.pinned_rustc,
-            context.generation.artifact_dir(),
-            &mut forwarded_args,
-            context
-                ._build_config
-                .as_ref()
-                .is_some_and(|config| config.envelope_mode().is_required()),
-            context.requires_locked_closure,
-        )?;
-    }
     let artifact_dir = context.generation.artifact_dir();
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let capability_profile = if context
-        ._build_config
-        .as_ref()
-        .is_some_and(build_config::PreparedBuildConfig::requires_source_debug_profile)
-    {
-        capability_broker::CapabilityProfileV1::S09
-    } else {
-        capability_broker::CapabilityProfileV1::Ordinary
-    };
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     let capability_profile = capability_broker::CapabilityProfileV1::Ordinary;
     let rustc_lib_tree_stat = rustix::fs::fstat(context.pinned_rustc.lib_tree_directory().file())
         .map_err(|error| {
@@ -1067,12 +921,6 @@ fn run_cargo_with_backend_inner(
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
     scrub_simulation_build_environment(cargo.as_command_mut());
-    #[cfg(feature = "qualification-oracles-test-only")]
-    configure_production_target_build_environment(
-        cargo.as_command_mut(),
-        context.production_target_profile,
-    );
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     configure_production_target_environment(cargo.as_command_mut());
     if context.requires_locked_closure {
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
@@ -1098,20 +946,6 @@ fn run_cargo_with_backend_inner(
         .as_command_mut()
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV);
-    #[cfg(feature = "qualification-oracles-test-only")]
-    match (
-        context.build_config_identity,
-        context._build_config.as_ref(),
-    ) {
-        (Some(identity), Some(config)) => {
-            cargo
-                .as_command_mut()
-                .env(config.expected_identity_environment(), identity.to_hex());
-        }
-        (None, None) => {}
-        _ => unreachable!("build configuration and identity have matching presence"),
-    }
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     match (
         context.build_config_identity,
         context._build_config.as_ref(),
@@ -1185,29 +1019,25 @@ fn run_cargo_with_backend_inner(
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
     context.generation.commit()?;
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
-    {
-        if command == "run" {
-            if !context.requires_locked_closure {
-                return Err(
-                    "production Worker V3 run requires an authorized locked compiler closure"
-                        .to_owned(),
-                );
-            }
-            inject_production_application_runner(
-                &context.project,
-                &context.pinned_cargo,
-                &context.pinned_rustc,
-                context.generation.artifact_dir(),
-                production_plan.host_mut().args_mut(),
-            )?;
+    if command == "run" {
+        if !context.requires_locked_closure {
+            return Err(
+                "production Worker V3 run requires an authorized locked compiler closure"
+                    .to_owned(),
+            );
         }
-        run_production_host_cargo(context, production_plan.host(), protected_release)?;
+        inject_production_application_runner(
+            &context.project,
+            &context.pinned_cargo,
+            &context.pinned_rustc,
+            context.generation.artifact_dir(),
+            production_plan.host_mut().args_mut(),
+        )?;
     }
+    run_production_host_cargo(context, production_plan.host(), protected_release)?;
     Ok(())
 }
 
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 fn run_production_host_cargo(
     context: &BackendRunContext,
     phase: &production_cargo_plan::CargoPhase,
@@ -1363,13 +1193,6 @@ fn configure_production_target_environment(command: &mut Command) {
         );
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
-fn configure_production_target_build_environment(command: &mut Command, enabled: bool) {
-    if enabled {
-        configure_production_target_environment(command);
-    }
-}
-
 fn aggregate_post_spawn_results<const N: usize>(
     primary: Result<(), String>,
     checks: [(&str, Result<(), String>); N],
@@ -1430,7 +1253,6 @@ fn resolve_application_runner(
     Ok((target, original_runner))
 }
 
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 fn inject_production_application_runner(
     project: &project::CargoProject,
     pinned_cargo: &pinned_executable::PinnedExecutable,
@@ -1462,59 +1284,6 @@ fn inject_production_application_runner(
             "0".to_owned(),
         ],
     )
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn inject_qualification_application_runner(
-    project: &project::CargoProject,
-    pinned_cargo: &pinned_executable::PinnedExecutable,
-    pinned_rustc: &PinnedRustc,
-    artifact_dir: &project::PinnedDirectory,
-    args: &mut Vec<OsString>,
-    expects_envelope: bool,
-    authority: bool,
-) -> Result<(), String> {
-    let (target, original_runner) =
-        resolve_application_runner(project, pinned_cargo, pinned_rustc, args, authority)?;
-    inject_application_runner_config(
-        args,
-        &target,
-        artifact_dir,
-        &original_runner,
-        expects_envelope,
-    )
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn inject_application_runner_config(
-    args: &mut Vec<OsString>,
-    target: &str,
-    artifact_dir: &project::PinnedDirectory,
-    original_runner: &[OsString],
-    expects_envelope: bool,
-) -> Result<(), String> {
-    let executable = application_runner_executable()?;
-    let (artifact_device, artifact_inode) = artifact_dir.identity_parts();
-    let mut runner = vec![
-        executable,
-        INTERNAL_RUNNER_ARG.to_string(),
-        application_handoff::RUNNER_CONTEXT_VERSION.to_string(),
-        hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
-        artifact_device.to_string(),
-        artifact_inode.to_string(),
-        if expects_envelope {
-            application_handoff::RUNNER_EXPECTS_ENVELOPE.to_string()
-        } else {
-            application_handoff::RUNNER_EXPECTS_NO_ENVELOPE.to_string()
-        },
-        original_runner.len().to_string(),
-    ];
-    runner.extend(
-        original_runner
-            .iter()
-            .map(|argument| hex_encode(os_bytes(argument))),
-    );
-    inject_serialized_application_runner_config(args, target, runner)
 }
 
 fn application_runner_executable() -> Result<String, String> {
@@ -1783,7 +1552,6 @@ fn host_rustc_target() -> Result<String, String> {
         .ok_or_else(|| "rustc -vV output did not contain a host target".to_string())
 }
 
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 fn pinned_rustc_host_target(rustc: &PinnedRustc) -> Result<String, String> {
     let mut command = rustc
         .executable
@@ -1879,18 +1647,6 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         artifact_device,
         artifact_inode,
     )?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let expects_envelope = match args[4].to_str() {
-        Some(application_handoff::RUNNER_EXPECTS_ENVELOPE) => true,
-        Some(application_handoff::RUNNER_EXPECTS_NO_ENVELOPE) => false,
-        _ => {
-            return Err(format!(
-                "invalid application envelope expectation {:?}",
-                args[4]
-            ));
-        }
-    };
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     if args[4].to_str() != Some(application_handoff::RUNNER_EXPECTS_ENVELOPE) {
         return Err(format!(
             "production application runner requires the Worker V3 envelope marker, got {:?}",
@@ -1919,61 +1675,21 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
     }
     reject_recursive_runner(&original_runner)?;
 
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
-    {
-        if runner_count != 0 || !original_runner.is_empty() {
-            return Err(
-                "production Worker V3 runner does not admit an intermediate Cargo runner"
-                    .to_owned(),
-            );
-        }
-        let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?
-            .ok_or_else(|| {
-                "production Worker V3 runner requires a canonical load envelope".to_owned()
-            })?;
-        run_application_with_handoff(
-            handoff,
-            application,
-            &args[application_index + 1..],
-            application_timeouts,
-        )
+    if runner_count != 0 || !original_runner.is_empty() {
+        return Err(
+            "production Worker V3 runner does not admit an intermediate Cargo runner".to_owned(),
+        );
     }
-    #[cfg(feature = "qualification-oracles-test-only")]
-    {
-        let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?;
-        if expects_envelope && handoff.is_none() {
-            return Err(
-                "Cargo runner expected a canonical production envelope, but none exists".into(),
-            );
-        }
-        if !expects_envelope && handoff.is_some() {
-            return Err(
-                "Cargo runner did not expect a production envelope for this application build"
-                    .into(),
-            );
-        }
-        if let Some(handoff) = handoff {
-            if !original_runner.is_empty() {
-                return Err(
-                    "production application descriptor handoff does not permit an intermediate Cargo runner"
-                        .to_string(),
-                );
-            }
-            run_application_with_handoff(
-                handoff,
-                application,
-                &args[application_index + 1..],
-                application_timeouts,
-            )
-        } else {
-            run_qualification_application_without_handoff(
-                artifact_dir,
-                &original_runner,
-                application,
-                &args[application_index + 1..],
-            )
-        }
-    }
+    let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?
+        .ok_or_else(|| {
+            "production Worker V3 runner requires a canonical load envelope".to_owned()
+        })?;
+    run_application_with_handoff(
+        handoff,
+        application,
+        &args[application_index + 1..],
+        application_timeouts,
+    )
 }
 
 fn run_application_with_handoff(
@@ -2047,37 +1763,6 @@ fn run_application_with_handoff(
     let cleanup = active_handoff.into_cleanup();
     drop(handoff);
     application_handoff::wait_and_contain_application_group(process, cleanup)
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn run_qualification_application_without_handoff(
-    artifact_dir: project::PinnedDirectory,
-    original_runner: &[OsString],
-    application: &OsStr,
-    application_args: &[OsString],
-) -> Result<ExitStatus, String> {
-    let mut child = if let Some(program) = original_runner.first() {
-        let mut command = Command::new(program);
-        command.args(&original_runner[1..]);
-        command.arg(application);
-        command.args(application_args);
-        command
-    } else {
-        let mut command = Command::new(application);
-        command.args(application_args);
-        command
-    };
-    scrub_application_environment(&mut child);
-    application_exec::configure_closed_descriptor_baseline(&mut child);
-    if original_runner.is_empty() {
-        // A direct non-Worker application still loads its compiler-produced image by name. Give
-        // only that application the pinned generation directory. An opaque configured runner
-        // cannot safely receive a capability intended for a later process image.
-        artifact_dir.replace_for_child_at(&mut child, ARTIFACT_CHILD_FD)?;
-        child.env(HSACO_DIR_ENV, format!("/proc/self/fd/{ARTIFACT_CHILD_FD}"));
-    }
-    process_execution::status(&mut child)
-        .map_err(|error| format!("failed to launch Cargo runner/application: {error}"))
 }
 
 fn scrub_application_environment(child: &mut Command) {
@@ -3030,12 +2715,11 @@ fn print_help() {
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod tests {
     use super::{
-        TARGET_ENV, aggregate_post_spawn_results, configure_production_target_build_environment,
-        inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        production_compilation_selected, reject_obsolete_codegen_pipeline, selected_run_target,
-        validate_production_cargo_selection,
+        TARGET_ENV, aggregate_post_spawn_results, configure_production_target_environment,
+        normalize_invocation, parse_rocminfo_target, reject_obsolete_codegen_pipeline,
+        selected_run_target, validate_production_cargo_inputs,
+        validate_production_compilation_environment,
     };
-    use crate::project::PinnedDirectory;
     use std::ffi::{OsStr, OsString};
     use std::process::Command;
 
@@ -3077,13 +2761,11 @@ mod tests {
 
     #[test]
     fn production_is_the_unselected_route_and_has_no_selector() {
-        assert!(production_compilation_selected(false, None).unwrap());
-        assert!(production_compilation_selected(true, None).unwrap());
-        assert!(!production_compilation_selected(false, Some(OsStr::new("kernel-ir-v1"))).unwrap());
+        assert!(validate_production_compilation_environment(None).is_ok());
         assert!(
-            production_compilation_selected(false, Some(OsStr::new("production-v1")))
-                .expect_err("obsolete production selector must fail")
-                .contains("must be unset for production compilation")
+            validate_production_compilation_environment(Some(OsStr::new("kernel-ir-v1")))
+                .expect_err("qualification selector must fail")
+                .contains("production compilation has no selector")
         );
     }
 
@@ -3106,7 +2788,7 @@ mod tests {
                 fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
                 "attacker",
             );
-        configure_production_target_build_environment(&mut command, true);
+        configure_production_target_environment(&mut command);
         assert_eq!(command_environment(&command, "RUSTFLAGS"), None);
         assert_eq!(
             command_environment(&command, TARGET_ENV),
@@ -3132,9 +2814,8 @@ mod tests {
     #[test]
     fn production_target_selection_is_owned_by_the_orchestrator() {
         assert!(
-            validate_production_cargo_selection(
+            validate_production_cargo_inputs(
                 &["--lib".into()],
-                true,
                 Some(OsStr::new(
                     fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
                 )),
@@ -3149,9 +2830,8 @@ mod tests {
             vec!["--target=x86_64-unknown-linux-gnu".into()],
         ] {
             assert!(
-                validate_production_cargo_selection(
+                validate_production_cargo_inputs(
                     &args,
-                    true,
                     Some(OsStr::new(
                         fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
                     )),
@@ -3159,10 +2839,7 @@ mod tests {
                 .is_err()
             );
         }
-        assert!(
-            validate_production_cargo_selection(&[], true, Some(OsStr::new("gfx942:xnack-")),)
-                .is_err()
-        );
+        assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("gfx942:xnack-"))).is_err());
     }
 
     #[test]
@@ -3192,42 +2869,6 @@ Agent 2
             parse_rocminfo_target(text).as_deref(),
             Some("gfx12-generic")
         );
-    }
-
-    #[test]
-    fn runner_configuration_precedes_and_preserves_application_arguments() {
-        let artifact_dir = PinnedDirectory::open_existing(
-            std::env::current_dir().expect("current directory"),
-            "runner configuration test directory",
-        )
-        .expect("pin test directory");
-        let mut args = ["--target", "gfx942", "--", "application"]
-            .map(OsString::from)
-            .to_vec();
-        inject_application_runner_config(
-            &mut args,
-            "gfx942",
-            &artifact_dir,
-            &[
-                OsString::from("qemu"),
-                OsString::from("-cpu"),
-                OsString::from("max"),
-            ],
-            false,
-        )
-        .expect("inject runner");
-        let separator = args
-            .iter()
-            .position(|argument| argument == "--")
-            .expect("application separator");
-        assert_eq!(&args[separator..], ["--", "application"]);
-        assert_eq!(&args[separator - 2], "--config");
-        assert!(
-            args[separator - 1]
-                .to_string_lossy()
-                .starts_with("target.gfx942.runner=")
-        );
-        assert!(args[separator - 1].to_string_lossy().contains("71656d75"));
     }
 
     #[test]

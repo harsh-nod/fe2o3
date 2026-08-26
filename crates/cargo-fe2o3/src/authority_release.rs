@@ -484,12 +484,6 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
 }
 
 fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if !crate::authority_sensitive_request_selected(true) {
-        return Err(
-            "authority release requires an authority-bearing pipeline selection".to_owned(),
-        );
-    }
     reject_reserved_descriptors(&[0, 1, 2])?;
     let compiler = observe_compiler_closure()?;
     let environment = current_environment()?;
