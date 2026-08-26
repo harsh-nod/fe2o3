@@ -81,7 +81,6 @@ required-features = ["qualification-oracles-test-only"]
 
 [[test]]
 name = "cross_crate_typed_binding"
-required-features = ["qualification-oracles-test-only"]
 
 [[test]]
 name = "tiled_gemm_frontend"
