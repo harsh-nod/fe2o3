@@ -516,13 +516,17 @@ pub(super) fn noncanonical_cyclic_scc_headers_v1(
         .iter()
         .map(|block| terminator_successors(block.terminator()))
         .collect::<Vec<_>>();
+    let reachable = reachable_from(0, &successors);
     let mut predecessors = vec![Vec::new(); successors.len()];
     for (source, targets) in successors.iter().enumerate() {
+        if !reachable.contains(&(source as u32)) {
+            continue;
+        }
         for target in targets {
             predecessors[*target as usize].push(source as u32);
         }
     }
-    let order = cfg_finish_order(&successors);
+    let order = cfg_finish_order(&successors, &reachable);
     let mut assigned = vec![false; successors.len()];
     let mut headers = BTreeSet::new();
     for start in order.into_iter().rev() {
@@ -573,11 +577,11 @@ pub(super) fn noncanonical_cyclic_scc_headers_v1(
     headers.into_iter().collect()
 }
 
-fn cfg_finish_order(adjacency: &[Vec<u32>]) -> Vec<u32> {
+fn cfg_finish_order(adjacency: &[Vec<u32>], reachable: &BTreeSet<u32>) -> Vec<u32> {
     let mut visited = vec![false; adjacency.len()];
-    let mut order = Vec::with_capacity(adjacency.len());
+    let mut order = Vec::with_capacity(reachable.len());
     for start in 0..adjacency.len() {
-        if visited[start] {
+        if visited[start] || !reachable.contains(&(start as u32)) {
             continue;
         }
         visited[start] = true;
@@ -586,7 +590,7 @@ fn cfg_finish_order(adjacency: &[Vec<u32>]) -> Vec<u32> {
             if *successor < adjacency[*block as usize].len() {
                 let target = adjacency[*block as usize][*successor] as usize;
                 *successor += 1;
-                if !visited[target] {
+                if reachable.contains(&(target as u32)) && !visited[target] {
                     visited[target] = true;
                     stack.push((target as u32, 0));
                 }
@@ -866,4 +870,83 @@ fn put_digest(digest: &mut Sha256, value: DigestV1) {
 fn put_blob(digest: &mut Sha256, value: &[u8]) {
     digest.update((value.len() as u64).to_le_bytes());
     digest.update(value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ProductionRankedBlockV1, ProductionRankedOperationV1, ProductionRankedValueIdV1};
+
+    #[test]
+    fn unreachable_cycle_is_ignored_while_reachable_canonical_loop_remains() {
+        let local =
+            |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+        let argument = |block| ProductionRankedValueV1::BlockArgument { block, argument: 0 };
+        let kernel = ProductionRankedKernelV1::new(
+            "reachable_loop_with_dead_cycle",
+            0,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: ProductionRankedValueIdV1::new(0),
+                            value: 0,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: ProductionRankedValueIdV1::new(1),
+                            value: 4,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: ProductionRankedValueIdV1::new(2),
+                            value: 1,
+                        },
+                    ],
+                    ProductionRankedTerminatorV1::BranchArgs {
+                        arguments: vec![local(0)],
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::IndexLessThanArgs {
+                        lhs: argument(1),
+                        rhs: local(1),
+                        true_arguments: vec![argument(1)],
+                        false_arguments: vec![],
+                        true_block: 2,
+                        false_block: 3,
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    1,
+                    vec![],
+                    ProductionRankedTerminatorV1::BranchArgsAdd {
+                        value: argument(2),
+                        step: local(2),
+                        target: 1,
+                    },
+                ),
+                ProductionRankedBlockV1::new(vec![], ProductionRankedTerminatorV1::Return),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::Branch { target: 5 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![],
+                    ProductionRankedTerminatorV1::Branch { target: 4 },
+                ),
+            ],
+        )
+        .unwrap();
+        let backedges = super::super::mir_pliron_semantic_contract_v1::natural_backedges(&kernel)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(backedges, [(2, 1)].into_iter().collect());
+        assert!(noncanonical_cyclic_scc_headers_v1(&kernel, &backedges).is_empty());
+
+        let live = derive_loop_shape(&kernel, 1).unwrap();
+        assert_eq!(live.loop_blocks, [1, 2]);
+        assert_eq!(live.exit_edges, [(1, 3)]);
+    }
 }
