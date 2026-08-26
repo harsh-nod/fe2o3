@@ -396,10 +396,27 @@ def wait_child(pid, timeout=3.0):
     raise AssertionError("trampoline child exceeded broker harness timeout")
 
 
-def stop_child_after_hello(pid):
-    os.kill(pid, signal.SIGSTOP)
-    observed, status = os.waitpid(pid, os.WUNTRACED)
+def wait_for_stopped_child(pid):
+    while True:
+        try:
+            observed, status = os.waitpid(pid, os.WUNTRACED)
+            break
+        except InterruptedError:
+            continue
     assert observed == pid and os.WIFSTOPPED(status), (observed, status)
+
+
+def reap_exited_child(pid):
+    while True:
+        try:
+            observed, _ = os.waitpid(pid, os.WNOHANG)
+            break
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return True
+    assert observed in {0, pid}, observed
+    return observed == pid
 
 
 def expected_success_output(binding, bootstrap_identity):
@@ -518,17 +535,20 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
             os.write(2, ("harness child exec failure: " + repr(error) + "\n").encode())
             os._exit(127)
 
-    child_socket.close()
-    os.close(binding_descriptor)
-    os.close(output_write)
-    os.close(error_write)
-    os.close(leaked_descriptor)
-
-    expected_failure = scenario not in {
-        "success", "pathname-substitution", "dumpable-exec-reset"
-    }
-    early_output = b""
+    child_reaped = False
+    child_stopped = False
+    descriptors = []
     try:
+        child_socket.close()
+        os.close(binding_descriptor)
+        os.close(output_write)
+        os.close(error_write)
+        os.close(leaked_descriptor)
+
+        expected_failure = scenario not in {
+            "success", "pathname-substitution", "dumpable-exec-reset"
+        }
+        early_output = b""
         if scenario not in {
             "response-file",
             "empty-argument",
@@ -598,10 +618,14 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
                 descriptors = [read_end]
 
             stopped_for_pre_exec_adversary = scenario in {
-                "peer-death", "replayed-frame"
+                "cleanup-after-stop-failure", "peer-death", "replayed-frame"
             }
             if stopped_for_pre_exec_adversary:
-                stop_child_after_hello(pid)
+                os.kill(pid, signal.SIGSTOP)
+                child_stopped = True
+                wait_for_stopped_child(pid)
+            if scenario == "cleanup-after-stop-failure":
+                raise RuntimeError("injected failure after stopping trampoline child")
             try:
                 if scenario == "timeout":
                     time.sleep(0.7)
@@ -625,12 +649,15 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
                         assert early_output == b"POST_EXEC_BROKER_V3_GATE_READY\n", early_output
                         broker_socket.sendmsg([bootstrap], rights)
             finally:
-                if stopped_for_pre_exec_adversary:
+                if child_stopped:
                     os.kill(pid, signal.SIGCONT)
+                    child_stopped = False
             for descriptor in descriptors:
                 os.close(descriptor)
+            descriptors.clear()
 
         exit_code = wait_child(pid)
+        child_reaped = True
         output = (early_output + os.read(output_read, 1 << 20)).decode(
             "utf-8", "replace"
         )
@@ -661,6 +688,32 @@ def run_scenario(scenario, trampoline_path, wrapper_path, alternate_path,
                 )
         assert not os.path.exists(preload_marker), (scenario, "LD_PRELOAD survived")
     finally:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if not child_reaped:
+            child_reaped = reap_exited_child(pid)
+        if not child_reaped:
+            if child_stopped:
+                try:
+                    os.kill(pid, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            while True:
+                try:
+                    observed, _ = os.waitpid(pid, 0)
+                    assert observed == pid
+                    break
+                except InterruptedError:
+                    continue
+                except ChildProcessError:
+                    break
         if original_path_bytes is not None:
             os.chmod(wrapper_path, 0o755)
             with open(wrapper_path, "wb") as stream:
@@ -681,7 +734,13 @@ if __name__ == "__main__":
     if len(sys.argv) != 7:
         raise SystemExit("usage: broker-harness scenario trampoline wrapper alternate preload marker")
     verify_rust_codec_golden_identity()
-    run_scenario(*sys.argv[1:])
+    try:
+        run_scenario(*sys.argv[1:])
+    except RuntimeError as error:
+        if sys.argv[1] != "cleanup-after-stop-failure" or str(error) != (
+            "injected failure after stopping trampoline child"
+        ):
+            raise
 PY
 chmod 0555 "${HARNESS}"
 
@@ -759,6 +818,7 @@ readonly SCENARIOS=(
   unsealed-descriptor
   substituted-wrapper
   nonregular-descriptor
+  cleanup-after-stop-failure
   replayed-frame
   delayed-replayed-frame
   dumpable-exec-reset
