@@ -483,11 +483,6 @@ impl<'allocation, T: DeviceCopy> GeneratedReadDeviceSlice<'allocation, T> {
             access: self.argument_access(),
         })
     }
-
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn device_pointer(&self) -> *const () {
-        self.pointer.as_raw().cast_const().cast()
-    }
 }
 
 /// Generated writable capability for one exclusive typed device-buffer region.
@@ -556,11 +551,6 @@ impl<'allocation, T: DeviceCopy> GeneratedWriteDeviceSlice<'allocation, T> {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
-    }
-
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn device_pointer(&self) -> *const () {
-        self.pointer.as_raw().cast_const().cast()
     }
 }
 

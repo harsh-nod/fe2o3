@@ -2033,12 +2033,9 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> LoadedHsaExecutableV1<K, A> 
         &self.resolution
     }
 
+    #[cfg(test)]
     pub(crate) const fn artifact_identity(&self) -> &ArtifactKernelIdentityV1 {
         self.authenticated.admission.artifact_identity()
-    }
-
-    pub(crate) fn physical_kernel(&self) -> &crate::PublishedKernelPhysicalLayoutV1 {
-        self.authenticated.admission.selected_kernel()
     }
 
     pub(crate) const fn environment(&self) -> &HsaEnvironmentObservationV1 {
@@ -2864,7 +2861,7 @@ impl<K, A: ReviewedHsaExecutableLifecycleAdapterV1> HsaKernelLaunchAuthorization
     }
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 impl<K, A: ReviewedHsaImplicitKernargAdapterV1> HsaKernelLaunchAuthorizationV1<'_, K, A> {
     pub(crate) fn launch_generated_with_implicit_kernarg(
         self,
@@ -5117,31 +5114,6 @@ pub(crate) mod tests {
         second.unload().unwrap();
         assert_eq!(first_unloads.load(Ordering::SeqCst), 1);
         assert_eq!(second_unloads.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn exact_typed_vecadd_profile_enters_generated_worker_v2_executor() {
-        let (loaded, unloads, _directory) = load(0x92, AdapterFault::None);
-        let executor = crate::GeneratedWorkerV2VecAddExecutorV1::bind_observed_for_test(
-            loaded.unwrap(),
-            ObservedContext::for_test(0x92, 0, "gfx942:sramecc+:xnack-", 1_024, 65_536),
-        )
-        .unwrap();
-        executor.unload().unwrap();
-        assert_eq!(unloads.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn generated_worker_v2_executor_rejects_context_substitution() {
-        let (loaded, unloads, _directory) = load(0x93, AdapterFault::None);
-        assert!(matches!(
-            crate::GeneratedWorkerV2VecAddExecutorV1::bind_observed_for_test(
-                loaded.unwrap(),
-                ObservedContext::for_test(0x93, 1, "gfx942", 1_024, 65_536),
-            ),
-            Err(crate::GeneratedWorkerV2VecAddBindError::ContextDeviceMismatch)
-        ));
-        assert_eq!(unloads.load(Ordering::SeqCst), 1);
     }
 
     #[test]

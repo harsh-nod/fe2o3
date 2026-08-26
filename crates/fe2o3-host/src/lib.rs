@@ -35,8 +35,6 @@ mod generated_wave64_collectives_v1;
 mod generated_wave64_collectives_v1_lifecycle;
 #[cfg(test)]
 mod generated_wave64_collectives_v1_lifecycle_tests;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod generated_worker_v2_vecadd;
 mod generated_worker_v3_dispatch;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_workgroup_lds_reduction_v1;
@@ -309,13 +307,6 @@ pub use generated_wave64_collectives_v1_lifecycle::{
     Wave64CollectivesLoadErrorV1, Wave64CollectivesUnloadIdentityV1, join_wave64_collectives_v1,
 };
 #[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use generated_worker_v2_vecadd::{
-    GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
-    GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
-    GeneratedWorkerV2VecAddPreparedV1,
-};
-#[doc(hidden)]
 pub use generated_worker_v3_dispatch::{
     CompilerGeneratedWorkerV3ArgumentsV1, GeneratedWorkerV3ArgumentBindingV1,
     GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
@@ -508,11 +499,8 @@ pub mod __generated {
         GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
         GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
         GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,
-        GeneratedWorkerV2VecAddBindError, GeneratedWorkerV2VecAddCompletionV1,
-        GeneratedWorkerV2VecAddExecutorV1, GeneratedWorkerV2VecAddPrepareError,
-        GeneratedWorkerV2VecAddPreparedV1, LoadedKernelLoadError, ScalarGemmV1ArgumentError,
-        ScalarGemmV1DispatchIdentity, ScalarGemmV1GeometryError, ScalarGemmV1PhysicalKernargError,
-        ScalarGemmV1ProfileError,
+        LoadedKernelLoadError, ScalarGemmV1ArgumentError, ScalarGemmV1DispatchIdentity,
+        ScalarGemmV1GeometryError, ScalarGemmV1PhysicalKernargError, ScalarGemmV1ProfileError,
     };
     #[cfg(any(test, feature = "qualification-oracles-test-only"))]
     pub use crate::{

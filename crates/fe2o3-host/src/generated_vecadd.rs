@@ -1,4 +1,4 @@
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 use crate::CompilerGeneratedArgumentLayoutV1;
 use crate::{
     AliasAdmissionError, ArtifactKernelIdentityV1, AuthenticatedKernelArtifactV1,
@@ -509,7 +509,7 @@ pub(crate) fn checked_vecadd_grid(
     Ok(length.div_ceil(VECADD_BLOCK_SIZE))
 }
 
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
+#[cfg(test)]
 pub(crate) fn generated_vecadd_argument_layout_v2()
 -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedVecAddProfileError> {
     let abi = generated_vecadd_abi_v2()?;
