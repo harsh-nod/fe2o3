@@ -19,7 +19,9 @@ use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
 use sha2::{Digest as _, Sha256};
 
 #[cfg(feature = "qualification-oracles-test-only")]
-use crate::qualification_selection::{CompilationRoute, RustcInvocationPolicy};
+use crate::qualification_selection::{
+    RustcInvocationPolicy, SelectedQualificationOracle, rustc_invocation_policy,
+};
 
 const EXACT_PROTECTED_TARGET_V1: &str = "gfx942:xnack-";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
@@ -146,7 +148,7 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
                 qualification_backend_marker_present,
             } => write!(
                 formatter,
-                "rustc invocation signals are forbidden on this pipeline route (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, protected-backend marker: {backend_marker_present}, qualification-backend marker: {qualification_backend_marker_present})"
+                "rustc invocation signals are forbidden by this admission policy (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, protected-backend marker: {backend_marker_present}, qualification-backend marker: {qualification_backend_marker_present})"
             ),
             #[cfg(feature = "qualification-oracles-test-only")]
             Self::QualificationObservationsMissing => formatter.write_str(
@@ -224,7 +226,7 @@ pub(crate) fn admit_for_production_codegen()
 
 #[cfg(feature = "qualification-oracles-test-only")]
 pub(crate) fn admit_for_codegen(
-    route: CompilationRoute,
+    qualification: Option<SelectedQualificationOracle>,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
     let explicit_unprotected_qualification = explicit_unprotected_qualification_enabled();
     let compiler_closure_marker_present =
@@ -233,20 +235,20 @@ pub(crate) fn admit_for_codegen(
     let qualification_backend_marker_present =
         env::var_os(QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1).is_some();
     #[cfg(feature = "qualification-oracles-test-only")]
-    let qualification_observations_authenticated = if route
-        .rustc_invocation_policy(explicit_unprotected_qualification)
-        == RustcInvocationPolicy::QualificationObserved
-        && compiler_closure_marker_present
-        && qualification_backend_marker_present
-    {
-        authenticate_qualification_observations()?
-    } else {
-        false
-    };
+    let qualification_observations_authenticated =
+        if rustc_invocation_policy(qualification, explicit_unprotected_qualification)
+            == RustcInvocationPolicy::QualificationObserved
+            && compiler_closure_marker_present
+            && qualification_backend_marker_present
+        {
+            authenticate_qualification_observations()?
+        } else {
+            false
+        };
     #[cfg(not(feature = "qualification-oracles-test-only"))]
     let qualification_observations_authenticated = false;
     admit_for_codegen_at(
-        route,
+        qualification,
         explicit_unprotected_qualification,
         RUSTC_INVOCATION_CHILD_FD_V1,
         compiler_closure_marker_present,
@@ -258,7 +260,7 @@ pub(crate) fn admit_for_codegen(
 
 #[cfg(feature = "qualification-oracles-test-only")]
 fn admit_for_codegen_at(
-    route: CompilationRoute,
+    qualification: Option<SelectedQualificationOracle>,
     explicit_unprotected_qualification: bool,
     child_fd: RawFd,
     _compiler_closure_marker_present: bool,
@@ -266,7 +268,7 @@ fn admit_for_codegen_at(
     qualification_backend_marker_present: bool,
     _qualification_observations_authenticated: bool,
 ) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
-    match route.rustc_invocation_policy(explicit_unprotected_qualification) {
+    match rustc_invocation_policy(qualification, explicit_unprotected_qualification) {
         #[cfg(feature = "qualification-oracles-test-only")]
         RustcInvocationPolicy::Unmanaged => {
             reject_unexpected_rustc_signals_at(

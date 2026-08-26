@@ -399,12 +399,17 @@ fn collect_qualification_oracle_input<'tcx>(
     cgus: &[rustc_middle::mir::mono::CodegenUnit<'tcx>],
     verbose: bool,
     target: &AmdGpuTarget,
-    pipeline: SelectedQualificationOracle,
+    qualification: SelectedQualificationOracle,
 ) -> Result<collector::CollectionResult<'tcx>, String> {
-    let collection =
-        collector::collect_qualification_device_functions(tcx, cgus, verbose, target, pipeline)
-            .map_err(|error| error.to_string())?;
-    let oracle = pipeline.oracle();
+    let collection = collector::collect_qualification_device_functions(
+        tcx,
+        cgus,
+        verbose,
+        target,
+        qualification,
+    )
+    .map_err(|error| error.to_string())?;
+    let oracle = qualification.oracle();
     let frontend_record = frontend_record_bridge::extract_frontend_record_v1(tcx, &collection)
         .map_err(|error| format!("frontend record extraction failed: {error}"))?;
     if verbose {
@@ -469,14 +474,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"));
             }
             #[cfg(feature = "qualification-oracles-test-only")]
-            let compilation_route = self
+            let selected_qualification = self
                 .config
                 .qualification_selection
                 .resolve()
                 .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
             #[cfg(feature = "qualification-oracles-test-only")]
             let mut protected_rustc_invocation =
-                protected_rustc_invocation::admit_for_codegen(compilation_route)
+                protected_rustc_invocation::admit_for_codegen(selected_qualification)
                     .unwrap_or_else(|error| {
                         tcx.dcx().fatal(format!(
                             "[rustc-codegen-fe2o3] protected rustc invocation admission failed without fallback: {error}"
@@ -490,7 +495,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     ))
                 });
             #[cfg(feature = "qualification-oracles-test-only")]
-            let production_compilation = compilation_route.is_production();
+            let production_compilation = selected_qualification.is_none();
             #[cfg(not(feature = "qualification-oracles-test-only"))]
             let production_compilation = true;
             let build_attempt = match self.config.build_attempt.resolve() {
@@ -634,7 +639,8 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 }
             }
             #[cfg(feature = "qualification-oracles-test-only")]
-            let qualification_oracle = compilation_route.qualification_oracle();
+            let qualification_oracle =
+                selected_qualification.map(SelectedQualificationOracle::oracle);
             #[cfg(feature = "qualification-oracles-test-only")]
             if kernel_count == 0
                 && qualification_oracle == Some(QualificationOracle::CollectedGeneralGemmV1)
@@ -646,11 +652,11 @@ impl CodegenBackend for Fe2o3CodegenBackend {
             }
             if kernel_count > 0 {
                 #[cfg(feature = "qualification-oracles-test-only")]
-                compilation_route
-                    .validate_device_transaction(production_device_transaction_complete)
-                    .unwrap_or_else(|error| {
-                        tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}"))
-                    });
+                qualification_selection::validate_device_transaction(
+                    selected_qualification,
+                    production_device_transaction_complete,
+                )
+                .unwrap_or_else(|error| tcx.dcx().fatal(format!("[rustc-codegen-fe2o3] {error}")));
                 #[cfg(not(feature = "qualification-oracles-test-only"))]
                 if !production_device_transaction_complete {
                     tcx.dcx().fatal(
@@ -659,9 +665,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                 }
             }
             #[cfg(feature = "qualification-oracles-test-only")]
-            if let Some(qualification_pipeline) = compilation_route.qualification() {
+            if let Some(qualification) = selected_qualification {
                 let output_dir = output_dir.expect("kernel output was required above");
-                let qualification_oracle = qualification_pipeline.oracle();
+                let qualification_oracle = qualification.oracle();
                 if qualification_oracle == QualificationOracle::SimulationV1 {
                     let attempt = build_attempt.unwrap_or_else(|| {
                         tcx.dcx().fatal(
@@ -674,7 +680,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let mir_module = mir_import::import_collection(tcx, &collection)
                             .map_err(|error| format!("compiler FFI MIR import failed: {error}"))?;
@@ -731,7 +737,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let imported = collected_general_gemm_v1::try_import_general_gemm_v1(
                             tcx,
@@ -786,7 +792,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         collected_executable_scalar_control_flow_v2::authenticate_collected_executable_scalar_control_flow_v2(
@@ -829,7 +835,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let typed_roots =
                             compiler_descriptor::typed_descriptor_roots_from_collection(
@@ -921,7 +927,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -1018,7 +1024,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -1061,7 +1067,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt = collected_wave64_collectives_v1::authenticate_collected_wave64_collectives_v1(
@@ -1117,7 +1123,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -1235,7 +1241,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         if collected_tiled_gemm_lds_slice1_v1::is_lds_slice1_collection(&collection)
@@ -1395,7 +1401,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let custom_llvm_pipeline = has_custom_llvm_configuration(tcx.sess);
                         let mut receipt =
@@ -1486,7 +1492,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             mono_partitions.codegen_units,
                             self.config.verbose,
                             &self.config.target,
-                            qualification_pipeline,
+                            qualification,
                         )?;
                         let descriptor_roots =
                             compiler_descriptor::typed_descriptor_roots_from_collection(
@@ -1596,7 +1602,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 mono_partitions.codegen_units,
                                 self.config.verbose,
                                 &self.config.target,
-                                qualification_pipeline,
+                                qualification,
                             )
                             .map_err(|reason| amdgpu_llvm::EmitError::Preflight { reason })?;
                             if qualification_oracle == QualificationOracle::KernelIrV1 {
@@ -2626,14 +2632,14 @@ mod tests {
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn admitted_protected_modules_route_only_through_strict_v3_publication() {
+    fn admitted_protected_modules_publish_only_through_strict_v3() {
         let backend = include_str!("lib.rs");
         let production_pipeline = include_str!("production_pipeline.rs");
         let production = backend
             .split("let mut production_device_transaction_complete")
             .nth(1)
             .expect("production transaction tracking exists")
-            .split(".validate_device_transaction")
+            .split("qualification_selection::validate_device_transaction")
             .next()
             .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));

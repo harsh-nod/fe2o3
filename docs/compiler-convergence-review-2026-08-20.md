@@ -163,7 +163,8 @@ middle end, ranked verification, target-neutral KIR lowering, gfx942 lowering,
 and strict Worker V3 handoff now execute inside `ProductionCompilation`. The
 backend has no production selector or alternate publication implementation.
 Qualification oracles remain feature-gated while their differential evidence
-is migrated; they cannot be selected by a feature-free production build.
+is migrated; they cannot be selected by a feature-free production build and
+are not represented as variants of a compiler-route enum.
 
 Do not add another workload-specific `QualificationOracleV1` variant, importer, raw
 context callback, textual identity boundary, or in-process profile finalizer.

@@ -16,7 +16,8 @@ use fe2o3_rustc_invocation::{
 
 #[cfg(feature = "qualification-oracles-test-only")]
 use crate::qualification_selection::{
-    CompilationRoute, QualificationOracle, QualificationSelection,
+    QualificationOracle, QualificationSelection, SelectedQualificationOracle,
+    rustc_invocation_policy,
 };
 
 use super::*;
@@ -123,33 +124,34 @@ fn validate(
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
-fn qualification_route(oracle: QualificationOracle) -> CompilationRoute {
+fn qualification_token(oracle: QualificationOracle) -> SelectedQualificationOracle {
     QualificationSelection::ExplicitQualification(oracle)
         .resolve()
-        .expect("qualification route must resolve")
+        .expect("qualification oracle must resolve")
+        .expect("qualification token")
 }
 
 #[test]
 #[cfg(feature = "qualification-oracles-test-only")]
 fn absent_and_present_selection_is_exact_and_ordinary_compatible() {
     assert_eq!(
-        CompilationRoute::Production.rustc_invocation_policy(true),
+        rustc_invocation_policy(None, true),
         RustcInvocationPolicy::ProtectedV3,
     );
     assert_eq!(
-        CompilationRoute::Production.rustc_invocation_policy(false),
+        rustc_invocation_policy(None, false),
         RustcInvocationPolicy::ProtectedV3,
     );
     #[cfg(feature = "qualification-oracles-test-only")]
     {
         for oracle in QualificationOracle::ALL {
-            let route = qualification_route(oracle);
+            let qualification = qualification_token(oracle);
             assert_eq!(
-                route.rustc_invocation_policy(true),
+                qualification.rustc_invocation_policy(true),
                 RustcInvocationPolicy::QualificationObserved,
             );
             assert_eq!(
-                route.rustc_invocation_policy(false),
+                qualification.rustc_invocation_policy(false),
                 match oracle {
                     QualificationOracle::CollectedRowSoftmaxV1 => {
                         RustcInvocationPolicy::ProtectedV3
@@ -181,20 +183,28 @@ fn production_admission_rejects_qualification_observation_authority() {
 
 #[test]
 #[cfg(feature = "qualification-oracles-test-only")]
-fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
+fn unmanaged_oracles_reject_protected_signals_without_consuming_unknown_fds() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     let descriptor_bytes =
         fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
 
     for oracle in QualificationOracle::ALL {
-        let route = qualification_route(oracle);
-        if route.rustc_invocation_policy(false) != RustcInvocationPolicy::Unmanaged {
+        let qualification = qualification_token(oracle);
+        if qualification.rustc_invocation_policy(false) != RustcInvocationPolicy::Unmanaged {
             continue;
         }
         let descriptor = sealed_image(&descriptor_bytes);
         install_inherited(&descriptor, TEST_CHILD_FD);
         assert!(matches!(
-            admit_for_codegen_at(route, false, TEST_CHILD_FD, false, false, false, false),
+            admit_for_codegen_at(
+                Some(qualification),
+                false,
+                TEST_CHILD_FD,
+                false,
+                false,
+                false,
+                false
+            ),
             Err(
                 ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
                     descriptor_present: true,
@@ -220,7 +230,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
     ] {
         assert!(matches!(
             admit_for_codegen_at(
-                qualification_route(QualificationOracle::KernelIrV1),
+                Some(qualification_token(QualificationOracle::KernelIrV1)),
                 false,
                 TEST_CHILD_FD,
                 compiler_closure_marker_present,
@@ -241,7 +251,7 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
 
     assert!(
         admit_for_codegen_at(
-            qualification_route(QualificationOracle::KernelIrV1),
+            Some(qualification_token(QualificationOracle::KernelIrV1)),
             false,
             TEST_CHILD_FD,
             false,
@@ -256,25 +266,35 @@ fn unprotected_routes_reject_protected_signals_without_consuming_unknown_fds() {
 
 #[test]
 #[cfg(feature = "qualification-oracles-test-only")]
-fn qualification_routes_require_paired_authenticated_observations_and_no_authority() {
+fn qualification_oracles_require_paired_authenticated_observations_and_no_authority() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     let descriptor_bytes =
         fe2o3_rustc_invocation::encode_descriptor_v3(&baseline_descriptor()).unwrap();
 
     for oracle in QualificationOracle::ALL {
-        let route = qualification_route(oracle);
-        if route.rustc_invocation_policy(true) != RustcInvocationPolicy::QualificationObserved {
+        let qualification = qualification_token(oracle);
+        if qualification.rustc_invocation_policy(true)
+            != RustcInvocationPolicy::QualificationObserved
+        {
             continue;
         }
         assert!(
-            admit_for_codegen_at(route, true, TEST_CHILD_FD, true, false, true, true,)
-                .unwrap()
-                .is_none()
+            admit_for_codegen_at(
+                Some(qualification),
+                true,
+                TEST_CHILD_FD,
+                true,
+                false,
+                true,
+                true,
+            )
+            .unwrap()
+            .is_none()
         );
     }
     assert!(
         admit_for_codegen_at(
-            qualification_route(QualificationOracle::SimulationV1),
+            Some(qualification_token(QualificationOracle::SimulationV1)),
             false,
             TEST_CHILD_FD,
             true,
@@ -291,7 +311,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     {
         assert!(matches!(
             admit_for_codegen_at(
-                qualification_route(QualificationOracle::KernelIrV1),
+                Some(qualification_token(QualificationOracle::KernelIrV1)),
                 true,
                 TEST_CHILD_FD,
                 compiler_closure_marker_present,
@@ -304,7 +324,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     }
     assert!(matches!(
         admit_for_codegen_at(
-            qualification_route(QualificationOracle::KernelIrV1),
+            Some(qualification_token(QualificationOracle::KernelIrV1)),
             true,
             TEST_CHILD_FD,
             true,
@@ -316,7 +336,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     ));
     assert!(matches!(
         admit_for_codegen_at(
-            qualification_route(QualificationOracle::KernelIrV1),
+            Some(qualification_token(QualificationOracle::KernelIrV1)),
             true,
             TEST_CHILD_FD,
             true,
@@ -338,7 +358,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     install_inherited(&descriptor, TEST_CHILD_FD);
     assert!(matches!(
         admit_for_codegen_at(
-            qualification_route(QualificationOracle::KernelIrV1),
+            Some(qualification_token(QualificationOracle::KernelIrV1)),
             true,
             TEST_CHILD_FD,
             true,
@@ -359,15 +379,7 @@ fn qualification_routes_require_paired_authenticated_observations_and_no_authori
     assert_eq!(unsafe { libc::close(TEST_CHILD_FD) }, 0);
 
     assert!(matches!(
-        admit_for_codegen_at(
-            CompilationRoute::Production,
-            false,
-            TEST_CHILD_FD,
-            true,
-            true,
-            true,
-            false,
-        ),
+        admit_for_codegen_at(None, false, TEST_CHILD_FD, true, true, true, false,),
         Err(
             ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
                 descriptor_present: false,
@@ -384,7 +396,7 @@ fn zero_kernel_protected_selection_cannot_downgrade_or_leave_an_inherited_fd() {
     let _guard = FD_TEST_LOCK.lock().unwrap();
     #[cfg(feature = "qualification-oracles-test-only")]
     assert_eq!(
-        qualification_route(QualificationOracle::CollectedRowSoftmaxV1)
+        qualification_token(QualificationOracle::CollectedRowSoftmaxV1)
             .rustc_invocation_policy(false),
         RustcInvocationPolicy::ProtectedV3,
     );

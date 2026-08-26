@@ -98,16 +98,18 @@ authority immediately after authenticating the transfer. The release
 child-inheritance API; those compile only for the row-softmax qualification
 oracle. The S09 broker profile and pinned-Cargo transfer image are likewise
 absent from feature-free compilation. Shared closure, backend, Cargo-image,
-and artifact validation remains route-neutral and runs before either
+and artifact validation remains implementation-neutral and runs before either
 constructor receives custody.
 
 The feature-free rustc backend likewise does not compile
-`QualificationSelection`, `CompilationRoute`, or `RustcInvocationPolicy`.
+`QualificationSelection`, `SelectedQualificationOracle`, or
+`RustcInvocationPolicy`.
 It captures a selector-free production environment preflight, enters protected
 V3 rustc admission directly, and requires the production device transaction to
-complete directly for every discovered kernel. The route and invocation-policy
-enums exist only in the qualification-feature build used for differential
-testing; they are not release implementation choices.
+complete directly for every discovered kernel. The qualification-feature build
+has an optional non-publishing oracle token and an invocation-policy enum for
+differential testing, but no compiler-route enum or release implementation
+choice.
 
 The `cargo fe2o3 simulate` command is also oracle-only and is absent from
 feature-free command dispatch and help. Production `build` and `run` cannot
@@ -320,7 +322,9 @@ suffixes identify frozen records and protocols, not selectable implementations.
 Production build inputs use only `FE2O3_PRODUCTION_BUILD_CONFIG_V1` with the
 `fe2o3-production-build-config-v1` schema. Worker V2 config, expected-identity,
 envelope, and source-debug controls are qualification-only and cannot be mixed
-with that production namespace.
+with that production namespace. The qualification build carries an optional
+non-publishing oracle token; there is no production-or-qualification route
+enum that could acquire another production implementation.
 
 Migration follows these rules:
 
