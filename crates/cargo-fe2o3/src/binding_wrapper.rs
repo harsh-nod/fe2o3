@@ -30,8 +30,7 @@ use fe2o3_artifact_transaction::{
     RecoveredWorkerV2PublicationIntentV1, RecoveredWorkerV2PublicationIntentV2,
     WorkerV2PublicationIntentErrorV1, WorkerV2PublicationIntentErrorV2,
     WorkerV2PublicationIntentRecordV2, clear_worker_v2_publication_intent_v1,
-    clear_worker_v2_publication_intent_v2, complete_simulation_kernel_ir_attempt_v1,
-    consume_compiler_module_handoff_v1, consume_simulation_kernel_ir_handoff_v1,
+    clear_worker_v2_publication_intent_v2, consume_compiler_module_handoff_v1,
     publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
     read_backend_publication_receipt_v1, read_backend_publication_receipt_v2,
     recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
@@ -3865,9 +3864,6 @@ fn complete_managed_attempt_inner(
     managed: &mut ManagedAttempt,
     parent_custody: Option<&ParentRustcInvocationCustody>,
 ) -> Result<(), CompletionFailure> {
-    if simulation_mode_selected() {
-        return complete_simulation_attempt(managed);
-    }
     if managed.row_softmax_provision {
         return complete_row_softmax_v1_provision(managed);
     }
@@ -3962,65 +3958,6 @@ fn complete_managed_qualification_work(
             &producer_binding,
         ),
     }
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn simulation_mode_selected() -> bool {
-    std::env::var_os(crate::SIMULATION_MODE_ENV).as_deref() == Some(OsStr::new("1"))
-        && std::env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").as_deref()
-            == Some(OsStr::new("simulation-v1"))
-        && std::env::var(crate::SIMULATION_ATTEMPT_ENV)
-            .ok()
-            .and_then(|attempt| BuildSession::from_hex(&attempt).ok())
-            .is_some_and(|attempt| attempt != BuildSession::DIRECT)
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn complete_simulation_attempt(managed: &ManagedAttempt) -> Result<(), CompletionFailure> {
-    if managed.production_build.is_some()
-        || managed.qualification_work.is_some()
-        || managed.row_softmax_provision
-        || managed.row_softmax_release.is_some()
-    {
-        return Err(CompletionFailure::Uncommitted(
-            "simulation-v1 cannot enter a Worker V2 or protected release completion path"
-                .to_owned(),
-        ));
-    }
-    let captured = match consume_simulation_kernel_ir_handoff_v1(
-        &managed.output_dir,
-        &managed.producer,
-        managed.attempt,
-    ) {
-        Ok(captured) => Some(captured),
-        Err(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV1::NotPublished) => None,
-        Err(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV1::AttemptNotClaimable) => {
-            // A host-only rustc invocation has an ordinary backend receipt, so
-            // the simulation-only BackendClaimed/no-receipt slot rejects it.
-            None
-        }
-        Err(error) => {
-            return Err(CompletionFailure::Uncommitted(format!(
-                "simulation-v1 could not consume its exact canonical KIR V7 handoff: {error}"
-            )));
-        }
-    };
-    if let Some(captured) = captured {
-        crate::simulation_capture::publish(&managed.output_dir, managed.attempt, captured.bytes())
-            .map_err(CompletionFailure::Uncommitted)?;
-        complete_simulation_kernel_ir_attempt_v1(&managed.output_dir, &managed.producer, &captured)
-            .map_err(|error| {
-                CompletionFailure::Uncommitted(format!(
-                    "simulation-v1 could not retire its exact KIR custody: {error}"
-                ))
-            })?;
-        return Ok(());
-    }
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::Uncommitted(format!(
-            "simulation-v1 build-attempt completion failed: {error}"
-        ))
-    })
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]

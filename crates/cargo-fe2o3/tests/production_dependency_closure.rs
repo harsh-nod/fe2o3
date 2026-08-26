@@ -1,34 +1,15 @@
-#![cfg(all(target_os = "linux", feature = "qualification-oracles-test-only"))]
-
 use std::path::Path;
 use std::process::Command;
 
-const FORBIDDEN: [&str; 6] = ["hsa", "hip", "kfd", "rocm", "amdgpu", "drm_amdgpu"];
+const FORBIDDEN_GPU_LIBRARIES: [&str; 6] = ["hsa", "hip", "kfd", "rocm", "amdgpu", "drm_amdgpu"];
 
 #[test]
-#[cfg(feature = "qualification-oracles-test-only")]
-fn simulation_help_requires_no_input_or_hardware_environment() {
-    let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
-        .args(["simulate", "--help"])
-        .env_clear()
-        .output()
-        .expect("run simulation help");
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "usage: cargo fe2o3 simulate --request PATH [--output PATH] [-- CARGO_BUILD_ARGS...]\n"
-    );
-    assert!(output.stderr.is_empty());
-}
-
-#[test]
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 fn production_binary_has_no_simulation_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
         .args(["simulate", "--help"])
         .env_clear()
         .output()
-        .expect("probe absent simulation command");
+        .expect("probe removed simulation command");
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("UTF-8 command error");
     assert!(stderr.contains("unknown cargo-fe2o3 command"), "{stderr}");
@@ -36,7 +17,7 @@ fn production_binary_has_no_simulation_command() {
 }
 
 #[test]
-fn default_binary_has_no_gpu_runtime_dynamic_dependency() {
+fn production_binary_has_no_gpu_runtime_dynamic_dependency() {
     let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
     let output = Command::new("readelf")
         .args(["--dynamic", binary])
@@ -49,16 +30,16 @@ fn default_binary_has_no_gpu_runtime_dynamic_dependency() {
     );
     let dynamic = String::from_utf8(output.stdout).expect("UTF-8 readelf output");
     let lower = dynamic.to_ascii_lowercase();
-    for forbidden in FORBIDDEN {
+    for forbidden in FORBIDDEN_GPU_LIBRARIES {
         assert!(
             !lower.contains(forbidden),
-            "{binary} unexpectedly has GPU runtime dynamic dependency containing {forbidden}:\n{dynamic}"
+            "{binary} unexpectedly depends on a GPU runtime containing {forbidden}:\n{dynamic}"
         );
     }
 }
 
 #[test]
-fn production_dependency_graph_excludes_optional_runtime_and_simulation_crates() {
+fn production_dependency_graph_excludes_optional_runtime_and_oracle_crates() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let dependency_tree = |package: &str| {
         let output = Command::new(env!("CARGO"))

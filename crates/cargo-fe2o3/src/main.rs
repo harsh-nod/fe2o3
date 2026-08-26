@@ -39,8 +39,6 @@ mod project;
 mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod simulation_capture;
 mod tool_commands;
 #[allow(dead_code)]
 #[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
@@ -70,13 +68,8 @@ const DEFAULT_TARGET: &str = "gfx1100";
 const BINDING_WRAPPER_MODE_ENV: &str = "FE2O3_BINDING_WRAPPER_MODE_V1";
 const MANAGED_RUSTC_ARGS_ENV: &str = "FE2O3_MANAGED_RUSTC_ARGS_V1";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
-pub(crate) const SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
-pub(crate) const SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
-#[cfg(feature = "qualification-oracles-test-only")]
-const SIMULATION_ORACLE_NAME: &str = "simulation-v1";
-#[cfg(feature = "qualification-oracles-test-only")]
-const SIMULATION_FAILURE_ALREADY_REPORTED: &str =
-    "cargo fe2o3 simulate emitted a structured simulation error";
+const OBSOLETE_SIMULATION_MODE_ENV: &str = "FE2O3_SIMULATION_MODE_V1";
+const OBSOLETE_SIMULATION_ATTEMPT_ENV: &str = "FE2O3_SIMULATION_ATTEMPT_V1";
 const EXPECTED_RUSTC_SHA256_ENV: &str = "FE2O3_EXPECTED_RUSTC_SHA256_V1";
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
 const CARGO_PRIMARY_PACKAGE_ENV: &str = "CARGO_PRIMARY_PACKAGE";
@@ -162,8 +155,6 @@ fn main() -> ExitCode {
         Some("doctor") => doctor(),
         Some("build") => cargo_with_backend("build", &rest),
         Some("run") => cargo_with_backend("run", &rest),
-        #[cfg(feature = "qualification-oracles-test-only")]
-        Some("simulate") => simulate_command(&rest),
         Some("smoke") => with_utf8_args(&rest, smoke),
         Some("examples") => with_utf8_args(&rest, example_manifest::command),
         Some("clean") => clean_command(&rest),
@@ -306,117 +297,13 @@ fn doctor() -> ExitCode {
 }
 
 fn cargo_with_backend(command: &str, args: &[OsString]) -> ExitCode {
-    match cargo_with_backend_result(command, args, None, None) {
+    match cargo_with_backend_result(command, args, None) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
             ExitCode::FAILURE
         }
     }
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-struct SimulationCommand {
-    request: PathBuf,
-    request_identity: fe2o3_kir_sim_cli::SimulationRequestIdentityV1,
-    output: Option<PathBuf>,
-}
-
-#[cfg(not(feature = "qualification-oracles-test-only"))]
-struct SimulationCommand;
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn simulate_command(args: &[OsString]) -> ExitCode {
-    if matches!(args, [argument] if argument == "--help" || argument == "-h") {
-        println!("{}", simulation_usage());
-        return ExitCode::SUCCESS;
-    }
-    let (simulation, cargo_args) = match parse_simulation_command(args) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    match cargo_with_backend_result("build", &cargo_args, None, Some(&simulation)) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            if error != SIMULATION_FAILURE_ALREADY_REPORTED {
-                eprintln!("{error}");
-            }
-            ExitCode::FAILURE
-        }
-    }
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn parse_simulation_command(
-    args: &[OsString],
-) -> Result<(SimulationCommand, Vec<OsString>), String> {
-    let mut request: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
-    let mut index = 0;
-    while index < args.len() {
-        let argument = &args[index];
-        if argument == "--" {
-            let cargo_args = args[index + 1..].to_vec();
-            let request = request.ok_or_else(simulation_usage)?;
-            let request_identity = fe2o3_kir_sim_cli::bind_request_v1(&request)?;
-            return Ok((
-                SimulationCommand {
-                    request,
-                    request_identity,
-                    output,
-                },
-                cargo_args,
-            ));
-        }
-        let slot = if argument == "--request" {
-            &mut request
-        } else if argument == "--output" {
-            &mut output
-        } else {
-            return Err(format!(
-                "unknown cargo fe2o3 simulate option {argument:?}; {}",
-                simulation_usage()
-            ));
-        };
-        index += 1;
-        let value = args
-            .get(index)
-            .ok_or_else(|| format!("{argument:?} requires a path; {}", simulation_usage()))?;
-        if value.is_empty() || slot.is_some() {
-            return Err(format!(
-                "{argument:?} requires one non-empty path; {}",
-                simulation_usage()
-            ));
-        }
-        let path = PathBuf::from(value);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            env::current_dir()
-                .map_err(|error| format!("cannot resolve simulation path: {error}"))?
-                .join(path)
-        };
-        *slot = Some(path);
-        index += 1;
-    }
-    let request = request.ok_or_else(simulation_usage)?;
-    let request_identity = fe2o3_kir_sim_cli::bind_request_v1(&request)?;
-    Ok((
-        SimulationCommand {
-            request,
-            request_identity,
-            output,
-        },
-        Vec::new(),
-    ))
-}
-
-#[cfg(feature = "qualification-oracles-test-only")]
-fn simulation_usage() -> String {
-    "usage: cargo fe2o3 simulate --request PATH [--output PATH] [-- CARGO_BUILD_ARGS...]".to_owned()
 }
 
 fn cargo_with_protected_release(
@@ -431,7 +318,7 @@ fn cargo_with_protected_release(
         eprintln!("protected authority release child requires build or run");
         return ExitCode::FAILURE;
     }
-    match cargo_with_backend_result(command, &args[1..], Some(&admission), None) {
+    match cargo_with_backend_result(command, &args[1..], Some(&admission)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
@@ -463,7 +350,7 @@ fn smoke(args: &[String]) -> ExitCode {
     for package in packages {
         eprintln!("cargo fe2o3 smoke: running {package}");
         let args = [OsString::from("-p"), OsString::from(package)];
-        if let Err(error) = cargo_with_backend_result("run", &args, None, None) {
+        if let Err(error) = cargo_with_backend_result("run", &args, None) {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
@@ -476,18 +363,15 @@ fn cargo_with_backend_result(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
-    simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
     reject_obsolete_codegen_pipeline(env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref())?;
     #[cfg(feature = "qualification-oracles-test-only")]
     let production_target_profile = production_compilation_selected(
         protected_release.is_some(),
-        simulation.is_some(),
         env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
     )?;
     #[cfg(not(feature = "qualification-oracles-test-only"))]
     validate_production_compilation_environment(
-        simulation.is_some(),
         env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
     )?;
     #[cfg(feature = "qualification-oracles-test-only")]
@@ -633,10 +517,10 @@ fn cargo_with_backend_result(
         production_target_profile,
     };
     #[cfg(feature = "qualification-oracles-test-only")]
-    let mut context = BackendRunContext::prepare(preparation, args, simulation.is_some())?;
+    let mut context = BackendRunContext::prepare(preparation, args)?;
     #[cfg(not(feature = "qualification-oracles-test-only"))]
     let mut context = BackendRunContext::prepare(preparation, args)?;
-    run_cargo_with_backend(&mut context, command, args, protected_release, simulation)
+    run_cargo_with_backend(&mut context, command, args, protected_release)
 }
 
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -653,7 +537,6 @@ fn authority_sensitive_request_selected(production_compilation: bool) -> bool {
 #[cfg(feature = "qualification-oracles-test-only")]
 fn production_compilation_selected(
     protected_release: bool,
-    simulation: bool,
     selector: Option<&OsStr>,
 ) -> Result<bool, String> {
     if selector == Some(OsStr::new("production-v1")) {
@@ -662,17 +545,13 @@ fn production_compilation_selected(
             build_config::QUALIFICATION_ORACLE_ENV,
         ));
     }
-    Ok(protected_release || (!simulation && selector.is_none()))
+    Ok(protected_release || selector.is_none())
 }
 
 #[cfg(not(feature = "qualification-oracles-test-only"))]
 fn validate_production_compilation_environment(
-    simulation: bool,
     qualification_oracle: Option<&OsStr>,
 ) -> Result<(), String> {
-    if simulation {
-        return Err("simulation is unavailable in the production cargo-fe2o3 build".to_owned());
-    }
     if let Some(value) = qualification_oracle {
         return Err(format!(
             "{} is unavailable in the production cargo-fe2o3 build; production compilation has no selector; found {value:?}",
@@ -848,11 +727,7 @@ struct BackendRunPreparation {
 }
 
 impl BackendRunContext {
-    fn prepare(
-        preparation: BackendRunPreparation,
-        args: &[OsString],
-        #[cfg(feature = "qualification-oracles-test-only")] simulation: bool,
-    ) -> Result<Self, String> {
+    fn prepare(preparation: BackendRunPreparation, args: &[OsString]) -> Result<Self, String> {
         let BackendRunPreparation {
             project,
             build_config,
@@ -867,7 +742,7 @@ impl BackendRunContext {
             production_target_profile,
         } = preparation;
         #[cfg(feature = "qualification-oracles-test-only")]
-        let target = amd_gpu_target(simulation);
+        let target = amd_gpu_target(false);
         #[cfg(not(feature = "qualification-oracles-test-only"))]
         let target = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1.to_owned();
         let target_dir = project.open_or_create_target()?;
@@ -956,12 +831,6 @@ impl BackendRunContext {
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
         #[cfg(feature = "qualification-oracles-test-only")]
-        if simulation {
-            cargo_configuration.extend_from_slice(b"fe2o3-cargo-simulation-v1\0");
-            cargo_configuration.extend_from_slice(b"fe2o3-simulation-attempt-v1\0");
-            cargo_configuration.extend_from_slice(build_session.as_bytes());
-        }
-        #[cfg(feature = "qualification-oracles-test-only")]
         if production_target_profile {
             append_production_target_semantic_configuration(&mut cargo_configuration);
         }
@@ -976,28 +845,9 @@ impl BackendRunContext {
             build_config_identity,
             &cargo_configuration,
         )?;
-        #[cfg(feature = "qualification-oracles-test-only")]
-        let mut generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
-        #[cfg(not(feature = "qualification-oracles-test-only"))]
         let generation = generation::PreparedGeneration::prepare(&target_dir, semantic)?;
         let managed_rustc_args =
-            match generation::managed_rustc_args(&backend_reference, generation.token()) {
-                Ok(arguments) => arguments,
-                #[cfg(feature = "qualification-oracles-test-only")]
-                Err(error) if simulation => {
-                    return match aggregate_post_spawn_results(
-                        Err(error),
-                        [(
-                            "ephemeral simulation generation cleanup after preparation failure",
-                            generation.discard_simulation_generation(),
-                        )],
-                    ) {
-                        Err(error) => Err(error),
-                        Ok(()) => unreachable!("primary simulation preparation failure was lost"),
-                    };
-                }
-                Err(error) => return Err(error),
-            };
+            generation::managed_rustc_args(&backend_reference, generation.token())?;
         Ok(Self {
             target,
             #[cfg(not(feature = "qualification-oracles-test-only"))]
@@ -1040,20 +890,8 @@ fn run_cargo_with_backend(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
-    simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
-    let result =
-        run_cargo_with_backend_inner(context, command, args, protected_release, simulation);
-    if simulation.is_none() {
-        return result;
-    }
-    aggregate_post_spawn_results(
-        result,
-        [(
-            "ephemeral simulation generation cleanup",
-            context.generation.discard_simulation_generation(),
-        )],
-    )
+    run_cargo_with_backend_inner(context, command, args, protected_release)
 }
 
 fn run_cargo_with_backend_inner(
@@ -1061,7 +899,6 @@ fn run_cargo_with_backend_inner(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
-    simulation: Option<&SimulationCommand>,
 ) -> Result<(), String> {
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
@@ -1229,12 +1066,6 @@ fn run_cargo_with_backend_inner(
             hex_encode(&context.compiler_closure_sha256),
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
-    #[cfg(feature = "qualification-oracles-test-only")]
-    configure_simulation_build_environment(
-        cargo.as_command_mut(),
-        simulation.map(|_| context.build_session),
-    );
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
     scrub_simulation_build_environment(cargo.as_command_mut());
     #[cfg(feature = "qualification-oracles-test-only")]
     configure_production_target_build_environment(
@@ -1353,13 +1184,7 @@ fn run_cargo_with_backend_inner(
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
-    #[cfg(feature = "qualification-oracles-test-only")]
-    let canonical_kir = simulation
-        .map(|_| simulation_capture::consume_exactly_one(context.generation.artifact_dir()))
-        .transpose()?;
-    if simulation.is_none() {
-        context.generation.commit()?;
-    }
+    context.generation.commit()?;
     #[cfg(not(feature = "qualification-oracles-test-only"))]
     {
         if command == "run" {
@@ -1379,20 +1204,6 @@ fn run_cargo_with_backend_inner(
         }
         run_production_host_cargo(context, production_plan.host(), protected_release)?;
     }
-    #[cfg(feature = "qualification-oracles-test-only")]
-    if let (Some(simulation), Some(canonical_kir)) = (simulation, canonical_kir) {
-        let status = fe2o3_kir_sim_cli::run_captured_kir_v7_with_bound_request(
-            &canonical_kir,
-            &simulation.request,
-            simulation.request_identity,
-            simulation.output.as_deref(),
-        );
-        if status != ExitCode::SUCCESS {
-            return Err(SIMULATION_FAILURE_ALREADY_REPORTED.to_owned());
-        }
-    }
-    #[cfg(not(feature = "qualification-oracles-test-only"))]
-    debug_assert!(simulation.is_none());
     Ok(())
 }
 
@@ -1442,8 +1253,8 @@ fn run_production_host_cargo(
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV)
         .env_remove(build_config::WORKER_V2_CONFIG_ENV)
         .env_remove(build_config::QUALIFICATION_ORACLE_ENV)
-        .env_remove(SIMULATION_MODE_ENV)
-        .env_remove(SIMULATION_ATTEMPT_ENV)
+        .env_remove(OBSOLETE_SIMULATION_MODE_ENV)
+        .env_remove(OBSOLETE_SIMULATION_ATTEMPT_ENV)
         .env_remove(NON_PRODUCTION_AUTHORITY_VALIDATION_ENV)
         .env_remove(AUTHORITY_CARGO_SHA256_ENV)
         .env_remove(AUTHORITY_RUSTC_SHA256_ENV)
@@ -1531,33 +1342,10 @@ fn run_production_host_cargo(
     context.generation.reject_if_substituted()
 }
 
-#[cfg(feature = "qualification-oracles-test-only")]
-fn configure_simulation_build_environment(
-    command: &mut Command,
-    attempt: Option<fe2o3_artifact_transaction::BuildSession>,
-) {
-    if let Some(attempt) = attempt {
-        command
-            .env(
-                build_config::QUALIFICATION_ORACLE_ENV,
-                SIMULATION_ORACLE_NAME,
-            )
-            .env(SIMULATION_MODE_ENV, "1")
-            .env(SIMULATION_ATTEMPT_ENV, attempt.to_hex())
-            .env("FE2O3_HIP_SYS_DISABLE", "1");
-    } else {
-        command
-            .env_remove(SIMULATION_MODE_ENV)
-            .env_remove(SIMULATION_ATTEMPT_ENV)
-            .env_remove("FE2O3_HIP_SYS_DISABLE");
-    }
-}
-
-#[cfg(not(feature = "qualification-oracles-test-only"))]
 fn scrub_simulation_build_environment(command: &mut Command) {
     command
-        .env_remove(SIMULATION_MODE_ENV)
-        .env_remove(SIMULATION_ATTEMPT_ENV)
+        .env_remove(OBSOLETE_SIMULATION_MODE_ENV)
+        .env_remove(OBSOLETE_SIMULATION_ATTEMPT_ENV)
         .env_remove("FE2O3_HIP_SYS_DISABLE");
 }
 
@@ -3235,27 +3023,16 @@ fn is_gfx_target(candidate: &str) -> bool {
 
 fn print_help() {
     eprintln!(
-        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n{}  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
-        qualification_help_lines(),
+        "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              check ROCm/HIP toolchain discovery\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  smoke               run manifest-selected GPU examples\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact or HSACO metadata without execution\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions",
     );
-}
-
-const fn qualification_help_lines() -> &'static str {
-    if cfg!(feature = "qualification-oracles-test-only") {
-        "  simulate            compile source to exact KIR V7 and execute it deterministically on CPU\n"
-    } else {
-        ""
-    }
 }
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
 mod tests {
     use super::{
-        SIMULATION_ATTEMPT_ENV, SIMULATION_MODE_ENV, TARGET_ENV, aggregate_post_spawn_results,
-        configure_production_target_build_environment, configure_simulation_build_environment,
+        TARGET_ENV, aggregate_post_spawn_results, configure_production_target_build_environment,
         inject_application_runner_config, normalize_invocation, parse_rocminfo_target,
-        production_compilation_selected, qualification_help_lines,
-        reject_obsolete_codegen_pipeline, resolve_amd_gpu_target, selected_run_target,
+        production_compilation_selected, reject_obsolete_codegen_pipeline, selected_run_target,
         validate_production_cargo_selection,
     };
     use crate::project::PinnedDirectory;
@@ -3279,7 +3056,6 @@ mod tests {
             "doctor",
             "build",
             "run",
-            "simulate",
             "smoke",
             "examples",
             "clean",
@@ -3300,56 +3076,12 @@ mod tests {
     }
 
     #[test]
-    fn simulation_command_help_is_oracle_feature_only() {
-        assert_eq!(
-            qualification_help_lines().is_empty(),
-            !cfg!(feature = "qualification-oracles-test-only")
-        );
-    }
-
-    #[test]
-    fn simulation_environment_is_explicit_and_normal_commands_clear_activation() {
-        let mut command = Command::new("cargo");
-        command
-            .env(SIMULATION_MODE_ENV, "attacker")
-            .env(SIMULATION_ATTEMPT_ENV, "attacker")
-            .env("FE2O3_HIP_SYS_DISABLE", "attacker");
-        configure_simulation_build_environment(&mut command, None);
-        assert_eq!(command_environment(&command, SIMULATION_MODE_ENV), None);
-        assert_eq!(command_environment(&command, SIMULATION_ATTEMPT_ENV), None);
-        assert_eq!(command_environment(&command, "FE2O3_HIP_SYS_DISABLE"), None);
-
-        let attempt = fe2o3_artifact_transaction::BuildSession::from_bytes([0x5a; 16]);
-        configure_simulation_build_environment(&mut command, Some(attempt));
-        assert_eq!(
-            command_environment(&command, SIMULATION_MODE_ENV),
-            Some(OsStr::new("1"))
-        );
-        assert_eq!(
-            command_environment(&command, SIMULATION_ATTEMPT_ENV),
-            Some(OsStr::new("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"))
-        );
-        assert_eq!(
-            command_environment(&command, "FE2O3_QUALIFICATION_ORACLE_V1"),
-            Some(OsStr::new("simulation-v1"))
-        );
-        assert_eq!(
-            command_environment(&command, "FE2O3_HIP_SYS_DISABLE"),
-            Some(OsStr::new("1"))
-        );
-    }
-
-    #[test]
     fn production_is_the_unselected_route_and_has_no_selector() {
-        assert!(production_compilation_selected(false, false, None).unwrap());
-        assert!(production_compilation_selected(true, false, None).unwrap());
-        assert!(!production_compilation_selected(false, true, None).unwrap());
+        assert!(production_compilation_selected(false, None).unwrap());
+        assert!(production_compilation_selected(true, None).unwrap());
+        assert!(!production_compilation_selected(false, Some(OsStr::new("kernel-ir-v1"))).unwrap());
         assert!(
-            !production_compilation_selected(false, false, Some(OsStr::new("kernel-ir-v1")))
-                .unwrap()
-        );
-        assert!(
-            production_compilation_selected(false, false, Some(OsStr::new("production-v1")))
+            production_compilation_selected(false, Some(OsStr::new("production-v1")))
                 .expect_err("obsolete production selector must fail")
                 .contains("must be unset for production compilation")
         );
@@ -3430,20 +3162,6 @@ mod tests {
         assert!(
             validate_production_cargo_selection(&[], true, Some(OsStr::new("gfx942:xnack-")),)
                 .is_err()
-        );
-    }
-
-    #[test]
-    fn simulation_target_selection_never_calls_hardware_detection() {
-        assert_eq!(
-            resolve_amd_gpu_target(true, None, || panic!("GPU detector was called")),
-            super::DEFAULT_TARGET
-        );
-        assert_eq!(
-            resolve_amd_gpu_target(true, Some("gfx942".to_owned()), || panic!(
-                "GPU detector was called"
-            ),),
-            "gfx942"
         );
     }
 

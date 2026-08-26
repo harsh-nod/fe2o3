@@ -114,16 +114,6 @@ impl PreparedGeneration {
             .validate_path("fe2o3 artifact directory")
     }
 
-    pub(crate) fn discard_simulation_generation(&mut self) -> Result<(), String> {
-        if !self.pending {
-            return Err(
-                "refusing to retain or delete a committed generation as ephemeral simulation state"
-                    .to_owned(),
-            );
-        }
-        self.discard_pending()
-    }
-
     fn discard_pending(&mut self) -> Result<(), String> {
         if !self.pending {
             return Ok(());
@@ -916,22 +906,6 @@ mod tests {
         assert_eq!(MARKER_MAGIC, b"fe2o3-codegen-generation-v1\0");
         assert_eq!(MARKER_BYTES, 116);
         assert_eq!(hex(&[0x00, 0x7f, 0xff]), "007fff");
-    }
-
-    #[test]
-    fn simulation_generation_is_explicitly_ephemeral_and_never_deletes_committed_state() {
-        let directory = TestDirectory::new();
-        let semantic = [0x6b; 32];
-        let mut ephemeral = PreparedGeneration::prepare(&directory.pinned(), semantic).unwrap();
-        fs::write(directory.0.join("fe2o3/transient"), b"kir").unwrap();
-        ephemeral.discard_simulation_generation().unwrap();
-        assert!(!directory.0.join("fe2o3").exists());
-        assert!(ephemeral.discard_simulation_generation().is_err());
-
-        let (committed, semantic) = committed_generation();
-        let mut retained = PreparedGeneration::prepare(&committed.pinned(), semantic).unwrap();
-        assert!(retained.discard_simulation_generation().is_err());
-        assert_committed_artifacts_preserved(&committed);
     }
 
     #[test]

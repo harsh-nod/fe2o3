@@ -209,9 +209,9 @@ fn ordinary_host_phase_has_no_device_compiler_controls() {
         .split("fn run_production_host_cargo(")
         .nth(1)
         .expect("host phase exists")
-        .split("fn configure_simulation_build_environment(")
+        .split("fn scrub_simulation_build_environment(")
         .next()
-        .expect("host phase ends before qualification configuration");
+        .expect("host phase ends before environment scrubbing helpers");
 
     for removed in [
         ".env_remove(BACKEND_ENV)",
