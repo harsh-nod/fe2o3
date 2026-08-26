@@ -3,8 +3,6 @@
 mod api;
 mod dispatch;
 mod environment;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod lds_gemm_resource_observation;
 mod lifecycle;
 #[cfg(feature = "qualification-oracles-test-only")]
 mod moe_top2_resource_observation;

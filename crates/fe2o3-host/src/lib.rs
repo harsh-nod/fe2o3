@@ -8,12 +8,6 @@ mod cooperative_launch;
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod generated_lds_gemm;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod generated_lds_gemm_lifecycle;
-#[cfg(test)]
-mod generated_lds_gemm_lifecycle_tests;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_expert_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_moe_expert_v2;
@@ -219,19 +213,6 @@ pub use generated_argument_plan::{
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
-};
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use generated_lds_gemm::{
-    GeneratedLdsGemmSlice1HostAdapterErrorV1, GeneratedLdsGemmSlice1HostAdapterV1,
-};
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use generated_lds_gemm_lifecycle::{
-    CompletedExactLdsGemmSlice1V1, ExactLdsGemmKernelResourceObservationV1,
-    ExactLdsGemmSlice1DispatchErrorV1, ExactLdsGemmSlice1JoinErrorV1,
-    ExactLdsGemmSlice1LoadErrorV1, ExactLdsGemmUnloadIdentityV1, JoinedExactLdsGemmSlice1V1,
-    LoadedExactLdsGemmSlice1V1, ReviewedExactLdsGemmRuntimeAdapterV1, UnloadedExactLdsGemmSlice1V1,
-    join_exact_lds_gemm_slice1_v1,
 };
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_moe_expert_v1::{
@@ -467,8 +448,7 @@ pub mod __generated {
         GeneratedAlphaZetaCov6ArgumentError, GeneratedAlphaZetaCov6CompletionV1,
         GeneratedAlphaZetaCov6GeometryError, GeneratedAlphaZetaCov6PhysicalKernargError,
         GeneratedAlphaZetaCov6PrepareError, GeneratedAlphaZetaCov6PrepareResultV1,
-        GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedLdsGemmSlice1HostAdapterErrorV1,
-        GeneratedLdsGemmSlice1HostAdapterV1, GeneratedScalarGemmV1ArgumentBinding,
+        GeneratedAlphaZetaCov6PreparedInvocationV1, GeneratedScalarGemmV1ArgumentBinding,
         GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
         GeneratedScalarGemmV1PrepareResult, GeneratedScalarGemmV1PreparedInvocation,
         GeneratedScalarGemmV1ReadDeviceSlice, GeneratedScalarGemmV1ReadWriteDeviceSlice,

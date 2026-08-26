@@ -1,5 +1,0 @@
-error[E0599]: no method named `launch` found for struct `LoadedExactLdsGemmSlice1V1<'a, 'b, 'c, A>` in the current scope
- --> tests/ui/generated_lds_gemm_lifecycle/generic_launch_is_unavailable.rs:6:12
-  |
-6 |     loaded.launch();
-  |            ^^^^^^ method not found in `LoadedExactLdsGemmSlice1V1<'_, '_, '_, A>`

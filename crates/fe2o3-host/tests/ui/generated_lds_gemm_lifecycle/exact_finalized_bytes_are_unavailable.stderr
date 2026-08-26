@@ -1,5 +1,0 @@
-error[E0599]: no method named `exact_finalized_bytes` found for reference `&JoinedExactLdsGemmSlice1V1<'_, '_, '_>` in the current scope
- --> tests/ui/generated_lds_gemm_lifecycle/exact_finalized_bytes_are_unavailable.rs:4:25
-  |
-4 |     let _bytes = joined.exact_finalized_bytes();
-  |                         ^^^^^^^^^^^^^^^^^^^^^ method not found in `&JoinedExactLdsGemmSlice1V1<'_, '_, '_>`

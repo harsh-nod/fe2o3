@@ -96,13 +96,12 @@ resource binding. It consumes a single-use correspondence receipt to select
 the canonical Slice 1 Kernel IR. Hostile removed-barrier, shifted-index, and
 same-spelling-helper fixtures cannot select that IR.
 
-The exact Slice 1 vertical slice continues from that selection through the
+The exact Slice 1 compiler path continues from that selection through the
 sealed profile registry, direct upstream LLVM target-machine and LLD library
-APIs, canonical COV6 finalization, and a generated borrowed host adapter. The
-adapter and finalized artifact enter a private, non-`Clone`, one-shot
-`Joined -> Loaded -> Completed -> Unloaded` lifecycle. The join authenticates
-the exact profile identities after canonical Worker V2 re-lowering, but it is
-not a compiler-refinement proof or compiler-origin authentication.
+APIs, and canonical COV6 finalization. Its former generated Worker V2 host
+adapter and workload-specific HSA lifecycle have been deleted. Production
+execution must use the workload-neutral Worker V3 admission, load, and dispatch
+contract; wiring this Slice 1 artifact into that contract remains pending.
 
 `verus/lds_tiled_slice1_source_refinement.rs` is a bounded, identity-bound
 source/model correspondence for this exact profile. Its 96 verified obligations
@@ -168,16 +167,15 @@ dynamic segment bytes, LDS reads and writes, one converged barrier, one BF16
 MFMA, and no calls or atomics. The launch contract is one `[64,1,1]` workgroup
 over grid `[1,1,1]`, with 48 explicit plus 256 hidden COV6 kernarg bytes.
 
-The exact protected hardware test at
-`crates/fe2o3-hsa-runtime/tests/tiled_gemm_lds_slice1_worker_v2_hardware.rs`
-ran the public one-shot lifecycle on MI300X `gfx942`, accepting the compatible
-observed target while retaining the exact `gfx942:xnack-` artifact identity. It
-matched all 256 output bits against the CPU reference, preserved immutable A/B,
-and preserved prefix/suffix guard canaries. The measured inputs were upstream
+Before that duplicate route was removed, its protected Worker V2 lifecycle ran
+on MI300X `gfx942` and matched all 256 output bits against the CPU reference,
+preserved immutable A/B, and preserved prefix/suffix guard canaries. This is
+historical qualification evidence only; its launcher and host API no longer
+exist and grant no production authority. The measured inputs were upstream
 LLVM 22.1.8 build
 `upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1` and worker
 `fe2o3-worker-v1-sha256-6c3dfd5f784b3babe140006aba57a214a897b171860928440184fa201b6f96db`.
-The terminal marker was:
+Its terminal marker was:
 
 ```text
 FE2O3_PROTECTED_SLICE1_WORKER_V2_OK outputs=256 max_abs_error=0 finalizer=078e9b523164b679ff7af3b4e819ad041713c53c6841399ac7cea95090f09774 unload=df2f77ee798444a9e1fe5e27f219bdf720386eb8603a9a74fccc0df8efb3921c
@@ -189,10 +187,9 @@ older observational artifact with SHA-pinned upstream LLVM tools. On MI300X it
 passed zero, identity, dyadic, deterministic-random, signed-cancellation, and
 adversarial finite-BF16 cases: 1,536 output values plus immutable A/B checks and
 prefix/suffix canaries around all three allocations. It remains useful
-multi-input numerical evidence, but it is separate from and weaker lifecycle
-evidence than the exact protected path above.
+multi-input numerical evidence, but it is not a production Worker V3 path.
 
-The exact protected execution is functional evidence, not production proof
+The historical protected execution is functional evidence, not production proof
 authority. It does not authenticate compiler origin, consume a production Verus
 certificate, prove MIR/KIR/LLVM/ISA refinement, or establish general
 illegal-memory or race freedom. It also does not cover general shapes or
