@@ -8,8 +8,6 @@ mod cooperative_launch;
 mod generated_alpha_zeta_cov6;
 mod generated_argument_plan;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod generated_row_softmax_v1;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_scalar_gemm_v1;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod generated_vecadd;
@@ -22,15 +20,11 @@ mod loaded_kernel;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod protected_row_softmax_v1_lifecycle;
 mod published_direct_link;
 mod published_hsaco_inspection;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod recovered_worker_v2_admission;
 mod recovered_worker_v3_admission;
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-mod row_softmax_protected_admission;
 mod tile_interop;
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod worker_v2_bundle_admission;
@@ -186,12 +180,6 @@ pub use generated_argument_plan::{
 };
 #[doc(hidden)]
 #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use generated_row_softmax_v1::{
-    GeneratedProtectedRowSoftmaxV1HostAdapterErrorV1, GeneratedProtectedRowSoftmaxV1HostAdapterV1,
-    ProtectedRowSoftmaxV1BufferRoleV1,
-};
-#[doc(hidden)]
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 pub use generated_scalar_gemm_v1::{
     CompilerGeneratedScalarGemmV1Arguments, GeneratedScalarGemmV1ArgumentBinding,
     GeneratedScalarGemmV1Completion, GeneratedScalarGemmV1PrepareError,
@@ -263,14 +251,6 @@ pub use prepared_launch::{
 pub use production_application::{
     ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use protected_row_softmax_v1_lifecycle::{
-    CompletedProtectedRowSoftmaxV1, JoinedProtectedRowSoftmaxV1, LoadedProtectedRowSoftmaxV1,
-    ProtectedRowSoftmaxV1DispatchErrorV1, ProtectedRowSoftmaxV1JoinErrorV1,
-    ProtectedRowSoftmaxV1KernelResourceObservationV1, ProtectedRowSoftmaxV1LoadErrorV1,
-    ProtectedRowSoftmaxV1UnloadIdentityV1, ReviewedProtectedRowSoftmaxV1RuntimeAdapterV1,
-    UnloadedProtectedRowSoftmaxV1, join_protected_row_softmax_v1,
-};
 pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
 };
@@ -298,12 +278,6 @@ pub use recovered_worker_v3_admission::{
     RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
     WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
 };
-#[cfg(any(test, feature = "qualification-oracles-test-only"))]
-pub use row_softmax_protected_admission::{
-    ProtectedRowSoftmaxV1HostAdmissionErrorV1, ProtectedRowSoftmaxV1HostTokenIdentityV1,
-    ProtectedRowSoftmaxV1HostTokenV1, prepare_protected_row_softmax_v1_host_token_v1,
-};
-
 pub use tile_interop::{
     GFX942_XOR4_BF16_TILE_COLUMNS_V1, GFX942_XOR4_BF16_TILE_ELEMENTS_V1,
     GFX942_XOR4_BF16_TILE_ROWS_V1, GFX942_XOR4_BF16_TILE_WAVE_LANES_V1, Gfx942TileInteropErrorV1,

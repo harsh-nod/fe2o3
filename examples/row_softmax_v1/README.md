@@ -38,23 +38,12 @@ OCML implementation/error, compiler causality, LLVM/ISA correspondence, GPU
 execution, generalized memory safety, and race freedom remain unproved. The
 receipt is inert and cannot promote a parity row.
 
-`production_release.rs` additionally stages the exact `gfx942:xnack-`, width-64
-typed HSA lifecycle with immutable guarded input, guarded output, CPU-oracle
-comparison, and fixed normal/equal/dominant workloads. Masked, exceptional,
-wrong-shape, wrong-policy, provider-drift, worker-artifact, and target variants
-have explicit prelaunch rejection stages. The compiler/finalizer join uses the
-direct upstream LLVM/LLD worker and an exact OCML closure; it uses neither COMGR
-nor a shell linker. These mechanics do not extend the formal proof above and do
-not generalize to other widths, shapes, masks, targets, or numerical profiles.
-
-This staged path is not production-reachable. A real MI300X protected attempt
-crosses launcher/handoff and frozen Cargo closure, but a dynamic Rust workspace
-wrapper cannot retain compiler authority: production cannot admit Cargo's
-mutable loader path, and after loader variables are cleared the wrapper cannot
-load `librustc_driver`. `cargo fe2o3 authority release run` therefore fails
-closed at `stage=binding-wrapper` pending integrated static-wrapper support. No
-compiler-origin, proof-validity, artifact-safety, runtime, or GPU-execution
-authority is minted by this slice.
+The former width-64 host token, typed HSA lifecycle, hardware launcher, and
+Cargo `legacy-hsa-runtime` switch were workload-specific alternatives to the
+production architecture and are deleted. The direct upstream LLVM/LLD and OCML
+compiler/finalizer evidence remains, but no row-softmax artifact can be loaded
+or dispatched until it is admitted by the generic Worker V3 application path.
+The certificate and numerical oracle grant no runtime or GPU authority.
 
 ## Contract layers
 
@@ -254,8 +243,8 @@ directories. See the exact commands in [the testing guide](../../docs/testing.md
 This gate produces compiler/code-object integrity evidence only. It does not
 authenticate origin, execute the GPU, connect the Verus model to emitted
 instructions, prove concrete memory safety or race freedom, or grant artifact,
-load, launch, or parity authority. The production static binding-wrapper gap
-remains.
+load, launch, or parity authority. Generic Worker V3 verifier admission and
+dispatch remain to be implemented for this kernel.
 
 ## Commands
 

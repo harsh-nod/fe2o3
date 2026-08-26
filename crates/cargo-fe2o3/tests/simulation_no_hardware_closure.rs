@@ -1,4 +1,4 @@
-#![cfg(all(target_os = "linux", not(feature = "legacy-hsa-runtime")))]
+#![cfg(target_os = "linux")]
 
 use std::path::Path;
 use std::process::Command;

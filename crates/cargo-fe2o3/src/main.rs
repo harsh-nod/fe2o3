@@ -30,21 +30,9 @@ mod pinned_executable_test_directory;
 mod process_execution;
 #[cfg(any(test, not(feature = "qualification-oracles-test-only")))]
 mod production_cargo_plan;
-#[cfg(all(
-    feature = "legacy-hsa-runtime",
-    any(test, feature = "qualification-oracles-test-only")
-))]
-#[path = "../../../examples/row_softmax_v1/src/production_release.rs"]
-mod production_release;
-#[cfg(all(
-    not(feature = "legacy-hsa-runtime"),
-    any(test, feature = "qualification-oracles-test-only")
-))]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 mod production_release_no_hardware;
-#[cfg(all(
-    not(feature = "legacy-hsa-runtime"),
-    any(test, feature = "qualification-oracles-test-only")
-))]
+#[cfg(any(test, feature = "qualification-oracles-test-only"))]
 use production_release_no_hardware as production_release;
 mod build_config;
 mod project;

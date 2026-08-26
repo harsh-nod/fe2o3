@@ -121,11 +121,11 @@ authority, or generalized memory/race safety. Their evidence is tracked in
 The fixed 64-element row-softmax slice uses one shared numerical oracle and an
 inert deterministic certificate that binds its exact Rust source, reviewed MIR
 profile, Kernel IR and LLVM identities, numerical policy, and Verus/Z3 closure.
-An exact finalizer join now consumes that certificate with the direct LLVM/LLD
+The exact compiler/finalizer lane still checks the direct upstream LLVM/LLD
 worker exchange, OCML closure, artifact, descriptor, ABI, geometry, and resource
-identities into a sealed linear host token. A fixed `gfx942:xnack-`, width-64,
-unmasked typed HSA path, guarded buffers, CPU comparison, and 25-pin terminal
-receipt are implemented behind that join.
+identities. Its workload-specific host token, typed HSA lifecycle, hardware
+launcher, and Cargo `legacy-hsa-runtime` switch are deleted. Row-softmax can
+return to hardware only through the generic Worker V3 application path.
 
 The row profile also has a host-specific compiler/code-object release gate. By
 protocol, implementation Commit A contains the gate but deliberately contains
@@ -141,17 +141,6 @@ evidence can be claimed only when a compliant B and two runs from distinct fresh
 build and Cargo directories reproduce the same caller-supplied manifest digest
 and byte-identical outputs. That combination establishes only operator-selected
 reviewed integrity, not origin authentication or GPU evidence.
-
-The typed runtime path remains unreachable from the production authority
-command. Candidate `2e5ad53bcb20f2a46e91128a42e838d918d61581` (tree
-`892f014381cd3e34f81cb05df3b9bbda4a412478`) is rejected and is not integrated
-or accepted. On MI300X it passed structural and hostile static-wrapper probes,
-crossed `stage=binding-wrapper`, authenticated Cargo and pinned rustc, loaded
-the backend, and collected the kernel. It then failed closed before the release
-main phase because `cargo-fe2o3` had no executable identity for broker
-authentication. The diagnostic run executed the Worker zero times and reached
-no artifact admission, GPU loading or dispatch, or `/dev/kfd` or `/dev/dri`
-access; COMGR opens were zero.
 
 W0/P0 is now accepted as a bounded host-link prerequisite. Its dedicated,
 genuinely static `fe2o3-host-lld` is built from pinned upstream LLVM/LLD
@@ -171,8 +160,8 @@ source-to-machine or Verus-to-machine refinement. W1/P0 Broker V4 is the next
 production blocker. The parity counts remain `0/82/0/12` normative,
 `0/15/0` supplemental, and `0/97/0/12` combined. The direct GPU link path
 remains separate and pinned to upstream LLVM 22 with in-process `lld::lldMain`,
-without COMGR or a shell GPU linker. The fixed row-softmax production slice
-remains tracked under [#120](https://github.com/harsh-nod/fe2o3/issues/120).
+without COMGR or a shell GPU linker. The replacement Worker V3 row-softmax
+slice remains tracked under [#120](https://github.com/harsh-nod/fe2o3/issues/120).
 The subsequent fixed FlashAttention and top-2 MoE vertical slices are tracked by
 [#122](https://github.com/harsh-nod/fe2o3/issues/122) through
 [#125](https://github.com/harsh-nod/fe2o3/issues/125).

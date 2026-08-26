@@ -1014,7 +1014,6 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
- "fe2o3-row-softmax-v1",
  "libc",
  "object 0.39.1",
  "reserved-fe2o3-symbols",
@@ -1497,11 +1496,6 @@ dependencies = [
  "fe2o3-device",
  "fe2o3-host",
 ]
-
-[[package]]
-name = "fe2o3-row-softmax-v1"
-version = "0.1.0"
-source = "git+https://github.com/harsh-nod/fe2o3.git?rev=e4ad3159491d14d48ffda099e34967341ec31c72#e4ad3159491d14d48ffda099e34967341ec31c72"
 
 [[package]]
 name = "fe2o3-runtime-model"

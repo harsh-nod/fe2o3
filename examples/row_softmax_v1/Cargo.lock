@@ -504,22 +504,10 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
- "fe2o3-worker-v2-bundle",
+ "fe2o3-runtime-protocol",
  "libc",
  "reserved-fe2o3-symbols",
  "rustix",
- "sha2 0.11.0",
-]
-
-[[package]]
-name = "fe2o3-hsa-runtime"
-version = "0.1.0"
-dependencies = [
- "cc",
- "fe2o3-amd-target",
- "fe2o3-artifacts",
- "fe2o3-core",
- "fe2o3-host",
  "sha2 0.11.0",
 ]
 
@@ -645,18 +633,21 @@ version = "0.1.0"
 name = "fe2o3-row-softmax-v1"
 version = "0.1.0"
 dependencies = [
- "fe2o3-artifact-transaction",
- "fe2o3-compiler-ffi",
- "fe2o3-core",
  "fe2o3-device",
  "fe2o3-host",
- "fe2o3-hsa-runtime",
- "fe2o3-hsaco",
- "fe2o3-hsaco-finalize",
- "fe2o3-verifier",
  "quote",
  "sha2 0.11.0",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fe2o3-runtime-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco-finalize",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -697,20 +688,6 @@ dependencies = [
  "sha2 0.11.0",
  "syn 2.0.119",
  "toml",
-]
-
-[[package]]
-name = "fe2o3-worker-v2-bundle"
-version = "0.1.0"
-dependencies = [
- "fe2o3-artifact-transaction",
- "fe2o3-artifacts",
- "fe2o3-build-authority",
- "fe2o3-compiler-ffi",
- "fe2o3-hsaco-finalize",
- "fe2o3-kernel-descriptor",
- "fe2o3-rustc-invocation",
- "sha2 0.11.0",
 ]
 
 [[package]]

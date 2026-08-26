@@ -199,11 +199,10 @@ Simulation sets the existing `FE2O3_HIP_SYS_DISABLE` build boundary and the
 default `cargo-fe2o3` dependency and ELF closures exclude `fe2o3-core`,
 `fe2o3-host`, `fe2o3-hsa-runtime`, HIP, HSA, KFD, DRM, and ROCm libraries.
 It does not enumerate a GPU or initialize a GPU runtime. Hardware commands
-remain explicit and never fall back to simulation. The existing legacy direct
-row-softmax HSA runtime and related hardware test fixtures are compiled only
-with the explicit `legacy-hsa-runtime` feature; a default command image fails
-closed before that compatibility boundary. New runtime work remains KFD-only.
-Simulation has no HSA, HIP, KFD, or ROCm runtime.
+remain explicit and never fall back to simulation. The legacy direct
+row-softmax HSA runtime, hardware fixtures, and `legacy-hsa-runtime` feature are
+deleted; row-softmax runtime work must use the generic Worker V3 application
+path. Simulation has no HSA, HIP, KFD, or ROCm runtime.
 
 `cargo fe2o3 simulate` is compiled only with
 `qualification-oracles-test-only`; it is absent from normal command dispatch

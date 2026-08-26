@@ -4,8 +4,6 @@ mod api;
 mod dispatch;
 mod environment;
 mod lifecycle;
-#[cfg(feature = "qualification-oracles-test-only")]
-mod row_softmax_resource_observation;
 mod sys;
 
 #[cfg(feature = "hardware-test-hooks")]
