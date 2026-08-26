@@ -340,10 +340,11 @@ the canonical Worker V3 load envelope, pins a sealed static application and its
 V3 identity, binds the envelope, artifact-directory, and ACK descriptors into a
 fresh occurrence, validates the challenge-bound ACK, and retains the
 current-publication lease until the application exits. Worker V2 envelope
-decoding, lease recovery, child environment, challenge, and ACK validation are
-compiled only for qualification-oracle and test builds. The V3 transfer carries
-inert descriptor custody; it does not itself authenticate prerequisites or grant
-HSA load or launch authority.
+decoding, lease recovery, child environment, challenge, and ACK validation have
+been removed from the Cargo application boundary in every build. Stale V2
+envelope names are recognized only for fail-closed rejection before child
+spawn. The V3 transfer carries inert descriptor custody; it does not itself
+authenticate prerequisites or grant HSA load or launch authority.
 
 The same boundary is enforced by `fe2o3-host`: feature-free builds export only
 the Worker V3 application, admission, verification, load, and generated
@@ -355,11 +356,12 @@ expansion emits only Worker V3 host code unless an oracle fixture explicitly
 requests `qualification_worker_v2`. The exact embedded vecadd compatibility
 API is the remaining generated host island to migrate to this V3 route.
 
-The application integration fixtures are protocol-specific. The V3 fixture
-has no runtime selector and its feature graph enables `fe2o3-host` only with
+The active application integration fixture is V3-only. It has no runtime
+selector and its feature graph enables `fe2o3-host` only with
 `hardware-test-hooks`; it does not enable the host qualification feature. The
-separate V2 fixture requires `worker-v2-host-consumer-fixture` and cannot be
-built through the V3 integration feature.
+old V2 consumer fixture remains standalone qualification source while its
+host-side oracle is retired, but Cargo no longer produces a V2 child handoff
+for it.
 
 Legacy protected V2 and ordinary V1 state machines are qualification paths.
 Their work state, restart modules, workload parsers, and V2 intake compile only

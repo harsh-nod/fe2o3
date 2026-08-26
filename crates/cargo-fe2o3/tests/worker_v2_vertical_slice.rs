@@ -1461,7 +1461,7 @@ fn required_cov6_production_wrapper_publishes_a_canonical_envelope() {
 }
 
 #[test]
-fn canonical_envelope_is_consumed_through_descriptor_protocol_completion() {
+fn retired_v2_envelope_is_rejected_before_application_spawn() {
     let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
     let published = run_wrapper_with_options(
@@ -1475,20 +1475,18 @@ fn canonical_envelope_is_consumed_through_descriptor_protocol_completion() {
 
     let report = directory.0.join("application-handoff.json");
     let application = run_application_fixture(&directory, &report);
-    assert!(application.status.success(), "{}", stderr(&application));
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    assert_eq!(report["artifact_fd_open"], false);
-    assert_eq!(report["backend_fd_open"], false);
-    assert_eq!(report["leaked_environment"], json!([]));
-    assert_eq!(report["unexpected_environment"], json!([]));
-    assert_eq!(report["handoff"]["acknowledged"], true);
-    assert_eq!(report["handoff"]["artifact_directory_read_only"], true);
-    assert_eq!(report["handoff"]["read_only"], true);
-    assert_eq!(report["handoff"]["commitment"].as_str().unwrap().len(), 64);
-    assert_eq!(report["payload_hex"], hex(b"worker-v2-application-payload"));
+    assert!(!application.status.success());
+    assert!(
+        stderr(&application)
+            .contains("Worker V2 application envelopes are retired and unavailable"),
+        "{}",
+        stderr(&application)
+    );
+    assert!(!report.exists(), "retired V2 child must not be spawned");
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn real_host_consumer_reaches_exact_prerequisite_admission() {
     let directory = published_host_consumer_fixture();
     let report = directory.0.join("host-consumer-report.json");
@@ -1541,6 +1539,7 @@ fn real_host_consumer_reaches_exact_prerequisite_admission() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn real_host_consumer_rejects_substituted_commitment() {
     let directory = published_host_consumer_fixture();
     let report = directory.0.join("host-consumer-substitution.json");
@@ -1598,6 +1597,7 @@ fn assert_rejected_host_consumer_report(report: &Path) {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_handoff_close_range_blocks_unrelated_inheritable_descriptors() {
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
@@ -1641,6 +1641,7 @@ fn application_handoff_close_range_blocks_unrelated_inheritable_descriptors() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
     let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
@@ -1667,6 +1668,7 @@ fn public_ack_completion_does_not_replace_private_host_currentness_authority() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
     // Process-tree probes run inside the bounded ACK window. Keep them from
     // competing with the other static application fixtures on hosted runners.
@@ -1713,6 +1715,7 @@ fn application_seccomp_rejects_process_and_double_fork_setsid_escape() {
 
 #[cfg(feature = "worker-v2-fault-injection-test-only")]
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
     let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
@@ -1801,6 +1804,7 @@ fn stalled_application_ack_times_out_without_spinning_and_reaps_the_leader() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_seccomp_rejects_static_and_dynamic_exec_replacement() {
     // The four exec probes share the same bounded application handoff window.
     let directory = TestDirectory::new_exclusive();
@@ -2006,10 +2010,14 @@ fn required_cov6_production_wrapper_recovers_after_published_crash() {
     assert!(restart_records(&directory).is_empty());
     let report = directory.0.join("recovered-application-handoff.json");
     let application = run_application_fixture(&directory, &report);
-    assert!(application.status.success(), "{}", stderr(&application));
-    let report: JsonValue = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
-    assert_eq!(report["handoff"]["acknowledged"], true);
-    assert_eq!(report["handoff"]["child_reacquired_currentness"], true);
+    assert!(!application.status.success());
+    assert!(
+        stderr(&application)
+            .contains("Worker V2 application envelopes are retired and unavailable"),
+        "{}",
+        stderr(&application)
+    );
+    assert!(!report.exists(), "retired V2 child must not be spawned");
 }
 
 #[test]
@@ -2062,6 +2070,7 @@ fn repeated_required_envelope_temp_crashes_are_bounded_and_recover() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_handoff_rejects_child_protocol_substitution_and_omission() {
     let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
@@ -2114,6 +2123,7 @@ fn application_handoff_rejects_child_protocol_substitution_and_omission() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_handoff_rejects_symlink_and_generation_path_replacement() {
     use std::os::unix::fs::symlink;
 
@@ -2170,6 +2180,7 @@ fn application_handoff_rejects_symlink_and_generation_path_replacement() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_handoff_rejects_truncated_and_extended_envelopes() {
     let directory = TestDirectory::new_exclusive();
     let fixture = required_alpha_zeta_publication_fixture(&directory);
@@ -2196,6 +2207,7 @@ fn application_handoff_rejects_truncated_and_extended_envelopes() {
 }
 
 #[test]
+#[ignore = "retired V2 application probe; migrate hostile case to the strict V3 fixture"]
 fn application_handoff_rejects_stale_envelope_after_publication_turnover() {
     let directory = TestDirectory::new_exclusive();
     let first = required_alpha_zeta_publication_fixture_with_seed(&directory, 0);

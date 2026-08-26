@@ -2212,21 +2212,11 @@ fn run_application_with_handoff(
     let sealed_application = pinned_application
         .seal_static_application()
         .map_err(|error| format!("failed to seal application runtime image: {error}"))?;
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    let application_identity_v2 = sealed_application.identity();
     let mut child = sealed_application
         .command()
         .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
     child.args(application_args);
     scrub_application_environment(child.as_command_mut());
-    #[cfg(any(test, feature = "qualification-oracles-test-only"))]
-    let pending_ack = handoff.configure_child_with_timeouts(
-        child.as_command_mut(),
-        application_identity_v2,
-        sealed_application.identity_v3(),
-        application_timeouts,
-    )?;
-    #[cfg(not(any(test, feature = "qualification-oracles-test-only")))]
     let pending_ack = handoff.configure_child_with_timeouts(
         child.as_command_mut(),
         sealed_application.identity_v3(),
