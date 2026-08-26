@@ -1,7 +1,11 @@
 //! Production join from compiler-derived sequential/parallel facts to one
 //! workload-neutral parallel-reference contract.
 
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use dialect_kernel::OwnershipCoverageAttr;
 use fe2o3_functional_proof::{
@@ -143,7 +147,25 @@ pub enum ProductionParallelReferenceContractErrorV1 {
     },
     TensorFunctionalRefinementIncomplete {
         live_sites: usize,
+        proved_sites: usize,
+    },
+    TensorOutputUnmatched {
+        site: usize,
+    },
+    TensorOutputAmbiguous {
+        site: usize,
         outputs: usize,
+    },
+    DuplicateTensorOutput {
+        index: usize,
+    },
+    TensorInstructionSiteUnmatched {
+        block: u32,
+        operation: u32,
+    },
+    DuplicateTensorInstructionSite {
+        block: u32,
+        operation: u32,
     },
     ContractConstruction(ParallelReferenceContractErrorV1),
     CounterOverflow,
@@ -191,7 +213,12 @@ impl fmt::Display for ProductionParallelReferenceContractErrorV1 {
             Self::NumericalSiteAmbiguous { site, outputs } => write!(formatter, "error[FE2O3-PARALLEL-024]: numerical refinement site {site} ambiguously matches {outputs} logical outputs"),
             Self::DuplicateNumericalSite { index } => write!(formatter, "error[FE2O3-PARALLEL-025]: logical output {index} has more than one numerical refinement site"),
             Self::NumericalCoverageIncomplete { index, component } => write!(formatter, "error[FE2O3-PARALLEL-026]: numerical refinement for logical output {index} is not total: {component} must be the canonical typed constant true"),
-            Self::TensorFunctionalRefinementIncomplete { live_sites, outputs } => write!(formatter, "error[FE2O3-PARALLEL-013]: functional refinement is incomplete for {live_sites} live cooperative tensor site(s) and {outputs} logical output(s): typed SSA def-use and claim-specific tensor arithmetic receipts are not implemented"),
+            Self::TensorFunctionalRefinementIncomplete { live_sites, proved_sites } => write!(formatter, "error[FE2O3-PARALLEL-013]: cooperative tensor functional refinement is incomplete: {live_sites} live tensor site(s), but {proved_sites} exact result-component/output receipt binding(s)"),
+            Self::TensorOutputUnmatched { site } => write!(formatter, "error[FE2O3-PARALLEL-027]: tensor refinement site {site} does not match any logical output view and actual/reference roots"),
+            Self::TensorOutputAmbiguous { site, outputs } => write!(formatter, "error[FE2O3-PARALLEL-028]: tensor refinement site {site} ambiguously matches {outputs} logical outputs"),
+            Self::DuplicateTensorOutput { index } => write!(formatter, "error[FE2O3-PARALLEL-029]: logical output {index} has more than one tensor refinement receipt"),
+            Self::TensorInstructionSiteUnmatched { block, operation } => write!(formatter, "error[FE2O3-PARALLEL-030]: tensor refinement names non-live tensor instruction site ^bb{block}:{operation}"),
+            Self::DuplicateTensorInstructionSite { block, operation } => write!(formatter, "error[FE2O3-PARALLEL-031]: tensor instruction site ^bb{block}:{operation} has more than one tensor refinement receipt"),
             Self::CounterOverflow => formatter.write_str("error[FE2O3-PARALLEL-015]: parallel relation count cannot be represented in the production report"),
             Self::ContractConstruction(error) => write!(formatter, "error[FE2O3-PARALLEL-017]: compiler-derived parallel contract was invalid: {error}"),
         }
@@ -265,7 +292,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
     ProductionParallelReferenceContractErrorV1,
 > {
     require_parallel_boundary_subjects_v1(ranked, evidence, semantics, semantic_contract)?;
-    require_no_live_tensor_functional_sites_v1(ranked.kernel(), semantic_contract.outputs().len())?;
+    let tensor = LiveTensorRefinementIndexV1::from_ranked(ranked, semantic_contract)?;
     let mut relations = Vec::with_capacity(semantic_contract.outputs().len());
     let bindings = derive_live_output_bindings_v1(ranked, evidence, semantic_contract)?;
     let numerical = LiveNumericalRefinementIndexV1::from_ranked(ranked, semantic_contract)?;
@@ -414,6 +441,7 @@ pub fn derive_and_require_parallel_reference_contract_v1(
                 schedule,
                 numerical_policy,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                tensor.for_output(index).map(|site| site.proof),
                 proof,
             )
             .map_err(ProductionParallelReferenceContractErrorV1::ContractConstruction)?,
@@ -832,7 +860,7 @@ pub fn require_parallel_reference_contract_v1(
     if expected.semantic_contract_identity() != semantics.contract_identity() {
         return Err(ProductionParallelReferenceContractErrorV1::SemanticContractMismatch);
     }
-    require_no_live_tensor_functional_sites_v1(ranked.kernel(), semantic_contract.outputs().len())?;
+    let tensor = LiveTensorRefinementIndexV1::from_ranked(ranked, semantic_contract)?;
 
     let live_total = usize::try_from(evidence.coverage_summary().total_view_proved())
         .map_err(|_| ProductionParallelReferenceContractErrorV1::CounterOverflow)?;
@@ -1018,6 +1046,12 @@ pub fn require_parallel_reference_contract_v1(
                 }
                 counts.recurrence += 1;
             }
+        }
+        if relation.tensor_refinement_identity() != tensor.for_output(index).map(|site| site.proof)
+        {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::OutputRelationMismatch { index },
+            );
         }
     }
     if counts.error_bounded != numerical.site_count() {
@@ -1379,29 +1413,174 @@ fn require_numerical_policy(
     }
 }
 
-fn tensor_site_count(kernel: &super::ProductionRankedKernelV1) -> usize {
+fn tensor_instruction_sites(
+    kernel: &super::ProductionRankedKernelV1,
+) -> BTreeSet<super::ProductionTensorInstructionSiteV1> {
     kernel
         .blocks()
         .iter()
-        .flat_map(|block| block.operations())
-        .filter(|operation| matches!(operation, ProductionRankedOperationV1::TensorLayout { .. }))
-        .count()
+        .enumerate()
+        .flat_map(|(block, body)| {
+            body.operations()
+                .iter()
+                .enumerate()
+                .filter_map(move |(operation, item)| {
+                    matches!(item, ProductionRankedOperationV1::TensorLayout { .. }).then(|| {
+                        super::ProductionTensorInstructionSiteV1::new(
+                            u32::try_from(block).unwrap_or(u32::MAX),
+                            u32::try_from(operation).unwrap_or(u32::MAX),
+                        )
+                    })
+                })
+        })
+        .collect()
 }
 
-fn require_no_live_tensor_functional_sites_v1(
-    kernel: &super::ProductionRankedKernelV1,
-    outputs: usize,
-) -> Result<(), ProductionParallelReferenceContractErrorV1> {
-    let live_sites = tensor_site_count(kernel);
-    if live_sites != 0 {
+#[derive(Clone, Copy)]
+struct LiveTensorRefinementV1 {
+    proof: DigestV1,
+}
+
+struct LiveTensorRefinementIndexV1 {
+    by_output: Vec<Option<LiveTensorRefinementV1>>,
+}
+
+fn require_tensor_site_bijection_v1(
+    live_tensor_sites: &BTreeSet<super::ProductionTensorInstructionSiteV1>,
+    claimed_tensor_sites: &[super::ProductionTensorInstructionSiteV1],
+) -> Result<
+    BTreeSet<super::ProductionTensorInstructionSiteV1>,
+    ProductionParallelReferenceContractErrorV1,
+> {
+    if live_tensor_sites.len() != claimed_tensor_sites.len() {
         return Err(
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
-                live_sites,
-                outputs,
+                live_sites: live_tensor_sites.len(),
+                proved_sites: claimed_tensor_sites.len(),
             },
         );
     }
-    Ok(())
+    let mut proved_tensor_sites = BTreeSet::new();
+    for tensor_site in claimed_tensor_sites {
+        if !live_tensor_sites.contains(tensor_site) {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::TensorInstructionSiteUnmatched {
+                    block: tensor_site.block(),
+                    operation: tensor_site.operation(),
+                },
+            );
+        }
+        if !proved_tensor_sites.insert(*tensor_site) {
+            return Err(
+                ProductionParallelReferenceContractErrorV1::DuplicateTensorInstructionSite {
+                    block: tensor_site.block(),
+                    operation: tensor_site.operation(),
+                },
+            );
+        }
+    }
+    if proved_tensor_sites != *live_tensor_sites {
+        return Err(
+            ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
+                live_sites: live_tensor_sites.len(),
+                proved_sites: proved_tensor_sites.len(),
+            },
+        );
+    }
+    Ok(proved_tensor_sites)
+}
+
+impl LiveTensorRefinementIndexV1 {
+    fn from_ranked(
+        ranked: &ProductionRankedKernelLoweringInputV1,
+        semantic_contract: &MirPlironSemanticContractV1,
+    ) -> Result<Self, ProductionParallelReferenceContractErrorV1> {
+        let live_tensor_sites = tensor_instruction_sites(ranked.kernel());
+        let live_sites = live_tensor_sites.len();
+        let sites = ranked
+            .kernel()
+            .blocks()
+            .iter()
+            .flat_map(|block| block.operations())
+            .filter_map(|operation| match operation {
+                ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+                    Some((contract, proof))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let claimed_tensor_sites = sites
+            .iter()
+            .map(|(contract, _)| contract.tensor_site())
+            .collect::<Vec<_>>();
+        let proved_tensor_sites =
+            require_tensor_site_bijection_v1(&live_tensor_sites, &claimed_tensor_sites)?;
+        let mut retained_receipts = BTreeMap::new();
+        for receipt in ranked.retained_functional_refinement_receipts() {
+            if receipt.is_retained_policy_verified_receipt() {
+                *retained_receipts
+                    .entry((receipt.receipt_identity(), receipt.binding()))
+                    .or_insert(0_usize) += 1;
+            }
+        }
+        let mut outputs_by_relation = BTreeMap::new();
+        for (index, output) in semantic_contract.outputs().iter().enumerate() {
+            outputs_by_relation
+                .entry((output.view_identity(), output.actual(), output.reference()))
+                .or_insert_with(Vec::new)
+                .push(index);
+        }
+        let mut by_output = vec![None; semantic_contract.outputs().len()];
+        for (site, (tensor, proof)) in sites.into_iter().enumerate() {
+            let retained = retained_receipts
+                .get(&(proof.receipt_identity(), proof.binding()))
+                .copied()
+                .unwrap_or_default();
+            if retained != 1 {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
+                        live_sites,
+                        proved_sites: site,
+                    },
+                );
+            }
+            let output_key = (
+                super::production_ranked_value_identity_v1(tensor.output_view()),
+                super::production_ranked_value_identity_v1(tensor.actual()),
+                super::production_ranked_value_identity_v1(tensor.reference()),
+            );
+            let matches = outputs_by_relation
+                .get(&output_key)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let [index] = matches else {
+                return Err(if matches.is_empty() {
+                    ProductionParallelReferenceContractErrorV1::TensorOutputUnmatched { site }
+                } else {
+                    ProductionParallelReferenceContractErrorV1::TensorOutputAmbiguous {
+                        site,
+                        outputs: matches.len(),
+                    }
+                });
+            };
+            if by_output[*index].is_some() {
+                return Err(
+                    ProductionParallelReferenceContractErrorV1::DuplicateTensorOutput {
+                        index: *index,
+                    },
+                );
+            }
+            by_output[*index] = Some(LiveTensorRefinementV1 {
+                proof: proof.receipt_identity().digest(),
+            });
+        }
+        debug_assert_eq!(proved_tensor_sites, live_tensor_sites);
+        Ok(Self { by_output })
+    }
+
+    fn for_output(&self, index: usize) -> Option<LiveTensorRefinementV1> {
+        self.by_output.get(index).copied().flatten()
+    }
 }
 
 /// Compiler-derived identity of the finite bound already established for one
@@ -1464,12 +1643,56 @@ mod tests {
             ProductionParallelReferenceContractErrorV1::NumericalProofIncomplete { index: 5 },
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: 1,
-                outputs: 2,
+                proved_sites: 0,
             },
         ] {
             assert!(error.is_incomplete(), "{error}");
             assert!(error.to_string().starts_with("error[FE2O3-PARALLEL-"));
         }
+    }
+
+    #[test]
+    fn tensor_receipts_must_form_an_exact_live_instruction_site_bijection() {
+        let first = super::super::ProductionTensorInstructionSiteV1::new(0, 3);
+        let second = super::super::ProductionTensorInstructionSiteV1::new(0, 20);
+        let live = [first, second].into_iter().collect::<BTreeSet<_>>();
+        assert_eq!(
+            require_tensor_site_bijection_v1(&live, &[first, second]).unwrap(),
+            live
+        );
+        assert!(matches!(
+            require_tensor_site_bijection_v1(&live, &[first]),
+            Err(
+                ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
+                    live_sites: 2,
+                    proved_sites: 1,
+                }
+            )
+        ));
+        assert!(matches!(
+            require_tensor_site_bijection_v1(&live, &[first, first]),
+            Err(
+                ProductionParallelReferenceContractErrorV1::DuplicateTensorInstructionSite {
+                    block: 0,
+                    operation: 3,
+                }
+            )
+        ));
+        assert!(matches!(
+            require_tensor_site_bijection_v1(
+                &live,
+                &[
+                    first,
+                    super::super::ProductionTensorInstructionSiteV1::new(1, 0)
+                ],
+            ),
+            Err(
+                ProductionParallelReferenceContractErrorV1::TensorInstructionSiteUnmatched {
+                    block: 1,
+                    operation: 0,
+                }
+            )
+        ));
     }
 
     #[test]
@@ -1639,68 +1862,17 @@ mod tests {
         assert_eq!(binding.result_root(), digest(6));
     }
 
-    fn live_tensor_kernel(site_count: usize) -> super::super::ProductionRankedKernelV1 {
-        use super::super::{
-            ProductionRankedBlockV1, ProductionRankedKernelV1, ProductionRankedTerminatorV1,
-        };
-
-        let tensor = ProductionRankedOperationV1::TensorLayout {
-            contract:
-                fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),
-            convergence: dialect_kernel::TensorConvergenceAttr::UniformSubgroup,
-            active_lanes: 64,
-            binding: Some(
-                super::super::ProductionCooperativeTensorBindingV1::new(
-                    digest(1),
-                    digest(2),
-                    digest(3),
-                    digest(4),
-                    digest(5),
-                    digest(6),
-                    4,
-                )
-                .unwrap(),
-            ),
-        };
-        ProductionRankedKernelV1::new(
-            "tensor_functional_boundary",
-            0,
-            vec![ProductionRankedBlockV1::new(
-                vec![tensor; site_count],
-                ProductionRankedTerminatorV1::Return,
-            )],
-        )
-        .unwrap()
-    }
-
     #[test]
-    fn single_output_tensor_site_fails_closed_at_the_functional_boundary() {
+    fn tensor_boundary_reports_live_and_proved_site_counts() {
         let error =
-            require_no_live_tensor_functional_sites_v1(&live_tensor_kernel(1), 1).unwrap_err();
-        assert_eq!(
-            error,
             ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
                 live_sites: 1,
-                outputs: 1,
-            }
-        );
+                proved_sites: 0,
+            };
         assert!(error.is_incomplete());
         assert_eq!(
             error.to_string(),
-            "error[FE2O3-PARALLEL-013]: functional refinement is incomplete for 1 live cooperative tensor site(s) and 1 logical output(s): typed SSA def-use and claim-specific tensor arithmetic receipts are not implemented"
-        );
-    }
-
-    #[test]
-    fn multi_output_tensor_sites_do_not_guess_an_output_association() {
-        assert_eq!(
-            require_no_live_tensor_functional_sites_v1(&live_tensor_kernel(2), 2),
-            Err(
-                ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
-                    live_sites: 2,
-                    outputs: 2,
-                }
-            )
+            "error[FE2O3-PARALLEL-013]: cooperative tensor functional refinement is incomplete: 1 live tensor site(s), but 0 exact result-component/output receipt binding(s)"
         );
     }
 }

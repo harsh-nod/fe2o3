@@ -14,8 +14,10 @@ use crate::{SemanticEvaluationOrderV1, SemanticIeeeExceptionalValueV1, SemanticI
 
 pub const HARD_MAX_PARALLEL_OUTPUT_RELATIONS_V1: usize = 4_096;
 pub const HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1: u16 = 256;
+pub const HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1: usize = 64;
 
 const CONTRACT_DOMAIN_V1: &[u8] = b"FE2O3/PARALLEL-REFERENCE-CONTRACT/V1\0";
+const CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PARALLEL-REFERENCE-CONTRACT/V2\0";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ParallelHierarchyLevelV1 {
@@ -128,6 +130,7 @@ pub struct ParallelOutputRelationV1 {
     schedule: ParallelScheduleRelationV1,
     numerical_policy: ParallelNumericalPolicyV1,
     hierarchy: Box<[ParallelHierarchyLevelV1]>,
+    tensor_refinement_identity: Option<DigestV1>,
     authenticated_proof: DigestV1,
 }
 
@@ -143,6 +146,7 @@ impl ParallelOutputRelationV1 {
         schedule: ParallelScheduleRelationV1,
         numerical_policy: ParallelNumericalPolicyV1,
         hierarchy: Vec<ParallelHierarchyLevelV1>,
+        tensor_refinement_identity: Option<DigestV1>,
         authenticated_proof: DigestV1,
     ) -> Result<Self, ParallelReferenceContractErrorV1> {
         if [
@@ -157,6 +161,7 @@ impl ParallelOutputRelationV1 {
         .into_iter()
         .any(DigestV1::is_zero)
             || hierarchy.as_slice() != COMPLETE_GPU_HIERARCHY_V1
+            || tensor_refinement_identity.is_some_and(DigestV1::is_zero)
         {
             return Err(ParallelReferenceContractErrorV1::InvalidOutputRelation);
         }
@@ -174,6 +179,7 @@ impl ParallelOutputRelationV1 {
             schedule,
             numerical_policy,
             hierarchy: hierarchy.into_boxed_slice(),
+            tensor_refinement_identity,
             authenticated_proof,
         })
     }
@@ -204,6 +210,11 @@ impl ParallelOutputRelationV1 {
     }
     pub fn hierarchy(&self) -> &[ParallelHierarchyLevelV1] {
         &self.hierarchy
+    }
+    /// Claim-specific receipt identity for a bounded cooperative-tensor
+    /// composition, distinct from the output-effect proof.
+    pub const fn tensor_refinement_identity(&self) -> Option<DigestV1> {
+        self.tensor_refinement_identity
     }
     pub const fn authenticated_proof(&self) -> DigestV1 {
         self.authenticated_proof
@@ -281,7 +292,18 @@ impl ParallelReferenceContractV1 {
 
     pub fn canonical_sha256(&self) -> DigestV1 {
         let mut digest = Sha256::new();
-        put_blob(&mut digest, CONTRACT_DOMAIN_V1);
+        let tensor_v2 = self
+            .relations
+            .iter()
+            .any(|relation| relation.tensor_refinement_identity.is_some());
+        put_blob(
+            &mut digest,
+            if tensor_v2 {
+                CONTRACT_DOMAIN_V2
+            } else {
+                CONTRACT_DOMAIN_V1
+            },
+        );
         put_digest(&mut digest, self.semantic_contract_identity);
         put_digest(&mut digest, self.output_product_identity);
         put_u64(&mut digest, self.relations.len() as u64);
@@ -301,6 +323,15 @@ impl ParallelReferenceContractV1 {
             put_u64(&mut digest, relation.hierarchy.len() as u64);
             for level in &relation.hierarchy {
                 digest.update([hierarchy_tag(*level)]);
+            }
+            if tensor_v2 {
+                match relation.tensor_refinement_identity {
+                    None => digest.update([0]),
+                    Some(identity) => {
+                        digest.update([1]);
+                        put_digest(&mut digest, identity);
+                    }
+                }
             }
             put_digest(&mut digest, relation.authenticated_proof);
         }
@@ -487,6 +518,7 @@ mod tests {
             ParallelScheduleRelationV1::PointwiseBijection,
             policy,
             COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+            None,
             d(4),
         )
     }
@@ -500,6 +532,49 @@ mod tests {
             COMPLETE_GPU_HIERARCHY_V1
         );
         assert_ne!(contract.canonical_sha256(), DigestV1::ZERO);
+    }
+
+    #[test]
+    fn canonical_v1_none_hash_is_stable_and_tensor_v2_binds_the_claim() {
+        let scalar = relation(ParallelNumericalPolicyV1::ExactBitVector).unwrap();
+        let scalar_contract =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![scalar.clone()]).unwrap();
+        assert_eq!(
+            scalar_contract.canonical_sha256(),
+            DigestV1::from_untrusted_bytes([
+                213, 95, 232, 195, 103, 219, 84, 38, 63, 7, 99, 212, 212, 196, 94, 28, 163, 116,
+                19, 53, 68, 178, 233, 55, 215, 221, 90, 51, 185, 215, 65, 35,
+            ]),
+        );
+        let tensor_relation = |identity| {
+            ParallelOutputRelationV1::new(
+                scalar.identity(),
+                scalar.output_contract(),
+                scalar.logical_domain(),
+                scalar.ranked_view_identity(),
+                scalar.ownership_identity(),
+                scalar.frame_identity(),
+                scalar.schedule(),
+                scalar.numerical_policy(),
+                scalar.hierarchy().to_vec(),
+                Some(identity),
+                scalar.authenticated_proof(),
+            )
+            .unwrap()
+        };
+        let first =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![tensor_relation(d(30))]).unwrap();
+        let second =
+            ParallelReferenceContractV1::new(d(5), d(6), vec![tensor_relation(d(31))]).unwrap();
+        assert_eq!(
+            first.canonical_sha256(),
+            DigestV1::from_untrusted_bytes([
+                216, 122, 125, 99, 68, 227, 66, 65, 97, 27, 161, 11, 127, 67, 240, 105, 39, 54,
+                172, 116, 241, 125, 171, 59, 200, 48, 177, 97, 58, 81, 189, 88,
+            ]),
+        );
+        assert_ne!(first.canonical_sha256(), scalar_contract.canonical_sha256());
+        assert_ne!(first.canonical_sha256(), second.canonical_sha256());
     }
 
     #[test]
@@ -550,6 +625,7 @@ mod tests {
                     ParallelHierarchyLevelV1::Invocation,
                     ParallelHierarchyLevelV1::Grid
                 ],
+                None,
                 d(4)
             ),
             Err(ParallelReferenceContractErrorV1::InvalidOutputRelation)
@@ -573,6 +649,7 @@ mod tests {
                 bad_fold,
                 ParallelNumericalPolicyV1::ExactBitVector,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                None,
                 d(4)
             ),
             Err(ParallelReferenceContractErrorV1::InvalidScheduleRelation)
@@ -594,6 +671,7 @@ mod tests {
                 bad_dynamic,
                 ParallelNumericalPolicyV1::ExactBitVector,
                 COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                None,
                 d(4)
             ),
             Err(ParallelReferenceContractErrorV1::InvalidScheduleRelation)
@@ -617,6 +695,7 @@ mod tests {
             schedule,
             ParallelNumericalPolicyV1::ExactBitVector,
             COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+            None,
             d(base + 2),
         )
         .unwrap()

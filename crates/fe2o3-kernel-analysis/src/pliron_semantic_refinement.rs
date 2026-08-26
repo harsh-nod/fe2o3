@@ -13,10 +13,12 @@ use dialect_kernel::{
     SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp, SemanticTypedCompareOp,
     SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedExpressionV1,
     SemanticTypedScalarV1, SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp,
+    TensorResultComponentOp,
 };
 use dialect_proof::{
     CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, PropertyAttr,
     RequireEffectRefinementOp, RequireNumericalRefinementOp, RequireRefinementOp,
+    RequireTensorRefinementOp,
 };
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
@@ -778,6 +780,8 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let mut requirements = Vec::new();
     let mut reference_requirements = Vec::new();
     let mut numerical_requirements = Vec::new();
+    let mut tensor_requirements = Vec::new();
+    let mut tensor_components = HashMap::new();
     let mut effect_requirement_ids = HashSet::new();
     let mut obligations = Vec::new();
     let mut evidence = Vec::new();
@@ -800,6 +804,15 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                 || is_typed_semantic_definition(&*operation)
             {
                 definitions.push(operation.get_operation());
+            } else if let Some(component) = operation.downcast_ref::<TensorResultComponentOp>() {
+                tensor_components.insert(
+                    component.result(context),
+                    (
+                        component.result_root(context),
+                        component.component(context),
+                        component.scalar(context),
+                    ),
+                );
             } else if let Some(requirement) = operation.downcast_ref::<RequireEquivalentOp>() {
                 requirements.push((
                     block_index,
@@ -814,6 +827,18 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
                     requirement.obligation_id(context),
                     requirement.actual(context),
                     requirement.expected(context),
+                ));
+            } else if let Some(requirement) = operation.downcast_ref::<RequireTensorRefinementOp>()
+            {
+                tensor_requirements.push((
+                    block_index,
+                    operation_index,
+                    requirement.obligation_id(context),
+                    requirement.result_root(context),
+                    requirement.view(context),
+                    requirement.actual(context),
+                    requirement.reference(context),
+                    requirement.components(context),
                 ));
             } else if let Some(requirement) = operation.downcast_ref::<RequireEffectRefinementOp>()
             {
@@ -899,7 +924,7 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded);
     }
 
-    let reference_count = reference_requirements.len();
+    let reference_count = reference_requirements.len() + tensor_requirements.len();
     let numerical_count = numerical_requirements.len();
     let authenticated_requirements = reference_requirements
         .iter()
@@ -908,6 +933,11 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
         })
         .chain(numerical_requirements.iter().map(
             |&(block, operation, identity, actual, reference, ..)| {
+                (block, operation, identity, actual, reference)
+            },
+        ))
+        .chain(tensor_requirements.iter().map(
+            |&(block, operation, identity, _, _, actual, reference, _)| {
                 (block, operation, identity, actual, reference)
             },
         ))
@@ -1097,6 +1127,54 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     }
     let mut proved_reference_obligations = 0;
     let mut proved_reference_pairs = HashSet::new();
+    for (block, operation, _, result_root, _, actual, reference, components) in tensor_requirements
+    {
+        let actual_fact = expressions.typed_root_fact(actual);
+        let reference_fact = expressions.typed_root_fact(reference);
+        let valid_aggregate = actual_fact
+            .zip(reference_fact)
+            .is_some_and(|(actual, reference)| actual == reference);
+        let root_component_count = result_root.map_or(0, |root| {
+            tensor_components
+                .values()
+                .filter(|(candidate, ..)| *candidate == Some(root))
+                .count()
+        });
+        let mut seen = HashSet::new();
+        let valid_components = result_root.is_some()
+            && !components.is_empty()
+            && root_component_count == components.len()
+            && components
+                .iter()
+                .enumerate()
+                .all(|(ordinal, (gpu, sequential))| {
+                    seen.insert(*gpu)
+                        && tensor_components.get(gpu).is_some_and(
+                            |(component_root, component_ordinal, scalar)| {
+                                *component_root == result_root
+                                    && *component_ordinal == u32::try_from(ordinal).ok()
+                                    && actual_fact.is_some_and(|fact| *scalar == Some(fact.scalar))
+                            },
+                        )
+                        && reference_fact
+                            .zip(expressions.typed_root_fact(*sequential))
+                            .is_some_and(|(aggregate, component)| aggregate == component)
+                });
+        if !valid_aggregate || !valid_components {
+            push(
+                &mut findings,
+                PlironSemanticRefinementFindingV1::ReferenceContractRejected {
+                    block,
+                    operation,
+                    obligation: [0; 4],
+                    reason: "tensor refinement lacks an exact result-root/component SSA mapping or compatible typed aggregate roots",
+                },
+            );
+        } else if contract_valid.contains(&(block, operation)) {
+            proved_reference_obligations += 1;
+            proved_reference_pairs.insert((actual, reference));
+        }
+    }
     for (block, operation, _, actual, expected) in reference_requirements {
         let Some(actual_node) = expressions.identity(actual) else {
             push(

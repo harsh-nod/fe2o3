@@ -2053,6 +2053,7 @@ fn production_parallel_relation_is_derived_from_live_output_and_hierarchy_facts(
         ParallelScheduleRelationV1::PointwiseBijection,
         ParallelNumericalPolicyV1::ExactBitVector,
         COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+        None,
         proof_digest(92),
     )
     .unwrap();
@@ -2095,7 +2096,7 @@ fn live_tensor_site_reaches_the_public_parallel_fail_closed_boundary() {
         error,
         fe2o3_pliron::ProductionParallelReferenceContractErrorV1::TensorFunctionalRefinementIncomplete {
             live_sites: 1,
-            outputs: 1,
+            proved_sites: 0,
         }
     );
     assert!(error.is_incomplete());
@@ -2288,6 +2289,7 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             relation.schedule(),
             relation.numerical_policy(),
             relation.hierarchy().to_vec(),
+            relation.tensor_refinement_identity(),
             authenticated_proof,
         )
         .unwrap()
@@ -2343,6 +2345,7 @@ fn multi_output_product_binds_views_frames_receipts_and_independent_schedules() 
             relation.schedule(),
             relation.numerical_policy(),
             relation.hierarchy().to_vec(),
+            relation.tensor_refinement_identity(),
             relation.authenticated_proof(),
         )
         .unwrap()

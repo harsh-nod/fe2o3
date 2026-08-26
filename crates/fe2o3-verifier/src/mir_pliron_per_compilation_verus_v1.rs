@@ -37,7 +37,8 @@ use crate::{
 
 const AGGREGATE_OBLIGATION_DOMAIN_V1: &[u8] =
     b"FE2O3/MIR-PLIRON/PER-COMPILATION-VERUS-OBLIGATION/V1\0";
-pub const MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1: usize = 64;
+pub const MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1: usize =
+    fe2o3_functional_proof::HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1;
 const MAX_PRODUCTION_AGGREGATE_FORMULA_SCAN_WORK_V1: usize =
     MAX_PRODUCTION_AGGREGATE_EFFECT_FORMULA_OUTPUTS_V1 * HARD_MAX_SESSION_OPERATION_TREE_ITEMS;
 
@@ -529,6 +530,14 @@ fn append_contract_instantiations_v1(
     let mut replays = Vec::with_capacity(contract.outputs().len());
     for (index, output) in contract.outputs().iter().enumerate() {
         let relation = &parallel_contract.relations()[index];
+        if relation.tensor_refinement_identity().is_some() {
+            return Err(
+                ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
+                    output: index,
+                    role: "tensor-component-composition",
+                },
+            );
+        }
         let unsupported_schedule = match relation.schedule() {
             ParallelScheduleRelationV1::PointwiseBijection => None,
             ParallelScheduleRelationV1::Permutation { .. } => Some("permutation-schedule-proof"),
@@ -900,6 +909,7 @@ mod tests {
                     ParallelScheduleRelationV1::PointwiseBijection,
                     ParallelNumericalPolicyV1::ExactBitVector,
                     COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                    None,
                     effect_proof,
                 )
                 .unwrap(),
@@ -1386,6 +1396,7 @@ mod tests {
                     ParallelScheduleRelationV1::PointwiseBijection,
                     ParallelNumericalPolicyV1::ExactBitVector,
                     COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                    None,
                     proof,
                 )
                 .unwrap()
@@ -1415,6 +1426,7 @@ mod tests {
                     schedule,
                     numerical_policy,
                     COMPLETE_GPU_HIERARCHY_V1.to_vec(),
+                    None,
                     effect_proof,
                 )
                 .unwrap(),
@@ -1617,6 +1629,52 @@ mod tests {
             ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
                 output: 0,
                 role: "finite-error-formula-replay",
+            }
+        ));
+        assert_eq!(generated, GENERATED_COMPOSITION_THEOREM_V1);
+    }
+
+    #[test]
+    fn tensor_component_receipt_never_grants_unreplayed_aggregate_authority() {
+        let (kernel, proof) = bound_effect_kernel();
+        let contract = pointwise_contract(SemanticFiniteExtentV1::Static(1));
+        let scalar_parallel = relation_contract(
+            &contract,
+            ParallelScheduleRelationV1::PointwiseBijection,
+            ParallelNumericalPolicyV1::ExactBitVector,
+            proof,
+        );
+        let relation = &scalar_parallel.relations()[0];
+        let parallel = ParallelReferenceContractV1::new(
+            contract.canonical_sha256(),
+            digest(34),
+            vec![
+                ParallelOutputRelationV1::new(
+                    relation.identity(),
+                    relation.output_contract(),
+                    relation.logical_domain(),
+                    relation.ranked_view_identity(),
+                    relation.ownership_identity(),
+                    relation.frame_identity(),
+                    relation.schedule(),
+                    relation.numerical_policy(),
+                    relation.hierarchy().to_vec(),
+                    Some(digest(74)),
+                    relation.authenticated_proof(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut generated = GENERATED_COMPOSITION_THEOREM_V1.to_owned();
+        let error =
+            append_contract_instantiations_v1(&mut generated, &kernel, &contract, &parallel)
+                .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionMirPlironPerCompilationVerusErrorV1::UnsupportedFormulaReplayRole {
+                output: 0,
+                role: "tensor-component-composition",
             }
         ));
         assert_eq!(generated, GENERATED_COMPOSITION_THEOREM_V1);

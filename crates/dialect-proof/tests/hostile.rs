@@ -3,10 +3,11 @@ use dialect_kernel::{
     SemanticSymbolOp,
 };
 use dialect_proof::{
-    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
-    ObligationRefType, ProofIdAttr, ProofOverlayOpInterface, PropertyAttr, RegistrationError,
-    RegistrationOutcome, RelativeErrorF64BitsAttr, RequireEffectRefinementOp,
-    RequireNumericalRefinementOp, evidence_ref_op_attr_names, register_dialect,
+    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr,
+    MAX_TENSOR_REFINEMENT_COMPONENTS_V1, ObligationOp, ObligationRefType, ProofIdAttr,
+    ProofOverlayOpInterface, PropertyAttr, RegistrationError, RegistrationOutcome,
+    RelativeErrorF64BitsAttr, RequireEffectRefinementOp, RequireNumericalRefinementOp,
+    RequireTensorRefinementOp, evidence_ref_op_attr_names, register_dialect,
 };
 use pliron::{
     attribute::{AttrObj, verify_attr},
@@ -393,4 +394,46 @@ fn numerical_refinement_requires_typed_roots_and_a_finite_nonzero_bound() {
         index,
     );
     assert!(verify_op(&wrong_type, &context).is_err());
+}
+
+#[test]
+fn tensor_refinement_component_payload_is_locally_bounded() {
+    let mut context = Context::new();
+    dialect_kernel::register_dialect(
+        &mut context,
+        &DialectName::try_new(KERNEL_DIALECT_NAME).unwrap(),
+    )
+    .unwrap();
+    register_dialect(&mut context).unwrap();
+    let view_type = RankedViewType::new(&mut context, 32, true, vec![4]).unwrap();
+    let view = RankedViewOp::new(&mut context, view_type, vec![]).unwrap();
+    let view_value = view.result(&context);
+    let scalar = SemanticSymbolOp::new(&mut context, 7).result(&context);
+
+    let at_limit = RequireTensorRefinementOp::try_new(
+        &mut context,
+        id(600),
+        id(610),
+        view_value,
+        scalar,
+        scalar,
+        std::iter::repeat_n((scalar, scalar), MAX_TENSOR_REFINEMENT_COMPONENTS_V1),
+    )
+    .unwrap();
+    verify_op(&at_limit, &context).expect("maximum bounded tensor payload must verify");
+    assert_eq!(
+        at_limit.components(&context).len(),
+        MAX_TENSOR_REFINEMENT_COMPONENTS_V1
+    );
+
+    let over_limit = RequireTensorRefinementOp::try_new(
+        &mut context,
+        id(620),
+        id(630),
+        view_value,
+        scalar,
+        scalar,
+        std::iter::repeat_n((scalar, scalar), MAX_TENSOR_REFINEMENT_COMPONENTS_V1 + 1),
+    );
+    assert!(over_limit.is_err());
 }

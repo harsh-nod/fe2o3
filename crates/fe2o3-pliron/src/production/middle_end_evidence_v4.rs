@@ -1146,6 +1146,16 @@ fn hash_functional_refinement_graph_operation(
             hash_numerical_refinement_contract(digest, *contract);
             hash_functional_refinement_subjects(digest, proof.binding().subjects());
         }
+        ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects } => {
+            digest.update([253]);
+            hash_tensor_refinement_contract(digest, contract);
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+            digest.update([253]);
+            hash_tensor_refinement_contract(digest, contract);
+            hash_functional_refinement_subjects(digest, proof.binding().subjects());
+        }
         _ => hash_ranked_operation(digest, operation),
     }
 }
@@ -1172,6 +1182,7 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::Barrier { .. } => 16,
         ProductionRankedOperationV1::Fence { .. } => 17,
         ProductionRankedOperationV1::TensorLayout { .. } => 18,
+        ProductionRankedOperationV1::TensorResultComponent { .. } => 32,
         ProductionRankedOperationV1::SemanticSymbol { .. } => 19,
         ProductionRankedOperationV1::SemanticConstant { .. } => 20,
         ProductionRankedOperationV1::SemanticBinary { .. } => 21,
@@ -1185,6 +1196,59 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         | ProductionRankedOperationV1::RequestEffectRefinement { .. } => 25,
         ProductionRankedOperationV1::RequireNumericalRefinement { .. }
         | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => 30,
+        ProductionRankedOperationV1::RequireTensorRefinement { .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { .. } => 33,
+    }
+}
+
+fn hash_tensor_refinement_contract(
+    digest: &mut Sha256,
+    contract: &super::ProductionTensorRefinementContractV1,
+) {
+    digest.update(contract.contract_identity().to_le_bytes());
+    digest.update(contract.tensor_site().block().to_le_bytes());
+    digest.update(contract.tensor_site().operation().to_le_bytes());
+    digest.update(contract.tensor_result_root().as_bytes());
+    hash_value(digest, contract.output_view());
+    hash_value(digest, contract.actual());
+    hash_value(digest, contract.reference());
+    match contract.component_scalar() {
+        super::ProductionSemanticScalarTypeV2::Bool => digest.update([1]),
+        super::ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
+            digest.update([2, u8::from(signed)]);
+            digest.update(bits.to_le_bytes());
+        }
+        super::ProductionSemanticScalarTypeV2::Float { bits } => {
+            digest.update([3]);
+            digest.update(bits.to_le_bytes());
+        }
+    }
+    match contract.numerical_contract() {
+        super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+            digest.update([1]);
+        }
+        super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding,
+            exceptional_values,
+        } => digest.update([2, rounding as u8, exceptional_values as u8]),
+        super::ProductionNumericalContractV2::ErrorBounded {
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+        } => {
+            digest.update([3]);
+            digest.update(absolute_error_f64_bits.to_le_bytes());
+            digest.update(relative_error_f64_bits.to_le_bytes());
+        }
+        super::ProductionNumericalContractV2::Relaxed => digest.update([4]),
+    }
+    digest.update((contract.components().len() as u64).to_le_bytes());
+    for component in contract.components() {
+        digest.update(component.component().to_le_bytes());
+        digest.update(component.store_site().block().to_le_bytes());
+        digest.update(component.store_site().operation().to_le_bytes());
+        hash_values(digest, component.indices());
+        hash_value(digest, component.gpu_value());
+        hash_value(digest, component.reference_value());
     }
 }
 
@@ -1519,6 +1583,49 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
                 }
             }
         }
+        ProductionRankedOperationV1::TensorResultComponent {
+            result,
+            tensor_result_root,
+            component,
+            scalar,
+            numerical_contract,
+        } => {
+            digest.update([32]);
+            digest.update(result.get().to_le_bytes());
+            digest.update(tensor_result_root.as_bytes());
+            digest.update(component.to_le_bytes());
+            match scalar {
+                super::ProductionSemanticScalarTypeV2::Bool => digest.update([1]),
+                super::ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
+                    digest.update([2, u8::from(*signed)]);
+                    digest.update(bits.to_le_bytes());
+                }
+                super::ProductionSemanticScalarTypeV2::Float { bits } => {
+                    digest.update([3]);
+                    digest.update(bits.to_le_bytes());
+                }
+            }
+            match numerical_contract {
+                super::ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => {
+                    digest.update([1]);
+                }
+                super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+                    rounding,
+                    exceptional_values,
+                } => {
+                    digest.update([2, *rounding as u8, *exceptional_values as u8]);
+                }
+                super::ProductionNumericalContractV2::ErrorBounded {
+                    absolute_error_f64_bits,
+                    relative_error_f64_bits,
+                } => {
+                    digest.update([3]);
+                    digest.update(absolute_error_f64_bits.to_le_bytes());
+                    digest.update(relative_error_f64_bits.to_le_bytes());
+                }
+                super::ProductionNumericalContractV2::Relaxed => digest.update([4]),
+            }
+        }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             digest.update([9]);
             digest.update(result.get().to_le_bytes());
@@ -1686,6 +1793,22 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
         ProductionRankedOperationV1::RequestNumericalRefinement { contract, subjects } => {
             digest.update([29]);
             digest.update(contract.request_shape_hash().as_bytes());
+            hash_functional_refinement_subjects(digest, *subjects);
+        }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+            digest.update([33]);
+            hash_tensor_refinement_contract(digest, contract);
+            digest.update(proof.receipt_identity().digest().as_bytes());
+            digest.update(
+                proof
+                    .binding()
+                    .normalized_obligation_effect_ir_hash()
+                    .as_bytes(),
+            );
+        }
+        ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects } => {
+            digest.update([34]);
+            hash_tensor_refinement_contract(digest, contract);
             hash_functional_refinement_subjects(digest, *subjects);
         }
     }
@@ -2436,6 +2559,44 @@ mod tests {
         assert_ne!(
             operation_identity(&base),
             operation_identity(&operation(binding([1, 2, 3, 4, 5, 6], 5))),
+        );
+    }
+
+    #[test]
+    fn tensor_component_operation_kind_substitution_changes_graph_identity() {
+        fn operation_identity(operation: &ProductionRankedOperationV1) -> [u8; SHA256_BYTES] {
+            let mut digest = Sha256::new();
+            hash_ranked_operation(&mut digest, operation);
+            digest.finalize().into()
+        }
+
+        let component = ProductionRankedOperationV1::TensorResultComponent {
+            result: ProductionRankedValueIdV1::new(0),
+            tensor_result_root: fe2o3_proof_contracts::DigestV1::from_untrusted_bytes(
+                [9; SHA256_BYTES],
+            ),
+            component: 0,
+            scalar: super::super::ProductionSemanticScalarTypeV2::Float { bits: 32 },
+            numerical_contract:
+                super::super::ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+                    rounding: super::super::ProductionIeeeRoundingModeV2::NearestTiesToEven,
+                    exceptional_values:
+                        super::super::ProductionIeeeExceptionalValuePolicyV2::PreserveExactBits,
+                },
+        };
+        let substituted = ProductionRankedOperationV1::SemanticSymbol {
+            result: ProductionRankedValueIdV1::new(0),
+            symbol: 0,
+        };
+        assert_ne!(
+            operation_identity(&component),
+            operation_identity(&substituted)
+        );
+        assert_eq!(functional_refinement_graph_operation_tag(&component), 32);
+        assert_ne!(
+            functional_refinement_graph_operation_tag(&component),
+            29,
+            "tensor component and collective graph tags must remain distinct",
         );
     }
 }

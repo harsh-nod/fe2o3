@@ -6,7 +6,7 @@ use crate::{
     AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, DIALECT_NAME, EvidenceRefOp, EvidenceRefType,
     EvidenceStatusAttr, ObligationOp, ObligationRefType, ProofIdAttr, PropertyAttr,
     RelativeErrorF64BitsAttr, RequireEffectRefinementOp, RequireNumericalRefinementOp,
-    RequireRefinementOp,
+    RequireRefinementOp, RequireTensorRefinementOp,
 };
 
 fn registration_hook(
@@ -26,6 +26,7 @@ fn registration_hook(
     service.register_operation::<RequireRefinementOp>()?;
     service.register_operation::<RequireEffectRefinementOp>()?;
     service.register_operation::<RequireNumericalRefinementOp>()?;
+    service.register_operation::<RequireTensorRefinementOp>()?;
     Ok(())
 }
 

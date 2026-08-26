@@ -1,8 +1,8 @@
 use fe2o3_functional_proof::{
     FunctionalRefinementBindingV2, FunctionalRefinementBoundaryV2,
     FunctionalRefinementReceiptIdentityV2, FunctionalRefinementSubjectsV2,
-    HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1, ImportedFunctionalRefinementProofV2,
-    VerusToolchainIdentityV2,
+    HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1, HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1,
+    ImportedFunctionalRefinementProofV2, VerusToolchainIdentityV2,
 };
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
@@ -34,12 +34,12 @@ use dialect_kernel::{
     SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
     SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
     SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
-    TensorLayoutOp, TrapOp,
+    TensorLayoutOp, TensorResultComponentOp, TrapOp,
 };
 use dialect_proof::{
     AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
     ProofIdAttr, PropertyAttr, RelativeErrorF64BitsAttr, RequireEffectRefinementOp,
-    RequireNumericalRefinementOp, RequireRefinementOp,
+    RequireNumericalRefinementOp, RequireRefinementOp, RequireTensorRefinementOp,
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
@@ -48,7 +48,7 @@ use fe2o3_kernel_analysis::{
     ProductionPlironPreloweringReportV2, RankedBoundsReportV1, RankedRaceReportV1,
     require_production_pliron_checks_before_lowering_v2,
 };
-use fe2o3_kernel_ir::TensorLayoutContractV1;
+use fe2o3_kernel_ir::{MatrixElement, TensorLayoutContractV1};
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
@@ -378,9 +378,14 @@ const FUNCTIONAL_REFINEMENT_FORMULA_DOMAIN_V2: &[u8] =
 const EFFECT_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] = b"FE2O3/PLIRON/EFFECT-REFINEMENT-CONTRACT/V2\0";
 const NUMERICAL_REFINEMENT_CONTRACT_DOMAIN_V2: &[u8] =
     b"FE2O3/PLIRON/NUMERICAL-REFINEMENT-CONTRACT/V2\0";
+const TENSOR_REFINEMENT_CONTRACT_DOMAIN_V1: &[u8] = b"FE2O3/PLIRON/TENSOR-REFINEMENT-CONTRACT/V1\0";
 pub const MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2: usize = MAX_RANKED_MEMORY_RANK;
+pub const MAX_PRODUCTION_TENSOR_COMPONENTS_V1: usize =
+    dialect_kernel::MAX_TENSOR_RESULT_COMPONENTS_V1;
+pub const MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1: usize =
+    HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ProductionGpuWriteSiteV2 {
     block: u32,
     operation: u32,
@@ -645,6 +650,179 @@ impl ProductionNumericalRefinementContractV2 {
     }
 }
 
+/// Stable location of one live cooperative-tensor instruction in ranked IR.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionTensorInstructionSiteV1 {
+    block: u32,
+    operation: u32,
+}
+
+impl ProductionTensorInstructionSiteV1 {
+    pub const fn new(block: u32, operation: u32) -> Self {
+        Self { block, operation }
+    }
+    pub const fn block(self) -> u32 {
+        self.block
+    }
+    pub const fn operation(self) -> u32 {
+        self.operation
+    }
+}
+
+/// Ordered binding from one tensor result component to one exact output write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionTensorResultComponentV1 {
+    component: u16,
+    store_site: ProductionGpuWriteSiteV2,
+    indices: Vec<ProductionRankedValueV1>,
+    gpu_value: ProductionRankedValueV1,
+    reference_value: ProductionRankedValueV1,
+}
+
+impl ProductionTensorResultComponentV1 {
+    pub fn new(
+        component: u16,
+        store_site: ProductionGpuWriteSiteV2,
+        indices: Vec<ProductionRankedValueV1>,
+        gpu_value: ProductionRankedValueV1,
+        reference_value: ProductionRankedValueV1,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        if indices.is_empty() || indices.len() > MAX_PRODUCTION_RANKED_EFFECT_INDICES_V2 {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            component,
+            store_site,
+            indices,
+            gpu_value,
+            reference_value,
+        })
+    }
+
+    pub const fn component(&self) -> u16 {
+        self.component
+    }
+    pub const fn store_site(&self) -> ProductionGpuWriteSiteV2 {
+        self.store_site
+    }
+    pub fn indices(&self) -> &[ProductionRankedValueV1] {
+        &self.indices
+    }
+    pub const fn gpu_value(&self) -> ProductionRankedValueV1 {
+        self.gpu_value
+    }
+    pub const fn reference_value(&self) -> ProductionRankedValueV1 {
+        self.reference_value
+    }
+}
+
+/// Claim-specific functional composition of one cooperative tensor instruction.
+///
+/// The supported V1 subset is deliberately finite: one live tensor instruction,
+/// all of its declared result components, one logical output view, and exact
+/// component stores. The claim states that the ordered component pair at ordinal
+/// `i` is the scalar extraction `i` of `tensor_result_root`, that its GPU member
+/// is the value consumed by the named store at the named output coordinate, and
+/// that the ordered product of all pairs refines the aggregate `actual` to the
+/// aggregate `reference` under `numerical_contract`. Construction grants no
+/// authority. Production admission requires an independently imported receipt
+/// over the complete ranked graph and this exact contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionTensorRefinementContractV1 {
+    contract_identity: u64,
+    tensor_site: ProductionTensorInstructionSiteV1,
+    tensor_result_root: DigestV1,
+    output_view: ProductionRankedValueV1,
+    actual: ProductionRankedValueV1,
+    reference: ProductionRankedValueV1,
+    component_scalar: ProductionSemanticScalarTypeV2,
+    numerical_contract: ProductionNumericalContractV2,
+    components: Vec<ProductionTensorResultComponentV1>,
+}
+
+impl ProductionTensorRefinementContractV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        contract_identity: u64,
+        tensor_site: ProductionTensorInstructionSiteV1,
+        tensor_result_root: DigestV1,
+        output_view: ProductionRankedValueV1,
+        actual: ProductionRankedValueV1,
+        reference: ProductionRankedValueV1,
+        component_scalar: ProductionSemanticScalarTypeV2,
+        numerical_contract: ProductionNumericalContractV2,
+        components: Vec<ProductionTensorResultComponentV1>,
+    ) -> Result<Self, ProductionRankedKernelErrorV1> {
+        if contract_identity == 0
+            || tensor_result_root.is_zero()
+            || components.is_empty()
+            || components.len() > MAX_PRODUCTION_TENSOR_COMPONENTS_V1
+            || !numerical_contract.is_supported()
+            || !numerical_contract.admits_scalar(component_scalar)
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        let canonical_components = components
+            .iter()
+            .enumerate()
+            .all(|(index, component)| usize::from(component.component) == index);
+        let unique_stores = components
+            .iter()
+            .map(|component| component.store_site)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == components.len();
+        let unique_gpu_values = components
+            .iter()
+            .map(|component| component.gpu_value)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == components.len();
+        if !canonical_components || !unique_stores || !unique_gpu_values {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+        Ok(Self {
+            contract_identity,
+            tensor_site,
+            tensor_result_root,
+            output_view,
+            actual,
+            reference,
+            component_scalar,
+            numerical_contract,
+            components,
+        })
+    }
+
+    pub const fn contract_identity(&self) -> u64 {
+        self.contract_identity
+    }
+    pub const fn tensor_site(&self) -> ProductionTensorInstructionSiteV1 {
+        self.tensor_site
+    }
+    pub const fn tensor_result_root(&self) -> DigestV1 {
+        self.tensor_result_root
+    }
+    pub const fn output_view(&self) -> ProductionRankedValueV1 {
+        self.output_view
+    }
+    pub const fn actual(&self) -> ProductionRankedValueV1 {
+        self.actual
+    }
+    pub const fn reference(&self) -> ProductionRankedValueV1 {
+        self.reference
+    }
+    pub const fn component_scalar(&self) -> ProductionSemanticScalarTypeV2 {
+        self.component_scalar
+    }
+    pub const fn numerical_contract(&self) -> ProductionNumericalContractV2 {
+        self.numerical_contract
+    }
+    pub fn components(&self) -> &[ProductionTensorResultComponentV1] {
+        &self.components
+    }
+}
+
 /// Derives the exact scalar-refinement transcript digest from validated recipe DAGs.
 pub fn normalized_functional_refinement_formula_hash_for_kernel_v2(
     kernel: &ProductionRankedKernelV1,
@@ -817,6 +995,243 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
         writer.field(tag, &value.to_le_bytes());
     }
     Ok(writer.finish())
+}
+
+/// Derives the exact claim-specific cooperative-tensor obligation from the
+/// complete ranked graph. This function proves no arithmetic: its digest is the
+/// statement authenticated by an independently imported receipt.
+pub fn normalized_tensor_refinement_hash_for_kernel_v1(
+    kernel: &ProductionRankedKernelV1,
+    block_index: usize,
+    operation_index: usize,
+    contract: &ProductionTensorRefinementContractV1,
+    subjects: FunctionalRefinementSubjectsV2,
+) -> Result<DigestV1, ProductionRankedKernelErrorV1> {
+    let mut tensor_sites = Vec::new();
+    let mut component_definitions = Vec::new();
+    let mut writes = Vec::new();
+    let mut ownership = Vec::new();
+    for (candidate_block, block) in kernel.blocks.iter().enumerate() {
+        for (candidate_operation, operation) in block.operations.iter().enumerate() {
+            match operation {
+                ProductionRankedOperationV1::TensorLayout {
+                    contract,
+                    convergence,
+                    active_lanes,
+                    binding,
+                } => tensor_sites.push((
+                    candidate_block,
+                    candidate_operation,
+                    contract,
+                    *convergence,
+                    *active_lanes,
+                    *binding,
+                )),
+                ProductionRankedOperationV1::TensorResultComponent {
+                    result,
+                    tensor_result_root,
+                    component,
+                    scalar,
+                    numerical_contract,
+                } => component_definitions.push((
+                    ProductionRankedValueV1::Local(*result),
+                    *tensor_result_root,
+                    *component,
+                    *scalar,
+                    *numerical_contract,
+                )),
+                ProductionRankedOperationV1::ValueAccess {
+                    kind,
+                    view,
+                    indices,
+                    value,
+                } if kind.writes_memory() && *view == contract.output_view => {
+                    writes.push((candidate_block, candidate_operation, *kind, indices, *value));
+                }
+                ProductionRankedOperationV1::Access { kind, view, .. }
+                | ProductionRankedOperationV1::AtomicAccess { kind, view, .. }
+                    if kind.writes_memory() && *view == contract.output_view =>
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
+                ProductionRankedOperationV1::AtomicValueAccess { kind, view, .. }
+                    if kind.writes_memory() && *view == contract.output_view =>
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
+                ProductionRankedOperationV1::OwnershipContract {
+                    view,
+                    coverage,
+                    partition,
+                } if *view == contract.output_view => {
+                    ownership.push((*coverage, *partition));
+                }
+                _ => {}
+            }
+        }
+    }
+    let bound_result_roots = tensor_sites
+        .iter()
+        .filter_map(|(_, _, _, _, _, binding)| binding.map(|binding| binding.result_root()))
+        .collect::<Vec<_>>();
+    if bound_result_roots
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != bound_result_roots.len()
+    {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
+    let matching_tensor_sites = tensor_sites
+        .iter()
+        .filter(|(block, operation, ..)| {
+            *block == contract.tensor_site.block as usize
+                && *operation == contract.tensor_site.operation as usize
+        })
+        .collect::<Vec<_>>();
+    let [(_tensor_block, _tensor_operation, layout, convergence, active_lanes, Some(binding))] =
+        matching_tensor_sites.as_slice()
+    else {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    };
+    if binding.result_root() != contract.tensor_result_root
+        || tensor_layout_result_scalar_v1(layout) != Some(contract.component_scalar)
+        || usize::from(layout.accumulator.fragment_elements) != contract.components.len()
+        || component_definitions
+            .iter()
+            .filter(|(_, result_root, ..)| *result_root == contract.tensor_result_root)
+            .count()
+            != contract.components.len()
+        || writes.len() != contract.components.len()
+        || ownership.as_slice()
+            != [(
+                OwnershipCoverageAttr::TotalView,
+                OwnershipPartitionAttr::ExactSets,
+            )]
+    {
+        return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+    }
+    for component in &contract.components {
+        let matching_definition = component_definitions
+            .iter()
+            .filter(|(value, result_root, ordinal, scalar, numerical)| {
+                *value == component.gpu_value
+                    && *result_root == contract.tensor_result_root
+                    && *ordinal == component.component
+                    && *scalar == contract.component_scalar
+                    && *numerical == contract.numerical_contract
+            })
+            .count();
+        let matching = writes
+            .iter()
+            .filter(|(block, operation, kind, indices, value)| {
+                *block == component.store_site.block as usize
+                    && *operation == component.store_site.operation as usize
+                    && *kind == AccessKindAttr::Write
+                    && *indices == &component.indices
+                    && *value == component.gpu_value
+            })
+            .count();
+        if matching_definition != 1 || matching != 1 {
+            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+        }
+    }
+
+    let mut writer = CanonicalRefinementDigestV2::new(TENSOR_REFINEMENT_CONTRACT_DOMAIN_V1);
+    writer.kernel_header(kernel, block_index, operation_index, subjects);
+    writer.field(
+        12,
+        &super::middle_end_evidence_v4::derive_functional_refinement_graph_identity_v2(kernel),
+    );
+    writer.field(20, &contract.contract_identity.to_le_bytes());
+    writer.field(21, &contract.tensor_site.block.to_le_bytes());
+    writer.field(22, &contract.tensor_site.operation.to_le_bytes());
+    writer.field(23, contract.tensor_result_root.as_bytes());
+    writer.value(24, contract.output_view);
+    writer.value(25, contract.actual);
+    writer.value(26, contract.reference);
+    let mut scalar = vec![];
+    match contract.component_scalar {
+        ProductionSemanticScalarTypeV2::Bool => scalar.push(1),
+        ProductionSemanticScalarTypeV2::Integer { signed, bits } => {
+            scalar.extend([2, u8::from(signed)]);
+            scalar.extend(bits.to_le_bytes());
+        }
+        ProductionSemanticScalarTypeV2::Float { bits } => {
+            scalar.push(3);
+            scalar.extend(bits.to_le_bytes());
+        }
+    }
+    writer.field(38, &scalar);
+    let mut numerical = vec![];
+    match contract.numerical_contract {
+        ProductionNumericalContractV2::ExactBitVectorOperatorCongruence => numerical.push(1),
+        ProductionNumericalContractV2::ExactIeee754OperatorCongruence {
+            rounding,
+            exceptional_values,
+        } => numerical.extend([2, rounding as u8, exceptional_values as u8]),
+        ProductionNumericalContractV2::ErrorBounded {
+            absolute_error_f64_bits,
+            relative_error_f64_bits,
+        } => {
+            numerical.push(3);
+            numerical.extend(absolute_error_f64_bits.to_le_bytes());
+            numerical.extend(relative_error_f64_bits.to_le_bytes());
+        }
+        ProductionNumericalContractV2::Relaxed => numerical.push(4),
+    }
+    writer.field(39, &numerical);
+
+    let mut layout_digest = Sha256::new();
+    super::middle_end_evidence_v4::hash_tensor_layout_contract(&mut layout_digest, layout);
+    writer.field(27, &layout_digest.finalize());
+    writer.field(
+        28,
+        &[match convergence {
+            TensorConvergenceAttr::UniformSubgroup => 1,
+            TensorConvergenceAttr::Divergent => 2,
+            TensorConvergenceAttr::UniformWorkgroup => 3,
+            TensorConvergenceAttr::Opaque => 4,
+        }],
+    );
+    writer.field(29, &active_lanes.to_le_bytes());
+    for (tag, root) in [
+        (30, binding.context_root()),
+        (31, binding.lane_root()),
+        (32, binding.lhs_root()),
+        (33, binding.rhs_root()),
+        (34, binding.accumulator_root()),
+        (35, binding.result_root()),
+    ] {
+        writer.field(tag, root.as_bytes());
+    }
+    writer.field(36, &binding.argument_count().to_le_bytes());
+    writer.field(37, &(contract.components.len() as u64).to_le_bytes());
+    for (index, component) in contract.components.iter().enumerate() {
+        let base = 100
+            + u16::try_from(index)
+                .map_err(|_| ProductionRankedKernelErrorV1::InvalidReferenceContract)?
+                * 8;
+        writer.field(base, &component.component.to_le_bytes());
+        writer.field(base + 1, &component.store_site.block.to_le_bytes());
+        writer.field(base + 2, &component.store_site.operation.to_le_bytes());
+        writer.values(base + 3, &component.indices);
+        writer.value(base + 4, component.gpu_value);
+        writer.value(base + 5, component.reference_value);
+    }
+    Ok(writer.finish())
+}
+
+fn tensor_layout_result_scalar_v1(
+    layout: &TensorLayoutContractV1,
+) -> Option<ProductionSemanticScalarTypeV2> {
+    match layout.accumulator.element {
+        MatrixElement::F32 => Some(ProductionSemanticScalarTypeV2::Float { bits: 32 }),
+        // The semantic scalar model has no BF16 kind yet. Keep such result
+        // layouts closed rather than conflating BF16 with IEEE binary16.
+        MatrixElement::Bf16 => None,
+    }
 }
 
 /// Derives the exact finite-error obligation from the complete ranked graph.
@@ -1224,6 +1639,14 @@ pub enum ProductionRankedOperationV1 {
         active_lanes: u32,
         binding: Option<ProductionCooperativeTensorBindingV1>,
     },
+    /// Exact typed SSA extraction from one authenticated tensor result root.
+    TensorResultComponent {
+        result: ProductionRankedValueIdV1,
+        tensor_result_root: DigestV1,
+        component: u16,
+        scalar: ProductionSemanticScalarTypeV2,
+        numerical_contract: ProductionNumericalContractV2,
+    },
     SemanticSymbol {
         result: ProductionRankedValueIdV1,
         symbol: u32,
@@ -1303,6 +1726,17 @@ pub enum ProductionRankedOperationV1 {
     /// equality does not prove guarded finiteness or the stated inequality.
     RequestNumericalRefinement {
         contract: ProductionNumericalRefinementContractV2,
+        subjects: FunctionalRefinementSubjectsV2,
+    },
+    /// Requires one independently proved cooperative-tensor composition.
+    RequireTensorRefinement {
+        contract: ProductionTensorRefinementContractV1,
+        proof: ProductionReferenceProofV2,
+    },
+    /// Import input for a claim-specific tensor theorem. The generic scalar
+    /// proof generator deliberately does not synthesize this theorem.
+    RequestTensorRefinement {
+        contract: ProductionTensorRefinementContractV1,
         subjects: FunctionalRefinementSubjectsV2,
     },
 }
@@ -1494,6 +1928,14 @@ impl ProductionRankedKernelV1 {
                     proof,
                 }
             }
+            ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects }
+                if *subjects == proof.binding().subjects() =>
+            {
+                ProductionRankedOperationV1::RequireTensorRefinement {
+                    contract: contract.clone(),
+                    proof,
+                }
+            }
             _ => return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract),
         };
         *operation = replacement;
@@ -1516,6 +1958,27 @@ impl ProductionRankedKernelV1 {
                 actual: self.blocks.len(),
             });
         }
+        let tensor_sites = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(operation, ProductionRankedOperationV1::TensorLayout { .. })
+            })
+            .count();
+        let tensor_claims = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.operations)
+            .filter(|operation| {
+                matches!(
+                    operation,
+                    ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                        | ProductionRankedOperationV1::RequestTensorRefinement { .. }
+                )
+            })
+            .count();
+        validate_tensor_refinement_resource_counts_v1(tensor_sites, tensor_claims)?;
         for expression in self.blocks.iter().flat_map(|block| {
             block
                 .operations
@@ -1550,6 +2013,8 @@ impl ProductionRankedKernelV1 {
                                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
                                 | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
                                 | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                                | ProductionRankedOperationV1::RequestTensorRefinement { .. }
                         ) => 3,
                         _ => 1,
                     })
@@ -1708,6 +2173,62 @@ impl ProductionRankedKernelV1 {
             )?;
         }
         Ok(tree_work)
+    }
+}
+
+fn validate_tensor_refinement_resource_counts_v1(
+    tensor_sites: usize,
+    tensor_claims: usize,
+) -> Result<(), ProductionRankedKernelErrorV1> {
+    for (resource, actual) in [
+        ("cooperative tensor instruction site", tensor_sites),
+        ("cooperative tensor refinement claim", tensor_claims),
+    ] {
+        if actual > MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 {
+            return Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                resource,
+                limit: MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                actual,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tensor_refinement_resource_tests {
+    use super::*;
+
+    #[test]
+    fn tensor_site_and_claim_prescans_are_bounded_at_sixty_four() {
+        assert_eq!(
+            validate_tensor_refinement_resource_counts_v1(
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+            ),
+            Ok(())
+        );
+        for (sites, claims, resource) in [
+            (
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 + 1,
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                "cooperative tensor instruction site",
+            ),
+            (
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 + 1,
+                "cooperative tensor refinement claim",
+            ),
+        ] {
+            assert_eq!(
+                validate_tensor_refinement_resource_counts_v1(sites, claims),
+                Err(ProductionRankedKernelErrorV1::ResourceLimit {
+                    resource,
+                    limit: MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1,
+                    actual: MAX_PRODUCTION_TENSOR_REFINEMENT_SITES_V1 + 1,
+                })
+            );
+        }
     }
 }
 
@@ -2492,6 +3013,28 @@ fn validate_operation(
         ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. } => Ok(None),
+        ProductionRankedOperationV1::TensorResultComponent {
+            result,
+            tensor_result_root,
+            component,
+            scalar,
+            numerical_contract,
+        } => {
+            if tensor_result_root.is_zero()
+                || usize::from(*component) >= MAX_PRODUCTION_TENSOR_COMPONENTS_V1
+                || !numerical_contract.is_supported()
+                || !numerical_contract.admits_scalar(*scalar)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(Some((
+                *result,
+                RecipeValueKindV1::TypedSemantic {
+                    scalar: *scalar,
+                    numerical_contract: *numerical_contract,
+                },
+            )))
+        }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             if *symbol >= super::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 {
                 return Err(ProductionRankedKernelErrorV1::InvalidSemanticExpression(
@@ -2640,6 +3183,29 @@ fn validate_operation(
                 || precondition != boolean
             {
                 return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            Ok(None)
+        }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { contract, .. } => {
+            require_view(contract.output_view(), argument_count, locals)?;
+            let actual = require_typed_semantic(contract.actual(), argument_count, locals)?;
+            let reference = require_typed_semantic(contract.reference(), argument_count, locals)?;
+            if actual != reference
+                || actual != (contract.component_scalar(), contract.numerical_contract())
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+            }
+            for component in contract.components() {
+                for index in component.indices() {
+                    require_index(*index, argument_count, locals)?;
+                }
+                let gpu = require_typed_semantic(component.gpu_value(), argument_count, locals)?;
+                let sequential =
+                    require_typed_semantic(component.reference_value(), argument_count, locals)?;
+                if gpu != actual || sequential != reference {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
             }
             Ok(None)
         }
@@ -2826,6 +3392,19 @@ fn validate_block_argument_values_v1(
                 validate(value)?;
             }
         }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { contract, .. } => {
+            validate(contract.output_view())?;
+            validate(contract.actual())?;
+            validate(contract.reference())?;
+            for component in contract.components() {
+                for value in component.indices() {
+                    validate(*value)?;
+                }
+                validate(component.gpu_value())?;
+                validate(component.reference_value())?;
+            }
+        }
         ProductionRankedOperationV1::ExecutionLayout { .. }
         | ProductionRankedOperationV1::IndexConstant { .. }
         | ProductionRankedOperationV1::IndexUnknown { .. }
@@ -2833,6 +3412,7 @@ fn validate_block_argument_values_v1(
         | ProductionRankedOperationV1::Barrier { .. }
         | ProductionRankedOperationV1::Fence { .. }
         | ProductionRankedOperationV1::TensorLayout { .. }
+        | ProductionRankedOperationV1::TensorResultComponent { .. }
         | ProductionRankedOperationV1::AllocationEffect { .. }
         | ProductionRankedOperationV1::SemanticSymbol { .. }
         | ProductionRankedOperationV1::SemanticConstant { .. } => {}
@@ -3968,6 +4548,23 @@ fn materialize_operation(
             let op = TensorLayoutOp::new(context, contract, *convergence, *active_lanes);
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::TensorResultComponent {
+            result,
+            tensor_result_root,
+            component,
+            scalar,
+            ..
+        } => {
+            let op = TensorResultComponentOp::new(
+                context,
+                dialect_kernel::SemanticExpressionCommitmentAttr::new(digest_words_v2(
+                    *tensor_result_root.as_bytes(),
+                )),
+                u32::from(*component),
+                typed_scalar(*scalar)?,
+            );
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
         ProductionRankedOperationV1::SemanticSymbol { result, symbol } => {
             let op = SemanticSymbolOp::new(context, *symbol);
             (op.get_operation(), Some((*result, op.result(context))))
@@ -4219,9 +4816,44 @@ fn materialize_operation(
             );
             (op.get_operation(), None)
         }
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+            let obligation_id = materialize_authenticated_refinement_header(
+                context,
+                block,
+                authenticated_functional_refinement,
+                proof,
+            )?;
+            let components = contract
+                .components()
+                .iter()
+                .map(|component| {
+                    Ok((
+                        resolve_value(component.gpu_value(), arguments, locals, block_arguments)?,
+                        resolve_value(
+                            component.reference_value(),
+                            arguments,
+                            locals,
+                            block_arguments,
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ProductionRankedKernelErrorV1>>()?;
+            let op = RequireTensorRefinementOp::try_new(
+                context,
+                obligation_id,
+                ProofIdAttr::new(digest_words_v2(*contract.tensor_result_root().as_bytes())),
+                resolve_value(contract.output_view(), arguments, locals, block_arguments)?,
+                resolve_value(contract.actual(), arguments, locals, block_arguments)?,
+                resolve_value(contract.reference(), arguments, locals, block_arguments)?,
+                components,
+            )
+            .map_err(|_| ProductionRankedKernelErrorV1::InvalidReferenceContract)?;
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
         | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-        | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
+        | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+        | ProductionRankedOperationV1::RequestTensorRefinement { .. } => {
             return Err(ProductionRankedKernelErrorV1::Materialization(
                 "unbound functional-refinement request cannot be materialized",
             ));
@@ -5064,7 +5696,8 @@ fn admit_functional_refinement_v2(
                 }
                 ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
-                | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => {
+                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                | ProductionRankedOperationV1::RequestTensorRefinement { .. } => {
                     return Err(ProductionFunctionalRefinementAdmissionErrorV2::UnboundRequest);
                 }
                 ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
@@ -5108,6 +5741,21 @@ fn admit_functional_refinement_v2(
                         block_index,
                         operation_index,
                         *contract,
+                        proof.binding().subjects(),
+                    )
+                    .map_err(|_| {
+                        ProductionFunctionalRefinementAdmissionErrorV2::ObligationEffectDigestMismatch(
+                            proof.receipt_identity(),
+                        )
+                    })?;
+                    admit(proof, expected_digest)?;
+                }
+                ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => {
+                    let expected_digest = normalized_tensor_refinement_hash_for_kernel_v1(
+                        kernel,
+                        block_index,
+                        operation_index,
+                        contract,
                         proof.binding().subjects(),
                     )
                     .map_err(|_| {

@@ -507,6 +507,156 @@ impl Verify for RequireRefinementOp {
     }
 }
 
+/// Joins one claim-specific cooperative-tensor theorem to a live output view,
+/// one aggregate actual/reference pair, and an ordered list of result-component
+/// actual/reference pairs.
+///
+/// This operation is inert. Its local verifier checks only the bounded typed
+/// payload. Whole-function analysis must authenticate the MIR-bound obligation;
+/// production admission separately binds the exact tensor layout, capability
+/// roots, component order, and correlated output stores into that obligation.
+pub const MAX_TENSOR_REFINEMENT_COMPONENTS_V1: usize =
+    dialect_kernel::MAX_TENSOR_RESULT_COMPONENTS_V1;
+
+#[pliron_op(
+    name = "proof.require_tensor_refinement",
+    format,
+    interfaces = [NResultsInterface<0>, NRegionsInterface<0>],
+    attributes = (
+        proof_require_tensor_refinement_obligation_id: ProofIdAttr,
+        proof_require_tensor_refinement_result_root: ProofIdAttr
+    )
+)]
+pub struct RequireTensorRefinementOp;
+
+impl RequireTensorRefinementOp {
+    pub fn try_new(
+        context: &mut Context,
+        obligation_id: ProofIdAttr,
+        result_root: ProofIdAttr,
+        view: Value,
+        actual: Value,
+        reference: Value,
+        components: impl IntoIterator<Item = (Value, Value)>,
+    ) -> std::result::Result<Self, &'static str> {
+        let mut operands = vec![view, actual, reference];
+        for (component, (gpu, sequential)) in components.into_iter().enumerate() {
+            if component == MAX_TENSOR_REFINEMENT_COMPONENTS_V1 {
+                return Err("proof tensor refinement component limit exceeded");
+            }
+            operands.extend([gpu, sequential]);
+        }
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![],
+            operands,
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_proof_require_tensor_refinement_obligation_id(context, obligation_id);
+        op.set_attr_proof_require_tensor_refinement_result_root(context, result_root);
+        Ok(op)
+    }
+
+    pub fn obligation_id(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_require_tensor_refinement_obligation_id(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn result_root(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_proof_require_tensor_refinement_result_root(context)
+            .map(|identity| identity.words())
+    }
+
+    pub fn view(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn actual(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(1)
+    }
+
+    pub fn reference(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(2)
+    }
+
+    pub fn components(&self, context: &Context) -> Vec<(Value, Value)> {
+        let operation = self.get_operation().deref(context);
+        let operand_count = operation.get_num_operands();
+        if operand_count < 5
+            || (operand_count - 3) % 2 != 0
+            || (operand_count - 3) / 2 > MAX_TENSOR_REFINEMENT_COMPONENTS_V1
+        {
+            return Vec::new();
+        }
+        (3..operand_count)
+            .step_by(2)
+            .map(|operand| {
+                (
+                    operation.get_operand(operand),
+                    operation.get_operand(operand + 1),
+                )
+            })
+            .collect()
+    }
+}
+
+impl Verify for RequireTensorRefinementOp {
+    fn verify(&self, context: &Context) -> Result<()> {
+        let operation = self.get_operation().deref(context);
+        let operand_count = operation.get_num_operands();
+        if operand_count < 5 || (operand_count - 3) % 2 != 0 {
+            return verify_err!(
+                self.loc(context),
+                "proof tensor refinement requires a view, an aggregate pair, and at least one complete component pair"
+            );
+        }
+        if (operand_count - 3) / 2 > MAX_TENSOR_REFINEMENT_COMPONENTS_V1 {
+            return verify_err!(
+                self.loc(context),
+                "proof tensor refinement exceeds the {} component limit",
+                MAX_TENSOR_REFINEMENT_COMPONENTS_V1
+            );
+        }
+        verify_closed_shape_with_operands(self, context, operand_count, 2)?;
+        required_attr(
+            self,
+            context,
+            self.get_attr_proof_require_tensor_refinement_obligation_id(context),
+            "obligation_id",
+        )?;
+        required_attr(
+            self,
+            context,
+            self.get_attr_proof_require_tensor_refinement_result_root(context),
+            "result_root",
+        )?;
+        if ranked_view_type(operation.get_operand(0), context).is_none() {
+            return verify_err!(
+                self.loc(context),
+                "proof tensor refinement operand 0 is not a ranked view"
+            );
+        }
+        for operand in 1..operand_count {
+            if !operation
+                .get_operand(operand)
+                .get_type(context)
+                .deref(context)
+                .is::<SemanticScalarType>()
+            {
+                return verify_err!(
+                    self.loc(context),
+                    "proof tensor refinement semantic operand {} is not kernel.semantic_scalar",
+                    operand - 1
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Joins one MIR-level functional-refinement obligation to one logical GPU
 /// write and its normalized sequential-reference effect.
 ///
@@ -898,6 +1048,7 @@ pub fn register_dialect(
     <ObligationOp as Op>::register(context);
     <EvidenceRefOp as Op>::register(context);
     <RequireRefinementOp as Op>::register(context);
+    <RequireTensorRefinementOp as Op>::register(context);
     <RequireEffectRefinementOp as Op>::register(context);
     <AbsoluteErrorF64BitsAttr as Attribute>::register::<AbsoluteErrorF64BitsAttr>(context);
     <RelativeErrorF64BitsAttr as Attribute>::register::<RelativeErrorF64BitsAttr>(context);

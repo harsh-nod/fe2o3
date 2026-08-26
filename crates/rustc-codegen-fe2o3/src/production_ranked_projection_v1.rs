@@ -9431,6 +9431,31 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             crate::encode_hex(subjects.safe_reference_mir_hash().as_bytes()),
             crate::encode_hex(subjects.kernel_mir_hash().as_bytes()),
         ),
+        ProductionRankedOperationV1::TensorResultComponent {
+            result,
+            tensor_result_root,
+            component,
+            scalar,
+            numerical_contract,
+        } => format!(
+            "  %{} = kernel.tensor_result_component <result_root={}, component={}, scalar={:?}, numerical={:?}>\n",
+            result.get(),
+            crate::encode_hex(tensor_result_root.as_bytes()),
+            component,
+            scalar,
+            numerical_contract,
+        ),
+        ProductionRankedOperationV1::RequireTensorRefinement { contract, proof } => format!(
+            "  proof.require_tensor_refinement <contract={:?}, receipt={}>\n",
+            contract,
+            crate::encode_hex(proof.receipt_identity().digest().as_bytes()),
+        ),
+        ProductionRankedOperationV1::RequestTensorRefinement { contract, subjects } => format!(
+            "  proof.request_tensor_refinement <contract={:?}, reference_mir={}, kernel_mir={}>\n",
+            contract,
+            crate::encode_hex(subjects.safe_reference_mir_hash().as_bytes()),
+            crate::encode_hex(subjects.kernel_mir_hash().as_bytes()),
+        ),
     }
 }
 
@@ -12343,6 +12368,7 @@ mod tests {
                 | ProductionRankedOperationV1::Barrier { .. }
                 | ProductionRankedOperationV1::Fence { .. }
                 | ProductionRankedOperationV1::TensorLayout { .. }
+                | ProductionRankedOperationV1::TensorResultComponent { .. }
                 | ProductionRankedOperationV1::SemanticSymbol { .. }
                 | ProductionRankedOperationV1::SemanticConstant { .. }
                 | ProductionRankedOperationV1::SemanticBinary { .. }
@@ -12355,7 +12381,9 @@ mod tests {
                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
                 | ProductionRankedOperationV1::RequireNumericalRefinement { .. }
-                | ProductionRankedOperationV1::RequestNumericalRefinement { .. } => None,
+                | ProductionRankedOperationV1::RequestNumericalRefinement { .. }
+                | ProductionRankedOperationV1::RequireTensorRefinement { .. }
+                | ProductionRankedOperationV1::RequestTensorRefinement { .. } => None,
             })
             .collect()
     }

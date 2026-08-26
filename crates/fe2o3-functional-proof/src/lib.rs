@@ -28,10 +28,11 @@ pub use mir_pliron_semantic_contract_v1::{
     SemanticOutputContractV1, SemanticScalarTypeV1, SemanticTypedRootV1,
 };
 pub use parallel_reference_contract_v1::{
-    COMPLETE_GPU_HIERARCHY_V1, HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1,
-    HARD_MAX_PARALLEL_OUTPUT_RELATIONS_V1, ParallelFoldOrderV1, ParallelHierarchyLevelV1,
-    ParallelNumericalPolicyV1, ParallelOutputRelationV1, ParallelReferenceContractErrorV1,
-    ParallelReferenceContractV1, ParallelScheduleRelationV1,
+    COMPLETE_GPU_HIERARCHY_V1, HARD_MAX_AGGREGATE_FUNCTIONAL_OUTPUTS_V1,
+    HARD_MAX_PARALLEL_CALL_ARGUMENTS_V1, HARD_MAX_PARALLEL_OUTPUT_RELATIONS_V1,
+    ParallelFoldOrderV1, ParallelHierarchyLevelV1, ParallelNumericalPolicyV1,
+    ParallelOutputRelationV1, ParallelReferenceContractErrorV1, ParallelReferenceContractV1,
+    ParallelScheduleRelationV1,
 };
 
 use std::{collections::BTreeSet, error::Error, fmt};

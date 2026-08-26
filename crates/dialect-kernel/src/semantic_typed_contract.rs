@@ -321,6 +321,99 @@ impl Verify for SemanticTypedSymbolOp {
     }
 }
 
+/// Typed SSA extraction of one ordered component from an authenticated
+/// cooperative-tensor result root.
+///
+/// The operation is target- and workload-neutral. Its result-root attribute is
+/// reconciled against the live tensor instruction by the production tensor
+/// refinement join; the local verifier only checks closed typed shape.
+pub const MAX_TENSOR_RESULT_COMPONENTS_V1: usize = 64;
+
+#[pliron_op(
+    name = "kernel.tensor_result_component",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    attributes = (
+        kernel_tensor_result_component_result_root: SemanticExpressionCommitmentAttr,
+        kernel_tensor_result_component_ordinal: SemanticSymbolAttr,
+        kernel_tensor_result_component_scalar_kind: SemanticScalarKindAttr,
+        kernel_tensor_result_component_bit_width: DimensionAttr
+    )
+)]
+pub struct TensorResultComponentOp;
+
+impl TensorResultComponentOp {
+    pub fn new(
+        context: &mut Context,
+        result_root: SemanticExpressionCommitmentAttr,
+        component: u32,
+        scalar: SemanticTypedScalarV1,
+    ) -> Self {
+        let op = Self::from_operation(semantic_operation::<Self>(context, vec![]));
+        op.set_attr_kernel_tensor_result_component_result_root(context, result_root);
+        op.set_attr_kernel_tensor_result_component_ordinal(context, SemanticSymbolAttr(component));
+        op.set_attr_kernel_tensor_result_component_scalar_kind(context, scalar.kind());
+        op.set_attr_kernel_tensor_result_component_bit_width(
+            context,
+            DimensionAttr(u32::from(scalar.bits())),
+        );
+        op
+    }
+
+    pub fn result_root(&self, context: &Context) -> Option<[u64; 4]> {
+        self.get_attr_kernel_tensor_result_component_result_root(context)
+            .map(|attr| attr.words())
+    }
+
+    pub fn component(&self, context: &Context) -> Option<u32> {
+        self.get_attr_kernel_tensor_result_component_ordinal(context)
+            .map(|attr| attr.0)
+    }
+
+    pub fn scalar(&self, context: &Context) -> Option<SemanticTypedScalarV1> {
+        let kind = self
+            .get_attr_kernel_tensor_result_component_scalar_kind(context)
+            .map(|attr| *attr)?;
+        let bits = self
+            .get_attr_kernel_tensor_result_component_bit_width(context)
+            .map(|attr| attr.0)?;
+        SemanticTypedScalarV1::new(kind, u16::try_from(bits).ok()?)
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+}
+
+impl Verify for TensorResultComponentOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_shape(self, context, 0)?;
+        verify_keys(
+            self,
+            context,
+            &[
+                "kernel_tensor_result_component_result_root",
+                "kernel_tensor_result_component_ordinal",
+                "kernel_tensor_result_component_scalar_kind",
+                "kernel_tensor_result_component_bit_width",
+            ],
+        )?;
+        let Some(result_root) = self.get_attr_kernel_tensor_result_component_result_root(context)
+        else {
+            return verify_err!(self.loc(context), SemanticContractError::MalformedOperation);
+        };
+        result_root.verify(context)?;
+        if self
+            .component(context)
+            .is_none_or(|component| component as usize >= MAX_TENSOR_RESULT_COMPONENTS_V1)
+            || self.scalar(context).is_none()
+        {
+            return verify_err!(self.loc(context), SemanticContractError::MalformedOperation);
+        }
+        Ok(())
+    }
+}
+
 #[pliron_op(
     name = "kernel.semantic_typed_constant",
     format,
