@@ -93,7 +93,7 @@ fn sparse_affine_chain_propagates_only_to_its_consumers() {
 }
 
 #[test]
-fn nonlinear_products_and_arithmetic_overflow_become_unknown() {
+fn nonlinear_products_are_unknown_and_checked_overflow_has_a_witness() {
     let context = &mut setup();
     let function = function(context, "nonlinear");
     let entry = function.get_entry_block(context);
@@ -130,10 +130,54 @@ fn nonlinear_products_and_arithmetic_overflow_become_unknown() {
         analysis.fact(product.result(context)),
         SparseIndexFactV1::Unknown
     );
-    assert_eq!(
-        analysis.fact(overflow.result(context)),
-        SparseIndexFactV1::Unknown
+    let overflow = analysis.fact(overflow.result(context));
+    let overflow = overflow
+        .machine_overflow()
+        .expect("checked addition overflow");
+    assert_eq!(overflow.operation(), IndexBinaryKindAttr::Add);
+    assert_eq!(overflow.operands(), (u64::MAX, 1));
+    assert_eq!(overflow.invocation(), &[3, 3]);
+}
+
+#[test]
+fn intermediate_overflow_is_not_erased_by_a_later_zero_scale() {
+    let context = &mut setup();
+    let function = function(context, "intermediate_overflow");
+    let entry = function.get_entry_block(context);
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let one = IndexConstantOp::new(context, 1);
+    let zero = IndexConstantOp::new(context, 0);
+    let overflow = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        maximum.result(context),
+        one.result(context),
     );
+    let collapsed = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        overflow.result(context),
+        zero.result(context),
+    );
+    let ret = ReturnOp::new(context);
+    for operation in [
+        maximum.get_operation(),
+        one.get_operation(),
+        zero.get_operation(),
+        overflow.get_operation(),
+        collapsed.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let analysis = analyze_pliron_sparse_indices_v1(context, &function).unwrap();
+    let collapsed = analysis.fact(collapsed.result(context));
+    let retained = collapsed
+        .machine_overflow()
+        .expect("eager checked evaluation retains the intermediate overflow");
+    assert_eq!(retained.operation(), IndexBinaryKindAttr::Add);
+    assert_eq!(retained.operands(), (u64::MAX, 1));
 }
 
 #[test]

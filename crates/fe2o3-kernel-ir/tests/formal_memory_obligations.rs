@@ -1235,6 +1235,31 @@ fn calls_and_unknown_launches_fail_closed() {
 }
 
 #[test]
+fn defined_pure_helper_does_not_make_formal_memory_incomplete() {
+    let call = Operation::new(
+        vec![],
+        OperationKind::Call {
+            callee: FunctionId::new("pure_helper"),
+            arguments: vec![],
+        },
+    );
+    let mut module = module_with_kernel(vec![], vec![call], dynamic_1d());
+    let mut block = BasicBlock::new(BlockId(0));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    module.functions.push(Function::definition(
+        "pure_helper",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    ));
+
+    let analysis = analyze(&module, 1);
+    assert!(analysis.is_complete());
+    assert!(analysis.incomplete_reasons().is_empty());
+    assert!(analysis.obligations().accesses().is_empty());
+}
+
+#[test]
 fn registered_diagnostic_intrinsics_do_not_make_formal_memory_incomplete() {
     let trap = AmdGpuDiagnosticOperation::Trap;
     let mut module = module_with_kernel(vec![], vec![trap.operation(None)], dynamic_1d());

@@ -573,11 +573,9 @@ fn guarded_overflowing_affine_multiply_is_not_proved_injective() {
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
-    assert!(
-        report
-            .findings()
-            .iter()
-            .any(|finding| matches!(finding, RankedRaceFindingV1::UnresolvedIndex { .. }))
+    assert_eq!(
+        report.findings(),
+        &[RankedRaceFindingV1::BoundsPrerequisiteRejected]
     );
 }
 
@@ -625,11 +623,9 @@ fn guarded_overflowing_affine_add_is_not_proved_injective() {
 
     let report = run_pliron_ranked_race_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
-    assert!(
-        report
-            .findings()
-            .iter()
-            .any(|finding| matches!(finding, RankedRaceFindingV1::UnresolvedIndex { .. }))
+    assert_eq!(
+        report.findings(),
+        &[RankedRaceFindingV1::BoundsPrerequisiteRejected]
     );
 }
 

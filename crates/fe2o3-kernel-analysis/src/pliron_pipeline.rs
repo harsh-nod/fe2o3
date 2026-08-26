@@ -724,6 +724,7 @@ mod tests {
             PlironAnalysisComputationCountsV1 {
                 sparse_indices: 1,
                 presburger: 1,
+                provenance_alias: 1,
                 execution_layout: 1,
                 exact_trace: 1,
                 tensor_layout_dataflow: 1,

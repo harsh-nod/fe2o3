@@ -565,6 +565,44 @@ fn registered_diagnostic_intrinsics_have_a_complete_empty_effect_summary() {
 }
 
 #[test]
+fn defined_pure_helper_call_has_a_compiler_derived_complete_summary() {
+    let caller = function(
+        vec![],
+        vec![Operation::new(
+            vec![],
+            OperationKind::Call {
+                callee: FunctionId::new("pure_helper"),
+                arguments: vec![],
+            },
+        )],
+    );
+    let helper = Function::definition(
+        "pure_helper",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![{
+            let mut block = BasicBlock::new(BlockId(0));
+            block.terminator = Some(Terminator::Return { values: vec![] });
+            block
+        }],
+    );
+    let caller_id = caller.id.clone();
+    let report = extract_function_region_effects(
+        &module_with_functions(vec![caller, helper]),
+        &caller_id,
+        &FunctionEffectBindings::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.completeness(),
+        EffectExtractionCompleteness::CompleteUnderSuppliedBindings
+    );
+    assert!(report.extraction_issues().is_empty());
+    assert!(report.effects().is_empty());
+}
+
+#[test]
 fn unresolved_calls_force_incomplete_status_despite_favorable_modeled_effects() {
     let access = MemoryAccess::new(AddressSpace::Global, 4);
     let call = Operation::new(

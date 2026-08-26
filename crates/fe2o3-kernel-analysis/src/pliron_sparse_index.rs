@@ -130,12 +130,36 @@ impl SparseAffineIndexV1 {
 pub enum SparseIndexFactV1 {
     Unknown,
     Affine(SparseAffineIndexV1),
+    MachineOverflow(SparseMachineOverflowV1),
     Remainder {
         dividend: SparseAffineIndexV1,
         modulus: u64,
     },
     CheckedTiled2D(SparseCheckedTiledIndex2DV1),
     CheckedRowStriped2D(SparseCheckedRowStripedIndex2DV1),
+}
+
+/// Concrete checked-integer failure retained through sparse SSA propagation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SparseMachineOverflowV1 {
+    operation: IndexBinaryKindAttr,
+    invocation: Vec<u64>,
+    lhs: u64,
+    rhs: u64,
+}
+
+impl SparseMachineOverflowV1 {
+    pub const fn operation(&self) -> IndexBinaryKindAttr {
+        self.operation
+    }
+
+    pub fn invocation(&self) -> &[u64] {
+        &self.invocation
+    }
+
+    pub const fn operands(&self) -> (u64, u64) {
+        (self.lhs, self.rhs)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -199,6 +223,7 @@ impl SparseIndexFactV1 {
         match self {
             Self::Affine(affine) => Some(affine),
             Self::Unknown
+            | Self::MachineOverflow(_)
             | Self::Remainder { .. }
             | Self::CheckedTiled2D(_)
             | Self::CheckedRowStriped2D(_) => None,
@@ -209,6 +234,7 @@ impl SparseIndexFactV1 {
         match self {
             Self::Affine(affine) => affine.is_constant(),
             Self::Unknown
+            | Self::MachineOverflow(_)
             | Self::Remainder { .. }
             | Self::CheckedTiled2D(_)
             | Self::CheckedRowStriped2D(_) => None,
@@ -218,6 +244,7 @@ impl SparseIndexFactV1 {
     pub fn evaluate(&self, invocation: &[u64]) -> Option<u64> {
         match self {
             Self::Unknown => None,
+            Self::MachineOverflow(_) => None,
             Self::Affine(affine) => affine.evaluate(invocation),
             Self::Remainder { dividend, modulus } if *modulus != 0 => {
                 dividend.evaluate(invocation).map(|value| value % modulus)
@@ -231,6 +258,7 @@ impl SparseIndexFactV1 {
     pub fn maximum(&self, launch_extents: &[u64]) -> Option<u64> {
         match self {
             Self::Unknown => None,
+            Self::MachineOverflow(_) => None,
             Self::Affine(affine) => affine.maximum(launch_extents),
             Self::Remainder { modulus, .. } => modulus.checked_sub(1),
             Self::CheckedTiled2D(_) => None,
@@ -241,6 +269,13 @@ impl SparseIndexFactV1 {
     pub const fn checked_tiled_2d(&self) -> Option<&SparseCheckedTiledIndex2DV1> {
         match self {
             Self::CheckedTiled2D(fact) => Some(fact),
+            _ => None,
+        }
+    }
+
+    pub const fn machine_overflow(&self) -> Option<&SparseMachineOverflowV1> {
+        match self {
+            Self::MachineOverflow(overflow) => Some(overflow),
             _ => None,
         }
     }
@@ -491,6 +526,14 @@ pub fn analyze_pliron_sparse_indices_v1(
         }
     }
 
+    let resolved_launch_extents = if launch_extents.is_empty() {
+        vec![1]
+    } else {
+        launch_extents
+            .iter()
+            .map(|extent| extent.unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
     let mut lattice = vec![SparseIndexLatticeV1::Pending; definitions.len()];
     let mut pending = (0..definitions.len()).collect::<VecDeque<_>>();
     let mut queued = vec![true; definitions.len()];
@@ -498,7 +541,13 @@ pub fn analyze_pliron_sparse_indices_v1(
     while let Some(index) = pending.pop_front() {
         queued[index] = false;
         charge_work(&mut propagation_work, 1)?;
-        let next = derive_definition(context, &definitions[index], &lattice, &definition_indices);
+        let next = derive_definition(
+            context,
+            &definitions[index],
+            &lattice,
+            &definition_indices,
+            &resolved_launch_extents,
+        );
         if lattice[index] == next {
             continue;
         }
@@ -525,17 +574,9 @@ pub fn analyze_pliron_sparse_indices_v1(
         })
         .collect();
     let declared_launch_extents = launch_extents.clone();
-    let launch_extents = if launch_extents.is_empty() {
-        vec![1]
-    } else {
-        launch_extents
-            .into_iter()
-            .map(|extent| extent.unwrap_or(0))
-            .collect()
-    };
     Ok(SparseIndexAnalysisV1 {
         facts,
-        launch_extents,
+        launch_extents: resolved_launch_extents,
         declared_launch_extents,
     })
 }
@@ -700,15 +741,20 @@ fn derive_definition(
     definition: &SparseDefinitionV1,
     lattice: &[SparseIndexLatticeV1],
     definition_indices: &HashMap<Value, usize>,
+    launch_extents: &[u64],
 ) -> SparseIndexLatticeV1 {
     match &definition.kind {
         SparseDefinitionKindV1::EntryArgument => {
             SparseIndexLatticeV1::Known(SparseIndexFactV1::Unknown)
         }
         SparseDefinitionKindV1::Merge(inputs) => merge_facts(inputs, lattice, definition_indices),
-        SparseDefinitionKindV1::Operation(operation) => {
-            derive_operation(context, *operation, lattice, definition_indices)
-        }
+        SparseDefinitionKindV1::Operation(operation) => derive_operation(
+            context,
+            *operation,
+            lattice,
+            definition_indices,
+            launch_extents,
+        ),
     }
 }
 
@@ -752,6 +798,7 @@ fn derive_operation(
     operation: Ptr<Operation>,
     lattice: &[SparseIndexLatticeV1],
     definition_indices: &HashMap<Value, usize>,
+    launch_extents: &[u64],
 ) -> SparseIndexLatticeV1 {
     let operation = Operation::get_op_dyn(operation, context);
     if let Some(constant) = operation.downcast_ref::<IndexConstantOp>() {
@@ -816,7 +863,12 @@ fn derive_operation(
         else {
             return SparseIndexLatticeV1::Pending;
         };
-        return known(derive_binary(binary.kind(context), lhs, rhs));
+        return known(derive_binary(
+            binary.kind(context),
+            lhs,
+            rhs,
+            launch_extents,
+        ));
     }
     if let Some(tiled) = operation.downcast_ref::<CheckedTiledIndex2DOp>() {
         let [invocation, component, rows, columns, row_stride] = tiled.operands(context);
@@ -905,24 +957,61 @@ fn derive_binary(
     kind: Option<IndexBinaryKindAttr>,
     lhs: SparseIndexFactV1,
     rhs: SparseIndexFactV1,
+    launch_extents: &[u64],
 ) -> SparseIndexFactV1 {
+    if let SparseIndexFactV1::MachineOverflow(overflow) = lhs {
+        return SparseIndexFactV1::MachineOverflow(overflow);
+    }
+    if let SparseIndexFactV1::MachineOverflow(overflow) = rhs {
+        return SparseIndexFactV1::MachineOverflow(overflow);
+    }
     let (SparseIndexFactV1::Affine(lhs), SparseIndexFactV1::Affine(rhs)) = (lhs, rhs) else {
         return SparseIndexFactV1::Unknown;
     };
     match kind {
-        Some(IndexBinaryKindAttr::Add) => lhs
-            .checked_add(&rhs)
-            .map(SparseIndexFactV1::Affine)
-            .unwrap_or(SparseIndexFactV1::Unknown),
+        Some(IndexBinaryKindAttr::Add) => match lhs.checked_add(&rhs) {
+            Some(result)
+                if launch_extents.contains(&0) || result.maximum(launch_extents).is_some() =>
+            {
+                SparseIndexFactV1::Affine(result)
+            }
+            _ => overflow_or_unknown(
+                IndexBinaryKindAttr::Add,
+                &lhs,
+                &rhs,
+                launch_extents,
+                u64::checked_add,
+            ),
+        },
         Some(IndexBinaryKindAttr::Multiply) => match (lhs.is_constant(), rhs.is_constant()) {
-            (Some(factor), _) => rhs
-                .checked_scale(factor)
-                .map(SparseIndexFactV1::Affine)
-                .unwrap_or(SparseIndexFactV1::Unknown),
-            (_, Some(factor)) => lhs
-                .checked_scale(factor)
-                .map(SparseIndexFactV1::Affine)
-                .unwrap_or(SparseIndexFactV1::Unknown),
+            (Some(factor), _) => match rhs.checked_scale(factor) {
+                Some(result)
+                    if launch_extents.contains(&0) || result.maximum(launch_extents).is_some() =>
+                {
+                    SparseIndexFactV1::Affine(result)
+                }
+                _ => overflow_or_unknown(
+                    IndexBinaryKindAttr::Multiply,
+                    &lhs,
+                    &rhs,
+                    launch_extents,
+                    u64::checked_mul,
+                ),
+            },
+            (_, Some(factor)) => match lhs.checked_scale(factor) {
+                Some(result)
+                    if launch_extents.contains(&0) || result.maximum(launch_extents).is_some() =>
+                {
+                    SparseIndexFactV1::Affine(result)
+                }
+                _ => overflow_or_unknown(
+                    IndexBinaryKindAttr::Multiply,
+                    &lhs,
+                    &rhs,
+                    launch_extents,
+                    u64::checked_mul,
+                ),
+            },
             _ => SparseIndexFactV1::Unknown,
         },
         Some(IndexBinaryKindAttr::Remainder) => rhs
@@ -936,6 +1025,34 @@ fn derive_binary(
         Some(IndexBinaryKindAttr::Divide) => SparseIndexFactV1::Unknown,
         None => SparseIndexFactV1::Unknown,
     }
+}
+
+fn overflow_or_unknown(
+    operation: IndexBinaryKindAttr,
+    lhs: &SparseAffineIndexV1,
+    rhs: &SparseAffineIndexV1,
+    launch_extents: &[u64],
+    checked: fn(u64, u64) -> Option<u64>,
+) -> SparseIndexFactV1 {
+    let Some(invocation) = launch_extents
+        .iter()
+        .map(|extent| extent.checked_sub(1))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return SparseIndexFactV1::Unknown;
+    };
+    let (Some(lhs), Some(rhs)) = (lhs.evaluate(&invocation), rhs.evaluate(&invocation)) else {
+        return SparseIndexFactV1::Unknown;
+    };
+    if checked(lhs, rhs).is_some() {
+        return SparseIndexFactV1::Unknown;
+    }
+    SparseIndexFactV1::MachineOverflow(SparseMachineOverflowV1 {
+        operation,
+        invocation,
+        lhs,
+        rhs,
+    })
 }
 
 const fn limit(resource: &'static str, limit: usize, actual: usize) -> SparseIndexFailureV1 {

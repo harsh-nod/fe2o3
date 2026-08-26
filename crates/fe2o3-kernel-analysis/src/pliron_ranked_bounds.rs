@@ -97,6 +97,18 @@ pub enum RankedBoundsFindingV1 {
         index: i128,
         extent: u64,
     },
+    MachineIntegerOverflow {
+        block: usize,
+        operation: usize,
+        access: AccessKindAttr,
+        view: String,
+        dimension: usize,
+        invocation: Vec<u64>,
+        source_operation: dialect_kernel::IndexBinaryKindAttr,
+        lhs: u64,
+        rhs: u64,
+        path_complete: bool,
+    },
     UnprovedBound {
         block: usize,
         operation: usize,
@@ -114,12 +126,20 @@ impl RankedBoundsFindingV1 {
             Self::StaticOutOfBounds { .. } | Self::PresburgerOutOfBounds { .. } => {
                 KernelCheckStatusV1::Rejected
             }
+            Self::MachineIntegerOverflow {
+                path_complete: true,
+                ..
+            } => KernelCheckStatusV1::Rejected,
             Self::StructuralVerificationFailed
             | Self::ResourceLimitExceeded { .. }
             | Self::UnreachableBlock { .. }
             | Self::UnsupportedTerminator { .. }
             | Self::UnsupportedOperation { .. }
             | Self::SparseIndexAnalysisFailed { .. }
+            | Self::MachineIntegerOverflow {
+                path_complete: false,
+                ..
+            }
             | Self::UnprovedBound { .. } => KernelCheckStatusV1::Incomplete,
         }
     }
@@ -184,6 +204,33 @@ impl fmt::Display for RankedBoundsFindingV1 {
                 formatter,
                 "error[FE2O3-BOUNDS-004]: affine {access:?} is out of bounds at block {block} op {operation}; access: {view} dimension {dimension}; counterexample invocation {invocation:?} computes index {index}, violating {index} < {extent}; help: guard the access with the failed relation or reduce the launch domain",
             ),
+            Self::MachineIntegerOverflow {
+                block,
+                operation,
+                access,
+                view,
+                dimension,
+                invocation,
+                source_operation,
+                lhs,
+                rhs,
+                path_complete,
+            } => {
+                let code = if *path_complete {
+                    "FE2O3-BOUNDS-005"
+                } else {
+                    "FE2O3-BOUNDS-006"
+                };
+                write!(
+                    formatter,
+                    "error[{code}]: checked {access:?} index arithmetic may overflow at block {block} op {operation}; access: {view} dimension {dimension}; counterexample invocation {invocation:?} evaluates {lhs} {source_operation:?} {rhs} outside the unsigned 64-bit range; {}help: use checked arithmetic, narrow the launch domain, or prove a guard that keeps the expression and this block reachable only in range",
+                    if *path_complete {
+                        ""
+                    } else {
+                        "path reachability for this non-entry block is not represented in the current Presburger domain; "
+                    },
+                )
+            }
             Self::UnprovedBound {
                 block,
                 operation,
@@ -1159,6 +1206,27 @@ fn verify_access(
     let view_name = view.unique_name(check.context).to_string();
     for (dimension, index) in access.indices(check.context).into_iter().enumerate() {
         check.budget.work(1)?;
+        let sparse_fact = check.sparse_indices.fact(index);
+        if let Some(overflow) = sparse_fact.machine_overflow() {
+            let (lhs, rhs) = overflow.operands();
+            push_finding(
+                check.findings,
+                check.budget,
+                RankedBoundsFindingV1::MachineIntegerOverflow {
+                    block,
+                    operation,
+                    access: access_kind,
+                    view: view_name.clone(),
+                    dimension,
+                    invocation: overflow.invocation().to_vec(),
+                    source_operation: overflow.operation(),
+                    lhs,
+                    rhs,
+                    path_complete: block == 0,
+                },
+            )?;
+            continue;
+        }
         let index_expr = canonical_index_expr(index, check.context);
         let extent_expr = extent_expr(view, &view_type, dimension, check.context);
         if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices)
@@ -1188,12 +1256,10 @@ fn verify_access(
                 )?;
             }
             _ => {
-                let presburger_decision = static_extent.and_then(|extent| {
-                    check
-                        .presburger
-                        .map_for_facts(&[check.sparse_indices.fact(index).clone()])
-                        .ok()
-                        .map(|map| (extent, map.find_out_of_bounds(&[extent])))
+                let presburger_map = check.presburger.map_for_facts(&[sparse_fact]).ok();
+                let presburger_decision = static_extent.zip(presburger_map).map(|(extent, map)| {
+                    let decision = map.find_out_of_bounds(&[extent]);
+                    (extent, decision)
                 });
                 match presburger_decision {
                     Some((_, PresburgerRangeDecisionV1::Proved)) => continue,

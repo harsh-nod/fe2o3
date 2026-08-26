@@ -9,6 +9,9 @@ use crate::pliron_invocation_trace::{
 use crate::pliron_memory_order::{
     PlironMemoryOrderAnalysisV1, PlironMemoryOrderFailureV1, analyze_pliron_memory_order_v1,
 };
+use crate::pliron_provenance_alias::{
+    PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1, analyze_pliron_provenance_alias_v1,
+};
 use crate::pliron_simt_protocol::{PlironSimtProtocolAnalysisV1, analyze_pliron_simt_protocol_v1};
 use crate::pliron_tensor_layout::{
     PlironTensorLayoutDataflowAnalysisV1, PlironTensorLayoutDataflowFailureV1,
@@ -22,7 +25,7 @@ use crate::{
 /// The manager has a fixed number of cache roots. Each cached analysis has its
 /// own independent resource bounds, so a run cannot accumulate unbounded
 /// entries by querying different analysis keys.
-pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 7;
+pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlironMemoryOrderAnalysisFailureV1 {
@@ -39,6 +42,7 @@ pub(crate) enum PlironSimtProtocolAnalysisFailureV1 {
 pub(crate) struct PlironAnalysisComputationCountsV1 {
     pub(crate) sparse_indices: usize,
     pub(crate) presburger: usize,
+    pub(crate) provenance_alias: usize,
     pub(crate) execution_layout: usize,
     pub(crate) exact_trace: usize,
     pub(crate) tensor_layout_dataflow: usize,
@@ -56,6 +60,7 @@ pub(crate) struct PlironAnalysisManagerV1 {
     function: pliron::context::Ptr<Operation>,
     sparse_indices: Option<Result<SparseIndexAnalysisV1, SparseIndexFailureV1>>,
     presburger: Option<Result<PlironPresburgerAnalysisV1, SparseIndexFailureV1>>,
+    provenance_alias: Option<Result<PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1>>,
     execution_layout: Option<Result<Option<PlironExecutionLayoutV1>, PlironTraceFailureV1>>,
     exact_trace: Option<Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1>>,
     tensor_layout_dataflow:
@@ -72,6 +77,7 @@ impl PlironAnalysisManagerV1 {
             function: function.get_operation(),
             sparse_indices: None,
             presburger: None,
+            provenance_alias: None,
             execution_layout: None,
             exact_trace: None,
             tensor_layout_dataflow: None,
@@ -125,6 +131,25 @@ impl PlironAnalysisManagerV1 {
         self.presburger
             .as_ref()
             .expect("Presburger analysis must be prepared before access")
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    pub(crate) fn prepare_provenance_alias(&mut self, context: &Context, function: &FuncOp) {
+        self.assert_function(function);
+        if self.provenance_alias.is_none() {
+            self.computations.provenance_alias += 1;
+            self.provenance_alias = Some(analyze_pliron_provenance_alias_v1(context, function));
+        }
+        debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
+    }
+
+    pub(crate) fn provenance_alias(
+        &self,
+    ) -> Result<&PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1> {
+        self.provenance_alias
+            .as_ref()
+            .expect("provenance/alias analysis must be prepared before access")
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -254,6 +279,7 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn cached_entries(&self) -> usize {
         usize::from(self.sparse_indices.is_some())
             + usize::from(self.presburger.is_some())
+            + usize::from(self.provenance_alias.is_some())
             + usize::from(self.execution_layout.is_some())
             + usize::from(self.exact_trace.is_some())
             + usize::from(self.tensor_layout_dataflow.is_some())

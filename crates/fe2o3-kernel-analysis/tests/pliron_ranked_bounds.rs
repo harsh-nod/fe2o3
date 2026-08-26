@@ -871,14 +871,23 @@ fn sparse_affine_overflow_does_not_wrap_into_a_false_bounds_proof() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
         report.findings(),
-        [RankedBoundsFindingV1::UnprovedBound { dimension: 0, .. }]
+        [RankedBoundsFindingV1::MachineIntegerOverflow {
+            access: AccessKindAttr::Read,
+            dimension: 0,
+            source_operation: IndexBinaryKindAttr::Add,
+            lhs: u64::MAX,
+            rhs: 1,
+            path_complete: true,
+            ..
+        }]
     ));
     assert!(
         report.findings()[0]
             .to_string()
-            .contains("FE2O3-BOUNDS-002")
+            .contains("FE2O3-BOUNDS-005")
     );
 }
 

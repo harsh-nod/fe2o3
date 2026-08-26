@@ -9,7 +9,7 @@ use crate::{
     FunctionId, FunctionOperationLocation, IndexKind, IntrinsicKind, InvocationRange1d, KernelId,
     LaunchDomain, LaunchExtent, MemoryAccess, Module, Operation, OperationKind,
     RegionValidationError, ScalarType, Type, ValueId, VerificationErrors, VerifiedKernelIrModuleV1,
-    verify_module_ref,
+    analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
 mod receipt_v1;
@@ -565,6 +565,8 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
     index_width: FormalIndexWidth,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let module = verified.module();
+    let effect_summaries = analyze_interprocedural_effects_from_verified_v1(verified)
+        .expect("verified module remains valid while deriving effect summaries");
     let kernel = module
         .kernels
         .iter()
@@ -607,7 +609,12 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
         for (operation_index, operation) in block.operations.iter().enumerate() {
             let location = FunctionOperationLocation::new(block.id, operation_index);
             match &operation.kind {
-                OperationKind::Call { callee, .. } if !operation.has_complete_effect_summary() => {
+                OperationKind::Call { callee, .. }
+                    if !operation.has_complete_effect_summary()
+                        && !effect_summaries
+                            .function(callee)
+                            .is_some_and(|summary| summary.is_complete_and_pure()) =>
+                {
                     reasons.insert(FormalMemoryIncompleteReason::CallEffectsUnavailable {
                         location,
                         callee: callee.clone(),
