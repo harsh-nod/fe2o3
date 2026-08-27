@@ -1,0 +1,947 @@
+//! Protected process, executable, and key admission for compiler-execution attestation.
+//!
+//! This module deliberately exposes no signing operation. The admitted value becomes usable only
+//! after the durable rollback state machine and supervised compiler-occurrence token consume it.
+
+use std::error::Error;
+use std::fmt;
+use std::fs::File;
+use std::io;
+use std::os::fd::{AsFd, OwnedFd};
+use std::os::unix::fs::FileExt;
+
+use ed25519_dalek::SigningKey;
+use fe2o3_runtime_protocol::{
+    CompilerExecutionAttestationErrorV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, SealedStaticApplicationErrorV1,
+    sealed_static_application_identity_v1,
+};
+use rustix::fs::{FileType, SealFlags};
+use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
+
+use crate::{ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1};
+
+/// Maximum admitted byte length of the protected issuer executable.
+pub const MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1: u64 = 256 * 1024 * 1024;
+
+/// Canonical content describing the loader-independent issuer runtime closure.
+pub const SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1: &[u8] =
+    b"FE2O3/SEALED-STATIC-X86_64-ISSUER-RUNTIME-CLOSURE/V1\0";
+
+/// This admission establishes only the protected issuer process, executable, and key boundary.
+pub const PROTECTED_COMPILER_EXECUTION_ISSUER_AUTHORITY_V1: &str = "admission-only";
+
+const KEY_BYTES: usize = 32;
+const SECRET_FILE_MODE: u32 = 0o400;
+const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
+const REQUIRED_KEY_SEALS: SealFlags = SealFlags::WRITE
+    .union(SealFlags::GROW)
+    .union(SealFlags::SHRINK)
+    .union(SealFlags::SEAL);
+
+/// Returns the only runtime-closure measurement accepted for a sealed-static issuer.
+pub fn sealed_static_issuer_runtime_measurement_v1() -> CompilerExecutionIssuerMeasurementV1 {
+    let digest = Sha256::digest(SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1).into();
+    CompilerExecutionIssuerMeasurementV1::new(
+        digest,
+        SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1.len() as u64,
+    )
+    .expect("the fixed sealed-static runtime measurement is nonzero")
+}
+
+/// Independently measured current static issuer executable and fixed empty runtime closure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CurrentStaticIssuerMeasurementsV1 {
+    executable: CompilerExecutionIssuerMeasurementV1,
+    runtime: CompilerExecutionIssuerMeasurementV1,
+    sealed_static_identity: [u8; 32],
+}
+
+impl CurrentStaticIssuerMeasurementsV1 {
+    /// Returns SHA-256 and byte length of the exact running executable image.
+    pub const fn executable(self) -> CompilerExecutionIssuerMeasurementV1 {
+        self.executable
+    }
+
+    /// Returns the canonical loader-independent runtime-closure measurement.
+    pub const fn runtime(self) -> CompilerExecutionIssuerMeasurementV1 {
+        self.runtime
+    }
+
+    /// Returns the domain-separated identity of the validated sealed-static ELF image.
+    pub const fn sealed_static_identity(self) -> [u8; 32] {
+        self.sealed_static_identity
+    }
+}
+
+/// Irreversible, move-only evidence that the current service process was hardened for key custody.
+///
+/// ```compile_fail
+/// fn duplicate(value: fe2o3_broker_authority_service::ProtectedIssuerProcessV1) {
+///     let moved = value;
+///     drop(value);
+///     drop(moved);
+/// }
+/// ```
+pub struct ProtectedIssuerProcessV1 {
+    _private: (),
+}
+
+impl fmt::Debug for ProtectedIssuerProcessV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProtectedIssuerProcessV1")
+            .field("authority", &"process-hardening-only")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProtectedIssuerProcessV1 {
+    /// Disables core dumps, makes the process nondumpable, and permanently enables
+    /// `no_new_privs`. The hard core limit and `no_new_privs` transition are irreversible.
+    pub fn harden() -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        let zero = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `zero` is a valid immutable rlimit and the call does not retain its pointer.
+        if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &raw const zero) } != 0 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::ProcessHardening,
+                "cannot disable issuer core dumps",
+                io::Error::last_os_error(),
+            ));
+        }
+        // SAFETY: these documented scalar prctl operations use no pointer arguments.
+        if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::ProcessHardening,
+                "cannot make issuer process nondumpable",
+                io::Error::last_os_error(),
+            ));
+        }
+        // SAFETY: `PR_SET_NO_NEW_PRIVS` accepts the scalar value one and zero trailing arguments.
+        if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::ProcessHardening,
+                "cannot enable issuer no_new_privs",
+                io::Error::last_os_error(),
+            ));
+        }
+        let process = Self { _private: () };
+        process.validate()?;
+        Ok(process)
+    }
+
+    fn validate(&self) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        let mut core = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+        // SAFETY: the pointer references writable storage for one rlimit result.
+        if unsafe { libc::getrlimit(libc::RLIMIT_CORE, core.as_mut_ptr()) } != 0 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::ProcessHardeningChanged,
+                "cannot revalidate issuer core-dump limits",
+                io::Error::last_os_error(),
+            ));
+        }
+        // SAFETY: getrlimit initialized `core` after its successful return.
+        let core = unsafe { core.assume_init() };
+        // SAFETY: these documented scalar query operations use no pointer arguments.
+        let dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) };
+        // SAFETY: these documented scalar query operations use no pointer arguments.
+        let no_new_privs = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+        if dumpable < 0 || no_new_privs < 0 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::ProcessHardeningChanged,
+                "cannot revalidate issuer process security state",
+                io::Error::last_os_error(),
+            ));
+        }
+        if core.rlim_cur != 0 || core.rlim_max != 0 || dumpable != 0 || no_new_privs != 1 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::ProcessHardeningChanged,
+                "issuer process security state changed after hardening",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileSnapshotV1 {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+    uid: u32,
+    gid: u32,
+    size: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: u64,
+    changed_seconds: i64,
+    changed_nanoseconds: u64,
+}
+
+impl FileSnapshotV1 {
+    fn inspect(
+        file: &impl AsFd,
+        kind: IssuerAdmissionErrorKindV1,
+        label: &'static str,
+    ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        let stat = rustix::fs::fstat(file).map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                kind,
+                format!("cannot inspect {label}"),
+                io::Error::from(error),
+            )
+        })?;
+        Ok(Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            mode: stat.st_mode,
+            links: stat.st_nlink,
+            uid: stat.st_uid,
+            gid: stat.st_gid,
+            size: stat.st_size.try_into().map_err(|_| {
+                ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                    kind,
+                    format!("{label} has a negative size"),
+                )
+            })?,
+            modified_seconds: stat.st_mtime,
+            modified_nanoseconds: stat.st_mtime_nsec,
+            changed_seconds: stat.st_ctime,
+            changed_nanoseconds: stat.st_ctime_nsec,
+        })
+    }
+
+    fn file_type(self) -> FileType {
+        FileType::from_raw_mode(self.mode)
+    }
+}
+
+struct RetainedStaticIssuerExecutableV1 {
+    image: File,
+    snapshot: FileSnapshotV1,
+    measurements: CurrentStaticIssuerMeasurementsV1,
+}
+
+impl RetainedStaticIssuerExecutableV1 {
+    fn observe() -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        let image = File::open("/proc/self/exe").map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::ExecutableInspect,
+                "cannot open the running issuer executable",
+                error,
+            )
+        })?;
+        require_close_on_exec(
+            &image,
+            IssuerAdmissionErrorKindV1::ExecutableCloseOnExec,
+            "issuer executable",
+        )?;
+        let snapshot = validate_executable_snapshot(&image)?;
+        let measurements = measure_static_executable(&image, snapshot)?;
+        let retained = Self {
+            image,
+            snapshot,
+            measurements,
+        };
+        retained.validate()?;
+        Ok(retained)
+    }
+
+    fn validate(&self) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        require_close_on_exec(
+            &self.image,
+            IssuerAdmissionErrorKindV1::ExecutableCloseOnExec,
+            "issuer executable",
+        )?;
+        let snapshot = validate_executable_snapshot(&self.image)?;
+        if snapshot != self.snapshot {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::ExecutableChanged,
+                "retained issuer executable identity or metadata changed",
+            ));
+        }
+        if measure_static_executable(&self.image, snapshot)? != self.measurements {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::ExecutableChanged,
+                "retained issuer executable bytes or static identity changed",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Measures and validates the exact `/proc/self/exe` image without trusting caller input.
+pub fn current_static_issuer_measurements_v1()
+-> Result<CurrentStaticIssuerMeasurementsV1, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    Ok(RetainedStaticIssuerExecutableV1::observe()?.measurements)
+}
+
+fn validate_executable_snapshot(
+    image: &File,
+) -> Result<FileSnapshotV1, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    let snapshot = FileSnapshotV1::inspect(
+        image,
+        IssuerAdmissionErrorKindV1::ExecutableInspect,
+        "running issuer executable",
+    )?;
+    if snapshot.file_type() != FileType::RegularFile || snapshot.mode & 0o111 == 0 {
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::ExecutableShape,
+            "running issuer executable is not an executable regular file",
+        ));
+    }
+    if snapshot.size == 0 || snapshot.size > MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1 {
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::ExecutableSize,
+            "running issuer executable has an invalid bounded size",
+        ));
+    }
+    Ok(snapshot)
+}
+
+fn measure_static_executable(
+    image: &File,
+    before: FileSnapshotV1,
+) -> Result<CurrentStaticIssuerMeasurementsV1, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    let length = usize::try_from(before.size).map_err(|_| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::ExecutableSize,
+            "running issuer executable does not fit in addressable memory",
+        )
+    })?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(length).map_err(|_| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::ExecutableSize,
+            "cannot reserve the bounded issuer executable image",
+        )
+    })?;
+    bytes.resize(length, 0);
+    image.read_exact_at(&mut bytes, 0).map_err(|error| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            IssuerAdmissionErrorKindV1::ExecutableRead,
+            "cannot read the exact issuer executable image",
+            error,
+        )
+    })?;
+    let mut trailing = [0_u8; 1];
+    if image.read_at(&mut trailing, before.size).map_err(|error| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            IssuerAdmissionErrorKindV1::ExecutableRead,
+            "cannot check the issuer executable boundary",
+            error,
+        )
+    })? != 0
+    {
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::ExecutableChanged,
+            "issuer executable grew while it was measured",
+        ));
+    }
+    let after = FileSnapshotV1::inspect(
+        image,
+        IssuerAdmissionErrorKindV1::ExecutableInspect,
+        "running issuer executable",
+    )?;
+    if after != before {
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::ExecutableChanged,
+            "issuer executable identity or metadata changed while it was measured",
+        ));
+    }
+    let sealed_static_identity =
+        sealed_static_application_identity_v1(&bytes).map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::static_image(
+                "running issuer executable is not loader independent",
+                error,
+            )
+        })?;
+    let executable =
+        CompilerExecutionIssuerMeasurementV1::new(Sha256::digest(&bytes).into(), before.size)
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::Protocol)?;
+    bytes.zeroize();
+    Ok(CurrentStaticIssuerMeasurementsV1 {
+        executable,
+        runtime: sealed_static_issuer_runtime_measurement_v1(),
+        sealed_static_identity,
+    })
+}
+
+struct ProtectedIssuerSigningKeyV1 {
+    key: SigningKey,
+    image: File,
+    snapshot: FileSnapshotV1,
+    seals: SealFlags,
+}
+
+impl fmt::Debug for ProtectedIssuerSigningKeyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProtectedIssuerSigningKeyV1")
+            .field("authority", &"key-custody-only")
+            .field("snapshot", &self.snapshot)
+            .field("seals", &self.seals)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProtectedIssuerSigningKeyV1 {
+    fn admit(
+        descriptor: OwnedFd,
+        policy: &CompilerExecutionIssuerPolicyV1,
+    ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        require_close_on_exec(
+            &descriptor,
+            IssuerAdmissionErrorKindV1::KeyCloseOnExec,
+            "issuer signing key",
+        )?;
+        let image = File::from(descriptor);
+        let snapshot = FileSnapshotV1::inspect(
+            &image,
+            IssuerAdmissionErrorKindV1::KeyInspect,
+            "issuer signing-key image",
+        )?;
+        if snapshot.file_type() != FileType::RegularFile || snapshot.links != 0 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::KeyShape,
+                "issuer signing key is not an anonymous regular file",
+            ));
+        }
+        if snapshot.uid != rustix::process::geteuid().as_raw()
+            || snapshot.mode & PERMISSION_AND_SPECIAL_BITS != SECRET_FILE_MODE
+        {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::KeyPermissions,
+                "issuer signing key is not service-owned with exact mode 0400",
+            ));
+        }
+        if snapshot.size != KEY_BYTES as u64 {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::KeySize,
+                "issuer signing-key image is not exactly 32 bytes",
+            ));
+        }
+        let seals = inspect_key_seals(&image)?;
+        let mut bytes = [0_u8; KEY_BYTES];
+        image.read_exact_at(&mut bytes, 0).map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::KeyRead,
+                "cannot read the exact issuer signing key",
+                error,
+            )
+        })?;
+        let key = SigningKey::from_bytes(&bytes);
+        bytes.zeroize();
+        if key.verifying_key().as_bytes() != policy.verifying_key() {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::SigningKeyMismatch,
+                "issuer signing key does not match the caller-pinned policy",
+            ));
+        }
+        let admitted = Self {
+            key,
+            image,
+            snapshot,
+            seals,
+        };
+        admitted.validate(policy)?;
+        Ok(admitted)
+    }
+
+    fn validate(
+        &self,
+        policy: &CompilerExecutionIssuerPolicyV1,
+    ) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        require_close_on_exec(
+            &self.image,
+            IssuerAdmissionErrorKindV1::KeyCloseOnExec,
+            "issuer signing key",
+        )?;
+        if FileSnapshotV1::inspect(
+            &self.image,
+            IssuerAdmissionErrorKindV1::KeyInspect,
+            "issuer signing-key image",
+        )? != self.snapshot
+            || inspect_key_seals(&self.image)? != self.seals
+        {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::KeyChanged,
+                "issuer signing-key descriptor, metadata, or seals changed",
+            ));
+        }
+        let mut bytes = [0_u8; KEY_BYTES];
+        self.image.read_exact_at(&mut bytes, 0).map_err(|error| {
+            ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+                IssuerAdmissionErrorKindV1::KeyRead,
+                "cannot re-read the exact issuer signing key",
+                error,
+            )
+        })?;
+        let matches = self.key.as_bytes() == &bytes
+            && self.key.verifying_key().as_bytes() == policy.verifying_key();
+        bytes.zeroize();
+        if !matches {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::KeyChanged,
+                "issuer signing-key bytes or policy binding changed",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Move-only admitted process, static executable, policy, service channel, and signing key.
+///
+/// This value intentionally has no signing API and grants no compiler, publication, load, or
+/// launch authority. The durable issuer state machine will consume it.
+///
+/// ```compile_fail
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<
+///     fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerAdmissionV1,
+/// >();
+/// ```
+pub struct ProtectedCompilerExecutionIssuerAdmissionV1 {
+    process: ProtectedIssuerProcessV1,
+    service: ProtectedServiceAdmissionV1,
+    policy: CompilerExecutionIssuerPolicyV1,
+    executable: RetainedStaticIssuerExecutableV1,
+    signing_key: ProtectedIssuerSigningKeyV1,
+}
+
+impl fmt::Debug for ProtectedCompilerExecutionIssuerAdmissionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProtectedCompilerExecutionIssuerAdmissionV1")
+            .field(
+                "authority",
+                &PROTECTED_COMPILER_EXECUTION_ISSUER_AUTHORITY_V1,
+            )
+            .field("policy", &self.policy)
+            .field("measurements", &self.executable.measurements)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProtectedCompilerExecutionIssuerAdmissionV1 {
+    /// Admits one exact protected service occurrence under a caller-pinned issuer policy.
+    pub fn admit(
+        process: ProtectedIssuerProcessV1,
+        service: ProtectedServiceAdmissionV1,
+        policy: CompilerExecutionIssuerPolicyV1,
+        signing_key: OwnedFd,
+    ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        process.validate()?;
+        service
+            .validate_continuity()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        let executable = RetainedStaticIssuerExecutableV1::observe()?;
+        let measurements = executable.measurements;
+        if measurements.executable != policy.executable() {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::ExecutablePolicyMismatch,
+                "running issuer executable does not match the caller-pinned policy",
+            ));
+        }
+        if measurements.runtime != policy.runtime() {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::RuntimePolicyMismatch,
+                "issuer runtime closure does not match the caller-pinned policy",
+            ));
+        }
+        let signing_key = ProtectedIssuerSigningKeyV1::admit(signing_key, &policy)?;
+        process.validate()?;
+        service
+            .validate_continuity()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        let admitted = Self {
+            process,
+            service,
+            policy,
+            executable,
+            signing_key,
+        };
+        admitted.validate_continuity()?;
+        Ok(admitted)
+    }
+
+    /// Revalidates every retained process, descriptor, key, and policy axis.
+    pub fn validate_continuity(
+        &self,
+    ) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        self.process.validate()?;
+        self.executable.validate()?;
+        self.service
+            .validate_continuity()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        self.signing_key.validate(&self.policy)?;
+        if self.executable.measurements.executable != self.policy.executable()
+            || self.executable.measurements.runtime != self.policy.runtime()
+        {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::PolicyChanged,
+                "retained issuer measurements no longer match the pinned policy",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns the exact caller-pinned policy.
+    pub const fn policy(&self) -> &CompilerExecutionIssuerPolicyV1 {
+        &self.policy
+    }
+
+    /// Reports that admission alone does not authenticate a compiler occurrence.
+    pub const fn authenticates_protected_compiler_execution(&self) -> bool {
+        false
+    }
+
+    /// Reports that admission alone grants no compiler authority.
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+}
+
+fn inspect_key_seals(
+    image: &File,
+) -> Result<SealFlags, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    let seals = rustix::fs::fcntl_get_seals(image).map_err(|error| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            IssuerAdmissionErrorKindV1::KeySeals,
+            "issuer signing key is not an inspectable sealed memfd",
+            io::Error::from(error),
+        )
+    })?;
+    let optional = SealFlags::FUTURE_WRITE | SealFlags::EXEC;
+    let unexpected = seals - REQUIRED_KEY_SEALS - optional;
+    if !seals.contains(REQUIRED_KEY_SEALS) || !unexpected.is_empty() {
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            IssuerAdmissionErrorKindV1::KeySeals,
+            "issuer signing key does not have the exact immutable seal profile",
+        ));
+    }
+    Ok(seals)
+}
+
+fn require_close_on_exec(
+    descriptor: &impl AsFd,
+    kind: IssuerAdmissionErrorKindV1,
+    label: &'static str,
+) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+    let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
+        ProtectedCompilerExecutionIssuerAdmissionErrorV1::io(
+            kind,
+            format!("cannot inspect {label} descriptor flags"),
+            io::Error::from(error),
+        )
+    })?;
+    if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
+        return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+            kind,
+            format!("{label} descriptor lacks FD_CLOEXEC"),
+        ));
+    }
+    Ok(())
+}
+
+/// Stable category for a protected issuer admission failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum IssuerAdmissionErrorKindV1 {
+    ProcessHardening,
+    ProcessHardeningChanged,
+    ExecutableCloseOnExec,
+    ExecutableInspect,
+    ExecutableShape,
+    ExecutableSize,
+    ExecutableRead,
+    ExecutableChanged,
+    ExecutableNotStatic,
+    ExecutablePolicyMismatch,
+    RuntimePolicyMismatch,
+    KeyCloseOnExec,
+    KeyInspect,
+    KeyShape,
+    KeyPermissions,
+    KeySize,
+    KeySeals,
+    KeyRead,
+    KeyChanged,
+    SigningKeyMismatch,
+    PolicyChanged,
+    ServiceAdmission,
+    Protocol,
+}
+
+/// Failure while admitting or revalidating the protected compiler-execution issuer.
+#[derive(Debug)]
+pub enum ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
+    Failure {
+        kind: IssuerAdmissionErrorKindV1,
+        message: String,
+        source: Option<io::Error>,
+    },
+    StaticImage {
+        message: &'static str,
+        source: SealedStaticApplicationErrorV1,
+    },
+    ServiceAdmission(ProtectedServiceAdmissionErrorV1),
+    Protocol(CompilerExecutionAttestationErrorV1),
+}
+
+impl ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
+    fn new(kind: IssuerAdmissionErrorKindV1, message: impl Into<String>) -> Self {
+        Self::Failure {
+            kind,
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    fn io(kind: IssuerAdmissionErrorKindV1, message: impl Into<String>, source: io::Error) -> Self {
+        Self::Failure {
+            kind,
+            message: message.into(),
+            source: Some(source),
+        }
+    }
+
+    fn static_image(message: &'static str, source: SealedStaticApplicationErrorV1) -> Self {
+        Self::StaticImage { message, source }
+    }
+
+    /// Returns the stable failure category.
+    pub const fn kind(&self) -> IssuerAdmissionErrorKindV1 {
+        match self {
+            Self::Failure { kind, .. } => *kind,
+            Self::StaticImage { .. } => IssuerAdmissionErrorKindV1::ExecutableNotStatic,
+            Self::ServiceAdmission(_) => IssuerAdmissionErrorKindV1::ServiceAdmission,
+            Self::Protocol(_) => IssuerAdmissionErrorKindV1::Protocol,
+        }
+    }
+}
+
+impl fmt::Display for ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Failure { message, .. } => formatter.write_str(message),
+            Self::StaticImage { message, .. } => formatter.write_str(message),
+            Self::ServiceAdmission(error) => {
+                write!(formatter, "protected service changed: {error}")
+            }
+            Self::Protocol(error) => write!(formatter, "issuer protocol input is invalid: {error}"),
+        }
+    }
+}
+
+impl Error for ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Failure { source, .. } => {
+                source.as_ref().map(|error| error as &(dyn Error + 'static))
+            }
+            Self::StaticImage { source, .. } => Some(source),
+            Self::ServiceAdmission(error) => Some(error),
+            Self::Protocol(error) => Some(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    use rustix::fs::{MemfdFlags, Mode};
+
+    use super::*;
+    use crate::test_process_execution;
+
+    fn policy(key: &SigningKey) -> CompilerExecutionIssuerPolicyV1 {
+        CompilerExecutionIssuerPolicyV1::new(
+            1,
+            CompilerExecutionIssuerMeasurementV1::new([1; 32], 1).unwrap(),
+            sealed_static_issuer_runtime_measurement_v1(),
+            key.verifying_key().to_bytes(),
+        )
+        .unwrap()
+    }
+
+    fn key_image(seed: [u8; 32], sealed: bool, mode: u32) -> OwnedFd {
+        let image = rustix::fs::memfd_create(
+            "fe2o3-compiler-execution-issuer-key-v1",
+            MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
+        )
+        .unwrap();
+        let mut file = File::from(image);
+        file.write_all(&seed).unwrap();
+        rustix::fs::fchmod(&file, Mode::from_raw_mode(mode)).unwrap();
+        if sealed {
+            rustix::fs::fcntl_add_seals(
+                &file,
+                SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+            )
+            .unwrap();
+            rustix::fs::fcntl_add_seals(&file, SealFlags::SEAL).unwrap();
+        }
+        file.into()
+    }
+
+    #[test]
+    fn runtime_measurement_is_exact_and_nonzero() {
+        let measurement = sealed_static_issuer_runtime_measurement_v1();
+        let expected: [u8; 32] = Sha256::digest(SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1).into();
+        assert_eq!(measurement.sha256(), expected);
+        assert_eq!(
+            measurement.byte_len(),
+            SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1.len() as u64
+        );
+    }
+
+    #[test]
+    fn signing_key_admission_requires_every_security_axis() {
+        let key = SigningKey::from_bytes(&[0x31; 32]);
+        let policy = policy(&key);
+        let admitted = ProtectedIssuerSigningKeyV1::admit(
+            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
+            &policy,
+        )
+        .unwrap();
+        admitted.validate(&policy).unwrap();
+
+        for (image, expected) in [
+            (
+                key_image(key.to_bytes(), false, SECRET_FILE_MODE),
+                IssuerAdmissionErrorKindV1::KeySeals,
+            ),
+            (
+                key_image(key.to_bytes(), true, 0o600),
+                IssuerAdmissionErrorKindV1::KeyPermissions,
+            ),
+            (
+                key_image([0x32; 32], true, SECRET_FILE_MODE),
+                IssuerAdmissionErrorKindV1::SigningKeyMismatch,
+            ),
+            (
+                key_image([0x31; 32], true, SECRET_FILE_MODE),
+                IssuerAdmissionErrorKindV1::SigningKeyMismatch,
+            ),
+        ] {
+            let other_policy = if expected == IssuerAdmissionErrorKindV1::SigningKeyMismatch {
+                CompilerExecutionIssuerPolicyV1::new(
+                    1,
+                    policy.executable(),
+                    policy.runtime(),
+                    SigningKey::from_bytes(&[0x7f; 32])
+                        .verifying_key()
+                        .to_bytes(),
+                )
+                .unwrap()
+            } else {
+                policy.clone()
+            };
+            let error = ProtectedIssuerSigningKeyV1::admit(image, &other_policy).unwrap_err();
+            assert_eq!(error.kind(), expected);
+        }
+    }
+
+    #[test]
+    fn signing_key_rejects_length_and_cloexec_substitution() {
+        let key = SigningKey::from_bytes(&[0x41; 32]);
+        let policy = policy(&key);
+        let short = key_image([0x41; 32], false, SECRET_FILE_MODE);
+        let short_file = File::from(short);
+        short_file.set_len(31).unwrap();
+        rustix::fs::fcntl_add_seals(
+            &short_file,
+            SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
+        )
+        .unwrap();
+        rustix::fs::fcntl_add_seals(&short_file, SealFlags::SEAL).unwrap();
+        let error = ProtectedIssuerSigningKeyV1::admit(short_file.into(), &policy).unwrap_err();
+        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeySize);
+
+        let no_cloexec = key_image(key.to_bytes(), true, SECRET_FILE_MODE);
+        rustix::io::fcntl_setfd(&no_cloexec, rustix::io::FdFlags::empty()).unwrap();
+        let error = ProtectedIssuerSigningKeyV1::admit(no_cloexec, &policy).unwrap_err();
+        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyCloseOnExec);
+    }
+
+    #[test]
+    fn signing_key_continuity_rejects_descriptor_and_metadata_drift() {
+        let key = SigningKey::from_bytes(&[0x45; 32]);
+        let policy = policy(&key);
+        let admitted = ProtectedIssuerSigningKeyV1::admit(
+            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
+            &policy,
+        )
+        .unwrap();
+        rustix::io::fcntl_setfd(&admitted.image, rustix::io::FdFlags::empty()).unwrap();
+        let error = admitted.validate(&policy).unwrap_err();
+        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyCloseOnExec);
+
+        let admitted = ProtectedIssuerSigningKeyV1::admit(
+            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
+            &policy,
+        )
+        .unwrap();
+        rustix::fs::fchmod(&admitted.image, Mode::from_raw_mode(0o600)).unwrap();
+        let error = admitted.validate(&policy).unwrap_err();
+        assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyChanged);
+
+        let admitted = ProtectedIssuerSigningKeyV1::admit(
+            key_image(key.to_bytes(), true, SECRET_FILE_MODE),
+            &policy,
+        )
+        .unwrap();
+        assert!(admitted.image.write_all_at(&[0; 32], 0).is_err());
+        admitted.validate(&policy).unwrap();
+    }
+
+    #[test]
+    #[ignore = "subprocess helper for irreversible issuer process hardening"]
+    fn issuer_process_hardening_helper() {
+        let process = ProtectedIssuerProcessV1::harden().unwrap();
+        process.validate().unwrap();
+        println!("FE2O3_ISSUER_PROCESS_HARDENED");
+    }
+
+    #[test]
+    fn issuer_process_hardening_is_observed_in_a_child() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "compiler_execution_issuer::tests::issuer_process_hardening_helper",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .stdin(Stdio::null());
+        let output = test_process_execution::capture_output(&mut command).unwrap();
+        assert!(
+            output.status.success(),
+            "child stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("FE2O3_ISSUER_PROCESS_HARDENED"));
+    }
+
+    #[test]
+    fn current_test_binary_measurement_fails_closed_or_is_validated_static() {
+        let result = current_static_issuer_measurements_v1();
+        if let Ok(measurements) = result {
+            assert_ne!(measurements.sealed_static_identity(), [0; 32]);
+            assert_ne!(measurements.executable().sha256(), [0; 32]);
+        } else {
+            assert!(matches!(
+                result.unwrap_err().kind(),
+                IssuerAdmissionErrorKindV1::ExecutableNotStatic
+                    | IssuerAdmissionErrorKindV1::ExecutableSize
+            ));
+        }
+    }
+}

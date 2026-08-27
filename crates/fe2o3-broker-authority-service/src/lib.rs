@@ -105,12 +105,22 @@ compile_error!(
 );
 
 #[cfg(target_os = "linux")]
+mod compiler_execution_issuer;
+#[cfg(target_os = "linux")]
 mod durable_session_consume;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 mod session;
 
+#[cfg(target_os = "linux")]
+pub use compiler_execution_issuer::{
+    CurrentStaticIssuerMeasurementsV1, IssuerAdmissionErrorKindV1,
+    MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1, PROTECTED_COMPILER_EXECUTION_ISSUER_AUTHORITY_V1,
+    ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
+    ProtectedIssuerProcessV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
+    current_static_issuer_measurements_v1, sealed_static_issuer_runtime_measurement_v1,
+};
 #[cfg(target_os = "linux")]
 pub use durable_session_consume::{
     BROKER_DURABLE_SESSION_AUTHORITY_V1, BrokerDurableFaultPointV1, BrokerDurableOptionsV1,

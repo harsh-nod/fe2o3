@@ -8,9 +8,13 @@ protected-issuer milestone in
 codec is in `fe2o3-runtime-protocol`.
 
 The protocol authenticates an Ed25519 signing key selected by a caller-pinned
-policy. It does not yet authenticate protected compiler execution. No
-production issuer service, protected key, durable replay ledger, receipt
-carriage, or Worker V3 authority join exists at this checkpoint.
+policy. It does not yet authenticate protected compiler execution. A
+[protected issuer admission](compiler-execution-issuer-admission-v1.md) now
+retains the hardened service process, exact static executable, private service
+channel, and sealed policy-matched key, but deliberately exposes no signing
+operation. No freshness state machine, supervised compiler occurrence,
+durable replay ledger, receipt carriage, or Worker V3 authority join exists at
+this checkpoint.
 
 ## Records
 
@@ -95,7 +99,9 @@ exact policy, request, and current rollback anchor.
 ## Protected Issuer Contract
 
 The production service must add properties that the codec intentionally
-cannot provide:
+cannot provide. Admission now implements the process/executable/runtime/key
+preconditions in items 1 and 2; completing either item still requires every
+signing transition to revalidate that retained admission:
 
 1. Admit only the caller-pinned issuer executable and runtime closure.
 2. Own the signing key without exposing it to Cargo, rustc, the backend, or

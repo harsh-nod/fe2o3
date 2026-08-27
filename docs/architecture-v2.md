@@ -75,6 +75,14 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   constructs and seals V3 and installs it at fd 199 for rustc; the backend
   revalidates the exact process, target, role pins, and closure before
   production publication.
+- Compiler-execution attestation has fixed canonical policy, challenge,
+  request, and receipt records. The protected authority service admits one
+  hardened nondumpable `no_new_privs` process, one private descriptor-only
+  service boundary, the retained loader-independent static issuer executable,
+  and an immutable service-owned sealed Ed25519 key that matches the caller
+  policy. It rehashes the exact executable and key during continuity checks but
+  exposes no signing operation. Durable freshness, supervised compiler
+  occurrence, receipt carriage, and the Worker V3 authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and

@@ -95,10 +95,15 @@ Strict consumption independently reconstructs identical bytes. A shared V1
 protocol now fixes the caller-pinned issuer policy, subject-bound challenge,
 complete request, Ed25519 receipt, and rollback transition as exact canonical
 records. This removes ambiguity at the future service boundary, but all of
-these values remain authority-free: no protected issuer owns the signing key,
-freshness source, process supervision, or durable replay ledger, and no receipt
-is carried through restart or joined by the runtime verifier. Consequently
-`CompilerExecutionProvenance` remains open.
+these values remain authority-free. The protected authority service now has a
+shared Linux admission primitive and an issuer-admission owner that requires an
+irreversibly hardened process, a loader-independent static executable matching
+the caller policy, and an immutable service-owned sealed signing-key image.
+It retains and remeasures the exact executable and key at every continuity
+boundary, but exposes no signing operation. Freshness, supervised compiler
+occurrence, durable replay state, receipt carriage, and the runtime verifier
+join remain absent. Consequently `CompilerExecutionProvenance` remains open.
+See [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md).
 
 ## CUDA-Oxide status
 
