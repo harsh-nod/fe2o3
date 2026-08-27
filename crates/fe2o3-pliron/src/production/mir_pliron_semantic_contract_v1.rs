@@ -1454,10 +1454,10 @@ fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1
 mod tests {
     use super::require_overflow_free_static_latch_v1;
     use crate::{
-        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
-        ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
-        ProductionRankedValueV1, ProductionSessionErrorV1, ProductionSessionLimitsV1,
-        compile_ranked_kernel_for_lowering_v1,
+        ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedCompileErrorV1,
+        ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedTerminatorV1,
+        ProductionRankedValueIdV1, ProductionRankedValueV1, ProductionSessionErrorV1,
+        ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
     };
     use fe2o3_kernel_analysis::PlironProgressFindingV1;
 
@@ -1476,7 +1476,7 @@ mod tests {
     }
 
     #[test]
-    fn production_compilation_rejects_static_loop_with_overflowing_latch() {
+    fn production_progress_rejects_an_overflowing_static_latch_before_lowering() {
         let lower = ProductionRankedValueIdV1::new(0);
         let upper = ProductionRankedValueIdV1::new(1);
         let step = ProductionRankedValueIdV1::new(2);
@@ -1552,17 +1552,18 @@ mod tests {
             ProductionSessionLimitsV1::default(),
         )
         .unwrap_err();
-        let crate::ProductionRankedCompileErrorV1::Session(
-            ProductionSessionErrorV1::RankedSemantic(error),
-        ) = error
+        let ProductionRankedCompileErrorV1::Session(ProductionSessionErrorV1::RankedSemantic(
+            error,
+        )) = error
         else {
-            panic!("expected semantic progress rejection");
+            panic!("overflowing static latch reached an unexpected failure boundary: {error:?}");
         };
-        assert!(matches!(
+        assert_eq!(
             error.report().progress().findings(),
-            [PlironProgressFindingV1::ProgressIncomplete { blocks, reason }]
-                if blocks == &[1, 2]
-                    && *reason == "the largest guarded induction value plus the step can overflow u64"
-        ));
+            &[PlironProgressFindingV1::ProgressIncomplete {
+                blocks: vec![1, 2],
+                reason: "the largest guarded induction value plus the step can overflow u64",
+            }],
+        );
     }
 }

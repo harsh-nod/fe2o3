@@ -1020,7 +1020,7 @@ mod platform {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             configure_worker_pre_exec(&mut command);
-            let child = command.spawn().map_err(|error| {
+            let child = crate::process_execution::spawn(&mut command).map_err(|error| {
                 AuthenticatedPhysicalMachineEffectErrorV1::detail(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::Spawn,
                     error,
@@ -2627,7 +2627,7 @@ mod platform {
             let mut command = Command::new("/bin/sleep");
             command.arg("30");
             configure_worker_pre_exec(&mut command);
-            let child = command.spawn().unwrap();
+            let child = crate::process_execution::spawn(&mut command).unwrap();
             let pid = child.id();
             (child, pid)
         }
@@ -2708,7 +2708,9 @@ mod platform {
         fn unrelated_process_cannot_be_retained_as_a_descendant() {
             let (child, _) = spawned_session_child();
             let mut worker = ChildProcessGuard::new(child).unwrap();
-            let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+            let mut command = Command::new("/bin/sleep");
+            command.arg("30");
+            let mut unrelated = crate::process_execution::spawn(&mut command).unwrap();
             let unrelated_pid = child_pid(&unrelated);
             let error = retain_descendant_pidfd(child_pid(&worker.child), unrelated_pid)
                 .expect_err("parent-session process was accepted as a worker descendant");

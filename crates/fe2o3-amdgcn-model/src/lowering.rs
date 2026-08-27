@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 
 use fe2o3_kernel_descriptor::Gfx942LaunchBoundsV1;
 use fe2o3_kernel_ir::{
+    AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME,
     AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE, AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE,
@@ -24,10 +25,11 @@ use fe2o3_kernel_ir::{
     MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
     NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
     PointerDistanceUnit, SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY,
-    SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, ScalarType, Signature, SynchronizationScope,
-    TargetCapability, Terminator, Type, UnaryOp, ValueId, VerificationErrors,
-    WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
-    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow, verify_module,
+    SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY, SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY,
+    ScalarType, Signature, SynchronizationScope, TargetCapability, TensorInstructionProfileV1,
+    Terminator, Type, UnaryOp, ValueId, VerificationErrors, WaveF32ReductionKindV1, WaveOperation,
+    WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent, WorkgroupSize,
+    analyze_control_flow, verify_module,
 };
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
@@ -77,6 +79,10 @@ impl LoweringTarget {
 
     const fn supports_gfx942_diagnostics(self) -> bool {
         !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
+    }
+
+    const fn supports_amdgpu_diagnostics(self) -> bool {
+        !matches!(self, Self::Baseline)
     }
 
     const fn supports_gfx942_xnack_minus_binding(self) -> bool {
@@ -1605,7 +1611,11 @@ impl FloatRequirements {
     }
 }
 
-fn emit_float_support_declarations(output: &mut dyn fmt::Write, requirements: &FloatRequirements) {
+fn emit_float_support_declarations(
+    output: &mut dyn fmt::Write,
+    requirements: &FloatRequirements,
+    target: LoweringTarget,
+) {
     if requirements
         .conversions
         .contains(&FloatConversionKind::F16ToF32)
@@ -1622,9 +1632,21 @@ fn emit_float_support_declarations(output: &mut dyn fmt::Write, requirements: &F
     }
     for function in &requirements.math {
         match function.required_implementation() {
+            F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1 => {
+                let arguments = if target == LoweringTarget::Gfx950XnackMinusV1 {
+                    "float"
+                } else {
+                    "float, metadata, metadata"
+                };
+                writeln!(
+                    output,
+                    "declare float @{}({arguments})",
+                    constrained_math_name(*function, target)
+                )
+                .unwrap();
+            }
             F32MathImplementation::ConstrainedLlvm => {
                 let arguments = match function {
-                    F32MathFunction::Sqrt => "float, metadata, metadata",
                     F32MathFunction::FusedMultiplyAdd => "float, float, float, metadata, metadata",
                     F32MathFunction::Floor
                     | F32MathFunction::Ceil
@@ -1635,7 +1657,7 @@ fn emit_float_support_declarations(output: &mut dyn fmt::Write, requirements: &F
                 writeln!(
                     output,
                     "declare float @{}({arguments})",
-                    constrained_math_name(*function)
+                    constrained_math_name(*function, target)
                 )
                 .unwrap();
             }
@@ -2007,8 +2029,9 @@ fn narrow_float_helpers(format: NarrowFloatFormat) -> (&'static str, &'static st
     }
 }
 
-fn constrained_math_name(function: F32MathFunction) -> &'static str {
+fn constrained_math_name(function: F32MathFunction, target: LoweringTarget) -> &'static str {
     match function {
+        F32MathFunction::Sqrt if target == LoweringTarget::Gfx950XnackMinusV1 => "llvm.sqrt.f32",
         F32MathFunction::Sqrt => "llvm.experimental.constrained.sqrt.f32",
         F32MathFunction::FusedMultiplyAdd => "llvm.experimental.constrained.fma.f32",
         F32MathFunction::Floor => "llvm.experimental.constrained.floor.f32",
@@ -2101,7 +2124,7 @@ fn emit_compiler_module(
         )
         .unwrap();
     }
-    emit_float_support_declarations(&mut output, &float_requirements);
+    emit_float_support_declarations(&mut output, &float_requirements, target);
     emit_diagnostic_declarations(&mut output, &diagnostic_requirements);
     for function in declarations {
         writeln!(
@@ -2267,6 +2290,20 @@ fn collect_intrinsic_declarations<'a>(
     for lowerer in lowerers {
         let body = lowerer.function.body.as_ref().expect("definition required");
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            if let OperationKind::Intrinsic(intrinsic) = &operation.kind
+                && let IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::WorkgroupCount,
+                    ..
+                } = intrinsic.kind
+            {
+                insert_intrinsic(
+                    &mut declarations,
+                    AmdgcnIntrinsic::DispatchPtr,
+                    "ptr addrspace(4)",
+                    "",
+                    IntrinsicAttribute::ReadNone,
+                );
+            }
             match &operation.kind {
                 OperationKind::Intrinsic(_) => {
                     let rank = lowerer.kernel.map_or(1, |kernel| kernel.domain.rank());
@@ -2286,14 +2323,11 @@ fn collect_intrinsic_declarations<'a>(
                             IntrinsicAttribute::ReadNone,
                         );
                     }
-                    for dim in [Dim::X, Dim::Y]
-                        .into_iter()
-                        .take(usize::from(rank.saturating_sub(1)))
-                    {
+                    if rank > 1 {
                         insert_intrinsic(
                             &mut declarations,
-                            AmdgcnIntrinsic::GridSize(dim),
-                            "i32",
+                            AmdgcnIntrinsic::DispatchPtr,
+                            "ptr addrspace(4)",
                             "",
                             IntrinsicAttribute::ReadNone,
                         );
@@ -2594,12 +2628,17 @@ fn validate_capabilities(
                     && matches!(
                         name.as_str(),
                         SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
+                            | SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY
                             | SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
                     ) => {}
             TargetCapability::Extension { namespace, name }
                 if target.supports_gfx942_diagnostics()
                     && namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target.supports_amdgpu_diagnostics()
+                    && namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME => {}
             TargetCapability::Extension { namespace, name }
                 if target.supports_gfx942_xnack_minus_binding()
                     && namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
@@ -3056,8 +3095,18 @@ impl<'a> FunctionLowerer<'a> {
         }
         writeln!(
             output,
-            "  {result}.grid.x.i32 = call i32 @{}()",
-            AmdgcnIntrinsic::GridSize(Dim::X).llvm_name()
+            "  {result}.dispatch = call ptr addrspace(4) @{}()",
+            AmdgcnIntrinsic::DispatchPtr.llvm_name()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.x.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 12"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.x.i32 = load i32, ptr addrspace(4) {result}.grid.x.ptr, align 4"
         )
         .unwrap();
         writeln!(
@@ -3076,8 +3125,12 @@ impl<'a> FunctionLowerer<'a> {
         }
         writeln!(
             output,
-            "  {result}.grid.y.i32 = call i32 @{}()",
-            AmdgcnIntrinsic::GridSize(Dim::Y).llvm_name()
+            "  {result}.grid.y.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 16"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.y.i32 = load i32, ptr addrspace(4) {result}.grid.y.ptr, align 4"
         )
         .unwrap();
         writeln!(
@@ -3233,6 +3286,33 @@ impl<'a> FunctionLowerer<'a> {
             .any(|declared| declared == required)
     }
 
+    fn declares_operation_capability(&self, required: &TargetCapability) -> bool {
+        if self.declares_capability(required) {
+            return true;
+        }
+        match required {
+            TargetCapability::Extension { namespace, name }
+                if namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME =>
+            {
+                self.declares_capability(&TargetCapability::Extension {
+                    namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+                    name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+                })
+            }
+            TargetCapability::Extension { namespace, name }
+                if namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME =>
+            {
+                self.declares_capability(&TargetCapability::Extension {
+                    namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+                    name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+                })
+            }
+            _ => false,
+        }
+    }
+
     fn validate_operation_capability_declarations(
         &self,
         operation: &Operation,
@@ -3301,10 +3381,15 @@ impl<'a> FunctionLowerer<'a> {
                     TargetCapability::Extension { namespace, name }
                         if namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
                             && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME
+                ) || matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                            && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME
                 )
             })
         {
-            if !self.declares_capability(&required) {
+            if !self.declares_operation_capability(&required) {
                 return Err(LoweringErrors::one(
                     location.clone(),
                     LoweringDiagnosticCode::UnsupportedCapability,
@@ -3659,7 +3744,10 @@ impl<'a> FunctionLowerer<'a> {
                             kind: IndexKind::Global,
                             axis: Axis::X,
                         } | IntrinsicKind::InvocationIndex {
-                            kind: IndexKind::Local,
+                            kind: IndexKind::Local
+                                | IndexKind::Workgroup
+                                | IndexKind::WorkgroupSize
+                                | IndexKind::WorkgroupCount,
                             axis: Axis::X,
                         }
                     )) => {}
@@ -4018,11 +4106,23 @@ impl<'a> FunctionLowerer<'a> {
         diagnostic: &AmdGpuDiagnosticOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if !self.target.supports_gfx942_diagnostics() {
+        if !self.target.supports_amdgpu_diagnostics() {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
-                "device diagnostics are admitted only by the exact gfx942 profile",
+                "device diagnostics require an exact supported AMDGPU target profile",
+            ));
+        }
+        if self.target == LoweringTarget::Gfx950XnackMinusV1
+            && !matches!(
+                diagnostic,
+                AmdGpuDiagnosticOperation::Trap | AmdGpuDiagnosticOperation::AssertFail { .. }
+            )
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedDiagnosticOperation,
+                "the exact gfx950 profile admits only terminating trap diagnostics",
             ));
         }
         let require_constant = |value, field: &str| {
@@ -4073,21 +4173,44 @@ impl<'a> FunctionLowerer<'a> {
     }
 
     fn constant_u32(&self, value: ValueId) -> Option<u32> {
-        self.function
+        let operation = self
+            .function
             .body
             .as_ref()?
             .blocks
             .iter()
             .flat_map(|block| &block.operations)
-            .find_map(|operation| {
-                if operation.results.first().map(|result| result.id) != Some(value) {
-                    return None;
-                }
-                match operation.kind {
-                    OperationKind::Constant(Constant::U32(value)) => Some(value),
-                    _ => None,
-                }
-            })
+            .find(|operation| operation.results.iter().any(|result| result.id == value))?;
+        match operation.kind {
+            OperationKind::Constant(Constant::U32(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn bounded_u32_source_lane(&self, value: ValueId, width: u32) -> bool {
+        if width == 0 || !width.is_power_of_two() || width > 64 {
+            return false;
+        }
+        if self.constant_u32(value).is_some_and(|lane| lane < width) {
+            return true;
+        }
+        let Some(OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            lhs,
+            rhs,
+        }) = self
+            .function
+            .body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .find(|operation| operation.results.iter().any(|result| result.id == value))
+            .map(|operation| &operation.kind)
+        else {
+            return false;
+        };
+        self.constant_u32(*lhs).is_some_and(|mask| mask < width)
+            || self.constant_u32(*rhs).is_some_and(|mask| mask < width)
     }
 
     fn validate_inline_assembly(
@@ -4417,8 +4540,7 @@ impl<'a> FunctionLowerer<'a> {
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
         match wave.kind {
-            WaveOperationKind::ReduceF32 { tile_width, .. }
-            | WaveOperationKind::BroadcastF32 { tile_width, .. } => {
+            WaveOperationKind::ReduceF32 { tile_width, .. } => {
                 if !self.target.supports_gfx950_attention()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
@@ -4432,6 +4554,22 @@ impl<'a> FunctionLowerer<'a> {
                     ));
                 }
             }
+            WaveOperationKind::BroadcastF32 { tile_width, .. } => {
+                if !self.target.supports_gfx950_attention()
+                    || self.kernel.is_none()
+                    || wave.width != WaveWidth::Wave64
+                    || wave.active_lanes != 64
+                    || tile_width == 0
+                    || !tile_width.is_power_of_two()
+                    || tile_width > 64
+                {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedWaveOperation,
+                        "gfx950 f32 broadcast requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
+                    ));
+                }
+            }
             _ => {}
         }
         if let WaveOperationKind::BroadcastF32 {
@@ -4439,9 +4577,7 @@ impl<'a> FunctionLowerer<'a> {
             tile_width,
             ..
         } = wave.kind
-            && !self
-                .constant_u32(source_lane)
-                .is_some_and(|lane| lane < tile_width)
+            && !self.bounded_u32_source_lane(source_lane, tile_width)
         {
             return Err(LoweringErrors::one(
                 location.clone(),
@@ -4594,6 +4730,7 @@ impl<'a> FunctionLowerer<'a> {
         if self.emit_workgroup_memory_declarations(&mut output) {
             writeln!(output).unwrap();
         }
+        let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self));
         writeln!(
             output,
             "declare i32 @{}() #1",
@@ -4606,6 +4743,23 @@ impl<'a> FunctionLowerer<'a> {
             AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
         )
         .unwrap();
+        for (symbol, declaration) in invocation_intrinsics {
+            if symbol == AmdgcnIntrinsic::DispatchPtr.llvm_name() {
+                debug_assert_eq!(declaration.result, "ptr addrspace(4)");
+                debug_assert_eq!(declaration.arguments, "");
+                debug_assert_eq!(declaration.attribute, IntrinsicAttribute::ReadNone);
+                writeln!(output, "declare ptr addrspace(4) @{symbol}() #1").unwrap();
+            } else if (symbol.starts_with("llvm.amdgcn.workitem.id.")
+                || symbol.starts_with("llvm.amdgcn.workgroup.id."))
+                && symbol != AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+                && symbol != AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+            {
+                debug_assert_eq!(declaration.result, "i32");
+                debug_assert_eq!(declaration.arguments, "");
+                debug_assert_eq!(declaration.attribute, IntrinsicAttribute::ReadNone);
+                writeln!(output, "declare i32 @{symbol}() #1").unwrap();
+            }
+        }
         if has_workgroup_barrier && !self.target.requires_physical_workgroup_barrier() {
             writeln!(
                 output,
@@ -4691,7 +4845,7 @@ impl<'a> FunctionLowerer<'a> {
             .unwrap();
         }
         emit_diagnostic_declarations(&mut output, &diagnostic_requirements);
-        emit_float_support_declarations(&mut output, &float_requirements);
+        emit_float_support_declarations(&mut output, &float_requirements, self.target);
         writeln!(output).unwrap();
 
         emit_float_support_definitions(&mut output, &float_requirements, self.target);
@@ -5070,23 +5224,88 @@ impl<'a> FunctionLowerer<'a> {
                     self.emit_logical_global_id(output, &result);
                     return Ok(());
                 }
-                writeln!(
-                    output,
-                    "  {result}.local.i32 = call i32 @{}()",
-                    AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "  {result}.local = zext i32 {result}.local.i32 to i64"
-                )
-                .unwrap();
                 match intrinsic.kind {
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::Local,
                         axis: Axis::X,
                     } => {
+                        writeln!(
+                            output,
+                            "  {result}.local.i32 = call i32 @{}()",
+                            AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.local = zext i32 {result}.local.i32 to i64"
+                        )
+                        .unwrap();
                         writeln!(output, "  {result} = add i64 {result}.local, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Workgroup,
+                        axis: Axis::X,
+                    } => {
+                        writeln!(
+                            output,
+                            "  {result}.group.i32 = call i32 @{}()",
+                            AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.group = zext i32 {result}.group.i32 to i64"
+                        )
+                        .unwrap();
+                        writeln!(output, "  {result} = add i64 {result}.group, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupSize,
+                        axis: Axis::X,
+                    } => {
+                        let extent = self
+                            .workgroup_size
+                            .expect("validated workgroup-size intrinsic")
+                            .x;
+                        writeln!(output, "  {result} = add i64 {extent}, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupCount,
+                        axis: Axis::X,
+                    } => {
+                        let extent = self
+                            .workgroup_size
+                            .expect("validated workgroup-count intrinsic")
+                            .x;
+                        writeln!(
+                            output,
+                            "  {result}.dispatch = call ptr addrspace(4) @{}()",
+                            AmdgcnIntrinsic::DispatchPtr.llvm_name()
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 12"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.grid.i32 = load i32, ptr addrspace(4) {result}.grid.ptr, align 4"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.grid = zext i32 {result}.grid.i32 to i64"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.rounded = add i64 {result}.grid, {}",
+                            extent - 1
+                        )
+                        .unwrap();
+                        writeln!(output, "  {result} = udiv i64 {result}.rounded, {extent}")
+                            .unwrap();
                     }
                     _ => unreachable!("preflight rejected unsupported intrinsic"),
                 }
@@ -5567,15 +5786,24 @@ impl<'a> FunctionLowerer<'a> {
                         .unwrap();
                     }
                 }
-                let format_selector =
+                let mixed_fp4_by_fp8 = matrix.tensor_layout.as_ref().is_some_and(|contract| {
+                    contract.profile
+                        == TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64
+                });
+                let lhs_format_selector =
                     if *profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
                         4
                     } else {
                         0
                     };
+                let rhs_format_selector = if mixed_fp4_by_fp8 {
+                    0
+                } else {
+                    lhs_format_selector
+                };
                 writeln!(
                     output,
-                    "  %{temporary}.mfma = call <4 x float> @{}(<8 x i32> %{temporary}.lhs.7, <8 x i32> %{temporary}.rhs.7, <4 x float> %{temporary}.acc.3, i32 {format_selector}, i32 {format_selector}, i32 0, i32 0, i32 0, i32 0)",
+                    "  %{temporary}.mfma = call <4 x float> @{}(<8 x i32> %{temporary}.lhs.7, <8 x i32> %{temporary}.rhs.7, <4 x float> %{temporary}.acc.3, i32 {lhs_format_selector}, i32 {rhs_format_selector}, i32 0, i32 0, i32 0, i32 0)",
                     AmdgcnIntrinsic::MfmaScaleF32M16N16K128F8F6F4V8I32.llvm_name(),
                 )
                 .unwrap();
@@ -6684,11 +6912,16 @@ impl<'a> FunctionLowerer<'a> {
                 source_lane,
                 tile_width,
             } => {
-                debug_assert_eq!(tile_width, 16);
+                debug_assert!(tile_width != 0 && tile_width.is_power_of_two() && tile_width <= 64);
                 let value = self.value(value).0;
                 let source_lane = self.value(source_lane).0;
                 self.emit_lane_id(output, &format!("{result}.lane"), wave.width);
-                writeln!(output, "  {result}.tile.base = and i32 {result}.lane, -16").unwrap();
+                writeln!(
+                    output,
+                    "  {result}.tile.base = and i32 {result}.lane, {}",
+                    -(tile_width as i32),
+                )
+                .unwrap();
                 writeln!(
                     output,
                     "  {result}.source = add i32 {result}.tile.base, {source_lane}"
@@ -6845,6 +7078,23 @@ impl<'a> FunctionLowerer<'a> {
                 implementation,
                 arguments,
             } => match implementation {
+                F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1 => {
+                    let [argument] = arguments.as_slice() else {
+                        unreachable!("verifier checked sqrt arity")
+                    };
+                    let metadata = if self.target == LoweringTarget::Gfx950XnackMinusV1 {
+                        ""
+                    } else {
+                        ", metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\""
+                    };
+                    writeln!(
+                        output,
+                        "  {result} = call float @{}(float {}{metadata})",
+                        constrained_math_name(*function, self.target),
+                        self.value(*argument).0
+                    )
+                    .unwrap();
+                }
                 F32MathImplementation::ConstrainedLlvm => {
                     let arguments = arguments
                         .iter()
@@ -6852,7 +7102,7 @@ impl<'a> FunctionLowerer<'a> {
                         .collect::<Vec<_>>()
                         .join(", ");
                     let metadata = match function {
-                        F32MathFunction::Sqrt | F32MathFunction::FusedMultiplyAdd => {
+                        F32MathFunction::FusedMultiplyAdd => {
                             ", metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\""
                         }
                         F32MathFunction::Floor
@@ -6864,7 +7114,7 @@ impl<'a> FunctionLowerer<'a> {
                     writeln!(
                         output,
                         "  {result} = call float @{}({arguments}{metadata})",
-                        constrained_math_name(*function)
+                        constrained_math_name(*function, self.target)
                     )
                     .unwrap();
                 }

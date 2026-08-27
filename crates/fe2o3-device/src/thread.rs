@@ -78,10 +78,15 @@ pub struct WorkgroupSize {
 impl WorkgroupSize {
     pub const fn new(x: u32, y: u32, z: u32) -> Option<Self> {
         if x == 0 || y == 0 || z == 0 {
-            None
-        } else {
-            Some(Self { x, y, z })
+            return None;
         }
+        let Some(xy) = (x as u64).checked_mul(y as u64) else {
+            return None;
+        };
+        if xy.checked_mul(z as u64).is_none() {
+            return None;
+        }
+        Some(Self { x, y, z })
     }
 
     pub const fn x(self) -> u32 {
@@ -100,11 +105,8 @@ impl WorkgroupSize {
         id.x < self.x && id.y < self.y && id.z < self.z
     }
 
-    pub const fn volume(self) -> Option<u64> {
-        match (self.x as u64).checked_mul(self.y as u64) {
-            Some(xy) => xy.checked_mul(self.z as u64),
-            None => None,
-        }
+    pub const fn volume(self) -> u64 {
+        self.x as u64 * self.y as u64 * self.z as u64
     }
 }
 
@@ -252,10 +254,32 @@ impl Invocation3D {
     ///
     /// Unsupported lowering and host execution trap. Unlike
     /// [`Self::from_raw_parts`], this API accepts no caller-asserted identity.
-    #[inline(never)]
+    #[inline(always)]
     #[rustc_diagnostic_item = "fe2o3_device_invocation_3d_current"]
     pub fn current() -> Self {
-        unreachable!("the current invocation must be issued by authenticated lowering")
+        Self {
+            workitem: WorkitemId {
+                x: thread_idx_x(),
+                y: thread_idx_y(),
+                z: thread_idx_z(),
+            },
+            workgroup: WorkgroupId {
+                x: block_idx_x(),
+                y: block_idx_y(),
+                z: block_idx_z(),
+            },
+            workgroup_size: WorkgroupSize {
+                x: block_dim_x(),
+                y: block_dim_y(),
+                z: block_dim_z(),
+            },
+            grid_size: GridSize {
+                x: grid_dim_x(),
+                y: grid_dim_y(),
+                z: grid_dim_z(),
+            },
+            _not_send_sync: PhantomData,
+        }
     }
 
     /// Constructs an invocation snapshot from caller-asserted coordinates.
@@ -839,32 +863,23 @@ impl GridLeader {
 /// This is a target-neutral device intrinsic. A backend may derive it from
 /// physical workgroup and local-invocation coordinates, but callers do not
 /// observe that mapping.
-#[inline(never)]
+#[inline(always)]
 pub fn global_id_1d() -> usize {
     let workgroup = block_idx_x() as u64;
     let workgroup_size = block_dim_x() as u64;
     let local = thread_idx_x() as u64;
-    match workgroup
-        .checked_mul(workgroup_size)
-        .and_then(|base| base.checked_add(local))
-    {
-        Some(index) => index as usize,
-        None => usize::MAX,
-    }
+    (workgroup * workgroup_size + local) as usize
 }
 
 /// Returns the number of invocations in the logical 1D launch.
 ///
 /// This is the logical global extent, independent of how a backend partitions
 /// the launch into physical workgroups.
-#[inline(never)]
+#[inline(always)]
 pub fn launch_extent_1d() -> usize {
     let workgroups = grid_dim_x() as u64;
     let workgroup_size = block_dim_x() as u64;
-    match workgroups.checked_mul(workgroup_size) {
-        Some(extent) => extent as usize,
-        None => 0,
-    }
+    (workgroups * workgroup_size) as usize
 }
 
 #[inline(never)]
@@ -884,7 +899,7 @@ pub fn index_1d() -> ThreadIndex {
 /// must preserve the one-to-one logical launch mapping. Until the production
 /// importer recognizes this diagnostic identity, it must reject the call
 /// rather than lower it as an ordinary host function.
-#[inline(always)]
+#[inline(never)]
 #[rustc_diagnostic_item = "fe2o3_device_grid_leader_current"]
 pub fn grid_leader() -> Option<GridLeader> {
     if global_id_1d() == 0 {
@@ -1105,7 +1120,7 @@ mod tests {
         assert!(!workgroup_size.contains(WorkitemId::new(8, 3, 1)));
         assert!(grid_size.contains(WorkgroupId::new(2, 4, 6)));
         assert!(!grid_size.contains(WorkgroupId::new(3, 4, 6)));
-        assert_eq!(workgroup_size.volume(), Some(64));
+        assert_eq!(workgroup_size.volume(), 64);
         assert_eq!(grid_size.volume(), Some(105));
     }
 

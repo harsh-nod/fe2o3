@@ -31,7 +31,11 @@ pub(crate) mod submit;
 pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1,
     ComputeAqlQueueSessionV1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1,
-    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+    GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1, GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDispatchBufferV1,
+    Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
+    Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
+    execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
 /// Canonical claim boundary for the executable native-queue foundation.

@@ -335,6 +335,8 @@ fn protected_target_admission_accepts_only_exact_typed_production_profiles() {
         ));
     }
 
+    assert!(AmdTargetIdTextV1::new("GFX950:xnack-").is_err());
+
     let closure = baseline_closure();
     assert!(matches!(
         try_descriptor_with(

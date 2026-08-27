@@ -838,9 +838,9 @@ fn os_string(value: Vec<u8>) -> Result<OsString, String> {
 mod tests {
     use super::*;
     use crate::compiler_toolchain::compiler_closure_v2_from_pins;
+    use rustix::fs::mkfifoat;
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
-    use std::os::unix::net::UnixListener;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -895,6 +895,10 @@ mod tests {
         );
         assert!(directory.0.join("fe2o3/.fe2o3-owned-v1").is_file());
         assert!(directory.0.join("fe2o3/.codegen-generation-v1").exists());
+    }
+
+    fn create_special_file(directory: &PinnedDirectory, name: &str) {
+        mkfifoat(directory.file(), name, Mode::RUSR | Mode::WUSR).unwrap();
     }
 
     #[test]
@@ -1015,9 +1019,9 @@ mod tests {
         assert!(snapshot(&directory.pinned()).is_err());
 
         fs::remove_file(&hostile).unwrap();
-        let listener = UnixListener::bind(&hostile).unwrap();
-        assert!(snapshot(&directory.pinned()).is_err());
-        drop(listener);
+        let pinned = directory.pinned();
+        create_special_file(&pinned, "hostile");
+        assert!(snapshot(&pinned).is_err());
         fs::remove_file(&hostile).unwrap();
 
         fs::write(&hostile, b"unreadable").unwrap();
@@ -1111,10 +1115,14 @@ mod tests {
         assert_committed_artifacts_preserved(&directory);
 
         fs::remove_file(&hostile).unwrap();
-        let listener = UnixListener::bind(&hostile).unwrap();
+        let generated = directory
+            .pinned()
+            .open_child("fe2o3", "generated artifact directory")
+            .unwrap()
+            .unwrap();
+        create_special_file(&generated, "hostile");
         assert!(rejected_prepare(&directory, semantic).contains("generated artifact"));
         assert_committed_artifacts_preserved(&directory);
-        drop(listener);
         fs::remove_file(&hostile).unwrap();
 
         fs::write(&hostile, b"unreadable").unwrap();

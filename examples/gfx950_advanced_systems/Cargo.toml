@@ -7,10 +7,21 @@ repository = "https://github.com/powderluv/fe2o3"
 rust-version = "1.94"
 publish = false
 
+[features]
+kernel-moe-route = []
+kernel-moe-expert-rank = []
+kernel-combine-expert-ranks = []
+kernel-speculative-transaction = []
+kernel-qwen-ngram-gather = []
+kernel-stage-gradient-shard = []
+kernel-muon-update = []
+
 [workspace]
 
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
 fe2o3-host = { path = "../../crates/fe2o3-host" }
 
 [lib]

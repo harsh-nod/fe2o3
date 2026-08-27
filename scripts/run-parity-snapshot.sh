@@ -10,7 +10,6 @@ readonly EVIDENCE_SCRIPT="${SCRIPT_DIR}/parity-evidence.sh"
 readonly DEFAULT_TIMEOUT_SECONDS=7200
 readonly MAX_TIMEOUT_SECONDS=86400
 readonly MAX_PATH_BYTES=2048
-readonly MAX_ID_BYTES=512
 
 declare -ar CORE_SHARDS=(Q1 Q2 Q3 Q4 Q5 Q6 Q7)
 
@@ -24,13 +23,7 @@ Usage:
 Options:
   --shard NAME             Select one Q1-Q7 shard; repeat to select several
   --gfx942-compile         Add the optional gfx942 compile shard
-  --gfx942-hardware        Add the optional gfx942 hardware shard
-  --llvm-link-worker PATH  Pinned direct LLVM Worker V2 executable
-  --llvm-link-worker-build-id ID
-                           Pinned direct LLVM Worker V2 build ID
-  --llvm-build-id ID       Pinned LLVM build ID used by Worker V2
-  --llvm-as PATH           Pinned llvm-as executable used by Worker V2
-  --vecadd-hsaco PATH      Archive-relative HSACO for the hardware shard
+  --gfx942-hardware        Fail closed: the Worker V2 hardware shard is retired
   --verus PATH             Absolute Verus executable for Q7
   --timeout-seconds N      Per-shard bound, 1..86400 (default: 7200)
   --path PATH              Exact absolute-only PATH recorded for commands
@@ -52,7 +45,7 @@ die() {
 
 valid_shard() {
   case "$1" in
-    Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | GFX942-COMPILE | GFX942-HARDWARE) return 0 ;;
+    Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | GFX942-COMPILE) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -69,42 +62,6 @@ valid_path_value() {
   local value="$1"
   ((${#value} >= 1 && ${#value} <= MAX_PATH_BYTES)) &&
     [[ "${value}" == /* && "${value}" != *$'\n'* && "${value}" != *$'\t'* ]]
-}
-
-valid_id_value() {
-  local value="$1"
-  ((${#value} >= 1 && ${#value} <= MAX_ID_BYTES)) &&
-    [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._:+/@-]*$ ]]
-}
-
-valid_executable_path() {
-  local value="$1"
-  local segment
-  local -a segments=()
-
-  ((${#value} >= 2 && ${#value} <= 1024)) || return 1
-  [[ "${value}" =~ ^/[A-Za-z0-9._/+:-]+$ ]] || return 1
-  [[ "${value}" != *//* && "${value}" != */ ]] || return 1
-  IFS=/ read -r -a segments <<<"${value}"
-  for segment in "${segments[@]}"; do
-    [[ "${segment}" != . && "${segment}" != .. ]] || return 1
-  done
-  [[ -f "${value}" && -x "${value}" ]]
-}
-
-valid_relative_path() {
-  local value="$1"
-  local segment
-  local -a segments=()
-
-  ((${#value} >= 1 && ${#value} <= 512)) || return 1
-  [[ "${value}" != /* && "${value}" != *$'\n'* && "${value}" != *$'\t'* ]] || return 1
-  [[ "${value}" != *//* && "${value}" != */ ]] || return 1
-  [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._/+:-]*$ ]] || return 1
-  IFS=/ read -r -a segments <<<"${value}"
-  for segment in "${segments[@]}"; do
-    [[ -n "${segment}" && "${segment}" != . && "${segment}" != .. ]] || return 1
-  done
 }
 
 validate_path_list() {
@@ -197,7 +154,9 @@ build_shard_command() {
       append_command command "${bash_bin}" scripts/tests/parity-evidence.sh
       ;;
     Q2)
-      append_command command "${cargo_bin}" test -p rustc-codegen-fe2o3 --locked
+      append_command command "${cargo_bin}" test -p rustc-codegen-fe2o3 --locked --lib
+      append_command command "${cargo_bin}" test -p rustc-codegen-fe2o3 --locked \
+        --features qualification-oracles-test-only --lib
       ;;
     Q3)
       append_command command "${cargo_bin}" test -p dialect-mir --locked
@@ -221,7 +180,7 @@ build_shard_command() {
       append_command command "${cargo_bin}" test -p fe2o3-hsa-runtime --locked
       ;;
     Q6)
-      append_command command "${cargo_bin}" test -p cargo-fe2o3 \
+      append_command command "${cargo_bin}" test -p cargo-fe2o3 --locked
       append_command command "${cargo_bin}" test -p fe2o3-differential --locked
       append_command command "${bash_bin}" scripts/tests/differential-conformance.sh
       ;;
@@ -230,19 +189,6 @@ build_shard_command() {
       ;;
     GFX942-COMPILE)
       append_command command "${bash_bin}" scripts/ci-local.sh rocm-compile
-      append_command command "${cargo_bin}" test -p rustc-codegen-fe2o3 \
-        --test kernel_ir_codegen \
-        worker_v2_real_source_publishes_two_kernels_with_one_shared_helper \
-        -- --ignored --exact --nocapture
-      ;;
-    GFX942-HARDWARE)
-      append_command command "${cargo_bin}" test -p fe2o3-hsa-runtime \
-        --test gfx942_hardware observes_one_exact_gfx942_hip_hsa_device \
-        -- --ignored --exact --nocapture
-      append_command command "${cargo_bin}" test -p fe2o3-hsa-runtime \
-        --features hardware-test-hooks --test gfx942_hardware \
-        safely_executes_generated_worker_v2_vecadd_end_to_end \
-        -- --ignored --exact --nocapture
       ;;
     *) die "unknown shard: ${shard}" ;;
   esac
@@ -271,8 +217,8 @@ Q4	core	artifact, transaction, HSACO, and finalization tests
 Q5	core	core, HIP, device, completion, verifier, host, and HSA tests
 Q6	core	Cargo integration and differential conformance tests
 Q7	core	positive and negative Verus proof fixtures
-GFX942-COMPILE	optional	gfx942 ROCm compilation and two-kernel publication
-GFX942-HARDWARE	optional	gfx942 identity and generated vecadd execution
+GFX942-COMPILE	optional	gfx942 production ROCm compilation
+GFX942-HARDWARE	unavailable	retired Worker V2 evidence has no production replacement
 EOF
 }
 
@@ -300,11 +246,6 @@ main() {
   local cargo_home="${CARGO_HOME:-${recorded_home}/.cargo}"
   local rustup_home="${RUSTUP_HOME:-${recorded_home}/.rustup}"
   local verus=""
-  local vecadd_hsaco=""
-  local llvm_link_worker=""
-  local llvm_link_worker_build_id=""
-  local llvm_build_id=""
-  local llvm_as=""
   local explicit_selection=false
   local want_gfx942_compile=false
   local want_gfx942_hardware=false
@@ -320,7 +261,6 @@ main() {
   local target_dir=""
   local tmp_dir=""
   local output_dir=""
-  local hsaco_absolute=""
   local index=0
   local -a selected=()
   local -a core_selection=()
@@ -329,7 +269,7 @@ main() {
 
   while (($# > 0)); do
     case "$1" in
-      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --vecadd-hsaco | --llvm-link-worker | --llvm-link-worker-build-id | --llvm-build-id | --llvm-as | --shard)
+      --repo | --archive-root | --timeout-seconds | --path | --home | --cargo-home | --rustup-home | --verus | --shard)
         (($# >= 2)) || die "$1 requires a value"
         case "$1" in
           --repo) repo="$2" ;;
@@ -340,11 +280,6 @@ main() {
           --cargo-home) cargo_home="$2" ;;
           --rustup-home) rustup_home="$2" ;;
           --verus) verus="$2" ;;
-          --vecadd-hsaco) vecadd_hsaco="$2" ;;
-          --llvm-link-worker) llvm_link_worker="$2" ;;
-          --llvm-link-worker-build-id) llvm_link_worker_build_id="$2" ;;
-          --llvm-build-id) llvm_build_id="$2" ;;
-          --llvm-as) llvm_as="$2" ;;
           --shard)
             valid_shard "$2" || die "unknown shard: $2"
             [[ "$2" == Q[1-7] ]] || die '--shard accepts only Q1 through Q7'
@@ -361,6 +296,8 @@ main() {
     esac
   done
 
+  [[ "${want_gfx942_hardware}" == false ]] ||
+    die 'the gfx942 hardware shard is unavailable: its retired Worker V2 evidence has no production replacement'
   [[ -n "${archive_root}" ]] || die '--archive-root is required'
   valid_uint "${timeout_seconds}" && ((timeout_seconds >= 1 && timeout_seconds <= MAX_TIMEOUT_SECONDS)) ||
     die '--timeout-seconds must be an integer from 1 through 86400'
@@ -381,7 +318,6 @@ main() {
     selected=("${CORE_SHARDS[@]}")
   fi
   [[ "${want_gfx942_compile}" == false ]] || selected+=(GFX942-COMPILE)
-  [[ "${want_gfx942_hardware}" == false ]] || selected+=(GFX942-HARDWARE)
   for shard in "${selected[@]}"; do
     [[ ! -v "seen[${shard}]" ]] || die "duplicate shard selection: ${shard}"
     seen["${shard}"]=1
@@ -404,24 +340,6 @@ main() {
   if [[ -v 'seen[Q7]' ]]; then
     valid_path_value "${verus}" && [[ -f "${verus}" && -x "${verus}" ]] ||
       die 'Q7 requires --verus with an absolute executable path'
-  fi
-  if [[ -v 'seen[GFX942-COMPILE]' ]]; then
-    valid_executable_path "${llvm_link_worker}" ||
-      die 'the gfx942 compile shard requires --llvm-link-worker with an absolute executable path'
-    valid_id_value "${llvm_link_worker_build_id}" ||
-      die 'the gfx942 compile shard requires a bounded safe --llvm-link-worker-build-id'
-    valid_id_value "${llvm_build_id}" ||
-      die 'the gfx942 compile shard requires a bounded safe --llvm-build-id'
-    valid_executable_path "${llvm_as}" ||
-      die 'the gfx942 compile shard requires --llvm-as with an absolute executable path'
-  fi
-  if [[ -v 'seen[GFX942-HARDWARE]' ]]; then
-    valid_relative_path "${vecadd_hsaco}" ||
-      die 'the hardware shard requires an archive-relative --vecadd-hsaco path'
-    hsaco_absolute="$(realpath -m -- "${archive_root}/${vecadd_hsaco}")"
-    path_is_within "${hsaco_absolute}" "${archive_root}" || die 'HSACO path escapes archive root'
-    [[ -f "${hsaco_absolute}" && ! -L "${hsaco_absolute}" ]] ||
-      die 'the hardware shard HSACO must be a regular non-symlink archive file'
   fi
   if [[ "${mode}" == dry-run ]]; then
     printf 'snapshot_plan_schema_version\t1\n'
@@ -473,31 +391,12 @@ main() {
       printf 'environment\t%s\tRUSTUP_HOME\t%s\n' "${shard}" "$(hex_encode "${rustup_home}")"
       printf 'environment\t%s\tTMPDIR\t%s\n' "${shard}" "$(hex_encode "${tmp_dir}")"
       [[ "${shard}" != Q7 ]] || printf 'environment\t%s\tVERUS\t%s\n' "${shard}" "$(hex_encode "${verus}")"
-      [[ "${shard}" != GFX942-COMPILE && "${shard}" != GFX942-HARDWARE ]] ||
+      [[ "${shard}" != GFX942-COMPILE ]] ||
         printf 'environment\t%s\tFE2O3_TARGET\t%s\n' "${shard}" "$(hex_encode gfx942)"
-      if [[ "${shard}" == GFX942-COMPILE ]]; then
-        printf 'environment\t%s\tFE2O3_LLVM_LINK_WORKER\t%s\n' \
-          "${shard}" "$(hex_encode "${llvm_link_worker}")"
-        printf 'environment\t%s\tFE2O3_LLVM_LINK_WORKER_BUILD_ID\t%s\n' \
-          "${shard}" "$(hex_encode "${llvm_link_worker_build_id}")"
-        printf 'environment\t%s\tFE2O3_LLVM_BUILD_ID\t%s\n' \
-          "${shard}" "$(hex_encode "${llvm_build_id}")"
-        printf 'environment\t%s\tFE2O3_LLVM_AS\t%s\n' \
-          "${shard}" "$(hex_encode "${llvm_as}")"
-      fi
-      [[ "${shard}" != GFX942-HARDWARE ]] ||
-        printf 'environment\t%s\tFE2O3_GFX942_VECADD_HSACO\t%s\n' \
-          "${shard}" "$(hex_encode "${hsaco_absolute}")"
-      [[ "${shard}" != GFX942-HARDWARE ]] ||
-        printf 'artifact\t%s\tvecadd-hsaco\t%s\n' "${shard}" "${vecadd_hsaco}"
       printf 'tool\t%s\tbash\t%s\n' "${shard}" "${bash_bin}"
       shard_uses_cargo "${shard}" && printf 'tool\t%s\tcargo\t%s\n' "${shard}" "${cargo_bin}"
       printf 'tool\t%s\tcommand\t%s\n' "${shard}" "${timeout_bin}"
       [[ "${shard}" != Q7 ]] || printf 'tool\t%s\tverus\t%s\n' "${shard}" "${verus}"
-      if [[ "${shard}" == GFX942-COMPILE ]]; then
-        printf 'tool\t%s\tllvm-link-worker\t%s\n' "${shard}" "${llvm_link_worker}"
-        printf 'tool\t%s\tllvm-as\t%s\n' "${shard}" "${llvm_as}"
-      fi
       for index in "${!outer_argv[@]}"; do
         printf 'argv\t%s\t%04d\t%s\n' \
           "${shard}" "${index}" "$(hex_encode "${outer_argv[${index}]}")"
@@ -526,24 +425,8 @@ main() {
     if [[ "${shard}" == Q7 ]]; then
       record_args+=(--env "VERUS=${verus}" --tool "verus=${verus}")
     fi
-    if [[ "${shard}" == GFX942-COMPILE || "${shard}" == GFX942-HARDWARE ]]; then
-      record_args+=(--env FE2O3_TARGET=gfx942)
-    fi
     if [[ "${shard}" == GFX942-COMPILE ]]; then
-      record_args+=(
-        --env "FE2O3_LLVM_LINK_WORKER=${llvm_link_worker}"
-        --env "FE2O3_LLVM_LINK_WORKER_BUILD_ID=${llvm_link_worker_build_id}"
-        --env "FE2O3_LLVM_BUILD_ID=${llvm_build_id}"
-        --env "FE2O3_LLVM_AS=${llvm_as}"
-        --tool "llvm-link-worker=${llvm_link_worker}"
-        --tool "llvm-as=${llvm_as}"
-      )
-    fi
-    if [[ "${shard}" == GFX942-HARDWARE ]]; then
-      record_args+=(
-        --env "FE2O3_GFX942_VECADD_HSACO=${hsaco_absolute}"
-        --artifact "vecadd-hsaco=${vecadd_hsaco}"
-      )
+      record_args+=(--env FE2O3_TARGET=gfx942)
     fi
     record_args+=(-- "${outer_argv[@]}")
 

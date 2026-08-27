@@ -1,13 +1,8 @@
-use fe2o3_workgroup_sync_v1::{
-    LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1, LDS_REDUCTION_WORKGROUP_V1,
-    SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1,
-};
+use fe2o3_workgroup_sync_v1::LDS_REDUCTION_WORKGROUP_V1;
 
 const REDUCTION_SOURCE: &str = include_str!("../src/kernel.rs");
 const ATOMIC_SOURCE: &str = include_str!("../src/scoped_atomic.rs");
 const README: &str = include_str!("../README.md");
-const _: () = assert!(!LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1);
-const _: () = assert!(!SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1);
 
 #[test]
 fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
@@ -16,7 +11,9 @@ fn reduction_is_ordinary_attributed_rust_with_fixed_wave64_contract() {
     for marker in [
         "#[kernel(",
         "typed,",
-        "launch(required = [64, 1, 1], max = [64, 1, 1])",
+        "required = [64, 1, 1],",
+        "max = [64, 1, 1],",
+        "static_shared_memory_bytes = 256",
         "pub fn lds_publish_read_reduce_i32_v1",
         "DynamicLds::<i32>::exact_current::<64>",
         "WorkgroupCollectiveScratch::from_dynamic_lds",
@@ -60,12 +57,19 @@ fn atomic_source_states_address_space_order_scope_and_eligibility() {
 #[test]
 fn documentation_is_explicit_about_later_evidence_phases() {
     for marker in [
-        "compiler profile authentication",
         "ordinary attributed Rust",
-        "source-to-IR",
-        "IR-to-machine correspondence",
-        "artifact admission",
-        "MI300X execution evidence",
+        "feature-independent production transaction",
+        "semantic MIR",
+        "ranked PLIRON",
+        "verified Kernel IR",
+        "compiler-bound handoff",
+        "upstream LLVM target APIs",
+        "in-process LLD",
+        "COV6 inspection",
+        "HSA execution",
+        "no workload-profile selector",
+        "source-to-machine execution evidence",
+        "compiler-refinement",
         "no COMGR",
         "no shell linker",
         "fail before output mutation",

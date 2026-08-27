@@ -1,3 +1,6 @@
+#[path = "support/process.rs"]
+mod test_process;
+
 use fe2o3_artifact_transaction::{
     CompilerArtifactGenerationErrorV1, CompilerArtifactGenerationFaultPointV1,
     CompilerArtifactGenerationFaultTimingV1, CompilerArtifactGenerationManifestV1,
@@ -2309,7 +2312,7 @@ fn subprocess_with_ready(action: &str, root: &Path, ready: Option<&Path>) -> std
     if let Some(ready) = ready {
         command.env("FE2O3_GENERATION_READY", ready);
     }
-    command.spawn().unwrap()
+    test_process::spawn(&mut command).unwrap()
 }
 
 fn wait_for_path(path: &Path) {

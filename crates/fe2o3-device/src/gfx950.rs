@@ -506,6 +506,25 @@ impl Gfx950Matrix {
         unreachable!("gfx950 FP4 MFMA requires authenticated compiler lowering")
     }
 
+    /// Performs one full-wave scaled MFMA with FP4 A and FP8 B operands.
+    #[must_use]
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_fp4_fp8_f32_m16n16k128_v1"]
+    pub fn multiply_accumulate_fp4_fp8<'wave>(
+        &self,
+        lhs: Gfx950Fp4MfmaAFragment<'wave>,
+        rhs: Gfx950Fp8MfmaBFragment<'wave>,
+        accumulator: Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1>,
+    ) -> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1> {
+        let _ = (
+            self,
+            lhs.into_registers(),
+            rhs.into_registers(),
+            accumulator.values,
+        );
+        unreachable!("gfx950 mixed FP4xFP8 MFMA requires authenticated compiler lowering")
+    }
+
     /// Performs one full-wave FP8 scaled MFMA with identity scales.
     #[must_use]
     #[inline(never)]

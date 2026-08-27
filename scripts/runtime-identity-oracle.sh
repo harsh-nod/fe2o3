@@ -114,6 +114,7 @@ if ! python3 "${AUDITOR}" --policy "${POLICY}" metadata --cargo \
     --root fe2o3-kfd \
     --root fe2o3-drm-uapi \
     --root fe2o3-kfd-uapi \
+    --root fe2o3-runtime \
     --root fe2o3-runtime-model \
     2>"${METADATA_AUDIT_ERROR}" | \
     head -c "$((MAX_AUDIT_REPORT_BYTES + 1))" >"${METADATA_AUDIT_REPORT}"; then

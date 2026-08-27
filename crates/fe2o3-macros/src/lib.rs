@@ -373,6 +373,11 @@ const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KF
 const KERNEL_FRONTEND_REGISTRATION_VERSION_V1: u16 = 1;
 const KERNEL_FRONTEND_REGISTRATION_KIND_V1: u16 = 1;
 const FRONTEND_KERNEL_CONTRACT_MAGIC_V1: [u8; 8] = *b"FE2O3KF\0";
+const KERNEL_RESOURCE_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_resource_contract_v1_";
+const KERNEL_RESOURCE_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KRA");
+const KERNEL_RESOURCE_REGISTRATION_VERSION_V1: u16 = 1;
+const KERNEL_RESOURCE_REGISTRATION_KIND_V1: u16 = 1;
+const KERNEL_RESOURCE_CONTRACT_MAGIC_V1: [u8; 8] = *b"FE2O3KR\0";
 
 const ASSEMBLY_OPERAND_SGPR_V1: u16 = 0x0001;
 const ASSEMBLY_OPERAND_VGPR_V1: u16 = 0x0002;
@@ -397,6 +402,8 @@ struct ParsedLaunchBoundsV1 {
     maximum: Option<[u32; 3]>,
     max_grid: Option<[u32; 3]>,
     min_workgroups_per_compute_unit: Option<u16>,
+    static_shared_memory_bytes: u32,
+    max_dynamic_shared_memory_bytes: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -516,14 +523,15 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             "#[kernel] safe Rust reference bindings require typed mode",
         ));
     }
-    if launch
-        .as_ref()
-        .is_some_and(|launch| launch.max_grid.is_some())
-        && !typed
+    if launch.as_ref().is_some_and(|launch| {
+        launch.max_grid.is_some()
+            || launch.static_shared_memory_bytes != 0
+            || launch.max_dynamic_shared_memory_bytes != 0
+    }) && !typed
     {
         return Err(syn::Error::new_spanned(
             attr,
-            "#[kernel] max_grid requires typed mode",
+            "#[kernel] max_grid and shared-memory resource declarations require typed mode",
         ));
     }
     Ok(KernelOptions {
@@ -545,6 +553,8 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
     let mut maximum = None;
     let mut max_grid = None;
     let mut occupancy = None;
+    let mut static_shared_memory_bytes = None;
+    let mut max_dynamic_shared_memory_bytes = None;
     list.parse_nested_meta(|meta| {
         if meta.path.is_ident("required") {
             if required.is_some() {
@@ -580,8 +590,32 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
             occupancy = Some(value);
             return Ok(());
         }
+        if meta.path.is_ident("static_shared_memory_bytes") {
+            if static_shared_memory_bytes.is_some() {
+                return Err(meta.error("static shared-memory bytes are duplicated"));
+            }
+            let value = meta.value()?.parse::<LitInt>()?.base10_parse::<u32>()?;
+            if value == 0 {
+                return Err(meta.error("static_shared_memory_bytes must be greater than zero"));
+            }
+            static_shared_memory_bytes = Some(value);
+            return Ok(());
+        }
+        if meta.path.is_ident("max_dynamic_shared_memory_bytes") {
+            if max_dynamic_shared_memory_bytes.is_some() {
+                return Err(meta.error("maximum dynamic shared-memory bytes are duplicated"));
+            }
+            let value = meta.value()?.parse::<LitInt>()?.base10_parse::<u32>()?;
+            if value == 0 {
+                return Err(meta.error(
+                    "max_dynamic_shared_memory_bytes must be greater than zero",
+                ));
+            }
+            max_dynamic_shared_memory_bytes = Some(value);
+            return Ok(());
+        }
         Err(meta.error(
-            "launch supports only required = [x, y, z], max = [x, y, z], max_grid = [x, y, z], and min_workgroups_per_compute_unit = n",
+            "launch supports only required = [x, y, z], max = [x, y, z], max_grid = [x, y, z], min_workgroups_per_compute_unit = n, static_shared_memory_bytes = n, and max_dynamic_shared_memory_bytes = n",
         ))
     })?;
 
@@ -608,11 +642,24 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
             "required workgroup dimensions exceed max dimensions",
         ));
     }
+    let static_shared_memory_bytes = static_shared_memory_bytes.unwrap_or(0);
+    let max_dynamic_shared_memory_bytes = max_dynamic_shared_memory_bytes.unwrap_or(0);
+    if static_shared_memory_bytes
+        .checked_add(max_dynamic_shared_memory_bytes)
+        .is_none()
+    {
+        return Err(syn::Error::new_spanned(
+            list,
+            "static and maximum dynamic shared-memory bytes overflow u32",
+        ));
+    }
     Ok(ParsedLaunchBoundsV1 {
         required,
         maximum,
         max_grid,
         min_workgroups_per_compute_unit: occupancy,
+        static_shared_memory_bytes,
+        max_dynamic_shared_memory_bytes,
     })
 }
 
@@ -1134,6 +1181,13 @@ fn expand_device_kernel_with_imports(
             );
         }
     });
+    let resource_registration = expand_kernel_resource_registration_v1(
+        &original_name,
+        &marker_value,
+        &function_pointer,
+        &internal_ident,
+        &options,
+    );
     let control_flow_registration = control_flow_contract.map(|bytes| {
         let registration_ident =
             format_ident!("{CONTROL_FLOW_REGISTRATION_PREFIX_V1}{original_name}");
@@ -1187,6 +1241,7 @@ fn expand_device_kernel_with_imports(
         static #registration_ident: #registration_type = #registration_value;
 
         #frontend_registration
+        #resource_registration
         #control_flow_registration
         #reference_registration
 
@@ -1402,6 +1457,13 @@ fn expand_general_typed_kernel_with_imports(
             );
         }
     });
+    let resource_registration = expand_kernel_resource_registration_v1(
+        &original_name,
+        &marker_value,
+        &function_pointer,
+        &internal_ident,
+        &options,
+    );
     let control_flow_registration = control_flow_contract.map(|bytes| {
         let registration_ident =
             format_ident!("{CONTROL_FLOW_REGISTRATION_PREFIX_V1}{original_name}");
@@ -1497,6 +1559,7 @@ fn expand_general_typed_kernel_with_imports(
         static #registration_ident: #registration_type = #registration_value;
 
         #frontend_registration
+        #resource_registration
         #control_flow_registration
         #reference_registration
 
@@ -3028,7 +3091,22 @@ fn general_typed_launch_v1(
         .and_then(|launch| launch.max_grid)
         .unwrap_or([u32::MAX, 1, 1]);
     let max_grid = general_typed_dimensions_v1(max_grid);
-    LaunchContract::new(1, block_size, max_grid, 0, 0).map_err(|error| {
+    let (static_shared_memory_bytes, max_dynamic_shared_memory_bytes) = launch
+        .map(|launch| {
+            (
+                launch.static_shared_memory_bytes,
+                launch.max_dynamic_shared_memory_bytes,
+            )
+        })
+        .unwrap_or_default();
+    LaunchContract::new(
+        1,
+        block_size,
+        max_grid,
+        static_shared_memory_bytes,
+        max_dynamic_shared_memory_bytes,
+    )
+    .map_err(|error| {
         syn::Error::new_spanned(span, format!("invalid general typed V1 launch: {error}"))
     })
 }
@@ -3142,6 +3220,64 @@ fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>
     bytes[12..16].copy_from_slice(&length.to_le_bytes());
     debug_assert!(bytes.len() <= 76);
     Some(bytes)
+}
+
+fn encode_kernel_resource_contract_v1(options: &KernelOptions) -> Option<Vec<u8>> {
+    let launch = options.launch?;
+    if launch.static_shared_memory_bytes == 0 && launch.max_dynamic_shared_memory_bytes == 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(28);
+    bytes.extend_from_slice(&KERNEL_RESOURCE_CONTRACT_MAGIC_V1);
+    push_u16(&mut bytes, 1);
+    let flags = u16::from(launch.static_shared_memory_bytes != 0)
+        | (u16::from(launch.max_dynamic_shared_memory_bytes != 0) * 0x0002);
+    push_u16(&mut bytes, flags);
+    push_u32(&mut bytes, 28);
+    push_u32(&mut bytes, 0);
+    push_u32(&mut bytes, launch.static_shared_memory_bytes);
+    push_u32(&mut bytes, launch.max_dynamic_shared_memory_bytes);
+    Some(bytes)
+}
+
+fn expand_kernel_resource_registration_v1(
+    original_name: &str,
+    marker_value: &syn::LitStr,
+    function_pointer: &proc_macro2::TokenStream,
+    internal_ident: &syn::Ident,
+    options: &KernelOptions,
+) -> proc_macro2::TokenStream {
+    let Some(bytes) = encode_kernel_resource_contract_v1(options) else {
+        return quote! {};
+    };
+    let registration_ident =
+        format_ident!("{KERNEL_RESOURCE_REGISTRATION_PREFIX_V1}{original_name}");
+    let bytes_ident = format_ident!("__fe2o3_kernel_resource_contract_bytes_v1_{original_name}");
+    let bytes = bytes.iter();
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        const #bytes_ident: &'static [u8] = &[#(#bytes),*];
+
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        #[used]
+        static #registration_ident: (
+            u64,
+            u16,
+            u16,
+            &'static str,
+            &'static [u8],
+            #function_pointer,
+        ) = (
+            #KERNEL_RESOURCE_REGISTRATION_MAGIC_V1,
+            #KERNEL_RESOURCE_REGISTRATION_VERSION_V1,
+            #KERNEL_RESOURCE_REGISTRATION_KIND_V1,
+            #marker_value,
+            #bytes_ident,
+            #internal_ident,
+        );
+    }
 }
 
 fn push_dimensions(bytes: &mut Vec<u8>, dimensions: Option<[u32; 3]>) {
@@ -5753,6 +5889,15 @@ mod tests {
         };
         let options = parse_kernel_options(quote!(
             typed,
+            launch(
+                required = [64, 1, 1],
+                max = [64, 1, 1],
+                static_shared_memory_bytes = 256
+            )
+        ))
+        .unwrap();
+        let no_resources = parse_kernel_options(quote!(
+            typed,
             launch(required = [64, 1, 1], max = [64, 1, 1])
         ))
         .unwrap();
@@ -5769,6 +5914,9 @@ mod tests {
         let default_model =
             model_general_typed_signature_v1(&input, &default_options, kernel_binding.as_bytes())
                 .unwrap();
+        let no_resource_model =
+            model_general_typed_signature_v1(&input, &no_resources, kernel_binding.as_bytes())
+                .unwrap();
         assert_eq!(
             model.launch.block_size(),
             BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap())
@@ -5776,6 +5924,13 @@ mod tests {
         assert_ne!(
             model.generated_host_contract_identity, default_model.generated_host_contract_identity,
             "the generated host identity must bind the exact workgroup"
+        );
+        assert_eq!(model.launch.static_shared_memory_bytes(), 256);
+        assert_eq!(model.launch.max_dynamic_shared_memory_bytes(), 0);
+        assert_ne!(
+            model.generated_host_contract_identity,
+            no_resource_model.generated_host_contract_identity,
+            "the generated host identity must bind exact resource bytes"
         );
 
         let device_import = device_import_for(FoundCrate::Name("gpu_device".to_string()));
@@ -5868,6 +6023,92 @@ mod tests {
                 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
             ]
         );
+
+        let resource = syntax
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Static(item)
+                    if item.ident == "__fe2o3_kernel_resource_contract_v1_lds_slice" =>
+                {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("generated resource registration");
+        let Expr::Tuple(resource) = resource.expr.as_ref() else {
+            panic!("resource registration is not a tuple");
+        };
+        assert_eq!(
+            resource.elems[5].to_token_stream().to_string(),
+            internal_name
+        );
+        let bytes_name = "__fe2o3_kernel_resource_contract_bytes_v1_lds_slice";
+        assert_eq!(resource.elems[4].to_token_stream().to_string(), bytes_name);
+        let bytes = syntax
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Const(item) if item.ident == bytes_name => Some(item),
+                _ => None,
+            })
+            .expect("generated resource byte-slice constant");
+        let Expr::Reference(bytes) = bytes.expr.as_ref() else {
+            panic!("resource bytes are not referenced");
+        };
+        let Expr::Array(bytes) = bytes.expr.as_ref() else {
+            panic!("resource bytes are not an array");
+        };
+        let bytes = bytes
+            .elems
+            .iter()
+            .map(|byte| match byte {
+                Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(byte),
+                    ..
+                }) => byte.base10_parse::<u8>().unwrap(),
+                _ => panic!("resource contract contains a non-byte expression"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bytes,
+            [
+                70, 69, 50, 79, 51, 75, 82, 0, 1, 0, 1, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0,
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_resource_parser_rejects_ambiguous_or_overflowing_declarations() {
+        for attributes in [
+            quote!(
+                typed,
+                launch(required = [64, 1, 1], static_shared_memory_bytes = 0)
+            ),
+            quote!(
+                typed,
+                launch(
+                    required = [64, 1, 1],
+                    static_shared_memory_bytes = 1,
+                    static_shared_memory_bytes = 2
+                )
+            ),
+            quote!(
+                typed,
+                launch(
+                    required = [64, 1, 1],
+                    static_shared_memory_bytes = 4294967295,
+                    max_dynamic_shared_memory_bytes = 1
+                )
+            ),
+            quote!(launch(
+                required = [64, 1, 1],
+                static_shared_memory_bytes = 256
+            )),
+        ] {
+            assert!(parse_kernel_options(attributes).is_err());
+        }
     }
 
     #[test]

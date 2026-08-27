@@ -3028,6 +3028,11 @@ mod tests {
             "inline_assembly"
         );
         assert_eq!(
+            serde_json::to_value(unsupported_code(&UnsupportedFeatureV1::Gfx950LdsTranspose))
+                .unwrap(),
+            "gfx950_lds_transpose"
+        );
+        assert_eq!(
             serde_json::to_value(unsupported_code(
                 &UnsupportedFeatureV1::DynamicWorkgroupMemory
             ))

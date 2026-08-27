@@ -52,6 +52,13 @@ pub enum ProductionFormalMemoryErrorV1 {
         /// Canonically ordered reasons formal extraction was incomplete.
         reasons: Box<[FormalMemoryIncompleteReason]>,
     },
+    /// Compiler-owned LDS effects no longer match their exact semantic lowering spans.
+    CompilerOwnedWorkgroupDischarge {
+        /// Canonically ordered internal workgroup-memory reasons.
+        reasons: Box<[FormalMemoryIncompleteReason]>,
+        /// Stable failure at the semantic/KIR composition boundary.
+        detail: ProductionMemoryDischargeFailureV1,
+    },
     /// Ranked checks could not correlate a dynamic index to its exact access.
     UnsupportedIndexDischarge {
         /// Canonically ordered formal reasons that required ranked discharge.
@@ -92,6 +99,14 @@ impl fmt::Display for ProductionFormalMemoryErrorV1 {
                 )?;
                 format_formal_reasons(formatter, reasons)
             }
+            Self::CompilerOwnedWorkgroupDischarge { reasons, detail } => {
+                write!(
+                    formatter,
+                    "exact compiler-owned workgroup lowering could not discharge {} internal reason(s): {detail}; locations: ",
+                    reasons.len(),
+                )?;
+                format_formal_reasons(formatter, reasons)
+            }
             Self::GuardedAccessDischarge { reasons, detail } => {
                 write!(
                     formatter,
@@ -127,6 +142,7 @@ impl Error for ProductionFormalMemoryErrorV1 {
             Self::Analysis(error) => Some(error),
             Self::KernelCount { .. }
             | Self::Incomplete { .. }
+            | Self::CompilerOwnedWorkgroupDischarge { .. }
             | Self::UnsupportedIndexDischarge { .. }
             | Self::GuardedAccessDischarge { .. }
             | Self::InterInvocationConflicts { .. }
@@ -148,6 +164,7 @@ pub struct ProductionFormalMemoryOwnerV1 {
     semantic_kir: ProductionSemanticKirOwnerV1,
     obligations: FormalMemoryObligations,
     ranked_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
+    compiler_discharged_reasons: Box<[FormalMemoryIncompleteReason]>,
 }
 
 impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
@@ -169,6 +186,10 @@ impl fmt::Debug for ProductionFormalMemoryOwnerV1 {
                 "ranked_discharged_reasons",
                 &self.ranked_discharged_reasons.len(),
             )
+            .field(
+                "compiler_discharged_reasons",
+                &self.compiler_discharged_reasons.len(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -182,11 +203,13 @@ impl ProductionFormalMemoryOwnerV1 {
         semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
-        let (obligations, ranked_discharged_reasons) = derive_admitted_obligations(&semantic_kir)?;
+        let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) =
+            derive_admitted_obligations(&semantic_kir)?;
         let owner = Self {
             semantic_kir,
             obligations,
             ranked_discharged_reasons,
+            compiler_discharged_reasons,
         };
         owner.verify_equivalence()?;
         Ok(owner)
@@ -198,10 +221,11 @@ impl ProductionFormalMemoryOwnerV1 {
         self.semantic_kir
             .verify_equivalence()
             .map_err(ProductionFormalMemoryErrorV1::SemanticKir)?;
-        let (obligations, ranked_discharged_reasons) =
+        let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) =
             derive_admitted_obligations(&self.semantic_kir)?;
         if obligations != self.obligations
             || ranked_discharged_reasons != self.ranked_discharged_reasons
+            || compiler_discharged_reasons != self.compiler_discharged_reasons
         {
             return Err(ProductionFormalMemoryErrorV1::ObligationMismatch);
         }
@@ -222,6 +246,12 @@ impl ProductionFormalMemoryOwnerV1 {
     /// ranked bounds/race receipt rather than the affine formal engine.
     pub fn ranked_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
         &self.ranked_discharged_reasons
+    }
+
+    /// Returns internal LDS effects discharged only by replaying the exact,
+    /// compiler-owned collective lowering and its source correspondence.
+    pub fn compiler_discharged_reasons(&self) -> &[FormalMemoryIncompleteReason] {
+        &self.compiler_discharged_reasons
     }
 
     /// Returns the structural fallback extent used for every dynamic axis.
@@ -251,7 +281,11 @@ impl ProductionFormalMemoryOwnerV1 {
 fn derive_admitted_obligations(
     semantic_kir: &ProductionSemanticKirOwnerV1,
 ) -> Result<
-    (FormalMemoryObligations, Box<[FormalMemoryIncompleteReason]>),
+    (
+        FormalMemoryObligations,
+        Box<[FormalMemoryIncompleteReason]>,
+        Box<[FormalMemoryIncompleteReason]>,
+    ),
     ProductionFormalMemoryErrorV1,
 > {
     let module = semantic_kir.module();
@@ -273,16 +307,42 @@ fn derive_admitted_obligations(
         FormalIndexWidth::Bits64,
     )
     .map_err(ProductionFormalMemoryErrorV1::Analysis)?;
-    let (obligations, ranked_discharged_reasons) = match analysis {
-        FormalMemoryObligationAnalysis::Complete(obligations) => {
-            (obligations, Vec::new().into_boxed_slice())
-        }
+    let (obligations, ranked_discharged_reasons, compiler_discharged_reasons) = match analysis {
+        FormalMemoryObligationAnalysis::Complete(obligations) => (
+            obligations,
+            Vec::new().into_boxed_slice(),
+            Vec::new().into_boxed_slice(),
+        ),
         FormalMemoryObligationAnalysis::Incomplete { partial, reasons } => {
+            let mut compiler_reasons = Vec::new();
+            let mut remaining_reasons = Vec::new();
+            for reason in reasons {
+                if matches!(
+                    reason,
+                    FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }
+                        | FormalMemoryIncompleteReason::UnsupportedPointerDerivation { .. }
+                ) {
+                    compiler_reasons.push(reason);
+                } else {
+                    remaining_reasons.push(reason);
+                }
+            }
+            if !compiler_reasons.is_empty()
+                && let Err(detail) = semantic_kir
+                    .retained_collective_lowering_discharges_workgroup_memory(&compiler_reasons)
+            {
+                return Err(
+                    ProductionFormalMemoryErrorV1::CompilerOwnedWorkgroupDischarge {
+                        reasons: compiler_reasons.into_boxed_slice(),
+                        detail,
+                    },
+                );
+            }
             let mut guarded_reasons = Vec::new();
             let mut guarded_locations = Vec::new();
             let mut unsupported_indices = Vec::new();
             let mut reasons_are_ranked_dischargeable = true;
-            for reason in &reasons {
+            for reason in &remaining_reasons {
                 match reason {
                     FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location } => {
                         guarded_reasons.push(reason.clone());
@@ -296,7 +356,7 @@ fn derive_admitted_obligations(
             }
             if !reasons_are_ranked_dischargeable {
                 return Err(ProductionFormalMemoryErrorV1::Incomplete {
-                    reasons: reasons.into_boxed_slice(),
+                    reasons: remaining_reasons.into_boxed_slice(),
                 });
             }
             if !unsupported_indices.is_empty() {
@@ -319,7 +379,11 @@ fn derive_admitted_obligations(
                     });
                 }
             }
-            (partial, reasons.into_boxed_slice())
+            (
+                partial,
+                remaining_reasons.into_boxed_slice(),
+                compiler_reasons.into_boxed_slice(),
+            )
         }
     };
     if !obligations.inter_invocation_conflicts().is_empty() {
@@ -330,7 +394,11 @@ fn derive_admitted_obligations(
                 .into_boxed_slice(),
         });
     }
-    Ok((obligations, ranked_discharged_reasons))
+    Ok((
+        obligations,
+        ranked_discharged_reasons,
+        compiler_discharged_reasons,
+    ))
 }
 
 fn witness_extents(domain: &LaunchDomain) -> [u64; 3] {

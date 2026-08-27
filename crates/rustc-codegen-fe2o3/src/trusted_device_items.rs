@@ -30,8 +30,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x04, 0xd0, 0x65, 0xe1, 0x6c, 0xa0, 0x69, 0x38, 0xc1, 0x9d, 0xe1, 0x54, 0xe5, 0xe4, 0xc1, 0xba,
-    0x7e, 0x7b, 0x3e, 0x91, 0x0c, 0xfd, 0x43, 0x00, 0xd2, 0x01, 0xa9, 0x4a, 0xe5, 0x7f, 0xfd, 0xca,
+    0x14, 0x77, 0xc0, 0x54, 0x64, 0xeb, 0x06, 0xe8, 0xa3, 0x01, 0x67, 0x0a, 0x6f, 0x98, 0xf6, 0xe0,
+    0x5c, 0x3b, 0xc3, 0x02, 0x19, 0xfc, 0xfb, 0x03, 0x0f, 0x95, 0x7e, 0x37, 0x9a, 0x98, 0x91, 0x8c,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -166,6 +166,7 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupLdsScope,
     WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
+    DynamicLdsIntoCollectiveRawParts,
     Invocation3D,
     Invocation3DCurrent,
     ThreadIndexX,
@@ -294,6 +295,7 @@ pub(crate) enum TrustedDeviceItem {
     Gfx950Matrix,
     Gfx950MatrixCurrent,
     Gfx950MatrixMultiplyAccumulateFp4,
+    Gfx950MatrixMultiplyAccumulateFp4Fp8,
     Gfx950MatrixMultiplyAccumulateFp8,
     Gfx950SubgroupContext,
     Gfx950SubgroupCurrent,
@@ -364,6 +366,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DynamicLdsExactCurrent,
         "fe2o3_device_dynamic_lds_exact_current_v1",
         "fe2o3_device::DynamicLds::<T>::exact_current",
+    ),
+    (
+        TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
+        "fe2o3_device_dynamic_lds_into_collective_raw_parts_v1",
+        "fe2o3_device::DynamicLds::<T>::into_collective_raw_parts",
     ),
     (
         TrustedDeviceItem::Invocation3D,
@@ -986,6 +993,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4",
     ),
     (
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
+        "fe2o3_device_gfx950_mfma_fp4_fp8_f32_m16n16k128_v1",
+        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4_fp8",
+    ),
+    (
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
         "fe2o3_device_gfx950_mfma_fp8_f32_m16n16k128_v1",
         "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp8",
@@ -1414,6 +1426,9 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::WorkgroupLdsScope => "fe2o3_device::lds::WorkgroupLdsScope",
         TrustedDeviceItem::WorkgroupLdsScopeCurrent => "fe2o3_device::lds::{impl#2}::current",
         TrustedDeviceItem::DynamicLdsExactCurrent => "fe2o3_device::lds::{impl#4}::exact_current",
+        TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
+            "fe2o3_device::lds::{impl#4}::into_collective_raw_parts"
+        }
         TrustedDeviceItem::Invocation3D => "fe2o3_device::thread::Invocation3D",
         TrustedDeviceItem::Invocation3DCurrent => "fe2o3_device::thread::{impl#6}::current",
         TrustedDeviceItem::Gfx942CollectivesContext => {
@@ -1557,6 +1572,9 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
             "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4"
         }
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8 => {
+            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4_fp8"
+        }
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8 => {
             "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp8"
         }
@@ -1598,6 +1616,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
         TrustedDeviceItem::WorkgroupLdsScope
             | TrustedDeviceItem::WorkgroupLdsScopeCurrent
             | TrustedDeviceItem::DynamicLdsExactCurrent
+            | TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
             | TrustedDeviceItem::Invocation3D
             | TrustedDeviceItem::Invocation3DCurrent
             | TrustedDeviceItem::ThreadIndexX
@@ -1677,6 +1696,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx950Matrix
             | TrustedDeviceItem::Gfx950MatrixCurrent
             | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+            | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8
             | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8
             | TrustedDeviceItem::Gfx950SubgroupContext
             | TrustedDeviceItem::Gfx950SubgroupCurrent
@@ -2673,8 +2693,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn source_closure_rejects_symlinks_and_nonregular_files() {
-        use std::os::unix::fs::symlink;
-        use std::os::unix::net::UnixListener;
+        use std::os::unix::{fs::symlink, net::UnixListener};
 
         let manifest_link = ProviderPackageFixture::new();
         let manifest = manifest_link.root.join("Cargo.toml");
@@ -2829,6 +2848,7 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
+            TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::ThreadIndexX,
@@ -2953,6 +2973,7 @@ mod tests {
             TrustedDeviceItem::Gfx950Matrix,
             TrustedDeviceItem::Gfx950MatrixCurrent,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
             TrustedDeviceItem::Gfx950SubgroupContext,
             TrustedDeviceItem::Gfx950SubgroupCurrent,
@@ -3029,6 +3050,7 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
+            TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::Gfx942CollectivesContext,
@@ -3075,6 +3097,7 @@ mod tests {
             TrustedDeviceItem::Gfx950Matrix,
             TrustedDeviceItem::Gfx950MatrixCurrent,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
             TrustedDeviceItem::Gfx950SubgroupContext,
             TrustedDeviceItem::Gfx950SubgroupCurrent,

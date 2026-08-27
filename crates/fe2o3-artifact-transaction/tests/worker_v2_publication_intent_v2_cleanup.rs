@@ -1,3 +1,6 @@
+#[path = "support/process.rs"]
+mod test_process;
+
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationBoundaryV2,
     AttemptScopedHsacoPublicationErrorV2, AttemptScopedHsacoPublicationFaultPointV2,
@@ -466,7 +469,8 @@ impl CleanupEscrowFixture {
             fs::write(&capsule_path, capsule.to_bytes()).unwrap();
             fs::set_permissions(&capsule_path, fs::Permissions::from_mode(0o600)).unwrap();
         }
-        let child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("cleanup_escrow_subprocess_crash_helper")
             .arg("--nocapture")
@@ -483,9 +487,8 @@ impl CleanupEscrowFixture {
                 ESCROW_CRASH_HELPER_BOUNDARY,
                 format!("{:?}", point.boundary),
             )
-            .env(ESCROW_CRASH_HELPER_TIMING, format!("{:?}", point.timing))
-            .output()
-            .unwrap();
+            .env(ESCROW_CRASH_HELPER_TIMING, format!("{:?}", point.timing));
+        let child = test_process::capture_output(&mut command).unwrap();
         assert_eq!(
             child.status.code(),
             Some(86),

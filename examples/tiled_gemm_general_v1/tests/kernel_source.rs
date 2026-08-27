@@ -140,7 +140,9 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
         "Bf16MfmaAMatrix::row_major",
         "Bf16MfmaBMatrix::row_major",
         "F32AccumulatorFragment::zero",
-        "while phase < k as usize",
+        "let phase_count = (k as usize + 15) / 16",
+        "while phase_index < phase_count",
+        "let phase = phase_index * 16",
         "alpha * values[0] + beta * *output",
     ] {
         assert!(KERNEL_SOURCE.contains(required), "missing `{required}`");

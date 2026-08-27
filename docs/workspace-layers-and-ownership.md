@@ -5,8 +5,9 @@ bounded Pliron scalar-add checkpoint. Issues
 [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The landed
 crates make both epics infrastructure-enabled and complete one exact scalar
-compile/finalize/execute slice; they do not implement a general production
-Pliron pipeline or persistent GPU execution.
+compile/finalize slice plus a qualification-only execution observation; they do
+not implement a general production Pliron pipeline or persistent GPU
+execution.
 
 This policy refines the [Pliron Wave 0 architecture](pliron-wave0-architecture.md)
 and preserves the existing production compiler, artifact, proof, publication,
@@ -43,6 +44,92 @@ The root `Cargo.toml`, `Cargo.lock`, layer policy, shared dependency versions,
 dialect registration, production-route boundary, qualification feature, and release composition
 are integration-owned files. Feature agents SHOULD NOT edit them. A dependency
 addition that changes `Cargo.lock` is a separate, integration-reviewed commit.
+
+Generic workspace checking runs the complete supported workspace graph through
+`cargo fe2o3 check --workspace --all-targets`. A sealed, metadata-derived map
+identifies every exact Cargo target source and whether its package structurally
+requires a compiler-derived binding. The host-only wrapper injects the normal
+crate-name/ordered-metadata binding for those targets, including transitive
+managed libraries, and leaves ordinary targets unbound. Manifest-declared
+examples that do not participate in generic checking remain explicit Cargo
+exclusions. This route admits no codegen backend, artifact directory,
+publication action, worker, or GPU authority; it is not compiler qualification
+or artifact production.
+
+Generic CPU testing partitions the manifest entries with `rustc_check=true` and
+`artifact_qualification=none` by that same structural projection. Artifact
+qualification is a separate, closed route classification and does not erase
+the source-artifact inventory. Ordinary entries use raw Cargo. Managed entries
+use the feature-free
+`cargo fe2o3 test --locked --all-targets -p <package>` path; `--all-targets` is
+required, while caller `--target`, `--config`, Cargo-side `-Z`, `--doc`,
+`--no-run`, and ambient compiler, rustdoc, protected fe2o3, and runner selections
+are rejected. Configured compiler, protected fe2o3, loader, and runner selection
+is rejected; configured rustdoc is overridden with the disabled selection, and
+ambient loader variables are scrubbed. The raw and managed lists remain
+package-name independent, sorted, disjoint, and exhaustive.
+
+The host-test route trusts workspace source and non-protected Cargo
+configuration, build scripts, procedural macros, linkers, and tests. Its fixed
+runner closes the test child's environment and descriptor boundary; it is not a
+sandbox. The runner opens and hashes Cargo's original test executable, executes
+the retained original while Cargo's path remains stable to preserve ordinary
+`current_exe` and `$ORIGIN` behavior and prevent directory-entry substitution
+between pin and execution, then rechecks it afterward. That behavior does not
+freeze same-inode writes and grants no immutable-artifact, origin, backend,
+HSACO, publication, GPU, or performance-prediction authority. Ordinary Cargo
+host artifacts are still produced, and trusted test code remains able to access
+the user's files, network, and device nodes.
+
+This projection is deliberately package-wide and feature-independent. Every
+regular `*.rs` file outside the exact generated Cargo target-directory boundary
+participates. Every exact Cargo target
+root reported by metadata MUST also be a package-owned UTF-8 `.rs` path, matching
+the rustc invocation parser's input contract. Conventional `mod`,
+literal `#[path]`, and literal `include!` edges are considered resolved only
+when they name a source already scanned beneath the same package root. A
+dynamic, missing, or package-external edge conservatively selects a package
+that has no observed binding declaration. When the package contains an
+explicit fallback and no direct unnamespaced typed kernel, that observed
+fallback wins and the external edge does not select the wrapper. The external
+content remains uninspected; an unnamespaced typed kernel hidden there can make
+ordinary compilation fail, but cannot grant compiler or publication authority.
+Nested Cargo package roots are always separate, uninspected ownership
+boundaries; an edge from the parent into one is an external selection boundary.
+A package MUST NOT mix a directly observed compiler-derived binding with an
+explicit fallback namespace anywhere in the complete projection, even when
+Cargo features or targets make the sources mutually exclusive. Unparseable
+scanned sources are rejected. This strict package ownership rule avoids feature-dependent binding selection
+and is checked with mixed-target and external-edge adversaries.
+
+Each Cargo target source MUST be owned beneath its package root. Cross-package
+source reuse uses a package-owned target root with an explicit external
+module/include edge; when no direct fallback is observed, that unresolved
+boundary makes the owning package managed, but the projection scanner does not
+follow or authenticate the included file.
+The exact Cargo `target_directory` reported by metadata is a generated-output
+boundary: declared sources beneath it are rejected, and an in-package target
+subtree is skipped without inspection. Other package-tree entries are opened
+descriptor-relatively so symlinks and special files fail the availability
+check even though only regular `*.rs` files are parsed for binding ownership.
+Cargo metadata paths, manifests, directories, and opened package sources are
+revalidated during each bounded scan, and generic CI recomputes the exact
+managed set after the binding-only checks and tests. It also revalidates both
+CPU-test partitions after managed test execution. These are authority-free
+policy snapshots, not authentication of later Cargo compilation inputs. The
+protected Cargo-configuration scans before and after host tests diagnose a
+persistent change but are not an atomic snapshot; neither mechanism makes a
+TOCTOU claim beyond each individual retained scan. Artifact and publication
+authority continue to require their separate authenticated source, worker, and
+finalizer contracts.
+
+Source depth, file size, entry, token, module-edge, byte, and name-byte limits
+apply to each package scan. Separate aggregate package, Cargo-target, source
+entry, source-file, byte, and name-byte limits bound the complete workspace
+projection before the binding-check Cargo process is launched.
+The source-token traversal limit applies after bounded source bytes have been
+parsed by `syn`; extreme parser nesting remains a local availability limitation,
+not a compiler, artifact, or publication authority boundary.
 
 ## Layers
 
@@ -157,6 +244,16 @@ authority-free. It consumes only canonical `fe2o3-service-model` and
 `fe2o3-host-api` records, retains caller storage borrows, and performs no
 allocation, load, launch, queue publication, execution, runtime wait,
 authentication, proof, or storage release.
+
+`fe2o3-runtime` is the sole pure-Rust gfx942 composition boundary over the
+canonical AMDHSA loader and `fe2o3-kfd`. Its safe API prepares a complete
+address-free request and has one consuming execution transition. That transition
+requires an unsafe Worker V3 authority implementation and independently matches
+the final object, kernel, complete invocation contract, and checked KFD device.
+The exact-artifact hardware diagnostic exercises it with a manually asserted
+unsafe authority; no production implementation exists yet. Production
+execution must consume verifier authority in this crate rather than adding
+another host-runtime route.
 
 ### Integration
 

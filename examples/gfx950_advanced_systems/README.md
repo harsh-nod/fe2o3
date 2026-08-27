@@ -6,11 +6,12 @@ contains independent safe CPU references, and `cargo test --offline` checks
 their bounded numerical and transactional contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion.
 
-The current rustc backend cannot lower these Rust sources to gfx950 HSACO: its
-production profile is still exact `gfx942:xnack-`, and gfx950 low-precision
-semantic importing and Kernel IR lowering are pending. The source therefore
-claims source and CPU-reference evidence only; the HIP results below do not
-silently become fe2o3 artifact evidence.
+Each `run-*-gfx950.sh` entry point selects exactly one kernel feature, invokes
+the production fe2o3 extractor, checks the compiler-published crate binding,
+links an exact gfx950:xnack- COV6 HSACO, validates its single-kernel metadata
+and symbol-scoped ISA, and runs a digest-pinned numerical HSA test. This is an
+explicit verification path; it does not grant protected artifact publication
+authority. The HIP results below remain independent evidence.
 
 The fixed-shape suite covers several systems patterns on AMD CDNA 4 (`gfx950`).
 It is deliberately small enough to have independent, deterministic CPU oracles;
@@ -50,7 +51,48 @@ metadata, accepted prefixes, transaction states, hash-table results, norms,
 and optimizer updates to separately implemented CPU references. Runtime
 execution rejects devices whose GCN architecture is not exactly `gfx950`.
 
-Run the complete compiler, target-rejection, ISA, and numerical suite on MI350:
+Run the production Rust lowering and numerical verification on a gfx950 host:
+
+```bash
+./run-moe-route-gfx950.sh
+./run-moe-expert-rank-gfx950.sh
+./run-combine-expert-ranks-gfx950.sh
+./run-speculative-transaction-gfx950.sh
+./run-qwen-ngram-gather-gfx950.sh
+./run-stage-gradient-shard-gfx950.sh
+./run-muon-update-gfx950.sh
+```
+
+The expert runner requires exactly three mixed FP4/FP8
+`v_mfma_f32_16x16x128_f8f6f4` instructions with `cbsz:4`: two rank-local
+experts and the optional shared expert. Routing and expert exponential math
+links only the reviewed ROCm 7.2.1 OCML `exp` closure shared with the
+low-precision examples; Muon square root uses the gfx950 native LLVM intrinsic.
+The per-kernel harness checks immutable inputs, output canaries, exact integer
+and rollback state, and bounded floating-point tolerances against the CPU
+references. Set `FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the
+documented tool and target-directory environment variables when validating a
+copied checkout.
+
+## Production Rust validation evidence
+
+On 2026-08-27, all seven production Rust wrappers passed on SSH host `mi350`
+(`smci350-rck-g03-b19-03`) with ROCm 7.2.1 and eight visible MI350X devices.
+Routing metadata, dispatch entries, N-gram results, and gradient shards matched
+exactly. The largest observed absolute errors were `4.768371582e-7` for the
+two expert-rank launches, `2.980232239e-8` for speculative state, and
+`7.450580597e-9` for the Muon update; rank combine and the Muon norm had zero
+error. The corresponding float tolerances are `2e-6` for routing weights,
+`3e-3` for expert and rank combine, `1e-7` for committed speculative state,
+and `2e-6` for Muon.
+
+The expert-rank Rust HSACO contained exactly three
+`v_mfma_f32_16x16x128_f8f6f4` instructions with FP4-A/FP8-B selector
+`cbsz:4`. The per-kernel portable namespace and LLVM/HSACO SHA-256 values are
+printed by each wrapper and pinned by the corresponding advanced tutorial
+evidence record.
+
+Run the independent HIP compiler, target-rejection, ISA, and numerical suite:
 
 ```bash
 ./build_and_test.sh

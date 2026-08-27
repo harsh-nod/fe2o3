@@ -73,7 +73,7 @@ fn inherited_descriptors() -> Vec<i32> {
 
 fn is_build_control(name: &OsStr) -> bool {
     let bytes = os_bytes(name);
-    (bytes.starts_with(b"FE2O3_") && bytes != b"FE2O3_HSACO_DIR")
+    bytes.starts_with(b"FE2O3_")
         || matches!(
             bytes,
             b"RUSTFLAGS"

@@ -6,6 +6,19 @@ fn u32_type() -> Type {
     Type::Scalar(ScalarType::U32)
 }
 
+fn legacy_gfx942_diagnostic_capabilities() -> BTreeSet<TargetCapability> {
+    BTreeSet::from([TargetCapability::Extension {
+        namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+        name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+    }])
+}
+
+fn legacy_gfx942_diagnostic_declaration(diagnostic: &AmdGpuDiagnosticOperation) -> Function {
+    let mut declaration = diagnostic.declaration();
+    declaration.required_capabilities = legacy_gfx942_diagnostic_capabilities();
+    declaration
+}
+
 fn module_with_operation(parameters: Vec<Type>, diagnostic: AmdGpuDiagnosticOperation) -> Module {
     let parameter_ids = (0..parameters.len())
         .map(|index| ValueId(index as u32))
@@ -80,8 +93,8 @@ fn operations() -> Vec<(Vec<Type>, AmdGpuDiagnosticOperation)> {
 #[test]
 fn exact_diagnostic_contracts_verify_and_derive_capability() {
     let expected = BTreeSet::from([TargetCapability::Extension {
-        namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
-        name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+        namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+        name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
     }]);
 
     for (parameters, diagnostic) in operations() {
@@ -92,6 +105,58 @@ fn exact_diagnostic_contracts_verify_and_derive_capability() {
         assert_eq!(operation.required_capabilities(), expected);
         assert!(operation.memory_effects().is_empty());
     }
+}
+
+#[test]
+fn frozen_gfx942_diagnostic_declarations_remain_verifiable() {
+    let diagnostic = AmdGpuDiagnosticOperation::Clock32;
+    let mut module = module_with_operation(Vec::new(), diagnostic.clone());
+    module.functions[1] = legacy_gfx942_diagnostic_declaration(&diagnostic);
+    let legacy = legacy_gfx942_diagnostic_capabilities();
+
+    verify_module(&module).unwrap();
+    verify_module_with_capabilities(&module, &legacy).unwrap();
+
+    let bytes = encode_module_v2(&module).unwrap();
+    let decoded = decode_module_v2(&bytes).unwrap();
+    assert_eq!(decoded, module);
+    verify_module_with_capabilities(&decoded, &diagnostic.required_capabilities()).unwrap();
+}
+
+#[test]
+fn legacy_diagnostic_alias_rejects_mixed_or_lookalike_declarations() {
+    let diagnostic = AmdGpuDiagnosticOperation::Clock32;
+    let mut mixed = module_with_operation(Vec::new(), diagnostic.clone());
+    mixed.functions[1] = legacy_gfx942_diagnostic_declaration(&diagnostic);
+    mixed.functions[1]
+        .required_capabilities
+        .extend(diagnostic.required_capabilities());
+    assert!(
+        verify_module(&mixed)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+    );
+
+    let mut lookalike = module_with_operation(Vec::new(), diagnostic.clone());
+    lookalike.functions[1] = legacy_gfx942_diagnostic_declaration(&diagnostic);
+    lookalike.functions[1].required_capabilities = BTreeSet::from([TargetCapability::Extension {
+        namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+        name: "diagnostics.gfx942.v1.lookalike".to_owned(),
+    }]);
+    assert!(
+        verify_module(&lookalike)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidAmdGpuDiagnosticOperation)
+    );
+
+    assert!(
+        verify_module_with_capabilities(
+            &module_with_operation(Vec::new(), diagnostic),
+            &lookalike.functions[1].required_capabilities,
+        )
+        .unwrap_err()
+        .contains(DiagnosticCode::UnsupportedCapability)
+    );
 }
 
 #[test]

@@ -26,6 +26,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V3: u16 = 3;
 pub const INERT_SEMANTIC_MIR_VERSION_V4: u16 = 4;
 pub const INERT_SEMANTIC_MIR_VERSION_V5: u16 = 5;
 pub const INERT_SEMANTIC_MIR_VERSION_V6: u16 = 6;
+pub const INERT_SEMANTIC_MIR_VERSION_V7: u16 = 7;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -39,6 +40,7 @@ pub enum SemanticMirWireVersionV1 {
     V4,
     V5,
     V6,
+    V7,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -49,6 +51,7 @@ impl SemanticMirWireVersionV1 {
             Self::V4 => INERT_SEMANTIC_MIR_VERSION_V4,
             Self::V5 => INERT_SEMANTIC_MIR_VERSION_V5,
             Self::V6 => INERT_SEMANTIC_MIR_VERSION_V6,
+            Self::V7 => INERT_SEMANTIC_MIR_VERSION_V7,
         }
     }
 
@@ -59,6 +62,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V4 => Some(Self::V4),
             INERT_SEMANTIC_MIR_VERSION_V5 => Some(Self::V5),
             INERT_SEMANTIC_MIR_VERSION_V6 => Some(Self::V6),
+            INERT_SEMANTIC_MIR_VERSION_V7 => Some(Self::V7),
             _ => None,
         }
     }
@@ -3417,6 +3421,7 @@ impl SemanticReachableAssemblyV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticKernelSourceContractV1 {
     launch: Option<SemanticKernelLaunchBoundsV1>,
+    resources: Option<SemanticKernelResourceContractV1>,
     unsafe_assembly: Option<SemanticUnsafeAssemblyDeclarationV1>,
     reachable_assembly: Option<SemanticReachableAssemblyV1>,
 }
@@ -3424,6 +3429,15 @@ pub struct SemanticKernelSourceContractV1 {
 impl SemanticKernelSourceContractV1 {
     pub fn new(
         launch: Option<SemanticKernelLaunchBoundsV1>,
+        unsafe_assembly: Option<SemanticUnsafeAssemblyDeclarationV1>,
+        reachable_assembly: Option<SemanticReachableAssemblyV1>,
+    ) -> Result<Self, SemanticMirErrorV1> {
+        Self::new_with_resources(launch, None, unsafe_assembly, reachable_assembly)
+    }
+
+    pub fn new_with_resources(
+        launch: Option<SemanticKernelLaunchBoundsV1>,
+        resources: Option<SemanticKernelResourceContractV1>,
         unsafe_assembly: Option<SemanticUnsafeAssemblyDeclarationV1>,
         reachable_assembly: Option<SemanticReachableAssemblyV1>,
     ) -> Result<Self, SemanticMirErrorV1> {
@@ -3440,6 +3454,7 @@ impl SemanticKernelSourceContractV1 {
         }
         Ok(Self {
             launch,
+            resources,
             unsafe_assembly,
             reachable_assembly,
         })
@@ -3449,12 +3464,49 @@ impl SemanticKernelSourceContractV1 {
         self.launch
     }
 
+    pub const fn resources(self) -> Option<SemanticKernelResourceContractV1> {
+        self.resources
+    }
+
     pub const fn unsafe_assembly(self) -> Option<SemanticUnsafeAssemblyDeclarationV1> {
         self.unsafe_assembly
     }
 
     pub const fn reachable_assembly(self) -> Option<SemanticReachableAssemblyV1> {
         self.reachable_assembly
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SemanticKernelResourceContractV1 {
+    static_shared_memory_bytes: u32,
+    max_dynamic_shared_memory_bytes: u32,
+}
+
+impl SemanticKernelResourceContractV1 {
+    pub fn new(
+        static_shared_memory_bytes: u32,
+        max_dynamic_shared_memory_bytes: u32,
+    ) -> Result<Self, SemanticMirErrorV1> {
+        if static_shared_memory_bytes == 0 && max_dynamic_shared_memory_bytes == 0
+            || static_shared_memory_bytes
+                .checked_add(max_dynamic_shared_memory_bytes)
+                .is_none()
+        {
+            return Err(SemanticMirErrorV1::InvalidKernelEntry);
+        }
+        Ok(Self {
+            static_shared_memory_bytes,
+            max_dynamic_shared_memory_bytes,
+        })
+    }
+
+    pub const fn static_shared_memory_bytes(self) -> u32 {
+        self.static_shared_memory_bytes
+    }
+
+    pub const fn max_dynamic_shared_memory_bytes(self) -> u32 {
+        self.max_dynamic_shared_memory_bytes
     }
 }
 
@@ -5046,6 +5098,20 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     GridDimension(SemanticAxisV1),
     /// Executes the target's canonical trap instruction and never returns.
     Trap,
+    /// Creates one exact compiler-owned allocation in the current workgroup's LDS.
+    DynamicLdsExactCurrent {
+        scope: SemanticTypeIdV1,
+        dynamic_lds: SemanticTypeIdV1,
+        element_storage: SemanticTypeIdV1,
+        elements: u64,
+    },
+    /// Consumes typed LDS and exposes its authenticated pointer/length pair to a collective binder.
+    DynamicLdsIntoCollectiveRawParts {
+        dynamic_lds: SemanticTypeIdV1,
+        raw_parts: SemanticTypeIdV1,
+        element_storage: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
@@ -5061,6 +5127,13 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     /// Creates compiler-issued authority for target-neutral subgroup collectives.
     CollectiveContextCurrent {
         context: SemanticTypeIdV1,
+    },
+    /// Reduces one scalar sum across the current gfx942 workgroup through authenticated LDS.
+    WorkgroupReduceSum {
+        workgroup: SemanticTypeIdV1,
+        context: SemanticTypeIdV1,
+        scratch: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
     },
     /// Reduces one scalar across each contiguous subgroup of `width` lanes.
     SubgroupReduceF32 {
@@ -5751,6 +5824,15 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V6, limits)
     }
 
+    /// Admits under the exact closed V7 schema that binds source-declared
+    /// static and maximum dynamic workgroup-memory resources.
+    pub fn admit_exact_v7(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V7, limits)
+    }
+
     /// Selects V5 for the existing production surface and V6 only when a typed
     /// gfx950 attention intrinsic requires it.
     pub fn admit_current_production(
@@ -5972,12 +6054,6 @@ fn select_kernel_body_v1(
     if root_function.role != SemanticFunctionRoleV1::KernelRoot {
         return None;
     }
-    if request.functions.len() == 1 {
-        return Some(SemanticKernelBodySelectionV1 {
-            root: *root,
-            body: *root,
-        });
-    }
     if !matches!(
         request.types[root_function.abi.source_output_type().0 as usize].shape,
         SemanticTypeShapeV1::Unit
@@ -5986,34 +6062,53 @@ fn select_kernel_body_v1(
     }
 
     let entry = root_function.blocks.get(root_function.entry.0 as usize)?;
-    if !entry
-        .statements
-        .iter()
-        .all(|statement| wrapper_administrative_statement(&statement.kind))
-    {
-        return None;
-    }
     let SemanticTerminatorKindV1::Call(call) = &entry.terminator.kind else {
-        return None;
+        return Some(SemanticKernelBodySelectionV1 {
+            root: *root,
+            body: *root,
+        });
     };
     let SemanticCallableDeclV1::Defined { function: body } =
         request.callables.get(call.callee.0 as usize)?
     else {
-        return None;
+        return Some(SemanticKernelBodySelectionV1 {
+            root: *root,
+            body: *root,
+        });
     };
-    if body == root {
-        return None;
-    }
     let body_function = request.functions.get(body.0 as usize)?;
+    let wrapper_candidate = body != root
+        && body_function.role == SemanticFunctionRoleV1::InternalHelper
+        && result_with_unit_ok(request, body_function.abi.source_output_type())
+        && root_function.blocks.len() == 2
+        && call
+            .destination
+            .as_ref()
+            .and_then(|destination| root_function.blocks.get(destination.edge.target.0 as usize))
+            .is_some_and(|return_block| {
+                matches!(
+                    return_block.terminator.kind,
+                    SemanticTerminatorKindV1::Return
+                )
+            });
+    if !wrapper_candidate {
+        return Some(SemanticKernelBodySelectionV1 {
+            root: *root,
+            body: *root,
+        });
+    }
+
     let destination = call.destination.as_ref()?;
     let return_block = root_function
         .blocks
         .get(destination.edge.target.0 as usize)?;
-    if body_function.role != SemanticFunctionRoleV1::InternalHelper
+    if !entry
+        .statements
+        .iter()
+        .all(|statement| wrapper_administrative_statement(&statement.kind))
         || body_function.abi.source_input_types() != root_function.abi.source_input_types()
         || body_function.abi.source_argument_ownership()
             != root_function.abi.source_argument_ownership()
-        || !result_with_unit_ok(request, body_function.abi.source_output_type())
         || destination.place.ty != body_function.abi.source_output_type()
         || !destination.place.projections.is_empty()
         || root_function.locals[destination.place.local.0 as usize].role
@@ -6035,7 +6130,6 @@ fn select_kernel_body_v1(
             return_block.terminator.kind,
             SemanticTerminatorKindV1::Return
         )
-        || root_function.blocks.len() != 2
     {
         return None;
     }
@@ -7259,6 +7353,8 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
         | SemanticCompilerIntrinsicOperationV1::Trap
+        | SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts { .. }
         | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -7266,6 +7362,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum { .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { .. }
@@ -7414,6 +7511,32 @@ fn compiler_intrinsic_signature_matches(
                     SemanticTypeShapeV1::Never
                 )
         }
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+            scope,
+            dynamic_lds,
+            element_storage,
+            elements,
+        } => {
+            inputs.len() == 1
+                && output == dynamic_lds
+                && mutable_reference_to(request, inputs[0], scope)
+                && elements != 0
+                && elements <= u64::from(u32::MAX)
+                && dynamic_lds_storage_type_matches(request, dynamic_lds, element_storage)
+        }
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+            dynamic_lds,
+            raw_parts,
+            element_storage,
+            element,
+        } => {
+            inputs.len() == 1
+                && inputs[0] == dynamic_lds
+                && output == raw_parts
+                && dynamic_lds_storage_type_matches(request, dynamic_lds, element_storage)
+                && dynamic_lds_element_storage_matches(request, element_storage, element)
+                && dynamic_lds_raw_parts_type_matches(request, raw_parts, element)
+        }
         SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier => {
@@ -7445,6 +7568,27 @@ fn compiler_intrinsic_signature_matches(
         }
         SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context } => {
             inputs.is_empty() && output == context
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+            workgroup,
+            context,
+            scratch,
+            element,
+        } => {
+            inputs.len() == 4
+                && shared_reference_to(request, inputs[0], workgroup)
+                && shared_reference_to(request, inputs[1], context)
+                && mutable_reference_to(request, inputs[2], scratch)
+                && inputs[3] == element
+                && output == element
+                && matches!(
+                    scalar_type(request, element),
+                    Some(
+                        SemanticScalarTypeV1::Integer { bits: 32, .. }
+                            | SemanticScalarTypeV1::Float { bits: 32 }
+                    )
+                )
+                && workgroup_collective_scratch_type_matches(request, scratch, element)
         }
         SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, width, .. } => {
             inputs.len() == 2
@@ -7710,6 +7854,16 @@ fn compiler_intrinsic_signature_matches(
             rhs,
             accumulator,
         } => {
+            let homogeneous_profiles =
+                lhs.profile == rhs.profile && lhs.profile == accumulator.profile;
+            let gfx950_fp4_by_fp8 = matches!(
+                (lhs.profile, rhs.profile, accumulator.profile),
+                (
+                    SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+                    SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+                    SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+                )
+            );
             inputs.len() == 4
                 && shared_reference_to(request, inputs[0], context)
                 && inputs[1] == lhs_fragment
@@ -7721,8 +7875,7 @@ fn compiler_intrinsic_signature_matches(
                 && mfma_accumulator_contract_valid(accumulator)
                 && lhs.role == SemanticMfmaOperandRoleV1::A
                 && rhs.role == SemanticMfmaOperandRoleV1::B
-                && lhs.profile == rhs.profile
-                && lhs.profile == accumulator.profile
+                && (homogeneous_profiles || gfx950_fp4_by_fp8)
                 && lhs.register_distribution == rhs.register_distribution
                 && lhs.wave_width == rhs.wave_width
                 && lhs.wave_width == accumulator.wave_width
@@ -8245,6 +8398,190 @@ fn transparent_index_witness_matches(
         }
     }
     raw_fields == 1 && marker_fields != 0
+}
+
+fn dynamic_lds_storage_type_matches(
+    request: &InertSemanticMirRequestV1,
+    dynamic_lds: SemanticTypeIdV1,
+    element_storage: SemanticTypeIdV1,
+) -> bool {
+    let Some(dynamic_lds_decl) = request.types.get(dynamic_lds.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(fields) = &dynamic_lds_decl.shape else {
+        return false;
+    };
+    if fields.fields.len() != 6
+        || !fields.fields[1..=2]
+            .iter()
+            .all(|field| is_unsigned_integer_with_bits(request, *field, 64))
+        || !fields.fields[3..].iter().all(|field| {
+            request
+                .types
+                .get(field.0 as usize)
+                .is_some_and(|declaration| declaration.layout.size_bytes == Some(0))
+        })
+    {
+        return false;
+    }
+    let mut current = fields.fields[0];
+    for _ in 0..4 {
+        let Some(declaration) = request.types.get(current.0 as usize) else {
+            return false;
+        };
+        match &declaration.shape {
+            SemanticTypeShapeV1::Aggregate(wrapper) | SemanticTypeShapeV1::Union(wrapper)
+                if wrapper.fields.len() == 1 =>
+            {
+                current = wrapper.fields[0];
+            }
+            SemanticTypeShapeV1::Pointer(pointer) => {
+                let Some(storage) = request.types.get(element_storage.0 as usize) else {
+                    return false;
+                };
+                return pointer.pointee == element_storage
+                    && pointer.kind == SemanticPointerKindV1::Raw
+                    && pointer.address_space == 0
+                    && pointer.pointer_width_bits == 64
+                    && pointer.metadata == SemanticPointerMetadataV1::None
+                    && storage.layout.size_bytes.is_some_and(|size| size != 0)
+                    && storage.layout.alignment_bytes != 0
+                    && storage.layout.alignment_bytes <= 16
+                    && storage.layout.alignment_bytes.is_power_of_two();
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+fn dynamic_lds_element_storage_matches(
+    request: &InertSemanticMirRequestV1,
+    element_storage: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(storage) = request.types.get(element_storage.0 as usize) else {
+        return false;
+    };
+    let Some(element_decl) = request.types.get(element.0 as usize) else {
+        return false;
+    };
+    if storage.layout.size_bytes != element_decl.layout.size_bytes
+        || storage.layout.alignment_bytes != element_decl.layout.alignment_bytes
+    {
+        return false;
+    }
+    let mut current = element_storage;
+    for _ in 0..4 {
+        if current == element {
+            return matches!(
+                scalar_type(request, element),
+                Some(
+                    SemanticScalarTypeV1::Integer { bits: 32, .. }
+                        | SemanticScalarTypeV1::Float { bits: 32 }
+                )
+            );
+        }
+        let Some(declaration) = request.types.get(current.0 as usize) else {
+            return false;
+        };
+        let (fields, aggregate_layout) = match (&declaration.shape, &declaration.layout.details) {
+            (
+                SemanticTypeShapeV1::Aggregate(fields),
+                SemanticTypeLayoutDetailsV1::Aggregate(layout),
+            ) => (fields, Some(layout)),
+            (SemanticTypeShapeV1::Union(fields), _) => (fields, None),
+            _ => return false,
+        };
+        let mut candidate = None;
+        for (index, field) in fields.fields.iter().copied().enumerate() {
+            let Some(field_decl) = request.types.get(field.0 as usize) else {
+                return false;
+            };
+            if field_decl.layout.size_bytes == declaration.layout.size_bytes
+                && field_decl.layout.alignment_bytes == declaration.layout.alignment_bytes
+                && !field_decl.layout.uninhabited
+            {
+                if candidate.replace((index, field)).is_some() {
+                    return false;
+                }
+            } else if field_decl.layout.size_bytes != Some(0) {
+                return false;
+            }
+        }
+        let Some((index, field)) = candidate else {
+            return false;
+        };
+        if aggregate_layout.is_some_and(|layout| {
+            layout.field_offsets.get(index) != Some(&0) || !layout.padding.is_empty()
+        }) {
+            return false;
+        }
+        current = field;
+    }
+    false
+}
+
+fn dynamic_lds_raw_parts_type_matches(
+    request: &InertSemanticMirRequestV1,
+    raw_parts: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(declaration) = request.types.get(raw_parts.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Tuple(fields) = &declaration.shape else {
+        return false;
+    };
+    fields.fields.len() == 2
+        && is_unsigned_integer_with_bits(request, fields.fields[1], 64)
+        && matches!(
+            request
+                .types
+                .get(fields.fields[0].0 as usize)
+                .map(|ty| &ty.shape),
+            Some(SemanticTypeShapeV1::Pointer(pointer))
+                if pointer.pointee == element
+                    && pointer.kind == SemanticPointerKindV1::Raw
+                    && pointer.mutability == SemanticMutabilityV1::Mutable
+                    && pointer.address_space == 0
+                    && pointer.pointer_width_bits == 64
+                    && pointer.metadata == SemanticPointerMetadataV1::None
+        )
+}
+
+fn workgroup_collective_scratch_type_matches(
+    request: &InertSemanticMirRequestV1,
+    scratch: SemanticTypeIdV1,
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(scratch_decl) = request.types.get(scratch.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(fields) = &scratch_decl.shape else {
+        return false;
+    };
+    if fields.fields.len() != 4
+        || !is_unsigned_integer_with_bits(request, fields.fields[1], 32)
+        || !fields.fields[2..].iter().all(|field| {
+            request
+                .types
+                .get(field.0 as usize)
+                .is_some_and(|declaration| declaration.layout.size_bytes == Some(0))
+        })
+    {
+        return false;
+    }
+    matches!(
+        request.types.get(fields.fields[0].0 as usize).map(|ty| &ty.shape),
+        Some(SemanticTypeShapeV1::Pointer(pointer))
+            if pointer.pointee == element
+                && pointer.kind == SemanticPointerKindV1::Raw
+                && pointer.mutability == SemanticMutabilityV1::Mutable
+                && pointer.address_space == 0
+                && pointer.pointer_width_bits == 64
+                && pointer.metadata == SemanticPointerMetadataV1::None
+    )
 }
 
 fn shared_reference_to(
@@ -10347,6 +10684,19 @@ fn resolve_niche_source(
             } else {
                 return Err(SemanticMirErrorV1::InvalidTypeLayout);
             }
+        }
+        SemanticBackendReprV1::Memory { .. }
+            if matches!(terminal.shape, SemanticTypeShapeV1::Enum { .. })
+                && terminal.layout.largest_niche.is_some_and(|source| {
+                    source.offset_bytes == relative_offset
+                        && source.primitive == niche.source_niche.primitive
+                        && source.valid_range == niche.source_niche.valid_range
+                }) =>
+        {
+            SemanticBackendScalarV1::initialized(
+                niche.source_niche.primitive,
+                niche.source_niche.valid_range,
+            )
         }
         _ => return Err(SemanticMirErrorV1::InvalidTypeLayout),
     };
@@ -13935,6 +14285,27 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
         | SemanticCompilerIntrinsicOperationV1::FabsF32 => {}
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+            scope,
+            dynamic_lds,
+            element_storage,
+            ..
+        } => {
+            pending.push_back(scope);
+            pending.push_back(dynamic_lds);
+            pending.push_back(element_storage);
+        }
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+            dynamic_lds,
+            raw_parts,
+            element_storage,
+            element,
+        } => {
+            pending.push_back(dynamic_lds);
+            pending.push_back(raw_parts);
+            pending.push_back(element_storage);
+            pending.push_back(element);
+        }
         SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { context, .. } => {
             pending.push_back(context);
@@ -13945,6 +14316,17 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { context, .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { context, .. } => {
             pending.push_back(context);
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+            workgroup,
+            context,
+            scratch,
+            element,
+        } => {
+            pending.push_back(workgroup);
+            pending.push_back(context);
+            pending.push_back(scratch);
+            pending.push_back(element);
         }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             pending.push_back(context);
@@ -14657,6 +15039,15 @@ fn encode_request(
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if request.functions.iter().any(|function| {
+        matches!(
+            &function.export,
+            Some(SemanticFunctionExportV1::Kernel(entry))
+                if entry.source_contract.resources().is_some()
+        )
+    }) {
+        return SemanticMirWireVersionV1::V7;
+    }
     let uses_gfx950_attention = request.callables.iter().any(|callable| {
         matches!(
             callable,
@@ -15455,7 +15846,7 @@ fn encode_function(
     match &function.export {
         Some(SemanticFunctionExportV1::Kernel(entry)) => {
             writer.u8(1)?;
-            encode_kernel_entry(writer, entry)?;
+            encode_kernel_entry(writer, entry, wire_version)?;
         }
         Some(SemanticFunctionExportV1::DeviceFfi { export_symbol }) => {
             writer.u8(2)?;
@@ -15573,6 +15964,30 @@ fn encode_compiler_intrinsic_operation(
             encode_axis(writer, axis)
         }
         SemanticCompilerIntrinsicOperationV1::Trap => writer.u8(41),
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+            scope,
+            dynamic_lds,
+            element_storage,
+            elements,
+        } => {
+            writer.u8(52)?;
+            writer.u32(scope.0)?;
+            writer.u32(dynamic_lds.0)?;
+            writer.u32(element_storage.0)?;
+            writer.u64(elements)
+        }
+        SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+            dynamic_lds,
+            raw_parts,
+            element_storage,
+            element,
+        } => {
+            writer.u8(54)?;
+            writer.u32(dynamic_lds.0)?;
+            writer.u32(raw_parts.0)?;
+            writer.u32(element_storage.0)?;
+            writer.u32(element.0)
+        }
         SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => writer.u8(4),
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
@@ -15811,6 +16226,18 @@ fn encode_compiler_intrinsic_operation(
         SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context } => {
             writer.u8(27)?;
             writer.u32(context.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+            workgroup,
+            context,
+            scratch,
+            element,
+        } => {
+            writer.u8(53)?;
+            writer.u32(workgroup.0)?;
+            writer.u32(context.0)?;
+            writer.u32(scratch.0)?;
+            writer.u32(element.0)
         }
         SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 {
             context,
@@ -16202,6 +16629,7 @@ fn encode_axis(
 fn encode_kernel_entry(
     writer: &mut CanonicalWriterV1,
     entry: &SemanticKernelEntryV1,
+    wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     writer.blob(&entry.export_symbol.0)?;
     writer.identity(entry.kernel_binding_identity.0)?;
@@ -16239,9 +16667,21 @@ fn encode_kernel_entry(
             writer.u32(reachable.blocks)?;
             writer.u16(reachable.operand_bits)?;
             writer.u16(reachable.option_bits)?;
-            writer.u16(reachable.effect_bits)
+            writer.u16(reachable.effect_bits)?;
         }
-        None => writer.u8(0),
+        None => writer.u8(0)?,
+    }
+    if wire_version >= SemanticMirWireVersionV1::V7 {
+        match contract.resources {
+            Some(resources) => {
+                writer.u8(1)?;
+                writer.u32(resources.static_shared_memory_bytes)?;
+                writer.u32(resources.max_dynamic_shared_memory_bytes)
+            }
+            None => writer.u8(0),
+        }
+    } else {
+        Ok(())
     }
 }
 
@@ -17060,6 +17500,126 @@ mod private_tests {
             layout,
             shape,
         )
+    }
+
+    fn gfx950_mfma_signature_matches(
+        lhs_profile: SemanticMfmaProfileV1,
+        rhs_profile: SemanticMfmaProfileV1,
+        accumulator_profile: SemanticMfmaProfileV1,
+    ) -> bool {
+        let context = SemanticTypeIdV1::from_index(0);
+        let context_reference = SemanticTypeIdV1::from_index(1);
+        let lhs_fragment = SemanticTypeIdV1::from_index(2);
+        let rhs_fragment = SemanticTypeIdV1::from_index(3);
+        let accumulator_fragment = SemanticTypeIdV1::from_index(4);
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([6; 32])),
+            vec![
+                test_type(
+                    1,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+                test_type(
+                    2,
+                    SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                    SemanticTypeShapeV1::Pointer(
+                        SemanticPointerTypeV1::new_with_kind(
+                            context,
+                            SemanticPointerKindV1::Reference,
+                            SemanticMutabilityV1::Immutable,
+                            0,
+                            64,
+                            SemanticPointerMetadataV1::None,
+                        )
+                        .unwrap(),
+                    ),
+                ),
+                test_type(
+                    3,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+                test_type(
+                    4,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+                test_type(
+                    5,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let abi_value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([7; 32]),
+            SemanticLayoutIdentityV1::from_sha256([8; 32]),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![
+                abi_value(context_reference),
+                abi_value(lhs_fragment),
+                abi_value(rhs_fragment),
+                abi_value(accumulator_fragment),
+            ],
+            abi_value(accumulator_fragment),
+        )
+        .unwrap();
+        let operand_contract = |role, profile| SemanticMfmaOperandContractV1 {
+            role,
+            profile,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+            wave_width: 64,
+        };
+        compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                context,
+                lhs_fragment,
+                rhs_fragment,
+                accumulator_fragment,
+                lhs: operand_contract(SemanticMfmaOperandRoleV1::A, lhs_profile),
+                rhs: operand_contract(SemanticMfmaOperandRoleV1::B, rhs_profile),
+                accumulator: SemanticMfmaAccumulatorContractV1 {
+                    profile: accumulator_profile,
+                    distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+                    wave_width: 64,
+                },
+            },
+            &abi,
+        )
+    }
+
+    #[test]
+    fn gfx950_mfma_signature_accepts_exact_fp4_a_fp8_b_fp4_accumulator() {
+        assert!(gfx950_mfma_signature_matches(
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        ));
+    }
+
+    #[test]
+    fn gfx950_mfma_signature_rejects_reversed_profiles_and_wrong_accumulator() {
+        assert!(!gfx950_mfma_signature_matches(
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        ));
+        assert!(!gfx950_mfma_signature_matches(
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        ));
     }
 
     #[test]

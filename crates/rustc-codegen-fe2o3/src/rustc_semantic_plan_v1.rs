@@ -959,7 +959,15 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 operand,
                 _,
             ) => self.inspect_operand(operand, site),
-            Rvalue::Cast(..) => Err(reject("unsupported Cast rvalue", site)),
+            Rvalue::Cast(rustc_middle::mir::CastKind::Transmute, ..) => {
+                Err(reject("unsupported Transmute Cast rvalue", site))
+            }
+            Rvalue::Cast(rustc_middle::mir::CastKind::PointerCoercion(..), ..) => {
+                Err(reject("unsupported PointerCoercion Cast rvalue", site))
+            }
+            Rvalue::Cast(rustc_middle::mir::CastKind::Subtype, ..) => {
+                Err(reject("unsupported Subtype Cast rvalue", site))
+            }
             Rvalue::BinaryOp(
                 BinOp::Add
                 | BinOp::Sub
@@ -2309,6 +2317,10 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
         ProductionTerminalExpansionV1::Trap => 86,
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 87,
+        ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
+        ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
+        ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
     }
 }
 
@@ -2420,6 +2432,12 @@ mod tests {
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate),
         ];
         assert_eq!(gfx950_fp4, [69, 70, 71, 72, 73, 74, 75]);
+        assert_eq!(
+            terminal_expansion_tag_v1(
+                ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate,
+            ),
+            87,
+        );
 
         let gfx950_attention = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent),

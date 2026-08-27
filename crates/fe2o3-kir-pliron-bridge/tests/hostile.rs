@@ -1,6 +1,8 @@
 use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, DiagnosticCode, Function, Kernel, LaunchDomain, LaunchExtent,
-    MAX_FUNCTIONS_V1, MAX_TEXT_BYTES_V1, Module, Signature, TargetCapability, Terminator,
+    AccessMode, AddressSpace, BasicBlock, BlockId, DiagnosticCode, Function,
+    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
+    Kernel, LaunchDomain, LaunchExtent, MAX_FUNCTIONS_V1, MAX_TEXT_BYTES_V1, Module, Operation,
+    OperationKind, ScalarType, Signature, TargetCapability, Terminator, Type, ValueDef, ValueId,
     encode_module_v1,
 };
 use fe2o3_kir_pliron_bridge::{
@@ -52,6 +54,38 @@ fn projected() -> (Context, BridgeEnvelope, CanonicalKirRecord) {
     let mut context = Context::new();
     let envelope = record.project_to_pliron(&mut context, limits).unwrap();
     (context, envelope, record)
+}
+
+#[test]
+fn v5_bridge_rejects_gfx950_lds_transpose_before_encoding() {
+    let mut module = kernel_module("gfx950-transpose");
+    module.functions[0].body.as_mut().unwrap().blocks[0]
+        .operations
+        .push(Operation::new(
+            vec![ValueDef::new(
+                ValueId(0),
+                Type::pointer(
+                    Type::Scalar(ScalarType::U8),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+            )],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Current {
+                    format: Gfx950LdsTransposeFormatV1::Fp8E4M3,
+                },
+            )),
+        ));
+
+    assert!(matches!(
+        CanonicalKirRecord::from_module(&module, KirVersion::V5, BridgeLimits::default()),
+        Err(BridgeError::Encode(
+            fe2o3_kernel_ir::KernelIrEncodeError::UnsupportedInVersion {
+                version: 5,
+                feature: "gfx950 LDS transpose operation",
+            }
+        ))
+    ));
 }
 
 fn recover_projected(

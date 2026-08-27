@@ -134,6 +134,7 @@ impl TensorInstructionAttr {
                 TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => 1,
                 TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => 4,
                 TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => 5,
+                TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => 6,
                 TensorInstructionProfileV1::IncompatibleWave32 => 2,
                 TensorInstructionProfileV1::Opaque(_) => 3,
             },
@@ -169,6 +170,9 @@ impl TensorInstructionAttr {
             }
             5 if self.profile_identity == 0 => {
                 TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
+            }
+            6 if self.profile_identity == 0 => {
+                TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64
             }
             _ => return Err(TensorLayoutDialectError::NumericFieldOutOfRange),
         })

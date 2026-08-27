@@ -506,12 +506,13 @@ pub fn analyze_gfx942_hsaco_with_worker_v1(
     worker: &Path,
     request: &PhysicalMachineEffectRequestV1,
 ) -> Result<PhysicalMachineEffectEvidenceV1, PhysicalMachineEffectWorkerErrorV1> {
-    let mut child = Command::new(worker)
+    let mut command = Command::new(worker);
+    command
         .arg("--machine-effects-gfx942-v1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    let mut child = crate::process_execution::spawn(&mut command)
         .map_err(PhysicalMachineEffectWorkerErrorV1::Spawn)?;
     child
         .stdin

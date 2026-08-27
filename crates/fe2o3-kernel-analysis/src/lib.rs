@@ -59,6 +59,8 @@ mod pliron_sparse_index;
 mod pliron_tensor_layout;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
+#[cfg(feature = "authenticated-machine-effect")]
+mod process_execution;
 mod ssa;
 mod uniformity;
 

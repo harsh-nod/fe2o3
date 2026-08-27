@@ -6,7 +6,10 @@ use fe2o3_rustc_front::{
     ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, ASSEMBLY_OPTION_PURE_V1, ASSEMBLY_OPTION_READONLY_V1,
     KERNEL_FRONTEND_REGISTRATION_KIND_V1, KERNEL_FRONTEND_REGISTRATION_MAGIC_V1,
     KERNEL_FRONTEND_REGISTRATION_PREFIX_V1, KERNEL_FRONTEND_REGISTRATION_VERSION_V1,
-    KernelFrontendContractV1, decode_kernel_frontend_contract_v1,
+    KERNEL_RESOURCE_REGISTRATION_KIND_V1, KERNEL_RESOURCE_REGISTRATION_MAGIC_V1,
+    KERNEL_RESOURCE_REGISTRATION_PREFIX_V1, KERNEL_RESOURCE_REGISTRATION_VERSION_V1,
+    KernelFrontendContractV1, KernelResourceContractV1, decode_kernel_frontend_contract_v1,
+    decode_kernel_resource_contract_v1,
 };
 use reserved_fe2o3_symbols::{
     CrateBindingIdV1, GeneratedHostContractIdV3, KernelBindingIdV1,
@@ -126,7 +129,14 @@ pub(crate) struct AuthenticatedKernelFrontendContractV1 {
     target_symbol: String,
     canonical_bytes: Vec<u8>,
     contract: KernelFrontendContractV1,
+    resource: Option<AuthenticatedKernelResourceContractV1>,
     reachable_assembly: ReachableAssemblySummaryV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuthenticatedKernelResourceContractV1 {
+    canonical_bytes: Vec<u8>,
+    contract: KernelResourceContractV1,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -145,6 +155,19 @@ impl AuthenticatedKernelFrontendContractV1 {
         self.contract
     }
 
+    pub(crate) const fn resource_contract(&self) -> Option<KernelResourceContractV1> {
+        match &self.resource {
+            Some(resource) => Some(resource.contract),
+            None => None,
+        }
+    }
+
+    pub(crate) fn resource_canonical_bytes(&self) -> Option<&[u8]> {
+        self.resource
+            .as_ref()
+            .map(|resource| resource.canonical_bytes.as_slice())
+    }
+
     pub(crate) const fn reachable_assembly(&self) -> ReachableAssemblySummaryV1 {
         self.reachable_assembly
     }
@@ -157,8 +180,22 @@ impl AuthenticatedKernelFrontendContractV1 {
             target_symbol: "fe2o3_kernel_kernel".to_owned(),
             canonical_bytes: fe2o3_rustc_front::encode_kernel_frontend_contract_v1(contract),
             contract,
+            resource: None,
             reachable_assembly: ReachableAssemblySummaryV1::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_with_resource(
+        contract: KernelFrontendContractV1,
+        resource: KernelResourceContractV1,
+    ) -> Self {
+        let mut authenticated = Self::for_test(contract);
+        authenticated.resource = Some(AuthenticatedKernelResourceContractV1 {
+            canonical_bytes: fe2o3_rustc_front::encode_kernel_resource_contract_v1(resource),
+            contract: resource,
+        });
+        authenticated
     }
 }
 
@@ -399,6 +436,21 @@ struct FrontendContractRegistrationRecord<T> {
 }
 
 #[derive(Clone, Debug)]
+struct ResourceContractRegistrationRecord<T> {
+    registration_path: String,
+    item_name: String,
+    magic: u64,
+    version: u16,
+    kind: u16,
+    logical_name: String,
+    canonical_bytes: Vec<u8>,
+    contract: KernelResourceContractV1,
+    target_symbol: String,
+    target_identity: String,
+    target: T,
+}
+
+#[derive(Clone, Debug)]
 struct ReferenceBindingRegistrationRecord<T> {
     registration_path: String,
     item_name: String,
@@ -509,6 +561,8 @@ fn kernel_roots<'tcx>(
     )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
+    let resource_records = decode_resource_contract_registrations(tcx, &functions_by_symbol)?;
+    bind_resource_contract_registrations(tcx, &mut roots, resource_records)?;
     let reference_records = decode_reference_binding_registrations(tcx)?;
     bind_reference_binding_registrations(tcx, &mut roots, reference_records)?;
     Ok(roots)
@@ -561,6 +615,15 @@ fn general_typed_launch_v3(
             )
         }
     };
+    let resources = frontend
+        .and_then(AuthenticatedKernelFrontendContractV1::resource_contract)
+        .map(|resource| {
+            (
+                resource.static_shared_memory_bytes(),
+                resource.max_dynamic_shared_memory_bytes(),
+            )
+        })
+        .unwrap_or_default();
     LaunchContract::new(
         1,
         BlockSize::Exact(
@@ -569,8 +632,8 @@ fn general_typed_launch_v3(
         ),
         Dimensions::new(max_grid[0], max_grid[1], max_grid[2])
             .map_err(|error| RegistrationError::new(registration_path, error.to_string()))?,
-        0,
-        0,
+        resources.0,
+        resources.1,
     )
     .map_err(|error| RegistrationError::new(registration_path, error.to_string()))
 }
@@ -640,6 +703,27 @@ fn frontend_contract_candidates<'tcx>(
             let item_name = final_path_segment(&path).to_string();
             item_name
                 .starts_with(KERNEL_FRONTEND_REGISTRATION_PREFIX_V1)
+                .then_some((path, item_name, def_id, item))
+        })
+        .collect()
+}
+
+fn resource_contract_candidates<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> Vec<(
+    String,
+    String,
+    rustc_hir::def_id::LocalDefId,
+    &'tcx rustc_hir::Item<'tcx>,
+)> {
+    tcx.hir_free_items()
+        .filter_map(|item_id| {
+            let item = tcx.hir_item(item_id);
+            let def_id = item.owner_id.def_id;
+            let path = tcx.def_path_str(def_id.to_def_id());
+            let item_name = final_path_segment(&path).to_string();
+            item_name
+                .starts_with(KERNEL_RESOURCE_REGISTRATION_PREFIX_V1)
                 .then_some((path, item_name, def_id, item))
         })
         .collect()
@@ -1100,7 +1184,226 @@ fn bind_frontend_contract_registrations<'tcx>(
             target_symbol: record.target_symbol,
             canonical_bytes: record.canonical_bytes,
             contract: record.contract,
+            resource: None,
             reachable_assembly: ReachableAssemblySummaryV1::default(),
+        });
+    }
+    Ok(())
+}
+
+fn decode_resource_contract_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<Vec<ResourceContractRegistrationRecord<Instance<'tcx>>>, RegistrationError> {
+    let mut candidates = resource_contract_candidates(tcx);
+    candidates.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    candidates
+        .into_iter()
+        .map(|(path, item_name, def_id, item)| {
+            decode_resource_contract_registration(
+                tcx,
+                def_id,
+                path,
+                item_name,
+                item,
+                functions_by_symbol,
+            )
+        })
+        .collect()
+}
+
+fn decode_resource_contract_registration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: rustc_hir::def_id::LocalDefId,
+    registration_path: String,
+    item_name: String,
+    item: &rustc_hir::Item<'tcx>,
+    functions_by_symbol: &BTreeMap<String, Vec<Instance<'tcx>>>,
+) -> Result<ResourceContractRegistrationRecord<Instance<'tcx>>, RegistrationError> {
+    if !matches!(item.kind, ItemKind::Static(..)) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "the reserved resource-contract name must identify a static item",
+        ));
+    }
+    if tcx.is_mutable_static(def_id.to_def_id()) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "resource-contract registration statics must be immutable",
+        ));
+    }
+    let flags = tcx.codegen_fn_attrs(def_id).flags;
+    if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
+        return Err(RegistrationError::new(
+            registration_path,
+            "resource-contract registration statics must carry #[used]",
+        ));
+    }
+
+    let registration_ty = tcx.type_of(def_id).instantiate_identity();
+    let TyKind::Tuple(field_types) = registration_ty.kind() else {
+        return Err(RegistrationError::new(
+            registration_path,
+            "resource-contract registration must use the exact V1 tuple type",
+        ));
+    };
+    let exact_type = field_types.len() == 6
+        && field_types[0] == tcx.types.u64
+        && field_types[1] == tcx.types.u16
+        && field_types[2] == tcx.types.u16
+        && is_shared_str(field_types[3])
+        && is_shared_u8_slice(field_types[4])
+        && matches!(field_types[5].kind(), TyKind::FnPtr(..));
+    if !exact_type {
+        return Err(RegistrationError::new(
+            registration_path,
+            "resource-contract registration type must be `(u64, u16, u16, &str, &[u8], fn pointer)`",
+        ));
+    }
+
+    let body = tcx.mir_for_ctfe(def_id);
+    let fields = registration_tuple_fields(body, 6, &registration_path)?;
+    let magic = registration_integer(tcx, fields[0], tcx.types.u64, "magic", &registration_path)?;
+    let version =
+        registration_integer(tcx, fields[1], tcx.types.u16, "version", &registration_path)?;
+    let kind = registration_integer(tcx, fields[2], tcx.types.u16, "kind", &registration_path)?;
+    let logical_name = registration_string(tcx, fields[3], "logical name", &registration_path)?;
+    let canonical_bytes =
+        registration_bytes(tcx, fields[4], "resource contract", &registration_path)?;
+    let contract = decode_kernel_resource_contract_v1(&canonical_bytes).map_err(|error| {
+        RegistrationError::new(
+            &registration_path,
+            format!("resource-contract bytes are invalid: {error}"),
+        )
+    })?;
+    let target = registration_target(tcx, body, fields[5], &registration_path)?;
+    let target_symbol = tcx.symbol_name(target).name.to_string();
+    let target_identity = tcx.def_path_str(target.def_id());
+    let Some(cgu_targets) = functions_by_symbol.get(&target_symbol) else {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!(
+                "resource-contract target `{target_symbol}` was not monomorphized into a codegen unit"
+            ),
+        ));
+    };
+    if cgu_targets.as_slice() != [target] {
+        return Err(RegistrationError::new(
+            registration_path,
+            format!("resource-contract target `{target_symbol}` is ambiguous or inconsistent"),
+        ));
+    }
+
+    Ok(ResourceContractRegistrationRecord {
+        registration_path,
+        item_name,
+        magic: u64::try_from(magic)
+            .map_err(|_| RegistrationError::new("resource contract", "magic does not fit u64"))?,
+        version: u16::try_from(version)
+            .map_err(|_| RegistrationError::new("resource contract", "version does not fit u16"))?,
+        kind: u16::try_from(kind)
+            .map_err(|_| RegistrationError::new("resource contract", "kind does not fit u16"))?,
+        logical_name,
+        canonical_bytes,
+        contract,
+        target_symbol,
+        target_identity,
+        target,
+    })
+}
+
+fn bind_resource_contract_registrations<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    roots: &mut [KernelRoot<Instance<'tcx>>],
+    mut records: Vec<ResourceContractRegistrationRecord<Instance<'tcx>>>,
+) -> Result<(), RegistrationError> {
+    records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
+    let roots_by_name = roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| (root.logical_name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut targets = BTreeMap::new();
+
+    for record in records {
+        let error = |reason| RegistrationError::new(record.registration_path.clone(), reason);
+        if record.magic != KERNEL_RESOURCE_REGISTRATION_MAGIC_V1 {
+            return Err(error(format!(
+                "resource-contract magic {:#018x} does not match {:#018x}",
+                record.magic, KERNEL_RESOURCE_REGISTRATION_MAGIC_V1
+            )));
+        }
+        if record.version != KERNEL_RESOURCE_REGISTRATION_VERSION_V1 {
+            return Err(error(format!(
+                "unknown resource-contract registration version {}",
+                record.version
+            )));
+        }
+        if record.kind != KERNEL_RESOURCE_REGISTRATION_KIND_V1 {
+            return Err(error(format!(
+                "unknown resource-contract registration kind {}",
+                record.kind
+            )));
+        }
+        if record.logical_name.is_empty() {
+            return Err(error(
+                "resource-contract logical name must not be empty".to_owned(),
+            ));
+        }
+        let expected_item_name = format!(
+            "{KERNEL_RESOURCE_REGISTRATION_PREFIX_V1}{}",
+            record.logical_name
+        );
+        if record.item_name != expected_item_name {
+            return Err(error(format!(
+                "resource-contract item name `{}` is inconsistent with logical name `{}`",
+                record.item_name, record.logical_name
+            )));
+        }
+        let Some(&root_index) = roots_by_name.get(&record.logical_name) else {
+            return Err(error(format!(
+                "orphan resource contract has no registered kernel `{}`",
+                record.logical_name
+            )));
+        };
+        let root = &mut roots[root_index];
+        if root.target != record.target {
+            return Err(error(format!(
+                "resource-contract target `{}` is not the exact registered kernel function",
+                record.target_identity
+            )));
+        }
+        let Some(frontend) = root.frontend_contract.as_mut() else {
+            return Err(error(
+                "resource contract requires an authenticated frontend launch contract".to_owned(),
+            ));
+        };
+        if frontend.resource.is_some() {
+            return Err(error(format!(
+                "duplicate resource contract for kernel `{}`",
+                record.logical_name
+            )));
+        }
+        if frontend.target_symbol != record.target_symbol
+            || frontend.target_def_path_hash
+                != tcx.def_path_hash(record.target.def_id()).0.to_le_bytes()
+        {
+            return Err(error(
+                "resource contract disagrees with the authenticated frontend target".to_owned(),
+            ));
+        }
+        if let Some(previous) = targets.insert(
+            record.target_identity.clone(),
+            record.registration_path.clone(),
+        ) {
+            return Err(error(format!(
+                "duplicate resource-contract target `{}`; first registered by `{previous}`",
+                record.target_identity
+            )));
+        }
+        frontend.resource = Some(AuthenticatedKernelResourceContractV1 {
+            canonical_bytes: record.canonical_bytes,
+            contract: record.contract,
         });
     }
     Ok(())
@@ -2581,7 +2884,7 @@ impl<'tcx> DeviceCollector<'tcx> {
 
                 if crate::trusted_device_items::classify(self.tcx, function.instance.def_id())
                     .is_some_and(
-                        crate::production_semantic_terminal_v1::is_traversed_atomic_view_v1,
+                        crate::production_semantic_terminal_v1::is_traversed_reviewed_helper_v1,
                     )
                     || crate::production_rustc_intrinsic_v1::is_reviewed_device_global_mut_ptr_as_raw_v1(
                         self.tcx,
@@ -2591,7 +2894,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
-                    if crate::production_rustc_intrinsic_v1::is_reviewed_core_function_v1(
+                    if crate::production_rustc_intrinsic_v1::is_reviewed_core_unsafe_atomic_function_v1(
                         self.tcx,
                         function.instance,
                     ) {
@@ -3241,7 +3544,7 @@ mod tests {
         ASSEMBLY_OPERAND_SGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
         ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendGridDimensionsV1, FrontendLaunchBoundsV1,
         FrontendUnsafeAssemblyDeclarationV1, FrontendUnsafeAssemblyTargetV1,
-        FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
+        FrontendWorkgroupDimensionsV1, KernelFrontendContractV1, KernelResourceContractV1,
     };
     use reserved_fe2o3_symbols::{
         GeneratedHostContractIdV3, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
@@ -3714,6 +4017,16 @@ mod tests {
                 .max_grid(),
             Dimensions::new(1, 1, 1).unwrap()
         );
+
+        let resource_frontend = AuthenticatedKernelFrontendContractV1::for_test_with_resource(
+            KernelFrontendContractV1::new(Some(finite_launch), None).unwrap(),
+            KernelResourceContractV1::new(256, 1_024).unwrap(),
+        );
+        let resource_launch =
+            general_typed_launch_v3(Some(&resource_frontend), "registration").unwrap();
+        assert_eq!(resource_launch.static_shared_memory_bytes(), 256);
+        assert_eq!(resource_launch.max_dynamic_shared_memory_bytes(), 1_024);
+        assert_ne!(resource_frontend.resource_canonical_bytes(), Some(&[][..]),);
 
         for frontend in [
             authenticated(None, Some([64, 1, 1]), None),

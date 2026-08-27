@@ -12,8 +12,7 @@
       "tests": [
         "production_extraction_driver_v1",
         "production_general_matrix_driver_v1",
-        "production_ranked_bounds_driver_v1",
-        "production_workgroup_sync_driver_v1"
+        "production_ranked_bounds_driver_v1"
       ]
     },
     {

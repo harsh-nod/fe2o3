@@ -50,7 +50,7 @@ const KERNEL_REGISTRATION_KIND_KERNEL: u16 = 1;
 pub fn renamed_genuine(mut output: DisjointSlice<f32>) {
     let index = thread::index_1d();
     if let Some(value) = output.get_mut(index) {
-        *value = 1.0;
+        *value = 42.5;
     }
 }
 

@@ -128,6 +128,7 @@ reuse detached or stale metadata:
 ```bash
 python3 scripts/runtime_pure_rust_audit.py metadata \
   --cargo \
+  --root fe2o3-runtime \
   --root fe2o3-kfd \
   --root fe2o3-kfd-uapi \
   --root fe2o3-runtime-model
@@ -478,10 +479,10 @@ inventory template.
 Exit requires:
 
 - generic CI runs all metadata/ELF audit unit tests without ROCm, audits the
-  actual locked production closures rooted at `fe2o3-kfd`, `fe2o3-drm-uapi`,
-  `fe2o3-kfd-uapi`, and `fe2o3-runtime-model`, builds `fe2o3-kfd`'s
-  `kfd-version`, `kfd-topology`, and `kfd-device-identity` examples in a
-  dedicated target directory, and audits all three linked ELFs;
+  actual locked production closures rooted at `fe2o3-runtime`, `fe2o3-kfd`,
+  `fe2o3-drm-uapi`, `fe2o3-kfd-uapi`, and `fe2o3-runtime-model`, builds the
+  bounded KFD policy examples and the exact-artifact dispatch diagnostic in a
+  dedicated target directory, and audits every linked ELF;
 - malformed metadata/ELF, missing resolve data, unknown DSO, prohibited DSO,
   `libdl`, prohibited symbol, dynamic-loader/process-launch symbol,
   loader-control dynamic tag, hidden loader literal, `links`, unapproved build

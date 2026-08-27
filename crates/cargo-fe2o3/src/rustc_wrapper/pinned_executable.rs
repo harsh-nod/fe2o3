@@ -1175,7 +1175,6 @@ mod platform {
         use crate::pinned_executable_test_directory::TestDirectory;
         use std::fs::{self, FileTimes, OpenOptions};
         use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
-        use std::process::Stdio;
         use std::time::{Duration, Instant};
 
         fn write_executable(path: &Path, contents: &[u8]) {
@@ -1617,11 +1616,16 @@ mod platform {
 
             let pinned_result = pinned.command();
             match pinned_result {
-                Ok(mut command) => {
+                Ok(command) => {
                     assert_eq!(command.as_command().get_program(), pinned.execution_path());
                     assert_eq!(command.configured_argv0(), selected.as_os_str());
+                    drop(command);
                     assert!(
-                        command.status().unwrap().success(),
+                        crate::process_execution::retry_transient_executable_busy(|| {
+                            pinned.command().unwrap().status()
+                        })
+                        .unwrap()
+                        .success(),
                         "pinned command reopened replacement"
                     );
                 }
@@ -1687,12 +1691,15 @@ mod platform {
             let pinned_metadata = fs::metadata(&descriptor_path).unwrap();
 
             {
-                let mut command = pinned.command().unwrap();
-                command
-                    .args(std::iter::empty::<&str>())
-                    .as_command_mut()
-                    .stdin(Stdio::null());
-                assert!(command.status().unwrap().success());
+                let command = pinned.command().unwrap();
+                assert_eq!(
+                    command.as_command().get_program(),
+                    descriptor_path.as_os_str()
+                );
+                assert_eq!(command.configured_argv0(), selected.as_os_str());
+                let during_command = fs::metadata(&descriptor_path).unwrap();
+                assert_eq!(pinned_metadata.dev(), during_command.dev());
+                assert_eq!(pinned_metadata.ino(), during_command.ino());
             }
             let after_command = fs::metadata(&descriptor_path).unwrap();
             assert_eq!(pinned_metadata.dev(), after_command.dev());

@@ -10,8 +10,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionAbiV1,
     SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
     SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
-    SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1, SemanticLinkSymbolV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1, SemanticKernelSourceContractV1,
+    SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMirErrorV1,
     SemanticMirLimitsV1, SemanticMirResourceV1, SemanticNonBodyCallableBindingV1,
@@ -19,8 +19,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
     SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
 };
-use rustc_middle::ty::{FloatTy, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
-use rustc_span::sym;
+use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
+use rustc_span::{Symbol, sym};
 
 use super::{
     AuthenticatedCollectedKernelClosureV1, AuthenticatedProductionRootV1, CollectedFunctionRole,
@@ -760,6 +760,16 @@ fn semantic_kernel_source_contract_v1(
         })
         .transpose()
         .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
+    let resources = authenticated
+        .resource_contract()
+        .map(|resources| {
+            SemanticKernelResourceContractV1::new(
+                resources.static_shared_memory_bytes(),
+                resources.max_dynamic_shared_memory_bytes(),
+            )
+        })
+        .transpose()
+        .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
     let unsafe_assembly = frontend
         .unsafe_assembly()
         .map(|assembly| {
@@ -788,8 +798,13 @@ fn semantic_kernel_source_contract_v1(
         })
         .transpose()
         .map_err(ProductionSemanticImportErrorV1::SemanticSchema)?;
-    SemanticKernelSourceContractV1::new(launch, unsafe_assembly, reachable_assembly)
-        .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
+    SemanticKernelSourceContractV1::new_with_resources(
+        launch,
+        resources,
+        unsafe_assembly,
+        reachable_assembly,
+    )
+    .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
 fn terminal_operation_v1<'tcx>(
@@ -838,6 +853,60 @@ fn terminal_operation_v1<'tcx>(
                 && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::GridDimension(axis))
+        }
+        ProductionTerminalExpansionV1::DynamicLdsExactCurrent
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::WorkgroupLdsScope)
+                })
+                && rust_dynamic_lds_scalar_element_v1(tcx, rust_output).is_some() =>
+        {
+            let elements = single_const_u64_v1(instance)
+                .filter(|elements| *elements != 0 && *elements <= u64::from(u32::MAX))
+                .ok_or_else(|| body_owner_table_mismatch_v1("exact LDS element count"))?;
+            let scope = pointer_pointee_v1(types, inputs[0])?;
+            let element_storage = dynamic_lds_element_storage_v1(types, output)?;
+            let storage = types
+                .get(element_storage.index() as usize)
+                .ok_or_else(|| body_owner_table_mismatch_v1("exact LDS storage type"))?;
+            let alignment = storage.layout().alignment_bytes();
+            if !storage.layout().size_bytes().is_some_and(|size| size != 0)
+                || alignment == 0
+                || alignment > 16
+                || !alignment.is_power_of_two()
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "exact LDS storage size or alignment",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+                    scope,
+                    dynamic_lds: output,
+                    element_storage,
+                    elements,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_dynamic_lds_scalar_element_v1(tcx, rust_inputs[0])
+                    .is_some_and(|element| rust_dynamic_lds_raw_parts_v1(rust_output, element)) =>
+        {
+            let dynamic_lds = inputs[0];
+            let element_storage = dynamic_lds_element_storage_v1(types, dynamic_lds)?;
+            let raw_pointer = tuple_field_v1(types, output, 0)?;
+            let element = pointer_pointee_v1(types, raw_pointer)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+                    dynamic_lds,
+                    raw_parts: output,
+                    element_storage,
+                    element,
+                },
+            )
         }
         ProductionTerminalExpansionV1::Trap
             if inputs.is_empty()
@@ -905,6 +974,41 @@ fn terminal_operation_v1<'tcx>(
                 ) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::WorkgroupReduceSum
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && matches!(rust_inputs[0].kind(), TyKind::Ref(_, _, _))
+                && rust_reference_pointee_v1(rust_inputs[1]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx942CollectivesContext)
+                })
+                && matches!(
+                    rust_inputs[2].kind(),
+                    TyKind::Ref(_, _, rustc_hir::Mutability::Mut)
+                )
+                && rust_inputs[3] == rust_output
+                && matches!(
+                    rust_output.kind(),
+                    TyKind::Int(IntTy::I32)
+                        | TyKind::Uint(UintTy::U32)
+                        | TyKind::Float(FloatTy::F32)
+                ) =>
+        {
+            let workgroup = pointer_pointee_v1(types, inputs[0])?;
+            let context = pointer_pointee_v1(types, inputs[1])?;
+            let scratch = pointer_pointee_v1(types, inputs[2])?;
+            let base = aggregate_field_v1(types, scratch, 0)?;
+            if pointer_pointee_v1(types, base)? != output || inputs[3] != output {
+                return Err(body_owner_table_mismatch_v1(
+                    "workgroup reduction scratch element",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+                workgroup,
+                context,
+                scratch,
+                element: output,
+            })
         }
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
@@ -1615,6 +1719,46 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
+                })
+                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
+                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output).is_some() =>
+        {
+            let (Some(lhs), Some(rhs), Some(accumulator)) = (
+                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]),
+                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]),
+                rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]),
+            ) else {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 mixed FP4xFP8 MFMA contract",
+                ));
+            };
+            if lhs.role != SemanticMfmaOperandRoleV1::A
+                || rhs.role != SemanticMfmaOperandRoleV1::B
+                || Some(accumulator) != rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output)
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 mixed FP4xFP8 MFMA contract",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    lhs_fragment: inputs[1],
+                    rhs_fragment: inputs[2],
+                    accumulator_fragment: inputs[3],
+                    lhs,
+                    rhs,
+                    accumulator,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
             if inputs.len() == 4
                 && rust_inputs.len() == 4
@@ -2084,6 +2228,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::MathContextCurrent
         | ProductionTerminalExpansionV1::MathF32(_)
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
+        | ProductionTerminalExpansionV1::WorkgroupReduceSum
         | ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
@@ -2098,6 +2243,8 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
         | ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice
         | ProductionTerminalExpansionV1::StridedReadView2DLoadOr
+        | ProductionTerminalExpansionV1::DynamicLdsExactCurrent
+        | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
@@ -2109,6 +2256,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
         | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
@@ -2160,6 +2308,49 @@ fn single_const_u32_v1(instance: Instance<'_>) -> Option<u32> {
         .map(|value| value.to_bits(value.size()));
     let value = u32::try_from(values.next()?).ok()?;
     values.next().is_none().then_some(value)
+}
+
+fn single_const_u64_v1(instance: Instance<'_>) -> Option<u64> {
+    let mut values = instance
+        .args
+        .iter()
+        .filter_map(|argument| argument.as_const())
+        .filter_map(|value| value.try_to_leaf())
+        .map(|value| value.to_bits(value.size()));
+    let value = u64::try_from(values.next()?).ok()?;
+    values.next().is_none().then_some(value)
+}
+
+fn rust_dynamic_lds_scalar_element_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if !tcx.is_diagnostic_item(Symbol::intern("fe2o3_device_dynamic_lds"), definition.did()) {
+        return None;
+    }
+    let arguments = arguments.types().collect::<Vec<_>>();
+    let [element, _state] = arguments.as_slice() else {
+        return None;
+    };
+    matches!(
+        element.kind(),
+        TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64 | UintTy::Usize)
+            | TyKind::Int(IntTy::I8 | IntTy::I16 | IntTy::I32 | IntTy::I64 | IntTy::Isize)
+            | TyKind::Float(FloatTy::F32 | FloatTy::F64)
+    )
+    .then_some(*element)
+}
+
+fn rust_dynamic_lds_raw_parts_v1<'tcx>(output: Ty<'tcx>, element: Ty<'tcx>) -> bool {
+    let TyKind::Tuple(fields) = output.kind() else {
+        return false;
+    };
+    fields.len() == 2
+        && matches!(
+            fields[0].kind(),
+            TyKind::RawPtr(pointee, rustc_hir::Mutability::Mut) if *pointee == element
+        )
+        && matches!(fields[1].kind(), TyKind::Uint(UintTy::Usize))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2276,7 +2467,10 @@ fn rust_result_payloads_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(Ty<
 
 fn rust_is_trusted_adt_v1(tcx: TyCtxt<'_>, ty: Ty<'_>, item: TrustedDeviceItem) -> bool {
     matches!(*ty.kind(), TyKind::Adt(definition, arguments)
-        if arguments.is_empty() && trusted_device_items::classify(tcx, definition.did()) == Some(item))
+        if arguments
+            .iter()
+            .all(|argument| matches!(argument.kind(), GenericArgKind::Lifetime(_)))
+            && trusted_device_items::classify(tcx, definition.did()) == Some(item))
 }
 
 fn rust_trusted_adt_type_arguments_v1<'tcx>(
@@ -2829,6 +3023,46 @@ fn aggregate_field_v1(
         .ok_or_else(|| body_owner_table_mismatch_v1("terminal aggregate field"))
 }
 
+fn tuple_field_v1(
+    types: &[SemanticTypeDeclV1],
+    tuple: SemanticTypeIdV1,
+    field: usize,
+) -> Result<SemanticTypeIdV1, ProductionSemanticImportErrorV1> {
+    let declaration = types
+        .get(tuple.index() as usize)
+        .ok_or_else(|| body_owner_table_mismatch_v1("terminal tuple type"))?;
+    let SemanticTypeShapeV1::Tuple(fields) = declaration.shape() else {
+        return Err(body_owner_table_mismatch_v1("terminal tuple type"));
+    };
+    fields
+        .fields()
+        .get(field)
+        .copied()
+        .ok_or_else(|| body_owner_table_mismatch_v1("terminal tuple field"))
+}
+
+fn dynamic_lds_element_storage_v1(
+    types: &[SemanticTypeDeclV1],
+    dynamic_lds: SemanticTypeIdV1,
+) -> Result<SemanticTypeIdV1, ProductionSemanticImportErrorV1> {
+    let mut current = aggregate_field_v1(types, dynamic_lds, 0)?;
+    for _ in 0..4 {
+        let declaration = types
+            .get(current.index() as usize)
+            .ok_or_else(|| body_owner_table_mismatch_v1("exact LDS pointer wrapper"))?;
+        match declaration.shape() {
+            SemanticTypeShapeV1::Aggregate(wrapper) | SemanticTypeShapeV1::Union(wrapper)
+                if wrapper.fields().len() == 1 =>
+            {
+                current = wrapper.fields()[0];
+            }
+            SemanticTypeShapeV1::Pointer(pointer) => return Ok(pointer.pointee()),
+            _ => return Err(body_owner_table_mismatch_v1("exact LDS pointer wrapper")),
+        }
+    }
+    Err(body_owner_table_mismatch_v1("exact LDS pointer depth"))
+}
+
 fn semantic_result_payloads_v1(
     types: &[SemanticTypeDeclV1],
     result: SemanticTypeIdV1,
@@ -2968,6 +3202,10 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
         ProductionTerminalExpansionV1::Trap => 86,
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 87,
+        ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
+        ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
+        ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
     }
 }
 
@@ -3097,6 +3335,10 @@ fn identity_inventory_identity_and_transcript_v1(
             Some(contract) => {
                 digest.field(&[1]);
                 digest.field(contract.canonical_bytes());
+                if let Some(bytes) = contract.resource_canonical_bytes() {
+                    digest.field(&[1]);
+                    digest.field(bytes);
+                }
                 let reachable = contract.reachable_assembly();
                 digest.field(&reachable.blocks().to_le_bytes());
                 digest.field(&reachable.operand_bits().to_le_bytes());

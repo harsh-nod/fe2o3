@@ -149,6 +149,14 @@ fn gfx950_fp4_matrix_module() -> Module {
     module
 }
 
+fn gfx950_mixed_fp4_fp8_matrix_module() -> Module {
+    let mut module = gfx950_fp4_matrix_module();
+    operation_mut(&mut module, 0).tensor_layout =
+        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64());
+    module.functions[0].required_capabilities = module.functions[0].derived_capabilities();
+    module
+}
+
 fn operation_mut(module: &mut Module, index: usize) -> &mut MatrixOperation {
     module.functions[0].body.as_mut().unwrap().blocks[0]
         .operations
@@ -849,6 +857,64 @@ fn gfx950_fp4_scaled_mfma_rejects_wrong_layout_and_operand_type() {
             .unwrap_err()
             .to_string()
             .contains("expected Scalar(U32)")
+    );
+}
+
+#[test]
+fn gfx950_mixed_fp4_by_fp8_scaled_mfma_verifies_and_round_trips_v8() {
+    let module = gfx950_mixed_fp4_fp8_matrix_module();
+    verify_module(&module).unwrap();
+    let bytes = encode_module_v8(&module).unwrap();
+    assert_eq!(decode_module_v8(&bytes).unwrap(), module);
+
+    let matrix = operation_mut(&mut module.clone(), 0).clone();
+    assert!(
+        matrix
+            .required_capabilities()
+            .contains(&TargetCapability::Extension {
+                namespace: MATRIX_CAPABILITY_NAMESPACE.to_owned(),
+                name: SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY.to_owned(),
+            })
+    );
+    let layout = matrix.tensor_layout.unwrap();
+    assert_eq!(layout.a.element, MatrixElement::Fp4E2M1);
+    assert_eq!(layout.b.element, MatrixElement::Fp8E4M3);
+    assert!(verify_tensor_layout_contract_v1(&layout).is_empty());
+}
+
+#[test]
+fn gfx950_mixed_scaled_mfma_rejects_reversed_formats_and_capability_mismatch() {
+    let mut reversed = gfx950_mixed_fp4_fp8_matrix_module();
+    let layout = operation_mut(&mut reversed, 0)
+        .tensor_layout
+        .as_mut()
+        .unwrap();
+    layout.a = TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64().a;
+    layout.b = TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64().b;
+    let diagnostic = verify_module(&reversed).unwrap_err().to_string();
+    assert!(diagnostic.contains("shape or element") || diagnostic.contains("packing"));
+
+    let missing_capability = gfx950_mixed_fp4_fp8_matrix_module();
+    let mut supported = missing_capability.functions[0].derived_capabilities();
+    supported.remove(&TargetCapability::Extension {
+        namespace: MATRIX_CAPABILITY_NAMESPACE.to_owned(),
+        name: SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY.to_owned(),
+    });
+    assert!(
+        verify_module_with_capabilities(&missing_capability, &supported)
+            .unwrap_err()
+            .to_string()
+            .contains("required capability")
+    );
+
+    let mut wrong_profile = gfx950_fp8_matrix_module();
+    operation_mut(&mut wrong_profile, 0).tensor_layout =
+        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64());
+    assert!(
+        verify_module(&wrong_profile)
+            .unwrap_err()
+            .to_string()
+            .contains("profile and gfx950 tensor layout disagree")
     );
 }
 

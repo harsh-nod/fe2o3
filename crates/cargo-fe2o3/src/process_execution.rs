@@ -1,5 +1,45 @@
 use std::io;
+use std::io::ErrorKind;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::time::Duration;
+
+#[cfg_attr(not(test), allow(dead_code))]
+const EXECUTABLE_BUSY_RETRIES: usize = 8;
+#[cfg_attr(not(test), allow(dead_code))]
+const EXECUTABLE_BUSY_INITIAL_DELAY: Duration = Duration::from_millis(1);
+
+/// Retries only the transient Linux fork/exec writer-alias failure.
+///
+/// The operation must do no work before attempting exec and must be safe to repeat when exec
+/// returns `ETXTBSY`, which guarantees that no child image started.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn retry_transient_executable_busy<T>(
+    operation: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    retry_transient_executable_busy_with_policy(
+        operation,
+        EXECUTABLE_BUSY_RETRIES,
+        EXECUTABLE_BUSY_INITIAL_DELAY,
+    )
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn retry_transient_executable_busy_with_policy<T>(
+    mut operation: impl FnMut() -> io::Result<T>,
+    retries: usize,
+    mut retry_delay: Duration,
+) -> io::Result<T> {
+    for attempt in 0..=retries {
+        match operation() {
+            Err(error) if error.kind() == ErrorKind::ExecutableFileBusy && attempt < retries => {
+                std::thread::sleep(retry_delay);
+                retry_delay *= 2;
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded executable-busy retry loop always returns")
+}
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn spawn(command: &mut Command) -> io::Result<Child> {
@@ -33,6 +73,56 @@ pub(crate) fn output_with_configured_stdio(command: &mut Command) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_busy_retry_is_bounded_to_the_exact_transient_error() {
+        let mut calls = 0;
+        let value = retry_transient_executable_busy_with_policy(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(ErrorKind::ExecutableFileBusy.into())
+                } else {
+                    Ok(17)
+                }
+            },
+            2,
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(value, 17);
+        assert_eq!(calls, 3);
+
+        let mut fatal_calls = 0;
+        let error = retry_transient_executable_busy_with_policy(
+            || {
+                fatal_calls += 1;
+                if fatal_calls < 2 {
+                    Err::<(), _>(ErrorKind::ExecutableFileBusy.into())
+                } else {
+                    Err::<(), _>(ErrorKind::PermissionDenied.into())
+                }
+            },
+            4,
+            Duration::ZERO,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(fatal_calls, 2);
+
+        let mut exhausted_calls = 0;
+        let error = retry_transient_executable_busy_with_policy(
+            || {
+                exhausted_calls += 1;
+                Err::<(), _>(ErrorKind::ExecutableFileBusy.into())
+            },
+            2,
+            Duration::ZERO,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
+        assert_eq!(exhausted_calls, 3);
+    }
 
     #[test]
     fn configured_output_preserves_explicit_stdout_and_stderr() {

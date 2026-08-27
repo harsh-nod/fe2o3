@@ -64,6 +64,28 @@ pub(crate) fn derive_production_geometry_v1(
         .source_contract()
         .launch()
         .ok_or(ProductionGeometryErrorV1::MissingSourceWorkgroup)?;
+    let semantic_resources = entry
+        .source_contract()
+        .resources()
+        .map(|resources| {
+            (
+                resources.static_shared_memory_bytes(),
+                resources.max_dynamic_shared_memory_bytes(),
+            )
+        })
+        .unwrap_or_default();
+    let descriptor_resources = (
+        source_launch.static_shared_memory_bytes(),
+        source_launch.max_dynamic_shared_memory_bytes(),
+    );
+    if semantic_resources != descriptor_resources {
+        return Err(ProductionGeometryErrorV1::SourceResourceMismatch {
+            semantic_static: semantic_resources.0,
+            semantic_dynamic: semantic_resources.1,
+            descriptor_static: descriptor_resources.0,
+            descriptor_dynamic: descriptor_resources.1,
+        });
+    }
     derive_production_geometry_from_launch_for_target_v1(
         module,
         semantic_launch.required(),
@@ -161,9 +183,19 @@ fn derive_production_geometry_from_launch_for_target_v1(
     if static_shared_memory_bytes != 0 && !allow_workgroup_memory {
         return Err(ProductionGeometryErrorV1::MissingWorkgroupMemoryCapability);
     }
-    let allow_exact_tiled_matrix = effective.contains(&TargetCapability::Extension {
-        namespace: fe2o3_kernel_ir::MATRIX_CAPABILITY_NAMESPACE.to_owned(),
-        name: fe2o3_kernel_ir::BF16_F32_M16N16K16_CAPABILITY.to_owned(),
+    let allow_exact_tiled_matrix = effective.iter().any(|capability| {
+        matches!(
+            capability,
+            TargetCapability::Extension { namespace, name }
+                if namespace == fe2o3_kernel_ir::MATRIX_CAPABILITY_NAMESPACE
+                    && matches!(
+                        name.as_str(),
+                        fe2o3_kernel_ir::BF16_F32_M16N16K16_CAPABILITY
+                            | fe2o3_kernel_ir::SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
+                            | fe2o3_kernel_ir::SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                            | fe2o3_kernel_ir::SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                    )
+        )
     });
 
     Ok(ProductionGeometryV1 {
@@ -370,6 +402,12 @@ pub(crate) enum ProductionGeometryErrorV1 {
         semantic: [u32; 3],
         descriptor: [u32; 3],
     },
+    SourceResourceMismatch {
+        semantic_static: u32,
+        semantic_dynamic: u32,
+        descriptor_static: u32,
+        descriptor_dynamic: u32,
+    },
     KernelClosure,
     IncompleteKirCallClosure,
     MissingKirWorkgroup,
@@ -424,6 +462,15 @@ impl fmt::Display for ProductionGeometryErrorV1 {
             } => write!(
                 formatter,
                 "semantic workgroup {semantic:?} disagrees with authenticated descriptor source {descriptor:?}",
+            ),
+            Self::SourceResourceMismatch {
+                semantic_static,
+                semantic_dynamic,
+                descriptor_static,
+                descriptor_dynamic,
+            } => write!(
+                formatter,
+                "semantic workgroup resources static={semantic_static}, dynamic={semantic_dynamic} disagree with authenticated descriptor source static={descriptor_static}, dynamic={descriptor_dynamic}",
             ),
             Self::KernelClosure => {
                 formatter.write_str("target-bound KIR must contain exactly one kernel")

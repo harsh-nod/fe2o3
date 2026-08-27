@@ -9,6 +9,7 @@ incomplete, while bounded `gfx942` vertical slices exercise the compiler,
 artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
+[gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
@@ -43,6 +44,23 @@ MIR, ranked PLIRON, verified Kernel IR, composed memory checks, and
 deterministic LLVM extraction. It cannot publish, finalize HSACO, load, or
 launch, so this checkpoint changes no parity status.
 
+The production workgroup slice now goes farther through that same transaction.
+The ordinary attributed `lds_publish_read_reduce_i32_v1` Rust kernel retains
+its exact `64x1x1` launch and 256-byte static-LDS contract through semantic MIR,
+ranked PLIRON, verified Kernel IR, composed memory admission, upstream-LLVM
+AMDGPU lowering, a compiler-bound handoff, the measured target-machine and
+in-process LLD worker, and COV6 descriptor inspection. Deterministic replay
+produces identical HSACO bytes with an exact 256-byte static-LDS contract. This
+route selects no workload profile and uses neither COMGR nor a shell linker. It
+does not grant load or launch authority. The same SHA-pinned HSACO now also
+completes one measured-only pure-Rust KFD diagnostic on the MI300X through the
+runtime's invocation-specific authority gate: all 64 inputs reduce to `2080`,
+allocation canaries remain intact, and queue/completion teardown succeeds. The
+diagnostic supplies an explicitly unsafe, manually asserted authority rather
+than a production Worker V3 decision. It establishes native KFD/AQL mechanics
+and the runtime identity join only; production executable evidence must still
+enter through the Worker V3 application and verifier.
+
 ## CUDA-Oxide status
 
 Against the pinned cuda-oxide baseline, the evidence ledger currently records
@@ -63,8 +81,12 @@ BF16 XOR4 tile/stream contract. The bounded
 masked `u32` wave64 reduction and one 256-thread static-LDS reduction through
 exact compiler/LLVM checks, Verus proofs, and direct LLVM/LLD MI300X execution.
 V2 admits only the full canonical `gfx942:xnack-` target, persists that binding
-in Kernel IR, and checks it against the Worker V2 envelope. Its genuine Rust
-source path still stops before an authenticated HSACO. The
+in Kernel IR, and checks it against the Worker V2 envelope. The older V2
+compiler-created fixture remains separate, but the production `i32` WG64 LDS
+reduction now joins genuine Rust source to reproducible inspected HSACO through
+the one compiler transaction. Exact-artifact KFD execution through an unsafe
+diagnostic authority passes, while production Worker V3-authorized KFD
+execution remains open. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
@@ -260,7 +282,9 @@ target lowering, and host execution into explicit ownership boundaries:
   [V1 pipeline contract](docs/general-kernel-check-pipeline-v1.md).
 - Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
   context-identity, pass-planning, and owner-held textual bridge over Pliron
-  v0.17.0 at commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+  v0.17.0 at reviewed fork commit
+  `5bdf861bf03e7f20242b25717fb653336d02e487`, a strict descendant of the
+  upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
   The bridge recursively verifies imported operations and enforces bounded
   owner/session accounting, but arbitrary registered `Parsable` implementations
   remain trusted parser code and the bridge grants no compiler authority. Seven
@@ -339,40 +363,15 @@ Safe ownership of resources used by asynchronous copies is documented in
   registration. The marker does not authenticate an executable or establish
   its full packed ABI and semantics; generated binding remains an unsafe
   compiler/runtime boundary.
-- `#[kernel(typed)]` implements one exact generated profile for a public, safe,
-  non-generic unit function with signature
-  `pub fn(&[f32], &[f32], DisjointSlice<f32>)`. It emits
-  `<kernel>_gpu::{Kernel, Prepared}`. The backend packages the finalized LLVM IR
-  identity, native HSACO payload, target, exact 48-byte read/read/write slice
-  ABI, canonical rustc-derived type/layout identities, and fixed
-  one-dimensional launch contract into a canonical `ArtifactContainerV1`, then
-  embeds those immutable bytes in the host link. Extraction uses normalized,
-  monomorphized rustc types, so token aliases such as `type f32 = f64` fail at
-  the compiler boundary.
-- The typed vecadd V2 profile records a domain-separated canonical source shape,
-  rustc ABI class, pointer width, size, alignment, and ordered physical
-  components for all three arguments. The host independently reconstructs the
-  same evidence from its actual slice and `DisjointSlice` layouts.
-  `Kernel::load` recomputes an identity over the profile, full kernel binding,
-  names, source and executable digests, ABI fields, effects, type/layout
-  identities, and launch contract before loading the embedded payload.
-- Before embedding, the backend parses the finalized HSACO and binds its ELF
-  entries to AMDHSA descriptors. The fixed profile requires one normal kernel,
-  the exact target and symbol, no printf/init/fini entry, and six 8-byte
-  pointer/length kernargs at offsets `0, 8, 16, 24, 32, 40`, followed by the
-  runtime-populated implicit argument region at offset 48.
-- Typed V2 registrations carry full SHA-256 crate and kernel binding IDs. The
-  Cargo wrapper derives the crate ID from rustc's crate name and ordered
-  `-C metadata` values; the macro and backend independently derive and validate
-  the kernel ID. Private host functions and artifact accessors use that ID, so
-  same-named kernels in separate rlibs cannot silently resolve to one archive
-  member. Direct compilation without the wrapper fails closed unless source
-  declares an explicit 256-bit fallback namespace.
-- The generated vecadd API safely prepares equal, nonempty `f32` buffers,
-  performs context, geometry, and alias admission, and retains all typed
-  resources through either synchronous `Prepared::launch` or non-escapable
-  `Prepared::launch_scoped`. The vecadd example uses only this generated API; it
-  contains no artifact pathname, raw parameter pack, or unsafe user launch.
+- `#[kernel(typed)]` emits a generic Worker V3 marker and typed argument plan.
+  The generated surface retains slice lifetimes, mutability, aliasing, and
+  canonical rustc-derived type/layout identities, but exposes no load or launch
+  method and no embedded artifact bytes.
+- The backend binds each kernel occurrence, target, descriptor, finalized
+  payload, proof records, and generated argument contract into the canonical
+  Worker V3 envelope. Production applications may dispatch only after the V3
+  verifier authenticates that complete graph; examples without that verifier
+  fail closed before runtime dispatch.
 - Production compilation is the only unselected compiler route and never
   falls back to a workload-specific implementation. Historical emitters and
   exact workload paths remain only as migration evidence until equivalent
@@ -381,19 +380,21 @@ Safe ownership of resources used by asynchronous copies is documented in
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. It exports no raw module, function, parameter
   pack, launch configuration, or launch function in any downstream build.
-- Production applications load and dispatch only through the authenticated
-  Worker V3 transaction, compiler-generated typed arguments, and reviewed HSA
-  adapter. The former host `launch!` macro and the selectable raw-HIP core
+- The current generated application route enters the authenticated Worker V3
+  transaction, compiler-generated typed arguments, and reviewed HSA adapter.
+  That HSA-backed implementation is migration debt, not the permanent runtime:
+  production is converging on the invocation-specific pure-KFD gate in
+  `fe2o3-runtime`. The former host `launch!` macro and selectable raw-HIP core
   feature are deleted; raw HIP module/launch mechanics remain private unit-test
   implementation details.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
   layouts and have compile-pass/compile-fail coverage.
 
-Hardware smoke coverage includes a local `gfx1151` Radeon 8060S and a remote
-`gfx942` MI300X. On both targets the suite generated and inspected real HSACO,
-launched every runnable example, copied results back, and compared them with
-CPU results. These runs cover the current narrow executable paths; they do not
-turn the foundations below into end-to-end features.
+Historical `gfx1151` and `gfx942` runs generated, inspected, and executed the
+then-runnable qualification paths. The current hardware lane runs focused
+runtime checks and fill/vecadd compiler qualification tests. Example binaries
+do not provide production Worker V3 execution until their verifier integration
+is complete, and the recorded runs grant no current production authority.
 
 ### Implemented foundations
 
@@ -458,7 +459,7 @@ turn the foundations below into end-to-end features.
   reaches only verified Kernel IR. Dynamic-LDS launch-byte plumbing, broad
   atomics and collectives, general source-to-HSACO finalization, and compiler
   refinement remain fail-closed gaps.
-- `fe2o3-host` exposes one Worker V3 execution graph. It consumes a recovered
+- `fe2o3-host` exposes one Worker V3 migration graph. It consumes a recovered
   pinned descriptor, authenticates compiler and verification evidence, grants
   one exact HSA load authorization, resolves the selected kernel, validates
   generated arguments and geometry against the admitted descriptor, packs the
@@ -467,6 +468,11 @@ turn the foundations below into end-to-end features.
   cooperative-launch bridge, embedded-artifact contract, and profile-specific
   vecadd host route are deleted. `PreparedLaunch<K>` and argument admission are
   inert validation foundations; neither can load or dispatch an executable.
+- `fe2o3-runtime` owns the permanent pure-KFD execution boundary. Its safe
+  consuming transition matches one exact HSACO, selected kernel, complete
+  address-free invocation contract, and checked KFD GPU unique ID against an
+  unsafe Worker V3 authority implementation. The LDS diagnostic exercises this
+  gate; production verifier and generated host-memory integration remain open.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -563,16 +569,18 @@ turn the foundations below into end-to-end features.
   either production or qualification builds; stale V2 envelope names are
   recognized only so they can be rejected before application spawn.
   Feature-free `fe2o3-host` builds export only the Worker V3 application,
-  admission, verification, HSA load, and generated dispatch route. Worker V2
-  application recovery, bundle admission, prerequisite authentication, HSA
-  lifecycle, launch metadata, and workload-specific host adapters have been
-  deleted rather than retained behind a qualification feature. General
+  admission, verification, and current HSA-backed generated migration route.
+  Worker V2 application recovery, bundle admission, prerequisite
+  authentication, HSA lifecycle, launch metadata, and workload-specific host
+  adapters have been deleted rather than retained behind a qualification
+  feature. General
   `#[kernel(typed)]` expansion, including the exact `f32` vecadd signature,
   emits only the generic Worker V3 adapter. The old
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
-  Production Worker V3 verification authority remains open; authorized Worker
-  V3 HSA loading and generated dispatch are the only host execution route.
+  Production Worker V3 verification authority remains open. The HSA-backed
+  generated route must be replaced by the pure-KFD transition before the
+  application pipeline is production-complete.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper
@@ -580,8 +588,11 @@ turn the foundations below into end-to-end features.
   rustc. This protects the measured bytes from pathname substitution; it is not
   a sandbox for hostile build scripts or procedural macros, which remain
   trusted inputs.
-- `examples/regression-manifest-v1.txt` is the authoritative package/artifact
-  inventory for ordinary checks, ROCm compilation, and GPU smoke tests.
+- `examples/regression-manifest-v2.txt` is the authoritative package/source-artifact
+  inventory for ordinary checks and explicit artifact qualification. The route is
+  data, never inferred from a package name; only `fe2o3-fill` currently selects the
+  bounded `kernel-ir-v1` oracle. The manifest grants no production or GPU-execution
+  authority.
 - The Verus vecadd, fill, active-wave, LDS, and exact gfx942 wave/LDS
   harnesses prove bounded source-model properties under documented
   assumptions. The exact control,
@@ -699,14 +710,14 @@ turn the foundations below into end-to-end features.
   `sanitize` and `debug` retain plan mode and can execute descriptor-pinned
   native ROCgdb under bounded supervision. ROCgdb precise-memory diagnostics
   are not a race, API, initialization, synchronization, or safety proof.
-  The opt-in S09 source-debug pilot builds one exact General V3 `alpha` profile
+  The historical S09 source-debug pilot built one exact General V3 `alpha` profile
   at O0 into an alpha-only COV6 HSACO for `gfx942:xnack-`. It binds inert
   semantic and build identity records to the physical `alpha`/`alpha.kd` pair,
   verifies linked DWARF, executes a dedicated controller over lengths 1, 255,
   256, 257, and 1023 with CPU-oracle and canary checks, and uses native ROCgdb
   to inspect scalar and aggregate arguments, a reference value, physical slice
   fields, and local `i`; tuple and array locals also carry located DWARF. The
-  checked-in lane produces only `local-capability-v2` evidence: it does not
+  archived lane produced only `local-capability-v2` evidence: it does not
   authenticate the compiler or runner, install production trust, materialize
   tuple/array runtime values at the fixed stop, cover optimized or general
   debugging, or provide a safety proof. Rows 45 and 46 and supplemental row S09
@@ -779,14 +790,11 @@ turn the foundations below into end-to-end features.
   frontend projection plus authenticated compiler-refinement evidence.
   Trusted rustc diagnostic-item classification also remains part of the
   compiler TCB.
-- The generated vecadd API has synchronous launch and a scoped asynchronous
-  callback that cannot return the in-flight operation. Generalized returnable
-  borrowed or owned generated async APIs, cancellation, and composition are not
-  complete.
-- Generated artifact embedding currently supports only the
-  `x86_64-unknown-linux-gnu` host. V2 binding IDs close same-name cross-crate
-  archive aliasing, but marker-to-artifact association remains part of the
-  trusted compiler/linker contract and does not prove executable semantics.
+- Generated Worker V3 arguments retain the resources required for dispatch,
+  but generalized asynchronous application APIs, cancellation, and composition
+  remain incomplete.
+- Worker V3 marker-to-artifact association remains part of the trusted
+  compiler/linker contract and does not itself prove executable semantics.
 - `cargo fe2o3 verify` and `build --require-proof` are roadmap commands. The
   current required Verus CI lane is invoked separately and does not prove the
   ordinary Rust function, compiler, ROCm, driver, or machine-code refinement.
@@ -892,8 +900,39 @@ Validate the authoritative example manifest and list a lane:
 
 ```bash
 cargo run --locked -p cargo-fe2o3 -- examples check
-cargo run --quiet --locked -p cargo-fe2o3 -- examples list rocm-compile
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list artifact-qualification
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list artifact-kernel-ir-v1
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-raw
+cargo run --quiet --locked -p cargo-fe2o3 -- examples list cpu-test-wrapper-managed
+cargo fe2o3 test --locked --all-targets -p fe2o3-vecadd
 ```
+
+The two CPU-test queries form a sorted, disjoint, exhaustive partition of
+manifest packages selected for Rust checks but not artifact qualification. The
+partition is computed from the exact structural wrapper-managed projection, so
+generic CI runs namespace-free typed-kernel tests through the mandatory
+`cargo fe2o3 test --all-targets` host path and leaves ordinary packages on raw
+Cargo without package-name rules. CI revalidates both complete lists and the
+full structural projection after tests.
+
+This binding-only path executes trusted workspace source, Cargo configuration,
+build scripts, procedural macros, linkers, and test bodies. It rejects a caller
+`--target`, `--config`, Cargo-side `-Z`, `--doc`, and `--no-run`, and rejects
+ambient compiler, rustdoc, protected fe2o3, and test-runner selection. Configured
+compiler, protected fe2o3, loader, and test-runner selection is rejected;
+configured rustdoc is overridden with the disabled selection, and ambient loader
+variables are scrubbed. The fixed runner retains and hashes Cargo's original test
+executable. While Cargo's path remains stable, this preserves ordinary
+`current_exe` and `$ORIGIN` behavior and prevents directory-entry substitution
+between pin and execution; the runner checks the retained object again afterward.
+That is not same-inode immutability, origin authentication, a sandbox, or an
+atomic Cargo-configuration snapshot. The pre/post protected-configuration scans
+are diagnostic checks against persistent changes, not a TOCTOU proof.
+
+The command produces ordinary Cargo host-test files but grants no fe2o3 backend,
+HSACO, publication, or immutable-artifact authority. It neither requests nor
+establishes GPU evidence and performs no performance prediction. Trusted test
+code is not confined from files, the network, or device nodes.
 
 Run the repository validation lanes:
 
@@ -901,33 +940,29 @@ Run the repository validation lanes:
 scripts/ci-local.sh generic
 scripts/ci-local.sh generic-core
 scripts/ci-local.sh shard-policy
-scripts/ci-local.sh rustc-codegen-shard 01-control-flow
+scripts/ci-local.sh rustc-codegen-shard 04-memory-math-gemm
 scripts/ci-local.sh workspace-test
 VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
-FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
-FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
+FE2O3_TARGET=gfx942 scripts/ci-local.sh rocm-compile
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx942 scripts/ci-local.sh hardware-smoke
 ```
 
 `generic` remains the complete serial generic gate. Hosted CI runs
-`generic-core` once and executes every target-isolated rustc-codegen integration
-test through the checked-in shard manifest. `shard-policy` derives the
-authoritative test-target set from locked Cargo metadata and rejects missing,
-duplicate, renamed, unknown, malformed, empty, or newly unassigned targets.
+`generic-core` once and executes every selector-free production integration
+target in the checked-in shard manifest. `shard-policy` derives the complete
+test-target set from locked Cargo metadata, requires an exact active-or-retired
+partition, and rejects overlap, missing, duplicate, renamed, unknown,
+malformed, empty, or newly unassigned targets. Retired targets are migration
+inventory, not executed evidence; their oracle logic runs only in library tests.
 Each hosted core or shard job uses separate Cargo and log directories; the
 stable `Generic validation` check succeeds only after the core and all shards
 succeed.
 
-Run the exact opt-in S09 local-capability lane on `gfx942:xnack-`. The evidence
-directory must be an absolute path that does not already exist:
-
-```bash
-FE2O3_ALLOW_S09_DEBUG=1 \
-FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
-  scripts/ci-local.sh s09-debug-hardware
-```
+The historical S09 hardware entry point is retired because its debug HSACO
+generator used the removed Worker V2 selector and HSA runtime. Its offline
+DWARF/transcript checkers remain tested; hardware evidence must be regenerated
+through a production Worker V3 compiler path and KFD runtime before the lane
+can be enabled again.
 
 `workspace-test` is the comprehensive local test gate. It runs all workspace
 test targets except `rustc-codegen-fe2o3`, then tests that package in a separate
@@ -965,8 +1000,6 @@ verifier has not yet been wired to the generated `Arguments`; it never falls
 back to the embedded V2 artifact. `FE2O3_CODEGEN_PIPELINE` is no longer
 accepted, and a production backend rejects `FE2O3_QUALIFICATION_ORACLE_V1`.
 
-The smoke command reads the same manifest and runs every GPU-selected example:
-
-```bash
-cargo run --locked -p cargo-fe2o3 -- smoke
-```
+The retired manifest smoke command is not a production or direct-KFD path and
+is no longer exposed. Hardware execution must enter an explicit runtime-owned
+gate; artifact qualification never implies load or dispatch authority.

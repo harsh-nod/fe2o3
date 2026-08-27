@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 struct TestOutputDir {
     path: PathBuf,
 }
 
 impl TestOutputDir {
-    fn new(target_root: &Path) -> Self {
-        let path = target_root.join(format!(
+    fn new(workspace: &Path) -> Self {
+        let path = cargo_fe2o3::cargo_target_root(workspace).join(format!(
             "rustc-codegen-fe2o3-test-output/cross-crate-binding-{}",
             std::process::id()
         ));
@@ -32,24 +35,48 @@ fn workspace() -> PathBuf {
         .expect("canonical workspace")
 }
 
-fn cargo_target_root(workspace: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
-        Some(path) => workspace.join(path),
-        None => workspace.join("target"),
-    }
-}
-
 #[test]
 fn explicit_namespaces_with_the_same_logical_name_resolve_distinct_v3_registrations() {
     let workspace = workspace();
-    let cargo_target = cargo_target_root(&workspace);
     let fixture_root =
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/cross-crate-binding");
-    let output_dir = TestOutputDir::new(&cargo_target);
+    let backend =
+        cargo_fe2o3::cargo_target_root(&workspace).join("debug/librustc_codegen_fe2o3.so");
+
+    let backend_build = Command::new(env!("CARGO"))
+        .current_dir(&workspace)
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "rustc-codegen-fe2o3/qualification-oracles-test-only",
+        ])
+        .output()
+        .expect("build qualification backend dylib");
+    require_success("qualification backend build", &backend_build);
+    assert!(
+        backend.is_file(),
+        "missing backend at {}",
+        backend.display()
+    );
+    let output_dir = TestOutputDir::new(&workspace);
     let fixture_target = output_dir.path.join("cargo-target");
-    let kernel_a = build_kernel(&fixture_root.join("kernel-a"), &fixture_target, "a");
-    let kernel_b = build_kernel(&fixture_root.join("kernel-b"), &fixture_target, "b");
+    let kernel_a = build_kernel(
+        &workspace,
+        &backend,
+        &fixture_root.join("kernel-a"),
+        &fixture_target,
+        "a",
+    );
+    let kernel_b = build_kernel(
+        &workspace,
+        &backend,
+        &fixture_root.join("kernel-b"),
+        &fixture_target,
+        "b",
+    );
 
     let executable = output_dir.path.join("binding-link-app");
     let source = fixture_root.join("app/src/main.rs");
@@ -91,26 +118,28 @@ fn explicit_namespaces_with_the_same_logical_name_resolve_distinct_v3_registrati
     require_success("fixture executable", &run);
 }
 
-fn build_kernel(package_root: &Path, target_dir: &Path, label: &str) -> PathBuf {
+fn build_kernel(
+    workspace: &Path,
+    backend: &Path,
+    package_root: &Path,
+    target_dir: &Path,
+    label: &str,
+) -> PathBuf {
     let manifest = package_root.join("Cargo.toml");
-    let mut command = Command::new(env!("CARGO"));
-    command
+    let build = cargo_fe2o3::non_production_command(workspace)
         .current_dir(package_root)
         .args(["build", "--locked", "--manifest-path"])
         .arg(&manifest)
         .arg("--target-dir")
-        .arg(target_dir);
-    for variable in [
-        "CARGO_ENCODED_RUSTFLAGS",
-        "CARGO_TARGET_DIR",
-        "RUSTC",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
-        "RUSTFLAGS",
-    ] {
-        command.env_remove(variable);
-    }
-    let build = command.output().expect("build kernel fixture");
+        .arg(target_dir)
+        .env("FE2O3_BACKEND", backend)
+        .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
+        .env(
+            "FE2O3_TARGET",
+            std::env::var("FE2O3_TEST_TARGET").unwrap_or_else(|_| "gfx942:xnack-".to_owned()),
+        )
+        .output()
+        .expect("build kernel fixture");
     require_success(&format!("kernel {label} build"), &build);
 
     let prefix = format!("libfe2o3_binding_kernel_{label}-");

@@ -24,6 +24,56 @@ expect_fail() {
 
 expect_fail "${LANE}"
 expect_fail "${LANE}" relative-evidence
+
+readonly SETUP_TEST_ROOT="$(mktemp -d "${TMPDIR:-/var/tmp}/fe2o3-s09-setup.XXXXXX")"
+cleanup_setup_test() {
+  chmod -R u+w -- "${SETUP_TEST_ROOT}" 2>/dev/null || true
+  rm -rf -- "${SETUP_TEST_ROOT}"
+}
+trap cleanup_setup_test EXIT
+readonly SETUP_DRIVER_DIR="${SETUP_TEST_ROOT}/driver"
+readonly SETUP_DRIVER="${SETUP_DRIVER_DIR}/cargo-fe2o3"
+readonly SETUP_WORKER="${SETUP_TEST_ROOT}/fe2o3-llvm-link-worker"
+mkdir -m 700 -- "${SETUP_DRIVER_DIR}"
+: >"${SETUP_DRIVER}"
+: >"${SETUP_WORKER}"
+chmod 500 -- "${SETUP_DRIVER}" "${SETUP_WORKER}"
+chmod 500 -- "${SETUP_DRIVER_DIR}"
+readonly SETUP_DRIVER_SHA256="$(sha256sum -- "${SETUP_DRIVER}" | cut -d ' ' -f 1)"
+readonly SETUP_COMMIT="$(git -C "${ROOT}" rev-parse HEAD)"
+readonly SETUP_TREE="$(git -C "${ROOT}" rev-parse HEAD^{tree})"
+set +e
+setup_output="$({
+  FE2O3_ALLOW_S09_DEBUG=1 \
+  FE2O3_LLVM_LINK_WORKER="${SETUP_WORKER}" \
+  FE2O3_LLVM_LINK_WORKER_BUILD_ID=invalid-after-private-driver \
+  FE2O3_LLVM_BUILD_ID=test-llvm \
+  FE2O3_TEST_CARGO_FE2O3_BIN="${SETUP_DRIVER}" \
+  FE2O3_TEST_CARGO_FE2O3_SHA256="${SETUP_DRIVER_SHA256}" \
+    "${LANE}" --source-supervised \
+      "${SETUP_TEST_ROOT}/evidence" "${SETUP_COMMIT}" "${SETUP_TREE}"
+} 2>&1)"
+setup_status=$?
+set -e
+((setup_status != 0)) || {
+  printf '%s\n' 'S09 setup unexpectedly reached hardware with a malformed Worker identity' >&2
+  exit 1
+}
+[[ "${setup_output}" != *'readonly variable'* ]] || {
+  printf '%s\n' 'S09 setup retained a dynamically scoped readonly-variable collision' >&2
+  exit 1
+}
+case "${setup_output}" in
+  *'llvm-dwarfdump must be an executable regular file'* | \
+    *'llvm-readobj must be an executable regular file'* | \
+    *'ROCgdb must be an executable regular file'* | \
+    *'Worker V2 build identity is malformed'*) ;;
+  *)
+    printf 'S09 setup did not pass private driver validation: %s\n' "${setup_output}" >&2
+    exit 1
+    ;;
+esac
+
 rg -q 'FE2O3_ALLOW_S09_DEBUG=1' "${LANE}"
 rg -q 'worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco' "${LANE}"
 rg -q -- '--test s09_gfx942_alpha_hardware' "${LANE}"

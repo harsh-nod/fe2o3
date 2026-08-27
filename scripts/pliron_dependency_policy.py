@@ -11,10 +11,15 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLIRON_REVISION = "2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+PLIRON_REVISION = "5bdf861bf03e7f20242b25717fb653336d02e487"
 PLIRON_VERSION = "0.17.0"
+PLIRON_REPOSITORY = "github.com/harsh-nod/pliron.git"
+KNOWN_PLIRON_REPOSITORIES = (
+    PLIRON_REPOSITORY,
+    "github.com/pliron-org/pliron.git",
+)
 PLIRON_SOURCE = (
-    "git+https://github.com/pliron-org/pliron.git"
+    f"git+https://{PLIRON_REPOSITORY}"
     f"?rev={PLIRON_REVISION}#{PLIRON_REVISION}"
 )
 REQUIRED_PACKAGES = ("pliron", "pliron-derive", "pliron-llvm")
@@ -50,7 +55,9 @@ def check_metadata(metadata: dict[str, Any]) -> tuple[list[str], dict[str, int]]
         source = package.get("source")
         if name in selected:
             selected[name].append(package)
-        if isinstance(source, str) and "github.com/pliron-org/pliron.git" in source:
+        if isinstance(source, str) and any(
+            repository in source for repository in KNOWN_PLIRON_REPOSITORIES
+        ):
             if name not in selected:
                 unexpected_source_packages.append(name)
         if name in FORBIDDEN_PACKAGES or any(

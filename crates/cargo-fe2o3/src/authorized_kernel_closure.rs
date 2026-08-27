@@ -25,11 +25,26 @@ const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SOURCE_TREE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SOURCE_TREE_FILES: usize = 100_000;
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
-const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 15] = [
+const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 25] = [
     (
         "cap-primitives",
         "4.0.2",
         "9c5c6262db1c26d16dc7bc175a2785b15d8e5e0c02825ffd1be9e20a4bff50f1",
+    ),
+    (
+        "const_fn",
+        "0.4.12",
+        "12719e3056fd7d108dce37f1802f2ab7d4e57c1ebbd28bf263c2dde74a4977f8",
+    ),
+    (
+        "curve25519-dalek",
+        "4.1.3",
+        "d6ce8e9f5bcd25566d94e0086de692a8f5049baca759b54ec2fcb04fcc6ad157",
+    ),
+    (
+        "generic-array",
+        "0.14.7",
+        "4342744f404f2087772e53283fbedaa581be1b1cea9e5ba0d538b9e66dfbb948",
     ),
     (
         "io-extras",
@@ -50,6 +65,16 @@ const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 15] = [
         "libc",
         "0.2.189",
         "54f1477836437a81c25bfb0774a700a3043d80a3f20c395429f47f66db34ace3",
+    ),
+    (
+        "linkme",
+        "0.3.37",
+        "fc0248a176fa41d6cbb679f98e38621b4361e5f0edf56788ed527fdf84396c36",
+    ),
+    (
+        "linkme-impl",
+        "0.3.37",
+        "af6739c0caf779cbb89368a70ea31d1c36251543c66440f36f14566dfc28e6aa",
     ),
     (
         "num-traits",
@@ -82,9 +107,24 @@ const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 15] = [
         "600f7d275e1f5f809dd2c6670acf7a4966733eb66983d8650c4d6b1d51184f29",
     ),
     (
+        "rustc_apfloat",
+        "0.2.3+llvm-462a31f5a5ab",
+        "a014a9ad4bf9561d5fc1f2622245293b8213fea3ac714776a1bcda6c3f95711c",
+    ),
+    (
         "rustix",
         "1.1.4",
         "62dd547337499a696f957e605c76c0419a2d34d915fcf06554827f955b93994a",
+    ),
+    (
+        "rustversion",
+        "1.0.23",
+        "e61d0c17536142c100d3cd417564742345b6f78db5ef37cf053eb396bd9c6987",
+    ),
+    (
+        "serde",
+        "1.0.229",
+        "c270b89adc556d39cd1cb5943cb564e56c09d2fe10797143ec89e7b02800758c",
     ),
     (
         "serde_core",
@@ -97,13 +137,71 @@ const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 15] = [
         "9fb6b972f5ef5eaf17be5c50854f9a328c5c0c8f9a7b462f51119ec92001f682",
     ),
     (
+        "slotmap",
+        "1.1.1",
+        "44aa0e37cc10b3306d0035a8c94c229a24de8602ae1a88a2cc27b229bb24f9f4",
+    ),
+    (
+        "thiserror",
+        "2.0.20",
+        "681133a62937d3660c49de30899f07ccdb1b4ef53426f9014fefd59cf78ab670",
+    ),
+    (
         "zmij",
         "1.0.23",
         "ee4ed4bdafb98dc92c5a51095290212137f81ffc6cdfae77e9cb540373fb4c11",
     ),
 ];
+const TRUSTED_REGISTRY_PROC_MACROS: [(&str, &str, &str); 8] = [
+    (
+        "awint_macros",
+        "0.18.1",
+        "a48c5475a5c4adf80066644a0cbbc3ed565e38eb5a9dd061cf8953450ba8e3b5",
+    ),
+    (
+        "const_fn",
+        "0.4.12",
+        "12719e3056fd7d108dce37f1802f2ab7d4e57c1ebbd28bf263c2dde74a4977f8",
+    ),
+    (
+        "curve25519-dalek-derive",
+        "0.1.1",
+        "95a234384a3fb6a73a7addf7543e85d47e7a1d175b138bd4617a1d0487c6b6b9",
+    ),
+    (
+        "linkme-impl",
+        "0.3.37",
+        "af6739c0caf779cbb89368a70ea31d1c36251543c66440f36f14566dfc28e6aa",
+    ),
+    (
+        "rustversion",
+        "1.0.23",
+        "e61d0c17536142c100d3cd417564742345b6f78db5ef37cf053eb396bd9c6987",
+    ),
+    (
+        "serde_derive",
+        "1.0.229",
+        "d685313d886c74b7780135bebc48dfa0d5df91d67f1008ad0113d788b359aa32",
+    ),
+    (
+        "thiserror-impl",
+        "2.0.16",
+        "3aa02dfbd6d84d88f75ea9f799e51903be846c41685bd3d15988a2bbfd15455b",
+    ),
+    (
+        "thiserror-impl",
+        "2.0.20",
+        "2b03916e618b74694c727ea32ae011c0d183faf846fd6d11bd6917aae0dc13f4",
+    ),
+];
+const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
+    "pliron-derive",
+    "0.17.0",
+    "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487",
+    "2a1c62604e290a3a45b923eac5ef8d0dfaf175a834d9931a9d19cd777adab819",
+)];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "0f06239a782a69b538b979f54ce71bb7b8af1aeece2220689da74a1b53993754";
+    "97c2a3354029e5880a5040cda60b648d48d4013cf96f49891c0edbc180f19996";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
     "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 
@@ -660,7 +758,7 @@ fn validate_host_code_package(package: &Value, tree_digest: &[u8; 32]) -> Result
         ));
     }
     if kinds.contains("proc-macro") {
-        validate_reviewed_fe2o3_macros(package, tree_digest)?;
+        validate_reviewed_proc_macro(package, tree_digest)?;
     }
     Ok(())
 }
@@ -734,13 +832,107 @@ fn validate_registry_build_script_against(
     Ok(true)
 }
 
+fn validate_reviewed_proc_macro(package: &Value, tree_digest: &[u8; 32]) -> Result<(), String> {
+    if package.get("name").and_then(Value::as_str) == Some("fe2o3-macros") {
+        return validate_reviewed_fe2o3_macros(package, tree_digest);
+    }
+    if validate_registry_proc_macro_against(package, tree_digest, &TRUSTED_REGISTRY_PROC_MACROS)?
+        || validate_git_proc_macro_against(package, tree_digest, &TRUSTED_GIT_PROC_MACROS)?
+    {
+        return Ok(());
+    }
+    Err(unreviewed_proc_macro(package))
+}
+
+fn unreviewed_proc_macro(package: &Value) -> String {
+    let name = package
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing-name>");
+    let version = package
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("<missing-version>");
+    let source = match package.get("source") {
+        Some(Value::Null) => "local",
+        Some(Value::String(source)) => source,
+        _ => "<missing-source>",
+    };
+    format!(
+        "authoritative kernel closure rejects an unreviewed procedural macro {name:?} version {version:?} from {source:?}"
+    )
+}
+
+fn validate_registry_proc_macro_against(
+    package: &Value,
+    tree_digest: &[u8; 32],
+    trusted: &[(&str, &str, &str)],
+) -> Result<bool, String> {
+    let Some(name) = package.get("name").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(version) = package.get("version").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    if package.get("source").and_then(Value::as_str) != Some(CRATES_IO_SOURCE) {
+        return Ok(false);
+    }
+    let Some((_, _, expected)) = trusted.iter().find(|(trusted_name, trusted_version, _)| {
+        name == *trusted_name && version == *trusted_version
+    }) else {
+        return Ok(false);
+    };
+    validate_expected_tree(
+        tree_digest,
+        expected,
+        Path::new(required_string(package, "manifest_path")?)
+            .parent()
+            .expect("manifest path was already required"),
+        "registry proc-macro",
+    )?;
+    Ok(true)
+}
+
+fn validate_git_proc_macro_against(
+    package: &Value,
+    tree_digest: &[u8; 32],
+    trusted: &[(&str, &str, &str, &str)],
+) -> Result<bool, String> {
+    let Some(name) = package.get("name").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(version) = package.get("version").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some(source) = package.get("source").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    let Some((_, _, _, expected)) =
+        trusted
+            .iter()
+            .find(|(trusted_name, trusted_version, trusted_source, _)| {
+                name == *trusted_name && version == *trusted_version && source == *trusted_source
+            })
+    else {
+        return Ok(false);
+    };
+    validate_expected_tree(
+        tree_digest,
+        expected,
+        Path::new(required_string(package, "manifest_path")?)
+            .parent()
+            .expect("manifest path was already required"),
+        "git proc-macro",
+    )?;
+    Ok(true)
+}
+
 fn validate_reviewed_fe2o3_macros(package: &Value, tree_digest: &[u8; 32]) -> Result<(), String> {
     if package.get("name").and_then(Value::as_str) != Some("fe2o3-macros")
+        || package.get("version").and_then(Value::as_str) != Some("0.1.0")
         || package.get("source").is_some_and(|value| !value.is_null())
     {
-        return Err(
-            "authoritative kernel closure rejects an unreviewed procedural macro".to_owned(),
-        );
+        return Err(unreviewed_proc_macro(package));
     }
     let expected = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1170,11 +1362,9 @@ mod tests {
         ] {
             let record = metadata(kind, name, links);
             let package = &record["packages"][0];
-            assert!(
-                validate_host_code_package(package, &[0_u8; 32])
-                    .unwrap_err()
-                    .contains(expected)
-            );
+            let error = validate_host_code_package(package, &[0_u8; 32]).unwrap_err();
+            assert!(error.contains(expected));
+            assert!(error.contains(name));
         }
     }
 
@@ -1204,6 +1394,100 @@ mod tests {
         let error =
             validate_registry_build_script_against(&package, &tampered, &trusted).unwrap_err();
         assert!(error.contains("registry build-script closure content changed"));
+    }
+
+    #[test]
+    fn reviewed_external_proc_macros_require_exact_source_and_content_identity() {
+        let directory = TestDirectory::new();
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            b"[package]\nname='reviewed-macro'\nversion='1.0.0'\n",
+        )
+        .unwrap();
+        let library = directory.path().join("lib.rs");
+        fs::write(&library, b"pub fn reviewed() {}\n").unwrap();
+        let reviewed = canonical_tree_digest(directory.path(), None).unwrap();
+        let reviewed_hex = hex(&reviewed);
+
+        let registry = serde_json::json!({
+            "name": "reviewed-macro",
+            "version": "1.0.0",
+            "source": CRATES_IO_SOURCE,
+            "manifest_path": directory.path().join("Cargo.toml"),
+        });
+        let registry_trusted = [("reviewed-macro", "1.0.0", reviewed_hex.as_str())];
+        assert!(
+            validate_registry_proc_macro_against(&registry, &reviewed, &registry_trusted).unwrap()
+        );
+        let mut local_substitution = registry.clone();
+        local_substitution["source"] = Value::Null;
+        assert!(
+            !validate_registry_proc_macro_against(
+                &local_substitution,
+                &reviewed,
+                &registry_trusted,
+            )
+            .unwrap()
+        );
+
+        let git_source = "git+https://example.invalid/reviewed.git?rev=0123#0123";
+        let git = serde_json::json!({
+            "name": "reviewed-macro",
+            "version": "1.0.0",
+            "source": git_source,
+            "manifest_path": directory.path().join("Cargo.toml"),
+        });
+        let git_trusted = [("reviewed-macro", "1.0.0", git_source, reviewed_hex.as_str())];
+        assert!(validate_git_proc_macro_against(&git, &reviewed, &git_trusted).unwrap());
+        let mut moving_git_reference = git.clone();
+        moving_git_reference["source"] =
+            Value::String("git+https://example.invalid/reviewed.git?branch=main#0123".into());
+        assert!(
+            !validate_git_proc_macro_against(&moving_git_reference, &reviewed, &git_trusted)
+                .unwrap()
+        );
+
+        fs::write(&library, b"pub fn substituted() {}\n").unwrap();
+        let tampered = canonical_tree_digest(directory.path(), None).unwrap();
+        assert!(
+            validate_registry_proc_macro_against(&registry, &tampered, &registry_trusted)
+                .unwrap_err()
+                .contains("registry proc-macro closure content changed")
+        );
+        assert!(
+            validate_git_proc_macro_against(&git, &tampered, &git_trusted)
+                .unwrap_err()
+                .contains("git proc-macro closure content changed")
+        );
+    }
+
+    #[test]
+    fn reviewed_workspace_proc_macro_requires_exact_local_identity() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cargo-fe2o3 has a workspace crates directory")
+            .join("fe2o3-macros");
+        let digest = canonical_tree_digest(&root, None).unwrap();
+        let package = serde_json::json!({
+            "name": "fe2o3-macros",
+            "version": "0.1.0",
+            "source": Value::Null,
+            "manifest_path": root.join("Cargo.toml"),
+        });
+        validate_reviewed_fe2o3_macros(&package, &digest).unwrap();
+
+        for (field, value) in [
+            ("version", Value::String("0.1.1".into())),
+            ("source", Value::String(CRATES_IO_SOURCE.into())),
+        ] {
+            let mut substituted = package.clone();
+            substituted[field] = value;
+            assert!(
+                validate_reviewed_fe2o3_macros(&substituted, &digest)
+                    .unwrap_err()
+                    .contains("unreviewed procedural macro")
+            );
+        }
     }
 
     #[test]

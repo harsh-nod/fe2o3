@@ -35,10 +35,13 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     DisjointSliceGetRowStriped2dMut,
     StridedReadView2DFromSharedSlice,
     StridedReadView2DLoadOr,
+    DynamicLdsExactCurrent,
+    DynamicLdsIntoCollectiveRawParts,
     WorkgroupBarrier,
     MathContextCurrent,
     MathF32(F32MathFunction),
     CollectiveContextCurrent,
+    WorkgroupReduceSum,
     SubgroupReduceSumF32,
     SubgroupReduceMaxF32,
     WaveLaneCurrent,
@@ -58,6 +61,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx950Fp4AccumulatorZero,
     Gfx950Fp4AccumulatorIntoValues,
     Gfx950Fp4MultiplyAccumulate,
+    Gfx950Fp4Fp8MultiplyAccumulate,
     Gfx950Fp8MatrixARowMajor,
     Gfx950Fp8MatrixBRowMajor,
     Gfx950Fp8MatrixALoadM16K128,
@@ -87,10 +91,12 @@ pub(crate) enum ProductionSemanticTerminalRuleV1 {
     Reject(TrustedDeviceItem),
 }
 
-pub(crate) const fn is_traversed_atomic_view_v1(item: TrustedDeviceItem) -> bool {
+pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> bool {
     matches!(
         item,
-        TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
+        TrustedDeviceItem::WorkgroupLdsScopeCurrent
+            | TrustedDeviceItem::Invocation3DCurrent
+            | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic
@@ -193,6 +199,12 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::StridedReadView2DLoadOr => {
                 Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr)
             }
+            TrustedDeviceItem::DynamicLdsExactCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::DynamicLdsExactCurrent)
+            }
+            TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
+                Self::Expand(ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts)
+            }
             TrustedDeviceItem::WorkgroupSyncthreads => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier)
             }
@@ -204,6 +216,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::Gfx942CollectivesCurrent => {
                 Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent)
+            }
+            TrustedDeviceItem::Gfx942WorkgroupReduceSum => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupReduceSum)
             }
             TrustedDeviceItem::Gfx942SubgroupReduceSumF32 => {
                 Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceSumF32)
@@ -261,6 +276,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate)
+            }
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate)
             }
             TrustedDeviceItem::Gfx950MfmaMatrixARowMajor => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor)
@@ -416,6 +434,12 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::StridedReadView2DLoadOr) => {
                 TrustedDeviceItem::StridedReadView2DLoadOr
             }
+            Self::Expand(ProductionTerminalExpansionV1::DynamicLdsExactCurrent) => {
+                TrustedDeviceItem::DynamicLdsExactCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts) => {
+                TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
+            }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier) => {
                 TrustedDeviceItem::WorkgroupSyncthreads
             }
@@ -427,6 +451,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::CollectiveContextCurrent) => {
                 TrustedDeviceItem::Gfx942CollectivesCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupReduceSum) => {
+                TrustedDeviceItem::Gfx942WorkgroupReduceSum
             }
             Self::Expand(ProductionTerminalExpansionV1::SubgroupReduceSumF32) => {
                 TrustedDeviceItem::Gfx942SubgroupReduceSumF32
@@ -484,6 +511,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate) => {
                 TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate) => {
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor) => {
                 TrustedDeviceItem::Gfx950MfmaMatrixARowMajor
@@ -550,7 +580,7 @@ impl ProductionSemanticTerminalRuleV1 {
 pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<ProductionSemanticTerminalRuleV1> {
     trusted_device_items::classify(tcx, def_id)
         .and_then(|item| {
-            (!is_traversed_atomic_view_v1(item))
+            (!is_traversed_reviewed_helper_v1(item))
                 .then(|| ProductionSemanticTerminalRuleV1::from_trusted_device_item(item))
         })
         .or_else(|| {
@@ -753,6 +783,10 @@ mod tests {
                 ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate,
             ),
             (
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
+                ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate,
+            ),
+            (
                 TrustedDeviceItem::Gfx950MfmaMatrixARowMajor,
                 ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor,
             ),
@@ -823,14 +857,16 @@ mod tests {
     }
 
     #[test]
-    fn standard_atomic_views_are_traversed_instead_of_hidden_by_a_terminal() {
+    fn reviewed_rust_helpers_are_traversed_instead_of_hidden_by_a_terminal() {
         for item in [
+            TrustedDeviceItem::WorkgroupLdsScopeCurrent,
+            TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
         ] {
-            assert!(is_traversed_atomic_view_v1(item));
+            assert!(is_traversed_reviewed_helper_v1(item));
         }
     }
 }

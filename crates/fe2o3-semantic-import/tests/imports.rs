@@ -377,8 +377,19 @@ fn run_cli(arguments: &[&str], input: &[u8]) -> std::process::Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
-    child.wait_with_output().unwrap()
+    let write_result = child.stdin.take().unwrap().write_all(input);
+    let output = child.wait_with_output().unwrap();
+    match write_result {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+            assert!(
+                !output.status.success(),
+                "stdin closed early even though the importer succeeded"
+            );
+        }
+        Err(error) => panic!("could not write importer stdin: {error}"),
+    }
+    output
 }
 
 fn rocprof_cli_arguments() -> Vec<String> {
@@ -412,16 +423,26 @@ fn cli_is_stdin_only_deterministic_and_rejects_duplicate_flags() {
     assert!(first.stdout.len() as u64 <= MAX_IMPORT_OUTPUT_BYTES_V1);
     decode_trace_v1(&first.stdout).unwrap();
 
-    let duplicate = run_cli(
-        &["rocprofv3-json", "--kir-len", "1", "--kir-len", "2"],
-        b"ignored",
+    let duplicate_arguments = ["rocprofv3-json", "--kir-len", "1", "--kir-len", "2"];
+    let duplicate = run_cli(&duplicate_arguments, b"ignored");
+    let repeated_duplicate = run_cli(&duplicate_arguments, b"ignored");
+    assert_eq!(duplicate.status.code(), Some(1));
+    assert_eq!(duplicate.status.code(), repeated_duplicate.status.code());
+    assert!(duplicate.stdout.is_empty());
+    assert_eq!(duplicate.stdout, repeated_duplicate.stdout);
+    assert_eq!(
+        duplicate.stderr,
+        b"{\"error\":\"arguments\",\"message\":\"each import flag may appear at most once\"}\n"
     );
-    assert!(!duplicate.status.success());
-    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("at most once"));
+    assert_eq!(duplicate.stderr, repeated_duplicate.stderr);
 
     let path_like = run_cli(&["rocprofv3-json", "/dev/stdin"], b"ignored");
-    assert!(!path_like.status.success());
-    assert!(String::from_utf8_lossy(&path_like.stderr).contains("every flag requires one value"));
+    assert_eq!(path_like.status.code(), Some(1));
+    assert!(path_like.stdout.is_empty());
+    assert_eq!(
+        path_like.stderr,
+        b"{\"error\":\"arguments\",\"message\":\"every flag requires one value\"}\n"
+    );
 }
 
 #[test]

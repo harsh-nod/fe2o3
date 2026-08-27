@@ -102,12 +102,16 @@ pub struct WorkgroupLdsScope<'workgroup> {
 impl<'workgroup> WorkgroupLdsScope<'workgroup> {
     /// Returns compiler-owned authority for the current workgroup's LDS.
     ///
-    /// Unsupported lowering and host execution trap. The value accepts no
-    /// caller-provided epoch or workgroup identity.
-    #[inline(never)]
+    /// The compiler reviews this private constructor in the production call
+    /// closure. The value accepts no caller-provided epoch or workgroup
+    /// identity and grants no allocation without a compiler terminal.
+    #[inline(always)]
     #[rustc_diagnostic_item = "fe2o3_device_workgroup_lds_scope_current"]
     pub fn current() -> Self {
-        unreachable!("the current LDS scope must be issued by authenticated lowering")
+        Self {
+            _brand: PhantomData,
+            _not_send_sync: PhantomData,
+        }
     }
 
     #[cfg(test)]
@@ -242,6 +246,8 @@ impl<'workgroup, T: LdsElement> DynamicLds<'workgroup, T, LdsUninitialized> {
         })
     }
 
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_dynamic_lds_into_collective_raw_parts_v1"]
     pub(crate) fn into_collective_raw_parts(self) -> (*mut T, usize) {
         (self.ptr.as_ptr().cast::<T>(), self.len)
     }
@@ -456,8 +462,8 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     #[test]
-    fn compiler_owned_lds_acquisition_fails_closed_on_host() {
-        assert!(catch_unwind(WorkgroupLdsScope::<'static>::current).is_err());
+    fn compiler_owned_lds_allocation_fails_closed_on_host() {
+        let _scope = WorkgroupLdsScope::<'static>::current();
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = WorkgroupLdsScope::for_host_test();

@@ -517,25 +517,40 @@ impl SealedGeneratedProofSourceV3 {
     fn create(
         source: &CanonicalGeneratedVerusProofInputV3,
     ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
-        let mut file = memfd_create(
+        let mut writable = memfd_create(
             "fe2o3-generated-verus-proof-v3",
             MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
         )
         .map(File::from)
         .map_err(|error| io_error("create generated proof memfd", error))?;
-        fchmod(&file, Mode::RUSR)
+        fchmod(&writable, Mode::RUSR)
             .map_err(|error| io_error("protect generated proof memfd", error))?;
-        file.write_all(source.source())
-            .and_then(|()| file.flush())
-            .and_then(|()| file.sync_all())
+        writable
+            .write_all(source.source())
+            .and_then(|()| writable.flush())
+            .and_then(|()| writable.sync_all())
             .map_err(|error| io_std_error("write generated proof memfd", error))?;
         fcntl_add_seals(
-            &file,
+            &writable,
             SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK,
         )
-        .and_then(|()| fcntl_add_seals(&file, SealFlags::SEAL))
+        .and_then(|()| fcntl_add_seals(&writable, SealFlags::SEAL))
         .map_err(|error| io_error("seal generated proof memfd", error))?;
-        let snapshot = ObjectSnapshotV2::capture(&file, "generated proof memfd")?;
+        let snapshot = ObjectSnapshotV2::capture(&writable, "generated proof memfd")?;
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", writable.as_raw_fd()));
+        let file = open(
+            &descriptor_path,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|error| io_error("retain generated proof memfd read-only", error))?;
+        if ObjectSnapshotV2::capture(&file, "read-only generated proof memfd")? != snapshot {
+            return Err(changed(
+                "read-only generated proof memfd identity changed during retention",
+            ));
+        }
+        drop(writable);
         let sealed = Self { file, snapshot };
         sealed.revalidate(source)?;
         Ok(sealed)
@@ -546,11 +561,17 @@ impl SealedGeneratedProofSourceV3 {
         source: &CanonicalGeneratedVerusProofInputV3,
     ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         let current = ObjectSnapshotV2::capture(&self.file, "generated proof memfd")?;
+        let descriptor_flags = rustix::io::fcntl_getfd(&self.file)
+            .map_err(|error| io_error("inspect generated proof memfd descriptor flags", error))?;
+        let status_flags = rustix::fs::fcntl_getfl(&self.file)
+            .map_err(|error| io_error("inspect generated proof memfd status flags", error))?;
         if current != self.snapshot
             || current.file_type() != FileType::RegularFile
             || current.permissions() != 0o400
             || current.size < 0
             || current.size as u64 != source.byte_len()
+            || !descriptor_flags.contains(rustix::io::FdFlags::CLOEXEC)
+            || status_flags & OFlags::ACCMODE != OFlags::RDONLY
         {
             return Err(changed("generated proof memfd metadata changed"));
         }
@@ -1314,16 +1335,22 @@ mod tests {
 
     impl Drop for TestClosure {
         fn drop(&mut self) {
-            for directory in ["", "bin", "empty", "lib", "lib/nested"] {
-                let _ = fs::set_permissions(
-                    self.root.join(directory),
-                    fs::Permissions::from_mode(0o755),
-                );
-            }
+            make_test_closure_removable(&self.root);
             let _ = fs::remove_dir_all(&self.root);
             for path in &self.outside {
-                let _ = fs::remove_file(path);
-                let _ = fs::remove_dir_all(path);
+                if fs::remove_file(path).is_err() {
+                    make_test_closure_removable(path);
+                    let _ = fs::remove_dir_all(path);
+                }
+            }
+        }
+    }
+
+    fn make_test_closure_removable(root: &Path) {
+        for directory in ["", "bin", "empty", "lib", "lib/nested"] {
+            let path = root.join(directory);
+            if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
             }
         }
     }
@@ -1521,6 +1548,10 @@ mod tests {
         assert_eq!(
             fcntl_get_seals(&sealed.file).unwrap(),
             GENERATED_PROOF_SOURCE_SEALS
+        );
+        assert_eq!(
+            rustix::fs::fcntl_getfl(&sealed.file).unwrap() & OFlags::ACCMODE,
+            OFlags::RDONLY
         );
         assert_eq!(
             read_exact_file(

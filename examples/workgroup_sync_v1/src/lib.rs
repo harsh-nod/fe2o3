@@ -4,9 +4,8 @@
 
 //! Source, oracle, and formal contracts for two fixed wave64 synchronization profiles.
 //!
-//! Both profiles are type-checked as ordinary attributed Rust kernels. Their
-//! exact compiler profiles, artifacts, and protected runtime paths remain
-//! separate evidence phases.
+//! Both kernels are type-checked as ordinary attributed Rust and enter the
+//! same production compiler, artifact, and protected runtime pipeline.
 
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod contract;
@@ -27,9 +26,6 @@ pub use contract::{
     compare_reduction_output_v1, lds_reduction_oracle_v1,
 };
 #[cfg(feature = "lds-kernel")]
-pub use kernel::{
-    LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1, LDS_REDUCTION_WORKGROUP_V1,
-    SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1,
-};
+pub use kernel::LDS_REDUCTION_WORKGROUP_V1;
 #[cfg(not(target_arch = "amdgpu"))]
 pub use vectors::{AtomicVectorV1, ReductionVectorV1, atomic_vectors_v1, reduction_vectors_v1};

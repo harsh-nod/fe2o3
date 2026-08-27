@@ -497,15 +497,18 @@ The detailed dependencies and exit criteria are in
   space, and represents workgroup barriers with convergence, scope, ordering,
   and memory-space claims. AMD lowering emits address-space-3 storage and
   convergent `llvm.amdgcn.s.barrier` plus required fences, and rejects
-  conditional or cyclic barrier placement under the bounded proof. Ordinary
-  Rust source integration, dynamic launch-byte admission, LDS initialization
-  transfer, general barrier convergence proof, and GPU semantic execution are
-  absent in the general paths. The bounded
+  conditional or cyclic barrier placement under the bounded proof. Dynamic
+  launch-byte admission and general barrier-convergence proof remain absent.
+  The production WG64 `i32` reduction now joins ordinary Rust source, exact
+  launch-resource admission, LDS initialization transfer, and reproducible
+  inspected HSACO through the one compiler transaction. Worker V3/KFD load and
+  execution remain open. The bounded
   [gfx942 wave/LDS V2](gfx942-wave-lds-v2.md) exception adds one compiler-created
   1,024-byte static-LDS capability, exact 256-thread barrier schedule, Verus
   ownership/participation proof, and numerical MI300X run from verified Kernel
   IR. V2 also binds the full canonical `gfx942:xnack-` identity through Kernel
-  IR and Worker V2. It does not join genuine Rust source to the executed HSACO.
+  IR and Worker V2. That older fixture remains separate from the new production
+  source-authentic path.
   The separate [LDS-tiled GEMM slices](tiled-gemm-lds-slices.md) add one exact
   WG64 `16x16x16` BF16/FP32 path. The collector authenticates the exact
   attributed Slice 1 root, reviewed MIR sequence, ABI, geometry, and
@@ -527,8 +530,12 @@ The detailed dependencies and exit criteria are in
   barriers. LLVM shape, gfx942:xnack- assembly and metadata, host-oracle MI300X
   execution, and an exact Verus model are present. Broader operations and
   types, scans in this proof/hardware lane, wave32 and target breadth, partial
-  physical EXEC masks, authenticated source-to-HSACO finalization, and compiler
-  refinement remain absent, so all three rows remain Partial.
+  physical EXEC masks and compiler refinement remain absent. Row 73 now also
+  has a genuine attributed Rust WG64 `i32` reduction carried through semantic
+  MIR, ranked PLIRON, verified Kernel IR, deterministic upstream-LLVM/LLD
+  finalization, and exact 256-byte LDS descriptor inspection. The operation,
+  type, and width matrix plus Worker V3/KFD execution are still incomplete, so
+  all three rows remain Partial.
 - Row 74: observed capabilities retain exact live
   contexts. Cooperative admission retains the exact loaded function and stream
   and conservatively accepts one workgroup until per-function occupancy is
@@ -627,7 +634,7 @@ The detailed dependencies and exit criteria are in
   binding, loaded-executable borrows, non-clone typed selections and HSA kernel
   sets, and unload-before-release errors. The suite does not yet cover every
   general typed signature, async cancellation path, barrier lifecycle, or
-  remaining unsafe transition.
+  production Worker V3-to-KFD authority implementation.
 - Row 87: authenticated rustc inline-assembly records bind statement,
   function, contract, and frontend-unit identities before a closed `gfx942`
   instruction table emits static LLVM templates. V1 covers a small set of

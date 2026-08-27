@@ -11,6 +11,8 @@ pub const SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY: &str =
     "scaled-mma-fp8-e4m3-f32-m16n16k128-wave64.v1";
 pub const SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY: &str =
     "scaled-mma-fp4-e2m1-f32-m16n16k128-wave64.v1";
+pub const SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY: &str =
+    "scaled-mma-fp4-e2m1-fp8-e4m3-f32-m16n16k128-wave64.v1";
 pub const LDS_TILE_16X16_XOR4_CAPABILITY: &str = "lds-tile-16x16-xor4-wave64.v1";
 
 pub const MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2: &str =
@@ -366,6 +368,7 @@ pub enum TensorInstructionProfileV1 {
     Gfx942MfmaBf16F32M16N16K16Wave64,
     Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64,
     Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64,
+    Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64,
     IncompatibleWave32,
     Opaque(u32),
 }
@@ -400,6 +403,14 @@ impl TensorInstructionProfileV1 {
                 })
             }
             Self::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
+                Some(TensorInstructionSemanticDescriptorV1 {
+                    call_argument_count: 4,
+                    subgroup_width: 64,
+                    contribution_shape: [16, 16, 128],
+                    output_shape: [16, 16],
+                })
+            }
+            Self::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {
                 Some(TensorInstructionSemanticDescriptorV1 {
                     call_argument_count: 4,
                     subgroup_width: 64,
@@ -511,6 +522,17 @@ impl TensorLayoutContractV1 {
             a: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::A),
             b: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::B),
             accumulator: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::Accumulator),
+            tail_mask: TensorTailMaskV1::ZeroFilledPredicateInputs,
+        }
+    }
+
+    pub const fn gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64() -> Self {
+        Self {
+            profile: TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64,
+            subgroup_width: 64,
+            a: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::A),
+            b: canonical_gfx950_fp8_fragment(TensorOperandRoleV1::B),
+            accumulator: canonical_fragment(TensorOperandRoleV1::Accumulator),
             tail_mask: TensorTailMaskV1::ZeroFilledPredicateInputs,
         }
     }
@@ -799,7 +821,8 @@ pub fn verify_tensor_layout_contract_v1(
     match contract.profile {
         TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64
         | TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
-        | TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {}
+        | TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64
+        | TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {}
         TensorInstructionProfileV1::IncompatibleWave32 => {
             findings.push(TensorLayoutFindingV1::ProfileMismatch {
                 field: "wave32 target profile",
@@ -876,6 +899,13 @@ fn verify_tensor_fragment_v1(
         }
         TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
             canonical_gfx950_fp4_fragment(position)
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {
+            match position {
+                TensorOperandRoleV1::A => canonical_gfx950_fp4_fragment(position),
+                TensorOperandRoleV1::B => canonical_gfx950_fp8_fragment(position),
+                TensorOperandRoleV1::Accumulator => canonical_fragment(position),
+            }
         }
         TensorInstructionProfileV1::IncompatibleWave32 | TensorInstructionProfileV1::Opaque(_) => {
             return;
@@ -1247,8 +1277,12 @@ impl MatrixOperation {
                 (profile.wave_width, BF16_F32_M16N16K16_CAPABILITY)
             }
             MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
-                let extension =
-                    if profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
+                let extension = if self.tensor_layout.as_ref().is_some_and(|contract| {
+                    contract.profile
+                        == TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64
+                }) {
+                    SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                } else if profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
                         SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
                     } else {
                         SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
@@ -1335,15 +1369,19 @@ impl MatrixOperation {
                 }
             }
             MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
-                let expected_layout_profile =
-                    if profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
-                        Some(TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64)
-                    } else if profile == MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64() {
-                        Some(TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64)
-                    } else {
-                        None
-                    };
-                if expected_layout_profile.is_none() {
+                let expected_layout_profiles = if profile
+                    == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64()
+                {
+                    &[
+                            TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64,
+                            TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64,
+                        ][..]
+                } else if profile == MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64() {
+                    &[TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64][..]
+                } else {
+                    &[][..]
+                };
+                if expected_layout_profiles.is_empty() {
                     issues.push(MatrixVerificationIssue::structure(format!(
                         "unsupported scaled matrix multiply profile {profile:?}"
                     )));
@@ -1355,7 +1393,7 @@ impl MatrixOperation {
                     expect_type(actual, Type::F32, &mut issues);
                 }
                 match &self.tensor_layout {
-                    Some(contract) if Some(contract.profile) == expected_layout_profile => {
+                    Some(contract) if expected_layout_profiles.contains(&contract.profile) => {
                         for finding in verify_tensor_layout_contract_v1(contract) {
                             issues.push(MatrixVerificationIssue::structure(finding.to_string()));
                         }

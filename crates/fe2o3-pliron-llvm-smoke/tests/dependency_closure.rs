@@ -8,7 +8,7 @@ use std::{
 use fe2o3_pliron_llvm_smoke::{PLIRON_LLVM_FEATURES, PLIRON_LLVM_LICENSE, PLIRON_REVISION};
 use serde_json::Value;
 
-const PLIRON_SOURCE_PREFIX: &str = "git+https://github.com/pliron-org/pliron.git?rev=";
+const PLIRON_SOURCE_PREFIX: &str = "git+https://github.com/harsh-nod/pliron.git?rev=";
 const PLIRON_PACKAGES: &[&str] = &["pliron", "pliron-derive", "pliron-llvm"];
 const FORBIDDEN_AUTHORITY_PACKAGES: &[&str] = &[
     "amd-comgr",

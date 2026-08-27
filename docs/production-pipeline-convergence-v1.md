@@ -104,8 +104,12 @@ differential testing, but no compiler-route enum or release implementation
 choice.
 
 The `cargo fe2o3 simulate` command and its Cargo-side oracle graph are deleted.
-Model and differential tools remain independent authority-free test programs;
-production `build` and `run` cannot select them.
+On Linux, the standalone `fe2o3-kir-sim-cli` consumes exact verified canonical
+KIR V7 without source, compiler, refinement-proof, artifact, load, launch, GPU,
+timing, or performance authority. `fe2o3-kir-sim-trace` independently maps
+ephemeral CPU-simulator events into collector-neutral Semantic Trace V1. These
+model and differential tools remain authority-free test programs; production
+`build` and `run` cannot select either one.
 
 The host-consumer and shared hostile application fixtures accept only V3
 inputs. The old V2 consumer binary, input adapter, Cargo feature, and hostile
@@ -425,26 +429,32 @@ routes.
 
 ## Critical milestones
 
-The current checkpoint has completed the feature-invariant backend entry and a
-real extraction-only gfx942 vertical slice. Safe dynamic GEMM now traverses
-ordinary attributed Rust, semantic MIR, ranked PLIRON, verified Kernel IR, the
-composed formal/ranked memory checks, and deterministic gfx942 LLVM. The same
-driver has positive and hostile coverage for collection, ranked bounds, and
-reference bindings. This is compiler evidence only: extraction custody cannot
-publish, finalize HSACO, load, or launch.
+The current checkpoint has completed the feature-invariant backend entry and
+the first source-authentic workgroup vertical slice. Safe dynamic GEMM still
+ends at deterministic gfx942 LLVM, but the ordinary attributed WG64 `i32` LDS
+reduction continues through the compiler-bound handoff, measured upstream LLVM
+target APIs, in-process LLD, and inspected COV6 HSACO. Its exact 256-byte LDS
+and launch-resource contract survives every compiler and artifact stage. The
+same route also requalifies the scoped atomic kernel. Neither path uses COMGR,
+a shell linker, or a workload-profile selector, and neither currently grants
+load or launch authority.
 
-1. **Compiler middle end:** #140 pass execution plus one importer, general
-   Kernel IR module, and deterministic scalar/control-flow transformations.
-2. **First production slice:** attributed scalar/control-flow Rust reaches an
-   inspected gfx942 artifact and generated host interface through only the
-   production transaction.
-3. **Safety semantics:** memory, barriers, wave operations, and scoped atomics
-   use the same transaction with source-spanned rejection and hostile tests.
+1. **Compiler middle end, bounded operational:** one importer carries the LDS
+   slice through semantic MIR, ranked PLIRON, general Kernel IR, composed
+   memory checks, and deterministic AMDGPU LLVM. General pass coverage remains.
+2. **First production code-object slice, complete:** attributed LDS-reduction
+   Rust reaches reproducible inspected gfx942 HSACO through only the production
+   compiler and finalizer transaction.
+3. **Safety semantics, in progress:** bounded references, LDS, barriers, and
+   scoped atomics use the same transaction with hostile tests; general race,
+   alias, convergence, and address-space proofs remain.
 4. **Rust and verification:** #106 evidence is consumed by the generic #174
    MIR-to-KIR receipt; no profile-selected semantic replacement remains.
 5. **Parameterized GEMM:** ordinary attributed Rust GEMM reaches inspected
    HSACO through the production transaction; #173 remains only an oracle.
-6. **Selector convergence:** all exact-profile production selectors are gone,
+6. **Worker V3/KFD execution:** the source-bound artifact enters the sole
+   application/verifier graph and pure-Rust KFD packet submission path.
+7. **Selector convergence:** all exact-profile production selectors are gone,
    default kernel compilation uses the one transaction, and unsupported code
    fails without fallback.
 

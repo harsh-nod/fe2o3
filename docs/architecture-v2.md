@@ -28,7 +28,7 @@ The permanent architecture has one executable route:
 ```text
 Rust kernel collection -> semantic MIR -> verified middle end -> Kernel IR
     -> typed AMDGPU/LLVM lowering -> upstream LLVM/LLD -> inspected HSACO
-    -> Worker V3 verification -> generated typed HSA dispatch
+    -> Worker V3 verification -> generated typed pure-KFD dispatch
 ```
 
 No Cargo feature, environment variable, macro option, workload profile, or
@@ -88,6 +88,14 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   extraction, but cannot publish a compiler-module handoff. Real AMDGPU tests
   cover safe and unsafe collection, dynamic ranked bounds, reference binding,
   and a loop-carried BF16/F32 MFMA GEMM.
+- A protected continuation of that transaction now carries the WG64 `i32` LDS
+  reduction through a compiler-bound inert handoff, measured upstream LLVM
+  target APIs, in-process LLD, and COV6 inspection. The source, semantic MIR,
+  Kernel IR, LLVM LDS allocation, and AMDHSA descriptor all agree on 256 static
+  group bytes. The sibling scoped-atomic kernel uses the same continuation.
+  This is the first bounded source-authentic workgroup code-object slice, not a
+  second compiler pipeline. It grants no load or launch authority; current
+  execution must be added through Worker V3 and the KFD runtime.
 - Production orchestration has one fixed Cargo plan. The first phase always
   builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
   backend and commits its generated-artifact generation. The second phase
@@ -102,6 +110,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
   authorization, or dispatch authority.
+- `fe2o3-runtime` now owns one invocation-specific pure-KFD authority gate. It
+  binds the exact object and length, selected kernel closure, materialized
+  image, kernarg, initial buffer bytes and declared effects, pointer fixups,
+  geometry, resources, timeout, KFD mechanics manifest, and checked GPU unique
+  ID. The SHA-pinned LDS diagnostic passes this gate on MI300X using a manually
+  asserted unsafe authority. No production Worker V3 implementation exists yet,
+  so generated application execution remains fail-closed.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
@@ -282,8 +297,9 @@ continue to point downward according to the machine-checked
 | `fe2o3-compiler-api` | Target-neutral request, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
-| `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
-| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, capability observations; raw module and launch APIs only in qualification builds | Kernel type discovery |
+| `fe2o3-host` | Generated Worker V3 arguments, verifier admission, argument ownership, and the HSA-backed migration implementation | MIR inspection, target lowering, or permanent launch authority |
+| `fe2o3-runtime` | Sole safe pure-KFD composition boundary, invocation identity, authority matching, effect-preserving completed buffers, and terminal execution policy | Constructing Worker V3 proof authority or accepting caller-asserted descriptive identities |
+| `fe2o3-core` | HIP resource wrappers, streams, events, buffers, and capability observations; raw module and launch mechanics are private to crate tests | Kernel type discovery or downstream raw launch authority |
 | `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
 | `fe2o3-service-model`, `fe2o3-service-host` | Executable-free service semantics and authority-free borrow-retaining host typestates | Persistent execution, runtime waits, progress proof, storage-release authority |
 | `fe2o3-contracts`, `fe2o3-proof-contracts` | Shared launch/spec vocabulary, erased proof markers, and solver-neutral property records | Solving proofs, code generation, proof promotion |
@@ -380,7 +396,7 @@ future MLIR lower half without changing the source API, artifact manifest, or
 verification model.
 
 The current implementation pins Pliron v0.17.0 commit
-`2610651306ea3ba670f68d5d8b1e1159bcd521ed` and provides a bounded context,
+`5bdf861bf03e7f20242b25717fb653336d02e487` and provides a bounded context,
 private context-identity, registration, and pass-plan shell. Generic pass
 execution is intentionally absent because upstream `Ptr<T>` values do not
 carry owner provenance; [#140](https://github.com/harsh-nod/fe2o3/issues/140)
@@ -514,36 +530,39 @@ RecoveredWorkerV3PinnedDescriptorV1
         |
         v
 AuthenticatedWorkerV3ExecutableV1<K>
+        + generated host-memory arguments + geometry
         |
         v
-AuthorizedWorkerV3HsaLoadV1<K, A>
+invocation-specific Worker V3 KFD authority
+        + PreparedGfx942RuntimeDispatchV1
         |
         v
-LoadedWorkerV3HsaExecutableV1<K, A>
-        + generated arguments + geometry
+execute_authorized_gfx942_runtime_dispatch_v1
         |
         v
-GeneratedWorkerV3PreparedInvocationV1<K, A, Arguments>
-        |
-        v
-CompletedWorkerV3DispatchV1 -> unload
+completed buffers after queue teardown
 ```
 
 The concrete type names may evolve, but these ownership rules do not:
 
-1. Recovery pins one durable publication, descriptor, target, observed context,
-   and application handoff lineage before verification begins.
+1. Recovery pins one durable publication, descriptor, target, and application
+   handoff lineage before verification begins. The production migration must
+   replace its HIP observed-context field with the exact checked KFD device
+   identity consumed by invocation authorization.
 2. Authentication binds one generated expectation to the recovered compiler,
-   proof, effect, and executable evidence. Authorization and load consume that
-   exact decision; no intermediate authority is cloneable or caller-created.
+   proof, effect, and executable evidence. Invocation authorization consumes
+   that exact decision; no intermediate authority is cloneable or
+   caller-created.
 3. Generated adapters bind values by source argument index to the existing
    `GeneratedArgumentPackingPlanV1`. The plan writes explicit fields by checked
    descriptor offsets, zeroes padding, preserves scalar bit patterns, and
    retains every buffer borrow, provenance witness, mutability/effect class,
    and alias admission.
-4. The target adapter initializes only the reviewed implicit COV6 region and
-   verifies the complete kernarg size/alignment reported by HSA. It does not
-   know a Rust signature or kernel name.
+4. The runtime initializes only the loader-inspected implicit COV6 region and
+   verifies the complete kernarg size/alignment, selected descriptor, and
+   static-plus-dynamic resources. It knows no Rust signature; the generated
+   invocation and Worker V3 authority must independently name the same complete
+   address-free contract.
 5. Preparation brands geometry and packed bytes with kernel, executable,
    context, ABI, and launch-contract identities. Values from another entry or
    load generation are not interchangeable even when their bytes match.
@@ -620,9 +639,10 @@ general memory-safety, or race-freedom claim.
 
 ## Remaining Migration from Bootstrap Paths
 
-### Retain
+### Retain During Migration
 
-- HIP initialization, streams, buffers, modules, errors, and HSACO loading;
+- HIP/HSA initialization, streams, buffers, modules, errors, and HSACO loading
+  only as isolated offline qualification oracles with no production authority;
 - ROCm discovery and target detection in `cargo-fe2o3`;
 - kernel root and reachable-call collection tests;
 - current examples as end-to-end regression cases;
@@ -634,9 +654,12 @@ general memory-safety, or race-freedom claim.
 - flat `MirOpRecord` streams with typed `mir.*` operations;
 - record sketches and elementwise expression recognition with general passes;
 - direct textual elementwise LLVM templates with `gpu.*` to AMDGPU lowering;
-- filename-based sidecar discovery with versioned embedded bundles;
-- safe-looking raw launch packing with typed prepared launches and explicit
-  unsafe raw methods.
+- filename-based sidecar discovery with authenticated Worker V3 envelopes;
+- every legacy raw or typed-prepared launch surface with generated Worker V3
+  host-memory arguments admitted by the one application verifier and pure-KFD
+  runtime graph;
+- the HSA-backed Worker V3 load/dispatch migration implementation with the
+  invocation-specific pure-KFD authority transition.
 
 ### Redesign
 

@@ -33,6 +33,7 @@ run_check() { :; }
 run_backend_build() { :; }
 run_cpu_tests() { :; }
 run_rustc_codegen_lib_tests() { :; }
+run_rustc_codegen_test_driver() { :; }
 run_auxiliary_tests() { :; }
 run_all_rustc_codegen_shards() { :; }
 

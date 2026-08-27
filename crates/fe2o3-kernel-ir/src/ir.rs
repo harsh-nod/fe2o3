@@ -852,9 +852,16 @@ impl InlineAssembly {
     }
 }
 
-/// Target capability required by the bounded gfx942 diagnostic profile.
+/// Legacy target capability used by the bounded gfx942 diagnostic profile.
 pub const AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu";
 pub const AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME: &str = "diagnostics.gfx942.v1";
+
+/// Target-neutral capability required by bounded AMDGPU diagnostic operations.
+///
+/// Exact target authority is carried separately by an exact-target capability;
+/// backends retain operation-specific target admission.
+pub const AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu";
+pub const AMDGPU_DIAGNOSTICS_CAPABILITY_NAME: &str = "diagnostics.amdgcn.v2";
 
 /// Canonical extension namespace for an exact AMD target-ID binding.
 pub const AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu.target";
@@ -881,7 +888,7 @@ pub fn gfx950_xnack_minus_target_capability() -> TargetCapability {
     }
 }
 
-/// One closed diagnostic or instrumentation operation for gfx942.
+/// One closed diagnostic or instrumentation operation for AMDGPU.
 ///
 /// These operations are lane-local and non-convergent. They neither imply a
 /// workgroup barrier nor authorize arbitrary target assembly.
@@ -928,6 +935,16 @@ impl AmdGpuDiagnosticOperation {
     }
 
     pub fn required_capabilities(&self) -> BTreeSet<TargetCapability> {
+        BTreeSet::from([TargetCapability::Extension {
+            namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+        }])
+    }
+
+    /// Returns the frozen capability carried by canonical gfx942 V1 diagnostic
+    /// declarations before the target-neutral AMDGPU diagnostics capability
+    /// was introduced.
+    pub(crate) fn legacy_gfx942_required_capabilities(&self) -> BTreeSet<TargetCapability> {
         BTreeSet::from([TargetCapability::Extension {
             namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
             name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
@@ -977,6 +994,14 @@ impl AmdGpuDiagnosticOperation {
             ),
         );
         function.required_capabilities = self.required_capabilities();
+        function
+    }
+
+    /// Reconstructs the exact frozen gfx942 V1 declaration for verifier-only
+    /// compatibility with already serialized modules.
+    pub(crate) fn legacy_gfx942_declaration(&self) -> Function {
+        let mut function = self.declaration();
+        function.required_capabilities = self.legacy_gfx942_required_capabilities();
         function
     }
 
@@ -1116,8 +1141,8 @@ impl F32MathFunction {
 
     pub const fn required_implementation(self) -> F32MathImplementation {
         match self {
-            Self::Sqrt
-            | Self::FusedMultiplyAdd
+            Self::Sqrt => F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
+            Self::FusedMultiplyAdd
             | Self::Floor
             | Self::Ceil
             | Self::Truncate
@@ -1140,6 +1165,12 @@ pub enum F32MathImplementation {
     ConstrainedLlvm,
     /// The strict `__ocml_*_f32` ABI, with fast/finite/unsafe modes disabled.
     OcmlAbiV1,
+    /// IEEE `f32` square root, round-to-nearest-even, with exceptions ignored.
+    ///
+    /// A target may realize this with constrained sqrt or with native
+    /// `llvm.sqrt.f32` when its strict default floating-point environment has
+    /// exactly these semantics.
+    IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
 }
 
 /// A pure floating-point operation with no implicit contraction or target fallback.

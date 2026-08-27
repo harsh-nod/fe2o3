@@ -13,11 +13,50 @@ This lane does not require ROCm or a GPU:
 scripts/ci-local.sh generic
 ```
 
-The generic lane validates `examples/regression-manifest-v1.txt` against Cargo
+The generic lane validates `examples/regression-manifest-v2.txt` against Cargo
 workspace metadata and the HSACO names referenced by each example. The manifest
-is the authoritative package selection for ordinary Rust checks, ROCm
-compilation, and GPU smoke. `verus-vecadd` remains ordinary-rustc-only and is
-never selected for ROCm compilation or GPU execution.
+separates source-artifact inventory from explicit qualification authority. It
+does not select production or GPU execution. `verus-vecadd` remains
+ordinary-rustc-only and has no artifact qualification route.
+
+CPU example tests are the exact manifest subset with `rustc_check=true` and
+`artifact_qualification=none`. The `cpu-test-raw` and
+`cpu-test-wrapper-managed` queries partition that subset using the structural
+source projection: ordinary packages run with raw Cargo, while every package
+containing a namespace-free typed kernel runs through the feature-free binding
+wrapper using exactly:
+
+```text
+cargo fe2o3 test --locked --all-targets -p <wrapper-managed-package>
+```
+
+`--all-targets` is mandatory. The host-test command rejects caller `--target`,
+`--config`, Cargo-side `-Z`, `--doc`, and `--no-run` arguments. It also rejects
+ambient runner and rustdoc selection plus configured runner, protected fe2o3,
+dynamic-loader, and compiler selection. Configured rustdoc is overridden with
+the disabled selection, and ambient loader variables are scrubbed. The lists are
+sorted, disjoint, exhaustive, and both complete lists plus the full structural
+projection are rescanned after the managed tests. This routing applies to any
+kernel package; it does not encode package-name exceptions or require literal
+namespaces.
+
+Workspace source and configuration outside those protected selections, build
+scripts, procedural macros, linkers, and test bodies are trusted and execute as
+the current user. The fixed runner closes its child environment and descriptor
+boundary, but it is not a sandbox. It opens and hashes Cargo's original test
+executable. While Cargo's path remains stable, executing the retained original
+preserves ordinary `current_exe` and `$ORIGIN` behavior and prevents
+directory-entry substitution between pin and execution; the runner rechecks the
+object afterward. This does not freeze same-inode writes or grant
+immutable-artifact or origin authority. The protected-configuration scans before
+and after Cargo are diagnostic checks for persistent changes, not an atomic
+snapshot or TOCTOU proof.
+
+This route may create ordinary Cargo host artifacts, but it has no fe2o3
+backend, HSACO, publication, or artifact authority. It makes no GPU observation
+or performance prediction. Because project code is trusted rather than
+confined, those claims do not mean a test body is prevented from opening files,
+network sockets, or device nodes.
 
 The generic test subset runs `rustc-codegen-fe2o3` in a dedicated Cargo process.
 The command-plan regression in `scripts/tests/ci-local-test-gate.sh` enforces
@@ -117,25 +156,10 @@ reject ambiguous helpers, signature changes, payload/proof/kernel
 substitutions, duplicate native identities, cloning linear selections, and
 unloading while a kernel set remains live.
 
-The real-source Worker V2 integration remains an ignored ROCm test. Run it with
-the same pinned worker and toolchain identities used to build the worker:
-
-```text
-FE2O3_LLVM_LINK_WORKER=/absolute/path/to/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-cargo test --locked -p rustc-codegen-fe2o3 \
-  --test kernel_ir_codegen \
-  worker_v2_real_source_publishes_two_kernels_with_one_shared_helper \
-  -- --ignored --exact --nocapture
-```
-
-On MI300X this test is compile/publication evidence: it runs the sealed Cargo
-backend, emits one `gfx942` HSACO containing both entries and one shared helper,
-and checks the published code object. It does not dispatch either kernel. HSA
-multi-symbol lifecycle tests at this checkpoint use the reviewed adapter's
-host-side test boundary and likewise do not establish two-kernel hardware
-execution.
+The real-source Worker V2 integration from this checkpoint is retired: its
+backend selector no longer exists. Its retained oracle logic is exercised only
+inside the feature-enabled library test binary and is not current
+compile/publication or hardware evidence.
 
 ## Historical alpha/zeta Worker V2 observation
 
@@ -159,33 +183,21 @@ cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-
 ```
 
 The next hardware evidence must enter through the production Worker V3
-application, verifier, HSA load, generated dispatch, completion, and unload
+application and verifier, generated dispatch, completion, and a KFD runtime
 path. A fake verifier or externally selected legacy route cannot satisfy that
 gate.
 
-### Repository-backed compiler evidence controller
+### Archived compiler evidence controller
 
-The checked compiler-evidence fixtures pin the exact source, toolchain, direct
-LLVM/LLD worker, COV6 metadata, descriptor section, and finalized HSACO
-identity used by the bounded alpha/zeta compiler observation. The controller
-runs two independent clean builds and requires byte-identical worker and
-artifact outputs.
+The checked controller and fixtures preserve the hardening and identity model
+used by the historical bounded alpha/zeta Worker V2 observation. New captures
+are disabled because their generator depended on a retired backend selector.
+`scripts/gfx942-cov6-compiler-evidence.sh` therefore fails closed in capture
+mode; its mutation self-test remains available for the archived format.
 
-```text
-systemd-run --user --scope --quiet -p Delegate=yes \
-  scripts/gfx942-cov6-compiler-evidence.sh \
-  /absolute/absent/run-root \
-  /absolute/absent/evidence-root
-```
-
-The controller is compiler evidence only. Its retired Worker V2 hardware
-capture has been removed, so it does not load or dispatch the artifact. The
-canonical transaction uses versioned Worker V2 serialization names, but those
-records grant no application, verifier, HSA load, or launch authority. Current
-hardware qualification must use the sole production Worker V3 route.
-
-The compiler-generation path uses LLVM and LLD library APIs only. It invokes
-neither COMGR nor a command-line HSACO linker or disassembler.
+A replacement compiler-evidence controller must consume a production Worker V3
+artifact and cannot grant runtime authority. New hardware qualification must
+use KFD rather than the historical HSA harness.
 
 ## Verus proof coverage
 
@@ -210,47 +222,43 @@ HSACO, HIP, or GPU execution refines that model.
 
 ## ROCm compile coverage
 
-Set an explicit LLVM target and compile every supported example:
+Set the admitted LLVM target and run the bounded production compiler gates:
 
 ```text
-FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
+FE2O3_TARGET=gfx942 scripts/ci-local.sh rocm-compile
 ```
 
-Use the target reported by `rocminfo` on the machine under test. Compilation
-does not execute a kernel. This lane also compiles the trusted-device marker
-fixtures. `#[kernel]` generates a typed `KernelMarkerV1` with deterministic
-marker symbol; public kernels expose the marker publicly but doc-hidden.
-Genuine and renamed dependencies must emit, while local lookalikes, the
-same-name unmarked external crate, local markers, and duplicate markers must
-fail closed. Rejected fixtures also preseed generated artifacts and require
-transactional invalidation of the complete artifact triplet. Markers identify
-compiler semantics; marker and executable authenticity plus full ABI semantics
-remain unsafe artifact-provenance and generated-binding responsibilities.
-
-The lane also compiles and inspects the hardened G1 fill code object, compiles
-the real three-slice vecadd through `kernel-ir-v1`, validates its exact ABI and
-bounds-control-flow LLVM shape, and checks that invalid selectors or
-unsupported inputs fail without fallback and remove stale artifacts.
-After each example build, the lane requires every artifact declared by the
-manifest. The pipeline example declares both `scale_stage.hsaco` and
-`bias_stage.hsaco`.
+Compilation does not execute a kernel. The lane runs the selector-free
+production extraction, general-matrix, transaction, ranked-bounds, and barrier
+drivers, including their fail-closed cases, then compiles and inspects the
+independent hardened G1 code-object fixture. It builds one private,
+content-addressed `cargo-fe2o3` production driver for `doctor`; neither that
+driver nor any backend child receives a qualification selector.
 
 ## Hardware smoke
 
 Hardware execution is deliberately opt-in:
 
 ```text
-FE2O3_ALLOW_GPU_SMOKE=1 scripts/ci-local.sh hardware-smoke
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx942 \
+  scripts/ci-local.sh hardware-smoke
 ```
 
-Native Linux requires read/write access to `/dev/kfd`. WSL uses `/dev/dxg` and
-also requires `HSA_ENABLE_DXG_DETECTION=1` with AMD's WSL HSA runtime installed:
+Native Linux requires read/write access to `/dev/kfd`; WSL `/dev/dxg` is not a
+KFD substitute. The lane measures the pure-Rust KFD identity boundary, admits
+every visible `gfx942:xnack-` device, maps and releases host-visible memory on
+each device, and creates, validates, and destroys one isolated compute AQL
+queue per device without packet submission or MMIO stores. It does not execute
+a kernel or claim application-level Worker V3 dispatch coverage.
+
+Supplying both diagnostic variables extends the lane with one exact-artifact
+packet in an isolated selected-device process:
 
 ```text
-HSA_ENABLE_DXG_DETECTION=1 \
-FE2O3_ALLOW_GPU_SMOKE=1 \
-FE2O3_TARGET=gfx1151 \
-scripts/ci-local.sh hardware-smoke
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx942 \
+FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID=0x6ced1647a296545c \
+FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO=/absolute/path/to/lds.hsaco \
+  scripts/ci-local.sh hardware-smoke
 ```
 
 The smoke suite builds and runs all supported examples. Each example copies its

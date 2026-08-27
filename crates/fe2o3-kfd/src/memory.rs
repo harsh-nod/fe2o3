@@ -28,7 +28,7 @@ pub const HOST_VISIBLE_MEMORY_PAGE_BYTES_V1: u64 = 4_096;
 /// consequently Contracted at the syscall boundary and makes no refinement or
 /// kernel-correctness claim.
 pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-single-device-host-visible-memory-r2-v1\n",
+    "profile=fe2o3-mi300x-single-device-host-visible-memory-r3-v1\n",
     "device_profile_sha256=e12ea33b259666e7928612403109640b03b0d637b893a2c15b87d17a4211c8de\n",
     "kfd_memory_schema_sha256=e2d6987b7c8e61a405b2f775d5d004f458a096241459e4cfdf90bd4497f4d58a\n",
     "platform=linux-x86_64,kernel:6.8.0-124-generic,amdgpu:6.16.13,page:4096\n",
@@ -51,11 +51,11 @@ pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
     "source.amdgpu_amdkfd.c=ce2d3a70928a267431313e5f0ad76ee2ebc5c8a724308e2cd89a7a67a1959c07\n",
     "source_linkage=contracted,source-hashes-do-not-prove-loaded-binary\n",
     "ordinary_backing=checked-page-align-4096,aql-executable-kernarg-vram-peer=unsupported\n",
-    "allocation=host-visible-coherent-gtt-writable,checked-fixed-gpu-va,whole-bo-map\n",
+    "allocation=host-visible-coherent-gtt-writable,checked-fixed-identity-cpu-gpu-va,whole-bo-map\n",
     "mapping=one-immutable-gpu-id,cumulative-n-success,no-retry\n",
-    "cpu_vma=release-gpu-va-reservation,kernel-selected-map-shared-prot-none,dontfork-then-mprotect-rw\n",
+    "cpu_vma=kernel-selected-prot-none-reservation,atomic-map-shared-fixed-bo-replacement-at-identical-address,dontfork-then-mprotect-rw\n",
     "fork_setup_gap=contracted,no-raw-fork-or-clone-during-mmap-to-dontfork\n",
-    "cleanup=munmap-before-free,free-exactly-once,no-drop-retry,owned-fds-still-close\n",
+    "cleanup=munmap-before-free,free-exactly-once,retire-reservation-without-second-munmap,no-drop-retry,owned-fds-still-close\n",
     "currentness=contracted-composite,borrows-sandwiched,concurrent-reset-unexcluded,post-failure-quarantines\n",
     "authority=retained-kfd-and-render-fds,no-native-handle-gpu-va-or-fd-export,closure-borrows-do-not-escape\n",
     "cpu_address=closure-can-observe-retain-raw-address,external-unsafe-dereference-contracted\n",
@@ -64,12 +64,12 @@ pub const HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_V1: &str =
-    "7bdca672c4921ee56a850d41040045f4a8fbe5a20176628a4ea982dd80fbe8ec";
+    "ff5ea2ba7ba25d539818a2cf262ce29e4eb411bb8cf349a99928d9883b5d58b2";
 
 /// Typed digest bytes of [`HOST_VISIBLE_MEMORY_PROFILE_MANIFEST_V1`].
 pub const HOST_VISIBLE_MEMORY_PROFILE_SHA256_BYTES_V1: [u8; 32] = [
-    0x7b, 0xdc, 0xa6, 0x72, 0xc4, 0x92, 0x1e, 0xe5, 0x6a, 0x85, 0x0d, 0x41, 0x04, 0x00, 0x45, 0xf4,
-    0xa8, 0xfb, 0xe5, 0xa2, 0x01, 0x76, 0x62, 0x8a, 0x4e, 0xa9, 0x82, 0xdd, 0x80, 0xfb, 0xe8, 0xec,
+    0xff, 0x5e, 0xa2, 0xba, 0x7b, 0xa2, 0x5d, 0x53, 0x98, 0x18, 0xa2, 0xcf, 0x26, 0x2c, 0xe2, 0x9e,
+    0x4e, 0xb4, 0x11, 0xbb, 0x8c, 0xf3, 0x49, 0xa9, 0x99, 0x28, 0xd9, 0x88, 0x3b, 0x5d, 0x58, 0xb2,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,8 +278,8 @@ pub(super) trait MemoryBackend {
         reservation: &mut Self::Reservation,
         mmap_offset: u64,
         bytes: usize,
-        retain_gpu_va_guard: bool,
     ) -> Result<Self::Mapping, MemorySessionError>;
+    fn mapping_address(mapping: &Self::Mapping) -> u64;
     fn prepare_cpu_mapping(
         &mut self,
         mapping: &mut Self::Mapping,
@@ -335,6 +335,15 @@ pub(super) trait MemoryBackend {
     ) -> Result<(), MemorySessionError> {
         Err(MemorySessionError::KernelResultMalformed(
             "AQL mapped publication backend",
+        ))
+    }
+    fn observe_i64_acquire(
+        _mapping: &mut Self::Mapping,
+        _requested_bytes: usize,
+        _offset: usize,
+    ) -> Result<i64, MemorySessionError> {
+        Err(MemorySessionError::KernelResultMalformed(
+            "mapped acquire observation backend",
         ))
     }
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError>;
@@ -464,14 +473,19 @@ impl<B: MemoryBackend> MemoryEngine<B> {
                 "reservation ownership",
             ));
         };
-        let mut mapping =
-            match self
-                .backend
-                .map_cpu(reservation, args.mmap_offset, backing_bytes, false)
-            {
-                Ok(value) => value,
-                Err(error) => return self.quarantine(error),
-            };
+        let mut mapping = match self
+            .backend
+            .map_cpu(reservation, args.mmap_offset, backing_bytes)
+        {
+            Ok(value) => value,
+            Err(error) => return self.quarantine(error),
+        };
+        if B::mapping_address(&mapping) != va {
+            self.mapping = Some(mapping);
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "identity CPU/GPU VA mapping",
+            ));
+        }
         if let Err(error) = self.backend.prepare_cpu_mapping(&mut mapping) {
             self.mapping = Some(mapping);
             return self.quarantine(error);
@@ -680,6 +694,18 @@ impl<B: MemoryBackend> MemoryEngine<B> {
             return self.quarantine(error);
         }
         self.handle = None;
+        if let Err(error) = self.backend.check_currentness() {
+            return self.quarantine(error);
+        }
+        let Some(reservation) = self.reservation.as_mut() else {
+            return self.quarantine(MemorySessionError::KernelResultMalformed(
+                "VA reservation ownership",
+            ));
+        };
+        if let Err(error) = self.backend.release_va_reservation(reservation) {
+            return self.quarantine(error);
+        }
+        self.reservation = None;
         if let Err(error) = self.backend.check_currentness() {
             return self.quarantine(error);
         }
@@ -1103,6 +1129,7 @@ mod tests {
 
     #[derive(Debug)]
     struct ScriptedMapping {
+        address: u64,
         bytes: Vec<u8>,
         active: bool,
         accessible: bool,
@@ -1117,7 +1144,9 @@ mod tests {
         ioctl_errno_at: Option<usize>,
         free_calls: usize,
         unmap_cpu_calls: usize,
+        release_va_calls: usize,
         alloc_override: Option<KfdIoctlAllocMemoryOfGpuArgs>,
+        mapping_address_override: Option<u64>,
         setup_cleanup_calls: usize,
     }
 
@@ -1131,7 +1160,9 @@ mod tests {
                 ioctl_errno_at: None,
                 free_calls: 0,
                 unmap_cpu_calls: 0,
+                release_va_calls: 0,
                 alloc_override: None,
+                mapping_address_override: None,
                 setup_cleanup_calls: 0,
             }
         }
@@ -1202,17 +1233,20 @@ mod tests {
         }
         fn map_cpu(
             &mut self,
-            _reservation: &mut u64,
+            reservation: &mut u64,
             _offset: u64,
             bytes: usize,
-            _retain_gpu_va_guard: bool,
         ) -> Result<ScriptedMapping, MemorySessionError> {
             self.tick("map_cpu")?;
             Ok(ScriptedMapping {
+                address: self.mapping_address_override.unwrap_or(*reservation),
                 bytes: vec![0; bytes],
                 active: true,
                 accessible: false,
             })
+        }
+        fn mapping_address(mapping: &Self::Mapping) -> u64 {
+            mapping.address
         }
         fn prepare_cpu_mapping(
             &mut self,
@@ -1276,6 +1310,7 @@ mod tests {
             &mut self,
             _reservation: &mut u64,
         ) -> Result<(), MemorySessionError> {
+            self.release_va_calls += 1;
             self.tick("release_va_reservation")
         }
         fn free(&mut self, _handle: u64) -> Result<(), MemorySessionError> {
@@ -1341,8 +1376,31 @@ mod tests {
         assert_eq!(engine.phase(), HostVisibleMemoryPhase::Released);
         assert_eq!(engine.backend.unmap_cpu_calls, 1);
         assert_eq!(engine.backend.free_calls, 1);
+        assert_eq!(engine.backend.release_va_calls, 1);
         assert!(engine.release().is_err());
         assert_eq!(engine.backend.free_calls, 1);
+        assert_eq!(engine.backend.release_va_calls, 1);
+    }
+
+    #[test]
+    fn non_identity_cpu_mapping_quarantines_before_mapping_setup() {
+        let mut engine = acquired();
+        engine.backend.mapping_address_override = Some(0x3_0000);
+        let calls_before = engine.backend.calls;
+        assert!(matches!(
+            engine.allocate(4096),
+            Err(MemorySessionError::KernelResultMalformed(
+                "identity CPU/GPU VA mapping"
+            ))
+        ));
+        assert_eq!(engine.phase(), HostVisibleMemoryPhase::Quarantined);
+        assert_eq!(engine.backend.calls, calls_before + 5);
+        assert!(
+            engine
+                .mapping
+                .as_ref()
+                .is_some_and(|mapping| mapping.active)
+        );
     }
 
     #[test]

@@ -29,6 +29,27 @@ canonical_executable() {
     fail "${label} path must already be canonical"
 }
 
+private_driver() {
+  local path="$1"
+  local expected_sha256="$2"
+  local parent file_mode parent_mode owner parent_owner observed
+
+  canonical_executable cargo-fe2o3-test-driver "${path}"
+  [[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+    fail 'cargo-fe2o3-test-driver SHA-256 is malformed'
+  parent="$(dirname -- "${path}")"
+  file_mode="$(stat -c '%a' -- "${path}")"
+  parent_mode="$(stat -c '%a' -- "${parent}")"
+  owner="$(stat -c '%u' -- "${path}")"
+  parent_owner="$(stat -c '%u' -- "${parent}")"
+  observed="$(sha256sum -- "${path}")"
+  observed="${observed%% *}"
+  [[ "${file_mode}" == 500 && "${parent_mode}" == 500 &&
+    "${owner}" == "$(id -u)" && "${parent_owner}" == "$(id -u)" &&
+    "${observed}" == "${expected_sha256}" ]] ||
+    fail 'cargo-fe2o3-test-driver identity or private custody changed'
+}
+
 executable_file() {
   local label="$1"
   local path="$2"
@@ -80,7 +101,10 @@ readonly SOURCE_COMMIT SOURCE_TREE
 readonly WORKER="${FE2O3_LLVM_LINK_WORKER:-}"
 readonly WORKER_BUILD_ID="${FE2O3_LLVM_LINK_WORKER_BUILD_ID:-}"
 readonly LLVM_BUILD_ID="${FE2O3_LLVM_BUILD_ID:-}"
+readonly CARGO_FE2O3="${FE2O3_TEST_CARGO_FE2O3_BIN:-}"
+readonly CARGO_FE2O3_SHA256="${FE2O3_TEST_CARGO_FE2O3_SHA256:-}"
 canonical_executable Worker-V2 "${WORKER}"
+private_driver "${CARGO_FE2O3}" "${CARGO_FE2O3_SHA256}"
 executable_file llvm-dwarfdump "${DWARFDUMP}"
 executable_file llvm-readobj "${READOBJ}"
 executable_file ROCgdb "${ROCGDB}"
@@ -91,7 +115,24 @@ executable_file snapshot-supervisor "${PINNER}"
   fail "Worker V2 build identity is malformed"
 [[ "${LLVM_BUILD_ID}" =~ ^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$ ]] ||
   fail "LLVM build identity is malformed"
-readonly BUILD_TARGET="${ROOT}/target/s09-debug-hardware-${BASHPID}"
+CARGO_TARGET_ROOT="${CARGO_TARGET_DIR:-${ROOT}/target}"
+if [[ "${CARGO_TARGET_ROOT}" != /* ]]; then
+  CARGO_TARGET_ROOT="${ROOT}/${CARGO_TARGET_ROOT}"
+fi
+[[ -d "${CARGO_TARGET_ROOT}" && ! -L "${CARGO_TARGET_ROOT}" ]] ||
+  fail 'Cargo target root must be an existing non-symlink directory'
+[[ "$(realpath --canonicalize-existing -- "${CARGO_TARGET_ROOT}")" == \
+  "${CARGO_TARGET_ROOT}" ]] ||
+  fail 'Cargo target root must already be canonical and contain no traversal'
+TARGET_MODE="$(stat -c '%a' -- "${CARGO_TARGET_ROOT}")"
+TARGET_OWNER="$(stat -c '%u' -- "${CARGO_TARGET_ROOT}")"
+readonly TARGET_MODE TARGET_OWNER
+(((8#${TARGET_MODE} & 8#077) == 0)) ||
+  fail 'Cargo target root must be private'
+[[ "${TARGET_OWNER}" == "$(id -u)" ]] ||
+  fail 'Cargo target root must be owned by the current user'
+readonly CARGO_TARGET_ROOT
+readonly BUILD_TARGET="${CARGO_TARGET_ROOT}/s09-debug-hardware-${BASHPID}"
 [[ ! -e "${BUILD_TARGET}" && ! -L "${BUILD_TARGET}" ]] ||
   fail "isolated hardware target already exists"
 cleanup() {

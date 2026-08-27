@@ -190,9 +190,12 @@ impl MemoryBackend for JournalBackend {
         _reservation: &mut (),
         _mmap_offset: u64,
         _bytes: usize,
-        _retain_gpu_va_guard: bool,
     ) -> Result<(), MemorySessionError> {
         Err(MemorySessionError::Injected("unused mmap"))
+    }
+
+    fn mapping_address(_mapping: &Self::Mapping) -> u64 {
+        0
     }
 
     fn prepare_cpu_mapping(&mut self, _mapping: &mut ()) -> Result<(), MemorySessionError> {

@@ -13,6 +13,7 @@ name = "fe2o3_verifier"
 
 [dependencies]
 dialect-kernel.workspace = true
+fe2o3-artifact-transaction.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-contracts.workspace = true
 fe2o3-compiler-lineage.workspace = true

@@ -7,6 +7,8 @@ static NEXT_OUTPUT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct TestOutputDir {
     path: PathBuf,
+    artifact_guard: PathBuf,
+    artifact_guard_identity: String,
 }
 
 impl TestOutputDir {
@@ -20,7 +22,27 @@ impl TestOutputDir {
             std::fs::remove_dir_all(&path).expect("remove stale frontend-contract output");
         }
         std::fs::create_dir_all(&path).expect("create frontend-contract output");
-        Self { path }
+        let artifact_guard = path.join("artifact-path-guard");
+        std::fs::create_dir(&artifact_guard).expect("create frontend-contract artifact guard");
+        std::fs::set_permissions(&artifact_guard, std::fs::Permissions::from_mode(0o700))
+            .expect("secure frontend-contract artifact guard");
+        let metadata =
+            std::fs::metadata(&artifact_guard).expect("inspect frontend-contract artifact guard");
+        let artifact_guard_identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+        Self {
+            path,
+            artifact_guard,
+            artifact_guard_identity,
+        }
+    }
+
+    fn configure_artifact_guard(&self, command: &mut Command) {
+        command
+            .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &self.artifact_guard)
+            .env(
+                "FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY",
+                &self.artifact_guard_identity,
+            );
     }
 }
 
@@ -109,14 +131,9 @@ fn compile_with_backend(
 ) -> Output {
     let artifact_dir = output.path.join(format!("{crate_name}-artifacts"));
     std::fs::create_dir_all(&artifact_dir).expect("create fixture artifact directory");
-    let guard_directory = output.path.join("artifact-path-guard");
-    std::fs::create_dir_all(&guard_directory).expect("create fixture artifact path guard");
-    std::fs::set_permissions(&guard_directory, std::fs::Permissions::from_mode(0o700))
-        .expect("secure fixture artifact path guard");
-    let metadata =
-        std::fs::metadata(&guard_directory).expect("inspect fixture artifact path guard");
-    let guard_identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
-    rustc()
+    let mut command = rustc();
+    output.configure_artifact_guard(&mut command);
+    command
         .arg(source)
         .args(["--edition=2024", "--crate-type=lib", "--crate-name"])
         .arg(crate_name)
@@ -128,8 +145,6 @@ fn compile_with_backend(
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_HSACO_DIR", artifact_dir)
-        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", guard_directory)
-        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", guard_identity)
         .output()
         .expect("compile frontend-contract fixture with backend")
 }

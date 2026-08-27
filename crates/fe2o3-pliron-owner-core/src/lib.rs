@@ -22,8 +22,8 @@ use pliron::{
     uniqued_any::{self, UniquedKey},
 };
 
-/// The only accepted Pliron workspace revision for Wave 0.
-pub const PLIRON_REVISION: &str = "2610651306ea3ba670f68d5d8b1e1159bcd521ed";
+/// The only accepted reviewed Pliron workspace revision for Wave 0.
+pub const PLIRON_REVISION: &str = "5bdf861bf03e7f20242b25717fb653336d02e487";
 
 /// Hard byte cap for dialect names admitted by registration adapters.
 pub const HARD_MAX_NAME_BYTES: usize = 96;

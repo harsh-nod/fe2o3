@@ -39,7 +39,7 @@ def provenance() -> CHECKER.ProvenanceInputs:
         auditor_data=b"runtime auditor fixture\n",
         cargo_lock_data=b"cargo lock fixture\n",
         metadata_audit_report_data=(
-            b"pure-Rust runtime audit: OK (metadata roots=4 packages=17 "
+            b"pure-Rust runtime audit: OK (metadata roots=5 packages=17 "
             b"allowed_build_scripts=libc@0.2.189,rustix@1.1.4 sha256="
             + b"a" * 64
             + b"; profile=fe2o3.runtime.pure-rust.gfx942.v1)\n"
@@ -266,6 +266,15 @@ class RuntimeIdentityOracleTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(CHECKER.OracleInputError, "success schema"):
             CHECKER.parse_provenance(failed_metadata, PURE_EXECUTABLE)
+
+        incomplete_roots = replace(
+            inputs,
+            metadata_audit_report_data=inputs.metadata_audit_report_data.replace(
+                b"metadata roots=5", b"metadata roots=4"
+            ),
+        )
+        with self.assertRaisesRegex(CHECKER.OracleInputError, "V1 policy gate"):
+            CHECKER.parse_provenance(incomplete_roots, PURE_EXECUTABLE)
 
     def test_provenance_rejects_invalid_utc_time(self) -> None:
         inputs = provenance()
