@@ -10,31 +10,28 @@ use std::{
 use fe2o3_llvm_handoff::{
     AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2, CallingConventionV2,
     ComparePredicateV2, ExecutableModuleV2, FunctionAttributeV2, FunctionIdV2, FunctionKindV2,
-    FunctionParameterV2, FunctionV2, GENERAL_GEMM_BINDING_SECTION_V2, Gfx942HandoffV2, GlobalIdV2,
-    GlobalV2, HandoffDiagnosticV2, InstructionKindV2, InstructionV2, IntegerBinaryOperationV2,
-    IntrinsicReferenceV2, IntrinsicV2, KERNEL_DESCRIPTOR_SECTION_V2, ModuleFlagV1, ReturnTypeV2,
-    ScalarConstantV2, ScalarTypeV1, TerminatorV2, TypedValueV2, ValueIdV2, ValueTypeV2,
+    FunctionParameterV2, FunctionV2, Gfx942HandoffV2, GlobalIdV2, GlobalV2, HandoffDiagnosticV2,
+    InstructionKindV2, InstructionV2, IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2,
+    KERNEL_DESCRIPTOR_SECTION_V2, ModuleFlagV1, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1,
+    TerminatorV2, TypedValueV2, ValueIdV2, ValueTypeV2,
 };
 use fe2o3_llvm_text::{SerializeErrorV2, serialize_gfx942_handoff_v2};
 use support::{Hostile, base_fixture, fixture, module_fixture};
 
-fn general_gemm_machine_helper(base: &fe2o3_llvm_handoff::Gfx942HandoffV1) -> FunctionV2 {
+fn vector_lds_machine_helper(base: &fe2o3_llvm_handoff::Gfx942HandoffV1) -> FunctionV2 {
     let i1 = ValueTypeV2::Scalar(ScalarTypeV1::I1);
     let i16 = ValueTypeV2::Scalar(ScalarTypeV1::I16);
     let i32 = ValueTypeV2::Scalar(ScalarTypeV1::I32);
     let i64 = ValueTypeV2::Scalar(ScalarTypeV1::I64);
     let f32 = ValueTypeV2::Scalar(ScalarTypeV1::F32);
-    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
-    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16, 4).unwrap();
+    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32, 4).unwrap();
     let global_i16 = ValueTypeV2::Pointer {
         pointee: ScalarTypeV1::I16,
         address_space: AddressSpaceV1::Global,
     };
-    let local_array = ValueTypeV2::ArrayPointer {
-        element: ScalarTypeV1::I16,
-        elements: 256,
-        address_space: AddressSpaceV1::Local,
-    };
+    let local_array =
+        ValueTypeV2::array_pointer(ScalarTypeV1::I16, 256, AddressSpaceV1::Local).unwrap();
     let local_i16 = ValueTypeV2::Pointer {
         pointee: ScalarTypeV1::I16,
         address_space: AddressSpaceV1::Local,
@@ -193,14 +190,14 @@ fn general_gemm_machine_helper(base: &fe2o3_llvm_handoff::Gfx942HandoffV1) -> Fu
     );
     FunctionV2::new(
         FunctionIdV2::new(20),
-        "general_gemm_machine_surface",
+        "vector_lds_machine_surface",
         FunctionKindV2::Helper,
         CallingConventionV2::C,
         ReturnTypeV2::Value(f32),
         vec![
             FunctionParameterV2::new(
                 TypedValueV2::new(ValueIdV2::new(1), global_i16),
-                "a",
+                "input",
                 vec![],
             )
             .unwrap(),
@@ -247,14 +244,17 @@ fn canonical_collection_order_produces_identical_bytes_and_identity() {
 }
 
 #[test]
-fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
+fn bounded_vector_and_local_array_shapes_round_trip_and_emit_typed_llvm() {
     let base = base_fixture();
     let existing = module_fixture(&base, false, Hostile::None);
     let mut globals = existing.globals().to_vec();
     globals.push(
-        GlobalV2::new_lds_bf16_array_256(
+        GlobalV2::new_local_array(
             GlobalIdV2::new(20),
-            "general_gemm_a_lds",
+            "shared_i16_lds",
+            ScalarTypeV1::I16,
+            256,
+            16,
             support::evidence(&base, false),
         )
         .unwrap(),
@@ -262,7 +262,7 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
     globals.push(
         GlobalV2::new_private_constant_bytes(
             GlobalIdV2::new(22),
-            "general_gemm_descriptor_source",
+            "descriptor_source",
             KERNEL_DESCRIPTOR_SECTION_V2,
             vec![0, 1, 0x7f, 0xff],
             1,
@@ -271,20 +271,12 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
         .unwrap(),
     );
     globals.push(
-        GlobalV2::new_private_constant_bytes(
-            GlobalIdV2::new(23),
-            "general_gemm_compilation_binding",
-            GENERAL_GEMM_BINDING_SECTION_V2,
-            vec![0x42; 32],
-            16,
-            support::evidence(&base, false),
-        )
-        .unwrap(),
-    );
-    globals.push(
-        GlobalV2::new_lds_bf16_array_256(
+        GlobalV2::new_local_array(
             GlobalIdV2::new(21),
-            "general_gemm_b_lds",
+            "shared_f32_lds",
+            ScalarTypeV1::F32,
+            1024,
+            32,
             support::evidence(&base, false),
         )
         .unwrap(),
@@ -318,7 +310,7 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
         kernel.evidence().clone(),
     )
     .unwrap();
-    functions.push(general_gemm_machine_helper(&base));
+    functions.push(vector_lds_machine_helper(&base));
     let module = ExecutableModuleV2::new(
         existing.flags().to_vec(),
         existing.named_metadata().to_vec(),
@@ -336,15 +328,18 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
 
     let assembly = serialize_gfx942_handoff_v2(&handoff).unwrap();
     let text = assembly.as_str();
-    assert!(text.contains(
-        "@general_gemm_a_lds = internal addrspace(3) global [256 x i16] undef, align 16"
-    ));
+    assert!(
+        text.contains("@shared_i16_lds = internal addrspace(3) global [256 x i16] undef, align 16")
+    );
     assert!(
         text.contains(
-            "getelementptr [256 x i16], ptr addrspace(3) @general_gemm_a_lds, i64 0, i64 0"
+            "@shared_f32_lds = internal addrspace(3) global [1024 x float] undef, align 32"
         )
     );
-    assert!(text.contains("load <4 x i16>, ptr addrspace(1) %a, align 8"));
+    assert!(
+        text.contains("getelementptr [256 x i16], ptr addrspace(3) @shared_i16_lds, i64 0, i64 0")
+    );
+    assert!(text.contains("load <4 x i16>, ptr addrspace(1) %input, align 8"));
     assert!(text.contains("phi <4 x float>"));
     assert!(text.contains("@llvm.amdgcn.mfma.f32.16x16x16bf16.1k"));
     assert!(text.contains("declare void @llvm.trap()"));
@@ -352,10 +347,8 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
     assert!(text.contains("!reqd_work_group_size"));
     assert!(text.contains("!{i32 64, i32 1, i32 1}"));
     assert!(text.contains("section \".fe2o3.kd.v1\", align 1"));
-    assert!(text.contains("section \".fe2o3.general-gemm.binding.v1\", align 16"));
-    assert!(text.contains("@llvm.compiler.used = appending global [2 x ptr]"));
-    assert!(text.contains("@general_gemm_descriptor_source to ptr"));
-    assert!(text.contains("@general_gemm_compilation_binding to ptr"));
+    assert!(text.contains("@llvm.compiler.used = appending global [1 x ptr]"));
+    assert!(text.contains("@descriptor_source to ptr"));
     if let Some(llvm_as) = std::env::var_os("FE2O3_LLVM_AS") {
         let mut child = Command::new(llvm_as)
             .args(["-o", "/dev/null", "-"])
@@ -373,26 +366,12 @@ fn general_gemm_machine_surface_round_trips_and_emits_typed_llvm() {
 }
 
 #[test]
-fn serializer_rejects_cfg_gep_kernel_call_and_reserved_namespace_attacks() {
+fn serializer_rejects_gep_kernel_call_and_reserved_namespace_attacks() {
     assert_eq!(
         serialize_gfx942_handoff_v2(&fixture(false, Hostile::MultiIndexGep)),
         Err(SerializeErrorV2::UnsupportedGetElementPtr {
             function: fe2o3_llvm_handoff::FunctionIdV2::new(10),
             indices: 2,
-        })
-    );
-    assert_eq!(
-        serialize_gfx942_handoff_v2(&fixture(false, Hostile::UnreachableBlock)),
-        Err(SerializeErrorV2::UnreachableBlock {
-            function: fe2o3_llvm_handoff::FunctionIdV2::new(10),
-            block: fe2o3_llvm_handoff::BlockIdV2::new(99),
-        })
-    );
-    assert_eq!(
-        serialize_gfx942_handoff_v2(&fixture(false, Hostile::EntryPredecessor)),
-        Err(SerializeErrorV2::EntryBlockHasPredecessor {
-            function: fe2o3_llvm_handoff::FunctionIdV2::new(10),
-            predecessor: fe2o3_llvm_handoff::BlockIdV2::new(2),
         })
     );
     assert_eq!(

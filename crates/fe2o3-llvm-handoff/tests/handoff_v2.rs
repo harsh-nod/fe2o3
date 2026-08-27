@@ -6,8 +6,9 @@ use fe2o3_llvm_handoff::{
     FunctionV2, Gfx942HandoffInputV1, Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1,
     GlobalIdV2, GlobalLinkageV2, GlobalV2, HandoffDiagnosticV2, HandoffLimitV2, IdentityV1,
     InstructionKindV2, InstructionV2, IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2,
-    KernelEntryV1, KernelParameterV1, KernelValueTypeV1, MAX_CANONICAL_HANDOFF_BYTES_V2,
-    MAX_FUNCTIONS_V2, ModuleFlagV1, ModuleMetadataV1, NamedMetadataV1, ObligationKindV1,
+    KernelEntryV1, KernelParameterV1, KernelValueTypeV1, MAX_ARRAY_ELEMENTS_V2,
+    MAX_CANONICAL_HANDOFF_BYTES_V2, MAX_FUNCTIONS_V2, MAX_LOCAL_ARRAY_BYTES_V2,
+    MAX_VECTOR_LANES_V2, ModuleFlagV1, ModuleMetadataV1, NamedMetadataV1, ObligationKindV1,
     ObligationV1, OriginKindV1, OriginV1, ParameterAttributeV1, ReturnTypeV2, ScalarConstantV2,
     ScalarTypeV1, SourceSpanV1, StageIdentitiesV1, TerminatorV2, TypedValueV2, ValueIdV2,
     ValueTypeV2, WireSectionV2, WorkgroupSizeRangeV1,
@@ -699,7 +700,7 @@ fn unknown_v2_semantic_tags_fail_with_typed_sections() {
 }
 
 #[test]
-fn general_gemm_closed_machine_shapes_fail_closed() {
+fn bounded_machine_shapes_and_descriptor_policy_fail_closed() {
     let base = base_fixture();
     assert_eq!(
         GlobalV2::new_private_constant_bytes(
@@ -748,15 +749,78 @@ fn general_gemm_closed_machine_shapes_fail_closed() {
         Err(HandoffDiagnosticV2::InvalidFunctionAttribute)
     );
 
-    let invalid_vector = FunctionV2::new(
+    assert_eq!(
+        ValueTypeV2::fixed_vector(ScalarTypeV1::I8, 0),
+        Err(HandoffDiagnosticV2::EmptyCollection("vector lanes"))
+    );
+    assert_eq!(
+        ValueTypeV2::fixed_vector(ScalarTypeV1::F64, MAX_VECTOR_LANES_V2 + 1),
+        Err(HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::VectorLanes,
+            observed: (MAX_VECTOR_LANES_V2 + 1) as u64,
+            maximum: MAX_VECTOR_LANES_V2 as u64,
+        })
+    );
+    assert_eq!(
+        ValueTypeV2::fixed_vector(ScalarTypeV1::I32, usize::MAX),
+        Err(HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::VectorLanes,
+            observed: u64::MAX,
+            maximum: MAX_VECTOR_LANES_V2 as u64,
+        })
+    );
+    for lanes in [1, MAX_VECTOR_LANES_V2] {
+        assert!(ValueTypeV2::fixed_vector(ScalarTypeV1::F16, lanes).is_ok());
+    }
+    assert_eq!(
+        ValueTypeV2::array_pointer(ScalarTypeV1::I16, 0, AddressSpaceV1::Global),
+        Err(HandoffDiagnosticV2::EmptyCollection("array elements"))
+    );
+    assert_eq!(
+        ValueTypeV2::array_pointer(
+            ScalarTypeV1::I16,
+            MAX_ARRAY_ELEMENTS_V2 + 1,
+            AddressSpaceV1::Global,
+        ),
+        Err(HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::ArrayElements,
+            observed: (MAX_ARRAY_ELEMENTS_V2 + 1) as u64,
+            maximum: MAX_ARRAY_ELEMENTS_V2 as u64,
+        })
+    );
+    assert_eq!(
+        ValueTypeV2::array_pointer(ScalarTypeV1::I8, usize::MAX, AddressSpaceV1::Global,),
+        Err(HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::ArrayElements,
+            observed: u64::MAX,
+            maximum: MAX_ARRAY_ELEMENTS_V2 as u64,
+        })
+    );
+    for elements in [1, MAX_ARRAY_ELEMENTS_V2] {
+        assert!(
+            ValueTypeV2::array_pointer(ScalarTypeV1::F32, elements, AddressSpaceV1::Global,)
+                .is_ok()
+        );
+    }
+    assert_eq!(
+        ValueTypeV2::array_pointer(
+            ScalarTypeV1::F64,
+            MAX_LOCAL_ARRAY_BYTES_V2 / 8 + 1,
+            AddressSpaceV1::Local,
+        ),
+        Err(HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::LocalArrayBytes,
+            observed: (MAX_LOCAL_ARRAY_BYTES_V2 + 8) as u64,
+            maximum: MAX_LOCAL_ARRAY_BYTES_V2 as u64,
+        })
+    );
+
+    let legal_vector = FunctionV2::new(
         FunctionIdV2::new(91),
-        "invalid_vector",
+        "legal_vector_shape",
         FunctionKindV2::Helper,
         CallingConventionV2::C,
-        ReturnTypeV2::Value(ValueTypeV2::Vector {
-            element: ScalarTypeV1::F32,
-            lanes: 3,
-        }),
+        ReturnTypeV2::Value(ValueTypeV2::fixed_vector(ScalarTypeV1::I8, 3).unwrap()),
         vec![],
         vec![FunctionAttributeV2::NoUnwind],
         BlockIdV2::new(0),
@@ -766,10 +830,84 @@ fn general_gemm_closed_machine_shapes_fail_closed() {
             TerminatorV2::Unreachable,
         )],
         evidence(&base, false),
+    )
+    .unwrap();
+    let existing = module_fixture(&base, false);
+    let mut globals = existing.globals().to_vec();
+    globals.push(
+        GlobalV2::new_local_array(
+            GlobalIdV2::new(90),
+            "local_i8_17",
+            ScalarTypeV1::I8,
+            17,
+            1,
+            evidence(&base, false),
+        )
+        .unwrap(),
+    );
+    globals.push(
+        GlobalV2::new_local_array(
+            GlobalIdV2::new(91),
+            "local_f64_1024",
+            ScalarTypeV1::F64,
+            1024,
+            32,
+            evidence(&base, false),
+        )
+        .unwrap(),
     );
     assert_eq!(
-        invalid_vector,
-        Err(HandoffDiagnosticV2::UnsupportedInstruction)
+        GlobalV2::new_local_array(
+            GlobalIdV2::new(92),
+            "too_large",
+            ScalarTypeV1::F64,
+            MAX_LOCAL_ARRAY_BYTES_V2 / 8 + 1,
+            16,
+            evidence(&base, false),
+        ),
+        Err(HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::LocalArrayBytes,
+            observed: (MAX_LOCAL_ARRAY_BYTES_V2 + 8) as u64,
+            maximum: MAX_LOCAL_ARRAY_BYTES_V2 as u64,
+        })
+    );
+    assert!(
+        GlobalV2::new_local_array(
+            GlobalIdV2::new(92),
+            "exact_local_cap",
+            ScalarTypeV1::F64,
+            MAX_LOCAL_ARRAY_BYTES_V2 / 8,
+            256,
+            evidence(&base, false),
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        GlobalV2::new_local_array(
+            GlobalIdV2::new(92),
+            "invalid_alignment",
+            ScalarTypeV1::I8,
+            1,
+            0,
+            evidence(&base, false),
+        ),
+        Err(HandoffDiagnosticV2::InvalidAlignment)
+    );
+    let mut functions = existing.functions().to_vec();
+    functions.push(legal_vector);
+    let module = ExecutableModuleV2::new(
+        existing.flags().to_vec(),
+        existing.named_metadata().to_vec(),
+        globals,
+        existing.intrinsics().to_vec(),
+        functions,
+    )
+    .unwrap();
+    let handoff = Gfx942HandoffV2::new(base, module).unwrap();
+    let encoded = handoff.encode_canonical();
+    assert_eq!(
+        Gfx942HandoffV2::decode_canonical(encoded.as_bytes()).unwrap(),
+        handoff
     );
 }
 

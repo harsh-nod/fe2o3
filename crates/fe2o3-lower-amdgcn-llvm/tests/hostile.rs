@@ -48,7 +48,7 @@ fn rejects_substituted_metadata_origin_and_obligation_with_named_categories() {
 }
 
 #[test]
-fn rejects_unsupported_type_and_tiled_gemm_global_with_named_categories() {
+fn rejects_unsupported_type_and_scalar_global_with_named_categories() {
     assert_eq!(
         rejection(&support::handoff_with_f64_parameter()),
         AmdgcnPlironLlvmRejectionV1::UnsupportedValueType(ValueTypeV2::Scalar(ScalarTypeV1::F64))

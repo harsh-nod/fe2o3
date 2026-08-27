@@ -15,8 +15,6 @@ use fe2o3_llvm_handoff::{
 pub enum Hostile {
     None,
     MultiIndexGep,
-    UnreachableBlock,
-    EntryPredecessor,
     KernelCall,
     ReservedSymbol,
 }
@@ -333,23 +331,8 @@ fn kernel_function(base: &Gfx942HandoffV1, permuted: bool, hostile: Hostile) -> 
         ],
         TerminatorV2::Branch(BlockIdV2::new(2)),
     );
-    let exit = BasicBlockV2::new(
-        BlockIdV2::new(2),
-        vec![],
-        if hostile == Hostile::EntryPredecessor {
-            TerminatorV2::Branch(BlockIdV2::new(0))
-        } else {
-            TerminatorV2::Return(None)
-        },
-    );
+    let exit = BasicBlockV2::new(BlockIdV2::new(2), vec![], TerminatorV2::Return(None));
     let mut blocks = vec![entry, body, exit];
-    if hostile == Hostile::UnreachableBlock {
-        blocks.push(BasicBlockV2::new(
-            BlockIdV2::new(99),
-            vec![],
-            TerminatorV2::Unreachable,
-        ));
-    }
     let mut attributes = v1
         .function_attributes()
         .iter()

@@ -443,7 +443,13 @@ fn write_instruction(
         } => {
             write_result(output, instruction)?;
             output.push("load ")?;
-            write_value_type(output, ValueTypeV2::fixed_vector(*element_type))?;
+            write_value_type(
+                output,
+                ValueTypeV2::Vector {
+                    element: *element_type,
+                    lanes: 4,
+                },
+            )?;
             output.push(", ")?;
             write_value_type(output, value_type(value_types, *pointer)?)?;
             output.push(" ")?;

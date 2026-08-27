@@ -54,8 +54,8 @@ pub fn scalar_handoff_with_empty_item_evidence() -> Gfx942HandoffV2 {
     )
 }
 
-pub fn gemm_control_flow_handoff() -> Gfx942HandoffV2 {
-    build_handoff(Fixture::GemmControlFlow, OriginKindV1::KernelIr, None)
+pub fn control_flow_handoff() -> Gfx942HandoffV2 {
+    build_handoff(Fixture::ControlFlow, OriginKindV1::KernelIr, None)
 }
 
 pub fn handoff_with_named_metadata(metadata: NamedMetadataV1) -> Gfx942HandoffV2 {
@@ -141,9 +141,12 @@ pub fn handoff_with_helper_c_calling_convention() -> Gfx942HandoffV2 {
 
 pub fn handoff_with_global() -> Gfx942HandoffV2 {
     let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
-    let global = GlobalV2::new_lds_bf16_array_256(
+    let global = GlobalV2::new_local_array(
         GlobalIdV2::new(1),
         "tile_lds",
+        ScalarTypeV1::I16,
+        256,
+        16,
         canonical.evidence.clone(),
     )
     .unwrap();
@@ -158,7 +161,77 @@ pub fn handoff_with_global() -> Gfx942HandoffV2 {
     Gfx942HandoffV2::new(canonical.base, module).unwrap()
 }
 
-pub fn tiled_data_handoff() -> Gfx942HandoffV2 {
+pub fn bounded_shape_handoff(vector_lanes: usize, local_elements: usize) -> Gfx942HandoffV2 {
+    let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
+    let source = &canonical.function;
+    let mut instructions = source.blocks()[0].instructions().to_vec();
+    instructions.push(instruction(
+        Some(TypedValueV2::new(
+            ValueIdV2::new(100),
+            ValueTypeV2::fixed_vector(ScalarTypeV1::F32, vector_lanes).unwrap(),
+        )),
+        InstructionKindV2::VectorZero {
+            element_type: ScalarTypeV1::F32,
+        },
+        &canonical.evidence,
+    ));
+    instructions.push(instruction(
+        Some(TypedValueV2::new(
+            ValueIdV2::new(101),
+            ValueTypeV2::Scalar(ScalarTypeV1::I32),
+        )),
+        InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I32, 0).unwrap()),
+        &canonical.evidence,
+    ));
+    instructions.push(instruction(
+        Some(TypedValueV2::new(
+            ValueIdV2::new(102),
+            ValueTypeV2::Scalar(ScalarTypeV1::F32),
+        )),
+        InstructionKindV2::ExtractElement {
+            vector: ValueIdV2::new(100),
+            index: ValueIdV2::new(101),
+        },
+        &canonical.evidence,
+    ));
+    let function = FunctionV2::new(
+        source.id(),
+        source.symbol(),
+        source.kind(),
+        source.calling_convention(),
+        source.return_type(),
+        source.parameters().to_vec(),
+        source.attributes().to_vec(),
+        source.entry(),
+        vec![BasicBlockV2::new(
+            source.entry(),
+            instructions,
+            TerminatorV2::Return(None),
+        )],
+        canonical.evidence.clone(),
+    )
+    .unwrap();
+    let global = GlobalV2::new_local_array(
+        GlobalIdV2::new(1),
+        "shared_values",
+        ScalarTypeV1::I32,
+        local_elements,
+        16,
+        canonical.evidence.clone(),
+    )
+    .unwrap();
+    let module = ExecutableModuleV2::new(
+        canonical.flags,
+        canonical.named_metadata,
+        vec![global],
+        vec![],
+        vec![function],
+    )
+    .unwrap();
+    Gfx942HandoffV2::new(canonical.base, module).unwrap()
+}
+
+pub fn vector_local_data_handoff() -> Gfx942HandoffV2 {
     let canonical = scalar_parts(Fixture::Scalar, OriginKindV1::AmdgcnIr, None, None);
     let source = &canonical.function;
     let mut instructions = source.blocks()[0].instructions().to_vec();
@@ -186,11 +259,8 @@ pub fn tiled_data_handoff() -> Gfx942HandoffV2 {
         InstructionKindV2::Constant(ScalarConstantV2::new(ScalarTypeV1::I16, 0).unwrap()),
         &canonical.evidence,
     );
-    let lds_array = ValueTypeV2::ArrayPointer {
-        element: ScalarTypeV1::I16,
-        elements: 256,
-        address_space: AddressSpaceV1::Local,
-    };
+    let lds_array =
+        ValueTypeV2::array_pointer(ScalarTypeV1::I16, 256, AddressSpaceV1::Local).unwrap();
     let local_i16 = ValueTypeV2::Pointer {
         pointee: ScalarTypeV1::I16,
         address_space: AddressSpaceV1::Local,
@@ -281,9 +351,12 @@ pub fn tiled_data_handoff() -> Gfx942HandoffV2 {
     )
     .unwrap();
     let globals = vec![
-        GlobalV2::new_lds_bf16_array_256(
+        GlobalV2::new_local_array(
             GlobalIdV2::new(1),
             "tile_lds",
+            ScalarTypeV1::I16,
+            256,
+            16,
             canonical.evidence.clone(),
         )
         .unwrap(),
@@ -372,8 +445,8 @@ pub fn intrinsic_handoff() -> Gfx942HandoffV2 {
             &canonical.evidence,
         ),
     ]);
-    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
-    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16, 4).unwrap();
+    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32, 4).unwrap();
     for (id, element_type) in [(14, ScalarTypeV1::I16), (15, ScalarTypeV1::I16)] {
         instructions.push(instruction(
             Some(TypedValueV2::new(ValueIdV2::new(id), i16x4)),
@@ -511,7 +584,7 @@ pub fn handoff_with_required_workgroup_size(shape: [u16; 3]) -> Gfx942HandoffV2 
 enum Fixture {
     Scalar,
     ScalarPermuted,
-    GemmControlFlow,
+    ControlFlow,
 }
 
 fn build_handoff(
@@ -538,7 +611,7 @@ fn build_handoff_with(
                 vec![parts.function],
             )
         }
-        Fixture::GemmControlFlow => gemm_parts(origin_kind, metadata, missing),
+        Fixture::ControlFlow => control_flow_parts(origin_kind, metadata, missing),
     }
 }
 
@@ -669,7 +742,7 @@ fn scalar_parts(
     }
 }
 
-fn gemm_parts(
+fn control_flow_parts(
     origin_kind: OriginKindV1,
     metadata: Option<NamedMetadataV1>,
     missing: Option<ObligationKindV1>,
@@ -693,10 +766,10 @@ fn gemm_parts(
                 },
             ),
             kernel_parameter("active", KernelValueTypeV1::Scalar(ScalarTypeV1::I1)),
-            kernel_parameter("lhs", KernelValueTypeV1::Scalar(ScalarTypeV1::F32)),
-            kernel_parameter("rhs", KernelValueTypeV1::Scalar(ScalarTypeV1::F32)),
+            kernel_parameter("left", KernelValueTypeV1::Scalar(ScalarTypeV1::F32)),
+            kernel_parameter("right", KernelValueTypeV1::Scalar(ScalarTypeV1::F32)),
         ],
-        "scalar_gemm_core_v1",
+        "scalar_control_flow_v1",
     );
     let parameters = vec![
         function_parameter(
@@ -708,8 +781,8 @@ fn gemm_parts(
             },
         ),
         function_parameter(2, "active", ValueTypeV2::Scalar(ScalarTypeV1::I1)),
-        function_parameter(3, "lhs", ValueTypeV2::Scalar(ScalarTypeV1::F32)),
-        function_parameter(4, "rhs", ValueTypeV2::Scalar(ScalarTypeV1::F32)),
+        function_parameter(3, "left", ValueTypeV2::Scalar(ScalarTypeV1::F32)),
+        function_parameter(4, "right", ValueTypeV2::Scalar(ScalarTypeV1::F32)),
     ];
     let multiply = instruction(
         Some(TypedValueV2::new(
@@ -786,7 +859,7 @@ fn gemm_parts(
     ];
     let function = FunctionV2::new(
         FunctionIdV2::new(1),
-        "scalar_gemm_core_v1",
+        "scalar_control_flow_v1",
         FunctionKindV2::Kernel,
         CallingConventionV2::AmdGpuKernel,
         ReturnTypeV2::Void,

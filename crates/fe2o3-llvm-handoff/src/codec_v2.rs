@@ -399,15 +399,19 @@ fn decode_module_v2(reader: &mut Reader<'_>) -> Result<ExecutableModuleV2, Decod
             if linkage != GlobalLinkageV2::Internal
                 || address_space != AddressSpaceV1::Local
                 || !mutable
-                || value_type != ScalarTypeV1::I16
-                || elements != crate::GENERAL_GEMM_LDS_ELEMENTS_V2
-                || alignment != 16
             {
                 return Err(DecodeHandoffErrorV2::InvalidModel(
                     HandoffDiagnosticV2::UnsupportedInstruction,
                 ));
             }
-            GlobalV2::new_lds_bf16_array_256(id, &symbol, evidence)
+            GlobalV2::new_local_array(
+                id,
+                &symbol,
+                value_type,
+                usize::from(elements),
+                alignment,
+                evidence,
+            )
         } else {
             GlobalV2::new(
                 id,
@@ -981,32 +985,15 @@ fn decode_value_type(reader: &mut Reader<'_>) -> Result<ValueTypeV2, DecodeHando
         3 => {
             let element = decode_scalar_type(reader.u8()?)?;
             let lanes = reader.u8()?;
-            if lanes != crate::GENERAL_GEMM_VECTOR_LANES_V2
-                || !matches!(element, ScalarTypeV1::I16 | ScalarTypeV1::F32)
-            {
-                return Err(DecodeHandoffErrorV2::InvalidModel(
-                    HandoffDiagnosticV2::UnsupportedInstruction,
-                ));
-            }
-            Ok(ValueTypeV2::Vector { element, lanes })
+            ValueTypeV2::fixed_vector(element, usize::from(lanes))
+                .map_err(DecodeHandoffErrorV2::InvalidModel)
         }
         4 => {
             let element = decode_scalar_type(reader.u8()?)?;
             let elements = reader.u16()?;
             let address_space = decode_address_space(reader.u8()?)?;
-            if element != ScalarTypeV1::I16
-                || elements != crate::GENERAL_GEMM_LDS_ELEMENTS_V2
-                || address_space != AddressSpaceV1::Local
-            {
-                return Err(DecodeHandoffErrorV2::InvalidModel(
-                    HandoffDiagnosticV2::UnsupportedInstruction,
-                ));
-            }
-            Ok(ValueTypeV2::ArrayPointer {
-                element,
-                elements,
-                address_space,
-            })
+            ValueTypeV2::array_pointer(element, usize::from(elements), address_space)
+                .map_err(DecodeHandoffErrorV2::InvalidModel)
         }
         tag => Err(DecodeHandoffErrorV2::UnknownTag {
             section: WireSectionV2::ValueType,

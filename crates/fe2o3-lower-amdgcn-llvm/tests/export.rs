@@ -25,7 +25,7 @@ fn serialize(
 
 #[test]
 fn fresh_serialization_binds_exact_envelope_graph_assembly_and_worker() {
-    let source = support::tiled_data_handoff();
+    let source = support::vector_local_data_handoff();
     let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
     let first = serialize(&lowered);
     let second = serialize(&lowered);
@@ -62,6 +62,35 @@ fn fresh_serialization_binds_exact_envelope_graph_assembly_and_worker() {
         .revalidate_against(&lowered)
         .unwrap();
     assert_ne!(first.receipt().identity().as_bytes(), [0; 32]);
+}
+
+#[test]
+fn graph_export_preserves_multiple_bounded_shapes() {
+    for (lanes, elements) in [(8, 33), (16, 1024)] {
+        let source = support::bounded_shape_handoff(lanes, elements);
+        let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
+        let serialized = serialize(&lowered);
+        assert!(serialized.assembly().as_str().contains(&format!(
+            "@shared_values = internal addrspace(3) global [{elements} x i32] undef, align 16"
+        )));
+        assert!(
+            serialized
+                .assembly()
+                .as_str()
+                .contains(&format!("extractelement <{lanes} x float> zeroinitializer"))
+        );
+        serialized
+            .retained_graph_export()
+            .revalidate_against(&lowered)
+            .unwrap();
+        assert_ne!(
+            serialized
+                .retained_graph_export()
+                .canonical_handoff_identity()
+                .as_bytes(),
+            &[0; 32]
+        );
+    }
 }
 
 #[test]
@@ -104,7 +133,7 @@ fn retained_export_rejects_equivalent_fresh_owner_substitution() {
 #[test]
 fn serialization_rejects_envelope_and_receipt_identity_substitution() {
     let first = lower_amdgcn_to_pliron_llvm_v1(&support::scalar_handoff()).unwrap();
-    let second = lower_amdgcn_to_pliron_llvm_v1(&support::gemm_control_flow_handoff()).unwrap();
+    let second = lower_amdgcn_to_pliron_llvm_v1(&support::control_flow_handoff()).unwrap();
 
     let error = first
         .acquire_worker_serialization_v1(
@@ -141,10 +170,10 @@ fn serialization_rejects_envelope_and_receipt_identity_substitution() {
 
 #[test]
 fn detached_source_replacement_cannot_change_owner_output() {
-    let mut source = support::tiled_data_handoff();
+    let mut source = support::vector_local_data_handoff();
     let original_identity = source.identity();
     let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
-    source = support::gemm_control_flow_handoff();
+    source = support::control_flow_handoff();
 
     let serialized = serialize(&lowered);
     assert_eq!(lowered.source_identity(), original_identity);

@@ -15,10 +15,10 @@ use fe2o3_llvm_handoff::{
 pub enum AmdgcnPlironLlvmProfileV1 {
     /// Straight-line scalar memory and arithmetic.
     ScalarMemoryArithmetic,
-    /// Scalar GEMM-style control flow with block-argument phi values.
-    ScalarControlFlowGemm,
-    /// Global arrays and fixed vectors used by tiled GEMM data movement.
-    TiledDataRepresentationGemm,
+    /// Scalar structured control flow with block-argument phi values.
+    ScalarControlFlow,
+    /// Fixed vectors, local arrays, or matrix intrinsics.
+    VectorAndLocalMemory,
 }
 
 /// A typed class of global rejected before Pliron construction.
@@ -26,7 +26,7 @@ pub enum AmdgcnPlironLlvmProfileV1 {
 pub enum UnsupportedGlobalV1 {
     /// A scalar global definition or declaration.
     Scalar,
-    /// An LDS array used by tiled GEMM.
+    /// A local-memory array.
     LdsArray,
     /// A retained private constant byte array.
     PrivateConstantBytes,
@@ -132,8 +132,8 @@ pub fn admit_amdgcn_pliron_llvm_v1(
 ) -> Result<AdmittedAmdgcnPlironLlvmV1<'_>, AmdgcnPlironLlvmRejectionV1> {
     validate_policy(handoff)?;
 
-    let mut control_flow_gemm = false;
-    let mut tiled_data_representation = !handoff.module().globals().is_empty();
+    let mut structured_control_flow = false;
+    let mut vector_or_local_memory = !handoff.module().globals().is_empty();
     for function in handoff.module().functions() {
         if function.calling_convention() != CallingConventionV2::AmdGpuKernel {
             return Err(AmdgcnPlironLlvmRejectionV1::UnsupportedCallingConvention(
@@ -156,14 +156,14 @@ pub fn admit_amdgcn_pliron_llvm_v1(
         for attribute in function.attributes() {
             validate_function_attribute(*attribute)?;
         }
-        control_flow_gemm |= function.blocks().len() > 1;
+        structured_control_flow |= function.blocks().len() > 1;
         for block in function.blocks() {
             for instruction in block.instructions() {
                 if let Some(result) = instruction.result() {
                     validate_value_type(result.value_type())?;
                 }
                 validate_instruction(instruction.kind())?;
-                tiled_data_representation |= matches!(
+                vector_or_local_memory |= matches!(
                     instruction.kind(),
                     InstructionKindV2::GlobalAddress(_)
                         | InstructionKindV2::VectorZero { .. }
@@ -177,17 +177,8 @@ pub fn admit_amdgcn_pliron_llvm_v1(
                             ..
                         }
                 );
-                control_flow_gemm |= matches!(instruction.kind(), InstructionKindV2::Phi { .. });
-                control_flow_gemm |= matches!(
-                    instruction.kind(),
-                    InstructionKindV2::Binary {
-                        operation: BinaryOperationV2::Float(FloatBinaryOperationV2::Multiply),
-                        ..
-                    } | InstructionKindV2::Call {
-                        target: CallTargetV2::Intrinsic(IntrinsicV2::FmaF32),
-                        ..
-                    }
-                );
+                structured_control_flow |=
+                    matches!(instruction.kind(), InstructionKindV2::Phi { .. });
             }
             validate_terminator(block.terminator())?;
         }
@@ -195,10 +186,10 @@ pub fn admit_amdgcn_pliron_llvm_v1(
 
     Ok(AdmittedAmdgcnPlironLlvmV1 {
         handoff,
-        profile: if tiled_data_representation {
-            AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm
-        } else if control_flow_gemm {
-            AmdgcnPlironLlvmProfileV1::ScalarControlFlowGemm
+        profile: if vector_or_local_memory {
+            AmdgcnPlironLlvmProfileV1::VectorAndLocalMemory
+        } else if structured_control_flow {
+            AmdgcnPlironLlvmProfileV1::ScalarControlFlow
         } else {
             AmdgcnPlironLlvmProfileV1::ScalarMemoryArithmetic
         },
@@ -306,11 +297,10 @@ fn validate_global(global: &GlobalV2) -> Result<(), AmdgcnPlironLlvmRejectionV1>
         {
             Ok(())
         }
-        (Some(256), None)
+        (Some(_), None)
             if global.linkage() == GlobalLinkageV2::Internal
                 && global.address_space() == AddressSpaceV1::Local
-                && global.is_mutable()
-                && global.value_type() == ScalarTypeV1::I16 =>
+                && global.is_mutable() =>
         {
             Ok(())
         }
@@ -356,7 +346,7 @@ fn validate_value_type(value_type: ValueTypeV2) -> Result<(), AmdgcnPlironLlvmRe
         | ValueTypeV2::Pointer {
             pointee: scalar, ..
         } => is_supported_scalar(scalar),
-        ValueTypeV2::Vector { element, lanes } => lanes == 4 && is_supported_scalar(element),
+        ValueTypeV2::Vector { element, .. } => is_supported_scalar(element),
         ValueTypeV2::ArrayPointer {
             element, elements, ..
         } => elements > 0 && is_supported_scalar(element),

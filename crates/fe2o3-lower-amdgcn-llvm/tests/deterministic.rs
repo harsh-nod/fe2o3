@@ -34,7 +34,7 @@ fn attributes_metadata_and_origins_change_the_canonical_receipt() {
         NamedMetadataV1::OpenClVersion2_0,
     ))
     .unwrap();
-    let origin = lower_amdgcn_to_pliron_llvm_v1(&support::gemm_control_flow_handoff()).unwrap();
+    let origin = lower_amdgcn_to_pliron_llvm_v1(&support::control_flow_handoff()).unwrap();
 
     assert_ne!(
         baseline.receipt().identity(),

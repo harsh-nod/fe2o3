@@ -391,7 +391,7 @@ fn build_function(
             let result = build_instruction(
                 context,
                 target,
-                instruction.kind(),
+                instruction,
                 &values,
                 &value_types,
                 globals,
@@ -493,12 +493,13 @@ fn phi_result_types(block: &BasicBlockV2) -> impl Iterator<Item = ValueTypeV2> +
 fn build_instruction(
     context: &mut Context,
     block: Ptr<BasicBlock>,
-    instruction: &InstructionKindV2,
+    instruction: &InstructionV2,
     values: &BTreeMap<ValueIdV2, Value>,
     value_types: &BTreeMap<ValueIdV2, ValueTypeV2>,
     globals: &BTreeMap<GlobalIdV2, GlobalBinding>,
     intrinsics: &BTreeMap<IntrinsicV2, IntrinsicBinding>,
 ) -> Result<Option<Value>, LoweringErrorV1> {
+    let kind = instruction.kind();
     let value = |id: ValueIdV2| {
         values
             .get(&id)
@@ -507,20 +508,25 @@ fn build_instruction(
                 ConstructionStageV1::DialectGraph,
             ))
     };
-    let result = match instruction {
+    let result = match kind {
         InstructionKindV2::Constant(constant) => {
             let attribute = constant_attribute(context, *constant)?;
             let operation = ConstantOp::new(context, attribute);
             Some(append_result(context, block, operation))
         }
         InstructionKindV2::VectorZero { element_type } => {
-            let vector_type = type_for(
-                context,
-                ValueTypeV2::Vector {
-                    element: *element_type,
-                    lanes: 4,
-                },
-            )?;
+            let result = instruction.result().ok_or(LoweringErrorV1::Construction(
+                ConstructionStageV1::DialectGraph,
+            ))?;
+            let vector_type = type_for(context, result.value_type())?;
+            if !matches!(
+                result.value_type(),
+                ValueTypeV2::Vector { element, .. } if element == *element_type
+            ) {
+                return Err(LoweringErrorV1::Construction(
+                    ConstructionStageV1::DialectGraph,
+                ));
+            }
             let operation = ZeroOp::new(context, vector_type);
             Some(append_result(context, block, operation))
         }
@@ -1991,8 +1997,8 @@ fn encode_receipt(
     bytes.extend_from_slice(RECEIPT_MAGIC_V1);
     bytes.push(match profile {
         dialect_amdgcn::AmdgcnPlironLlvmProfileV1::ScalarMemoryArithmetic => 1,
-        dialect_amdgcn::AmdgcnPlironLlvmProfileV1::ScalarControlFlowGemm => 2,
-        dialect_amdgcn::AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm => 3,
+        dialect_amdgcn::AmdgcnPlironLlvmProfileV1::ScalarControlFlow => 2,
+        dialect_amdgcn::AmdgcnPlironLlvmProfileV1::VectorAndLocalMemory => 3,
     });
     bytes.extend_from_slice(&source_len.to_le_bytes());
     bytes.extend_from_slice(source_bytes.as_bytes());
@@ -2204,8 +2210,8 @@ mod tests {
         assert!(serialize(lowered).is_err());
     }
 
-    fn tiled_with_integer_add() -> Gfx942HandoffV2 {
-        let source = crate::integration_test_support::tiled_data_handoff();
+    fn vector_local_with_integer_add() -> Gfx942HandoffV2 {
+        let source = crate::integration_test_support::vector_local_data_handoff();
         let function = &source.module().functions()[0];
         let mut instructions = function.blocks()[0].instructions().to_vec();
         instructions.push(
@@ -2277,7 +2283,7 @@ mod tests {
         );
         assert_export_rejected(&lowered);
 
-        let source = tiled_with_integer_add();
+        let source = vector_local_with_integer_add();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let add = entry_block(&lowered, first_function(&lowered))
             .deref(&lowered.context)
@@ -2296,7 +2302,7 @@ mod tests {
 
     #[test]
     fn constant_and_callee_mutations_are_the_exported_authority() {
-        let source = crate::integration_test_support::tiled_data_handoff();
+        let source = crate::integration_test_support::vector_local_data_handoff();
         let mut lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let before = serialize(&lowered).unwrap().receipt();
         let constant = entry_block(&lowered, first_function(&lowered))
@@ -2356,7 +2362,7 @@ mod tests {
 
     #[test]
     fn cfg_phi_and_gep_mutations_fail_closed() {
-        let source = crate::integration_test_support::gemm_control_flow_handoff();
+        let source = crate::integration_test_support::control_flow_handoff();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let function = first_function(&lowered);
         let conditional = function
@@ -2374,7 +2380,7 @@ mod tests {
         Operation::push_successor(conditional.get_operation(), &lowered.context, extra);
         assert_export_rejected(&lowered);
 
-        let source = crate::integration_test_support::gemm_control_flow_handoff();
+        let source = crate::integration_test_support::control_flow_handoff();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let function = first_function(&lowered);
         let branch = function
@@ -2392,7 +2398,7 @@ mod tests {
         Operation::remove_operand(branch.get_operation(), &lowered.context, 0);
         assert_export_rejected(&lowered);
 
-        let source = crate::integration_test_support::tiled_data_handoff();
+        let source = crate::integration_test_support::vector_local_data_handoff();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         let gep = entry_block(&lowered, first_function(&lowered))
             .deref(&lowered.context)
@@ -2413,7 +2419,7 @@ mod tests {
             MODULE_FLAGS_ATTR_V1,
             MODULE_METADATA_ATTR_V1,
         ] {
-            let source = crate::integration_test_support::tiled_data_handoff();
+            let source = crate::integration_test_support::vector_local_data_handoff();
             let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
             substitute_policy_bytes(&lowered, lowered.module.module.get_operation(), attribute);
             assert_export_rejected(&lowered);
@@ -2423,7 +2429,7 @@ mod tests {
             FUNCTION_ATTRIBUTES_ATTR_V1,
             FUNCTION_PARAMETERS_ATTR_V1,
         ] {
-            let source = crate::integration_test_support::tiled_data_handoff();
+            let source = crate::integration_test_support::vector_local_data_handoff();
             let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
             substitute_policy_bytes(
                 &lowered,
@@ -2433,7 +2439,7 @@ mod tests {
             assert_export_rejected(&lowered);
         }
 
-        let source = crate::integration_test_support::tiled_data_handoff();
+        let source = crate::integration_test_support::vector_local_data_handoff();
         let lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
         first_function(&lowered)
             .set_attr_llvm_function_linkage(&lowered.context, LinkageAttr::InternalLinkage);
@@ -2455,8 +2461,8 @@ mod tests {
         declaration.set_attr_llvm_function_linkage(&lowered.context, LinkageAttr::ExternalLinkage);
         assert_export_rejected(&lowered);
 
-        for mutation in 0..6 {
-            let source = crate::integration_test_support::tiled_data_handoff();
+        for mutation in 0..5 {
+            let source = crate::integration_test_support::vector_local_data_handoff();
             let mut lowered = lower_amdgcn_to_pliron_llvm_v1(&source).unwrap();
             let globals = lowered
                 .module
@@ -2486,7 +2492,6 @@ mod tests {
                 4 => {
                     substitute_policy_bytes(&lowered, global.get_operation(), GLOBAL_POLICY_ATTR_V1)
                 }
-                5 => global.set_alignment(&lowered.context, 8),
                 _ => unreachable!(),
             }
             assert_export_rejected(&lowered);

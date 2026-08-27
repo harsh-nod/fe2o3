@@ -4,13 +4,12 @@ use fe2o3_llvm_handoff::{
     AddressSpaceV1, BasicBlockV2, BinaryOperationV2, BlockIdV2, CallTargetV2, CastOperationV2,
     ComparePredicateV2, EvidenceV2, ExecutableModuleV2, FloatBinaryOperationV2,
     FunctionAttributeV1, FunctionAttributeV2, FunctionIdV2, FunctionKindV2, FunctionV2,
-    GENERAL_GEMM_LDS_ELEMENTS_V2, Gfx942HandoffInputV1, Gfx942HandoffV1, Gfx942HandoffV2,
-    Gfx942TargetPolicyV1, GlobalLinkageV2, GlobalV2, InstructionKindV2, InstructionV2,
-    IntegerBinaryOperationV2, IntrinsicReferenceV2, IntrinsicV2, KernelEntryV1, KernelParameterV1,
-    KernelValueTypeV1, MAX_FUNCTION_BLOCKS_V2, MAX_FUNCTIONS_V2, MAX_GLOBALS_V2,
-    MAX_INSTRUCTIONS_PER_FUNCTION_V2, MAX_INTRINSICS_V2, MAX_SYMBOL_BYTES_V2,
-    MAX_VALUES_PER_FUNCTION_V2, ModuleMetadataV1, ReturnTypeV2, ScalarConstantV2, ScalarTypeV1,
-    TerminatorV2, TypedValueV2, ValueTypeV2,
+    Gfx942HandoffInputV1, Gfx942HandoffV1, Gfx942HandoffV2, Gfx942TargetPolicyV1, GlobalLinkageV2,
+    GlobalV2, InstructionKindV2, InstructionV2, IntegerBinaryOperationV2, IntrinsicReferenceV2,
+    IntrinsicV2, KernelEntryV1, KernelParameterV1, KernelValueTypeV1, MAX_FUNCTION_BLOCKS_V2,
+    MAX_FUNCTIONS_V2, MAX_GLOBALS_V2, MAX_INSTRUCTIONS_PER_FUNCTION_V2, MAX_INTRINSICS_V2,
+    MAX_SYMBOL_BYTES_V2, MAX_VALUES_PER_FUNCTION_V2, ModuleMetadataV1, ReturnTypeV2,
+    ScalarConstantV2, ScalarTypeV1, TerminatorV2, TypedValueV2, ValueTypeV2,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -334,16 +333,21 @@ fn derive_global(
             evidence.clone(),
         )
         .map_err(|_| InspectionErrorV1::UnexpectedGraph),
-        None if elements == Some(GENERAL_GEMM_LDS_ELEMENTS_V2)
-            && value_type == ScalarTypeV1::I16
+        None if elements.is_some()
             && linkage == GlobalLinkageV2::Internal
             && address_space == AddressSpaceV1::Local
             && policy.mutable
-            && policy.section.is_none()
-            && alignment == 16 =>
+            && policy.section.is_none() =>
         {
-            GlobalV2::new_lds_bf16_array_256(policy.id, &symbol, evidence.clone())
-                .map_err(|_| InspectionErrorV1::UnexpectedGraph)
+            GlobalV2::new_local_array(
+                policy.id,
+                &symbol,
+                value_type,
+                usize::from(elements.unwrap()),
+                alignment,
+                evidence.clone(),
+            )
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph)
         }
         None if elements.is_none() && linkage == GlobalLinkageV2::External => GlobalV2::new(
             policy.id,
@@ -768,7 +772,7 @@ fn derive_instruction_kind(
         if binding.result.is_none() {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
-        let ValueTypeV2::Vector { element, lanes: 4 } = binding.result.unwrap().value_type() else {
+        let ValueTypeV2::Vector { element, .. } = binding.result.unwrap().value_type() else {
             return Err(InspectionErrorV1::UnexpectedGraph);
         };
         return Ok(InstructionKindV2::VectorZero {
@@ -1107,11 +1111,12 @@ fn decode_value_type(
         if vector.kind() != VectorTypeKind::Fixed {
             return Err(InspectionErrorV1::UnexpectedGraph);
         }
-        return Ok(ValueTypeV2::Vector {
-            element: decode_scalar_type(context, vector.elem_type())?,
-            lanes: u8::try_from(vector.num_elements())
+        return ValueTypeV2::fixed_vector(
+            decode_scalar_type(context, vector.elem_type())?,
+            usize::try_from(vector.num_elements())
                 .map_err(|_| InspectionErrorV1::UnexpectedGraph)?,
-        });
+        )
+        .map_err(|_| InspectionErrorV1::UnexpectedGraph);
     }
     drop(value_ref);
     Ok(ValueTypeV2::Scalar(decode_scalar_type(context, value)?))

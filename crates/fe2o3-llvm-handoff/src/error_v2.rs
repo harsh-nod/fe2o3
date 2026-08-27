@@ -21,6 +21,9 @@ pub enum HandoffLimitV2 {
     ParameterAttributes,
     SymbolBytes,
     Values,
+    VectorLanes,
+    ArrayElements,
+    LocalArrayBytes,
 }
 
 /// The typed definition family associated with a V2 validation failure.

@@ -48,7 +48,7 @@ fn admits_exact_intrinsic_declaration_and_use_closure() {
     let admitted = admit_amdgcn_pliron_llvm_v1(&handoff).unwrap();
     assert_eq!(
         admitted.profile(),
-        AmdgcnPlironLlvmProfileV1::TiledDataRepresentationGemm
+        AmdgcnPlironLlvmProfileV1::VectorAndLocalMemory
     );
     assert_eq!(admitted.handoff().module().intrinsics().len(), 11);
 }
@@ -167,8 +167,8 @@ fn intrinsic_kernel(fixture: &Fixture, replacement: Option<Vec<InstructionV2>>) 
 fn all_intrinsic_calls(evidence: &EvidenceV2) -> Vec<InstructionV2> {
     let i32_type = ValueTypeV2::Scalar(ScalarTypeV1::I32);
     let f32_type = ValueTypeV2::Scalar(ScalarTypeV1::F32);
-    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
-    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+    let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16, 4).unwrap();
+    let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32, 4).unwrap();
     let mut instructions = vec![
         instruction(
             evidence,

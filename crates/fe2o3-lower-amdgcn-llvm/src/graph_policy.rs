@@ -522,23 +522,22 @@ fn decode_parameter_attribute(
 }
 
 fn decode_value_type(reader: &mut ReaderV1<'_>) -> Result<ValueTypeV2, InspectionErrorV1> {
-    Ok(match reader.byte()? {
-        1 => ValueTypeV2::Scalar(decode_scalar(reader.byte()?)?),
-        2 => ValueTypeV2::Vector {
-            element: decode_scalar(reader.byte()?)?,
-            lanes: reader.byte()?,
-        },
-        3 => ValueTypeV2::Pointer {
+    match reader.byte()? {
+        1 => Ok(ValueTypeV2::Scalar(decode_scalar(reader.byte()?)?)),
+        2 => ValueTypeV2::fixed_vector(decode_scalar(reader.byte()?)?, usize::from(reader.byte()?))
+            .map_err(|_| InspectionErrorV1::UnexpectedGraph),
+        3 => Ok(ValueTypeV2::Pointer {
             pointee: decode_scalar(reader.byte()?)?,
             address_space: decode_address_space(reader.byte()?)?,
-        },
-        4 => ValueTypeV2::ArrayPointer {
-            element: decode_scalar(reader.byte()?)?,
-            elements: reader.u16()?,
-            address_space: decode_address_space(reader.byte()?)?,
-        },
-        _ => return Err(InspectionErrorV1::UnexpectedGraph),
-    })
+        }),
+        4 => ValueTypeV2::array_pointer(
+            decode_scalar(reader.byte()?)?,
+            usize::from(reader.u16()?),
+            decode_address_space(reader.byte()?)?,
+        )
+        .map_err(|_| InspectionErrorV1::UnexpectedGraph),
+        _ => Err(InspectionErrorV1::UnexpectedGraph),
+    }
 }
 
 fn decode_intrinsic(tag: u8) -> Result<IntrinsicV2, InspectionErrorV1> {

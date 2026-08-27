@@ -28,11 +28,13 @@ pub const MAX_GEP_INDICES_V2: usize = 8;
 pub const MAX_EVIDENCE_OBLIGATIONS_V2: usize = 64;
 pub const MAX_MODULE_FLAGS_V2: usize = 8;
 pub const MAX_NAMED_METADATA_V2: usize = 8;
-pub const GENERAL_GEMM_VECTOR_LANES_V2: u8 = 4;
-pub const GENERAL_GEMM_LDS_ELEMENTS_V2: u16 = 256;
+pub const MIN_VECTOR_LANES_V2: usize = 1;
+pub const MAX_VECTOR_LANES_V2: usize = 64;
+pub const MIN_ARRAY_ELEMENTS_V2: usize = 1;
+pub const MAX_ARRAY_ELEMENTS_V2: usize = u16::MAX as usize;
+pub const MAX_LOCAL_ARRAY_BYTES_V2: usize = 64 * 1024;
 pub const MAX_CONSTANT_GLOBAL_BYTES_V2: usize = 4 * 1024;
 pub const KERNEL_DESCRIPTOR_SECTION_V2: &str = ".fe2o3.kd.v1";
-pub const GENERAL_GEMM_BINDING_SECTION_V2: &str = ".fe2o3.general-gemm.binding.v1";
 
 const MODULE_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.llvm-handoff.module.identity.v2";
 const HANDOFF_IDENTITY_DOMAIN_V2: &[u8] = b"fe2o3.llvm-handoff.identity.v2";
@@ -134,11 +136,27 @@ impl ValueTypeV2 {
         )
     }
 
-    pub const fn fixed_vector(element: ScalarTypeV1) -> Self {
-        Self::Vector {
+    pub fn fixed_vector(element: ScalarTypeV1, lanes: usize) -> Result<Self, HandoffDiagnosticV2> {
+        Ok(Self::Vector {
             element,
-            lanes: GENERAL_GEMM_VECTOR_LANES_V2,
+            lanes: bounded_vector_lanes(lanes)?,
+        })
+    }
+
+    pub fn array_pointer(
+        element: ScalarTypeV1,
+        elements: usize,
+        address_space: AddressSpaceV1,
+    ) -> Result<Self, HandoffDiagnosticV2> {
+        let elements = bounded_array_elements(elements)?;
+        if matches!(address_space, AddressSpaceV1::Local) {
+            validate_local_array_bytes(element, usize::from(elements))?;
         }
+        Ok(Self::ArrayPointer {
+            element,
+            elements,
+            address_space,
+        })
     }
 }
 
@@ -290,22 +308,28 @@ impl GlobalV2 {
         })
     }
 
-    pub fn new_lds_bf16_array_256(
+    pub fn new_local_array(
         id: GlobalIdV2,
         symbol: &str,
+        value_type: ScalarTypeV1,
+        elements: usize,
+        alignment: u16,
         evidence: EvidenceV2,
     ) -> Result<Self, HandoffDiagnosticV2> {
         validate_symbol(symbol)?;
+        let elements = bounded_array_elements(elements)?;
+        validate_local_array_bytes(value_type, usize::from(elements))?;
+        validate_alignment(alignment)?;
         Ok(Self {
             id,
             symbol: symbol.to_string(),
             linkage: GlobalLinkageV2::Internal,
             address_space: AddressSpaceV1::Local,
             mutable: true,
-            value_type: ScalarTypeV1::I16,
+            value_type,
             initializer: None,
-            array_elements: Some(GENERAL_GEMM_LDS_ELEMENTS_V2),
-            alignment: 16,
+            array_elements: Some(elements),
+            alignment,
             byte_initializer: None,
             section: None,
             evidence,
@@ -321,10 +345,8 @@ impl GlobalV2 {
         evidence: EvidenceV2,
     ) -> Result<Self, HandoffDiagnosticV2> {
         validate_symbol(symbol)?;
-        if !matches!(
-            section,
-            KERNEL_DESCRIPTOR_SECTION_V2 | GENERAL_GEMM_BINDING_SECTION_V2
-        ) || bytes.is_empty()
+        if section != KERNEL_DESCRIPTOR_SECTION_V2
+            || bytes.is_empty()
             || bytes.len() > MAX_CONSTANT_GLOBAL_BYTES_V2
             || alignment == 0
             || !alignment.is_power_of_two()
@@ -433,8 +455,14 @@ impl IntrinsicV2 {
             Self::SqrtF32 => (ReturnTypeV2::Value(f32_type), vec![f32_type]),
             Self::Trap => (ReturnTypeV2::Void, vec![]),
             Self::AmdGpuMfmaF32_16x16x16Bf16_1k => {
-                let i16x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::I16);
-                let f32x4 = ValueTypeV2::fixed_vector(ScalarTypeV1::F32);
+                let i16x4 = ValueTypeV2::Vector {
+                    element: ScalarTypeV1::I16,
+                    lanes: 4,
+                };
+                let f32x4 = ValueTypeV2::Vector {
+                    element: ScalarTypeV1::F32,
+                    lanes: 4,
+                };
                 (
                     ReturnTypeV2::Value(f32x4),
                     vec![
@@ -1273,10 +1301,13 @@ impl ExecutableModuleV2 {
         match &instruction.kind {
             InstructionKindV2::Constant(value) => require_result(instruction, value.value_type()),
             InstructionKindV2::VectorZero { element_type } => {
-                if !matches!(element_type, ScalarTypeV1::I16 | ScalarTypeV1::F32) {
-                    return Err(HandoffDiagnosticV2::UnsupportedInstruction);
+                let result = instruction
+                    .result
+                    .ok_or(HandoffDiagnosticV2::InvalidInstructionResult)?;
+                match result.value_type {
+                    ValueTypeV2::Vector { element, .. } if element == *element_type => Ok(()),
+                    _ => Err(HandoffDiagnosticV2::InvalidInstructionResult),
                 }
-                require_result(instruction, ValueTypeV2::fixed_vector(*element_type))
             }
             InstructionKindV2::GlobalAddress(id) => {
                 let global = self
@@ -1398,7 +1429,13 @@ impl ExecutableModuleV2 {
                 ) {
                     return Err(HandoffDiagnosticV2::ValueTypeMismatch(*pointer));
                 }
-                require_result(instruction, ValueTypeV2::fixed_vector(*element_type))
+                require_result(
+                    instruction,
+                    ValueTypeV2::Vector {
+                        element: *element_type,
+                        lanes: 4,
+                    },
+                )
             }
             InstructionKindV2::Store {
                 pointer,
@@ -1475,14 +1512,11 @@ impl ExecutableModuleV2 {
                 let vector_type = value_type(*vector)?;
                 let ValueTypeV2::Vector {
                     element: element_type,
-                    lanes,
+                    ..
                 } = vector_type
                 else {
                     return Err(HandoffDiagnosticV2::ValueTypeMismatch(*vector));
                 };
-                if lanes != GENERAL_GEMM_VECTOR_LANES_V2 {
-                    return Err(HandoffDiagnosticV2::UnsupportedInstruction);
-                }
                 require_value_type(available, *element, ValueTypeV2::Scalar(element_type))?;
                 require_value_type(available, *index, ValueTypeV2::Scalar(ScalarTypeV1::I32))?;
                 require_result(instruction, vector_type)
@@ -1491,14 +1525,11 @@ impl ExecutableModuleV2 {
                 let vector_type = value_type(*vector)?;
                 let ValueTypeV2::Vector {
                     element: element_type,
-                    lanes,
+                    ..
                 } = vector_type
                 else {
                     return Err(HandoffDiagnosticV2::ValueTypeMismatch(*vector));
                 };
-                if lanes != GENERAL_GEMM_VECTOR_LANES_V2 {
-                    return Err(HandoffDiagnosticV2::UnsupportedInstruction);
-                }
                 require_value_type(available, *index, ValueTypeV2::Scalar(ScalarTypeV1::I32))?;
                 require_result(instruction, ValueTypeV2::Scalar(element_type))
             }
@@ -1957,18 +1988,19 @@ fn require_value_type(
 const fn valid_value_type_v2(value: ValueTypeV2) -> bool {
     match value {
         ValueTypeV2::Scalar(_) | ValueTypeV2::Pointer { .. } => true,
-        ValueTypeV2::Vector { element, lanes } => {
-            lanes == GENERAL_GEMM_VECTOR_LANES_V2
-                && matches!(element, ScalarTypeV1::I16 | ScalarTypeV1::F32)
+        ValueTypeV2::Vector { lanes, .. } => {
+            lanes as usize >= MIN_VECTOR_LANES_V2 && lanes as usize <= MAX_VECTOR_LANES_V2
         }
         ValueTypeV2::ArrayPointer {
             element,
             elements,
             address_space,
         } => {
-            matches!(element, ScalarTypeV1::I16)
-                && elements == GENERAL_GEMM_LDS_ELEMENTS_V2
-                && matches!(address_space, AddressSpaceV1::Local)
+            elements as usize >= MIN_ARRAY_ELEMENTS_V2
+                && elements as usize <= MAX_ARRAY_ELEMENTS_V2
+                && (!matches!(address_space, AddressSpaceV1::Local)
+                    || elements as usize * scalar_storage_bytes(element)
+                        <= MAX_LOCAL_ARRAY_BYTES_V2)
         }
     }
 }
@@ -2041,6 +2073,69 @@ fn validate_symbol(value: &str) -> Result<(), HandoffDiagnosticV2> {
     Ok(())
 }
 
+fn bounded_vector_lanes(lanes: usize) -> Result<u8, HandoffDiagnosticV2> {
+    check_nonempty_count(
+        "vector lanes",
+        HandoffLimitV2::VectorLanes,
+        lanes,
+        MAX_VECTOR_LANES_V2,
+    )?;
+    u8::try_from(lanes).map_err(|_| HandoffDiagnosticV2::LimitExceeded {
+        limit: HandoffLimitV2::VectorLanes,
+        observed: observed_u64(lanes),
+        maximum: MAX_VECTOR_LANES_V2 as u64,
+    })
+}
+
+fn bounded_array_elements(elements: usize) -> Result<u16, HandoffDiagnosticV2> {
+    check_nonempty_count(
+        "array elements",
+        HandoffLimitV2::ArrayElements,
+        elements,
+        MAX_ARRAY_ELEMENTS_V2,
+    )?;
+    u16::try_from(elements).map_err(|_| HandoffDiagnosticV2::LimitExceeded {
+        limit: HandoffLimitV2::ArrayElements,
+        observed: observed_u64(elements),
+        maximum: MAX_ARRAY_ELEMENTS_V2 as u64,
+    })
+}
+
+const fn scalar_storage_bytes(value: ScalarTypeV1) -> usize {
+    match value {
+        ScalarTypeV1::I1 | ScalarTypeV1::I8 => 1,
+        ScalarTypeV1::I16 | ScalarTypeV1::F16 | ScalarTypeV1::Bf16 => 2,
+        ScalarTypeV1::I32 | ScalarTypeV1::F32 => 4,
+        ScalarTypeV1::I64 | ScalarTypeV1::F64 => 8,
+    }
+}
+
+fn validate_local_array_bytes(
+    element: ScalarTypeV1,
+    elements: usize,
+) -> Result<(), HandoffDiagnosticV2> {
+    let bytes = elements.checked_mul(scalar_storage_bytes(element)).ok_or(
+        HandoffDiagnosticV2::LimitExceeded {
+            limit: HandoffLimitV2::LocalArrayBytes,
+            observed: u64::MAX,
+            maximum: MAX_LOCAL_ARRAY_BYTES_V2 as u64,
+        },
+    )?;
+    check_count(
+        HandoffLimitV2::LocalArrayBytes,
+        bytes,
+        MAX_LOCAL_ARRAY_BYTES_V2,
+    )
+}
+
+fn validate_alignment(alignment: u16) -> Result<(), HandoffDiagnosticV2> {
+    if alignment == 0 || !alignment.is_power_of_two() || alignment > 256 {
+        Err(HandoffDiagnosticV2::InvalidAlignment)
+    } else {
+        Ok(())
+    }
+}
+
 fn check_nonempty_count(
     name: &'static str,
     limit: HandoffLimitV2,
@@ -2061,11 +2156,15 @@ fn check_count(
     if observed > maximum {
         return Err(HandoffDiagnosticV2::LimitExceeded {
             limit,
-            observed: observed as u64,
+            observed: observed_u64(observed),
             maximum: maximum as u64,
         });
     }
     Ok(())
+}
+
+fn observed_u64(observed: usize) -> u64 {
+    u64::try_from(observed).unwrap_or(u64::MAX)
 }
 
 fn hash_identity(domain: &[u8], payload: &[u8]) -> [u8; 32] {
