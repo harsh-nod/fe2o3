@@ -39,7 +39,6 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         || output.len() != MOE_EXPERT_TILE_ELEMENTS_V1
     {
         fe2o3_device::trap();
-        return;
     }
 
     let lane = WaveLane::<Wave64>::current();
@@ -51,7 +50,6 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         MOE_EXPERT_INPUT_WIDTH_V1,
     ) else {
         fe2o3_device::trap();
-        return;
     };
     let Ok(weight_matrix) = Bf16MfmaBMatrix::row_major(
         weights,
@@ -61,7 +59,6 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         MOE_EXPERT_OUTPUT_WIDTH_V1,
     ) else {
         fe2o3_device::trap();
-        return;
     };
     let activation_fragment = activation_matrix.load_m16k16(&lane, 0, 0);
     let weight_fragment = weight_matrix.load_k16n16(&lane, 0, 0);
@@ -75,7 +72,6 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
         .into_values();
     let Some(output_block) = thread_index.checked_block::<16, 4>() else {
         fe2o3_device::trap();
-        return;
     };
 
     if let Some(slot) = output.get_block_mut(&output_block, 0) {
@@ -117,7 +113,6 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
         || combined_output.len() != MOE_COMBINED_OUTPUT_ELEMENTS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     if flat >= MOE_COMBINED_OUTPUT_ELEMENTS_V1 {
         return;
@@ -135,7 +130,6 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
         || first_weight + second_weight != 1.0
     {
         fe2o3_device::trap();
-        return;
     }
 
     let mut accumulator = 0.0_f32;
@@ -146,7 +140,6 @@ pub fn moe_expert_combine_f32_t8_k2_o16_v1(
         if slot != DROP_ROUTE_V1 {
             if slot as usize >= MOE_ROUTES_V1 {
                 fe2o3_device::trap();
-                return;
             }
             let compact_index = slot as usize * MOE_EXPERT_OUTPUT_WIDTH_V1 + output_column;
             accumulator += route_weights[route] * compact_output[compact_index];

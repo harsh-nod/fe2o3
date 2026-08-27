@@ -25,7 +25,6 @@ pub fn canonical_load(
     let index = row * u64::from(stride) + column;
     let Some(value) = values.get(index as usize) else {
         trap();
-        return 0;
     };
     *value
 }
@@ -44,7 +43,6 @@ pub fn split_provenance_load(
     let index = row * u64::from(stride) + column;
     let Some(value) = values.get(index as usize) else {
         trap();
-        return 0;
     };
     let selected = if row == 0 { &SUBSTITUTE } else { value };
     *selected

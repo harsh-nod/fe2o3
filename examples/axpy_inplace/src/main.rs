@@ -9,7 +9,6 @@ pub fn axpy_inplace(alpha: f32, x: &[f32], mut y: DisjointSlice<f32>) {
     };
     if i >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *y_value = alpha * x[i] + *y_value;
 }

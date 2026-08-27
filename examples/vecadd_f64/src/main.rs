@@ -9,7 +9,6 @@ pub fn vecadd_f64(a: &[f64], b: &[f64], mut c: DisjointSlice<f64>) {
     };
     if i >= a.len() || i >= b.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = a[i] + b[i];
 }

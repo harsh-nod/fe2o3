@@ -142,7 +142,6 @@ pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(
         || !inputs_are_finite_v1(q, k, v)
     {
         fe2o3_device::trap();
-        return;
     }
 
     let first_output = lane * FLASH_ATTENTION_OUTPUT_ELEMENTS_PER_LANE_V1;
@@ -152,11 +151,9 @@ pub fn flash_attention_causal_f32_b1_h1_n8_d16_v1(
     let math = DeviceMath::current();
     let Some(values) = output_pair_v1(&math, q, k, v, query_row, output_column) else {
         fe2o3_device::trap();
-        return;
     };
     let Some(output_block) = lane_index.checked_block::<1, 2>() else {
         fe2o3_device::trap();
-        return;
     };
 
     if let Some(first) = output.get_block_mut(&output_block, 0) {

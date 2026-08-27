@@ -9,7 +9,6 @@ pub fn negate(x: &[f32], mut out: DisjointSlice<f32>) {
     };
     if i >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = -x[i];
 }

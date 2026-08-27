@@ -9,7 +9,6 @@ pub fn scale(alpha: f32, x: &[f32], mut y: DisjointSlice<f32>) {
     };
     if i >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *out = alpha * x[i];
 }

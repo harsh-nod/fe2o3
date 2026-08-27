@@ -9,7 +9,6 @@ pub fn shift(x: &[f32], mut out: DisjointSlice<f32>) {
     };
     if source >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = x[source];
 }

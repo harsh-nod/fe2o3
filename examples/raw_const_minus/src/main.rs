@@ -12,12 +12,10 @@ pub fn raw_const_minus(x: &[f32], mut out: DisjointSlice<f32>) {
     };
     if base > LAST {
         fe2o3_device::trap();
-        return;
     }
     let source = LAST - base;
     if source >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = x[source];
 }

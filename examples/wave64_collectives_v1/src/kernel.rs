@@ -35,7 +35,6 @@ pub fn wave64_collectives_v1(
         || exclusive_output.len() != 64
     {
         fe2o3_device::trap();
-        return;
     }
 
     let active = active_mask & (1_u64 << lane) != 0;

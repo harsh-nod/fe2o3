@@ -10,7 +10,6 @@ pub fn raw_parenthesized_sub(x: &[f32], mut out: DisjointSlice<f32>) {
     let source = (base + 1) - base;
     if source >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = x[source];
 }

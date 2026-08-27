@@ -155,7 +155,6 @@ fn write_f32_v1(
 ) {
     let Some(slot) = output.get_mut_exclusive(leader, index) else {
         fe2o3_device::trap();
-        return;
     };
     *slot = value;
 }
@@ -169,7 +168,6 @@ fn write_u32_v1(
 ) {
     let Some(slot) = output.get_mut_exclusive(leader, index) else {
         fe2o3_device::trap();
-        return;
     };
     *slot = value;
 }
@@ -293,7 +291,6 @@ pub fn gfx950_kda_gdn_decode(
         || normalized_output.len() != CHANNELS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let mut initial = [0.0_f32; CHANNELS_V1];
     initial.copy_from_slice(state);
@@ -302,7 +299,6 @@ pub fn gfx950_kda_gdn_decode(
         kda_update_v1(&math, history, gate_input, &initial, convolution_weights)
     else {
         fe2o3_device::trap();
-        return;
     };
     let mut channel = 0;
     while channel < CHANNELS_V1 {
@@ -483,7 +479,6 @@ pub fn gfx950_kda_gdn_prefill(
         || normalized_output.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let math = DeviceMath::current();
     let mut state = [0.0_f32; CHANNELS_V1];
@@ -512,7 +507,6 @@ pub fn gfx950_kda_gdn_prefill(
                 kda_update_v1(&math, &history, gates, &state, convolution_weights)
             else {
                 fe2o3_device::trap();
-                return;
             };
             state = next;
             let mut channel = 0;
@@ -1093,7 +1087,6 @@ pub fn gfx950_content_sparse_attention(
         || selected_output.len() != SELECTED_TOKENS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let selected = select_sparse_tokens_v1(content_scores);
     let mut rank = 0;
@@ -1108,7 +1101,6 @@ pub fn gfx950_content_sparse_attention(
         let token = selected[rank];
         let Some(dot) = attention_score_v1(q, k, token) else {
             fe2o3_device::trap();
-            return;
         };
         scores[rank] = dot + 0.75 * content_scores[token];
         if scores[rank] > maximum {
@@ -1127,11 +1119,9 @@ pub fn gfx950_content_sparse_attention(
     }
     let Some(output_gate) = sigmoid_v1(&math, maximum * 0.01) else {
         fe2o3_device::trap();
-        return;
     };
     if !denominator.is_finite() || denominator <= 0.0 {
         fe2o3_device::trap();
-        return;
     }
     let mut channel = 0;
     while channel < CHANNELS_V1 {
@@ -1294,14 +1284,12 @@ pub fn gfx950_compressed_hybrid_attention(
         || output.len() != CHANNELS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let mut scores = [0.0_f32; ATTENTION_TOKENS_V1];
     let mut token = 0;
     while token < ATTENTION_TOKENS_V1 {
         let Some(dot) = attention_score_v1(q, k, token) else {
             fe2o3_device::trap();
-            return;
         };
         scores[token] = dot + token_bias[token];
         token += 1;
@@ -1341,11 +1329,9 @@ pub fn gfx950_compressed_hybrid_attention(
     }
     let Some(mix) = sigmoid_v1(&math, scores[0] * 0.01) else {
         fe2o3_device::trap();
-        return;
     };
     if local_sum <= 0.0 || global_sum <= 0.0 || !local_sum.is_finite() || !global_sum.is_finite() {
         fe2o3_device::trap();
-        return;
     }
     let mut channel = 0;
     while channel < CHANNELS_V1 {
@@ -1445,7 +1431,6 @@ pub fn gfx950_attnres_aggregate(
         || output.len() != CHANNELS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let math = DeviceMath::current();
     let mut channel = 0;
@@ -1470,7 +1455,6 @@ pub fn gfx950_attnres_aggregate(
         }
         if denominator <= 0.0 || !denominator.is_finite() || !value.is_finite() {
             fe2o3_device::trap();
-            return;
         }
         write_f32_v1(&mut output, &leader, channel, value / denominator);
         channel += 1;
@@ -1530,7 +1514,6 @@ pub fn gfx950_four_branch_residual(
         || output.len() != CHANNELS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let math = DeviceMath::current();
     let mut channel = 0;
@@ -1540,14 +1523,12 @@ pub fn gfx950_four_branch_residual(
         while branch < MIXING_STREAMS_V1 {
             let Some(gate) = sigmoid_v1(&math, gate_logits[branch * CHANNELS_V1 + channel]) else {
                 fe2o3_device::trap();
-                return;
             };
             value += 0.25 * gate * branches[branch * CHANNELS_V1 + channel];
             branch += 1;
         }
         if !value.is_finite() {
             fe2o3_device::trap();
-            return;
         }
         write_f32_v1(&mut output, &leader, channel, value);
         channel += 1;
@@ -1687,7 +1668,6 @@ pub fn gfx950_mhc_sinkhorn_mix(
         || output.len() != MIXING_STREAMS_V1 * CHANNELS_V1
     {
         fe2o3_device::trap();
-        return;
     }
     let math = DeviceMath::current();
     let mut matrix = [0.0_f32; MIXING_STREAMS_V1 * MIXING_STREAMS_V1];
@@ -1696,7 +1676,6 @@ pub fn gfx950_mhc_sinkhorn_mix(
         matrix[index] = math.exp_f32(mixing_logits[index]);
         if !matrix[index].is_finite() {
             fe2o3_device::trap();
-            return;
         }
         index += 1;
     }
@@ -1712,7 +1691,6 @@ pub fn gfx950_mhc_sinkhorn_mix(
             }
             if sum <= 0.0 || !sum.is_finite() {
                 fe2o3_device::trap();
-                return;
             }
             column = 0;
             while column < MIXING_STREAMS_V1 {
@@ -1731,7 +1709,6 @@ pub fn gfx950_mhc_sinkhorn_mix(
             }
             if sum <= 0.0 || !sum.is_finite() {
                 fe2o3_device::trap();
-                return;
             }
             row = 0;
             while row < MIXING_STREAMS_V1 {

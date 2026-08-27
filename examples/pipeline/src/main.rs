@@ -9,7 +9,6 @@ pub fn scale_stage(alpha: f32, x: &[f32], mut tmp: DisjointSlice<f32>) {
     };
     if i >= x.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = alpha * x[i];
 }
@@ -23,7 +22,6 @@ pub fn bias_stage(tmp: &[f32], beta: f32, mut out: DisjointSlice<f32>) {
     };
     if i >= tmp.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = tmp[i] + beta;
 }

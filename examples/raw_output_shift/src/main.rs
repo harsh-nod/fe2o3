@@ -9,11 +9,9 @@ pub fn raw_output_shift(x: &[f32], mut out: DisjointSlice<f32, Shifted<Index1D, 
     }
     let Some(target) = idx.checked_shift::<1>() else {
         fe2o3_device::trap();
-        return;
     };
     let Some(value) = out.get_disjoint_mut(target) else {
         fe2o3_device::trap();
-        return;
     };
     *value = x[source] * 2.0;
 }

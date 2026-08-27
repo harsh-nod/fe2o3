@@ -9,7 +9,6 @@ pub fn saxpy(alpha: f32, x: &[f32], y: &[f32], mut out: DisjointSlice<f32>) {
     };
     if i >= x.len() || i >= y.len() {
         fe2o3_device::trap();
-        return;
     }
     *value = alpha * x[i] + y[i];
 }

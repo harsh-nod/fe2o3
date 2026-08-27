@@ -33,7 +33,6 @@ pub fn positive_store_backedge(
     let c_extent = positive_hostile_common::accessed_extent(m, n, ldc);
     if invalid_stride || a.len() < a_extent || b.len() < b_extent || c.len() < c_extent {
         fe2o3_device::trap();
-        return;
     }
 
     let mut repetition = 0;

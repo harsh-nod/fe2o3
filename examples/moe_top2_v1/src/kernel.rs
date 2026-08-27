@@ -77,7 +77,6 @@ fn write_value_v1(
 ) {
     let Some(slot) = output.get_mut_exclusive(leader, index) else {
         fe2o3_device::trap();
-        return;
     };
     *slot = value;
 }
@@ -125,7 +124,6 @@ pub fn moe_top2_route_f32_t8_e4_k2_c4_v1(
         || !logits_are_finite_v1(logits)
     {
         fe2o3_device::trap();
-        return;
     }
 
     let mut staged_top2 = [0_u32; MOE_ROUTES_V1];
