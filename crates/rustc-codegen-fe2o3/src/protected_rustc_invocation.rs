@@ -126,6 +126,9 @@ pub(crate) enum ProtectedRustcInvocationErrorV1 {
     BackendPathMismatch {
         found: String,
     },
+    ArtifactDirectoryPathMismatch {
+        found: String,
+    },
     RustcClosurePinMismatch,
     CodegenBackendClosurePinMismatch,
     RunningRustcMismatch,
@@ -177,6 +180,11 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
                 formatter,
                 "sealed V3 backend path must be the retained backend capability {}, found {found}",
                 fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1,
+            ),
+            Self::ArtifactDirectoryPathMismatch { found } => write!(
+                formatter,
+                "sealed V3 artifact-directory path must be the retained directory capability {}, found {found}",
+                fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1,
             ),
             Self::RustcClosurePinMismatch => formatter.write_str(
                 "sealed V3 rustc pin differs from the rustc role in its full compiler closure",
@@ -347,6 +355,7 @@ fn validate_retained_capability(
         observation.running_rustc_sha256,
         observation.running_codegen_backend_sha256,
         fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1,
+        fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1,
     )
     .map_err(map_process_validation_error)?;
 
@@ -374,6 +383,9 @@ fn map_process_validation_error(
         }
         ProtectedRustcProcessValidationErrorV1::BackendPathMismatch { found } => {
             ProtectedRustcInvocationErrorV1::BackendPathMismatch { found }
+        }
+        ProtectedRustcProcessValidationErrorV1::ArtifactDirectoryPathMismatch { found } => {
+            ProtectedRustcInvocationErrorV1::ArtifactDirectoryPathMismatch { found }
         }
         ProtectedRustcProcessValidationErrorV1::RustcClosurePinMismatch => {
             ProtectedRustcInvocationErrorV1::RustcClosurePinMismatch

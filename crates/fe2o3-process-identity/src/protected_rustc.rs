@@ -21,6 +21,7 @@ pub enum ProtectedRustcProcessValidationErrorV1 {
     CompileEnvironmentMismatch,
     TargetMismatch { found: String },
     BackendPathMismatch { found: String },
+    ArtifactDirectoryPathMismatch { found: String },
     RustcClosurePinMismatch,
     CodegenBackendClosurePinMismatch,
     RunningRustcMismatch,
@@ -50,6 +51,10 @@ impl fmt::Display for ProtectedRustcProcessValidationErrorV1 {
             Self::BackendPathMismatch { found } => write!(
                 formatter,
                 "V3 descriptor has backend path {found}, expected the protected path"
+            ),
+            Self::ArtifactDirectoryPathMismatch { found } => write!(
+                formatter,
+                "V3 descriptor has artifact-directory path {found}, expected the protected path"
             ),
             Self::RustcClosurePinMismatch => formatter
                 .write_str("V3 rustc executable digest does not match its compiler closure"),
@@ -89,6 +94,7 @@ pub fn validate_protected_rustc_process_observation_v1(
     observed_running_rustc_sha256: [u8; 32],
     observed_running_codegen_backend_sha256: [u8; 32],
     required_backend_path: &str,
+    required_artifact_directory_path: &str,
 ) -> Result<(), ProtectedRustcProcessValidationErrorV1> {
     let closure = descriptor.compiler_closure();
     if descriptor
@@ -115,6 +121,13 @@ pub fn validate_protected_rustc_process_observation_v1(
         return Err(
             ProtectedRustcProcessValidationErrorV1::BackendPathMismatch {
                 found: descriptor.codegen_backend_path().to_owned(),
+            },
+        );
+    }
+    if descriptor.artifact_output_directory() != required_artifact_directory_path {
+        return Err(
+            ProtectedRustcProcessValidationErrorV1::ArtifactDirectoryPathMismatch {
+                found: descriptor.artifact_output_directory().to_owned(),
             },
         );
     }
@@ -203,6 +216,7 @@ mod tests {
     const RUSTC: [u8; 32] = [0x44; 32];
     const BACKEND: [u8; 32] = [0x66; 32];
     const BACKEND_PATH: &str = "/proc/./self/fd/198";
+    const ARTIFACT_PATH: &str = "/proc/self/fd/197";
 
     fn hex(digest: [u8; 32]) -> String {
         digest.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -214,7 +228,10 @@ mod tests {
         )
         .unwrap();
         let environment = CompileEnvironmentV2::from_child_environment([
-            (OsString::from("FE2O3_HSACO_DIR"), OsString::from("/output")),
+            (
+                OsString::from("FE2O3_HSACO_DIR"),
+                OsString::from(ARTIFACT_PATH),
+            ),
             (
                 OsString::from("FE2O3_TARGET"),
                 OsString::from("gfx942:xnack-"),
@@ -261,6 +278,7 @@ mod tests {
             RUSTC,
             BACKEND,
             BACKEND_PATH,
+            ARTIFACT_PATH,
         )
     }
 
@@ -282,6 +300,7 @@ mod tests {
                 RUSTC,
                 BACKEND,
                 BACKEND_PATH,
+                ARTIFACT_PATH,
             ),
             Err(ProtectedRustcProcessValidationErrorV1::ArgumentsMismatch)
         );
@@ -294,6 +313,7 @@ mod tests {
                 RUSTC,
                 BACKEND,
                 BACKEND_PATH,
+                ARTIFACT_PATH,
             ),
             Err(ProtectedRustcProcessValidationErrorV1::WorkingDirectoryMismatch)
         );
@@ -306,6 +326,7 @@ mod tests {
                 [0x45; 32],
                 BACKEND,
                 BACKEND_PATH,
+                ARTIFACT_PATH,
             ),
             Err(ProtectedRustcProcessValidationErrorV1::RunningRustcMismatch)
         );
@@ -318,6 +339,7 @@ mod tests {
                 RUSTC,
                 [0x67; 32],
                 BACKEND_PATH,
+                ARTIFACT_PATH,
             ),
             Err(ProtectedRustcProcessValidationErrorV1::RunningCodegenBackendMismatch)
         );
@@ -330,8 +352,22 @@ mod tests {
                 RUSTC,
                 BACKEND,
                 "/changed",
+                ARTIFACT_PATH,
             ),
             Err(ProtectedRustcProcessValidationErrorV1::BackendPathMismatch { .. })
+        ));
+        assert!(matches!(
+            validate_protected_rustc_process_observation_v1(
+                &descriptor,
+                &argv,
+                descriptor.rustc().working_directory(),
+                descriptor.compile_environment(),
+                RUSTC,
+                BACKEND,
+                BACKEND_PATH,
+                "/changed",
+            ),
+            Err(ProtectedRustcProcessValidationErrorV1::ArtifactDirectoryPathMismatch { .. })
         ));
     }
 }

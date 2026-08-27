@@ -81,10 +81,15 @@ receipt-before-release durability, crash replay, singleton exclusion, and
 idempotent acknowledgment. The signing entry points remain unreachable because
 no public constructor can create the required supervised-occurrence token.
 
-The remaining issuer work is the independently supervised compiler-occurrence
-producer and a bounded `SOCK_SEQPACKET` service loop. Worker V3 must then carry
-and verify the receipt under its own protected current rollback ledger. Until
-that complete chain lands, `CompilerExecutionProvenance` remains open.
+The authority service now has an authority-free primitive that independently
+binds an admitted live rustc pid/start identity to its exact procfs state,
+sealed V3 invocation, measured rustc/backend images, and retained artifact
+directory. The remaining issuer work is to launch that inspection under the
+production distinct-UID policy, reconstruct and retain the exact current V3
+subject, create the crate-private occurrence token, and expose the durable
+issuer through a bounded `SOCK_SEQPACKET` service loop. Worker V3 must then
+carry and verify the receipt under its own protected current rollback ledger.
+Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification
 

@@ -74,9 +74,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   hardened nondumpable `no_new_privs` process, one private descriptor-only
   service boundary, the retained loader-independent static issuer executable,
   and an immutable service-owned sealed Ed25519 key that matches the caller
-  policy. It rehashes the exact executable and key during continuity checks but
-  exposes no signing operation. Durable freshness, supervised compiler
-  occurrence, receipt carriage, and the Worker V3 authority join remain open.
+  policy. It rehashes the exact executable and key during continuity checks,
+  owns a signed crash-safe freshness journal, and can independently retain and
+  revalidate an authority-free observation of the admitted rustc process and
+  its three fixed capability descriptors. It exposes no signing operation.
+  The current-publication subject join, bounded service transport, receipt
+  carriage, external rollback verification, and Worker V3 authority join
+  remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and

@@ -109,6 +109,8 @@ mod compiler_execution_issuer;
 #[cfg(target_os = "linux")]
 mod compiler_execution_issuer_durable;
 #[cfg(target_os = "linux")]
+mod compiler_execution_supervision;
+#[cfg(target_os = "linux")]
 mod durable_session_consume;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -129,6 +131,10 @@ pub use compiler_execution_issuer_durable::{
     CompilerExecutionIssuerRecoveryV1, ProtectedCompilerExecutionChallengeV1,
     ProtectedCompilerExecutionIssuerErrorV1, ProtectedCompilerExecutionIssuerV1,
     ProtectedCompilerExecutionOccurrenceV1, ProtectedCompilerExecutionReceiptV1,
+};
+#[cfg(target_os = "linux")]
+pub use compiler_execution_supervision::{
+    CompilerExecutionSupervisionErrorV1, ValidatedRemoteRustcProcessObservationV1,
 };
 #[cfg(target_os = "linux")]
 pub use durable_session_consume::{

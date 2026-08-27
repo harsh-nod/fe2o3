@@ -11,8 +11,11 @@ publish = false
 [dependencies]
 fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
+fe2o3-compiler-closure-capability.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
 fe2o3-host-link-closure = { path = "../fe2o3-host-link-closure" }
+fe2o3-process-identity.workspace = true
+fe2o3-rustc-invocation.workspace = true
 fe2o3-runtime-protocol.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 libc.workspace = true

@@ -413,6 +413,17 @@ impl ProtectedServiceAdmissionV1 {
             && self.live_client.start_time_ticks == start_time_ticks
     }
 
+    pub(crate) const fn client_process_identity(&self) -> (u32, u64) {
+        (
+            self.live_client.expected_client.pid,
+            self.live_client.start_time_ticks,
+        )
+    }
+
+    pub(crate) fn client_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.live_client.pidfd.as_fd()
+    }
+
     pub(crate) fn try_clone_service_root(
         &self,
     ) -> Result<OwnedFd, ProtectedServiceAdmissionErrorV1> {
@@ -956,7 +967,7 @@ fn open_validated_procfs_self() -> Result<File, ProtectedServiceAdmissionErrorV1
     Ok(self_entry)
 }
 
-fn require_procfs(
+pub(crate) fn require_procfs(
     file: &File,
     label: &'static str,
 ) -> Result<(), ProtectedServiceAdmissionErrorV1> {

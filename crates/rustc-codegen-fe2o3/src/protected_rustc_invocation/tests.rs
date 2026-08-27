@@ -40,13 +40,17 @@ fn hex(digest: [u8; 32]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn environment(
+fn environment_with_artifact_path(
     target: &str,
     closure_observation: [u8; 32],
     backend_observation: [u8; 32],
+    artifact_path: &str,
 ) -> CompileEnvironmentV2 {
     CompileEnvironmentV2::from_child_environment([
-        (OsString::from("FE2O3_HSACO_DIR"), OsString::from("/output")),
+        (
+            OsString::from("FE2O3_HSACO_DIR"),
+            OsString::from(artifact_path),
+        ),
         (OsString::from("FE2O3_TARGET"), OsString::from(target)),
         (
             OsString::from(EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1),
@@ -76,6 +80,22 @@ fn try_descriptor_with(
     closure_observation: [u8; 32],
     backend_observation: [u8; 32],
 ) -> Result<RustcInvocationDescriptorV3, fe2o3_rustc_invocation::ValidationError> {
+    try_descriptor_with_artifact_path(
+        closure,
+        target,
+        closure_observation,
+        backend_observation,
+        fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1,
+    )
+}
+
+fn try_descriptor_with_artifact_path(
+    closure: CompilerClosureV2,
+    target: &str,
+    closure_observation: [u8; 32],
+    backend_observation: [u8; 32],
+    artifact_path: &str,
+) -> Result<RustcInvocationDescriptorV3, fe2o3_rustc_invocation::ValidationError> {
     let rustc = RustcUnitV2::new(
         "/workspace",
         vec![
@@ -89,7 +109,12 @@ fn try_descriptor_with(
         closure.rustc_executable_sha256(),
         closure.codegen_backend_sha256(),
         rustc,
-        environment(target, closure_observation, backend_observation),
+        environment_with_artifact_path(
+            target,
+            closure_observation,
+            backend_observation,
+            artifact_path,
+        ),
     )?;
     RustcInvocationDescriptorV3::new(v2, closure)
 }
@@ -348,6 +373,23 @@ fn argv_cwd_environment_and_target_mismatches_fail_closed() {
     assert!(matches!(
         validate(wrong_target.clone(), observation(&wrong_target)),
         Err(ProtectedRustcInvocationErrorV1::TargetMismatch { .. })
+    ));
+
+    let closure = baseline_closure();
+    let wrong_artifact_path = try_descriptor_with_artifact_path(
+        closure,
+        BASELINE_PROTECTED_TARGET_V1,
+        closure.identity_sha256(),
+        BACKEND_PIN,
+        "/output",
+    )
+    .unwrap();
+    assert!(matches!(
+        validate(
+            wrong_artifact_path.clone(),
+            observation(&wrong_artifact_path)
+        ),
+        Err(ProtectedRustcInvocationErrorV1::ArtifactDirectoryPathMismatch { .. })
     ));
 }
 

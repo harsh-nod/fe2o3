@@ -1,6 +1,7 @@
 # Protected Compiler-Execution Issuer Durable State V1
 
-Status: implemented local issuer state; supervised producer and Worker V3 join remain open.
+Status: implemented local issuer state and authority-free remote process observation; supervised
+subject/current-publication join and Worker V3 authority remain open.
 
 This contract consumes
 [`ProtectedCompilerExecutionIssuerAdmissionV1`](compiler-execution-issuer-admission-v1.md)
@@ -25,11 +26,13 @@ description. Its device and inode must match the retained root before the lock
 is accepted. A second live issuer for the same root therefore fails before it
 can inspect or mutate state.
 
-No public API constructs a
-`ProtectedCompilerExecutionOccurrenceV1`. The future supervised compiler
-adapter must independently reconstruct the exact canonical subject and create
-that move-only token inside the authority-service crate. Challenge preparation
-and receipt issuance are unreachable without such a token.
+No public API constructs a `ProtectedCompilerExecutionOccurrenceV1`. The
+authority service can now independently retain and revalidate one exact remote
+rustc process observation, but that value is deliberately inert. The next
+supervised compiler adapter must reconstruct the exact canonical subject from
+the current V3 publication, join it to that observation, and create the
+move-only occurrence token inside the authority-service crate. Challenge
+preparation and receipt issuance are unreachable without such a token.
 
 ## Canonical Record
 
@@ -131,7 +134,7 @@ supplied observations of:
 - the exact ordered argument vector;
 - the canonical working directory;
 - the complete compile environment;
-- the supported AMD target and required backend path;
+- the supported AMD target and required backend and artifact-directory paths;
 - the descriptor-to-closure rustc and backend pins;
 - the measured running rustc and backend bytes; and
 - the closed compiler-closure and backend environment observations.
@@ -141,12 +144,22 @@ second implementation. The validator accepts only inert observations and
 returns only success or a typed mismatch; it cannot construct the opaque
 supervised-occurrence token and therefore cannot reach the signing API.
 
-The protected service must independently gather the same observations from the
-admitted live rustc process, revalidate process continuity before and after the
-observation, reconstruct the exact compiler-execution subject, and only then
-construct the crate-private occurrence token. Reusing the validator prevents
-the backend and issuer from assigning different meaning to the same V3
-descriptor without treating backend self-observation as protected evidence.
+The protected service now gathers the same observations from the admitted live
+rustc process. It retains the exact procfs process directory; duplicates and
+validates the sealed invocation, backend, and artifact-directory descriptors
+through the admitted pidfd; hashes the retained rustc and backend objects; and
+revalidates process continuity and every retained object. The observation is
+move-only, exposes no descriptor, and cannot create the crate-private
+occurrence token. A production service under a distinct UID still needs a
+narrowly scoped launch policy that permits these ptrace-governed inspections.
+
+The remaining adapter must recover the exact current V3 publication through
+the retained artifact directory, reconstruct its canonical compiler-execution
+subject, join every subject identity to the remote process observation, retain
+currentness through issuance, and only then construct the occurrence token.
+Reusing the validator prevents the backend and issuer from assigning different
+meaning to the same V3 descriptor without treating backend self-observation as
+protected evidence.
 
 ## Qualification
 
@@ -158,6 +171,8 @@ injection exercises both sides of all seven retained-directory boundaries for
 genesis and each of the three legal transitions. Recovery must produce only
 the exact prior record or exact legal successor.
 
-This evidence qualifies the local durable issuer mechanism only. The protected
-supervision adapter, bounded `SOCK_SEQPACKET` service protocol, Worker V3 wire
-carriage, verifier rollback ledger, and MI300X Cargo-to-KFD run remain required.
+This evidence qualifies the local durable issuer mechanism and the
+authority-free remote observation primitive only. The current-publication
+subject join, production distinct-UID inspection policy, bounded
+`SOCK_SEQPACKET` service protocol, Worker V3 wire carriage, verifier rollback
+ledger, and MI300X Cargo-to-KFD run remain required.
