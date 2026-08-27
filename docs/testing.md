@@ -292,8 +292,9 @@ specializations cannot satisfy each other's generated trait.
 The generated KFD composition lane now covers authenticated Worker V3 typestate,
 generated dispatch, completion, and the KFD runtime with a synthetic verifier.
 The remaining production hardware gate must use the reviewed production
-verifier and KFD-native application custody. A synthetic verifier or externally
-selected legacy route cannot satisfy that gate.
+verifier through the inherited KFD application transition and must obtain its
+artifact from the same build/publication transaction. A synthetic verifier,
+externally injected HSACO, or selected legacy route cannot satisfy that gate.
 
 ### Archived compiler evidence controller
 
@@ -395,7 +396,9 @@ buffer lengths, and host canaries. It also holds the exact publication token and
 output borrows through KFD quiescence. The verifier in this test is explicitly
 synthetic and the HSACO path is externally injected, so the result proves the
 joined composition and native mechanics, not production compiler or proof
-authority.
+authority. The test enters the same private preparation transition used by
+`prepare_inherited_worker_v3_kfd_application_v1`; a full inherited application
+process run remains a separate production gate.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, private joined KFD invocation,

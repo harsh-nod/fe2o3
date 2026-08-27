@@ -566,6 +566,9 @@ by the
 The production transition is:
 
 ```text
+inherited Cargo Worker V3 handoff + generated kernel type
+        |
+        v
 RecoveredWorkerV3PinnedDescriptorV1
         + generated expectation + production verifier
         |
@@ -587,9 +590,12 @@ completed buffers after queue teardown
 The concrete type names may evolve, but these ownership rules do not:
 
 1. Recovery pins one durable publication, descriptor, target, and application
-   handoff lineage before verification begins. The production migration must
-   replace its HIP observed-context field with the exact checked KFD device
-   identity consumed by invocation authorization.
+   handoff lineage before verification begins, but carries no physical device
+   identity. Verification proves a theorem for the admitted target rather than
+   one observed device. The KFD application transition consumes the exact
+   checked physical device only when invocation authority is created; the
+   temporary HSA migration route separately owns its HIP observation at HSA
+   authorization.
 2. Authentication binds one generated expectation to the recovered compiler,
    proof, effect, and executable evidence. Invocation authorization consumes
    that exact decision; no intermediate authority is cloneable or

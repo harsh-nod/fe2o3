@@ -44,9 +44,10 @@ move-only invocation, and validates numerical output, completion writeback, and
 canaries. This closes the production-shaped composition boundary without
 claiming production verification. The next major gates are:
 
-1. implement the reviewed production Worker V3 verifier, replace inherited HIP
-   device observation with checked KFD identity, and expose the existing
-   pure-Rust KFD transition through one public build/publish/run command;
+1. implement the reviewed production Worker V3 verifier, make generated
+   applications invoke the canonical inherited pure-KFD transition, and prove
+   one public build/publish/run command on MI300X without external HSACO
+   injection;
 2. general race, alias, address-space, bounds, and barrier-convergence proof
    obligations with Verus-consumable evidence;
 3. source-authentic tiled LDS GEMM through the same transaction;
@@ -469,8 +470,11 @@ earlier authority transition.
    invocation adapter, and measured unsafe-diagnostic replay. The generated
    adapter and authenticated Worker V3 executable now join into one private,
    move-only KFD invocation, and an exact scalar-GEMM replay passes on MI300X
-   with a synthetic verifier. A production verifier, KFD-native application
-   custody, and replay without external HSACO injection remain open.
+   with a synthetic verifier. The canonical inherited-application API now
+   derives the kernel from its generated type and consumes the Cargo handoff,
+   verifier, generated arguments, current publication, and checked device into
+   that invocation. A production verifier, generated-application adoption, and
+   replay without external HSACO injection remain open.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
    closed call graph and physical memory sites. Production admission must still
@@ -725,8 +729,11 @@ launch custody is created. The runtime authority gate and compiler-generated
 host-memory KFD preparation now bind the exact current HSACO, geometry, effects,
 checked device, and authenticated decision into one private move-only
 invocation. The existing hardware proof uses a synthetic verifier and the
-recovered admission still carries inherited HIP device observation, so
-application custody is not yet KFD-native.
+canonical inherited KFD transition is not yet exercised by an ordinary
+generated application process. Recovered admission and verifier requests are
+now device-independent. The temporary HSA route receives and retains HIP
+observation only at HSA authorization, while the KFD route consumes a checked
+device only when it creates joined invocation authority.
 Bounded machine-effect and Verus proof records are not production-bound to
 compiler origin and the exact artifact. These are the ordered critical
 milestones above; feature and architecture breadth follows them.
