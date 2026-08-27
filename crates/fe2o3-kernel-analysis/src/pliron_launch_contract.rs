@@ -12,11 +12,10 @@ use pliron::{
     common_traits::Named,
     context::Context,
     linked_list::ContainsLinkedList,
-    op::Op,
-    operation::{Operation, verify_operation},
+    operation::Operation,
 };
 
-use crate::KernelCheckStatusV1;
+use crate::{KernelCheckStatusV1, derive_pliron_ir_structural_identity_v1};
 
 pub const MAX_PLIRON_TARGET_SUBGROUP_SIZES_V1: usize = 16;
 pub const MAX_PLIRON_HOST_ALLOCATIONS_V1: usize = 64;
@@ -400,44 +399,52 @@ pub fn run_pliron_launch_contract_check_v1(
     function: &FuncOp,
     contract: &PlironLaunchContractV1,
 ) -> PlironLaunchContractReportV1 {
-    if verify_operation(function.get_operation(), context).is_err() {
-        return PlironLaunchContractReportV1 {
-            findings: vec![PlironLaunchContractFindingV1::StructuralPrerequisiteRejected],
-            workgroup_memory_bytes: None,
-            checked_global_allocations: 0,
-        };
+    // This shared preflight bounds the closed ranked subset before invoking
+    // Pliron recursive verification, and contains traversal/verifier panics. A
+    // successful identity therefore bounds the streaming scan below without a
+    // second retained raw-operation inventory.
+    if derive_pliron_ir_structural_identity_v1(context, function).is_err() {
+        return structural_prerequisite_failure();
     }
-    let mut layouts = Vec::new();
-    let mut views = Vec::new();
+
+    let mut layout_count = 0_usize;
+    let mut first_layout = None;
+    let mut view_findings = Vec::new();
+    let mut workgroup_by_origin = BTreeMap::<u64, u64>::new();
+    let mut global_origins = BTreeMap::<u64, (String, Option<u64>)>::new();
     for block in function.get_region(context).deref(context).iter(context) {
         for operation in block.deref(context).iter(context) {
             let operation = Operation::get_op_dyn(operation, context);
             if let Some(layout) = operation.downcast_ref::<ExecutionLayoutOp>() {
-                layouts.push((
-                    layout.global_extents(context),
-                    layout.workgroup_extents(context),
-                    layout.subgroup_size(context),
-                ));
+                layout_count += 1;
+                first_layout.get_or_insert_with(|| {
+                    (
+                        layout.global_extents(context),
+                        layout.workgroup_extents(context),
+                        layout.subgroup_size(context),
+                    )
+                });
             } else if let Some(view) = operation.downcast_ref::<RankedViewOp>() {
-                views.push((
-                    view.result(context),
-                    view.memory_space(context),
-                    view.allocation_origin(context),
-                    view.view_type(context),
-                ));
+                fold_ranked_view(
+                    context,
+                    view,
+                    &mut workgroup_by_origin,
+                    &mut global_origins,
+                    &mut view_findings,
+                );
             }
         }
     }
     let mut findings = Vec::new();
-    if layouts.is_empty() {
+    if layout_count == 0 {
         findings.push(PlironLaunchContractFindingV1::MissingExecutionLayout);
     }
-    if layouts.len() > 1 {
+    if layout_count > 1 {
         findings.push(PlironLaunchContractFindingV1::DuplicateExecutionLayout {
-            count: layouts.len(),
+            count: layout_count,
         });
     }
-    if let Some((Some(global), Some(workgroup), Some(subgroup))) = layouts.first().copied() {
+    if let Some((Some(global), Some(workgroup), Some(subgroup))) = first_layout {
         for (axis, (actual, limit)) in global
             .into_iter()
             .zip(contract.limits.max_grid_extents)
@@ -486,83 +493,7 @@ pub fn run_pliron_launch_contract_check_v1(
         }
     }
 
-    let mut workgroup_by_origin = BTreeMap::<u64, u64>::new();
-    let mut global_origins = BTreeMap::<u64, (String, Option<u64>)>::new();
-    for (value, memory_space, origin, view_type) in views {
-        let name = value.unique_name(context).to_string();
-        let (Some(memory_space), Some(origin), Some(view_type)) = (memory_space, origin, view_type)
-        else {
-            continue;
-        };
-        let view_type = view_type.deref(context);
-        let size = static_view_bytes(view_type.shape(), u64::from(view_type.element_width()));
-        match memory_space {
-            MemorySpaceAttr::Private => {}
-            MemorySpaceAttr::Workgroup => {
-                if origin == 0 {
-                    findings.push(
-                        PlironLaunchContractFindingV1::WorkgroupMemoryProvenanceUnknown {
-                            view: name,
-                        },
-                    );
-                    continue;
-                }
-                match size {
-                    Ok(bytes) => {
-                        workgroup_by_origin
-                            .entry(origin)
-                            .and_modify(|current| *current = (*current).max(bytes))
-                            .or_insert(bytes);
-                    }
-                    Err(ViewSizeFailureV1::Dynamic(dimension)) => {
-                        findings.push(PlironLaunchContractFindingV1::WorkgroupMemorySizeUnknown {
-                            view: name,
-                            dimension,
-                        })
-                    }
-                    Err(ViewSizeFailureV1::Overflow) => findings.push(
-                        PlironLaunchContractFindingV1::WorkgroupMemoryArithmeticOverflow {
-                            view: name,
-                        },
-                    ),
-                }
-            }
-            MemorySpaceAttr::Global => {
-                if origin == 0 {
-                    findings.push(
-                        PlironLaunchContractFindingV1::GlobalAllocationOriginUnknown { view: name },
-                    );
-                    continue;
-                }
-                let required = match size {
-                    Ok(bytes) => Some(bytes),
-                    Err(ViewSizeFailureV1::Dynamic(dimension)) => {
-                        findings.push(PlironLaunchContractFindingV1::GlobalViewSizeUnknown {
-                            view: name.clone(),
-                            origin,
-                            dimension,
-                        });
-                        None
-                    }
-                    Err(ViewSizeFailureV1::Overflow) => {
-                        findings.push(
-                            PlironLaunchContractFindingV1::GlobalViewSizeArithmeticOverflow {
-                                view: name.clone(),
-                                origin,
-                            },
-                        );
-                        None
-                    }
-                };
-                global_origins
-                    .entry(origin)
-                    .and_modify(|(_, current)| {
-                        *current = current.zip(required).map(|(a, b)| a.max(b))
-                    })
-                    .or_insert((name, required));
-            }
-        }
-    }
+    findings.append(&mut view_findings);
     let workgroup_memory_bytes = workgroup_by_origin
         .values()
         .try_fold(0_u64, |total, bytes| total.checked_add(*bytes));
@@ -621,6 +552,93 @@ pub fn run_pliron_launch_contract_check_v1(
         findings,
         workgroup_memory_bytes,
         checked_global_allocations,
+    }
+}
+
+fn structural_prerequisite_failure() -> PlironLaunchContractReportV1 {
+    PlironLaunchContractReportV1 {
+        findings: vec![PlironLaunchContractFindingV1::StructuralPrerequisiteRejected],
+        workgroup_memory_bytes: None,
+        checked_global_allocations: 0,
+    }
+}
+
+fn fold_ranked_view(
+    context: &Context,
+    view: &RankedViewOp,
+    workgroup_by_origin: &mut BTreeMap<u64, u64>,
+    global_origins: &mut BTreeMap<u64, (String, Option<u64>)>,
+    findings: &mut Vec<PlironLaunchContractFindingV1>,
+) {
+    let name = view.result(context).unique_name(context).to_string();
+    let (Some(memory_space), Some(origin), Some(view_type)) = (
+        view.memory_space(context),
+        view.allocation_origin(context),
+        view.view_type(context),
+    ) else {
+        return;
+    };
+    let view_type = view_type.deref(context);
+    let size = static_view_bytes(view_type.shape(), u64::from(view_type.element_width()));
+    match memory_space {
+        MemorySpaceAttr::Private => {}
+        MemorySpaceAttr::Workgroup => {
+            if origin == 0 {
+                findings.push(
+                    PlironLaunchContractFindingV1::WorkgroupMemoryProvenanceUnknown { view: name },
+                );
+                return;
+            }
+            match size {
+                Ok(bytes) => {
+                    workgroup_by_origin
+                        .entry(origin)
+                        .and_modify(|current| *current = (*current).max(bytes))
+                        .or_insert(bytes);
+                }
+                Err(ViewSizeFailureV1::Dynamic(dimension)) => {
+                    findings.push(PlironLaunchContractFindingV1::WorkgroupMemorySizeUnknown {
+                        view: name,
+                        dimension,
+                    })
+                }
+                Err(ViewSizeFailureV1::Overflow) => findings.push(
+                    PlironLaunchContractFindingV1::WorkgroupMemoryArithmeticOverflow { view: name },
+                ),
+            }
+        }
+        MemorySpaceAttr::Global => {
+            if origin == 0 {
+                findings.push(
+                    PlironLaunchContractFindingV1::GlobalAllocationOriginUnknown { view: name },
+                );
+                return;
+            }
+            let required = match size {
+                Ok(bytes) => Some(bytes),
+                Err(ViewSizeFailureV1::Dynamic(dimension)) => {
+                    findings.push(PlironLaunchContractFindingV1::GlobalViewSizeUnknown {
+                        view: name.clone(),
+                        origin,
+                        dimension,
+                    });
+                    None
+                }
+                Err(ViewSizeFailureV1::Overflow) => {
+                    findings.push(
+                        PlironLaunchContractFindingV1::GlobalViewSizeArithmeticOverflow {
+                            view: name.clone(),
+                            origin,
+                        },
+                    );
+                    None
+                }
+            };
+            global_origins
+                .entry(origin)
+                .and_modify(|(_, current)| *current = current.zip(required).map(|(a, b)| a.max(b)))
+                .or_insert((name, required));
+        }
     }
 }
 

@@ -1,18 +1,22 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use dialect_gpu::{ExecutionExtentAttr, ExecutionLayoutOp};
 use dialect_kernel::{
-    DIALECT_NAME, DYNAMIC_EXTENT, IndexConstantOp, MemorySpaceAttr, RankedViewOp, RankedViewType,
-    ReturnOp, register_dialect,
+    AtomicScopeAttr, DIALECT_NAME, DYNAMIC_EXTENT, IndexConstantOp, MemorySpaceAttr, RankedViewOp,
+    RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckRepairActionV1, KernelCheckStatusV1, PlironHostAllocationV1,
+    KernelCheckRepairActionV1, KernelCheckStatusV1, MAX_PLIRON_IDENTITY_BLOCKS_V1,
+    PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1, PlironHostAllocationV1,
     PlironLaunchContractFindingV1, PlironLaunchContractInputErrorV1, PlironLaunchContractV1,
     PlironLaunchTargetLimitsV1, ProductionPlironPreloweringErrorV2,
+    require_production_pliron_checks_with_atomic_and_target_before_lowering_v2,
     require_production_pliron_checks_with_target_before_lowering_v2,
     run_pliron_launch_contract_check_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{ops::FuncOp, types::FunctionType},
+    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp, types::FunctionType},
     context::{Context, Ptr},
     dialect::DialectName,
     op::Op,
@@ -82,6 +86,16 @@ fn contract(
         limits(max_lds, subgroups),
         vec![PlironHostAllocationV1::new(2, host_bytes, host_alignment).unwrap()],
     )
+    .unwrap()
+}
+
+fn atomic_target() -> PlironAtomicTargetContextV1 {
+    PlironAtomicTargetContextV1::new([PlironAtomicTargetCapabilityV1::new(
+        32,
+        MemorySpaceAttr::Global,
+        AtomicScopeAttr::Device,
+    )
+    .unwrap()])
     .unwrap()
 }
 
@@ -292,4 +306,125 @@ fn malformed_layout_and_global_size_overflow_never_produce_clean_reports() {
         report.findings(),
         [PlironLaunchContractFindingV1::GlobalViewSizeArithmeticOverflow { origin: 2, .. }]
     ));
+}
+
+fn function_with_block_count(context: &mut Context, name: &str, count: usize) -> FuncOp {
+    assert!(count > 0);
+    let function = FuncOp::new(
+        context,
+        name.try_into().unwrap(),
+        FunctionType::get(context, vec![], vec![]),
+    );
+    let mut blocks = vec![function.get_entry_block(context)];
+    for _ in 1..count {
+        let block = BasicBlock::new(context, None, vec![]);
+        block.insert_at_back(function.get_region(context), context);
+        blocks.push(block);
+    }
+    for block in blocks {
+        let ret = ReturnOp::new(context);
+        append(context, block, &ret);
+    }
+    function
+}
+
+#[test]
+fn structural_preflight_accepts_exact_block_limit_and_rejects_one_over() {
+    for (count, expected) in [
+        (
+            MAX_PLIRON_IDENTITY_BLOCKS_V1,
+            PlironLaunchContractFindingV1::MissingExecutionLayout,
+        ),
+        (
+            MAX_PLIRON_IDENTITY_BLOCKS_V1 + 1,
+            PlironLaunchContractFindingV1::StructuralPrerequisiteRejected,
+        ),
+    ] {
+        let context = &mut setup();
+        let function = function_with_block_count(context, "target_block_limit", count);
+        let report = run_pliron_launch_contract_check_v1(
+            context,
+            &function,
+            &contract(65_536, vec![64], 64, 16),
+        );
+        assert_eq!(report.findings(), &[expected]);
+    }
+}
+
+fn deeply_nested_function(context: &mut Context, depth: usize) -> FuncOp {
+    let root = FuncOp::new(
+        context,
+        "target_deep_root".try_into().unwrap(),
+        FunctionType::get(context, vec![], vec![]),
+    );
+    let mut parent = root;
+    for index in 0..depth {
+        let child = FuncOp::new(
+            context,
+            format!("target_deep_{index}").try_into().unwrap(),
+            FunctionType::get(context, vec![], vec![]),
+        );
+        child
+            .get_operation()
+            .insert_at_back(parent.get_entry_block(context), context);
+        parent = child;
+    }
+    let ret = ReturnOp::new(context);
+    append(context, parent.get_entry_block(context), &ret);
+    root
+}
+
+#[test]
+fn deep_nested_regions_fail_before_recursive_verification_without_unwinding() {
+    let context = &mut setup();
+    let function = deeply_nested_function(context, MAX_PLIRON_IDENTITY_BLOCKS_V1 + 32);
+    let contract = contract(65_536, vec![64], 64, 16);
+    let report = catch_unwind(AssertUnwindSafe(|| {
+        run_pliron_launch_contract_check_v1(context, &function, &contract)
+    }))
+    .expect("bounded target preflight must contain malformed traversal and verifier panics");
+    assert_eq!(
+        report.findings(),
+        &[PlironLaunchContractFindingV1::StructuralPrerequisiteRejected]
+    );
+}
+
+#[test]
+fn both_target_aware_production_entries_keep_malformed_ir_target_diagnostic() {
+    let context = &mut setup();
+    let function = FuncOp::new(
+        context,
+        "malformed_target_entry".try_into().unwrap(),
+        FunctionType::get(context, vec![], vec![]),
+    );
+    let entry = function.get_entry_block(context);
+    let layout = ExecutionLayoutOp::new(context, 7, [256, 1, 1], [64, 1, 1], 64);
+    layout.set_attr_gpu_execution_workgroup_x(context, ExecutionExtentAttr(0));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &layout);
+    append(context, entry, &ret);
+    let contract = contract(65_536, vec![64], 64, 16);
+
+    let errors = [
+        require_production_pliron_checks_with_target_before_lowering_v2(
+            context, &function, &contract,
+        )
+        .unwrap_err(),
+        require_production_pliron_checks_with_atomic_and_target_before_lowering_v2(
+            context,
+            &function,
+            &atomic_target(),
+            &contract,
+        )
+        .unwrap_err(),
+    ];
+    for error in errors {
+        let ProductionPlironPreloweringErrorV2::TargetContract(error) = error else {
+            panic!("bounded target preflight must preserve target-specific error precedence");
+        };
+        assert_eq!(
+            error.report().findings(),
+            &[PlironLaunchContractFindingV1::StructuralPrerequisiteRejected]
+        );
+    }
 }
