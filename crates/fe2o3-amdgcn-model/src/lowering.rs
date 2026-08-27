@@ -27,9 +27,8 @@ use fe2o3_kernel_ir::{
     SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, ScalarType, Signature, SynchronizationScope,
     TargetCapability, Terminator, Type, UnaryOp, ValueId, VerificationErrors,
     WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
-    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow, encode_module_v4, verify_module,
+    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow, verify_module,
 };
-use sha2::{Digest as _, Sha256};
 
 use crate::{AMDGPU_TRIPLE, AmdgcnIntrinsic, Dim};
 
@@ -43,19 +42,12 @@ pub const MAX_COMPILER_MODULE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 /// Deterministic dialect layout used before the production route binds the
 /// exact layout measured from its pinned upstream LLVM target machine.
 pub const GFX942_XNACK_MINUS_DATA_LAYOUT: &str = "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9";
-const ROW_SOFTMAX_MODULE_BINDING_DOMAIN_V1: &[u8] = b"fe2o3.row-softmax.canonical-module.v1";
-const REVIEWED_ROW_SOFTMAX_MODULE_V4_COMMITMENT: [u8; 32] = [
-    0x1e, 0x1b, 0x14, 0xc6, 0x84, 0x2f, 0xfd, 0x09, 0x10, 0x3e, 0xb5, 0x5e, 0xb3, 0x9b, 0x1b, 0xca,
-    0xe9, 0xc0, 0xda, 0x81, 0x59, 0x7f, 0xed, 0x61, 0x86, 0x76, 0x75, 0x62, 0x33, 0x72, 0x30, 0xe6,
-];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoweringTarget {
     Baseline,
     Gfx942StrictFloatV1,
     Gfx942XnackMinusV1,
     Gfx950XnackMinusV1,
-    Gfx942RowSoftmaxV1,
 }
 
 impl LoweringTarget {
@@ -88,7 +80,7 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_xnack_minus_binding(self) -> bool {
-        matches!(self, Self::Gfx942XnackMinusV1 | Self::Gfx942RowSoftmaxV1)
+        matches!(self, Self::Gfx942XnackMinusV1)
     }
 
     const fn exact_target_binding(self) -> Option<&'static str> {
@@ -105,7 +97,7 @@ impl LoweringTarget {
             Self::Gfx942StrictFloatV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\""
             }
-            Self::Gfx942XnackMinusV1 | Self::Gfx942RowSoftmaxV1 => {
+            Self::Gfx942XnackMinusV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
             }
             Self::Gfx950XnackMinusV1 => {
@@ -116,7 +108,7 @@ impl LoweringTarget {
 
     const fn data_layout(self) -> Option<&'static str> {
         match self {
-            Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1 | Self::Gfx942RowSoftmaxV1 => {
+            Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1 => {
                 Some(GFX942_XNACK_MINUS_DATA_LAYOUT)
             }
             Self::Baseline | Self::Gfx942StrictFloatV1 => None,
@@ -125,14 +117,12 @@ impl LoweringTarget {
 
     const fn wave_target_feature(self, width: WaveWidth) -> &'static str {
         match (self, width) {
-            (
-                Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1 | Self::Gfx942RowSoftmaxV1,
-                WaveWidth::Wave32,
-            ) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\"",
-            (
-                Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1 | Self::Gfx942RowSoftmaxV1,
-                WaveWidth::Wave64,
-            ) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\"",
+            (Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1, WaveWidth::Wave32) => {
+                " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\""
+            }
+            (Self::Gfx942XnackMinusV1 | Self::Gfx950XnackMinusV1, WaveWidth::Wave64) => {
+                " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""
+            }
             (_, WaveWidth::Wave32) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64\"",
             (_, WaveWidth::Wave64) => " \"target-features\"=\"-wavefrontsize32,+wavefrontsize64\"",
         }
@@ -623,82 +613,6 @@ pub fn lower_device_module_to_gfx942_xnack_minus_llvm_ir(
         None,
         false,
     )
-}
-
-/// Opaque admission for the exact reviewed row-softmax V1 Kernel IR graph.
-///
-/// This profile carries no execution authority. It exists only to prevent the
-/// generic gfx942 lowering surface from acquiring underspecified floating-point
-/// comparison or division semantics.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Gfx942RowSoftmaxLoweringProfileV1 {
-    canonical_module_commitment: [u8; 32],
-}
-
-/// Authenticates the exact canonical row-softmax V1 graph for dedicated lowering.
-///
-/// The commitment is independently pinned over the bounded canonical V4 Kernel
-/// IR encoding. A caller cannot mint this profile from a same-name or
-/// structurally modified module.
-pub fn authenticate_gfx942_row_softmax_lowering_profile_v1(
-    module: &Module,
-) -> Result<Gfx942RowSoftmaxLoweringProfileV1, LoweringErrors> {
-    verify_module(module).map_err(LoweringErrors::verification)?;
-    let canonical_module_commitment = row_softmax_module_commitment_v1(module)?;
-    if canonical_module_commitment != REVIEWED_ROW_SOFTMAX_MODULE_V4_COMMITMENT {
-        return Err(LoweringErrors::one(
-            LoweringLocation::module(module),
-            LoweringDiagnosticCode::UnsupportedCapability,
-            "module does not match the reviewed row-softmax V1 lowering commitment",
-        ));
-    }
-    Ok(Gfx942RowSoftmaxLoweringProfileV1 {
-        canonical_module_commitment,
-    })
-}
-
-/// Lowers only a module admitted by the dedicated row-softmax V1 profile.
-///
-/// The module commitment is rechecked so an admission cannot be paired with a
-/// substituted graph. This inert textual lowering performs no linking, worker
-/// execution, code-object generation, loading, or launching.
-pub fn lower_authenticated_row_softmax_module_to_gfx942_xnack_minus_llvm_ir_v1(
-    module: &Module,
-    profile: &Gfx942RowSoftmaxLoweringProfileV1,
-) -> Result<String, LoweringErrors> {
-    let current = authenticate_gfx942_row_softmax_lowering_profile_v1(module)?;
-    if &current != profile {
-        return Err(LoweringErrors::one(
-            LoweringLocation::module(module),
-            LoweringDiagnosticCode::UnsupportedCapability,
-            "row-softmax lowering profile is not bound to this canonical module",
-        ));
-    }
-    lower_compiler_module_to_llvm_ir_for_target(
-        module,
-        LoweringTarget::Gfx942RowSoftmaxV1,
-        None,
-        false,
-    )
-}
-
-fn row_softmax_module_commitment_v1(module: &Module) -> Result<[u8; 32], LoweringErrors> {
-    let bytes = encode_module_v4(module).map_err(|error| {
-        LoweringErrors::one(
-            LoweringLocation::module(module),
-            LoweringDiagnosticCode::UnsupportedCapability,
-            format!("row-softmax V4 module encoding failed: {error}"),
-        )
-    })?;
-    let mut digest = Sha256::new();
-    hash_commitment_field(&mut digest, ROW_SOFTMAX_MODULE_BINDING_DOMAIN_V1);
-    hash_commitment_field(&mut digest, &bytes);
-    Ok(digest.finalize().into())
-}
-
-fn hash_commitment_field(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update((bytes.len() as u64).to_le_bytes());
-    digest.update(bytes);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

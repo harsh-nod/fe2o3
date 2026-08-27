@@ -56,43 +56,43 @@ fn request_with(
 fn request() -> PhysicalMachineEffectRequestV1 {
     request_with(
         b"exact finalized gfx942 hsaco",
-        vec![entry("alpha", budget())],
+        vec![entry("arbitrary_entry", budget())],
     )
 }
 
 fn effects() -> Vec<Effect<'static>> {
     vec![
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: CODE_OFFSET,
             kind: 1,
             width: 8,
         },
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: CODE_OFFSET,
             kind: 2,
             width: 4,
         },
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: CODE_OFFSET + 4,
             kind: 1,
             width: 8,
         },
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: CODE_OFFSET + 4,
             kind: 3,
             width: 4,
         },
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: CODE_OFFSET + 8,
             kind: 4,
             width: 0,
@@ -162,9 +162,9 @@ fn evidence_with_entry_range(
     output
 }
 
-fn alpha_function() -> Function<'static> {
+fn entry_function() -> Function<'static> {
     Function {
-        symbol: "alpha",
+        symbol: "arbitrary_entry",
         offset: CODE_OFFSET,
         size: CODE_SIZE,
         callees: Vec::new(),
@@ -191,7 +191,7 @@ fn push_text(output: &mut Vec<u8>, value: &str) {
 #[test]
 fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
     let request = request();
-    let bytes = evidence(&request, &[alpha_function()], &effects());
+    let bytes = evidence(&request, &[entry_function()], &effects());
     let decoded = PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes).unwrap();
 
     assert_eq!(decoded.schema_version(), 1);
@@ -206,14 +206,14 @@ fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
     );
     assert_eq!(decoded.request_identity(), request.identity());
     assert_eq!(decoded.payload_identity(), request.payload_identity());
-    assert_eq!(decoded.entry_points()[0].symbol(), "alpha");
+    assert_eq!(decoded.entry_points()[0].symbol(), "arbitrary_entry");
     assert_eq!(
         decoded.entry_points()[0].descriptor_identity().as_bytes(),
         [0x33; 32]
     );
     assert_eq!(decoded.entry_points()[0].code_offset(), CODE_OFFSET);
     assert_eq!(decoded.entry_points()[0].code_size(), CODE_SIZE);
-    assert_eq!(decoded.functions()[0].symbol(), "alpha");
+    assert_eq!(decoded.functions()[0].symbol(), "arbitrary_entry");
     assert!(decoded.functions()[0].direct_callees().is_empty());
     assert_eq!(
         decoded.effects()[1].kind(),
@@ -233,25 +233,31 @@ fn canonical_record_binds_exact_payload_worker_target_graph_and_effects() {
 fn request_and_evidence_are_deterministic_golden_records() {
     let first = request_with(
         b"golden-payload",
-        vec![entry("zeta", budget()), entry("alpha", budget())],
+        vec![
+            entry("_secondary.entry$1", budget()),
+            entry("arbitrary_entry", budget()),
+        ],
     );
     let second = request_with(
         b"golden-payload",
-        vec![entry("alpha", budget()), entry("zeta", budget())],
+        vec![
+            entry("arbitrary_entry", budget()),
+            entry("_secondary.entry$1", budget()),
+        ],
     );
     assert_eq!(first.canonical_bytes(), second.canonical_bytes());
     assert_eq!(first.identity(), second.identity());
 
-    let bytes = evidence(&request(), &[alpha_function()], &effects());
+    let bytes = evidence(&request(), &[entry_function()], &effects());
     let first = PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request(), &bytes).unwrap();
     let second = PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request(), &bytes).unwrap();
     assert_eq!(first.identity(), second.identity());
     assert_eq!(
         first.identity().sha256(),
         [
-            0x2e, 0xe9, 0xf4, 0xfe, 0x2f, 0x5f, 0x38, 0x6e, 0x43, 0xab, 0x1b, 0x11, 0x85, 0xc5,
-            0x99, 0x27, 0xa9, 0xb1, 0x03, 0xf5, 0xe8, 0x0a, 0x02, 0x81, 0xcd, 0x1d, 0x4e, 0x7b,
-            0x62, 0x3f, 0x76, 0xf5,
+            0x0d, 0x67, 0x6d, 0x09, 0x8f, 0xb7, 0x97, 0xf3, 0xf3, 0xd2, 0x8e, 0x6c, 0x73, 0xd9,
+            0x15, 0x8d, 0xcf, 0x89, 0x3d, 0xe5, 0x6a, 0x12, 0xae, 0xf8, 0x1f, 0x58, 0xb2, 0x68,
+            0xc6, 0xe8, 0xd1, 0xc4,
         ]
     );
 }
@@ -259,10 +265,10 @@ fn request_and_evidence_are_deterministic_golden_records() {
 #[test]
 fn payload_mutation_cannot_reuse_evidence() {
     let original = request();
-    let bytes = evidence(&original, &[alpha_function()], &effects());
+    let bytes = evidence(&original, &[entry_function()], &effects());
     let mutated = request_with(
         b"exact finalized gfx942 hsacp",
-        vec![entry("alpha", budget())],
+        vec![entry("arbitrary_entry", budget())],
     );
     assert_eq!(
         PhysicalMachineEffectEvidenceV1::decode_canonical_for(&mutated, &bytes),
@@ -273,7 +279,7 @@ fn payload_mutation_cannot_reuse_evidence() {
 #[test]
 fn symbol_and_identity_substitution_fail_closed() {
     let request = request();
-    let mut bytes = evidence(&request, &[alpha_function()], &effects());
+    let mut bytes = evidence(&request, &[entry_function()], &effects());
     let entry_offset = PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1.len()
         + 4
         + 2
@@ -293,7 +299,7 @@ fn symbol_and_identity_substitution_fail_closed() {
         Err(PhysicalMachineEffectEvidenceErrorV1::EntrySetMismatch)
     );
 
-    let mut bytes = evidence(&request, &[alpha_function()], &effects());
+    let mut bytes = evidence(&request, &[entry_function()], &effects());
     let analyzer_offset =
         PHYSICAL_MACHINE_EFFECT_EVIDENCE_DOMAIN_V1.len() + 4 + 2 + 32 + 32 + 8 + 32 + 8;
     bytes[analyzer_offset] ^= 1;
@@ -307,7 +313,7 @@ fn symbol_and_identity_substitution_fail_closed() {
 fn open_call_edge_and_effect_expansion_fail_closed() {
     let request = request();
     let open = Function {
-        symbol: "alpha",
+        symbol: "arbitrary_entry",
         offset: CODE_OFFSET,
         size: CODE_SIZE,
         callees: vec!["missing_helper"],
@@ -323,14 +329,14 @@ fn open_call_edge_and_effect_expansion_fail_closed() {
     let tight = request_with(
         b"exact finalized gfx942 hsaco",
         vec![entry(
-            "alpha",
+            "arbitrary_entry",
             PhysicalMachineEffectBudgetV1::new(8, 0, 4, 2, 2),
         )],
     );
     assert_eq!(
         PhysicalMachineEffectEvidenceV1::decode_canonical_for(
             &tight,
-            &evidence(&tight, &[alpha_function()], &effects())
+            &evidence(&tight, &[entry_function()], &effects())
         ),
         Err(PhysicalMachineEffectEvidenceErrorV1::EffectExpansion)
     );
@@ -339,24 +345,24 @@ fn open_call_edge_and_effect_expansion_fail_closed() {
 #[test]
 fn code_ranges_may_end_exactly_at_the_payload_boundary() {
     let payload = [0u8; 32];
-    let request = request_with(&payload, vec![entry("alpha", budget())]);
+    let request = request_with(&payload, vec![entry("arbitrary_entry", budget())]);
     let function = Function {
-        symbol: "alpha",
+        symbol: "arbitrary_entry",
         offset: 16,
         size: 16,
         callees: Vec::new(),
     };
     let effects = [
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: 16,
             kind: 4,
             width: 0,
         },
         Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset: 31,
             kind: 4,
             width: 0,
@@ -374,11 +380,11 @@ fn code_ranges_may_end_exactly_at_the_payload_boundary() {
 #[test]
 fn invalid_entry_ranges_fail_closed_without_panicking() {
     let payload = [0u8; 32];
-    let request = request_with(&payload, vec![entry("alpha", budget())]);
+    let request = request_with(&payload, vec![entry("arbitrary_entry", budget())]);
 
     for (offset, size) in [(32, 1), (31, 2), (u64::MAX, 1), (0, 0)] {
         let bytes =
-            evidence_with_entry_range(&request, offset, size, &[alpha_function()], &effects());
+            evidence_with_entry_range(&request, offset, size, &[entry_function()], &effects());
         let result = std::panic::catch_unwind(|| {
             PhysicalMachineEffectEvidenceV1::decode_canonical_for(&request, &bytes)
         });
@@ -394,11 +400,11 @@ fn invalid_entry_ranges_fail_closed_without_panicking() {
 #[test]
 fn invalid_function_ranges_fail_closed_without_panicking() {
     let payload = [0u8; 32];
-    let request = request_with(&payload, vec![entry("alpha", budget())]);
+    let request = request_with(&payload, vec![entry("arbitrary_entry", budget())]);
 
     for (offset, size) in [(32, 1), (31, 2), (u64::MAX, 1), (0, 0)] {
         let function = Function {
-            symbol: "alpha",
+            symbol: "arbitrary_entry",
             offset,
             size,
             callees: Vec::new(),
@@ -419,9 +425,9 @@ fn invalid_function_ranges_fail_closed_without_panicking() {
 #[test]
 fn instruction_offsets_outside_the_function_fail_closed() {
     let payload = [0u8; 32];
-    let request = request_with(&payload, vec![entry("alpha", budget())]);
+    let request = request_with(&payload, vec![entry("arbitrary_entry", budget())]);
     let function = Function {
-        symbol: "alpha",
+        symbol: "arbitrary_entry",
         offset: 16,
         size: 16,
         callees: Vec::new(),
@@ -429,8 +435,8 @@ fn instruction_offsets_outside_the_function_fail_closed() {
 
     for offset in [15, 32, u64::MAX] {
         let effects = [Effect {
-            entry: "alpha",
-            function: "alpha",
+            entry: "arbitrary_entry",
+            function: "arbitrary_entry",
             offset,
             kind: 4,
             width: 0,
@@ -450,20 +456,47 @@ fn instruction_offsets_outside_the_function_fail_closed() {
 }
 
 #[test]
-fn slice_rejects_unprofiled_entries_and_reserved_identities() {
-    assert_eq!(
-        PhysicalMachineEffectEntryRequestV1::new("other", budget()),
-        Err(PhysicalMachineEffectRequestErrorV1::UnsupportedEntry(
-            "other".to_string()
-        ))
-    );
+fn entry_symbols_are_workload_neutral_and_bounded() {
+    for valid in [
+        "other",
+        "_private_entry7",
+        ".hidden.entry",
+        "$generated$entry",
+    ] {
+        assert_eq!(
+            PhysicalMachineEffectEntryRequestV1::new(valid, budget())
+                .unwrap()
+                .symbol(),
+            valid
+        );
+    }
+
+    let too_long = "k".repeat(257);
+    for invalid in [
+        "",
+        "7leading_digit",
+        "contains/slash",
+        "non_ascii_\u{e9}",
+        &too_long,
+    ] {
+        assert_eq!(
+            PhysicalMachineEffectEntryRequestV1::new(invalid, budget()),
+            Err(PhysicalMachineEffectRequestErrorV1::InvalidEntrySymbol {
+                byte_len: invalid.len(),
+            })
+        );
+    }
+}
+
+#[test]
+fn request_rejects_reserved_identities() {
     assert_eq!(
         PhysicalMachineEffectRequestV1::new(
             PhysicalMachineExecutionChallengeV1::from_sha256_bytes([1; 32]),
             PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([0; 32]),
             PhysicalMachineToolchainIdentityV1::from_sha256_bytes([2; 32]),
             vec![1],
-            vec![entry("alpha", budget())],
+            vec![entry("arbitrary_entry", budget())],
         ),
         Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
             "analyzer"
@@ -475,7 +508,7 @@ fn slice_rejects_unprofiled_entries_and_reserved_identities() {
             PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([1; 32]),
             PhysicalMachineToolchainIdentityV1::from_sha256_bytes([2; 32]),
             vec![1],
-            vec![entry("alpha", budget())],
+            vec![entry("arbitrary_entry", budget())],
         ),
         Err(PhysicalMachineEffectRequestErrorV1::ZeroIdentity(
             "execution challenge"

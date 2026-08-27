@@ -48,14 +48,6 @@ pub fn general_wrong_block(value: u32) {
     typed,
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
-pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
-    let _ = (scale, input, output);
-}
-
-#[kernel(
-    typed,
-    launch(required = [64, 1, 1], max = [64, 1, 1])
-)]
 pub fn vecadd_wrong_launch(a: &[f32], b: &[f32], output: DisjointSlice<f32>) {
     let _ = (a, b, output);
 }

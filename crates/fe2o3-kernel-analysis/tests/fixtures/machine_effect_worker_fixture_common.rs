@@ -434,39 +434,11 @@ fn evidence(request: &Request) -> Vec<u8> {
         push_u64(&mut output, request.payload_bytes);
         push_u16(&mut output, 0);
     }
-    let effect_count = request
-        .entries
-        .iter()
-        .map(|entry| {
-            if entry.symbol == "scalar_gemm_v1" {
-                19_u32
-            } else {
-                1_u32
-            }
-        })
-        .sum();
+    let effect_count = request.entries.len() as u32;
     push_u32(&mut output, effect_count);
     for entry in &request.entries {
         let base = 0;
-        if entry.symbol == "scalar_gemm_v1" {
-            for (site, width, kind) in [
-                (0, 8, 2),
-                (4, 8, 2),
-                (8, 8, 2),
-                (12, 4, 2),
-                (16, 4, 2),
-                (20, 4, 2),
-                (24, 4, 2),
-                (28, 4, 2),
-                (32, 4, 3),
-            ] {
-                push_effect(&mut output, &entry.symbol, base + site, 1, 8);
-                push_effect(&mut output, &entry.symbol, base + site, kind, width);
-            }
-            push_effect(&mut output, &entry.symbol, base + 36, 4, 0);
-        } else {
-            push_effect(&mut output, &entry.symbol, base, 4, 0);
-        }
+        push_effect(&mut output, &entry.symbol, base, 4, 0);
     }
     set_length(&mut output, EVIDENCE_DOMAIN.len());
     output

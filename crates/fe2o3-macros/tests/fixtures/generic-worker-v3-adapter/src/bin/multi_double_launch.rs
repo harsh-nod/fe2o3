@@ -1,12 +1,12 @@
-use alpha_zeta_adapter_fixture::scalar_gemm_v1_gpu;
+use generic_worker_v3_adapter_fixture::multi_argument_kernel_gpu;
 
 fn launch_twice<'loaded, 'allocation, A>(
     prepared: gpu_host::__generated::GeneratedWorkerV3PreparedInvocationV1<
         'loaded,
         'allocation,
-        scalar_gemm_v1_gpu::Marker,
+        multi_argument_kernel_gpu::Marker,
         A,
-        scalar_gemm_v1_gpu::Arguments<'allocation>,
+        multi_argument_kernel_gpu::Arguments<'allocation>,
     >,
 ) where
     A: gpu_host::ReviewedHsaImplicitKernargAdapterV1,

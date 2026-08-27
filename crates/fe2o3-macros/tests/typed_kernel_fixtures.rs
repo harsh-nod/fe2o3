@@ -107,13 +107,13 @@ fn generated_global_mut_arguments_reject_forgery_and_substitution() {
 #[test]
 fn generated_worker_v3_adapter_compiles_downstream() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/alpha-zeta-adapter-test");
+    let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
     let output = cargo_check(&manifest, &target_dir, Some("pass"));
 
     assert!(
         output.status.success(),
-        "alpha/zeta generated adapter fixture failed:\n{}",
+        "generic generated adapter fixture failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -121,29 +121,32 @@ fn generated_worker_v3_adapter_compiles_downstream() {
 #[test]
 fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let manifest = manifest_dir.join("tests/fixtures/alpha-zeta-adapter/Cargo.toml");
-    let target_dir = manifest_dir.join("../../target/alpha-zeta-adapter-test");
+    let manifest = manifest_dir.join("tests/fixtures/generic-worker-v3-adapter/Cargo.toml");
+    let target_dir = manifest_dir.join("../../target/generic-worker-v3-adapter-test");
     let cases: &[(&str, &[&str])] = &[
         ("lifetime_escape", &["lifetime may not live long enough"]),
         ("private_fields", &["private"]),
         ("non_clone", &["no method named `clone`"]),
-        ("raw_pointer_escape", &["field `input`"]),
+        ("raw_pointer_escape", &["field `source`"]),
         (
-            "scalar_lifetime_escape",
+            "multi_lifetime_escape",
             &["lifetime may not live long enough"],
         ),
         (
-            "scalar_private_fields",
-            &["fields `a`, `b`, `c`, `m`, `n` and `k`", "are private"],
+            "multi_private_fields",
+            &[
+                "fields `first`, `second`, `destination`, `extent_x`, `extent_y` and `extent_z`",
+                "are private",
+            ],
         ),
-        ("scalar_raw_pointer_escape", &["field `a`", "is private"]),
+        ("multi_raw_pointer_escape", &["field `first`", "is private"]),
         (
-            "scalar_capability_raw_pointer_escape",
+            "multi_capability_raw_pointer_escape",
             &["no method named `device_pointer`"],
         ),
-        ("scalar_non_clone", &["no method named `clone`"]),
+        ("multi_non_clone", &["no method named `clone`"]),
         (
-            "scalar_abi_substitution",
+            "multi_abi_substitution",
             &[
                 "error[E0277]",
                 "CompilerGeneratedWorkerV3ArgumentsV1",
@@ -151,7 +154,7 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
             ],
         ),
         (
-            "scalar_double_launch",
+            "multi_double_launch",
             &["error[E0382]", "use of moved value: `prepared`"],
         ),
     ];
@@ -221,7 +224,6 @@ fn typed_kernel_compile_fail_diagnostics_are_stable() {
                 "general typed V1 explicit launch requires required dimensions",
                 "general typed V1 explicit launch requires identical required and max dimensions",
                 "general typed V1 supports only exact 64x1x1 or 256x1x1 launch dimensions",
-                "the alpha/zeta and scalar_gemm_v1 typed profiles require an exact 256x1x1 launch contract",
                 "the typed vecadd V2 profile requires an exact 256x1x1 launch contract",
             ],
         ),

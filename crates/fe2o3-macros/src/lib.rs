@@ -2368,102 +2368,6 @@ fn generated_worker_v3_field_v1(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AlphaZetaCov6MacroRoleV1 {
-    Alpha,
-    Zeta,
-}
-
-const SCALAR_GEMM_V1_ARGUMENT_NAMES: &[&str] = &["a", "b", "c", "m", "n", "k"];
-
-fn exact_scalar_gemm_v1(input: &ItemFn, arguments: &[GeneralTypedArgumentKindV1]) -> bool {
-    let names = input
-        .sig
-        .inputs
-        .iter()
-        .map(|argument| match argument {
-            FnArg::Typed(argument) => match argument.pat.as_ref() {
-                Pat::Ident(pattern) => pattern.ident.to_string(),
-                _ => unreachable!("general typed validation requires identifier patterns"),
-            },
-            FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
-        })
-        .collect::<Vec<_>>();
-
-    input.sig.ident == "scalar_gemm_v1"
-        && names
-            .iter()
-            .map(String::as_str)
-            .eq(SCALAR_GEMM_V1_ARGUMENT_NAMES.iter().copied())
-        && arguments
-            == [
-                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
-                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
-                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::U32),
-            ]
-}
-
-impl AlphaZetaCov6MacroRoleV1 {
-    const fn argument_names(self) -> &'static [&'static str] {
-        match self {
-            Self::Alpha => &["scale", "input", "output"],
-            Self::Zeta => &["a", "b", "bias", "output"],
-        }
-    }
-}
-
-fn exact_alpha_zeta_cov6_role_v1(
-    input: &ItemFn,
-    arguments: &[GeneralTypedArgumentKindV1],
-) -> Option<AlphaZetaCov6MacroRoleV1> {
-    let names = input
-        .sig
-        .inputs
-        .iter()
-        .map(|argument| match argument {
-            FnArg::Typed(argument) => match argument.pat.as_ref() {
-                Pat::Ident(pattern) => pattern.ident.to_string(),
-                _ => unreachable!("general typed validation requires identifier patterns"),
-            },
-            FnArg::Receiver(_) => unreachable!("general typed validation rejects receivers"),
-        })
-        .collect::<Vec<_>>();
-
-    match (
-        input.sig.ident.to_string().as_str(),
-        names.as_slice(),
-        arguments,
-    ) {
-        (
-            "alpha",
-            [scale, input, output],
-            [
-                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
-            ],
-        ) if scale == "scale" && input == "input" && output == "output" => {
-            Some(AlphaZetaCov6MacroRoleV1::Alpha)
-        }
-        (
-            "zeta",
-            [a, b, bias, output],
-            [
-                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::SharedSlice(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::Scalar(GeneralTypedScalarV1::F32),
-                GeneralTypedArgumentKindV1::ExclusiveSlice(GeneralTypedScalarV1::F32),
-            ],
-        ) if a == "a" && b == "b" && bias == "bias" && output == "output" => {
-            Some(AlphaZetaCov6MacroRoleV1::Zeta)
-        }
-        _ => None,
-    }
-}
-
 #[allow(dead_code)]
 fn model_general_typed_signature_v1(
     input: &ItemFn,
@@ -2480,24 +2384,8 @@ fn model_general_typed_signature_v1(
         .enumerate()
         .map(|(index, argument)| parse_general_typed_argument_v1(argument, index + 1))
         .collect::<syn::Result<Vec<_>>>()?;
-    let scalar_gemm_v1 = exact_scalar_gemm_v1(input, &arguments);
-    let alpha_zeta_cov6 = exact_alpha_zeta_cov6_role_v1(input, &arguments);
-    let exact_argument_names = if scalar_gemm_v1 {
-        Some(SCALAR_GEMM_V1_ARGUMENT_NAMES)
-    } else {
-        alpha_zeta_cov6.map(AlphaZetaCov6MacroRoleV1::argument_names)
-    };
-    let abi = general_typed_abi_v1(&arguments, exact_argument_names, &input.sig)?;
+    let abi = general_typed_abi_v1(&arguments, &input.sig)?;
     let launch = general_typed_launch_v1(options.launch.as_ref(), &input.sig)?;
-    if (scalar_gemm_v1 || alpha_zeta_cov6.is_some())
-        && launch.block_size()
-            != BlockSize::Exact(general_typed_dimensions_v1(GENERAL_TYPED_DEFAULT_BLOCK_V1))
-    {
-        return Err(syn::Error::new_spanned(
-            &input.sig,
-            "the alpha/zeta and scalar_gemm_v1 typed profiles require an exact 256x1x1 launch contract",
-        ));
-    }
     let logical_name = input.sig.ident.to_string();
     let generated_host_contract_identity = derive_generated_host_contract_identity_v1(
         MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
@@ -2848,7 +2736,6 @@ fn parse_u64_const_argument_v1(argument: &GenericArgument) -> Option<u64> {
 
 fn general_typed_abi_v1(
     arguments: &[GeneralTypedArgumentKindV1],
-    exact_argument_names: Option<&[&str]>,
     span: impl quote::ToTokens,
 ) -> syn::Result<AbiLayout> {
     let mut offset = 0_u64;
@@ -2872,15 +2759,11 @@ fn general_typed_abi_v1(
             syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
         })?;
         fields.push(
-            general_typed_abi_field_v1(
-                exact_argument_names
-                    .map_or_else(|| format!("arg{index}"), |names| names[index].to_owned()),
-                offset,
-                argument,
-            )
-            .map_err(|error| {
-                syn::Error::new_spanned(&span, format!("invalid general typed V1 ABI: {error}"))
-            })?,
+            general_typed_abi_field_v1(format!("arg{index}"), offset, argument).map_err(
+                |error| {
+                    syn::Error::new_spanned(&span, format!("invalid general typed V1 ABI: {error}"))
+                },
+            )?,
         );
         offset = offset.checked_add(size).ok_or_else(|| {
             syn::Error::new_spanned(&span, "general typed V1 argument layout overflows")
@@ -5275,19 +5158,19 @@ mod tests {
 
     #[test]
     fn general_typed_kernels_emit_exact_v3_expectation_only_registrations() {
-        let alpha: ItemFn = parse_quote! {
-            pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
-                let _ = (scale, input, output);
+        let transform: ItemFn = parse_quote! {
+            pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
+                let _ = (factor, source, destination);
             }
         };
-        let zeta: ItemFn = parse_quote! {
-            pub fn zeta(
-                a: &[f32],
-                b: &[f32],
-                bias: f32,
-                output: DisjointSlice<f32>,
+        let combine: ItemFn = parse_quote! {
+            pub fn combine(
+                left: &[f32],
+                right: &[f32],
+                offset: f32,
+                destination: DisjointSlice<f32>,
             ) {
-                let _ = (a, b, bias, output);
+                let _ = (left, right, offset, destination);
             }
         };
         let options = parse_kernel_options(quote!(typed)).unwrap();
@@ -5320,54 +5203,65 @@ mod tests {
             (expansion, binding, contract)
         };
 
-        let alpha_model = model_general_typed_signature_v1(
-            &alpha,
+        let transform_model = model_general_typed_signature_v1(
+            &transform,
             &options,
             derive_kernel_binding_id_v1(
                 crate_binding,
                 MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                "alpha",
-                "alpha",
+                "transform",
+                "transform",
             )
             .as_bytes(),
         )
         .unwrap();
-        let zeta_model = model_general_typed_signature_v1(
-            &zeta,
+        let combine_model = model_general_typed_signature_v1(
+            &combine,
             &options,
             derive_kernel_binding_id_v1(
                 crate_binding,
                 MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                "zeta",
-                "zeta",
+                "combine",
+                "combine",
             )
             .as_bytes(),
         )
         .unwrap();
         assert_eq!(
-            alpha_model
+            transform_model
                 .abi
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
-            ["scale", "input", "output"]
+            ["arg0", "arg1", "arg2"]
         );
         assert_eq!(
-            zeta_model
+            combine_model
                 .abi
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
-            ["a", "b", "bias", "output"]
+            ["arg0", "arg1", "arg2", "arg3"]
         );
 
-        let (alpha_expansion, alpha_binding, alpha_contract) = expand(alpha.clone(), crate_binding);
-        let (zeta_expansion, zeta_binding, zeta_contract) = expand(zeta, crate_binding);
+        let (transform_expansion, transform_binding, transform_contract) =
+            expand(transform.clone(), crate_binding);
+        let (combine_expansion, combine_binding, combine_contract) = expand(combine, crate_binding);
         for (name, expansion, binding, contract) in [
-            ("alpha", &alpha_expansion, alpha_binding, alpha_contract),
-            ("zeta", &zeta_expansion, zeta_binding, zeta_contract),
+            (
+                "transform",
+                &transform_expansion,
+                transform_binding,
+                transform_contract,
+            ),
+            (
+                "combine",
+                &combine_expansion,
+                combine_binding,
+                combine_contract,
+            ),
         ] {
             let file: syn::File = syn::parse2(expansion.clone()).unwrap();
             let registration_name = format!("__fe2o3_kernel_registration_{name}");
@@ -5428,13 +5322,9 @@ mod tests {
             assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
             assert!(expansion.contains("pub fn prepare_worker_v3"));
             assert!(expansion.contains("prepare_generated_worker_v3_v1"));
-            assert!(!expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
-            assert!(!expansion.contains("AlphaZetaCov6DispatchIdentityV1 :: new"));
             assert!(!expansion.contains("KernelId :: from_bytes"));
             assert!(expansion.contains("CompilerGeneratedArgumentLayoutV1 :: new"));
             assert!(expansion.contains("from_compiler_generated_parts_v1"));
-            assert!(!expansion.contains("prepare_generated_alpha_zeta_cov6_selected_kernel_v1"));
-            assert!(!expansion.contains("GeneratedAlphaZetaCov6PrepareResultV1"));
             assert!(!expansion.contains("plan . slice"));
             assert!(!expansion.contains("from_raw"));
             assert!(!expansion.contains("CompilerGeneratedKernelContractV1"));
@@ -5452,38 +5342,34 @@ mod tests {
             );
         }
 
-        assert_ne!(alpha_binding, zeta_binding);
-        assert_ne!(alpha_contract, zeta_contract);
+        assert_ne!(transform_binding, combine_binding);
+        assert_ne!(transform_contract, combine_contract);
 
         let changed_signature: ItemFn = parse_quote! {
-            pub fn alpha(scale: f64, input: &[f32], output: DisjointSlice<f32>) {}
+            pub fn transform(factor: f64, source: &[f32], destination: DisjointSlice<f32>) {}
         };
         let (changed_signature_expansion, changed_signature_binding, changed_signature_contract) =
             expand(changed_signature, crate_binding);
-        assert_eq!(alpha_binding, changed_signature_binding);
-        assert_ne!(alpha_contract, changed_signature_contract);
+        assert_eq!(transform_binding, changed_signature_binding);
+        assert_ne!(transform_contract, changed_signature_contract);
         let changed_signature_expansion = changed_signature_expansion.to_string();
-        assert!(!changed_signature_expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
         assert!(changed_signature_expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
         assert!(changed_signature_expansion.contains("pub fn prepare_worker_v3"));
-        assert!(!changed_signature_expansion.contains("prepare_generated_alpha_zeta_cov6"));
 
         let renamed: ItemFn = parse_quote! {
-            pub fn renamed(scale: f32, input: &[f32], output: DisjointSlice<f32>) {}
+            pub fn renamed(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {}
         };
         let (renamed_expansion, renamed_binding, renamed_contract) = expand(renamed, crate_binding);
-        assert_ne!(alpha_binding, renamed_binding);
-        assert_ne!(alpha_contract, renamed_contract);
+        assert_ne!(transform_binding, renamed_binding);
+        assert_ne!(transform_contract, renamed_contract);
         let renamed_expansion = renamed_expansion.to_string();
-        assert!(!renamed_expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
         assert!(renamed_expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
         assert!(renamed_expansion.contains("pub fn prepare_worker_v3"));
-        assert!(!renamed_expansion.contains("prepare_generated_alpha_zeta_cov6"));
 
         let other_crate_binding = derive_crate_binding_id_v1("fixture", ["other-binding"]);
-        let (_, rebound_binding, rebound_contract) = expand(alpha, other_crate_binding);
-        assert_ne!(alpha_binding, rebound_binding);
-        assert_ne!(alpha_contract, rebound_contract);
+        let (_, rebound_binding, rebound_contract) = expand(transform, other_crate_binding);
+        assert_ne!(transform_binding, rebound_binding);
+        assert_ne!(transform_contract, rebound_contract);
     }
 
     #[test]
@@ -5530,15 +5416,15 @@ mod tests {
     }
 
     #[test]
-    fn scalar_gemm_v1_host_contract_matches_the_normative_rustc_identity() {
+    fn multi_argument_typed_kernel_uses_generic_abi_and_worker_v3_adapter() {
         let input: ItemFn = parse_quote! {
-            pub fn scalar_gemm_v1(
-                a: &[f32],
-                b: &[f32],
-                c: DisjointSlice<f32>,
-                m: u32,
-                n: u32,
-                k: u32,
+            pub fn multi_argument_kernel(
+                first: &[f32],
+                second: &[f32],
+                destination: DisjointSlice<f32>,
+                extent_x: u32,
+                extent_y: u32,
+                extent_z: u32,
             ) {}
         };
         let options = parse_kernel_options(quote!(
@@ -5553,8 +5439,8 @@ mod tests {
         let kernel_binding = derive_kernel_binding_id_v1(
             crate_binding,
             MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-            "scalar_gemm_v1",
-            "scalar_gemm_v1",
+            "multi_argument_kernel",
+            "multi_argument_kernel",
         );
         let model =
             model_general_typed_signature_v1(&input, &options, kernel_binding.as_bytes()).unwrap();
@@ -5568,7 +5454,7 @@ mod tests {
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
-            ["a", "b", "c", "m", "n", "k"]
+            ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5"]
         );
         assert_eq!(
             model
@@ -5579,62 +5465,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 16, 32, 48, 52, 56]
         );
-        assert_eq!(
-            hex(model.generated_host_contract_identity.as_bytes()),
-            "55108b826b645a8f8cb648c046504786a7034df7bdddc0fbcb5f7698d2205ca0"
-        );
-
-        let lookalike: ItemFn = parse_quote! {
-            pub fn scalar_gemm_lookalike(
-                a: &[f32],
-                b: &[f32],
-                c: DisjointSlice<f32>,
-                m: u32,
-                n: u32,
-                k: u32,
-            ) {}
-        };
-        let lookalike_binding = derive_kernel_binding_id_v1(
-            crate_binding,
-            MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-            "scalar_gemm_lookalike",
-            "scalar_gemm_lookalike",
-        );
-        let lookalike =
-            model_general_typed_signature_v1(&lookalike, &options, lookalike_binding.as_bytes())
-                .unwrap();
-        assert_eq!(
-            lookalike
-                .abi
-                .fields()
-                .iter()
-                .map(|field| field.name().as_str())
-                .collect::<Vec<_>>(),
-            ["arg0", "arg1", "arg2", "arg3", "arg4", "arg5"]
-        );
-    }
-
-    #[test]
-    fn scalar_gemm_v1_emits_only_the_generic_worker_v3_adapter() {
-        let input: ItemFn = parse_quote! {
-            pub fn scalar_gemm_v1(
-                a: &[f32],
-                b: &[f32],
-                c: DisjointSlice<f32>,
-                m: u32,
-                n: u32,
-                k: u32,
-            ) {}
-        };
-        let options = parse_kernel_options(quote!(
-            typed,
-            launch(required = [256, 1, 1], max = [256, 1, 1])
-        ))
-        .unwrap();
-        let crate_binding = CrateBindingIdV1::from_hex(
-            "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
-        )
-        .unwrap();
         let expansion = expand_kernel_with_imports(
             input,
             options,
@@ -5649,15 +5479,7 @@ mod tests {
         assert!(expansion.contains("prepare_worker_v3"));
         assert!(expansion.contains("GeneratedReadDeviceSlice"));
         assert!(expansion.contains("GeneratedReadWriteDeviceSlice"));
-        for retired in [
-            "GeneratedScalarGemmV1ReadDeviceSlice",
-            "GeneratedScalarGemmV1ReadWriteDeviceSlice",
-            "CompilerGeneratedScalarGemmV1Arguments",
-            "prepare_generated_scalar_gemm_v1",
-            "WorkerV2PrerequisiteAuthenticatorV1",
-        ] {
-            assert!(!expansion.contains(retired), "retained `{retired}`");
-        }
+        assert_eq!(model.generated_host_contract_identity.as_bytes().len(), 32);
     }
 
     #[test]
@@ -5817,7 +5639,8 @@ mod tests {
     #[test]
     fn general_typed_model_constructs_scalar_slice_abi_and_default_launch() {
         let input: ItemFn = parse_quote!(
-            pub fn alpha(scale: u32, input: &[f32], output: fe2o3_device::DisjointSlice<f32>) {}
+            pub fn transform(factor: u32, input: &[f32], output: fe2o3_device::DisjointSlice<f32>) {
+            }
         );
         let options = parse_kernel_options(quote!(typed)).unwrap();
         let model = model_general_typed_signature_v1(&input, &options, [0x41; 32]).unwrap();
@@ -6082,16 +5905,16 @@ mod tests {
             parse_kernel_options(quote!(typed, launch(required = [256, 1, 1]))).unwrap();
         validate_typed_kernel_profile_v1(&vecadd, &wg256_required_only).unwrap();
 
-        let alpha: ItemFn = parse_quote! {
-            pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
-                let _ = (scale, input, output);
+        let transform: ItemFn = parse_quote! {
+            pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
+                let _ = (factor, source, destination);
             }
         };
-        model_general_typed_signature_v1(&alpha, &wg256_required_only, [0x64; 32]).unwrap();
+        model_general_typed_signature_v1(&transform, &wg256_required_only, [0x64; 32]).unwrap();
     }
 
     #[test]
-    fn fixed_typed_profiles_reject_wg64_without_falling_back() {
+    fn legacy_exact_profile_rejects_wg64_while_general_typed_accepts_it() {
         let options = parse_kernel_options(quote!(
             typed,
             launch(required = [64, 1, 1], max = [64, 1, 1])
@@ -6109,17 +5932,12 @@ mod tests {
                 .contains("typed vecadd V2 profile requires an exact 256x1x1")
         );
 
-        let alpha: ItemFn = parse_quote! {
-            pub fn alpha(scale: f32, input: &[f32], output: DisjointSlice<f32>) {
-                let _ = (scale, input, output);
+        let transform: ItemFn = parse_quote! {
+            pub fn transform(factor: f32, source: &[f32], destination: DisjointSlice<f32>) {
+                let _ = (factor, source, destination);
             }
         };
-        assert!(
-            model_general_typed_signature_v1(&alpha, &options, [0x64; 32])
-                .unwrap_err()
-                .to_string()
-                .contains("alpha/zeta and scalar_gemm_v1 typed profiles require")
-        );
+        model_general_typed_signature_v1(&transform, &options, [0x64; 32]).unwrap();
     }
 
     #[test]
@@ -6365,17 +6183,17 @@ mod tests {
 
     #[test]
     fn general_typed_contract_identity_binds_signature_name_and_binding() {
-        let alpha: ItemFn = parse_quote!(
-            pub fn alpha(scale: u32, input: &[f32], output: DisjointSlice<f32>) {}
+        let original: ItemFn = parse_quote!(
+            pub fn transform(factor: u32, input: &[f32], output: DisjointSlice<f32>) {}
         );
         let renamed: ItemFn = parse_quote!(
-            pub fn renamed(scale: u32, input: &[f32], output: DisjointSlice<f32>) {}
+            pub fn renamed(factor: u32, input: &[f32], output: DisjointSlice<f32>) {}
         );
         let changed_scalar: ItemFn = parse_quote!(
-            pub fn alpha(scale: u64, input: &[f32], output: DisjointSlice<f32>) {}
+            pub fn transform(factor: u64, input: &[f32], output: DisjointSlice<f32>) {}
         );
         let changed_effect: ItemFn = parse_quote!(
-            pub fn alpha(scale: u32, input: &[f32], output: &[f32]) {}
+            pub fn transform(factor: u32, input: &[f32], output: &[f32]) {}
         );
         let default_options = parse_kernel_options(quote!(typed)).unwrap();
         let explicit_options =
@@ -6385,7 +6203,7 @@ mod tests {
                 .unwrap()
                 .generated_host_contract_identity
         };
-        let baseline = identity(&alpha, &default_options, [0x61; 32]);
+        let baseline = identity(&original, &default_options, [0x61; 32]);
 
         assert_ne!(baseline, identity(&renamed, &default_options, [0x61; 32]));
         assert_ne!(
@@ -6396,9 +6214,9 @@ mod tests {
             baseline,
             identity(&changed_effect, &default_options, [0x61; 32])
         );
-        assert_eq!(baseline, identity(&alpha, &explicit_options, [0x61; 32]));
-        assert_ne!(baseline, identity(&alpha, &default_options, [0x62; 32]));
-        assert_eq!(baseline, identity(&alpha, &default_options, [0x61; 32]));
+        assert_eq!(baseline, identity(&original, &explicit_options, [0x61; 32]));
+        assert_ne!(baseline, identity(&original, &default_options, [0x62; 32]));
+        assert_eq!(baseline, identity(&original, &default_options, [0x61; 32]));
     }
 
     #[test]

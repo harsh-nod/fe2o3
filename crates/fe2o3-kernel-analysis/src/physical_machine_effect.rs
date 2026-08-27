@@ -1,4 +1,4 @@
-//! Payload-derived machine effects for the bounded gfx942 alpha/zeta slice.
+//! Payload-derived machine effects for bounded gfx942 entry-point sets.
 //!
 //! The native worker derives this record from finalized HSACO with LLVM
 //! Object/MC APIs. This crate binds and validates the record but grants no
@@ -142,10 +142,10 @@ impl PhysicalMachineEffectEntryRequestV1 {
         budget: PhysicalMachineEffectBudgetV1,
     ) -> Result<Self, PhysicalMachineEffectRequestErrorV1> {
         let symbol = symbol.into();
-        if !matches!(symbol.as_str(), "alpha" | "scalar_gemm_v1" | "zeta") {
-            return Err(PhysicalMachineEffectRequestErrorV1::UnsupportedEntry(
-                symbol,
-            ));
+        if !valid_symbol(&symbol) {
+            return Err(PhysicalMachineEffectRequestErrorV1::InvalidEntrySymbol {
+                byte_len: symbol.len(),
+            });
         }
         Ok(Self { symbol, budget })
     }
@@ -972,7 +972,7 @@ pub enum PhysicalMachineEffectRequestErrorV1 {
     ZeroIdentity(&'static str),
     PayloadSize { actual: usize, maximum: usize },
     EntryCount(usize),
-    UnsupportedEntry(String),
+    InvalidEntrySymbol { byte_len: usize },
     DuplicateEntry,
     RecordTooLarge,
 }

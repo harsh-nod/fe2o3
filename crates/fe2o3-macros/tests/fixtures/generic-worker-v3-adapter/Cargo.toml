@@ -1,7 +1,7 @@
 [workspace]
 
 [package]
-name = "alpha-zeta-adapter-fixture"
+name = "generic-worker-v3-adapter-fixture"
 version = "0.0.0"
 edition = "2024"
 publish = false
