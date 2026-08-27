@@ -128,18 +128,25 @@ publication, reconstructs its canonical subject under lock, and retains both
 custody values through every issuer use. The issuer accepts no caller-selected
 occurrence, and its private guard keeps publication currentness locked through
 request comparison, signing, and durable commit. Production distinct-UID launch
-permission, the bounded service loop, durable Worker rollback verifier, and
-Worker V3 join remain absent. A fixed receipt sidecar and publication ACK now
+permission, the bounded service loop, and Worker V3 authority join remain
+absent. A fixed receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
 journal V2 retains that complete ACK across every later state, accepts no raw
 receipt-digest acknowledgment, signs the occurrence identity, and rejects a
-subject-equivalent replacement after restart. Consequently
+subject-equivalent replacement after restart. A separate 1,690-byte Worker
+journal retains the complete request and sidecar, verifies the signed receipt
+against its own current anchor, commits only an immediate successor, reacquires
+the exact canonical bytes, and is the sole producer of the move-only ACK
+capability. Issuer admission accepts only the three legal cross-journal crash
+positions. Consequently
 `CompilerExecutionProvenance` remains open. See
 [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md)
 and [durable issuer state V2](docs/compiler-execution-issuer-durable-v2.md).
 The transport records are specified in
 [receipt publication V1](docs/compiler-execution-receipt-publication-v1.md).
+The durable consumer is specified in
+[Worker receipt ledger V1](docs/compiler-execution-worker-ledger-v1.md).
 
 ## CUDA-Oxide status
 

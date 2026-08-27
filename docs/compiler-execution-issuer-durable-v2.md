@@ -1,8 +1,8 @@
 # Protected Compiler-Execution Issuer Durable State V2
 
 Status: implemented local issuer state, exact subject/current-publication join,
-and publication-bound ACK journal; bounded service transport and durable Worker
-authority remain open.
+publication-bound ACK journal, and cross-journal Worker rollback commit; bounded
+service transport and Worker verification authority remain open.
 
 This contract consumes
 [`ProtectedCompilerExecutionIssuerAdmissionV1`](compiler-execution-issuer-admission-v1.md)
@@ -146,13 +146,14 @@ offline migration policy rather than an implicit reset.
 The journal provides integrity, state-machine ordering, crash consistency, and
 single-live-writer exclusion. It does not provide local anti-rollback against
 an actor that can replace the entire service-owned directory with an older
-valid signed snapshot. Worker V3 must maintain its own protected current
-rollback anchor, verify the receipt against that anchor, durably advance it,
-and independently reacquire the exact durable record named by the canonical
-[publication ACK](compiler-execution-receipt-publication-v1.md). Raw ACK bytes
-cannot construct the move-only committed-publication token accepted by the
-issuer. This independent join is required before `CompilerExecutionProvenance`
-can close.
+valid signed snapshot. The
+[Worker ledger](compiler-execution-worker-ledger-v1.md) now maintains its own
+current rollback anchor, verifies the receipt against that anchor, durably
+advances it, and independently reacquires the exact durable record named by the
+canonical [publication ACK](compiler-execution-receipt-publication-v1.md). Raw
+ACK bytes cannot construct the move-only committed-publication token accepted
+by the issuer. Lossless Worker V3 custody and production verifier authority are
+still required before `CompilerExecutionProvenance` can close.
 
 ## Shared Process Validation
 
@@ -207,6 +208,6 @@ invocation, non-compile input, and missing or malformed managed attempts.
 The issuer constructs every occurrence from its own admission, and a guard
 contention test proves a superseding attempt cannot advance until issuer
 currentness custody is explicitly dropped. Production distinct-UID inspection
-policy, the bounded `SOCK_SEQPACKET` service, Worker V3 durable sidecar
-publication and rollback ledger, and the MI300X Cargo-to-KFD run remain
+policy, the bounded `SOCK_SEQPACKET` service, Worker V3
+load-envelope/verification carriage, and the MI300X Cargo-to-KFD run remain
 required.

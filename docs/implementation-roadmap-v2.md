@@ -41,8 +41,13 @@ production verifier. A second MI300X lane authenticates the exact scalar-GEMM
 Worker V3 artifact with an explicitly synthetic test verifier, joins it to
 macro-generated host-memory arguments and one checked KFD device, executes the
 move-only invocation, and validates numerical output, completion writeback, and
-canaries. This closes the production-shaped composition boundary without
-claiming production verification. The next major gates are:
+canaries. Compiler-execution authority now has signed request and receipt
+records plus separate crash-safe issuer and Worker journals. The Worker journal
+verifies and durably reacquires the exact request and receipt before the issuer
+can acknowledge publication, and recovery accepts only the three legal
+cross-journal positions. This closes durable local receipt publication, but not
+the service transport, external monotonic rollback anchor, or production Worker
+verifier. The next major gates are:
 
 1. implement the reviewed production Worker V3 verifier, make generated
    applications invoke the canonical inherited pure-KFD transition, and prove

@@ -120,6 +120,8 @@ mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]
 mod compiler_execution_supervision;
 #[cfg(target_os = "linux")]
+mod compiler_execution_worker_ledger;
+#[cfg(target_os = "linux")]
 mod durable_session_consume;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -151,6 +153,10 @@ pub(crate) use compiler_execution_occurrence::{
 #[cfg(target_os = "linux")]
 pub use compiler_execution_supervision::{
     CompilerExecutionSupervisionErrorV1, ValidatedRemoteRustcProcessObservationV1,
+};
+#[cfg(target_os = "linux")]
+pub use compiler_execution_worker_ledger::{
+    COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V1, ProtectedCompilerExecutionWorkerLedgerErrorV1,
 };
 #[cfg(target_os = "linux")]
 pub use durable_session_consume::{

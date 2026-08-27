@@ -11,9 +11,11 @@ The protocol authenticates an Ed25519 signing key selected by a caller-pinned
 policy. The protected issuer now adds a hardened signer, fresh durable state,
 and one exact supervised compiler occurrence. The
 [receipt publication contract](compiler-execution-receipt-publication-v1.md)
-also fixes authority-free sidecar and ACK bytes. Bounded service transport,
-durable Worker-ledger publication, and the Worker V3 authority join remain
-open; the codec alone does not authenticate protected compiler execution.
+also fixes authority-free sidecar and ACK bytes. The descriptor-relative Worker
+ledger now implements durable publication and rollback verification. Bounded
+service transport, lossless Worker V3 carriage, and the Worker V3 authority join
+remain open; the codec alone does not authenticate protected compiler
+execution.
 
 ## Records
 
@@ -152,5 +154,6 @@ These tests qualify only the codec and pinned-key signature boundary. The
 [protected issuer admission](compiler-execution-issuer-admission-v1.md) and
 [durable issuer state](compiler-execution-issuer-durable-v2.md) implement the
 local protected signer and supervised occurrence foundation. The receipt
-sidecar codec is frozen separately. Bounded service transport, durable Worker V3
-carriage and verification, and MI300X end-to-end tests remain required.
+sidecar codec and [Worker ledger](compiler-execution-worker-ledger-v1.md) are
+frozen separately. Bounded service transport, Worker V3 carriage and authority
+verification, and MI300X end-to-end tests remain required.

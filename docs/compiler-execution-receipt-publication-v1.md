@@ -3,8 +3,9 @@
 ## Status
 
 This document freezes the authority-free sidecar and acknowledgment records used
-to carry one protected compiler-execution receipt into the Worker V3 rollback
-ledger. The authoritative codecs are in `fe2o3-runtime-protocol`.
+to carry one protected compiler-execution receipt into the implemented
+[Worker V3 rollback ledger](compiler-execution-worker-ledger-v1.md). The
+authoritative codecs are in `fe2o3-runtime-protocol`.
 
 The records are bounded and canonical. They do not prove that a filesystem
 write, rename, sync, or Worker-ledger transition happened. Production issuer
@@ -97,6 +98,7 @@ the issuer journal from raw ACK bytes. It must first:
 The protocol tests fix both record sizes, exercise canonical round trips and
 wrong lengths, reject mutation of every one of the 872 wire bytes, and test
 independently valid policy, journal, occurrence, receipt, publication, and
-Worker-ledger substitutions. Filesystem crash injection and protected-ledger
-reacquisition belong to the durable Worker integration milestone, not this
-authority-free codec.
+Worker-ledger substitutions. The protected Worker ledger separately covers
+filesystem crash injection, strict receipt verification, exact record
+reacquisition, idempotent replay, and issuer/Worker cross-journal crash
+positions. Those tests do not turn either wire codec into authority.

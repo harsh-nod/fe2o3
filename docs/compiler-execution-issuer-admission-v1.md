@@ -94,11 +94,13 @@ publication lock, and retains both custody values through issuer use. The
 currentness guard keeps that lock through request comparison, signing, and
 durable receipt commit. The issuer accepts a publication acknowledgment only
 through a move-only committed-publication capability that callers cannot
-construct from wire bytes. The remaining issuer work is to implement the
-protected Worker ledger that creates that capability after independently
-committing and reacquiring the exact sidecar, launch inspection under the production distinct-UID
-policy and expose the durable issuer through a bounded `SOCK_SEQPACKET` service
-loop that carries the journal-bound occurrence/session identity.
+construct from wire bytes. The
+[protected Worker ledger](compiler-execution-worker-ledger-v1.md) now creates
+that capability only after independently verifying, committing, and reacquiring
+the exact request and sidecar. The remaining issuer work is to launch inspection
+under the production distinct-UID policy and expose the composition through a
+bounded `SOCK_SEQPACKET` service loop that carries the journal-bound
+occurrence/session identity.
 Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification

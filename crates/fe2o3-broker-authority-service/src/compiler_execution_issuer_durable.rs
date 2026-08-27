@@ -24,6 +24,10 @@ use fe2o3_runtime_protocol::{
 use rustix::fs::{FlockOperation, Mode, OFlags, flock};
 use sha2::{Digest, Sha256};
 
+use crate::compiler_execution_worker_ledger::{
+    ProtectedCompilerExecutionWorkerLedgerErrorV1, ReacquiredWorkerReceiptRecordV1,
+    WorkerReceiptLedgerV1,
+};
 use crate::{
     ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
     ProtectedCompilerExecutionOccurrenceErrorV1, ProtectedCompilerExecutionOccurrenceGuardV1,
@@ -968,6 +972,12 @@ pub struct CommittedCompilerExecutionReceiptPublicationV1 {
 }
 
 impl CommittedCompilerExecutionReceiptPublicationV1 {
+    pub(super) fn from_reacquired_worker_record(record: ReacquiredWorkerReceiptRecordV1) -> Self {
+        Self {
+            ack: record.into_acknowledgment(),
+        }
+    }
+
     /// Returns the exact canonical ACK bound to the reacquired Worker ledger record.
     pub const fn acknowledgment(&self) -> &CompilerExecutionReceiptPublicationAckV1 {
         &self.ack
@@ -997,9 +1007,22 @@ pub enum CompilerExecutionIssuerAckV1 {
 /// use fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerV1;
 /// fn duplicate(value: ProtectedCompilerExecutionIssuerV1) { let _ = value.clone(); }
 /// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::{
+///     CommittedCompilerExecutionReceiptPublicationV1, ProtectedCompilerExecutionIssuerV1,
+/// };
+/// fn bypass(
+///     issuer: &mut ProtectedCompilerExecutionIssuerV1,
+///     committed: CommittedCompilerExecutionReceiptPublicationV1,
+/// ) {
+///     let _ = issuer.acknowledge_published_receipt(committed);
+/// }
+/// ```
 pub struct ProtectedCompilerExecutionIssuerV1 {
     admission: ProtectedCompilerExecutionIssuerAdmissionV1,
     ledger: IssuerLedgerV2,
+    worker_ledger: WorkerReceiptLedgerV1,
 }
 
 impl ProtectedCompilerExecutionIssuerV1 {
@@ -1009,11 +1032,22 @@ impl ProtectedCompilerExecutionIssuerV1 {
     ) -> Result<(Self, CompilerExecutionIssuerRecoveryV1), ProtectedCompilerExecutionIssuerErrorV1>
     {
         admission.validate_continuity()?;
-        let root = admission.try_clone_service_root()?;
-        let ledger = IssuerLedgerV2::recover(root, admission.policy(), admission.signing_key())?;
+        let issuer_root = admission.try_clone_service_root()?;
+        let worker_root = admission.try_clone_service_root()?;
+        let ledger =
+            IssuerLedgerV2::recover(issuer_root, admission.policy(), admission.signing_key())?;
+        let worker_ledger = WorkerReceiptLedgerV1::recover(worker_root, admission.policy())?;
+        validate_worker_ledger_join(&ledger.record, &worker_ledger)?;
         admission.validate_continuity()?;
         let recovery = ledger.recovery();
-        Ok((Self { admission, ledger }, recovery))
+        Ok((
+            Self {
+                admission,
+                ledger,
+                worker_ledger,
+            },
+            recovery,
+        ))
     }
 
     /// Generates and durably commits a fresh subject-bound challenge before returning it.
@@ -1070,9 +1104,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
         Ok(ProtectedCompilerExecutionReceiptV1 { publication })
     }
 
-    /// Durably advances only after consuming a service-owned proof of exact Worker publication.
-    /// Repeating the same complete acknowledgment after a lost response is idempotent.
-    pub fn acknowledge_published_receipt(
+    fn acknowledge_published_receipt(
         &mut self,
         committed: CommittedCompilerExecutionReceiptPublicationV1,
     ) -> Result<CompilerExecutionIssuerAckV1, ProtectedCompilerExecutionIssuerErrorV1> {
@@ -1090,9 +1122,125 @@ impl ProtectedCompilerExecutionIssuerV1 {
         Ok(outcome)
     }
 
+    /// Verifies and durably publishes one exact issued receipt in the protected Worker ledger,
+    /// reacquires the canonical Worker record, and only then advances the issuer journal.
+    /// Repeating the same request and sidecar after a lost response is idempotent.
+    pub fn publish_receipt_to_worker(
+        &mut self,
+        request_bytes: &[u8],
+        publication_bytes: &[u8],
+    ) -> Result<CompilerExecutionIssuerAckV1, ProtectedCompilerExecutionIssuerErrorV1> {
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        let request = CompilerExecutionAttestationRequestV1::decode(request_bytes)?;
+        let publication = CompilerExecutionReceiptPublicationV1::decode(publication_bytes)?;
+        validate_publication_input(
+            &self.ledger.record,
+            &self.worker_ledger,
+            &request,
+            &publication,
+        )?;
+        let reacquired = self
+            .worker_ledger
+            .commit_publication(request, publication)?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        let committed =
+            CommittedCompilerExecutionReceiptPublicationV1::from_reacquired_worker_record(
+                reacquired,
+            );
+        let outcome = self.acknowledge_published_receipt(committed)?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        self.admission.validate_continuity()?;
+        Ok(outcome)
+    }
+
     /// Returns the current inert restart output without changing durable state.
     pub fn recovery(&self) -> CompilerExecutionIssuerRecoveryV1 {
         self.ledger.recovery()
+    }
+}
+
+fn validate_worker_ledger_join(
+    issuer: &IssuerRecordV2,
+    worker: &WorkerReceiptLedgerV1,
+) -> Result<(), ProtectedCompilerExecutionIssuerErrorV1> {
+    let Some(worker_record) = worker.last_record() else {
+        if issuer.sequence == 1
+            && issuer.prior_anchor == [0; SHA256_BYTES]
+            && issuer.last_ack.is_none()
+        {
+            return Ok(());
+        }
+        return Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+            "non-genesis issuer state has no Worker record",
+        ));
+    };
+
+    let worker_ack = worker_record.acknowledgment()?;
+    let worker_is_prior = worker_record.sequence().checked_add(1) == Some(issuer.sequence)
+        && worker_record.current_rollback_anchor() == issuer.prior_anchor
+        && issuer.last_ack.as_ref() == Some(&worker_ack);
+    if worker_is_prior {
+        return Ok(());
+    }
+
+    if issuer.stage == IssuerStageV2::Issued
+        && worker_record.sequence() == issuer.sequence
+        && worker_record.prior_rollback_anchor() == issuer.prior_anchor
+        && issuer.request.as_ref() == Some(worker_record.request())
+        && issuer
+            .receipt_publication()
+            .is_ok_and(|publication| &publication == worker_record.publication())
+    {
+        return Ok(());
+    }
+
+    Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+        "durable sequences, anchors, ACK, request, or publication do not form one crash position",
+    ))
+}
+
+fn validate_publication_input(
+    issuer: &IssuerRecordV2,
+    worker: &WorkerReceiptLedgerV1,
+    request: &CompilerExecutionAttestationRequestV1,
+    publication: &CompilerExecutionReceiptPublicationV1,
+) -> Result<(), ProtectedCompilerExecutionIssuerErrorV1> {
+    match issuer.stage {
+        IssuerStageV2::Issued => {
+            let expected_request = issuer.request.as_ref().ok_or(
+                ProtectedCompilerExecutionIssuerErrorV1::InvalidRecord(
+                    "issued state has no request",
+                ),
+            )?;
+            let expected_publication = issuer.receipt_publication()?;
+            if request != expected_request || publication != &expected_publication {
+                return Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+                    "publication input does not equal the current issued record",
+                ));
+            }
+            Ok(())
+        }
+        IssuerStageV2::Ready if issuer.sequence > 1 => {
+            let worker_record = worker.last_record().ok_or(
+                ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+                    "acknowledged issuer state has no Worker record",
+                ),
+            )?;
+            if request != worker_record.request()
+                || publication != worker_record.publication()
+                || issuer.last_ack.as_ref() != Some(&worker_record.acknowledgment()?)
+            {
+                return Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+                    "replayed publication does not equal both durable journals",
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(ProtectedCompilerExecutionIssuerErrorV1::WrongStage {
+            expected: "issued or matching acknowledged receipt",
+            actual: issuer.stage.name(),
+        }),
     }
 }
 
@@ -1248,6 +1396,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     Durable(RetainedDurableDirectoryErrorV1),
     Protocol(CompilerExecutionAttestationErrorV1),
     ReceiptPublication(CompilerExecutionReceiptPublicationErrorV1),
+    WorkerLedger(ProtectedCompilerExecutionWorkerLedgerErrorV1),
     Occurrence(ProtectedCompilerExecutionOccurrenceErrorV1),
     SingletonLock(io::Error),
     Entropy(io::Error),
@@ -1260,6 +1409,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     ChallengeMismatch,
     RequestMismatch,
     OccurrenceMismatch,
+    WorkerLedgerJoin(&'static str),
     IllegalSuccessor,
     SequenceExhausted,
     Poisoned,
@@ -1278,6 +1428,7 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::ReceiptPublication(error) => {
                 write!(formatter, "issuer receipt publication failed: {error}")
             }
+            Self::WorkerLedger(error) => write!(formatter, "issuer Worker ledger failed: {error}"),
             Self::Occurrence(error) => {
                 write!(formatter, "compiler occurrence validation failed: {error}")
             }
@@ -1295,6 +1446,9 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::RequestMismatch => formatter.write_str("issuer request mismatch"),
             Self::OccurrenceMismatch => {
                 formatter.write_str("issuer occurrence identity or subject mismatch")
+            }
+            Self::WorkerLedgerJoin(reason) => {
+                write!(formatter, "issuer and Worker ledger disagree: {reason}")
             }
             Self::IllegalSuccessor => {
                 formatter.write_str("issuer journal has an illegal successor")
@@ -1318,6 +1472,7 @@ impl Error for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::Durable(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::ReceiptPublication(error) => Some(error),
+            Self::WorkerLedger(error) => Some(error),
             Self::Occurrence(error) => Some(error),
             Self::SingletonLock(error) | Self::Entropy(error) => Some(error),
             _ => None,
@@ -1354,6 +1509,14 @@ impl From<CompilerExecutionAttestationErrorV1> for ProtectedCompilerExecutionIss
 impl From<CompilerExecutionReceiptPublicationErrorV1> for ProtectedCompilerExecutionIssuerErrorV1 {
     fn from(error: CompilerExecutionReceiptPublicationErrorV1) -> Self {
         Self::ReceiptPublication(error)
+    }
+}
+
+impl From<ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    for ProtectedCompilerExecutionIssuerErrorV1
+{
+    fn from(error: ProtectedCompilerExecutionWorkerLedgerErrorV1) -> Self {
+        Self::WorkerLedger(error)
     }
 }
 
@@ -1538,6 +1701,117 @@ mod tests {
             next.prior_anchor,
             issued.receipt.as_ref().unwrap().next_rollback_anchor()
         );
+    }
+
+    #[test]
+    fn worker_ledger_join_accepts_only_the_three_exact_crash_positions() {
+        let fixture = Fixture::new();
+        let ready = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        let prepared = fixture.prepare(&ready, [0x70; 32]).unwrap();
+        let request = CompilerExecutionAttestationRequestV1::new(
+            prepared.challenge.clone().unwrap(),
+            fixture.subject.clone(),
+        )
+        .unwrap();
+        let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
+        let publication = issued.receipt_publication().unwrap();
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+
+        validate_worker_ledger_join(&ready, &worker).unwrap();
+        validate_worker_ledger_join(&prepared, &worker).unwrap();
+        validate_worker_ledger_join(&issued, &worker).unwrap();
+
+        let reacquired = worker
+            .commit_publication(request.clone(), publication.clone())
+            .unwrap();
+        validate_worker_ledger_join(&issued, &worker).unwrap();
+        let committed =
+            CommittedCompilerExecutionReceiptPublicationV1::from_reacquired_worker_record(
+                reacquired,
+            );
+        let (acknowledged, outcome) = issued
+            .acknowledge(
+                committed.acknowledgment(),
+                &fixture.policy,
+                &fixture.signing_key,
+            )
+            .unwrap();
+        assert_eq!(outcome, CompilerExecutionIssuerAckV1::Advanced);
+        validate_worker_ledger_join(&acknowledged, &worker).unwrap();
+        validate_publication_input(&acknowledged, &worker, &request, &publication).unwrap();
+
+        let replay = worker.commit_publication(request, publication).unwrap();
+        let replay =
+            CommittedCompilerExecutionReceiptPublicationV1::from_reacquired_worker_record(replay);
+        let (_, outcome) = acknowledged
+            .acknowledge(
+                replay.acknowledgment(),
+                &fixture.policy,
+                &fixture.signing_key,
+            )
+            .unwrap();
+        assert_eq!(outcome, CompilerExecutionIssuerAckV1::AlreadyAcknowledged);
+    }
+
+    #[test]
+    fn publication_substitution_fails_before_worker_state_changes() {
+        let fixture = Fixture::new();
+        let ready = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        let prepared = fixture.prepare(&ready, [0x70; 32]).unwrap();
+        let request = CompilerExecutionAttestationRequestV1::new(
+            prepared.challenge.clone().unwrap(),
+            fixture.subject.clone(),
+        )
+        .unwrap();
+        let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
+        let publication = issued.receipt_publication().unwrap();
+        let worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let substituted = CompilerExecutionReceiptPublicationV1::new(
+            [0x94; SHA256_BYTES],
+            publication.compiler_occurrence_identity(),
+            publication.receipt().clone(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            validate_publication_input(&issued, &worker, &request, &substituted),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(_))
+        ));
+        assert!(worker.last_record().is_none());
+    }
+
+    #[test]
+    fn cross_journal_gap_or_unrelated_worker_record_fails_closed() {
+        let fixture = Fixture::new();
+        let ready = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        let prepared = fixture.prepare(&ready, [0x70; 32]).unwrap();
+        let request = CompilerExecutionAttestationRequestV1::new(
+            prepared.challenge.clone().unwrap(),
+            fixture.subject.clone(),
+        )
+        .unwrap();
+        let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
+        let publication = issued.receipt_publication().unwrap();
+        let ack = fixture.ack(&issued);
+        let acknowledged = issued
+            .acknowledge(&ack, &fixture.policy, &fixture.signing_key)
+            .unwrap()
+            .0;
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        assert!(matches!(
+            validate_worker_ledger_join(&acknowledged, &worker),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(_))
+        ));
+
+        worker.commit_publication(request, publication).unwrap();
+        assert!(matches!(
+            validate_worker_ledger_join(&acknowledged, &worker),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(_))
+        ));
+        assert!(matches!(
+            validate_worker_ledger_join(&ready, &worker),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(_))
+        ));
     }
 
     #[test]
