@@ -27,7 +27,7 @@ use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
     InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
     ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
-    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError,
+    WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
     WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
     finalize_inspected_protected_worker_v3_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1, inspect_unfinalized,
@@ -377,7 +377,7 @@ fn native_v3_finalization_fails_closed_without_descriptor_source_evidence() {
     let raw_output = raw.raw_hsaco_identity();
     let blocker = match finalize_inspected_protected_worker_v3_hsaco_v1(raw) {
         Err(
-            WorkerV2HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
+            WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
                 blocker,
             ),
         ) => blocker,
@@ -423,7 +423,7 @@ fn native_v3_finalization_rejects_a_different_canonical_descriptor_source() {
     let raw = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
     assert!(matches!(
         finalize_inspected_protected_worker_v3_hsaco_v1(raw),
-        Err(WorkerV2HsacoFinalizationError::CompilerDescriptorSourceMismatch)
+        Err(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch)
     ));
 }
 
@@ -444,7 +444,7 @@ fn native_v3_finalization_rejects_a_different_export_manifest_receipt() {
     let raw = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
     assert!(matches!(
         finalize_inspected_protected_worker_v3_hsaco_v1(raw),
-        Err(WorkerV2HsacoFinalizationError::ExportManifestMismatch)
+        Err(WorkerV3HsacoFinalizationError::ExportManifestMismatch)
     ));
 }
 

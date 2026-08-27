@@ -1,5 +1,0 @@
-error[E0616]: field `finalized` of struct `FinalizedExactLdsGemmHsacoV1` is private
- --> tests/ui/exact_lds_gemm_finalization/finalized_artifact_fields_are_private.rs:4:31
-  |
-4 |     let _finalized = artifact.finalized;
-  |                               ^^^^^^^^^ private field

@@ -1,5 +1,0 @@
-error[E0599]: no method named `launch` found for struct `FinalizedExactLdsGemmHsacoV1` in the current scope
- --> tests/ui/exact_lds_gemm_finalization/descriptive_access_grants_no_launch.rs:6:14
-  |
-6 |     artifact.launch();
-  |              ^^^^^^ method not found in `FinalizedExactLdsGemmHsacoV1`

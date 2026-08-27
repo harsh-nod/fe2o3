@@ -11,8 +11,9 @@ use fe2o3_kernel_descriptor::{
     DeviceDescriptorTableV1, DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1,
     DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1,
     KernelId, LaunchConstraintsV1, LogicalArgumentV1, MAX_DESCRIPTOR_TABLE_BYTES,
-    ProducerIdentityV1, ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
-    encode_device_descriptor_table_v1,
+    ProducerIdentityV1, RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1,
+    RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1, ScalarTypeV1, SourceTypeDescriptorV1,
+    SourceTypeRecordV1, Text, ValidName, encode_device_descriptor_table_v1,
 };
 use rmpv::{Value, encode::write_value};
 use sha2::{Digest, Sha256};
@@ -742,6 +743,30 @@ fn general_v3_cov6_reconciliation_rejects_target_substitution() {
 }
 
 #[test]
+fn general_v3_cov6_reconciliation_rejects_legacy_and_unknown_producers() {
+    for producer in [
+        "rustc-codegen-fe2o3-worker-v2",
+        "rustc-codegen-fe2o3-production-v4",
+    ] {
+        let fixture = general_v3_fixture_for_identity(
+            GeneralV3Kernel::Alpha,
+            40,
+            296,
+            8,
+            8,
+            CodeObjectVersion::V6,
+            "typed-general-gfx942-cov6-v1",
+            GENERAL_V3_TARGET,
+            producer,
+        );
+        assert!(matches!(
+            finalize_unfinalized(&fixture.bytes),
+            Err(FinalizationError::KernargSegmentSizeMismatch { .. })
+        ));
+    }
+}
+
+#[test]
 fn requires_real_function_object_and_descriptor_bindings() {
     let fixture = valid_fixture();
     let inspected = inspect_unfinalized(&fixture.bytes).unwrap();
@@ -1264,6 +1289,31 @@ fn general_v3_fixture_for_target(
     producer_version: &str,
     target: &str,
 ) -> Fixture {
+    general_v3_fixture_for_identity(
+        profile,
+        explicit_size,
+        total_size,
+        descriptor_alignment,
+        metadata_alignment,
+        version,
+        producer_version,
+        target,
+        RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn general_v3_fixture_for_identity(
+    profile: GeneralV3Kernel,
+    explicit_size: u32,
+    total_size: u32,
+    descriptor_alignment: u32,
+    metadata_alignment: u32,
+    version: CodeObjectVersion,
+    producer_version: &str,
+    target: &str,
+    producer_name: &str,
+) -> Fixture {
     let table = general_v3_table(
         profile,
         explicit_size,
@@ -1272,6 +1322,7 @@ fn general_v3_fixture_for_target(
         version,
         producer_version,
         target,
+        producer_name,
     );
     let metadata = general_v3_metadata(profile, explicit_size, metadata_alignment, target);
     let mut fixture = build_fixture_for_kernels(
@@ -1314,6 +1365,7 @@ fn general_v3_table(
     version: CodeObjectVersion,
     producer_version: &str,
     target: &str,
+    producer_name: &str,
 ) -> DeviceDescriptorTableV1 {
     let scalar_source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
     let scalar_layout =
@@ -1388,11 +1440,12 @@ fn general_v3_table(
     DeviceDescriptorTableV1::new(
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
         version,
-        CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("test"), [0x21; 20]),
-        ProducerIdentityV1::new(
-            text("rustc-codegen-fe2o3-worker-v2"),
-            text(producer_version),
+        CompilerIdentityV1::new(
+            text(RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1),
+            text("test"),
+            [0x21; 20],
         ),
+        ProducerIdentityV1::new(text(producer_name), text(producer_version)),
         DeviceTargetV1::parse(target).unwrap(),
         vec![scalar_source, shared_source, disjoint_source],
         vec![scalar_layout, shared_layout, disjoint_layout],

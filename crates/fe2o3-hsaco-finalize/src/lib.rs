@@ -13,16 +13,15 @@ use fe2o3_hsaco::{
 use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
     CanonicalCodeObjectDigest, CodeObjectVersion, DecodeError, DeviceDescriptorTableV1,
-    KernelDescriptorV1, MAX_DESCRIPTOR_TABLE_BYTES, PhysicalAbiComponentKind, ScalarTypeV1,
-    decode_device_descriptor_table_v1,
+    KernelDescriptorV1, MAX_DESCRIPTOR_TABLE_BYTES, PhysicalAbiComponentKind,
+    RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1, RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1,
+    ScalarTypeV1, decode_device_descriptor_table_v1,
 };
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
 mod first_build_worker_v3;
-mod lds_gemm_finalizer;
-mod lds_gemm_profile_registry;
 mod link_plan;
 mod request_construction;
 mod worker_executor;
@@ -85,18 +84,6 @@ pub use first_build_worker_v3::{
     execute_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
 };
-pub use lds_gemm_finalizer::{
-    ExactLdsGemmFinalizationErrorV1, FinalizedExactLdsGemmHsacoIdentityV1,
-    FinalizedExactLdsGemmHsacoV1, finalize_exact_lds_gemm_compiler_import_v1,
-};
-pub use lds_gemm_profile_registry::{
-    ExactLdsGemmBufferContractV1, ExactLdsGemmBufferRoleV1, ExactLdsGemmCompilerImportPinsV1,
-    ExactLdsGemmContentIdentityV1, ExactLdsGemmContractV1, ExactLdsGemmElementV1,
-    ExactLdsGemmLengthIdentityV1, ExactLdsGemmProfileAdmissionErrorV1,
-    ExactLdsGemmProfileAvailabilityV1, ExactLdsGemmProfileIdV1, ExactLdsGemmProfileIdentityV1,
-    InspectedExactLdsGemmCompilerImportIdentityV1, InspectedExactLdsGemmCompilerImportV1,
-    exact_lds_gemm_profile_availability_v1, inspect_exact_lds_gemm_compiler_import_v1,
-};
 pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
@@ -140,14 +127,13 @@ pub use worker_protocol_v2::{
 pub use worker_v2_hsaco_admission::{
     CanonicalDescriptorSectionObservationV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
     InspectedProtectedRawWorkerV3HsacoV1, ObservedWorkerV2KernelSymbolsV1,
-    SealedWorkerV2ResponseIdentityV1, WorkerV2RawHsacoInspectionError,
-    WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
-    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
+    SealedWorkerV2ResponseIdentityV1, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
+    WorkerV3RawHsacoInspectionError, inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
 };
 pub use worker_v2_hsaco_finalization::{
     DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
-    PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV2HsacoFinalizationError,
+    PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError,
     finalize_inspected_protected_worker_v3_hsaco_v1,
 };
 pub use worker_v3_compact_finalizer_replay::{
@@ -196,8 +182,6 @@ const SHT_NOBITS: u32 = 8;
 const PT_LOAD: u32 = 1;
 const PF_R: u32 = 4;
 const SHF_ALLOC: u64 = 2;
-const GENERAL_V3_COV6_COMPILER_NAME_V1: &str = "rustc-codegen-fe2o3";
-const GENERAL_V3_COV6_PRODUCER_NAME_V1: &str = "rustc-codegen-fe2o3-worker-v2";
 const GENERAL_V3_COV6_PRODUCER_VERSION_V1: &str = "typed-general-gfx942-cov6-v1";
 const GENERAL_V3_COV6_DEVICE_TARGET_V1: &str = "gfx942:xnack-";
 
@@ -1018,8 +1002,8 @@ fn kernarg_segment_sizes_match_v1(
 fn is_general_v3_cov6_profile_v1(table: &DeviceDescriptorTableV1) -> bool {
     table.code_object_version() == CodeObjectVersion::V6
         && table.device_target().to_string() == GENERAL_V3_COV6_DEVICE_TARGET_V1
-        && table.compiler().name().as_str() == GENERAL_V3_COV6_COMPILER_NAME_V1
-        && table.producer().name().as_str() == GENERAL_V3_COV6_PRODUCER_NAME_V1
+        && table.compiler().name().as_str() == RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1
+        && table.producer().name().as_str() == RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1
         && table.producer().version().as_str() == GENERAL_V3_COV6_PRODUCER_VERSION_V1
 }
 

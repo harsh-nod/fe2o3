@@ -215,7 +215,6 @@ pub(crate) struct ProtectedFirstBuildReplayValidationV2<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedProtectedFirstBuildReplayV2 {
     evidence_identity: ProtectedFirstBuildWorkerV2IdentityV1,
-    output_identity: ContentIdentityV1,
 }
 
 impl ValidatedProtectedFirstBuildReplayV2 {
@@ -357,7 +356,6 @@ pub(crate) fn validate_protected_first_build_replay_v2(
             bootstrap_response,
             authorized_response,
         ),
-        output_identity: replay.expected_output_identity,
     })
 }
 

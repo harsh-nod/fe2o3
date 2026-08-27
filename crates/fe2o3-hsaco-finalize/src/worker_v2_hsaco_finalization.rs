@@ -336,10 +336,10 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
     }
 }
 
-/// Failure while turning admitted raw Worker V2 output into inert canonical-finalization evidence.
+/// Failure while turning admitted raw Worker V3 output into inert canonical-finalization evidence.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum WorkerV2HsacoFinalizationError {
+pub enum WorkerV3HsacoFinalizationError {
     RawOutputIdentityMismatch,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
         Box<MissingAuthenticatedProtectedDescriptorSourceEvidenceV3>,
@@ -360,7 +360,7 @@ pub enum WorkerV2HsacoFinalizationError {
     FinalizedOutputIdentityMismatch,
 }
 
-impl fmt::Display for WorkerV2HsacoFinalizationError {
+impl fmt::Display for WorkerV3HsacoFinalizationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RawOutputIdentityMismatch => formatter
@@ -375,12 +375,12 @@ impl fmt::Display for WorkerV2HsacoFinalizationError {
             Self::CanonicalFinalization(error) => {
                 write!(
                     formatter,
-                    "canonical Worker V2 HSACO finalization failed: {error}"
+                    "canonical Worker V3 HSACO finalization failed: {error}"
                 )
             }
             Self::FinalizedVerification(error) => write!(
                 formatter,
-                "independent Worker V2 HSACO finalization verification failed: {error}"
+                "independent Worker V3 HSACO finalization verification failed: {error}"
             ),
             Self::CanonicalDescriptorEvidence(error) => write!(
                 formatter,
@@ -416,7 +416,7 @@ impl fmt::Display for WorkerV2HsacoFinalizationError {
     }
 }
 
-impl Error for WorkerV2HsacoFinalizationError {
+impl Error for WorkerV3HsacoFinalizationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CanonicalFinalization(error) | Self::FinalizedVerification(error) => Some(error),
@@ -434,10 +434,10 @@ impl Error for WorkerV2HsacoFinalizationError {
 /// evidence nor falls back to a V1/V2 finalization entry.
 pub fn finalize_inspected_protected_worker_v3_hsaco_v1(
     raw: InspectedProtectedRawWorkerV3HsacoV1,
-) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV2HsacoFinalizationError> {
+) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError> {
     if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
         return Err(
-            WorkerV2HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
+            WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
                 Box::new(MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 { raw }),
             ),
         );
@@ -445,7 +445,7 @@ pub fn finalize_inspected_protected_worker_v3_hsaco_v1(
     let outer = raw.outer_handoff();
     let descriptor_source =
         CompilerDescriptorSourceV1::decode(outer.capsule().receipts().abi().canonical_preimage())
-            .map_err(WorkerV2HsacoFinalizationError::CompilerDescriptorSource)?;
+            .map_err(WorkerV3HsacoFinalizationError::CompilerDescriptorSource)?;
     if outer
         .capsule()
         .receipts()
@@ -453,18 +453,18 @@ pub fn finalize_inspected_protected_worker_v3_hsaco_v1(
         .canonical_preimage()
         != outer.module_handoff().symbol_manifest().canonical_bytes()
     {
-        return Err(WorkerV2HsacoFinalizationError::ExportManifestMismatch);
+        return Err(WorkerV3HsacoFinalizationError::ExportManifestMismatch);
     }
-    let core = finalize_worker_v2_hsaco_shared(&raw, false)?
-        .ok_or(WorkerV2HsacoFinalizationError::CompilerDescriptorSourceMismatch)?;
+    let core = finalize_worker_v3_hsaco(&raw, false)?
+        .ok_or(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch)?;
     let descriptor_bytes =
         encode_device_descriptor_table_v1(core.finalized.inspection().descriptor_table())
-            .map_err(WorkerV2HsacoFinalizationError::CanonicalDescriptorEvidence)?;
+            .map_err(WorkerV3HsacoFinalizationError::CanonicalDescriptorEvidence)?;
     let digest_end = CANONICAL_CODE_OBJECT_DIGEST_OFFSET + 32;
     let mut zero_normalized_descriptor = descriptor_bytes.clone();
     zero_normalized_descriptor[CANONICAL_CODE_OBJECT_DIGEST_OFFSET..digest_end].fill(0);
     if zero_normalized_descriptor != descriptor_source.canonical_bytes() {
-        return Err(WorkerV2HsacoFinalizationError::CompilerDescriptorSourceMismatch);
+        return Err(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch);
     }
     let canonical_descriptor_evidence = ContentIdentityV1::calculate(&descriptor_bytes);
     let identity = calculate_protected_v3_finalized_identity(
@@ -488,54 +488,13 @@ struct SharedCanonicalFinalizationV1 {
     finalized_output: ContentIdentityV1,
 }
 
-trait WorkerV2HsacoFinalizationSourceV1 {
-    fn exact_bytes(&self) -> &[u8];
-    fn linked_output_identity(&self) -> ContentIdentityV1;
-    fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1;
-    fn target(&self) -> DeviceTargetV1;
-    fn code_object_version(&self) -> CodeObjectVersion;
-    fn policy(&self) -> &WorkerV2RawHsacoPolicyV1;
-}
-
-macro_rules! impl_finalization_source {
-    ($source:ty) => {
-        impl WorkerV2HsacoFinalizationSourceV1 for $source {
-            fn exact_bytes(&self) -> &[u8] {
-                self.exact_bytes()
-            }
-
-            fn linked_output_identity(&self) -> ContentIdentityV1 {
-                self.linked_output_identity()
-            }
-
-            fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
-                self.canonical_descriptor_section()
-            }
-
-            fn target(&self) -> DeviceTargetV1 {
-                self.target()
-            }
-
-            fn code_object_version(&self) -> CodeObjectVersion {
-                self.code_object_version()
-            }
-
-            fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
-                self.policy()
-            }
-        }
-    };
-}
-
-impl_finalization_source!(InspectedProtectedRawWorkerV3HsacoV1);
-
-fn finalize_worker_v2_hsaco_shared(
-    raw: &impl WorkerV2HsacoFinalizationSourceV1,
+fn finalize_worker_v3_hsaco(
+    raw: &InspectedProtectedRawWorkerV3HsacoV1,
     allocated_read_only: bool,
-) -> Result<Option<SharedCanonicalFinalizationV1>, WorkerV2HsacoFinalizationError> {
+) -> Result<Option<SharedCanonicalFinalizationV1>, WorkerV3HsacoFinalizationError> {
     let raw_bytes = raw.exact_bytes();
     if !raw.linked_output_identity().matches(raw_bytes) {
-        return Err(WorkerV2HsacoFinalizationError::RawOutputIdentityMismatch);
+        return Err(WorkerV3HsacoFinalizationError::RawOutputIdentityMismatch);
     }
     if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
         return Ok(None);
@@ -546,15 +505,15 @@ fn finalize_worker_v2_hsaco_shared(
     } else {
         finalize_unfinalized(raw_bytes)
     }
-    .map_err(WorkerV2HsacoFinalizationError::CanonicalFinalization)?;
+    .map_err(WorkerV3HsacoFinalizationError::CanonicalFinalization)?;
     let verified = if allocated_read_only {
         verify_allocated_read_only_finalized(finalized.as_bytes())
     } else {
         verify_finalized(finalized.as_bytes())
     }
-    .map_err(WorkerV2HsacoFinalizationError::FinalizedVerification)?;
+    .map_err(WorkerV3HsacoFinalizationError::FinalizedVerification)?;
     if &verified != finalized.inspection() {
-        return Err(WorkerV2HsacoFinalizationError::FinalizedInspectionMismatch);
+        return Err(WorkerV3HsacoFinalizationError::FinalizedInspectionMismatch);
     }
 
     validate_metadata_lineage(raw, &finalized)?;
@@ -563,7 +522,7 @@ fn finalize_worker_v2_hsaco_shared(
         || verified.digest().as_bytes() == &[0; 32]
         || verified.digest() != finalized.inspection().digest()
     {
-        return Err(WorkerV2HsacoFinalizationError::FinalizedOutputIdentityMismatch);
+        return Err(WorkerV3HsacoFinalizationError::FinalizedOutputIdentityMismatch);
     }
     Ok(Some(SharedCanonicalFinalizationV1 {
         finalized,
@@ -572,9 +531,9 @@ fn finalize_worker_v2_hsaco_shared(
 }
 
 fn validate_metadata_lineage(
-    raw: &impl WorkerV2HsacoFinalizationSourceV1,
+    raw: &InspectedProtectedRawWorkerV3HsacoV1,
     finalized: &FinalizedHsaco,
-) -> Result<(), WorkerV2HsacoFinalizationError> {
+) -> Result<(), WorkerV3HsacoFinalizationError> {
     validate_metadata_lineage_parts(
         raw.target(),
         raw.code_object_version(),
@@ -588,18 +547,18 @@ fn validate_metadata_lineage_parts(
     code_object_version: CodeObjectVersion,
     policy: &WorkerV2RawHsacoPolicyV1,
     finalized: &FinalizedHsaco,
-) -> Result<(), WorkerV2HsacoFinalizationError> {
+) -> Result<(), WorkerV3HsacoFinalizationError> {
     let inspection = finalized.inspection();
     let metadata = inspection.hsaco();
     if inspection.descriptor_table().device_target() != target
         || metadata.target() != target.as_amd_target_id()
     {
-        return Err(WorkerV2HsacoFinalizationError::TargetMismatch);
+        return Err(WorkerV3HsacoFinalizationError::TargetMismatch);
     }
     if inspection.descriptor_table().code_object_version() != code_object_version
         || map_code_object_version(metadata.code_object_version()) != code_object_version
     {
-        return Err(WorkerV2HsacoFinalizationError::CodeObjectVersionMismatch);
+        return Err(WorkerV3HsacoFinalizationError::CodeObjectVersionMismatch);
     }
 
     let mut observed: Vec<_> = metadata
@@ -614,7 +573,7 @@ fn validate_metadata_lineage_parts(
         .map(|kernel| (kernel.entry(), kernel.descriptor()))
         .collect();
     if observed != expected {
-        return Err(WorkerV2HsacoFinalizationError::KernelClosureMismatch);
+        return Err(WorkerV3HsacoFinalizationError::KernelClosureMismatch);
     }
 
     let launch = policy.launch();
@@ -623,7 +582,7 @@ fn validate_metadata_lineage_parts(
             || kernel.max_flat_workgroup_size() != launch.max_flat_workgroup_size()
             || kernel.wavefront_size() != launch.wavefront_size()
         {
-            return Err(WorkerV2HsacoFinalizationError::LaunchContractMismatch {
+            return Err(WorkerV3HsacoFinalizationError::LaunchContractMismatch {
                 kernel: kernel.name().to_owned(),
             });
         }

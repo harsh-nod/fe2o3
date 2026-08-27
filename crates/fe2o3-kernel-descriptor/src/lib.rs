@@ -1,6 +1,12 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+/// Stable compiler name recorded by the production rustc descriptor emitter.
+pub const RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1: &str = "rustc-codegen-fe2o3";
+/// Stable producer name for the workload-neutral production V3 pipeline.
+pub const RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1: &str =
+    "rustc-codegen-fe2o3-production-v3";
+
 mod decode;
 mod digest;
 mod encode;

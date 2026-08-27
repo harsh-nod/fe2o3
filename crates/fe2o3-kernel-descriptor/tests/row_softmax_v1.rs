@@ -4,10 +4,11 @@ use fe2o3_kernel_descriptor::{
     DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest,
     EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1,
     LogicalArgumentV1, ProducerIdentityV1, ROW_SOFTMAX_V1_DESCRIPTOR_SYMBOL,
-    ROW_SOFTMAX_V1_INTENDED_HOST_ROW_ELEMENTS, RowSoftmaxV1StructuralDescriptorErrorV1,
-    RowSoftmaxV1StructuralDescriptorExpectationV1, ScalarTypeV1, SourceTypeDescriptorV1,
-    SourceTypeRecordV1, Text, ValidName, admit_row_softmax_v1_structural_descriptor_v1,
-    decode_device_descriptor_table_v1, encode_device_descriptor_table_v1,
+    ROW_SOFTMAX_V1_INTENDED_HOST_ROW_ELEMENTS, RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1,
+    RowSoftmaxV1StructuralDescriptorErrorV1, RowSoftmaxV1StructuralDescriptorExpectationV1,
+    ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName,
+    admit_row_softmax_v1_structural_descriptor_v1, decode_device_descriptor_table_v1,
+    encode_device_descriptor_table_v1,
 };
 
 #[derive(Clone)]
@@ -156,7 +157,10 @@ fn table(options: &Options) -> DeviceDescriptorTableV1 {
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
         options.code_object_version,
         CompilerIdentityV1::new(text("rustc-codegen-fe2o3"), text("test"), [0x41; 20]),
-        ProducerIdentityV1::new(text("rustc-codegen-fe2o3-worker-v2"), text("test")),
+        ProducerIdentityV1::new(
+            text(RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1),
+            text("test"),
+        ),
         DeviceTargetV1::parse(options.target).unwrap(),
         source_records,
         layout_records,

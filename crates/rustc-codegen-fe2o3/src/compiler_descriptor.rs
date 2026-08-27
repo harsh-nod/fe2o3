@@ -16,6 +16,7 @@ use fe2o3_kernel_descriptor::{
     CodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1, DeviceLayoutDescriptorV1,
     DeviceLayoutRecordV1, DimensionsV1, EvidenceDigest, EvidenceIdentity, KernelAbiLayoutV1,
     KernelDescriptorV1, KernelId, LaunchConstraintsV1, LogicalArgumentV1, ProducerIdentityV1,
+    RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1, RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1,
     ScalarTypeV1, SourceTypeDescriptorV1, SourceTypeRecordV1, Text, ValidName, ValidationError,
 };
 use fe2o3_kernel_ir::{
@@ -915,12 +916,12 @@ fn construct_compiler_descriptor_source_with_profile_v1(
         CanonicalCodeObjectDigest::from_bytes([0; 32]),
         CodeObjectVersion::V6,
         CompilerIdentityV1::new(
-            Text::new("rustc-codegen-fe2o3")?,
+            Text::new(RUSTC_CODEGEN_FE2O3_COMPILER_NAME_V1)?,
             Text::new(env!("CARGO_PKG_VERSION"))?,
             [0; 20],
         ),
         ProducerIdentityV1::new(
-            Text::new("rustc-codegen-fe2o3-production-v3")?,
+            Text::new(RUSTC_CODEGEN_FE2O3_PRODUCTION_V3_PRODUCER_NAME_V1)?,
             Text::new(producer_version)?,
         ),
         envelope.target(),

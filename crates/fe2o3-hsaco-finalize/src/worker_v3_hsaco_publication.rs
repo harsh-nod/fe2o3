@@ -391,8 +391,8 @@ pub enum WorkerV3HsacoPublicationErrorV1 {
     Request(WorkerRequestConstructionError),
     Protocol(WorkerProtocolError),
     FirstBuild(ProtectedFirstBuildWorkerV3Error),
-    Inspection(crate::WorkerV2RawHsacoInspectionError),
-    Finalization(crate::WorkerV2HsacoFinalizationError),
+    Inspection(crate::WorkerV3RawHsacoInspectionError),
+    Finalization(crate::WorkerV3HsacoFinalizationError),
     FinalizedHsaco(crate::FinalizationError),
     LinkPlan(crate::LinkPlanError),
     AllocationFailed { component: &'static str },
@@ -493,8 +493,8 @@ error_conversion!(crate::ProtectedCompilerHandoffBindingErrorV3, Binding);
 error_conversion!(WorkerRequestConstructionError, Request);
 error_conversion!(WorkerProtocolError, Protocol);
 error_conversion!(ProtectedFirstBuildWorkerV3Error, FirstBuild);
-error_conversion!(crate::WorkerV2RawHsacoInspectionError, Inspection);
-error_conversion!(crate::WorkerV2HsacoFinalizationError, Finalization);
+error_conversion!(crate::WorkerV3RawHsacoInspectionError, Inspection);
+error_conversion!(crate::WorkerV3HsacoFinalizationError, Finalization);
 error_conversion!(crate::FinalizationError, FinalizedHsaco);
 error_conversion!(crate::LinkPlanError, LinkPlan);
 

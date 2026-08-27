@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `FinalizedExactLdsGemmHsacoV1` in the current scope
- --> tests/ui/exact_lds_gemm_finalization/finalized_artifact_cannot_clone.rs:4:31
-  |
-4 |     let _duplicate = artifact.clone();
-  |                               ^^^^^ method not found in `FinalizedExactLdsGemmHsacoV1`

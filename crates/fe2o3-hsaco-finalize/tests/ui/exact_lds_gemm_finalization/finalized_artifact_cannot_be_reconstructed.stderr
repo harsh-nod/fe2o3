@@ -1,7 +1,0 @@
-error: cannot construct `FinalizedExactLdsGemmHsacoV1` with struct literal syntax due to private fields
- --> tests/ui/exact_lds_gemm_finalization/finalized_artifact_cannot_be_reconstructed.rs:4:5
-  |
-4 |     FinalizedExactLdsGemmHsacoV1 {}
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: private fields that were not provided
