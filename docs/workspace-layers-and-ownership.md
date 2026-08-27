@@ -246,11 +246,14 @@ allocation, load, launch, queue publication, execution, runtime wait,
 authentication, proof, or storage release.
 
 `fe2o3-runtime` is the sole pure-Rust gfx942 composition boundary over the
-canonical AMDHSA loader and `fe2o3-kfd`. Its safe API currently prepares a
-complete address-free request but grants no launch authority; the exact-artifact
-hardware diagnostic reaches the private mechanics only through an explicit
-unsafe transition. Production execution must consume verifier authority in this
-crate rather than adding another host-runtime route.
+canonical AMDHSA loader and `fe2o3-kfd`. Its safe API prepares a complete
+address-free request and has one consuming execution transition. That transition
+requires an unsafe Worker V3 authority implementation and independently matches
+the final object, kernel, complete invocation contract, and checked KFD device.
+The exact-artifact hardware diagnostic exercises it with a manually asserted
+unsafe authority; no production implementation exists yet. Production
+execution must consume verifier authority in this crate rather than adding
+another host-runtime route.
 
 ### Integration
 

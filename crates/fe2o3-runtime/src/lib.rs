@@ -1,5 +1,14 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![doc = include_str!("../README.md")]
+
+#[allow(unsafe_code)]
+mod authorized_execution;
+
+pub use authorized_execution::{
+    Gfx942AuthorizedRuntimeCompletedBufferV1, Gfx942AuthorizedRuntimeDispatchResultV1,
+    Gfx942AuthorizedRuntimeExecutionErrorV1, WorkerV3Gfx942ExecutionAuthorityV1,
+    execute_authorized_gfx942_runtime_dispatch_v1,
+};
 
 use core::fmt;
 
@@ -10,20 +19,109 @@ use fe2o3_amdhsa_loader::{
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_hsaco::{HiddenArgument, HiddenValueKind};
 use fe2o3_kfd::{
-    Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
-    Gfx942KfdDispatchRequestV1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1, Gfx942KfdDispatchBufferV1,
+    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
 };
+use sha2::{Digest, Sha256};
 
 const COV6_IMPLICIT_KERNARG_BYTES_V1: usize = 256;
 const DIRECT_KFD_KERNARG_ALIGNMENT_V1: u64 = 16;
 const GFX942_WAVEFRONT_SIZE_V1: u32 = 64;
 const GFX942_MAX_GROUP_SEGMENT_BYTES_V1: u64 = 64 * 1024;
+const GFX942_RUNTIME_DISPATCH_CONTRACT_DOMAIN_V1: &[u8] =
+    b"fe2o3.runtime.gfx942-dispatch-contract.v1\0";
+
+#[derive(Clone, Copy)]
+struct Gfx942RuntimeKernelIdentityProjectionV1 {
+    object_sha256: [u8; 32],
+    metadata_sha256: [u8; 32],
+    descriptor_sha256: [u8; 32],
+    entry_sha256: [u8; 32],
+    closure_sha256: [u8; 32],
+}
+
+impl From<KernelIdentityInputsV1> for Gfx942RuntimeKernelIdentityProjectionV1 {
+    fn from(identity: KernelIdentityInputsV1) -> Self {
+        Self {
+            object_sha256: identity.object_sha256(),
+            metadata_sha256: identity.metadata_sha256(),
+            descriptor_sha256: identity.descriptor_sha256(),
+            entry_sha256: identity.entry_sha256(),
+            closure_sha256: identity.closure_sha256(),
+        }
+    }
+}
+
+/// Worker V3 memory effect assigned to one address-free KFD dispatch buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Gfx942RuntimeBufferAccessV1 {
+    ReadOnly,
+    WriteOnly,
+    ReadWrite,
+}
+
+impl Gfx942RuntimeBufferAccessV1 {
+    const fn canonical_tag(self) -> u8 {
+        match self {
+            Self::ReadOnly => 1,
+            Self::WriteOnly => 2,
+            Self::ReadWrite => 3,
+        }
+    }
+}
+
+/// Owned initial bytes and declared effect for one address-free runtime buffer.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Gfx942RuntimeDispatchBufferV1 {
+    buffer: Gfx942KfdDispatchBufferV1,
+    access: Gfx942RuntimeBufferAccessV1,
+}
+
+pub(crate) struct Gfx942RuntimePreparedBufferPolicyV1 {
+    access: Gfx942RuntimeBufferAccessV1,
+    read_only_initial_bytes: Option<Vec<u8>>,
+}
+
+impl Gfx942RuntimePreparedBufferPolicyV1 {
+    pub(crate) const fn access(&self) -> Gfx942RuntimeBufferAccessV1 {
+        self.access
+    }
+
+    pub(crate) fn read_only_initial_bytes(&self) -> Option<&[u8]> {
+        self.read_only_initial_bytes.as_deref()
+    }
+}
+
+impl Gfx942RuntimeDispatchBufferV1 {
+    pub fn new(
+        bytes: Vec<u8>,
+        access: Gfx942RuntimeBufferAccessV1,
+    ) -> Result<Self, Gfx942KfdDispatchRequestErrorV1> {
+        Ok(Self {
+            buffer: Gfx942KfdDispatchBufferV1::new(bytes)?,
+            access,
+        })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.buffer.bytes()
+    }
+
+    pub const fn access(&self) -> Gfx942RuntimeBufferAccessV1 {
+        self.access
+    }
+
+    fn into_kfd_buffer(self) -> Gfx942KfdDispatchBufferV1 {
+        self.buffer
+    }
+}
 
 /// Complete caller-owned data needed before loader and ABI admission.
 #[must_use]
 pub struct Gfx942RuntimeDispatchInputsV1 {
     explicit_kernarg: Vec<u8>,
-    buffers: Vec<Gfx942KfdDispatchBufferV1>,
+    buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
     pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
     geometry: AqlDispatchGeometryV1,
     dynamic_group_segment_bytes: u32,
@@ -33,7 +131,7 @@ pub struct Gfx942RuntimeDispatchInputsV1 {
 impl Gfx942RuntimeDispatchInputsV1 {
     pub fn new(
         explicit_kernarg: Vec<u8>,
-        buffers: Vec<Gfx942KfdDispatchBufferV1>,
+        buffers: Vec<Gfx942RuntimeDispatchBufferV1>,
         pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
         geometry: AqlDispatchGeometryV1,
         dynamic_group_segment_bytes: u32,
@@ -57,7 +155,10 @@ impl Gfx942RuntimeDispatchInputsV1 {
 #[must_use = "preparation does not execute or authorize the selected kernel"]
 pub struct PreparedGfx942RuntimeDispatchV1 {
     request: Gfx942KfdDispatchRequestV1,
+    buffer_policies: Vec<Gfx942RuntimePreparedBufferPolicyV1>,
     identity: KernelIdentityInputsV1,
+    finalized_hsaco_length: u64,
+    dispatch_contract_sha256: [u8; 32],
     kernel_name: String,
     descriptor_offset: u64,
     static_group_segment_bytes: u64,
@@ -69,6 +170,8 @@ impl fmt::Debug for PreparedGfx942RuntimeDispatchV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PreparedGfx942RuntimeDispatchV1")
+            .field("finalized_hsaco_length", &self.finalized_hsaco_length)
+            .field("dispatch_contract_sha256", &self.dispatch_contract_sha256)
             .field("kernel_name", &self.kernel_name)
             .field("descriptor_offset", &self.descriptor_offset)
             .field(
@@ -90,6 +193,20 @@ impl fmt::Debug for PreparedGfx942RuntimeDispatchV1 {
 impl PreparedGfx942RuntimeDispatchV1 {
     pub const fn identity(&self) -> KernelIdentityInputsV1 {
         self.identity
+    }
+
+    pub const fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_hsaco_length
+    }
+
+    /// Canonical identity of the complete address-free invocation presented to KFD.
+    ///
+    /// This binds the finalized object, selected kernel closure, materialized image,
+    /// descriptor offset, complete kernarg template, initial buffer bytes, pointer fixups,
+    /// geometry, resource sizes, and timeout. It is descriptive until an admitting Worker V3
+    /// authority independently names the same identity.
+    pub const fn dispatch_contract_sha256(&self) -> [u8; 32] {
+        self.dispatch_contract_sha256
     }
 
     pub fn kernel_name(&self) -> &str {
@@ -116,6 +233,15 @@ impl PreparedGfx942RuntimeDispatchV1 {
     /// still requires the complete unsafe Worker V3 contract.
     pub fn into_unchecked_kfd_request(self) -> Gfx942KfdDispatchRequestV1 {
         self.request
+    }
+
+    pub(crate) fn into_authorized_execution_parts(
+        self,
+    ) -> (
+        Gfx942KfdDispatchRequestV1,
+        Vec<Gfx942RuntimePreparedBufferPolicyV1>,
+    ) {
+        (self.request, self.buffer_policies)
     }
 }
 
@@ -239,12 +365,42 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
         .ok_or(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
             "total group segment representation",
         ))?;
+    let finalized_hsaco_length =
+        u64::try_from(hsaco.len()).map_err(|_| Gfx942RuntimePreparationErrorV1::ImageSize)?;
+    let dispatch_contract_sha256 = derive_dispatch_contract_sha256_v1(
+        finalized_hsaco_length,
+        identity.into(),
+        kernel_name,
+        &image,
+        descriptor_offset,
+        &kernarg,
+        kernarg_alignment,
+        &inputs.buffers,
+        &inputs.pointer_fixups,
+        inputs.geometry,
+        packet_group_segment_bytes,
+        inputs.timeout_milliseconds,
+    );
+    let buffer_policies = inputs
+        .buffers
+        .iter()
+        .map(|buffer| Gfx942RuntimePreparedBufferPolicyV1 {
+            access: buffer.access(),
+            read_only_initial_bytes: (buffer.access() == Gfx942RuntimeBufferAccessV1::ReadOnly)
+                .then(|| buffer.bytes().to_vec()),
+        })
+        .collect();
+    let buffers = inputs
+        .buffers
+        .into_iter()
+        .map(Gfx942RuntimeDispatchBufferV1::into_kfd_buffer)
+        .collect();
     let request = Gfx942KfdDispatchRequestV1::new(
         image,
         descriptor_offset,
         kernarg,
         kernarg_alignment,
-        inputs.buffers,
+        buffers,
         inputs.pointer_fixups,
         inputs.geometry,
         0,
@@ -253,13 +409,98 @@ pub fn prepare_gfx942_runtime_dispatch_v1(
     )?;
     Ok(PreparedGfx942RuntimeDispatchV1 {
         request,
+        buffer_policies,
         identity,
+        finalized_hsaco_length,
+        dispatch_contract_sha256,
         kernel_name: kernel_name.to_owned(),
         descriptor_offset,
         static_group_segment_bytes,
         dynamic_group_segment_bytes: inputs.dynamic_group_segment_bytes,
         packet_group_segment_bytes,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_dispatch_contract_sha256_v1(
+    finalized_hsaco_length: u64,
+    identity: Gfx942RuntimeKernelIdentityProjectionV1,
+    kernel_name: &str,
+    image: &[u8],
+    descriptor_offset: u64,
+    kernarg: &[u8],
+    kernarg_alignment: u64,
+    buffers: &[Gfx942RuntimeDispatchBufferV1],
+    pointer_fixups: &[Gfx942KfdDispatchPointerFixupV1],
+    geometry: AqlDispatchGeometryV1,
+    packet_group_segment_bytes: u32,
+    timeout_milliseconds: u32,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(GFX942_RUNTIME_DISPATCH_CONTRACT_DOMAIN_V1);
+    digest.update(GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1.as_bytes());
+    digest.update(identity.object_sha256);
+    digest.update(finalized_hsaco_length.to_le_bytes());
+    digest.update(identity.metadata_sha256);
+    digest.update(identity.descriptor_sha256);
+    digest.update(identity.entry_sha256);
+    digest.update(identity.closure_sha256);
+    update_length_delimited_v1(&mut digest, kernel_name.as_bytes());
+    update_length_delimited_v1(&mut digest, image);
+    digest.update(descriptor_offset.to_le_bytes());
+    update_length_delimited_v1(&mut digest, kernarg);
+    digest.update(kernarg_alignment.to_le_bytes());
+    digest.update(
+        u64::try_from(buffers.len())
+            .expect("bounded runtime buffer count fits u64")
+            .to_le_bytes(),
+    );
+    for buffer in buffers {
+        digest.update([buffer.access().canonical_tag()]);
+        update_length_delimited_v1(&mut digest, buffer.bytes());
+    }
+    digest.update(
+        u64::try_from(pointer_fixups.len())
+            .expect("bounded runtime pointer-fixup count fits u64")
+            .to_le_bytes(),
+    );
+    for fixup in pointer_fixups {
+        digest.update(
+            u64::try_from(fixup.kernarg_offset())
+                .expect("bounded kernarg offset fits u64")
+                .to_le_bytes(),
+        );
+        digest.update(
+            u64::try_from(fixup.buffer_index())
+                .expect("bounded buffer index fits u64")
+                .to_le_bytes(),
+        );
+        digest.update(
+            u64::try_from(fixup.buffer_byte_offset())
+                .expect("bounded buffer offset fits u64")
+                .to_le_bytes(),
+        );
+        digest.update(fixup.required_alignment().to_le_bytes());
+    }
+    for dimension in geometry.grid() {
+        digest.update(dimension.to_le_bytes());
+    }
+    for dimension in geometry.workgroup() {
+        digest.update(u32::from(dimension).to_le_bytes());
+    }
+    digest.update(0_u32.to_le_bytes());
+    digest.update(packet_group_segment_bytes.to_le_bytes());
+    digest.update(timeout_milliseconds.to_le_bytes());
+    digest.finalize().into()
+}
+
+fn update_length_delimited_v1(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update(
+        u64::try_from(bytes.len())
+            .expect("bounded runtime input length fits u64")
+            .to_le_bytes(),
+    );
+    digest.update(bytes);
 }
 
 fn validate_resources(
@@ -409,12 +650,77 @@ fn hidden_value(
 }
 
 const fn ceil_div_u32(value: u32, divisor: u32) -> u32 {
-    value / divisor + if value % divisor == 0 { 0 } else { 1 }
+    value / divisor + if value.is_multiple_of(divisor) { 0 } else { 1 }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct DispatchContractCaseV1 {
+        finalized_hsaco_length: u64,
+        identity: Gfx942RuntimeKernelIdentityProjectionV1,
+        kernel_name: String,
+        image: Vec<u8>,
+        descriptor_offset: u64,
+        kernarg: Vec<u8>,
+        kernarg_alignment: u64,
+        buffers: Vec<(Gfx942RuntimeBufferAccessV1, Vec<u8>)>,
+        pointer_fixups: Vec<Gfx942KfdDispatchPointerFixupV1>,
+        geometry: AqlDispatchGeometryV1,
+        group_segment_bytes: u32,
+        timeout_milliseconds: u32,
+    }
+
+    impl DispatchContractCaseV1 {
+        fn baseline() -> Self {
+            Self {
+                finalized_hsaco_length: 7_000,
+                identity: Gfx942RuntimeKernelIdentityProjectionV1 {
+                    object_sha256: [1; 32],
+                    metadata_sha256: [2; 32],
+                    descriptor_sha256: [3; 32],
+                    entry_sha256: [4; 32],
+                    closure_sha256: [5; 32],
+                },
+                kernel_name: "kernel_v1".to_owned(),
+                image: vec![6; 128],
+                descriptor_offset: 64,
+                kernarg: vec![0; 32],
+                kernarg_alignment: 16,
+                buffers: vec![(Gfx942RuntimeBufferAccessV1::ReadOnly, vec![7; 64])],
+                pointer_fixups: vec![Gfx942KfdDispatchPointerFixupV1::new(0, 0, 8, 4)],
+                geometry: AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+                group_segment_bytes: 256,
+                timeout_milliseconds: 5_000,
+            }
+        }
+
+        fn identity(&self) -> [u8; 32] {
+            let buffers = self
+                .buffers
+                .iter()
+                .map(|(access, bytes)| {
+                    Gfx942RuntimeDispatchBufferV1::new(bytes.clone(), *access).unwrap()
+                })
+                .collect::<Vec<_>>();
+            derive_dispatch_contract_sha256_v1(
+                self.finalized_hsaco_length,
+                self.identity,
+                &self.kernel_name,
+                &self.image,
+                self.descriptor_offset,
+                &self.kernarg,
+                self.kernarg_alignment,
+                &buffers,
+                &self.pointer_fixups,
+                self.geometry,
+                self.group_segment_bytes,
+                self.timeout_milliseconds,
+            )
+        }
+    }
 
     fn geometry() -> AqlDispatchGeometryV1 {
         AqlDispatchGeometryV1::new([130, 4, 1], [64, 2, 1]).unwrap()
@@ -465,5 +771,77 @@ mod tests {
         assert_eq!(ceil_div_u32(64, 64), 1);
         assert_eq!(ceil_div_u32(65, 64), 2);
         assert_eq!(ceil_div_u32(u32::MAX, u16::MAX.into()), 65_537);
+    }
+
+    #[test]
+    fn dispatch_contract_is_deterministic_and_binds_every_runtime_axis() {
+        let baseline = DispatchContractCaseV1::baseline();
+        let expected = baseline.identity();
+        assert_eq!(baseline.identity(), expected);
+
+        let mut mutations = Vec::new();
+        let mut changed = baseline.clone();
+        changed.finalized_hsaco_length += 1;
+        mutations.push(("finalized length", changed));
+        let mut changed = baseline.clone();
+        changed.identity.object_sha256[0] ^= 1;
+        mutations.push(("object identity", changed));
+        let mut changed = baseline.clone();
+        changed.identity.metadata_sha256[0] ^= 1;
+        mutations.push(("metadata identity", changed));
+        let mut changed = baseline.clone();
+        changed.identity.descriptor_sha256[0] ^= 1;
+        mutations.push(("descriptor identity", changed));
+        let mut changed = baseline.clone();
+        changed.identity.entry_sha256[0] ^= 1;
+        mutations.push(("entry identity", changed));
+        let mut changed = baseline.clone();
+        changed.identity.closure_sha256[0] ^= 1;
+        mutations.push(("closure identity", changed));
+        let mut changed = baseline.clone();
+        changed.kernel_name.push('x');
+        mutations.push(("kernel name", changed));
+        let mut changed = baseline.clone();
+        changed.image[0] ^= 1;
+        mutations.push(("materialized image", changed));
+        let mut changed = baseline.clone();
+        changed.descriptor_offset += 64;
+        mutations.push(("descriptor offset", changed));
+        let mut changed = baseline.clone();
+        changed.kernarg[31] ^= 1;
+        mutations.push(("kernarg", changed));
+        let mut changed = baseline.clone();
+        changed.kernarg_alignment = 32;
+        mutations.push(("kernarg alignment", changed));
+        let mut changed = baseline.clone();
+        changed.buffers[0].0 = Gfx942RuntimeBufferAccessV1::ReadWrite;
+        mutations.push(("buffer access", changed));
+        let mut changed = baseline.clone();
+        changed.buffers[0].1[0] ^= 1;
+        mutations.push(("buffer bytes", changed));
+        let mut changed = baseline.clone();
+        changed
+            .buffers
+            .push((Gfx942RuntimeBufferAccessV1::WriteOnly, vec![8; 4]));
+        mutations.push(("buffer count", changed));
+        let mut changed = baseline.clone();
+        changed.pointer_fixups[0] = Gfx942KfdDispatchPointerFixupV1::new(8, 0, 8, 4);
+        mutations.push(("pointer fixup", changed));
+        let mut changed = baseline.clone();
+        changed.geometry = AqlDispatchGeometryV1::new([128, 1, 1], [64, 1, 1]).unwrap();
+        mutations.push(("grid geometry", changed));
+        let mut changed = baseline.clone();
+        changed.geometry = AqlDispatchGeometryV1::new([64, 1, 1], [32, 1, 1]).unwrap();
+        mutations.push(("workgroup geometry", changed));
+        let mut changed = baseline.clone();
+        changed.group_segment_bytes += 4;
+        mutations.push(("group segment", changed));
+        let mut changed = baseline.clone();
+        changed.timeout_milliseconds += 1;
+        mutations.push(("timeout", changed));
+
+        for (field, changed) in mutations {
+            assert_ne!(changed.identity(), expected, "{field} was not bound");
+        }
     }
 }

@@ -1,8 +1,11 @@
 use std::{env, fs};
 
 use fe2o3_aql::AqlDispatchGeometryV1;
-use fe2o3_kfd::{Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchPointerFixupV1};
-use fe2o3_runtime::{Gfx942RuntimeDispatchInputsV1, prepare_gfx942_runtime_dispatch_v1};
+use fe2o3_kfd::Gfx942KfdDispatchPointerFixupV1;
+use fe2o3_runtime::{
+    Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
+    prepare_gfx942_runtime_dispatch_v1,
+};
 use sha2::{Digest, Sha256};
 
 const HSACO_ENV: &str = "FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO";
@@ -30,8 +33,10 @@ fn prepares_exact_source_authenticated_lds_reduction_without_native_work() {
         Gfx942RuntimeDispatchInputsV1::new(
             explicit,
             vec![
-                Gfx942KfdDispatchBufferV1::new(input).unwrap(),
-                Gfx942KfdDispatchBufferV1::new(output).unwrap(),
+                Gfx942RuntimeDispatchBufferV1::new(input, Gfx942RuntimeBufferAccessV1::ReadOnly)
+                    .unwrap(),
+                Gfx942RuntimeDispatchBufferV1::new(output, Gfx942RuntimeBufferAccessV1::ReadWrite)
+                    .unwrap(),
             ],
             vec![
                 Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 4),

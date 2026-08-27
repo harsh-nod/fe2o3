@@ -2,14 +2,18 @@
 
 //! Exact-artifact direct-KFD diagnosis. This is not a production authority path.
 
-use std::{env, fs, process};
+use std::{convert::Infallible, env, fs};
 
 use fe2o3_aql::AqlDispatchGeometryV1;
 use fe2o3_kfd::{
-    DeviceSelector, GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1, Gfx942KfdDispatchBufferV1,
-    Gfx942KfdDispatchPointerFixupV1, OpenedKfd, execute_gfx942_kfd_dispatch_unchecked_v1,
+    DeviceSelector, GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
+    Gfx942KfdDispatchPointerFixupV1, OpenedKfd,
 };
-use fe2o3_runtime::{Gfx942RuntimeDispatchInputsV1, prepare_gfx942_runtime_dispatch_v1};
+use fe2o3_runtime::{
+    Gfx942RuntimeBufferAccessV1, Gfx942RuntimeDispatchBufferV1, Gfx942RuntimeDispatchInputsV1,
+    WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_dispatch_v1,
+    prepare_gfx942_runtime_dispatch_v1,
+};
 
 const USAGE: &str = "usage: gfx942-lds-diagnostic <unique-id> <exact-hsaco-path>";
 const EXPECTED_HSACO_SHA256_HEX: &str =
@@ -18,6 +22,45 @@ const KERNEL: &str = "lds_publish_read_reduce_i32_v1";
 const CANARY_BYTES: usize = 64;
 const INPUT_VALUES: usize = 64;
 const EXPECTED_SUM: i32 = 2_080;
+
+struct PinnedDiagnosticAuthorityV1 {
+    finalized_hsaco_sha256: [u8; 32],
+    finalized_hsaco_length: u64,
+    dispatch_contract_sha256: [u8; 32],
+    device_unique_id: u64,
+}
+
+// SAFETY: this opt-in diagnostic deliberately substitutes one manually audited, SHA-pinned test
+// kernel for the absent production Worker V3 verifier. It binds the complete prepared invocation
+// and selected device below, runs synchronously, and is unavailable from the library API. It is
+// diagnostic evidence only and must never be copied into production authority code.
+unsafe impl WorkerV3Gfx942ExecutionAuthorityV1 for PinnedDiagnosticAuthorityV1 {
+    type CurrentnessError = Infallible;
+
+    fn finalized_hsaco_sha256(&self) -> [u8; 32] {
+        self.finalized_hsaco_sha256
+    }
+
+    fn finalized_hsaco_length(&self) -> u64 {
+        self.finalized_hsaco_length
+    }
+
+    fn kernel_name(&self) -> &str {
+        KERNEL
+    }
+
+    fn dispatch_contract_sha256(&self) -> [u8; 32] {
+        self.dispatch_contract_sha256
+    }
+
+    fn device_unique_id(&self) -> u64 {
+        self.device_unique_id
+    }
+
+    fn revalidate_currentness(&self) -> Result<(), Self::CurrentnessError> {
+        Ok(())
+    }
+}
 
 fn parse_unique_id(value: &str) -> Result<u64, String> {
     value
@@ -74,8 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Gfx942RuntimeDispatchInputsV1::new(
             explicit,
             vec![
-                Gfx942KfdDispatchBufferV1::new(input)?,
-                Gfx942KfdDispatchBufferV1::new(output)?,
+                Gfx942RuntimeDispatchBufferV1::new(input, Gfx942RuntimeBufferAccessV1::ReadOnly)?,
+                Gfx942RuntimeDispatchBufferV1::new(output, Gfx942RuntimeBufferAccessV1::ReadWrite)?,
             ],
             vec![
                 Gfx942KfdDispatchPointerFixupV1::new(0, 0, CANARY_BYTES, 4),
@@ -93,23 +136,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
+    let authority = PinnedDiagnosticAuthorityV1 {
+        finalized_hsaco_sha256: prepared.identity().object_sha256(),
+        finalized_hsaco_length: prepared.finalized_hsaco_length(),
+        dispatch_contract_sha256: prepared.dispatch_contract_sha256(),
+        device_unique_id: unique_id,
+    };
     let device = OpenedKfd::open_default()?
         .admit_uapi()?
         .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))?;
 
-    // SAFETY: this diagnostic is limited to one SHA-pinned, loader-inspected
-    // artifact and its exact reviewed ABI/buffers. It deliberately does not
-    // construct or claim the missing Worker V3 production authority.
-    let result = match unsafe {
-        execute_gfx942_kfd_dispatch_unchecked_v1(device, prepared.into_unchecked_kfd_request())
-    } {
-        Ok(result) => result,
-        Err(error) => {
-            eprintln!("terminal direct-KFD diagnostic failure: {error}");
-            process::abort();
-        }
-    };
-    let [input, output]: [Gfx942KfdDispatchBufferV1; 2] = result
+    let result = execute_authorized_gfx942_runtime_dispatch_v1(authority, device, prepared)?;
+    let [input, output] = result
         .into_buffers()
         .try_into()
         .map_err(|_| "runtime returned the wrong buffer cardinality")?;
@@ -131,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!(
-        "status=measured-diagnostic-only target=gfx942:xnack- unique_id={unique_id:016x} kernel={KERNEL} hsaco_sha256={actual_sha256} closure_sha256={closure_sha256} kfd_dispatch_profile_sha256={} result={observed} canaries=preserved authority=none",
+        "status=measured-diagnostic-only target=gfx942:xnack- unique_id={unique_id:016x} kernel={KERNEL} hsaco_sha256={actual_sha256} closure_sha256={closure_sha256} kfd_dispatch_profile_sha256={} result={observed} canaries=preserved authority=none runtime_gate=unsafe-diagnostic",
         GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
     );
     Ok(())

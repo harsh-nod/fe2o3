@@ -634,7 +634,7 @@ The detailed dependencies and exit criteria are in
   binding, loaded-executable borrows, non-clone typed selections and HSA kernel
   sets, and unload-before-release errors. The suite does not yet cover every
   general typed signature, async cancellation path, barrier lifecycle, or
-  remaining unsafe transition.
+  production Worker V3-to-KFD authority implementation.
 - Row 87: authenticated rustc inline-assembly records bind statement,
   function, contract, and frontend-unit identities before a closed `gfx942`
   instruction table emits static LLVM templates. V1 covers a small set of

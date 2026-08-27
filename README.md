@@ -53,11 +53,13 @@ in-process LLD worker, and COV6 descriptor inspection. Deterministic replay
 produces identical HSACO bytes with an exact 256-byte static-LDS contract. This
 route selects no workload profile and uses neither COMGR nor a shell linker. It
 does not grant load or launch authority. The same SHA-pinned HSACO now also
-completes one explicitly unsafe, measured-only pure-Rust KFD diagnostic on the
-MI300X: all 64 inputs reduce to `2080`, allocation canaries remain intact, and
-queue/completion teardown succeeds. The diagnostic establishes native KFD/AQL
-mechanics only; production executable evidence must still enter through the
-Worker V3 application and verifier.
+completes one measured-only pure-Rust KFD diagnostic on the MI300X through the
+runtime's invocation-specific authority gate: all 64 inputs reduce to `2080`,
+allocation canaries remain intact, and queue/completion teardown succeeds. The
+diagnostic supplies an explicitly unsafe, manually asserted authority rather
+than a production Worker V3 decision. It establishes native KFD/AQL mechanics
+and the runtime identity join only; production executable evidence must still
+enter through the Worker V3 application and verifier.
 
 ## CUDA-Oxide status
 
@@ -82,8 +84,9 @@ V2 admits only the full canonical `gfx942:xnack-` target, persists that binding
 in Kernel IR, and checks it against the Worker V2 envelope. The older V2
 compiler-created fixture remains separate, but the production `i32` WG64 LDS
 reduction now joins genuine Rust source to reproducible inspected HSACO through
-the one compiler transaction. Unsafe exact-artifact KFD execution passes, while
-Worker V3-authorized KFD execution remains open. The
+the one compiler transaction. Exact-artifact KFD execution through an unsafe
+diagnostic authority passes, while production Worker V3-authorized KFD
+execution remains open. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
@@ -222,10 +225,11 @@ MIR-to-KIR refinement proof or an authority-bearing proof receipt.
 The former MoE V1/V2 host bridges, generated adapters, exact top-2 lifecycle,
 and workload-specific HSA launcher were non-production qualification
 alternatives. They have been removed so MoE execution cannot bypass the sole
-Worker V3 application, descriptor, argument, HSA, and unload lifecycle. The
-ordinary Rust kernels, rustc/KIR diagnostics, compact-plan verifier and Verus
-evidence, and independent source/oracle tests remain. MoE hardware execution
-through Worker V3 is still pending and no parity promotion is claimed.
+Worker V3 application, descriptor, argument, verifier, and runtime lifecycle.
+The ordinary Rust kernels, rustc/KIR diagnostics, compact-plan verifier and
+Verus evidence, and independent source/oracle tests remain. MoE hardware
+execution through Worker V3 is still pending and no parity promotion is
+claimed.
 The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
 the checked host contract with bounded production-directed LDS slices. An
 ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
@@ -445,9 +449,11 @@ Safe ownership of resources used by asynchronous copies is documented in
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. It exports no raw module, function, parameter
   pack, launch configuration, or launch function in any downstream build.
-- Production applications load and dispatch only through the authenticated
-  Worker V3 transaction, compiler-generated typed arguments, and reviewed HSA
-  adapter. The former host `launch!` macro and the selectable raw-HIP core
+- The current generated application route enters the authenticated Worker V3
+  transaction, compiler-generated typed arguments, and reviewed HSA adapter.
+  That HSA-backed implementation is migration debt, not the permanent runtime:
+  production is converging on the invocation-specific pure-KFD gate in
+  `fe2o3-runtime`. The former host `launch!` macro and selectable raw-HIP core
   feature are deleted; raw HIP module/launch mechanics remain private unit-test
   implementation details.
 - `DeviceCopy` and its derive macro restrict safe byte transfers to supported
@@ -522,7 +528,7 @@ is complete, and the recorded runs grant no current production authority.
   reaches only verified Kernel IR. Dynamic-LDS launch-byte plumbing, broad
   atomics and collectives, general source-to-HSACO finalization, and compiler
   refinement remain fail-closed gaps.
-- `fe2o3-host` exposes one Worker V3 execution graph. It consumes a recovered
+- `fe2o3-host` exposes one Worker V3 migration graph. It consumes a recovered
   pinned descriptor, authenticates compiler and verification evidence, grants
   one exact HSA load authorization, resolves the selected kernel, validates
   generated arguments and geometry against the admitted descriptor, packs the
@@ -531,6 +537,11 @@ is complete, and the recorded runs grant no current production authority.
   cooperative-launch bridge, embedded-artifact contract, and profile-specific
   vecadd host route are deleted. `PreparedLaunch<K>` and argument admission are
   inert validation foundations; neither can load or dispatch an executable.
+- `fe2o3-runtime` owns the permanent pure-KFD execution boundary. Its safe
+  consuming transition matches one exact HSACO, selected kernel, complete
+  address-free invocation contract, and checked KFD GPU unique ID against an
+  unsafe Worker V3 authority implementation. The LDS diagnostic exercises this
+  gate; production verifier and generated host-memory integration remain open.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -627,16 +638,18 @@ is complete, and the recorded runs grant no current production authority.
   either production or qualification builds; stale V2 envelope names are
   recognized only so they can be rejected before application spawn.
   Feature-free `fe2o3-host` builds export only the Worker V3 application,
-  admission, verification, HSA load, and generated dispatch route. Worker V2
-  application recovery, bundle admission, prerequisite authentication, HSA
-  lifecycle, launch metadata, and workload-specific host adapters have been
-  deleted rather than retained behind a qualification feature. General
+  admission, verification, and current HSA-backed generated migration route.
+  Worker V2 application recovery, bundle admission, prerequisite
+  authentication, HSA lifecycle, launch metadata, and workload-specific host
+  adapters have been deleted rather than retained behind a qualification
+  feature. General
   `#[kernel(typed)]` expansion, including the exact `f32` vecadd signature,
   emits only the generic Worker V3 adapter. The old
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
-  Production Worker V3 verification authority remains open; authorized Worker
-  V3 HSA loading and generated dispatch are the only host execution route.
+  Production Worker V3 verification authority remains open. The HSA-backed
+  generated route must be replaced by the pure-KFD transition before the
+  application pipeline is production-complete.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper

@@ -25,6 +25,4 @@ fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-kfd.workspace = true
-
-[dev-dependencies]
 sha2.workspace = true

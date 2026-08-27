@@ -51,13 +51,16 @@ output canaries remain unchanged, and queue/completion teardown succeeds. The
 runtime uses identical CPU/GPU virtual addresses for every BO and places the
 complete 256-byte static-plus-dynamic group allocation in the AQL packet.
 
-That diagnostic invokes the private mechanics through an explicit `unsafe`
-call. It grants no production authority and does not replace the next gate:
-the sole Worker V3 application and production verifier must authenticate the
-artifact, generated arguments, memory effects, launch, completion, and evidence
-chain before the KFD transition becomes safe. The scoped-atomic kernel is
-requalified only through the same compiler, worker, descriptor-inspection, and
-authorized runtime path.
+That diagnostic now invokes the private mechanics through the runtime's sole
+safe, consuming execution transition. The transition independently matches the
+final object, kernel, complete address-free invocation identity, and checked
+KFD GPU identity, and aborts on any post-mutation failure. The diagnostic still
+grants no production authority because its trait implementation is an explicit
+unsafe manual assertion. The sole Worker V3 application and production verifier
+must authenticate the artifact, generated arguments, memory effects, launch,
+completion, and evidence chain before production can construct that authority.
+The scoped-atomic kernel is requalified only through the same compiler, worker,
+descriptor-inspection, and authorized runtime path.
 
 ## Defects closed
 

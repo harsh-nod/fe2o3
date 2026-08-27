@@ -484,7 +484,8 @@ Status: the historical direct-HIP application route has been removed.
 Remaining work:
 
 - Wire the generated Worker V3 host contract through descriptor recovery,
-  application verification, authenticated HSA loading, dispatch, and unload.
+  application verification, invocation-specific pure-KFD authority, dispatch,
+  completion, and teardown.
 - Add automated `gfx942` hardware coverage for that exact route.
 
 Acceptance:

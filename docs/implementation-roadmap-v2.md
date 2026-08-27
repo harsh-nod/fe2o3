@@ -34,11 +34,14 @@ existing scoped atomic kernel is requalified through the same code-object
 harness. Neither path has current load or launch authority. See
 [gfx942 production LDS reduction V1](gfx942-production-lds-reduction-v1.md).
 
-The next major gates are:
+The direct pure-Rust KFD packet mechanics and invocation-specific runtime
+authority gate are now implemented and measured with the exact LDS artifact.
+The measurement uses a manually asserted unsafe diagnostic authority, not the
+production verifier. The next major gates are:
 
-1. join this exact artifact to the Worker V3 application and production
-   verifier, then implement pure-Rust KFD packet submission and a public
-   build/publish/run command;
+1. join this exact artifact and compiler-generated host-memory invocation to
+   the Worker V3 application and production verifier, then expose the existing
+   pure-Rust KFD transition through one public build/publish/run command;
 2. general race, alias, address-space, bounds, and barrier-convergence proof
    obligations with Verus-consumable evidence;
 3. source-authentic tiled LDS GEMM through the same transaction;
@@ -456,8 +459,10 @@ earlier authority transition.
    host reacquires a fresh lease and rechecks the envelope, lineage, semantic and
    physical ABI, currentness, and marker facts. Cargo transfers only pinned
    read-only descriptors. The separate recovered Worker V2 host admission and
-   launch bridge are deleted. A production verifier and generated-safe MI300X
-   replay without external HSACO injection remain open.
+   launch bridge are deleted. The pure-KFD runtime now has one safe,
+   invocation-specific authority transition and a measured unsafe-diagnostic
+   replay. A production verifier, generated host-memory invocation adapter, and
+   MI300X replay without external HSACO injection remain open.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
    closed call graph and physical memory sites. Production admission must still
@@ -707,7 +712,9 @@ reviewed runtime adapter, durable lease reacquisition, Cargo
 publication of the canonical load envelope, V3-only production descriptor
 handoff, and safe split mutable views already exist. The recovered Worker V2
 host route is deleted. Still missing is a production `WorkerV3VerifierV1` that
-can promote the carried evidence into authorized HSA load and launch custody.
+can promote the carried evidence into invocation-specific pure-KFD launch
+custody. The runtime authority gate exists, but generated host-memory argument
+preparation and the application handoff do not yet construct its authority.
 Bounded machine-effect and Verus proof records are not production-bound to
 compiler origin and the exact artifact. These are the ordered critical
 milestones above; feature and architecture breadth follows them.

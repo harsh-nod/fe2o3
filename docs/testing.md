@@ -365,8 +365,9 @@ FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO=/absolute/path/to/lds.hsaco \
 The diagnostic refuses an HSACO whose SHA-256 differs from
 `ab6bda1e8af05b61c22753382e75dd6a9952db8e598eaac3cb5769863a618ed0`,
 expects the LDS reduction result `2080`, and checks both canary regions. It uses
-an explicit unsafe mechanics transition and therefore does not claim the still
-missing Worker V3 verifier authority.
+the same invocation-specific runtime gate as production, but supplies an
+explicitly unsafe diagnostic authority implementation. It therefore does not
+claim the still missing production Worker V3 verifier authority.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated
