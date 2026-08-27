@@ -606,6 +606,8 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
 
     let invocation_bounds = invocation_upper_bounds_by_block(context, function);
     if symbolically_proves_disjoint(
+        context,
+        function,
         &effects,
         &sparse,
         &launch_extents,
@@ -923,11 +925,18 @@ fn insert_witness(state: &mut AddressStateV1, witness: RankedRaceWitnessV1) {
 }
 
 fn symbolically_proves_disjoint(
+    context: &Context,
+    function: &FuncOp,
     effects: &[EffectV1],
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
+    let entry_arguments = function
+        .get_entry_block(context)
+        .deref(context)
+        .arguments()
+        .collect::<HashSet<_>>();
     let mut by_view: HashMap<u64, Vec<&EffectV1>> = HashMap::new();
     for effect in effects {
         by_view
@@ -1002,8 +1011,13 @@ fn symbolically_proves_disjoint(
                     )
             })
             .collect::<Vec<_>>();
-        if tiled_2d_effect_family_is_injective(&relevant, sparse, launch_extents)
-            || row_striped_2d_effect_family_is_injective(&relevant, sparse, launch_extents)
+        if tiled_2d_effect_family_is_injective(&relevant, sparse, launch_extents, &entry_arguments)
+            || row_striped_2d_effect_family_is_injective(
+                &relevant,
+                sparse,
+                launch_extents,
+                &entry_arguments,
+            )
         {
             continue;
         }
@@ -1137,6 +1151,7 @@ fn row_striped_2d_effect_family_is_injective(
     effects: &[&EffectV1],
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
+    entry_arguments: &HashSet<Value>,
 ) -> bool {
     let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
         return false;
@@ -1154,7 +1169,12 @@ fn row_striped_2d_effect_family_is_injective(
             return false;
         };
         if index.invocation() != first.invocation()
-            || !same_known_index_formula(&index.runtime_layout(), &first.runtime_layout(), sparse)
+            || !same_invocation_invariant_index_formula(
+                &index.runtime_layout(),
+                &first.runtime_layout(),
+                sparse,
+                entry_arguments,
+            )
             || index.geometry() != first.geometry()
         {
             return false;
@@ -1167,6 +1187,7 @@ fn tiled_2d_effect_family_is_injective(
     effects: &[&EffectV1],
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
+    entry_arguments: &HashSet<Value>,
 ) -> bool {
     let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
         return false;
@@ -1184,7 +1205,12 @@ fn tiled_2d_effect_family_is_injective(
             return false;
         };
         if index.invocation() != first.invocation()
-            || !same_known_index_formula(&index.runtime_layout(), &first.runtime_layout(), sparse)
+            || !same_invocation_invariant_index_formula(
+                &index.runtime_layout(),
+                &first.runtime_layout(),
+                sparse,
+                entry_arguments,
+            )
             || index.geometry() != first.geometry()
         {
             return false;
@@ -1213,6 +1239,13 @@ fn affine_facts_contain_unit_coordinate_embedding(
     active_dimensions.iter().all(|embedded_dimension| {
         facts.iter().any(|affine| {
             affine.constant_term() == 0
+                && affine.coefficients().iter().copied().enumerate().all(
+                    |(dimension, coefficient)| match launch_extents.get(dimension) {
+                        None => coefficient == 0,
+                        Some(1) => true,
+                        Some(_) => coefficient == u64::from(dimension == *embedded_dimension),
+                    },
+                )
                 && active_dimensions.iter().all(|dimension| {
                     affine.coefficients().get(*dimension).copied()
                         == Some(u64::from(dimension == embedded_dimension))
@@ -1229,17 +1262,42 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
             .all(|(first, second)| sparse.fact(*first) == sparse.fact(*second))
 }
 
-fn same_known_index_formula(
+fn same_invocation_invariant_index_formula(
     first: &[Value],
     second: &[Value],
     sparse: &SparseIndexAnalysisV1,
+    entry_arguments: &HashSet<Value>,
 ) -> bool {
     first.len() == second.len()
         && first.iter().zip(second).all(|(first, second)| {
-            let first = sparse.fact(*first);
-            let second = sparse.fact(*second);
-            !matches!(first, SparseIndexFactV1::Unknown) && first == second
+            // Production function entry arguments are launch-invariant ABI
+            // inputs. A block argument or opaque operation result receives no
+            // such authority merely because two accesses reuse the same SSA
+            // value.
+            if first == second && entry_arguments.contains(first) {
+                return true;
+            }
+            let first_fact = sparse.fact(*first);
+            let second_fact = sparse.fact(*second);
+            first_fact == second_fact && sparse_fact_is_invocation_invariant(&first_fact)
         })
+}
+
+fn sparse_fact_is_invocation_invariant(fact: &SparseIndexFactV1) -> bool {
+    match fact {
+        SparseIndexFactV1::Affine(affine) => affine
+            .coefficients()
+            .iter()
+            .all(|coefficient| *coefficient == 0),
+        SparseIndexFactV1::Remainder { dividend, .. } => dividend
+            .coefficients()
+            .iter()
+            .all(|coefficient| *coefficient == 0),
+        SparseIndexFactV1::Unknown
+        | SparseIndexFactV1::MachineOverflow(_)
+        | SparseIndexFactV1::CheckedTiled2D(_)
+        | SparseIndexFactV1::CheckedRowStriped2D(_) => false,
+    }
 }
 
 fn affine_map_is_injective(
