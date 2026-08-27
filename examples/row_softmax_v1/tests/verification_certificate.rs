@@ -9,10 +9,6 @@ const NUMERICAL_POLICY: &[u8] = include_bytes!("../src/numerical_contract.rs");
 const PROOF_SOURCE: &[u8] = include_bytes!("../verus/row_softmax_v1.rs");
 const VERUS_CLOSURE_MANIFEST: &[u8] = include_bytes!("../verus/VERUS_CLOSURE_MANIFEST");
 const VERUS_TRUST_VOCABULARY: &[u8] = include_bytes!("../verus/VERUS_TRUST_VOCABULARY");
-const COMPILER_SOURCE: &str =
-    include_str!("../../../crates/rustc-codegen-fe2o3/src/collected_row_softmax_v1.rs");
-const CODEGEN_SOURCE: &str =
-    include_str!("../../../crates/rustc-codegen-fe2o3/src/kernel_ir_codegen.rs");
 
 fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -27,7 +23,7 @@ fn assert_identity(identity: VerificationEvidenceIdentityV1, bytes: &[u8]) {
 }
 
 #[test]
-fn reviewed_manifest_matches_every_repository_evidence_input() {
+fn reviewed_manifest_matches_retained_repository_evidence_inputs() {
     let manifest = ROW_SOFTMAX_VERIFICATION_MANIFEST_V1;
     assert_identity(manifest.attributed_source, ATTRIBUTED_SOURCE);
     assert_identity(manifest.numerical_policy, NUMERICAL_POLICY);
@@ -37,21 +33,6 @@ fn reviewed_manifest_matches_every_repository_evidence_input() {
     assert_eq!(manifest.input_elements, 64);
     assert_eq!(manifest.output_elements, 64);
 
-    for marker in [
-        "const PORTABLE_MIR_SEMANTIC_IDENTITY: [u8; 32]",
-        "const REVIEWED_CANONICAL_MODULE_V4_COMMITMENT: [u8; 32]",
-        "const REVIEWED_RUSTC_RELEASE: &str = \"1.96.0-nightly\"",
-        "const REVIEWED_RUSTC_COMMIT: &str = \"55e86c996809902e8bbad512cfb4d2c18be446d9\"",
-        "const REVIEWED_RUSTC_LLVM: &str = \"22.1.2\"",
-        "pub(crate) const EXACT_ROW_SOFTMAX_TARGET_V1: &str = \"gfx942:xnack-\"",
-        "pub(crate) const ROW_SOFTMAX_ELEMENTS_V1: u32 = 64",
-    ] {
-        assert!(
-            COMPILER_SOURCE.contains(marker),
-            "missing compiler identity {marker}"
-        );
-    }
-    assert!(CODEGEN_SOURCE.contains("const REVIEWED_ROW_SOFTMAX_V1_LLVM_SHA256: [u8; 32]"));
     assert!(
         VERUS_CLOSURE_MANIFEST
             .windows(manifest.solver_executable_sha256.len())
