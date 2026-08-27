@@ -3,6 +3,7 @@
 
 mod application_handoff_v3;
 mod compiler_execution_attestation;
+mod compiler_execution_receipt_publication;
 mod static_application;
 mod worker_v3_load_envelope;
 
@@ -32,6 +33,13 @@ pub use compiler_execution_attestation::{
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
+};
+pub use compiler_execution_receipt_publication::{
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1,
+    CompilerExecutionReceiptPublicationAckIdentityV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationIdentityV1,
+    CompilerExecutionReceiptPublicationV1,
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,

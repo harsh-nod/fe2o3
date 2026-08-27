@@ -26,3 +26,17 @@ the policy. These records do not supervise a process, protect a signing key,
 persist or advance a replay ledger, or grant compiler, publication, load, or
 launch authority. The protected issuer service and Worker V3 verifier must add
 those properties while consuming the same exact bytes.
+
+## Compiler-execution receipt publication V1
+
+The crate also defines a 584-byte immutable receipt sidecar and a 288-byte
+publication ACK claim. The sidecar binds the complete signed receipt to the
+exact issuer journal and supervised compiler occurrence. The ACK additionally
+binds one protected Worker ledger record, sequence, and advanced rollback
+anchor. Both records strictly rederive nested identities and reject every
+noncanonical byte.
+
+These records are inert transport data. In particular, the ACK digest does not
+prove that its named Worker record is durable. Only independent protected-ledger
+reacquisition may construct the move-only result that allows the issuer to
+discard an issued receipt.

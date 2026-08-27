@@ -116,6 +116,18 @@ identity_type!(
     RECEIPT_PREIMAGE_BYTES
 );
 
+impl CompilerExecutionIssuerPolicyIdentityV1 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; SHA256_BYTES]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl CompilerExecutionAttestationReceiptIdentityV1 {
+    pub(crate) const fn from_bytes_for_protocol(bytes: [u8; SHA256_BYTES]) -> Self {
+        Self(bytes)
+    }
+}
+
 /// Exact content measurement used by an issuer policy.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CompilerExecutionIssuerMeasurementV1 {

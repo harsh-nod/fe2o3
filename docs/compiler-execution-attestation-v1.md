@@ -8,13 +8,12 @@ protected-issuer milestone in
 codec is in `fe2o3-runtime-protocol`.
 
 The protocol authenticates an Ed25519 signing key selected by a caller-pinned
-policy. It does not yet authenticate protected compiler execution. A
-[protected issuer admission](compiler-execution-issuer-admission-v1.md) now
-retains the hardened service process, exact static executable, private service
-channel, and sealed policy-matched key, but deliberately exposes no signing
-operation. No freshness state machine, supervised compiler occurrence,
-durable replay ledger, receipt carriage, or Worker V3 authority join exists at
-this checkpoint.
+policy. The protected issuer now adds a hardened signer, fresh durable state,
+and one exact supervised compiler occurrence. The
+[receipt publication contract](compiler-execution-receipt-publication-v1.md)
+also fixes authority-free sidecar and ACK bytes. Bounded service transport,
+durable Worker-ledger publication, and the Worker V3 authority join remain
+open; the codec alone does not authenticate protected compiler execution.
 
 ## Records
 
@@ -151,7 +150,7 @@ The protocol suite must retain:
 
 These tests qualify only the codec and pinned-key signature boundary. The
 [protected issuer admission](compiler-execution-issuer-admission-v1.md) and
-[durable issuer state](compiler-execution-issuer-durable-v1.md) now implement
-the local protected signer foundation. Supervised compiler transport, Worker V3
-carriage and verification, and MI300X end-to-end tests remain separate required
-milestones.
+[durable issuer state](compiler-execution-issuer-durable-v1.md) implement the
+local protected signer and supervised occurrence foundation. The receipt
+sidecar codec is frozen separately. Bounded service transport, durable Worker V3
+carriage and verification, and MI300X end-to-end tests remain required.
