@@ -38,7 +38,7 @@ pub const KERNEL_IR_VERSION_V6: u16 = 6;
 pub const KERNEL_IR_VERSION_V7: u16 = 7;
 /// Kernel IR V8 adds gfx950 FP8 scaled matrix operations and layouts.
 pub const KERNEL_IR_VERSION_V8: u16 = 8;
-/// Kernel IR V9 adds typed gfx950 attention collectives and LDS transpose operations.
+/// Kernel IR V9 adds typed gfx950 collectives and LDS transpose operations.
 pub const KERNEL_IR_VERSION_V9: u16 = 9;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";

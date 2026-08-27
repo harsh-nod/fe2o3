@@ -121,7 +121,7 @@ fn wave_operation_module() -> Module {
 }
 
 fn masked_broadcast_module(mask: Option<u32>, mask_on_left: bool) -> Module {
-    let mut module = attention_module();
+    let mut module = wave_operation_module();
     let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
     let mut broadcast = block.operations.pop().expect("broadcast operation");
     let mask_value = ValueId(22);

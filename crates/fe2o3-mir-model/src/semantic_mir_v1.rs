@@ -5816,7 +5816,8 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V5, limits)
     }
 
-    /// Admits under the exact closed V6 schema that adds typed gfx950 attention terminals.
+    /// Admits under the exact closed V6 schema that adds typed gfx950 collective and LDS
+    /// transpose terminals.
     pub fn admit_exact_v6(
         self,
         limits: SemanticMirLimitsV1,
@@ -5834,7 +5835,7 @@ impl InertSemanticMirRequestV1 {
     }
 
     /// Selects V5 for the existing production surface and V6 only when a typed
-    /// gfx950 attention intrinsic requires it.
+    /// gfx950 collective or LDS transpose intrinsic requires it.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -15048,7 +15049,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
     }) {
         return SemanticMirWireVersionV1::V7;
     }
-    let uses_gfx950_attention = request.callables.iter().any(|callable| {
+    let uses_gfx950_collective_or_lds_transpose = request.callables.iter().any(|callable| {
         matches!(
             callable,
             SemanticCallableDeclV1::CompilerIntrinsic {
@@ -15063,7 +15064,7 @@ fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireV
             }
         )
     });
-    if uses_gfx950_attention {
+    if uses_gfx950_collective_or_lds_transpose {
         return SemanticMirWireVersionV1::V6;
     }
     let uses_checked_read_view = request.callables.iter().any(|callable| {

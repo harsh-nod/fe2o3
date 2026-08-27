@@ -2439,7 +2439,7 @@ mod tests {
             87,
         );
 
-        let gfx950_attention = [
+        let gfx950_collectives_and_lds_transpose = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent),
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32),
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32),
@@ -2451,7 +2451,10 @@ mod tests {
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4),
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8),
         ];
-        assert_eq!(gfx950_attention, [76, 77, 78, 79, 80, 81, 82, 83, 84, 85]);
+        assert_eq!(
+            gfx950_collectives_and_lds_transpose,
+            [76, 77, 78, 79, 80, 81, 82, 83, 84, 85]
+        );
     }
 
     #[test]

@@ -438,7 +438,8 @@ pub enum ProductionSemanticKirErrorV1 {
     InvalidKernelIr(VerificationErrors),
     /// The lowered module could not become exact verified canonical Kernel IR V8.
     CanonicalKernelIrV8(VerifiedCanonicalKernelIrErrorV8),
-    /// The lowered attention module could not become exact verified canonical Kernel IR V9.
+    /// The lowered collective or LDS transpose module could not become exact verified canonical
+    /// Kernel IR V9.
     CanonicalKernelIrV9(VerifiedCanonicalKernelIrErrorV9),
     /// Retained correspondence no longer matches the exact source owner.
     CorrespondenceMismatch,
@@ -776,7 +777,7 @@ impl ProductionCanonicalKernelIrIdentityV1 {
 
 impl ProductionCanonicalKernelIrV1 {
     fn from_module(module: Module) -> Result<Self, ProductionSemanticKirErrorV1> {
-        if module_uses_kernel_ir_v9_attention_v1(&module) {
+        if module_requires_kernel_ir_v9_collective_or_lds_transpose_v1(&module) {
             VerifiedCanonicalKernelIrV9::from_module(module)
                 .map(Self::V9)
                 .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV9)
@@ -821,7 +822,7 @@ impl ProductionCanonicalKernelIrV1 {
     }
 }
 
-fn module_uses_kernel_ir_v9_attention_v1(module: &Module) -> bool {
+fn module_requires_kernel_ir_v9_collective_or_lds_transpose_v1(module: &Module) -> bool {
     module.functions.iter().any(|function| {
         function.body.as_ref().is_some_and(|body| {
             body.blocks.iter().any(|block| {
@@ -998,7 +999,7 @@ impl ProductionSemanticKirOwnerV1 {
     }
 
     /// Borrows canonical V9 ownership when the lowered module uses the exact
-    /// gfx950 attention surface.
+    /// gfx950 collective or LDS transpose surface.
     pub const fn canonical_kernel_ir_v9(&self) -> Option<&VerifiedCanonicalKernelIrV9> {
         match &self.canonical_kernel_ir {
             ProductionCanonicalKernelIrV1::V8(_) => None,
@@ -1006,7 +1007,7 @@ impl ProductionSemanticKirOwnerV1 {
         }
     }
 
-    /// Borrows the typed V9 identity for an exact gfx950 attention module.
+    /// Borrows the typed V9 identity for an exact gfx950 collective or LDS transpose module.
     pub const fn canonical_kernel_ir_v9_identity(
         &self,
     ) -> Option<&VerifiedCanonicalKernelIrIdentityV9> {

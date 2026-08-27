@@ -1,8 +1,10 @@
 use dialect_kernel::IndexBinaryKindAttr;
+use fe2o3_amdgcn_model::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir;
 use fe2o3_kernel_ir::{
     AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain,
     OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth, WorkgroupSize,
-    decode_module_v8, gfx942_xnack_minus_target_capability, verify_module,
+    decode_module_v8, gfx942_xnack_minus_target_capability, gfx950_xnack_minus_target_capability,
+    verify_module,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, PRODUCTION_FORMAL_MEMORY_WITNESS_EXTENT_V1,
@@ -63,6 +65,9 @@ fn scalar_type(tag: u8, scalar: SemanticScalarTypeV1) -> SemanticTypeDeclV1 {
             SemanticBackendPrimitiveV1::integer(false, 64, 8),
             u64::MAX.into(),
         ),
+        SemanticScalarTypeV1::Float { bits: 32 } => {
+            (4, SemanticBackendPrimitiveV1::float(32, 4), u32::MAX.into())
+        }
         _ => panic!("unsupported test scalar"),
     };
     SemanticTypeDeclV1::new(
@@ -351,6 +356,347 @@ fn block(
         SemanticTerminatorV1::new(SemanticSourceProvenanceV1::unavailable(), terminator),
     )
     .unwrap()
+}
+
+fn direct_abi_value(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
+    SemanticAbiValueV1::new(
+        ty,
+        SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
+                SemanticAbiExtensionV1::None,
+                0,
+                None,
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+fn shared_reference_abi_value(ty: SemanticTypeIdV1) -> SemanticAbiValueV1 {
+    SemanticAbiValueV1::new(
+        ty,
+        SemanticAbiPassModeV1::Direct(
+            SemanticAbiValueAttributesV1::new(
+                SemanticAbiRegularAttributesV1::new(
+                    true,
+                    Some(SemanticAbiPointerCaptureV1::CapturesReadOnly),
+                    true,
+                    true,
+                    false,
+                    true,
+                ),
+                SemanticAbiExtensionV1::None,
+                0,
+                None,
+            )
+            .unwrap(),
+        ),
+    )
+}
+
+fn compiler_intrinsic_callable(
+    tag: u8,
+    inputs: Vec<SemanticAbiValueV1>,
+    output: SemanticAbiValueV1,
+    operation: SemanticCompilerIntrinsicOperationV1,
+) -> SemanticCallableDeclV1 {
+    let arguments = inputs
+        .into_iter()
+        .map(SemanticAbiArgumentV1::source)
+        .collect::<Vec<_>>();
+    let abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(tag)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::Rust,
+        SemanticExternAbiV1::Rust,
+        false,
+        false,
+        arguments.len() as u32,
+        arguments,
+        output,
+    )
+    .unwrap();
+    SemanticCallableDeclV1::CompilerIntrinsic {
+        binding: SemanticNonBodyCallableBindingV1::new(
+            SemanticFunctionIdentityV1::from_sha256(bytes(tag)),
+            SemanticItemDefinitionIdentityV1::from_sha256(bytes(tag)),
+            SemanticMonomorphizationIdentityV1::from_sha256(bytes(tag)),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(tag)),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(tag)),
+            SemanticSourceProvenanceV1::unavailable(),
+            abi,
+        ),
+        operation,
+        operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256(bytes(tag)),
+    }
+}
+
+fn gfx950_reduction_admission(
+    width: u32,
+) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let context = SemanticTypeIdV1::from_index(1);
+    let context_ref = SemanticTypeIdV1::from_index(2);
+    let f32_ty = SemanticTypeIdV1::from_index(3);
+    let source = SemanticSourceProvenanceV1::unavailable();
+    let context_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(70)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(70)),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(0),
+            1,
+            SemanticBackendReprV1::memory(true),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Opaque,
+    );
+    let context_reference_type = SemanticTypeDeclV1::new(
+        SemanticTypeIdentityV1::from_sha256(bytes(71)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(71)),
+        SemanticTypeLayoutV1::new_with_backend_repr(
+            Some(8),
+            8,
+            SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                SemanticScalarValidityRangeV1::new(1, u64::MAX.into()),
+            )),
+            false,
+        )
+        .unwrap(),
+        SemanticTypeShapeV1::Pointer(
+            SemanticPointerTypeV1::new_with_kind(
+                context,
+                SemanticPointerKindV1::Reference,
+                SemanticMutabilityV1::Immutable,
+                0,
+                64,
+                SemanticPointerMetadataV1::None,
+            )
+            .unwrap(),
+        ),
+    )
+    .with_rustc_abi_properties(
+        SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+            Some(
+                SemanticAbiPointeeInfoV1::new(
+                    SemanticAbiPointeeKindV1::SharedReference { frozen: true },
+                    0,
+                    1,
+                )
+                .unwrap(),
+            ),
+            None,
+        ),
+    );
+    let call_edge = |target| {
+        SemanticControlFlowEdgeV1::new(
+            SemanticEdgeRoleV1::CallReturn,
+            SemanticBlockIdV1::from_index(target),
+        )
+    };
+    let context_call = SemanticTerminatorKindV1::Call(
+        SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(1),
+            vec![],
+            Some(SemanticCallDestinationV1::new(
+                local_place(1, context),
+                call_edge(1),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap(),
+    );
+    let borrow = SemanticStatementV1::new(
+        source,
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            local_place(2, context_ref),
+            SemanticRvalueV1::new(
+                context_ref,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Shared,
+                    place: local_place(1, context),
+                },
+            ),
+        )),
+    );
+    let value = SemanticOperandV1::Constant(SemanticConstantV1::new(
+        f32_ty,
+        SemanticConstantValueV1::Scalar(
+            SemanticScalarValueV1::new(f32::to_bits(1.0).into(), 4).unwrap(),
+        ),
+    ));
+    let reduction_call = SemanticTerminatorKindV1::Call(
+        SemanticDirectCallV1::new_callable(
+            SemanticCallableIdV1::from_index(2),
+            vec![SemanticOperandV1::Copy(local_place(2, context_ref)), value],
+            Some(SemanticCallDestinationV1::new(
+                local_place(3, f32_ty),
+                call_edge(2),
+            )),
+            SemanticUnwindActionV1::Unreachable,
+        )
+        .unwrap(),
+    );
+    let function_abi = SemanticFunctionAbiV1::from_rustc(
+        SemanticAbiIdentityV1::from_sha256(bytes(72)),
+        SemanticLayoutIdentityV1::from_sha256(bytes(250)),
+        SemanticCanonAbiV1::GpuKernel,
+        SemanticExternAbiV1::GpuKernel,
+        false,
+        false,
+        0,
+        vec![],
+        SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+    )
+    .unwrap();
+    let locals = [unit, context, context_ref, f32_ty]
+        .into_iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256(bytes(73 + index as u8)),
+                ty,
+                if index == 0 {
+                    SemanticLocalRoleV1::Return
+                } else {
+                    SemanticLocalRoleV1::Temporary
+                },
+                source,
+            )
+        })
+        .collect();
+    let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+    let contract = SemanticKernelSourceContractV1::new(
+        Some(SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap()),
+        None,
+        None,
+    )
+    .unwrap();
+    let function = SemanticFunctionDeclV1::new(
+        SemanticFunctionIdentityV1::from_sha256(bytes(72)),
+        SemanticFunctionRoleV1::KernelRoot,
+        SemanticItemDefinitionIdentityV1::from_sha256(bytes(72)),
+        SemanticMonomorphizationIdentityV1::from_sha256(bytes(72)),
+        SemanticGenericTypeArgumentsIdentityV1::from_sha256(bytes(72)),
+        SemanticConstGenericArgumentsIdentityV1::from_sha256(bytes(72)),
+        source,
+        function_abi,
+        locals,
+        SemanticBlockIdV1::from_index(0),
+        vec![
+            block(80, vec![], context_call),
+            block(81, vec![borrow], reduction_call),
+            block(82, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    )
+    .unwrap()
+    .with_kernel_entry(SemanticKernelEntryV1::new(
+        SemanticLinkSymbolV1::new(b"gfx950_collective_width".to_vec()).unwrap(),
+        SemanticKernelBindingIdentityV1::from_sha256(bytes(83)),
+        contract,
+    ));
+    let callables = vec![
+        SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(0)),
+        compiler_intrinsic_callable(
+            84,
+            vec![],
+            SemanticAbiValueV1::new(context, SemanticAbiPassModeV1::Ignore),
+            SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { context },
+        ),
+        compiler_intrinsic_callable(
+            85,
+            vec![
+                shared_reference_abi_value(context_ref),
+                direct_abi_value(f32_ty),
+            ],
+            direct_abi_value(f32_ty),
+            SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+                context,
+                width,
+                kind: SemanticSubgroupReductionKindV1::Sum,
+            },
+        ),
+    ];
+    InertSemanticMirRequestV1::new_with_callables(
+        SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256(bytes(250))),
+        vec![
+            unit_type(),
+            context_type,
+            context_reference_type,
+            scalar_type(86, SemanticScalarTypeV1::Float { bits: 32 }),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![function],
+        callables,
+        vec![SemanticFunctionIdV1::from_index(0)],
+    )
+    .unwrap()
+    .admit_current_production(SemanticMirLimitsV1::default())
+}
+
+fn gfx950_reduction_owner(width: u32) -> ProductionSemanticMirOwnerV1 {
+    ProductionSemanticMirOwnerV1::try_new(
+        gfx950_reduction_admission(width).unwrap(),
+        ProductionSemanticMirLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn bind_exact_gfx950_target(mut module: fe2o3_kernel_ir::Module) -> fe2o3_kernel_ir::Module {
+    let target = gfx950_xnack_minus_target_capability();
+    module.required_capabilities.insert(target.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(target.clone());
+    module.kernels[0].required_capabilities.insert(target);
+    module
+}
+
+#[test]
+fn semantic_collective_widths_lower_through_canonical_kir_to_llvm() {
+    for width in [1_u32, 2, 4, 8, 16, 32, 64] {
+        let lowered = ProductionSemanticKirOwnerV1::try_lower(
+            gfx950_reduction_owner(width),
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .unwrap();
+        lowered.verify_equivalence().unwrap();
+        let operation =
+            &lowered.module().functions[0].body.as_ref().unwrap().blocks[1].operations[1];
+        assert!(matches!(
+            operation.kind,
+            OperationKind::Wave(fe2o3_kernel_ir::WaveOperation {
+                kind: fe2o3_kernel_ir::WaveOperationKind::ReduceF32 { tile_width, .. },
+                ..
+            }) if tile_width == width
+        ));
+        let target_bound = bind_exact_gfx950_target(lowered.module().clone());
+        verify_module(&target_bound).unwrap();
+        let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&target_bound).unwrap();
+        if width == 1 {
+            assert!(llvm.contains("select i1 true, float"));
+        } else {
+            assert_eq!(
+                llvm.matches("call i32 @llvm.amdgcn.ds.bpermute").count(),
+                width.trailing_zeros() as usize
+            );
+        }
+    }
+}
+
+#[test]
+fn semantic_collective_rejects_invalid_widths_before_kir_construction() {
+    for width in [0_u32, 3, 65] {
+        assert_eq!(
+            gfx950_reduction_admission(width).unwrap_err(),
+            SemanticMirErrorV1::InvalidFunctionAbi,
+            "width {width} must fail closed in semantic MIR admission"
+        );
+    }
 }
 
 fn owner_from_parts(

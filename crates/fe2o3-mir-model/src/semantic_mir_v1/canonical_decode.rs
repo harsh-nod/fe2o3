@@ -172,7 +172,8 @@ impl AdmittedInertSemanticMirV1 {
         Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V5))
     }
 
-    /// Decodes bytes canonical specifically under the closed V6 attention schema.
+    /// Decodes bytes canonical specifically under the closed V6 collective and LDS transpose
+    /// schema.
     pub fn decode_exact_v6_canonical(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,

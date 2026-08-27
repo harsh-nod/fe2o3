@@ -8,7 +8,7 @@ use fe2o3_amdgcn_model::{
 };
 use fe2o3_kernel_ir::*;
 
-fn attention_module(format: Gfx950LdsTransposeFormatV1) -> Module {
+fn collective_and_lds_transpose_module(format: Gfx950LdsTransposeFormatV1) -> Module {
     let source = Type::slice(
         Type::Scalar(ScalarType::U8),
         AddressSpace::Global,
@@ -120,7 +120,7 @@ fn attention_module(format: Gfx950LdsTransposeFormatV1) -> Module {
         terminator: Some(Terminator::Return { values: vec![] }),
     };
     let mut function = Function::kernel_entry(
-        "attention_impl",
+        "collective_impl",
         Signature::new(parameter_types, vec![]),
         parameters,
         vec![block],
@@ -128,8 +128,8 @@ fn attention_module(format: Gfx950LdsTransposeFormatV1) -> Module {
     function.required_capabilities = function.derived_capabilities();
 
     let mut kernel = Kernel::new(
-        "attention",
-        "attention_impl",
+        "collective",
+        "collective_impl",
         LaunchDomain::D1 {
             x: LaunchExtent::Dynamic,
         },
@@ -137,7 +137,7 @@ fn attention_module(format: Gfx950LdsTransposeFormatV1) -> Module {
     kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
     kernel.required_capabilities = function.required_capabilities.clone();
 
-    let mut module = Module::new("tests::gfx950_attention");
+    let mut module = Module::new("tests::gfx950_collectives_and_lds_transpose");
     module.required_capabilities = function.required_capabilities.clone();
     module.functions.push(function);
     module.kernels.push(kernel);
@@ -145,7 +145,7 @@ fn attention_module(format: Gfx950LdsTransposeFormatV1) -> Module {
 }
 
 fn masked_wave64_broadcast_module(mask: Option<u32>, mask_on_left: bool) -> Module {
-    let mut module = attention_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
+    let mut module = collective_and_lds_transpose_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
     let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
     let mut broadcast = block.operations.pop().expect("broadcast operation");
     let mask_value = ValueId(25);
@@ -190,7 +190,7 @@ fn masked_wave64_broadcast_module(mask: Option<u32>, mask_on_left: bool) -> Modu
 
 fn assert_llvm_parses(llvm: &str, label: &str) {
     let directory = std::env::temp_dir().join(format!(
-        "fe2o3-gfx950-attention-{}-{label}",
+        "fe2o3-gfx950-collectives-{}-{label}",
         std::process::id()
     ));
     fs::create_dir_all(&directory).unwrap();
@@ -208,7 +208,7 @@ fn assert_llvm_parses(llvm: &str, label: &str) {
 }
 
 #[test]
-fn lowers_exact_fp4_and_fp8_attention_modules() {
+fn lowers_exact_fp4_and_fp8_collective_and_lds_transpose_modules() {
     for (format, bytes, intrinsic, calls, stores) in [
         (
             Gfx950LdsTransposeFormatV1::Fp4E2M1,
@@ -225,11 +225,11 @@ fn lowers_exact_fp4_and_fp8_attention_modules() {
             32,
         ),
     ] {
-        let module = attention_module(format);
+        let module = collective_and_lds_transpose_module(format);
         verify_module(&module).unwrap();
         let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
         assert!(llvm.contains(&format!(
-            "@__fe2o3_lds_attention_10 = internal addrspace(3) global [{bytes} x i8] undef, align 64"
+            "@__fe2o3_lds_collective_10 = internal addrspace(3) global [{bytes} x i8] undef, align 64"
         )));
         assert_eq!(
             llvm.matches(&format!(" = call <2 x i32> @{intrinsic}"))
@@ -288,10 +288,10 @@ fn lowers_exact_fp4_and_fp8_attention_modules() {
 }
 
 #[test]
-fn rejects_wrong_target_collective_width_and_unbounded_broadcast() {
-    let module = attention_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
+fn rejects_wrong_target_invalid_collective_protocol_and_unbounded_broadcast() {
+    let module = collective_and_lds_transpose_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
     let wrong_target =
-        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("attention"))
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("collective"))
             .unwrap_err();
     assert!(
         wrong_target
@@ -300,23 +300,22 @@ fn rejects_wrong_target_collective_width_and_unbounded_broadcast() {
             .any(|diagnostic| { diagnostic.code == LoweringDiagnosticCode::UnsupportedCapability })
     );
 
-    let mut wrong_width = module.clone();
+    for invalid_width in [0, 3, 65] {
+        let mut invalid = module.clone();
+        set_reduction_width(&mut invalid, 5, invalid_width);
+        assert!(verify_module(&invalid).is_err());
+        assert!(lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&invalid).is_err());
+    }
+
+    let mut partial_wave = module.clone();
     let OperationKind::Wave(reduction) =
-        &mut wrong_width.functions[0].body.as_mut().unwrap().blocks[0].operations[5].kind
+        &mut partial_wave.functions[0].body.as_mut().unwrap().blocks[0].operations[5].kind
     else {
         unreachable!()
     };
-    let WaveOperationKind::ReduceF32 { tile_width, .. } = &mut reduction.kind else {
-        unreachable!()
-    };
-    *tile_width = 8;
-    let error = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&wrong_width).unwrap_err();
-    assert!(
-        error.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code == LoweringDiagnosticCode::UnsupportedWaveOperation
-        }),
-        "{error:?}"
-    );
+    reduction.active_lanes = 32;
+    assert!(verify_module(&partial_wave).is_err());
+    assert!(lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&partial_wave).is_err());
 
     let mut unbounded = module;
     let block = &mut unbounded.functions[0].body.as_mut().unwrap().blocks[0];
@@ -359,7 +358,89 @@ fn lowers_mask63_wave64_broadcast_and_rejects_hostile_masks() {
 
 #[test]
 fn rejected_profile_does_not_depend_on_undeclared_capabilities() {
-    let mut module = attention_module(Gfx950LdsTransposeFormatV1::Fp4E2M1);
+    let mut module = collective_and_lds_transpose_module(Gfx950LdsTransposeFormatV1::Fp4E2M1);
     module.required_capabilities = BTreeSet::new();
     assert!(lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).is_err());
+}
+
+fn set_reduction_width(module: &mut Module, operation_index: usize, width: u32) {
+    let OperationKind::Wave(reduction) =
+        &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[operation_index].kind
+    else {
+        panic!("expected wave reduction")
+    };
+    let WaveOperationKind::ReduceF32 { tile_width, .. } = &mut reduction.kind else {
+        panic!("expected f32 reduction")
+    };
+    *tile_width = width;
+}
+
+fn set_broadcast_width_and_zero_source(module: &mut Module, width: u32) {
+    let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
+    block.operations[4].kind = OperationKind::Constant(Constant::U32(0));
+    let OperationKind::Wave(broadcast) = &mut block.operations[7].kind else {
+        panic!("expected wave broadcast")
+    };
+    let WaveOperationKind::BroadcastF32 { tile_width, .. } = &mut broadcast.kind else {
+        panic!("expected f32 broadcast")
+    };
+    *tile_width = width;
+}
+
+#[test]
+fn lowers_every_admitted_power_of_two_reduction_width() {
+    for width in [1_u32, 2, 4, 8, 16, 32, 64] {
+        let mut module = collective_and_lds_transpose_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
+        set_reduction_width(&mut module, 5, width);
+        set_reduction_width(&mut module, 6, width);
+        verify_module(&module).unwrap();
+
+        let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+        let stages = width.trailing_zeros() as usize;
+        assert_eq!(
+            llvm.matches(" = fadd float ").count(),
+            stages,
+            "width {width}"
+        );
+        assert_eq!(
+            llvm.matches(" = fcmp olt float ").count(),
+            stages,
+            "width {width}"
+        );
+        assert_eq!(
+            llvm.matches("call i32 @llvm.amdgcn.ds.bpermute").count(),
+            stages * 2 + 1,
+            "width {width}"
+        );
+        if width == 1 {
+            assert!(llvm.contains("%v22 = select i1 true, float %arg7, float %arg7"));
+            assert!(llvm.contains("%v23 = select i1 true, float %arg7, float %arg7"));
+        } else {
+            let last_stage = stages - 1;
+            let last_distance = width / 2;
+            assert!(llvm.contains(&format!(
+                "%v22.source.{last_stage} = xor i32 %v22.lane, {last_distance}"
+            )));
+            assert!(llvm.contains(&format!(
+                "%v23.source.{last_stage} = xor i32 %v23.lane, {last_distance}"
+            )));
+        }
+        assert_llvm_parses(&llvm, &format!("reduce-width-{width}"));
+    }
+}
+
+#[test]
+fn lowers_every_admitted_power_of_two_broadcast_width() {
+    for width in [1_u32, 2, 4, 8, 16, 32, 64] {
+        let mut module = collective_and_lds_transpose_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
+        set_broadcast_width_and_zero_source(&mut module, width);
+        verify_module(&module).unwrap();
+
+        let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+        assert!(llvm.contains(&format!(
+            "%v24.tile.base = and i32 %v24.lane, {}",
+            -(width as i32)
+        )));
+        assert_llvm_parses(&llvm, &format!("broadcast-width-{width}"));
+    }
 }

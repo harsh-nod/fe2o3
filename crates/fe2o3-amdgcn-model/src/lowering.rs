@@ -73,7 +73,7 @@ impl LoweringTarget {
         matches!(self, Self::Gfx950XnackMinusV1)
     }
 
-    const fn supports_gfx950_attention(self) -> bool {
+    const fn supports_gfx950_collectives_and_lds_transpose(self) -> bool {
         matches!(self, Self::Gfx950XnackMinusV1)
     }
 
@@ -3330,7 +3330,7 @@ impl<'a> FunctionLowerer<'a> {
         );
         let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
-        let is_gfx950_attention = matches!(
+        let is_gfx950_collective_or_lds_transpose = matches!(
             operation.kind,
             OperationKind::Gfx950LdsTranspose(_)
                 | OperationKind::Wave(WaveOperation {
@@ -3343,7 +3343,7 @@ impl<'a> FunctionLowerer<'a> {
             && !is_diagnostic
             && !is_inline_assembly
             && !is_matrix
-            && !is_gfx950_attention
+            && !is_gfx950_collective_or_lds_transpose
             && !matches!(
                 &operation.kind,
                 OperationKind::Fence(_)
@@ -4495,7 +4495,7 @@ impl<'a> FunctionLowerer<'a> {
         transpose: &Gfx950LdsTransposeOperationV1,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if !self.target.supports_gfx950_attention() {
+        if !self.target.supports_gfx950_collectives_and_lds_transpose() {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedOperation,
@@ -4541,21 +4541,23 @@ impl<'a> FunctionLowerer<'a> {
     ) -> Result<(), LoweringErrors> {
         match wave.kind {
             WaveOperationKind::ReduceF32 { tile_width, .. } => {
-                if !self.target.supports_gfx950_attention()
+                if !self.target.supports_gfx950_collectives_and_lds_transpose()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
                     || wave.active_lanes != 64
-                    || tile_width != 16
+                    || tile_width == 0
+                    || !tile_width.is_power_of_two()
+                    || tile_width > 64
                 {
                     return Err(LoweringErrors::one(
                         location.clone(),
                         LoweringDiagnosticCode::UnsupportedWaveOperation,
-                        "gfx950 attention f32 collectives require the exact gfx950:xnack- kernel profile, one fully active Wave64, and tile width 16",
+                        "gfx950 f32 reduction requires the exact gfx950:xnack- kernel profile, one fully active Wave64, and a power-of-two tile width no larger than 64",
                     ));
                 }
             }
             WaveOperationKind::BroadcastF32 { tile_width, .. } => {
-                if !self.target.supports_gfx950_attention()
+                if !self.target.supports_gfx950_collectives_and_lds_transpose()
                     || self.kernel.is_none()
                     || wave.width != WaveWidth::Wave64
                     || wave.active_lanes != 64
@@ -4582,7 +4584,7 @@ impl<'a> FunctionLowerer<'a> {
             return Err(LoweringErrors::one(
                 location.clone(),
                 LoweringDiagnosticCode::UnsupportedWaveOperation,
-                "gfx950 attention broadcast requires a statically bounded tile-local source lane",
+                "gfx950 f32 broadcast requires a statically bounded tile-local source lane",
             ));
         }
         let Some(flat_workgroup_size) = self.flat_workgroup_size() else {
@@ -6850,10 +6852,21 @@ impl<'a> FunctionLowerer<'a> {
                 tile_width,
                 kind,
             } => {
-                debug_assert_eq!(tile_width, 16);
-                let mut reduced = self.value(value).0.to_owned();
+                debug_assert!(tile_width != 0 && tile_width.is_power_of_two() && tile_width <= 64);
+                let value = self.value(value).0;
+                if tile_width == 1 {
+                    writeln!(
+                        output,
+                        "  {result} = select i1 true, float {value}, float {value}"
+                    )
+                    .unwrap();
+                    return;
+                }
+                let mut reduced = value.to_owned();
                 self.emit_lane_id(output, &format!("{result}.lane"), wave.width);
-                for (index, distance) in [1, 2, 4, 8].into_iter().enumerate() {
+                let stages = tile_width.trailing_zeros();
+                for index in 0..stages {
+                    let distance = 1_u32 << index;
                     writeln!(
                         output,
                         "  {result}.source.{index} = xor i32 {result}.lane, {distance}"
@@ -6880,7 +6893,7 @@ impl<'a> FunctionLowerer<'a> {
                         "  {result}.remote.{index} = bitcast i32 {result}.remote.bits.{index} to float"
                     )
                     .unwrap();
-                    let destination = if index == 3 {
+                    let destination = if index + 1 == stages {
                         result.to_owned()
                     } else {
                         format!("{result}.reduce.{index}")

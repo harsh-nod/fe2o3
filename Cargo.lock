@@ -1110,6 +1110,7 @@ dependencies = [
  "dialect-amdgcn",
  "dialect-kernel",
  "dialect-mir",
+ "fe2o3-amdgcn-model",
  "fe2o3-kernel-ir",
  "fe2o3-mir-model",
  "fe2o3-pliron",
