@@ -103,7 +103,11 @@ boundary. A signed fixed-width singleton journal now durably commits fresh
 subject-bound challenges and exact receipts, recovers only immediate legal
 successors, re-emits prepared/issued outputs after crashes, and advances its
 rollback chain idempotently. Its signing APIs remain unreachable without the
-still-missing protected compiler-occurrence producer. The bounded service loop,
+still-missing protected compiler-occurrence producer. The backend and future
+supervisor now share one authority-free validator for exact V3 argv, canonical
+cwd, complete environment, target, backend path, compiler-closure pins, and
+measured rustc/backend bytes; only the backend currently supplies those
+observations. The bounded service loop, independent remote process observation,
 receipt carriage, external rollback verifier, and Worker V3 join also remain
 absent. Consequently `CompilerExecutionProvenance` remains open. See
 [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md)

@@ -26,6 +26,13 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
+mod protected_rustc;
+
+pub use protected_rustc::{
+    CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1,
+    ProtectedRustcProcessValidationErrorV1, validate_protected_rustc_process_observation_v1,
+};
+
 pub const S09_PROCESS_CONSISTENCY_EXPECTATION_FD_V3: RawFd = 194;
 // Measurement streams the executable through a fixed-size buffer. Keep a
 // finite admission bound while accommodating large rustc and debug binaries.

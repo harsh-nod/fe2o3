@@ -13,13 +13,15 @@ use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_closure_capability::{
     RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1,
 };
+use fe2o3_process_identity::{
+    CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1,
+    ProtectedRustcProcessValidationErrorV1, validate_protected_rustc_process_observation_v1,
+};
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
 const BASELINE_PROTECTED_TARGET_V1: &str = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1;
-const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
-const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
     "FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1";
 const RUNNING_RUSTC_PATH: &str = "/proc/self/exe";
@@ -337,62 +339,16 @@ fn validate_retained_capability(
     observation: RustcProcessObservationV1,
 ) -> Result<(), ProtectedRustcInvocationErrorV1> {
     let descriptor = capability.descriptor();
-    let closure = descriptor.compiler_closure();
-
-    if descriptor
-        .rustc()
-        .argv()
-        .ne(observation.argv.iter().map(String::as_str))
-    {
-        return Err(ProtectedRustcInvocationErrorV1::ArgumentsMismatch);
-    }
-    if descriptor.rustc().working_directory() != observation.canonical_working_directory {
-        return Err(ProtectedRustcInvocationErrorV1::WorkingDirectoryMismatch);
-    }
-    if descriptor.compile_environment() != &observation.compile_environment {
-        return Err(ProtectedRustcInvocationErrorV1::CompileEnvironmentMismatch);
-    }
-    if fe2o3_amd_target::ProductionAmdTargetProfileV1::from_device_target(descriptor.amd_target())
-        .is_none()
-    {
-        return Err(ProtectedRustcInvocationErrorV1::TargetMismatch {
-            found: descriptor.amd_target().to_owned(),
-        });
-    }
-    if descriptor.codegen_backend_path()
-        != fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1
-    {
-        return Err(ProtectedRustcInvocationErrorV1::BackendPathMismatch {
-            found: descriptor.codegen_backend_path().to_owned(),
-        });
-    }
-    if descriptor.rustc_executable_sha256() != &closure.rustc_executable_sha256() {
-        return Err(ProtectedRustcInvocationErrorV1::RustcClosurePinMismatch);
-    }
-    if descriptor.codegen_backend_sha256() != &closure.codegen_backend_sha256() {
-        return Err(ProtectedRustcInvocationErrorV1::CodegenBackendClosurePinMismatch);
-    }
-    if observation.running_rustc_sha256 != closure.rustc_executable_sha256() {
-        return Err(ProtectedRustcInvocationErrorV1::RunningRustcMismatch);
-    }
-    if observation.running_codegen_backend_sha256 != closure.codegen_backend_sha256() {
-        return Err(ProtectedRustcInvocationErrorV1::RunningCodegenBackendMismatch);
-    }
-
-    let compiler_closure_observation = closed_sha256_observation(
+    validate_protected_rustc_process_observation_v1(
+        descriptor,
+        &observation.argv,
+        &observation.canonical_working_directory,
         &observation.compile_environment,
-        EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1,
-    )?;
-    if compiler_closure_observation != closure.identity_sha256() {
-        return Err(ProtectedRustcInvocationErrorV1::CompilerClosureObservationMismatch);
-    }
-    let backend_observation = closed_sha256_observation(
-        &observation.compile_environment,
-        CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2,
-    )?;
-    if backend_observation != closure.codegen_backend_sha256() {
-        return Err(ProtectedRustcInvocationErrorV1::CodegenBackendObservationMismatch);
-    }
+        observation.running_rustc_sha256,
+        observation.running_codegen_backend_sha256,
+        fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1,
+    )
+    .map_err(map_process_validation_error)?;
 
     capability
         .revalidate()
@@ -400,45 +356,47 @@ fn validate_retained_capability(
     Ok(())
 }
 
-fn closed_sha256_observation(
-    environment: &CompileEnvironmentV2,
-    name: &'static str,
-) -> Result<[u8; 32], ProtectedRustcInvocationErrorV1> {
-    let encoded = environment
-        .entries()
-        .iter()
-        .find(|entry| entry.key() == name)
-        .map(|entry| entry.value())
-        .ok_or(ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name })?;
-    decode_sha256_observation(name, encoded)
-}
-
-fn decode_sha256_observation(
-    name: &'static str,
-    encoded: &str,
-) -> Result<[u8; 32], ProtectedRustcInvocationErrorV1> {
-    if encoded.len() != 64
-        || !encoded
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name });
-    }
-    let mut digest = [0_u8; 32];
-    for (output, pair) in digest.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
-        *output = (lower_hex_value(pair[0]) << 4) | lower_hex_value(pair[1]);
-    }
-    if digest == [0; 32] {
-        return Err(ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name });
-    }
-    Ok(digest)
-}
-
-fn lower_hex_value(byte: u8) -> u8 {
-    match byte {
-        b'0'..=b'9' => byte - b'0',
-        b'a'..=b'f' => byte - b'a' + 10,
-        _ => unreachable!("lowercase hex was checked above"),
+fn map_process_validation_error(
+    error: ProtectedRustcProcessValidationErrorV1,
+) -> ProtectedRustcInvocationErrorV1 {
+    match error {
+        ProtectedRustcProcessValidationErrorV1::ArgumentsMismatch => {
+            ProtectedRustcInvocationErrorV1::ArgumentsMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::WorkingDirectoryMismatch => {
+            ProtectedRustcInvocationErrorV1::WorkingDirectoryMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::CompileEnvironmentMismatch => {
+            ProtectedRustcInvocationErrorV1::CompileEnvironmentMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::TargetMismatch { found } => {
+            ProtectedRustcInvocationErrorV1::TargetMismatch { found }
+        }
+        ProtectedRustcProcessValidationErrorV1::BackendPathMismatch { found } => {
+            ProtectedRustcInvocationErrorV1::BackendPathMismatch { found }
+        }
+        ProtectedRustcProcessValidationErrorV1::RustcClosurePinMismatch => {
+            ProtectedRustcInvocationErrorV1::RustcClosurePinMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::CodegenBackendClosurePinMismatch => {
+            ProtectedRustcInvocationErrorV1::CodegenBackendClosurePinMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::RunningRustcMismatch => {
+            ProtectedRustcInvocationErrorV1::RunningRustcMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::RunningCodegenBackendMismatch => {
+            ProtectedRustcInvocationErrorV1::RunningCodegenBackendMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::CompilerClosureObservationMismatch => {
+            ProtectedRustcInvocationErrorV1::CompilerClosureObservationMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::CodegenBackendObservationMismatch => {
+            ProtectedRustcInvocationErrorV1::CodegenBackendObservationMismatch
+        }
+        ProtectedRustcProcessValidationErrorV1::InvalidClosedObservation { name } => {
+            ProtectedRustcInvocationErrorV1::InvalidClosedObservation { name }
+        }
+        other => ProtectedRustcInvocationErrorV1::Observation(other.to_string()),
     }
 }
 
