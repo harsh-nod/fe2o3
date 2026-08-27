@@ -5291,6 +5291,17 @@ fn pointer_operations_cannot_forge_reference_or_address_space_evidence() {
     )
     .admit(SemanticMirLimitsV1::default())
     .unwrap();
+    // Raw-pointer mutability is a source type property, not ownership authority.
+    pointer_cast_request(
+        SemanticPointerKindV1::Raw,
+        SemanticMutabilityV1::Immutable,
+        0,
+        SemanticPointerKindV1::Raw,
+        SemanticMutabilityV1::Mutable,
+        0,
+    )
+    .admit(SemanticMirLimitsV1::default())
+    .unwrap();
     borrow_request(
         SemanticBorrowKindV1::Shared,
         SemanticPointerKindV1::Reference,
@@ -5321,14 +5332,6 @@ fn pointer_operations_cannot_forge_reference_or_address_space_evidence() {
             SemanticPointerKindV1::Raw,
             SemanticMutabilityV1::Mutable,
             1,
-            SemanticPointerKindV1::Raw,
-            SemanticMutabilityV1::Mutable,
-            0,
-        ),
-        pointer_cast_request(
-            SemanticPointerKindV1::Raw,
-            SemanticMutabilityV1::Immutable,
-            0,
             SemanticPointerKindV1::Raw,
             SemanticMutabilityV1::Mutable,
             0,

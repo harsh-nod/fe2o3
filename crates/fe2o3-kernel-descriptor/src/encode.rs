@@ -186,6 +186,7 @@ pub(crate) const fn descriptor_kind_tag(value: DescriptorKind) -> u8 {
         DescriptorKind::Scalar => 1,
         DescriptorKind::SharedSlice => 2,
         DescriptorKind::DisjointSlice => 3,
+        DescriptorKind::GlobalMutPointer => 4,
     }
 }
 

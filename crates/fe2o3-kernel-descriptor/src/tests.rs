@@ -93,6 +93,42 @@ fn fixture() -> DeviceDescriptorTableV1 {
     .expect("valid table")
 }
 
+fn global_mut_pointer_fixture() -> DeviceDescriptorTableV1 {
+    let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(
+        ScalarTypeV1::U32,
+    ));
+    let layout = DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::global_mut_pointer(
+        ScalarTypeV1::U32,
+    ));
+    let argument = LogicalArgumentV1::global_mut_pointer(0, name("output"), &source, &layout, 0)
+        .expect("global mutable pointer argument");
+    let kernel = KernelDescriptorV1::new(
+        KernelId::from_bytes([0x72; 32]),
+        name("scoped_atomic"),
+        name("scoped_atomic"),
+        name("scoped_atomic.kd"),
+        evidence(0x73, 0x74),
+        evidence(0x75, 0x76),
+        vec![CapabilityV1::Atomics],
+        KernelAbiLayoutV1::new(8, 8, 8).expect("valid pointer ABI layout"),
+        launch(),
+        vec![argument],
+    )
+    .expect("valid pointer kernel");
+
+    DeviceDescriptorTableV1::new(
+        CanonicalCodeObjectDigest::from_bytes([0x77; 32]),
+        CodeObjectVersion::V6,
+        CompilerIdentityV1::new(text("rustc"), text("pointer-test"), [0x78; 20]),
+        ProducerIdentityV1::new(text("fe2o3-test"), text("pointer-test")),
+        target("gfx942:xnack-"),
+        vec![source],
+        vec![layout],
+        vec![kernel],
+    )
+    .expect("valid pointer table")
+}
+
 fn decode_error(bytes: &[u8]) -> DecodeError {
     decode_device_descriptor_table_v1(bytes).expect_err("mutation must be rejected")
 }
@@ -135,6 +171,61 @@ fn round_trip_reencodes_byte_identically() {
         &encoded[CANONICAL_CODE_OBJECT_DIGEST_OFFSET..CANONICAL_CODE_OBJECT_DIGEST_OFFSET + 32],
         &[0xa0; 32]
     );
+}
+
+#[test]
+fn global_mut_pointer_tag_and_wire_semantics_are_stable() {
+    use crate::encode::descriptor_kind_tag;
+
+    assert_eq!(descriptor_kind_tag(DescriptorKind::GlobalMutPointer), 4);
+    let table = global_mut_pointer_fixture();
+    let encoded = encode_device_descriptor_table_v1(&table).expect("encode pointer table");
+    let decoded = decode_device_descriptor_table_v1(&encoded).expect("decode pointer table");
+    assert_eq!(decoded, table);
+    assert_eq!(
+        encode_device_descriptor_table_v1(&decoded).expect("re-encode pointer table"),
+        encoded
+    );
+    assert!(
+        decoded.type_records()[0]
+            .descriptor()
+            .is_global_mut_pointer()
+    );
+    assert_eq!(
+        decoded.layout_records()[0].descriptor().kind,
+        DescriptorKind::GlobalMutPointer
+    );
+    let argument = &decoded.kernels()[0].arguments()[0];
+    assert_eq!(argument.ownership(), OwnershipSemantics::UniqueBorrow);
+    assert_eq!(argument.access(), AccessMode::ReadWrite);
+    assert_eq!(argument.alias(), AliasSemantics::Exclusive);
+    assert_eq!(argument.physical_components().len(), 1);
+
+    let mut wrong_access = table.clone();
+    wrong_access.kernels[0].arguments[0].access = AccessMode::ReadOnly;
+    let wrong_access = encode_device_descriptor_table_v1(&wrong_access).expect("encode mutation");
+    assert!(decode_device_descriptor_table_v1(&wrong_access).is_err());
+
+    let mut wrong_component = table.clone();
+    wrong_component.kernels[0].arguments[0].components[0].access = AccessMode::ReadOnly;
+    let wrong_component =
+        encode_device_descriptor_table_v1(&wrong_component).expect("encode mutation");
+    assert!(decode_device_descriptor_table_v1(&wrong_component).is_err());
+
+    let mut extra_component = table;
+    extra_component.kernels[0].arguments[0]
+        .components
+        .push(PhysicalAbiComponentV1 {
+            kind: PhysicalAbiComponentKind::SliceLengthU64,
+            offset: 8,
+            size: 8,
+            alignment: 8,
+            access: AccessMode::ByValue,
+            alias: AliasSemantics::Value,
+        });
+    let extra_component =
+        encode_device_descriptor_table_v1(&extra_component).expect("encode mutation");
+    assert!(decode_device_descriptor_table_v1(&extra_component).is_err());
 }
 
 #[test]
@@ -835,16 +926,18 @@ fn canonical_code_object_digest_is_not_a_raw_payload_digest() {
 }
 
 #[test]
-fn raw_pointer_generic_address_space_and_records_have_no_v1_representation() {
+fn v1_represents_only_closed_typed_memory_kinds() {
     let supported_kinds = [
         SourceTypeDescriptorV1::scalar(ScalarTypeV1::U64),
         SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::U64),
         SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::U64),
+        SourceTypeDescriptorV1::global_mut_pointer(ScalarTypeV1::U64),
     ];
-    assert_eq!(supported_kinds.len(), 3);
+    assert_eq!(supported_kinds.len(), 4);
     assert!(supported_kinds[0].is_scalar());
     assert!(supported_kinds[1].is_shared_slice());
     assert!(supported_kinds[2].is_disjoint_slice());
+    assert!(supported_kinds[3].is_global_mut_pointer());
 }
 
 #[test]

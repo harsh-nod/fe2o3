@@ -13,18 +13,23 @@ struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
     amdgpu_llvm_output: Option<PathBuf>,
     expected_llvm_target: Option<&'static str>,
+    gfx942_compiler_handoff_output: Option<PathBuf>,
     result: Option<Result<(), String>>,
 }
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
-        self.result = Some(if let Some(output) = self.amdgpu_llvm_output.as_deref() {
-            extract_amdgpu_llvm_in_active_session_v1(tcx, output, self.expected_llvm_target)
-        } else if self.ranked_memory {
-            extract_ranked_memory_in_active_session_v1(tcx)
-        } else {
-            extract_in_active_session_v1(tcx)
-        });
+        self.result = Some(
+            if let Some(output) = self.gfx942_compiler_handoff_output.as_deref() {
+                extract_gfx942_compiler_handoff_in_active_session_v1(tcx, output)
+            } else if let Some(output) = self.amdgpu_llvm_output.as_deref() {
+                extract_amdgpu_llvm_in_active_session_v1(tcx, output, self.expected_llvm_target)
+            } else if self.ranked_memory {
+                extract_ranked_memory_in_active_session_v1(tcx)
+            } else {
+                extract_in_active_session_v1(tcx)
+            },
+        );
         Compilation::Stop
     }
 }
@@ -140,6 +145,36 @@ fn extract_amdgpu_llvm_in_active_session_v1(
     Ok(())
 }
 
+fn extract_gfx942_compiler_handoff_in_active_session_v1(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let lowered = transaction_in_active_session_v1(tcx)?
+        .lower_production_target()
+        .map_err(|error| error.to_string())?;
+    if lowered.target_name() != fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1 {
+        return Err(format!(
+            "production gfx942 compiler handoff expected live target {:?}; found {:?}",
+            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
+            lowered.target_name()
+        ));
+    }
+    let handoff = lowered
+        .into_inert_worker_handoff_for_extraction()
+        .map_err(|error| error.to_string())?;
+    std::fs::write(output, handoff.canonical_bytes()).map_err(|error| {
+        format!(
+            "failed to write inert production compiler-module handoff extraction `{}`: {error}",
+            output.display()
+        )
+    })?;
+    eprintln!(
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942 LLVM -> compiler-bound inert handoff; {} handoff byte(s), artifact/launch authority false",
+        handoff.canonical_bytes().len(),
+    );
+    Ok(())
+}
+
 /// Runs one already-targeted rustc invocation in this process.
 ///
 /// The caller must provide the complete rustc argument vector, including argv0.
@@ -160,6 +195,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         ranked_memory: true,
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -178,6 +214,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -195,10 +232,34 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         ranked_memory: false,
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
+        gfx942_compiler_handoff_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
     callbacks.result.unwrap_or_else(|| {
         Err("production gfx942 extraction callback did not reach rustc analysis".to_owned())
+    })
+}
+
+/// Runs the complete production analysis and lowering transaction and emits
+/// its compiler-bound nested handoff for inert worker integration testing.
+/// The result carries no publication, artifact, load, or launch authority.
+pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let mut callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
+        gfx942_compiler_handoff_output: Some(output.to_path_buf()),
+        result: None,
+    };
+    rustc_driver::run_compiler(args, &mut callbacks);
+    callbacks.result.unwrap_or_else(|| {
+        Err(
+            "production compiler-handoff extraction callback did not reach rustc analysis"
+                .to_owned(),
+        )
     })
 }

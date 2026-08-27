@@ -146,6 +146,7 @@ impl FormalAllocationParameter {
 pub enum FormalMemoryAccessKind {
     Read,
     Write,
+    Atomic,
 }
 
 /// A compiler-derived, per-invocation byte region rooted at a formal kernel
@@ -709,9 +710,25 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                         FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof { location },
                     );
                 }
+                OperationKind::Atomic(atomic) => {
+                    if let Some(invocations) = access_invocations {
+                        match derive_access(
+                            location,
+                            atomic.pointer,
+                            FormalMemoryAccessKind::Atomic,
+                            atomic.access,
+                            invocations,
+                            &context,
+                        ) {
+                            Ok(access) => accesses.push(access),
+                            Err(reason) => {
+                                reasons.insert(reason);
+                            }
+                        }
+                    }
+                }
                 OperationKind::Alloca { .. }
                 | OperationKind::Barrier(_)
-                | OperationKind::Atomic(_)
                 | OperationKind::Fence(_)
                 | OperationKind::Matrix(_)
                 | OperationKind::InlineAssembly(_)
@@ -1586,11 +1603,11 @@ fn derive_alias_requirements(accesses: &[FormalMemoryAccess]) -> Vec<RuntimeAlia
                 envelope.range.start = envelope.range.start.min(range.start);
                 envelope.range.end_exclusive =
                     envelope.range.end_exclusive.max(range.end_exclusive);
-                envelope.writes |= access.kind == FormalMemoryAccessKind::Write;
+                envelope.writes |= access.kind != FormalMemoryAccessKind::Read;
             })
             .or_insert(AllocationEnvelope {
                 range,
-                writes: access.kind == FormalMemoryAccessKind::Write,
+                writes: access.kind != FormalMemoryAccessKind::Read,
                 address_space: access.address_space,
             });
     }
@@ -1634,6 +1651,8 @@ fn derive_inter_invocation_conflicts(
             if left.allocation != right.allocation
                 || (left.kind == FormalMemoryAccessKind::Read
                     && right.kind == FormalMemoryAccessKind::Read)
+                || (left.kind == FormalMemoryAccessKind::Atomic
+                    && right.kind == FormalMemoryAccessKind::Atomic)
                 || proves_distinct_invocation_disjointness(left, right)
             {
                 continue;

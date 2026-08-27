@@ -28,6 +28,7 @@ macro_rules! global_atomic_view {
             /// differently sized aliases. Safe callers can only access the
             /// pointee atomically through the returned reference.
             #[rustc_diagnostic_item = $diagnostic]
+            #[inline(always)]
             pub fn as_atomic(&self) -> &$atomic {
                 // SAFETY: DeviceGlobalMutPtr construction/ABI admission owns
                 // the validity, lifetime, alignment, and aliasing invariant

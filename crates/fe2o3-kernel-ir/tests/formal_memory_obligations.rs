@@ -1164,7 +1164,7 @@ fn unmodeled_barrier_effect_fails_closed() {
 }
 
 #[test]
-fn unsupported_atomic_effect_fails_closed() {
+fn atomic_effect_retains_bounds_and_atomic_race_semantics() {
     let access = MemoryAccess::new(AddressSpace::Global, 4);
     let atomic = Atomic {
         kind: AtomicKind::Add,
@@ -1192,10 +1192,19 @@ fn unsupported_atomic_effect_fails_closed() {
     );
 
     let analysis = result.unwrap();
-    assert!(matches!(
-        analysis.incomplete_reasons(),
-        [FormalMemoryIncompleteReason::UnsupportedMemoryEffect { .. }]
-    ));
+    assert!(analysis.incomplete_reasons().is_empty());
+    assert_eq!(analysis.obligations().accesses().len(), 1);
+    assert_eq!(
+        analysis.obligations().accesses()[0].kind(),
+        FormalMemoryAccessKind::Atomic
+    );
+    assert_eq!(analysis.obligations().bounds_requirements().len(), 1);
+    assert!(
+        analysis
+            .obligations()
+            .inter_invocation_conflicts()
+            .is_empty()
+    );
 }
 
 #[test]

@@ -1131,6 +1131,28 @@ fn single_global_atomic_module(
     module
 }
 
+fn direct_global_pointer_atomic_module() -> Module {
+    let mut module = single_global_atomic_module(
+        ScalarType::U32,
+        AtomicKind::Add,
+        SynchronizationScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    module.functions[0].signature.parameters[0] = Type::pointer(
+        Type::Scalar(ScalarType::U32),
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    );
+    let operations = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations;
+    operations.remove(0);
+    let OperationKind::Atomic(atomic) = &mut operations[0].kind else {
+        panic!("atomic expected")
+    };
+    atomic.pointer = ValueId(0);
+    module
+}
+
 #[test]
 fn lowers_fences_convergent_barriers_static_dynamic_lds_and_wave_width() {
     let llvm =
@@ -1488,6 +1510,39 @@ fn signed_integer_min_and_max_select_signed_llvm_operations() {
             "wrong signed atomic operation in:\n{llvm}"
         );
     }
+}
+
+#[test]
+fn global_pointer_kernel_parameter_reaches_atomic_llvm_exactly() {
+    let module = direct_global_pointer_atomic_module();
+    let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("single_atomic")).unwrap();
+    assert!(
+        llvm.contains("ptr addrspace(1) %arg0, i32 %arg1, i32 %arg2"),
+        "global pointer parameter missing from:\n{llvm}"
+    );
+    assert!(
+        llvm.contains("%v4 = atomicrmw add ptr addrspace(1) %arg0, i32 %arg1 monotonic, align 4")
+    );
+}
+
+#[test]
+fn non_global_pointer_kernel_parameter_fails_closed() {
+    let mut module = direct_global_pointer_atomic_module();
+    let Type::Pointer(pointer) = &mut module.functions[0].signature.parameters[0] else {
+        panic!("pointer expected")
+    };
+    pointer.address_space = AddressSpace::Workgroup;
+    let OperationKind::Atomic(atomic) =
+        &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[0].kind
+    else {
+        panic!("atomic expected")
+    };
+    atomic.access.address_space = AddressSpace::Workgroup;
+    atomic.scope = SynchronizationScope::Workgroup;
+    assert_eq!(
+        first_code(&module, "single_atomic"),
+        LoweringDiagnosticCode::UnsupportedAddressSpace
+    );
 }
 
 #[test]
@@ -2246,8 +2301,8 @@ fn unsupported_parameter_types_and_address_spaces_are_rejected() {
             LoweringDiagnosticCode::UnsupportedAddressSpace,
         ),
         (
-            global_pointer(AccessMode::ReadWrite),
-            LoweringDiagnosticCode::UnsupportedParameter,
+            Type::pointer(Type::Unit, AddressSpace::Global, AccessMode::ReadWrite),
+            LoweringDiagnosticCode::UnsupportedType,
         ),
         (Type::Unit, LoweringDiagnosticCode::UnsupportedParameter),
     ];

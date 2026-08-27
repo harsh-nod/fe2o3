@@ -54,14 +54,16 @@ pub(crate) enum GeneralTypedArgumentKindV3 {
     Scalar(RustScalarElementTypeV1),
     SharedSlice(RustScalarElementTypeV1),
     DisjointSlice(RustScalarElementTypeV1),
+    GlobalMutPointer(RustScalarElementTypeV1),
 }
 
 impl GeneralTypedArgumentKindV3 {
     pub(crate) const fn scalar(self) -> RustScalarElementTypeV1 {
         match self {
-            Self::Scalar(scalar) | Self::SharedSlice(scalar) | Self::DisjointSlice(scalar) => {
-                scalar
-            }
+            Self::Scalar(scalar)
+            | Self::SharedSlice(scalar)
+            | Self::DisjointSlice(scalar)
+            | Self::GlobalMutPointer(scalar) => scalar,
         }
     }
 }
@@ -278,9 +280,33 @@ fn extract_argument<'tcx>(
     }
 
     if let TyKind::Adt(definition, args) = *ty.kind() {
-        if trusted_device_items::classify(tcx, definition.did())
-            != Some(TrustedDeviceItem::DisjointSlice)
-        {
+        let trusted = trusted_device_items::classify(tcx, definition.did());
+        if trusted == Some(TrustedDeviceItem::DeviceGlobalMutPtr) {
+            let Some(element) = args.first().and_then(|argument| argument.as_type()) else {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{} has malformed genuine DeviceGlobalMutPtr arguments",
+                    argument()
+                )));
+            };
+            if args.len() != 1 {
+                return Err(GeneralTypedExtractError::new(format!(
+                    "{} has malformed genuine DeviceGlobalMutPtr arguments",
+                    argument()
+                )));
+            }
+            let scalar = scalar_type(element).ok_or_else(|| {
+                GeneralTypedExtractError::new(format!(
+                    "{} has unsupported DeviceGlobalMutPtr element type `{element}`",
+                    argument()
+                ))
+            })?;
+            let layout = global_mut_pointer_layout(layout_cx, ty, scalar, &argument())?;
+            return Ok(GeneralTypedArgumentV3 {
+                kind: GeneralTypedArgumentKindV3::GlobalMutPointer(scalar),
+                layout,
+            });
+        }
+        if trusted != Some(TrustedDeviceItem::DisjointSlice) {
             return Err(GeneralTypedExtractError::new(format!(
                 "{} uses untrusted or unsupported aggregate type `{ty}`",
                 argument()
@@ -323,9 +349,57 @@ fn extract_argument<'tcx>(
     }
 
     Err(GeneralTypedExtractError::new(format!(
-        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, and genuine DisjointSlice values are accepted",
+        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, genuine DisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
         argument()
     )))
+}
+
+fn global_mut_pointer_layout<'tcx>(
+    layout_cx: &LayoutCx<'tcx>,
+    ty: Ty<'tcx>,
+    scalar: RustScalarElementTypeV1,
+    argument: &str,
+) -> Result<RustLayoutEvidenceV1, GeneralTypedExtractError> {
+    let layout = layout_cx.layout_of(ty).map_err(|error| {
+        GeneralTypedExtractError::new(format!("failed to lay out {argument}: {error}"))
+    })?;
+    let BackendRepr::Scalar(pointer) = layout.backend_repr else {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} does not have rustc scalar pointer ABI"
+        )));
+    };
+    let pointer_ok = matches!(pointer.primitive(), Primitive::Pointer(address_space) if address_space.0 == 0)
+        && pointer.size(layout_cx).bytes() == POINTER_BYTES
+        && pointer.align(layout_cx).abi.bytes() == u64::from(POINTER_ALIGNMENT);
+    if !pointer_ok
+        || layout.size.bytes() != POINTER_BYTES
+        || layout.align.abi.bytes() != u64::from(POINTER_ALIGNMENT)
+    {
+        return Err(GeneralTypedExtractError::new(format!(
+            "{argument} does not have the exact 64-bit mutable-pointer ABI"
+        )));
+    }
+    let component = RustPhysicalComponentV1::new(
+        0,
+        POINTER_BYTES,
+        POINTER_ALIGNMENT,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: RustPointerMutabilityV1::Mut,
+            pointee: scalar,
+        },
+    )
+    .map_err(|error| {
+        GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}"))
+    })?;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(scalar)),
+        RustcAbiClassV1::Scalar,
+        PointerWidth::Bits64,
+        POINTER_BYTES,
+        POINTER_ALIGNMENT,
+        vec![component],
+    )
+    .map_err(|error| GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}")))
 }
 
 fn disjoint_index_space_v1<'tcx>(
@@ -730,6 +804,19 @@ fn build_abi_field(
                 ArgumentOwnership::UniqueBorrow,
                 AliasClass::Exclusive,
             ),
+            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (
+                POINTER_BYTES,
+                POINTER_ALIGNMENT,
+                AbiKind::Pointer {
+                    pointee_size: scalar.size_bytes(),
+                    pointee_alignment: scalar.size_bytes() as u32,
+                },
+                Mutability::Mutable,
+                Access::ReadWrite,
+                AddressSpace::Global,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
         };
     AbiField::new(
         Name::new(name).map_err(|error| GeneralTypedExtractError::new(error.to_string()))?,
@@ -771,6 +858,7 @@ fn argument_size_alignment(kind: GeneralTypedArgumentKindV3) -> (u64, u32) {
         }
         GeneralTypedArgumentKindV3::SharedSlice(_)
         | GeneralTypedArgumentKindV3::DisjointSlice(_) => (SLICE_BYTES, POINTER_ALIGNMENT),
+        GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (POINTER_BYTES, POINTER_ALIGNMENT),
     }
 }
 
@@ -891,6 +979,24 @@ mod tests {
                 16,
                 8,
                 slice_components(scalar, RustPointerMutabilityV1::Mut),
+            ),
+            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => (
+                RustSourceTypeShapeV1::global_mut_pointer(scalar),
+                RustcAbiClassV1::Scalar,
+                8,
+                8,
+                vec![
+                    RustPhysicalComponentV1::new(
+                        0,
+                        8,
+                        8,
+                        RustPhysicalComponentKindV1::Pointer {
+                            mutability: RustPointerMutabilityV1::Mut,
+                            pointee: scalar,
+                        },
+                    )
+                    .unwrap(),
+                ],
             ),
         };
         GeneralTypedArgumentV3 {
@@ -1067,6 +1173,54 @@ mod tests {
         assert_eq!(abi.fields()[0].access(), Access::ReadOnly);
         assert_eq!(abi.fields()[1].access(), Access::ReadOnly);
         assert_eq!(abi.fields()[2].access(), Access::ReadWrite);
+    }
+
+    #[test]
+    fn global_mut_pointer_retains_exact_abi_ownership_and_identity() {
+        let pointer = argument(GeneralTypedArgumentKindV3::GlobalMutPointer(
+            RustScalarElementTypeV1::U32,
+        ));
+        let abi = build_abi(
+            "global_pointer",
+            "global_pointer",
+            std::slice::from_ref(&pointer),
+        )
+        .unwrap();
+        let field = &abi.fields()[0];
+
+        assert_eq!(abi.size(), 8);
+        assert_eq!(abi.alignment(), 8);
+        assert_eq!(field.offset(), 0);
+        assert_eq!(field.size(), 8);
+        assert_eq!(field.alignment(), 8);
+        assert_eq!(
+            field.kind(),
+            AbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            }
+        );
+        assert_eq!(field.mutability(), Mutability::Mutable);
+        assert_eq!(field.access(), Access::ReadWrite);
+        assert_eq!(field.address_space(), AddressSpace::Global);
+        assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
+        assert_eq!(field.alias_class(), AliasClass::Exclusive);
+        assert_eq!(pointer.layout.abi_class(), RustcAbiClassV1::Scalar);
+        assert_eq!(pointer.layout.size(), 8);
+        assert_eq!(pointer.layout.abi_alignment(), 8);
+        assert_eq!(pointer.layout.components().len(), 1);
+        assert_eq!(
+            pointer.layout.components()[0].kind(),
+            RustPhysicalComponentKindV1::Pointer {
+                mutability: RustPointerMutabilityV1::Mut,
+                pointee: RustScalarElementTypeV1::U32,
+            }
+        );
+
+        let scalar = argument(GeneralTypedArgumentKindV3::Scalar(
+            RustScalarElementTypeV1::U64,
+        ));
+        assert_ne!(pointer.type_identity(), scalar.type_identity());
     }
 
     #[test]

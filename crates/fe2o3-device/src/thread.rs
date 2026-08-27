@@ -841,7 +841,16 @@ impl GridLeader {
 /// observe that mapping.
 #[inline(never)]
 pub fn global_id_1d() -> usize {
-    unreachable!("global_id_1d must be lowered by the fe2o3 backend")
+    let workgroup = block_idx_x() as u64;
+    let workgroup_size = block_dim_x() as u64;
+    let local = thread_idx_x() as u64;
+    match workgroup
+        .checked_mul(workgroup_size)
+        .and_then(|base| base.checked_add(local))
+    {
+        Some(index) => index as usize,
+        None => usize::MAX,
+    }
 }
 
 /// Returns the number of invocations in the logical 1D launch.
@@ -850,7 +859,12 @@ pub fn global_id_1d() -> usize {
 /// the launch into physical workgroups.
 #[inline(never)]
 pub fn launch_extent_1d() -> usize {
-    unreachable!("launch_extent_1d must be lowered by the fe2o3 backend")
+    let workgroups = grid_dim_x() as u64;
+    let workgroup_size = block_dim_x() as u64;
+    match workgroups.checked_mul(workgroup_size) {
+        Some(extent) => extent as usize,
+        None => 0,
+    }
 }
 
 #[inline(never)]

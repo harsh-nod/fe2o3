@@ -24,6 +24,8 @@ const EXTRACT_CRATE_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_V1";
 const EXTRACT_RANKED_MEMORY_ENV_V1: &str = "FE2O3_EXTRACT_RANKED_MEMORY_V1";
 const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1";
 const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
+const EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1: &str =
+    "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 const PORTABLE_SELECTED_METADATA_DOMAIN_V1: &[u8] = b"FE2O3/PORTABLE-SELECTED-RUSTC-METADATA/V1\0";
 const PORTABLE_CODEGEN_IDENTITY_KEYS_V1: &[&str] = &[
@@ -54,6 +56,7 @@ fn main() {
         env::var_os(EXTRACT_RANKED_MEMORY_ENV_V1),
         env::var_os(EXTRACT_AMDGPU_LLVM_PATH_ENV_V1),
         env::var_os(EXTRACT_GFX942_LLVM_PATH_ENV_V1),
+        env::var_os(EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1),
         env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1),
         None,
     );
@@ -221,6 +224,7 @@ enum ExtractionModeV1 {
     RankedMemory,
     AmdgpuLlvm(OsString),
     Gfx942Llvm(OsString),
+    Gfx942CompilerHandoff(OsString),
 }
 
 fn prepare(
@@ -229,6 +233,7 @@ fn prepare(
     ranked_memory: Option<OsString>,
     amdgpu_llvm_path: Option<OsString>,
     gfx942_llvm_path: Option<OsString>,
+    gfx942_compiler_handoff_path: Option<OsString>,
     crate_binding_path: Option<OsString>,
     package_identity: Option<PortablePackageIdentityV1>,
 ) -> Result<PreparedExtractionV1, String> {
@@ -236,6 +241,12 @@ fn prepare(
         .get(1..)
         .filter(|argv| !argv.is_empty())
         .ok_or_else(|| "wrapper requires the actual rustc argv".to_owned())?;
+    if is_cargo_stdin_probe(actual_rustc_argv) {
+        return Ok(PreparedExtractionV1::Passthrough {
+            executable: actual_rustc_argv[0].clone(),
+            forwarded_args: actual_rustc_argv[1..].to_vec(),
+        });
+    }
     let invocation = classify_rustc_invocation_v2(actual_rustc_argv)
         .map_err(|error| format!("invalid rustc invocation: {error}"))?;
     let selected_crate = match selected_crate {
@@ -282,17 +293,23 @@ fn prepare(
     let crate_binding =
         derive_crate_binding_id_v1(compile.crate_name(), [portable_metadata.as_str()]);
     let metadata_observation = derive_cargo_metadata_build_observation_v2(&cargo_metadata);
-    if amdgpu_llvm_path.is_some() && gfx942_llvm_path.is_some() {
+    let selected_modes = usize::from(ranked_memory.is_some())
+        + usize::from(amdgpu_llvm_path.is_some())
+        + usize::from(gfx942_llvm_path.is_some())
+        + usize::from(gfx942_compiler_handoff_path.is_some());
+    if selected_modes > 1 {
         return Err(format!(
-            "{EXTRACT_AMDGPU_LLVM_PATH_ENV_V1} and legacy {EXTRACT_GFX942_LLVM_PATH_ENV_V1} are mutually exclusive"
+            "{EXTRACT_RANKED_MEMORY_ENV_V1}, {EXTRACT_AMDGPU_LLVM_PATH_ENV_V1}, legacy {EXTRACT_GFX942_LLVM_PATH_ENV_V1}, and {EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} are mutually exclusive"
         ));
     }
-    if (amdgpu_llvm_path.is_some() || gfx942_llvm_path.is_some()) && ranked_memory.is_some() {
-        return Err(format!(
-            "{EXTRACT_RANKED_MEMORY_ENV_V1} and an LLVM extraction output are mutually exclusive"
-        ));
-    }
-    let mode = if let Some(output) = amdgpu_llvm_path {
+    let mode = if let Some(output) = gfx942_compiler_handoff_path {
+        if output.is_empty() {
+            return Err(format!(
+                "{EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} must not be empty"
+            ));
+        }
+        ExtractionModeV1::Gfx942CompilerHandoff(output)
+    } else if let Some(output) = amdgpu_llvm_path {
         if output.is_empty() {
             return Err(format!(
                 "{EXTRACT_AMDGPU_LLVM_PATH_ENV_V1} must not be empty"
@@ -531,6 +548,16 @@ fn replace_selected_codegen_metadata_v1(
     Ok(rewritten)
 }
 
+fn is_cargo_stdin_probe(argv: &[OsString]) -> bool {
+    argv.get(1).is_some_and(|argument| argument == "-")
+        && argv.iter().skip(2).any(|argument| {
+            argument == "--print"
+                || argument
+                    .to_str()
+                    .is_some_and(|argument| argument.starts_with("--print="))
+        })
+}
+
 fn prepare_passthrough(invocation: RustcInvocationV2<'_>) -> PreparedExtractionV1 {
     PreparedExtractionV1::Passthrough {
         executable: invocation.executable().to_owned(),
@@ -585,6 +612,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
         }
         ExtractionModeV1::Gfx942Llvm(output) => {
             rustc_codegen_fe2o3::run_production_gfx942_llvm_extraction_driver_v1(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
+        ExtractionModeV1::Gfx942CompilerHandoff(output) => {
+            rustc_codegen_fe2o3::run_production_gfx942_compiler_handoff_extraction_driver_v1(
                 &selected.args,
                 std::path::Path::new(&output),
             )?;
@@ -685,6 +718,7 @@ mod tests {
         let prepared = prepare(
             compile_argv(crate_name, metadata),
             Some(OsString::from(crate_name)),
+            None,
             None,
             None,
             None,
@@ -989,6 +1023,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap_err();
         assert!(missing.contains("has no explicit -C metadata value"));
@@ -1068,6 +1103,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         let PreparedExtractionV1::Passthrough {
@@ -1103,6 +1139,29 @@ mod tests {
             prepare(
                 query,
                 Some(OsString::from("selected")),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            PreparedExtractionV1::Passthrough { .. }
+        ));
+
+        let managed_stdin_probe = vec![
+            OsString::from("fe2o3-rustc-extract"),
+            OsString::from("rustc"),
+            OsString::from("-"),
+            OsString::from("-Zmir-enable-passes=-JumpThreading"),
+            OsString::from("--print=file-names"),
+        ];
+        assert!(matches!(
+            prepare(
+                managed_stdin_probe,
+                Some(OsString::from("selected")),
+                None,
                 None,
                 None,
                 None,
