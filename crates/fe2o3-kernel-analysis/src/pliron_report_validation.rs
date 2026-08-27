@@ -3,9 +3,8 @@
 //! A clean analysis report is not, by itself, evidence that the analysis
 //! visited every relevant operation or discharged every obligation. This
 //! module binds each actual report result to the exact compiler-owned PLIRON
-//! checkpoint and records the independent witness that would be required to
-//! admit it as sound. The current V1 reports do not retain those exhaustive
-//! witnesses, so their independent-checking status remains `Incomplete`.
+//! checkpoint and records the independently replayed witness, or the exact
+//! evidence gap that keeps the supported-fragment result `Incomplete`.
 //!
 //! Compact structural labels are diagnostic lineage only. Session decisions
 //! consume private tokens minted after retained canonical-byte comparison.
@@ -25,7 +24,9 @@ use crate::{
     PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1, PlironBarrierReportV1,
     PlironPassCheckpointTokenV1, PlironPassPreservationReportV1, PlironPassValidationHandleV1,
     PlironSemanticRefinementReportV1, PlironStructuralIdentityLabelV1, PlironTensorLayoutReportV1,
-    PlironWorkgroupMemoryReportV1, RankedBoundsReportV1, RankedRaceReportV1,
+    PlironWorkgroupMemoryReportV1, ProductionAnalysisWitnessEnvelopeV1,
+    ProductionAnalysisWitnessValidationErrorV1, RankedBoundsReportV1, RankedRaceReportV1,
+    issue_and_validate_production_analysis_witness_v1,
 };
 
 /// Number of reports in the fixed production analysis sequence.
@@ -215,7 +216,7 @@ impl ProductionAnalysisWitnessGapV1 {
     }
 }
 
-fn witness_gap(pass: KernelCheckPassKindV1) -> ProductionAnalysisWitnessGapV1 {
+pub(crate) fn witness_gap(pass: KernelCheckPassKindV1) -> ProductionAnalysisWitnessGapV1 {
     match pass {
         KernelCheckPassKindV1::TensorLayout => {
             ProductionAnalysisWitnessGapV1::TensorLayoutExhaustiveDataflow
@@ -247,14 +248,14 @@ fn witness_gap(pass: KernelCheckPassKindV1) -> ProductionAnalysisWitnessGapV1 {
     }
 }
 
-/// Non-authoritative diagnostic from one successfully sealed report.
+/// Non-authoritative replay result from one successfully sealed report.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionAnalysisStageValidationV1 {
     checkpoint: ProductionAnalysisCheckpointV1,
     implementation: ProductionAnalysisImplementationV1,
     configuration: ProductionAnalysisConfigurationV1,
     analysis_status: KernelCheckStatusV1,
-    witness_gap: ProductionAnalysisWitnessGapV1,
+    witness: ProductionAnalysisWitnessEnvelopeV1,
 }
 
 impl ProductionAnalysisStageValidationV1 {
@@ -274,22 +275,24 @@ impl ProductionAnalysisStageValidationV1 {
         self.analysis_status
     }
 
-    pub const fn witness_gap(&self) -> ProductionAnalysisWitnessGapV1 {
-        self.witness_gap
+    pub const fn remaining_witness_gap(&self) -> Option<ProductionAnalysisWitnessGapV1> {
+        self.witness.coverage().gap()
     }
 
-    /// Independent admission remains incomplete even when the underlying
-    /// policy analysis returned no findings.
+    pub const fn witness(&self) -> &ProductionAnalysisWitnessEnvelopeV1 {
+        &self.witness
+    }
+
     pub const fn independent_validation_status(&self) -> KernelCheckStatusV1 {
-        self.analysis_status.join(KernelCheckStatusV1::Incomplete)
+        self.analysis_status.join(self.witness.status())
     }
 }
 
 /// Diagnostic summary for the fixed eight sealed results.
 ///
 /// This type deliberately carries no private seal or canonical bytes and
-/// cannot be converted into proof authority. It explains why a strict future
-/// consumer must not accept the reports yet.
+/// cannot be converted into proof authority. Complete supported-fragment
+/// replay remains separate from compiler-refinement and lowering authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionAnalysisReportValidationV1 {
     stages: Vec<ProductionAnalysisStageValidationV1>,
@@ -308,9 +311,10 @@ impl ProductionAnalysisReportValidationV1 {
             })
     }
 
-    /// V1 reports all lack at least one exhaustive independent witness.
-    pub const fn all_reports_independently_validated(&self) -> bool {
-        false
+    pub fn all_reports_independently_validated(&self) -> bool {
+        self.stages
+            .iter()
+            .all(|stage| stage.witness.coverage().is_complete())
     }
 
     /// Diagnostic metadata and compact labels never mint refinement authority.
@@ -338,7 +342,7 @@ pub(crate) enum CapturedProductionAnalysisReportV1 {
 }
 
 impl CapturedProductionAnalysisReportV1 {
-    const fn pass(&self) -> KernelCheckPassKindV1 {
+    pub(crate) const fn pass(&self) -> KernelCheckPassKindV1 {
         match self {
             Self::TensorLayout(report) => report.pass(),
             Self::Bounds(report) => report.pass(),
@@ -351,7 +355,7 @@ impl CapturedProductionAnalysisReportV1 {
         }
     }
 
-    fn status(&self) -> KernelCheckStatusV1 {
+    pub(crate) fn status(&self) -> KernelCheckStatusV1 {
         match self {
             Self::TensorLayout(report) => report.status(),
             Self::Bounds(report) => report.status(),
@@ -418,6 +422,10 @@ pub enum ProductionAnalysisReportValidationErrorV1 {
         position: usize,
         pass: KernelCheckPassKindV1,
     },
+    WitnessValidation {
+        position: usize,
+        error: ProductionAnalysisWitnessValidationErrorV1,
+    },
 }
 
 impl ProductionAnalysisReportValidationErrorV1 {
@@ -435,6 +443,7 @@ impl ProductionAnalysisReportValidationErrorV1 {
             Self::ReportStatusTampered { .. } => "FE2O3-PRESERVE-040",
             Self::PreservationManifestInconsistent => "FE2O3-PRESERVE-041",
             Self::OmittedReport { .. } => "FE2O3-PRESERVE-043",
+            Self::WitnessValidation { error, .. } => error.code(),
         }
     }
 }
@@ -497,6 +506,9 @@ impl fmt::Display for ProductionAnalysisReportValidationErrorV1 {
                 formatter,
                 "analysis report {pass:?} is omitted from required position {position}"
             ),
+            Self::WitnessValidation { position, error } => {
+                write!(formatter, "analysis witness at position {position} failed: {error}")
+            }
         }
     }
 }
@@ -679,12 +691,24 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
                 ProductionAnalysisReportValidationErrorV1::ReportStatusTampered { position },
             );
         }
+        let witness =
+            issue_and_validate_production_analysis_witness_v1(
+                context,
+                function,
+                bound.submitted_checkpoint,
+                bound.implementation,
+                bound.configuration.clone(),
+                bound.submitted_report.clone(),
+            )
+            .map_err(|error| {
+                ProductionAnalysisReportValidationErrorV1::WitnessValidation { position, error }
+            })?;
         self.stages.push(ProductionAnalysisStageValidationV1 {
             checkpoint: bound.submitted_checkpoint,
             implementation: bound.implementation,
             configuration: bound.configuration.clone(),
             analysis_status: bound.claimed_status,
-            witness_gap: witness_gap(expected),
+            witness,
         });
         self.next += 1;
         Ok(())
@@ -815,6 +839,7 @@ mod tests {
         DIALECT_NAME, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
     };
     use fe2o3_kernel_ir::TensorLayoutContractV1;
+    use fe2o3_pliron_owner_core::ensure_context_identity;
     use pliron::{
         builtin::{ops::FuncOp, types::FunctionType},
         context::Context,
@@ -845,6 +870,7 @@ mod tests {
         )
         .expect("register kernel dialect");
         dialect_gpu::register_dialect(&mut context).expect("register gpu dialect");
+        ensure_context_identity(&mut context).expect("context identity");
         context
     }
 
@@ -931,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn production_happy_path_binds_all_reports_but_keeps_soundness_incomplete() {
+    fn production_happy_path_completes_only_supported_witness_fragments() {
         let context = &mut setup();
         let function = valid_function(context, "validation_happy");
         let report = require_production_pliron_checks_before_lowering_v2(context, &function)
@@ -950,13 +976,25 @@ mod tests {
                 PRODUCTION_PLIRON_PASS_CONTRACTS_V1[position].pass()
             );
             assert_eq!(stage.implementation().pass(), stage.checkpoint().pass());
-            assert_eq!(stage.witness_gap().pass(), stage.checkpoint().pass());
             assert_eq!(stage.analysis_status(), KernelCheckStatusV1::Clean);
-            assert_eq!(
-                stage.independent_validation_status(),
-                KernelCheckStatusV1::Incomplete
-            );
-            assert!(!stage.witness_gap().required_evidence().is_empty());
+            let expected_status =
+                if stage.checkpoint().pass() == KernelCheckPassKindV1::MemoryBounds {
+                    KernelCheckStatusV1::Clean
+                } else {
+                    KernelCheckStatusV1::Incomplete
+                };
+            assert_eq!(stage.independent_validation_status(), expected_status);
+            if expected_status == KernelCheckStatusV1::Clean {
+                assert_eq!(stage.remaining_witness_gap(), None);
+            } else {
+                let gap = stage
+                    .remaining_witness_gap()
+                    .expect("remaining witness gap");
+                assert_eq!(gap.pass(), stage.checkpoint().pass());
+                assert!(!gap.required_evidence().is_empty());
+            }
+            assert!(!stage.witness().grants_compiler_refinement_authority());
+            assert!(!stage.witness().grants_lowering_or_launch_authority());
         }
         assert_eq!(
             validation.stages()[2].configuration(),

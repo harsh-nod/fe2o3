@@ -16,6 +16,8 @@ mod physical_machine_effect;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_analysis_manager;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_analysis_witness;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_atomic_legality;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_barrier;
@@ -79,6 +81,8 @@ pub use kernel_check_pipeline::*;
 pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use physical_machine_effect::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_analysis_witness::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_atomic_legality::*;
 #[cfg(feature = "pliron-analysis")]

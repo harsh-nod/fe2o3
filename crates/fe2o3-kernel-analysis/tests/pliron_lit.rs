@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fmt::Write, fs, path::Path};
 
 use dialect_kernel::{AtomicScopeAttr, DIALECT_NAME, MemorySpaceAttr, register_dialect};
 use fe2o3_kernel_analysis::{
@@ -10,6 +10,7 @@ use fe2o3_kernel_analysis::{
     require_production_pliron_checks_with_atomic_target_before_lowering_v2,
     require_production_pliron_checks_with_target_before_lowering_v2,
 };
+use fe2o3_pliron_owner_core::ensure_context_identity;
 use pliron::{
     builtin::ops::FuncOp,
     context::Context,
@@ -133,6 +134,7 @@ fn run_fixture(path: &Path) {
         .join("\n");
 
     let mut context = Context::new();
+    ensure_context_identity(&mut context).expect("lit context identity");
     register_dialect(&mut context, &DialectName::try_new(DIALECT_NAME).unwrap()).unwrap();
     dialect_gpu::register_dialect(&mut context).unwrap();
     dialect_proof::register_dialect(&mut context).unwrap();
@@ -170,7 +172,20 @@ fn run_fixture(path: &Path) {
     let output = match result {
         Ok(report) => {
             assert!(report.is_clean());
-            "PASS".to_owned()
+            let mut output = "PASS".to_owned();
+            if source.lines().any(|line| line == "// CHECK-WITNESSES") {
+                for stage in report.report_validation().stages() {
+                    write!(
+                        output,
+                        "\nWITNESS {:?} {:?} obligations={}",
+                        stage.checkpoint().pass(),
+                        stage.witness().coverage().status(),
+                        stage.witness().coverage().obligation_count(),
+                    )
+                    .expect("write witness output");
+                }
+            }
+            output
         }
         Err(error) => {
             let repairs = error.repair_hints();
@@ -296,5 +311,5 @@ fn parse_atomic_capability(source: &str) -> PlironAtomicTargetCapabilityV1 {
 }
 
 fn result_is_rejected(output: &str) -> bool {
-    output != "PASS"
+    !output.starts_with("PASS")
 }
