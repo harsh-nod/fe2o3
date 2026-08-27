@@ -24,24 +24,25 @@ use fe2o3_kir_debugger::{
     DebugSiteSelectorV1, DebugSourceCatalogV1, DebugSourceFileV1, DebugSourceResolutionV1,
     DebugSourceSiteV1, DebugSourceSpanV1, DebugStopReasonV1, DebugStopV1, DebugTerminalFaultV1,
     DebugTranscriptCompletenessV1, DebugTranscriptTruncationV1, DebugWatchAccessV1,
-    DebugWatchpointV1, DebugWaveWidthV1, DebuggerLimitsV1, capture_debugger_run_v1,
-    hierarchy_for_invocation_v1,
+    DebugWatchpointV1, DebugWaveWidthV1, DebuggerLimitsV1, capture_debugger_replayed_run_v1,
+    capture_debugger_run_v1, hierarchy_for_invocation_v1,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, ScalarBitsV1, SimulationDebugBarrierActionV1,
     SimulationDebugBindingV1, SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1,
     SimulationDebugCollectionV1, SimulationDebugFrameV1, SimulationDebugRecordKindV1,
     SimulationDebugRecordV1, SimulationDebugValueV1, SimulationErrorV1, SimulationInvocationV1,
-    SimulationTargetV1,
+    SimulationScheduleRecordV1, SimulationTargetV1,
 };
 use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
     load_debug_simulation_bundle_v1, load_debug_simulation_input_v1,
+    load_debug_simulation_schedule_v1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
+const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--replay-schedule PATH] [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = fe2o3_kernel_ir::DEBUG_SOURCE_MAP_SCHEMA_V1;
@@ -53,6 +54,7 @@ struct OptionsV1 {
     request: PathBuf,
     source_map: Option<PathBuf>,
     source_bundle_subject: Option<OpaqueIdentityV1>,
+    replay_schedule: Option<PathBuf>,
     wave_width: DebugWaveWidthV1,
 }
 
@@ -1292,6 +1294,16 @@ pub fn main() -> ExitCode {
         (None, None) => None,
         _ => unreachable!("argument parser requires source-map options as a pair"),
     };
+    let replay_schedule = match options.replay_schedule.as_ref() {
+        Some(path) => match load_debug_simulation_schedule_v1(path, &admitted) {
+            Ok(schedule) => Some(schedule),
+            Err(error) => {
+                write_input_error(&error);
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
     if let Some(bundle) = bundle.as_ref()
         && let Some(map) = bundle.debug_map()
     {
@@ -1307,12 +1319,13 @@ pub fn main() -> ExitCode {
         let stdout = io::stdout();
         let mut reader = BufReader::new(stdin.lock());
         let mut writer = BufWriter::new(stdout.lock());
-        return match run_admitted_jsonl_with_compiler_source_map_v1(
+        return match run_admitted_jsonl_with_compiler_source_map_and_schedule_v1(
             admitted,
             options.wave_width,
             map,
             subject,
             map_identity,
+            replay_schedule.as_ref().map(|schedule| schedule.record()),
             &mut reader,
             &mut writer,
         ) {
@@ -1331,14 +1344,18 @@ pub fn main() -> ExitCode {
             }
         };
     }
-    let backend =
-        match SimulatorBackendV1::new_with_source_map(admitted, options.wave_width, source_map) {
-            Ok(backend) => backend,
-            Err(message) => {
-                write_bootstrap_error("backend", "simulation_capture_failed", &message);
-                return ExitCode::FAILURE;
-            }
-        };
+    let backend = match SimulatorBackendV1::new_with_source_map_and_schedule(
+        admitted,
+        options.wave_width,
+        source_map,
+        replay_schedule.as_ref().map(|schedule| schedule.record()),
+    ) {
+        Ok(backend) => backend,
+        Err(message) => {
+            write_bootstrap_error("backend", "simulation_capture_failed", &message);
+            return ExitCode::FAILURE;
+        }
+    };
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = BufReader::new(stdin.lock());
@@ -1362,6 +1379,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     let mut request = None;
     let mut source_map = None;
     let mut source_bundle_subject = None;
+    let mut replay_schedule = None;
     let mut protocol_seen = false;
     let mut wave_width = DebugWaveWidthV1::Wave64;
     while let Some(option) = arguments.next() {
@@ -1376,6 +1394,12 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             set_once(&mut request, PathBuf::from(value), "--request")?;
         } else if option == OsStr::new("--source-map") {
             set_once(&mut source_map, PathBuf::from(value), "--source-map")?;
+        } else if option == OsStr::new("--replay-schedule") {
+            set_once(
+                &mut replay_schedule,
+                PathBuf::from(value),
+                "--replay-schedule",
+            )?;
         } else if option == OsStr::new("--source-bundle-subject") {
             let value = value
                 .to_str()
@@ -1436,6 +1460,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         request: request.ok_or_else(|| format!("--request is required; {USAGE}"))?,
         source_map,
         source_bundle_subject,
+        replay_schedule,
         wave_width,
     })
 }
@@ -1530,6 +1555,29 @@ pub fn run_admitted_jsonl_with_compiler_source_map_v1<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
 ) -> Result<(), CompilerBundleDebugRunErrorV1> {
+    run_admitted_jsonl_with_compiler_source_map_and_schedule_v1(
+        input,
+        wave_width,
+        source_map_bytes,
+        verified_bundle_subject,
+        committed_map_identity,
+        None,
+        reader,
+        writer,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_admitted_jsonl_with_compiler_source_map_and_schedule_v1<R: BufRead, W: Write>(
+    input: AdmittedSimulationInputV1,
+    wave_width: DebugWaveWidthV1,
+    source_map_bytes: &[u8],
+    verified_bundle_subject: OpaqueIdentityV1,
+    committed_map_identity: OpaqueIdentityV1,
+    replay_schedule: Option<&SimulationScheduleRecordV1>,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), CompilerBundleDebugRunErrorV1> {
     if input.simulation_bundle_subject() != Some(verified_bundle_subject.as_bytes()) {
         return Err(CompilerBundleDebugRunErrorV1::SourceMap(
             "compiler-bundle source map subject is not retained by the admitted bundle input"
@@ -1546,8 +1594,13 @@ pub fn run_admitted_jsonl_with_compiler_source_map_v1<R: BufRead, W: Write>(
         SourceMapProvenanceV1::CompilerBundleBound,
     )
     .map_err(CompilerBundleDebugRunErrorV1::SourceMap)?;
-    let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))
-        .map_err(CompilerBundleDebugRunErrorV1::Backend)?;
+    let backend = SimulatorBackendV1::new_with_source_map_and_schedule(
+        input,
+        wave_width,
+        Some(source_map),
+        replay_schedule,
+    )
+    .map_err(CompilerBundleDebugRunErrorV1::Backend)?;
     run_jsonl_v1(backend, reader, writer).map_err(CompilerBundleDebugRunErrorV1::ProtocolStream)
 }
 
@@ -1669,29 +1722,67 @@ impl SimulatorBackendV1 {
         wave_width: DebugWaveWidthV1,
         source_map: Option<AdmittedSourceMapV1>,
     ) -> Result<Self, String> {
+        Self::new_with_source_map_and_schedule(input, wave_width, source_map, None)
+    }
+
+    fn new_with_source_map_and_schedule(
+        input: AdmittedSimulationInputV1,
+        wave_width: DebugWaveWidthV1,
+        source_map: Option<AdmittedSourceMapV1>,
+        replay_schedule: Option<&SimulationScheduleRecordV1>,
+    ) -> Result<Self, String> {
         let capture_limits =
             SimulationDebugCaptureLimitsV1::new(64, 4_096, 16_384, 16 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
         let debugger_limits = DebuggerLimitsV1::new(1_000_000, 16_000_000, 256 * 1024 * 1024)
             .map_err(|error| error.to_string())?;
-        let run = capture_debugger_run_v1(
-            &input.module,
-            &input.request,
-            input.simulation_target(),
-            input.simulation_limits,
-            capture_limits,
-            debugger_limits,
-            wave_width,
-        );
+        let base_configuration_identity = configuration_identity_for_input(&input, wave_width);
+        let run = match replay_schedule {
+            Some(schedule) => capture_debugger_replayed_run_v1(
+                &input.module,
+                &input.request,
+                input.simulation_target(),
+                input.simulation_limits,
+                capture_limits,
+                debugger_limits,
+                wave_width,
+                schedule,
+            ),
+            None => capture_debugger_run_v1(
+                &input.module,
+                &input.request,
+                input.simulation_target(),
+                input.simulation_limits,
+                capture_limits,
+                debugger_limits,
+                wave_width,
+            ),
+        };
         if let Err(SimulationErrorV1::Preflight(error)) = &run.execution {
             return Err(error.to_string());
         }
+        if replay_schedule.is_some()
+            && let Err(SimulationErrorV1::Execution(error)) = &run.execution
+            && matches!(
+                &error.kind,
+                fe2o3_kir_sim::SimulationExecutionErrorKindV1::ScheduleDecisionLimit { .. }
+                    | fe2o3_kir_sim::SimulationExecutionErrorKindV1::ScheduleResidentLimit { .. }
+                    | fe2o3_kir_sim::SimulationExecutionErrorKindV1::ScheduleReplay(_)
+            )
+        {
+            return Err(format!(
+                "persisted semantic schedule replay failed: {error}"
+            ));
+        }
         let failed_execution = matches!(run.execution, Err(SimulationErrorV1::Execution(_)));
-        let configuration_identity = configuration_identity_for_input(&input, wave_width);
+        let configuration_identity = replay_schedule
+            .map_or(base_configuration_identity, |schedule| {
+                configuration_identity_for_replay(base_configuration_identity, schedule)
+            });
         let mut session = DebugSessionV1::new(run.transcript);
         let mut source_map_provenance = None;
         let source_map_identity = if let Some(source_map) = source_map {
-            if source_map.configuration_identity != configuration_identity {
+            if source_map.configuration_identity != base_configuration_identity {
                 return Err("source map configuration identity changed before binding".to_owned());
             }
             let _externally_bound_subject = source_map.bundle_subject_identity;
@@ -3740,6 +3831,19 @@ fn configuration_identity_for_input(
     digest.update(b"fe2o3-debug-sim-bundle-config-v1\0");
     digest.update(base.as_bytes());
     digest.update(bundle_subject);
+    nonzero_identity(digest.finalize().into())
+}
+
+fn configuration_identity_for_replay(
+    base: OpaqueIdentityV1,
+    schedule: &SimulationScheduleRecordV1,
+) -> OpaqueIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-debug-sim-schedule-config-v1\0");
+    digest.update(base.as_bytes());
+    digest.update(schedule.context_identity());
+    digest.update(schedule.transcript_identity());
+    digest.update(schedule.record_integrity());
     nonzero_identity(digest.finalize().into())
 }
 

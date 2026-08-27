@@ -21,6 +21,7 @@ use fe2o3_kernel_ir::{
     decode_module_v7,
 };
 use fe2o3_kir_debugger::DebugWaveWidthV1;
+use fe2o3_kir_sim::{PersistedSimulationScheduleDocumentV1, SimulationScheduleRequestV1};
 use serde_json::Value;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -137,13 +138,28 @@ fn run_debug(
     wave_width: &str,
     requests: &[u8],
 ) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-debug"))
+    run_debug_with_schedule(bundle, request, wave_width, None, requests)
+}
+
+fn run_debug_with_schedule(
+    bundle: &Path,
+    request: &Path,
+    wave_width: &str,
+    schedule: Option<&Path>,
+    requests: &[u8],
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fe2o3-debug"));
+    command
         .arg("sim")
         .arg("--bundle")
         .arg(bundle)
         .arg("--request")
         .arg(request)
-        .args(["--protocol", "jsonl", "--wave-width", wave_width])
+        .args(["--protocol", "jsonl", "--wave-width", wave_width]);
+    if let Some(schedule) = schedule {
+        command.arg("--replay-schedule").arg(schedule);
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -151,6 +167,121 @@ fn run_debug(
         .unwrap();
     child.stdin.take().unwrap().write_all(requests).unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn debugger_replays_a_bundle_bound_schedule_without_weakening_session_revision() {
+    let directory = TestDirectory::new();
+    let bundle_path = directory.0.join("scheduled.fe2sim");
+    fs::write(
+        &bundle_path,
+        bundle_with_map(false, false).canonical_bytes(),
+    )
+    .unwrap();
+    let request = workspace_root().join("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json");
+    let admitted =
+        fe2o3_kir_sim_cli::load_debug_simulation_bundle_v1(&bundle_path, &request).unwrap();
+    let binding = admitted.input().persisted_schedule_binding();
+    let execution = admitted
+        .input()
+        .module
+        .simulate_scheduled(
+            &admitted.input().request,
+            admitted.input().simulation_target(),
+            admitted.input().simulation_limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 0x5eed,
+                max_decisions: 16,
+            },
+        )
+        .unwrap();
+    let schedule = directory.0.join("schedule.json");
+    fs::write(
+        &schedule,
+        PersistedSimulationScheduleDocumentV1::encode_record(
+            binding,
+            execution.schedule_record().unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let scheduled = run_debug_with_schedule(
+        &bundle_path,
+        &request,
+        "64",
+        Some(&schedule),
+        DISCOVER_AND_RESOLVE,
+    );
+    assert!(
+        scheduled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&scheduled.stderr)
+    );
+    let scheduled_responses = decode_lines(&scheduled.stdout);
+    assert_eq!(scheduled_responses.len(), 2);
+    let DebugResponseV1::Ok {
+        session: scheduled_session,
+        ..
+    } = &scheduled_responses[0]
+    else {
+        panic!("scheduled capability discovery failed")
+    };
+    assert_eq!(scheduled_session.revision, 0);
+    assert!(matches!(scheduled_responses[1], DebugResponseV1::Ok { .. }));
+
+    let canonical = run_debug(&bundle_path, &request, "64", DISCOVER_AND_RESOLVE);
+    let canonical_responses = decode_lines(&canonical.stdout);
+    let DebugResponseV1::Ok {
+        session: canonical_session,
+        ..
+    } = &canonical_responses[0]
+    else {
+        panic!("canonical capability discovery failed")
+    };
+    assert_ne!(
+        scheduled_session.configuration_identity,
+        canonical_session.configuration_identity
+    );
+    let wave32 = run_debug_with_schedule(
+        &bundle_path,
+        &request,
+        "32",
+        Some(&schedule),
+        DISCOVER_AND_RESOLVE,
+    );
+    assert!(wave32.status.success());
+    let wave32_responses = decode_lines(&wave32.stdout);
+    let DebugResponseV1::Ok {
+        session: wave32_session,
+        ..
+    } = &wave32_responses[0]
+    else {
+        panic!("wave32 scheduled capability discovery failed")
+    };
+    assert_ne!(
+        scheduled_session.configuration_identity,
+        wave32_session.configuration_identity
+    );
+
+    let substituted_bundle = directory.0.join("substituted.fe2sim");
+    fs::write(
+        &substituted_bundle,
+        build_bundle_for_target(None, "gfx950:xnack-").canonical_bytes(),
+    )
+    .unwrap();
+    let rejected = run_debug_with_schedule(
+        &substituted_bundle,
+        &request,
+        "64",
+        Some(&schedule),
+        DISCOVER_AND_RESOLVE,
+    );
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["stage"], "input");
+    assert_eq!(error["code"], "schedule_binding_mismatch");
 }
 
 fn decode_lines(bytes: &[u8]) -> Vec<DebugResponseV1> {

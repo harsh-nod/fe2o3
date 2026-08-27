@@ -29,6 +29,8 @@ pub(crate) enum ErrorKind {
     InputChanged,
     SimulationBundleRejected,
     SimulationBundleTargetUnsupported,
+    ScheduleCodecRejected,
+    ScheduleBindingMismatch,
     RequestJsonSyntax,
     RequestJsonDuplicateField,
     RequestJsonUnknownField,

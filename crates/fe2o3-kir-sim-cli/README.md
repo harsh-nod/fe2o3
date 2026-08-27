@@ -6,6 +6,10 @@ deterministic CPU execution of exact verified canonical Kernel IR V7:
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
     fe2o3-kir-sim --bundle kernel.fe2sim --request request.json
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json --output result.json
+    fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
+      --record-seeded-schedule schedule.json --schedule-seed 42
+    fe2o3-kir-sim --bundle kernel.fe2sim --request request.json \
+      --replay-schedule schedule.json
 
 It does not link or initialize HSA, HIP, KFD, ROCm, or a GPU. Simulation is an
 observation only. It grants no source-refinement, proof, compiler, artifact,
@@ -45,6 +49,29 @@ attempts a racy name-based rollback in a mutable parent. A later failure reports
 whether durability is unknown or the published name is uncertain, and callers
 must resolve that explicit state. There is no attacker-visible staging name;
 filesystems or procfs setups without these primitives fail closed.
+
+`--record-canonical-schedule PATH` and `--record-seeded-schedule PATH
+--schedule-seed U64` publish the existing semantic CPU scheduler's successful
+decision record. `--schedule-max-decisions COUNT` bounds recording and defaults
+to 1,048,576. `--replay-schedule PATH` is mutually exclusive with recording.
+Schedule input uses the same regular-file snapshot boundary; publication uses
+the same private durable no-replace boundary as result output. The strict
+`fe2o3-simulation-schedule-v1` document is canonical JSON capped at 256 MiB and
+binds exact KIR, raw-versus-bundle route, complete verified bundle identity and
+subject, request bytes, target, limits, context, transcript, seed, coverage, and
+decisions.
+Binding drift is rejected before execution; runnable-decision and transcript
+validation remains in the simulator itself.
+
+For recording, the schedule is the primary durable artifact and is published
+before the ordinary result is delivered. Simulation or schedule-encoding
+failure emits no result and creates no schedule name; a schedule-publication
+failure before `linkat` does the same. Post-link schedule-publication failures
+use the existing typed `publication_state` contract because the name may exist
+with uncertain durability. If a later result-file publication or stdout write
+fails after confirmed schedule durability, the schedule remains and the error
+carries `"schedule_published":true`; two output sinks cannot share one
+filesystem transaction.
 
 ## Request V1
 
@@ -127,9 +154,10 @@ and canonical byte length, all execution counters including padded scheduled
 slots, the deterministic cooperative workgroup schedule identity, exact
 semantic transcript SHA-256, complete decision/workgroup/barrier-release
 coverage, bounded cross-invocation conflict assessment, copied argument values,
-and copied shared backing buffers and views. The V1 CLI retains canonical
-cooperative ordering; opt-in seeded recording and replay are bounded in-process
-`fe2o3-kir-sim` APIs rather than new V1 request fields.
+and copied shared backing buffers and views. With no schedule option the V1 CLI
+retains canonical cooperative ordering. Recording and replay are command
+policy, not request-document fields, so an unchanged request cannot silently
+opt into a different execution order.
 Scalar bits, buffer bytes, and initialization bitsets retain their exact typed
 lowercase hexadecimal encodings. Result bytes are measured exactly and capped
 at 64 MiB before output publication begins, then emitted directly through a

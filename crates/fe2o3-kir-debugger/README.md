@@ -15,6 +15,10 @@ captured as scoped memory-order points, not execution barriers.
 Reverse navigation moves over an immutable deterministic transcript. It does
 not invert writes or claim physical GPU scheduling. Wave32 and Wave64 are
 explicit visualization profiles over the canonical local-work-item order.
+Debugger capture can replay an admitted persisted semantic schedule through the
+same scheduled simulator API. The captured transcript remains immutable;
+interactive debugger revisions navigate that transcript and do not replace or
+weaken simulator context, decision, coverage, or transcript validation.
 
 Source locations are optional sidecar claims bound to the exact canonical KIR
 digest and byte length. The debugger rejects a source catalog whose identity

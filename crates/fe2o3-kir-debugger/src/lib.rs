@@ -12,7 +12,8 @@ use fe2o3_kir_sim::{
     SimulationDebugSinkControlV1, SimulationDebugSinkV1, SimulationDebugSiteV1,
     SimulationDebugUnavailableReasonV1, SimulationDebugValueV1, SimulationErrorV1,
     SimulationExecutionErrorKindV1, SimulationExecutionV1, SimulationInvocationV1,
-    SimulationLimitsV1, SimulationRequestV1, SimulationSiteV1, SimulationTargetV1,
+    SimulationLimitsV1, SimulationRequestV1, SimulationScheduleRecordV1,
+    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
 pub const MAX_DEBUGGER_RECORDS_V1: usize = 1_000_000;
@@ -273,18 +274,77 @@ pub fn capture_debugger_run_v1(
     debugger_limits: DebuggerLimitsV1,
     wave_width: DebugWaveWidthV1,
 ) -> DebuggerRunV1 {
+    capture_debugger_run_with_schedule_v1(
+        module,
+        request,
+        target,
+        simulation_limits,
+        capture_limits,
+        debugger_limits,
+        wave_width,
+        None,
+    )
+}
+
+/// Captures the debugger transcript while replaying one exact persisted
+/// semantic CPU schedule. Interactive debugger revisions remain local to the
+/// resulting immutable transcript and do not alter simulator replay checks.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_debugger_replayed_run_v1(
+    module: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    target: SimulationTargetV1,
+    simulation_limits: SimulationLimitsV1,
+    capture_limits: SimulationDebugCaptureLimitsV1,
+    debugger_limits: DebuggerLimitsV1,
+    wave_width: DebugWaveWidthV1,
+    schedule: &SimulationScheduleRecordV1,
+) -> DebuggerRunV1 {
+    capture_debugger_run_with_schedule_v1(
+        module,
+        request,
+        target,
+        simulation_limits,
+        capture_limits,
+        debugger_limits,
+        wave_width,
+        Some(schedule),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_debugger_run_with_schedule_v1(
+    module: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    target: SimulationTargetV1,
+    simulation_limits: SimulationLimitsV1,
+    capture_limits: SimulationDebugCaptureLimitsV1,
+    debugger_limits: DebuggerLimitsV1,
+    wave_width: DebugWaveWidthV1,
+    schedule: Option<&SimulationScheduleRecordV1>,
+) -> DebuggerRunV1 {
     let identity = DebugKirIdentityV1 {
         digest: *module.identity().digest(),
         canonical_len: module.identity().canonical_length(),
     };
     let mut collector = TranscriptCollectorV1::new(debugger_limits);
-    let execution = module.simulate_debugged_with_sink(
-        request,
-        target,
-        simulation_limits,
-        capture_limits,
-        &mut collector,
-    );
+    let execution = match schedule {
+        Some(schedule) => module.simulate_debugged_scheduled_with_sink(
+            request,
+            target,
+            simulation_limits,
+            SimulationScheduleRequestV1::Replay(schedule),
+            capture_limits,
+            &mut collector,
+        ),
+        None => module.simulate_debugged_with_sink(
+            request,
+            target,
+            simulation_limits,
+            capture_limits,
+            &mut collector,
+        ),
+    };
     let terminal_fault = match &execution {
         Err(SimulationErrorV1::Execution(error)) => Some(DebugTerminalFaultV1 {
             ordinal: collector

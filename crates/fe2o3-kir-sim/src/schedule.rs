@@ -9,6 +9,14 @@ use crate::{
     SimulationLimitsV1, SimulationPlanV1, SimulationRequestV1, SimulationTargetV1,
 };
 
+mod persisted;
+
+pub use persisted::{
+    MAX_PERSISTED_SCHEDULE_BYTES_V1, PersistedSimulationScheduleArtifactV1,
+    PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleCodecErrorV1,
+    PersistedSimulationScheduleDocumentV1,
+};
+
 /// Hard upper bound on retained runnable-invocation decisions in one schedule record.
 pub const MAX_SCHEDULE_DECISIONS_V1: usize = 4 * 1024 * 1024;
 
@@ -99,6 +107,11 @@ impl SimulationScheduleRecordV1 {
 
     pub const fn transcript_identity(&self) -> &[u8; 32] {
         &self.transcript_identity
+    }
+
+    /// Identity of this transcript plus every exact replay decision.
+    pub const fn record_integrity(&self) -> &[u8; 32] {
+        &self.record_integrity
     }
 
     pub const fn schedule(&self) -> SimulationScheduleIdentityV1 {
@@ -197,7 +210,15 @@ impl<'a> PreparedScheduleV1<'a> {
             });
         };
         let context_identity = schedule_context_identity(identity, simulation, target, limits);
-        let (mode, schedule, seed, max_decisions, retained_decisions, needs_order) = match request {
+        let (
+            mode,
+            schedule,
+            seed,
+            max_decisions,
+            retained_decisions,
+            resident_decisions,
+            needs_order,
+        ) = match request {
             SimulationScheduleRequestV1::Replay(record) => {
                 validate_record(record, context_identity, plan, limits)?;
                 (
@@ -206,6 +227,7 @@ impl<'a> PreparedScheduleV1<'a> {
                     record.seed,
                     record.decisions.len(),
                     0,
+                    record.decisions.capacity(),
                     true,
                 )
             }
@@ -213,6 +235,7 @@ impl<'a> PreparedScheduleV1<'a> {
                 ScheduledModeV1::Record,
                 SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
                 None,
+                max_decisions,
                 max_decisions,
                 max_decisions,
                 false,
@@ -226,12 +249,13 @@ impl<'a> PreparedScheduleV1<'a> {
                 Some(seed),
                 max_decisions,
                 max_decisions,
+                max_decisions,
                 true,
             ),
         };
         validate_decision_limit(max_decisions, limits)?;
 
-        let decision_bytes = reserved_vec_bytes::<SimulationScheduleDecisionV1>(retained_decisions)
+        let decision_bytes = reserved_vec_bytes::<SimulationScheduleDecisionV1>(resident_decisions)
             .ok_or(SchedulePrepareErrorV1::ResidentLimit {
                 actual: usize::MAX,
                 limit: limits.max_resident_bytes,

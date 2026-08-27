@@ -28,6 +28,11 @@ the production source/MIR/KIR stages under extraction-only custody, records
 that no compiler-execution subject is available, and never silently falls back
 from hardware execution.
 
+The same CPU-only path can publish and replay a strict bounded
+[`fe2o3-simulation-schedule-v1`](docs/semantic-schedule-v1.md) decision record
+through `fe2o3-kir-sim`, including exact bundle/request custody and debugger
+capture. This is deterministic simulator replay, not GPU scheduling evidence.
+
 Feature-free production has one compiler transaction and no pipeline selector.
 `cargo fe2o3 build` and `cargo fe2o3 run` first build the selected crate graph
 for the fixed AMDGPU target through fe2o3, commit the exact device artifact

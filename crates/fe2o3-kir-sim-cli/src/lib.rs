@@ -9,7 +9,9 @@ use std::process::ExitCode;
 
 use fe2o3_kernel_ir::VerifiedSimulationBundleV1;
 use fe2o3_kir_sim::{
-    AdmittedSimulationModuleV1, SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
+    AdmittedSimulationModuleV1, PersistedSimulationScheduleArtifactV1,
+    PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleDocumentV1,
+    SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
 };
 
 /// Exact, strictly parsed simulator inputs admitted through the standalone
@@ -23,8 +25,11 @@ pub struct AdmittedSimulationInputV1 {
     /// Present only when admission retained a verified simulation-bundle
     /// subject. Debugger configuration identities bind this exact subject.
     simulation_bundle_subject: Option<[u8; 32]>,
+    /// Complete content identity of the exact admitted canonical bundle bytes.
+    simulation_bundle_identity: Option<[u8; 32]>,
     pub kir_sha256: [u8; 32],
     pub request_sha256: [u8; 32],
+    request_bytes: u64,
 }
 
 impl AdmittedSimulationInputV1 {
@@ -34,6 +39,41 @@ impl AdmittedSimulationInputV1 {
 
     pub const fn simulation_bundle_subject(&self) -> Option<[u8; 32]> {
         self.simulation_bundle_subject
+    }
+
+    /// Complete canonical bundle identity retained during exact admission.
+    pub const fn simulation_bundle_identity(&self) -> Option<[u8; 32]> {
+        self.simulation_bundle_identity
+    }
+
+    /// Exact byte length of the strictly admitted request document.
+    pub const fn request_bytes(&self) -> u64 {
+        self.request_bytes
+    }
+
+    /// Exact artifact/request/target/limit binding used by persisted schedules.
+    pub fn persisted_schedule_binding(&self) -> PersistedSimulationScheduleBindingV1 {
+        let artifact = match (
+            self.simulation_bundle_identity,
+            self.simulation_bundle_subject,
+        ) {
+            (None, None) => PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+            (Some(bundle_sha256), Some(subject_sha256)) => {
+                PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
+                    bundle_sha256,
+                    subject_sha256,
+                }
+            }
+            _ => unreachable!("admitted bundle identity and subject remain paired"),
+        };
+        PersistedSimulationScheduleBindingV1::new(
+            artifact,
+            *self.module.identity(),
+            self.request_sha256,
+            self.request_bytes,
+            self.simulation_target,
+            self.simulation_limits,
+        )
     }
 }
 
@@ -275,6 +315,28 @@ pub fn load_debug_simulation_bundle_v1(
             stage: "platform".to_owned(),
             code: "unsupported_platform".to_owned(),
             message: "fe2o3 debugger simulation bundle admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely captures and strictly admits a canonical persisted semantic CPU
+/// schedule, then binds it to an already admitted simulator input before any
+/// replay execution begins.
+pub fn load_debug_simulation_schedule_v1(
+    path: &Path,
+    input: &AdmittedSimulationInputV1,
+) -> Result<PersistedSimulationScheduleDocumentV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_schedule_v1(path.as_os_str().to_owned(), input)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path, input);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "persisted simulation schedule admission requires Linux".to_owned(),
         })
     }
 }

@@ -11,7 +11,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
     EventPolicyV1, MAX_REPORTED_UNSUPPORTED_FINDINGS_V1,
-    MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1, ScalarBitsV1,
+    MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,
+    PersistedSimulationScheduleArtifactV1, PersistedSimulationScheduleBindingV1,
+    PersistedSimulationScheduleCodecErrorV1, PersistedSimulationScheduleDocumentV1, ScalarBitsV1,
     SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
     SimulationConflictAssessmentV1, SimulationDebugCaptureLimitsV1, SimulationDebugMemoryAccessV1,
     SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSinkControlV1,
@@ -3572,6 +3574,69 @@ fn maximum_call_chain_and_recursive_limit_run_on_a_small_native_stack() {
 }
 
 #[test]
+fn persisted_schedule_codec_and_replay_run_on_a_small_native_stack() {
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(empty_kernel_module(
+        "empty_schedule",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ))
+    .expect("verified fixture");
+    let identity = *canonical.identity();
+    let admitted = AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default())
+        .expect("admitted fixture");
+    std::thread::Builder::new()
+        .name("kir-sim-persisted-schedule-small-stack".into())
+        .stack_size(256 * 1024)
+        .spawn(move || persisted_schedule_small_stack_body(&admitted, identity))
+        .expect("small-stack thread starts")
+        .join()
+        .expect("persisted schedule stays iterative");
+}
+
+#[inline(never)]
+fn persisted_schedule_small_stack_body(
+    admitted: &AdmittedSimulationModuleV1,
+    identity: fe2o3_kernel_ir::VerifiedCanonicalKernelIrIdentityV7,
+) {
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let request = SimulationRequestV1::new("empty_schedule", [4, 1, 1], [4, 1, 1], vec![]);
+    let recorded = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 17,
+                max_decisions: 64,
+            },
+        )
+        .unwrap();
+    let binding = PersistedSimulationScheduleBindingV1::new(
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+        identity,
+        [0x51; 32],
+        87,
+        target,
+        limits,
+    );
+    let bytes = PersistedSimulationScheduleDocumentV1::encode_record(
+        binding,
+        recorded.schedule_record().unwrap(),
+    )
+    .unwrap();
+    let persisted = PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&bytes).unwrap();
+    admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(persisted.record()),
+        )
+        .unwrap();
+}
+
+#[test]
 fn high_invocation_tiny_kernel_does_not_reserve_limit_sized_frames() {
     let admitted = admitted(empty_kernel_module(
         "tiny_many",
@@ -4119,6 +4184,222 @@ fn seeded_schedule_is_deterministic_and_replays_helper_barriers_and_partial_grou
 }
 
 #[test]
+fn persisted_schedule_codec_round_trips_and_replays_the_existing_record() {
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(helper_barrier_exchange_module())
+        .expect("verified fixture");
+    let identity = *canonical.identity();
+    let admitted = AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default())
+        .expect("admitted fixture");
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [10, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 10]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let recorded = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 0x5eed,
+                max_decisions: 64,
+            },
+        )
+        .unwrap();
+    let binding = PersistedSimulationScheduleBindingV1::new(
+        PersistedSimulationScheduleArtifactV1::SimulationBundleV1 {
+            bundle_sha256: [6; 32],
+            subject_sha256: [7; 32],
+        },
+        identity,
+        [9; 32],
+        317,
+        target,
+        limits,
+    );
+    let encoded = PersistedSimulationScheduleDocumentV1::encode_record(
+        binding,
+        recorded.schedule_record().unwrap(),
+    )
+    .unwrap();
+    let decoded = PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&encoded).unwrap();
+
+    assert_eq!(decoded.binding(), binding);
+    assert_eq!(decoded.to_canonical_bytes().unwrap(), encoded);
+    assert_eq!(decoded.record(), recorded.schedule_record().unwrap());
+    let replayed = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(decoded.record()),
+        )
+        .unwrap();
+    assert_eq!(replayed.arguments(), recorded.arguments());
+    assert_eq!(
+        replayed.schedule_transcript_identity(),
+        recorded.schedule_transcript_identity()
+    );
+
+    let different_route = PersistedSimulationScheduleBindingV1::new(
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+        identity,
+        [9; 32],
+        317,
+        target,
+        limits,
+    );
+    assert_ne!(decoded.binding(), different_route);
+
+    let mut invalid_limits = limits;
+    invalid_limits.max_events = 0;
+    let invalid_binding = PersistedSimulationScheduleBindingV1::new(
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+        identity,
+        [9; 32],
+        317,
+        target,
+        invalid_limits,
+    );
+    assert_eq!(
+        PersistedSimulationScheduleDocumentV1::encode_record(
+            invalid_binding,
+            recorded.schedule_record().unwrap(),
+        )
+        .unwrap_err(),
+        PersistedSimulationScheduleCodecErrorV1::InvalidLimits
+    );
+
+    let substituted_seed =
+        String::from_utf8(encoded)
+            .unwrap()
+            .replacen("\"seed\":24301", "\"seed\":24302", 1);
+    assert_eq!(
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(substituted_seed.as_bytes())
+            .unwrap_err(),
+        PersistedSimulationScheduleCodecErrorV1::InvalidRecordIntegrity
+    );
+}
+
+#[test]
+fn persisted_schedule_codec_rejects_noncanonical_and_corrupt_documents() {
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(helper_barrier_exchange_module())
+        .expect("verified fixture");
+    let identity = *canonical.identity();
+    let admitted = AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default())
+        .expect("admitted fixture");
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [4, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 4]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let recorded = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::RecordCanonical { max_decisions: 16 },
+        )
+        .unwrap();
+    let binding = PersistedSimulationScheduleBindingV1::new(
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+        identity,
+        [3; 32],
+        99,
+        target,
+        limits,
+    );
+    let encoded = PersistedSimulationScheduleDocumentV1::encode_record(
+        binding,
+        recorded.schedule_record().unwrap(),
+    )
+    .unwrap();
+
+    let mut whitespace = encoded.clone();
+    whitespace.push(b'\n');
+    assert_eq!(
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&whitespace).unwrap_err(),
+        PersistedSimulationScheduleCodecErrorV1::NonCanonical
+    );
+
+    let text = String::from_utf8(encoded).unwrap();
+    for corrupt in [
+        text.replacen("{\"schema\":", "{\"unknown\":0,\"schema\":", 1),
+        text.replacen(
+            "\"schema\":\"fe2o3-simulation-schedule-v1\"",
+            "\"schema\":null",
+            1,
+        ),
+        text.replacen(
+            "\"schema\":\"fe2o3-simulation-schedule-v1\"",
+            "\"schema\":\"fe2o3-simulation-schedule-v1\",\"schema\":\"fe2o3-simulation-schedule-v1\"",
+            1,
+        ),
+        text.replacen(
+            "{\"schema\":",
+            "{\"fe2o3:schedule_decision_limit\":0,\"schema\":",
+            1,
+        ),
+        text.replacen(
+            "{\"schema\":",
+            "{\"fe2o3:schedule_allocation_failure\":0,\"schema\":",
+            1,
+        ),
+        text.replacen(
+            "{\"schema\":",
+            "{\"fe2o3:schedule_schema_unsupported\":0,\"schema\":",
+            1,
+        ),
+        text.replacen("\"sha256\":\"0303", "\"sha256\":\"A303", 1),
+        text.replacen(
+            "\"artifact\":{\"kind\":",
+            "\"artifact\":{\"unknown\":0,\"kind\":",
+            1,
+        ),
+        text.replacen("\"limits\":{", "\"limits\":{\"max_events\":1,", 1),
+        text.replacen("\"kind\":\"canonical_kir_v7\"", "\"kind\":null", 1),
+    ] {
+        assert!(matches!(
+            PersistedSimulationScheduleDocumentV1::from_canonical_bytes(corrupt.as_bytes()),
+            Err(PersistedSimulationScheduleCodecErrorV1::JsonStructure)
+        ));
+    }
+
+    let unsupported_schema = text.replacen(
+        "fe2o3-simulation-schedule-v1",
+        "fe2o3-simulation-schedule-v2",
+        1,
+    );
+    assert_eq!(
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(unsupported_schema.as_bytes(),)
+            .unwrap_err(),
+        PersistedSimulationScheduleCodecErrorV1::UnsupportedSchema
+    );
+
+    let hostile_long_key = format!("{{\"{}\":0}}", "x".repeat(129));
+    assert_eq!(
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(hostile_long_key.as_bytes(),)
+            .unwrap_err(),
+        PersistedSimulationScheduleCodecErrorV1::StringTokenLimit {
+            actual: 129,
+            limit: 128,
+        }
+    );
+
+    let corrupt_integrity = text.replacen("\"record_sha256\":\"", "\"record_sha256\":\"0", 1);
+    assert!(
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(corrupt_integrity.as_bytes())
+            .is_err()
+    );
+}
+
+#[test]
 fn debug_records_expose_seeded_semantic_schedule_and_decision_prefix() {
     let admitted = admitted(helper_barrier_exchange_module());
     let request = SimulationRequestV1::new(
@@ -4222,6 +4503,33 @@ fn schedule_record_bounds_are_fail_closed_without_changing_default_step_failures
     ));
     let request = SimulationRequestV1::new("empty_schedule", [4, 1, 1], [4, 1, 1], vec![]);
     let target = SimulationTargetV1::amdgpu_64();
+    let plan = admitted
+        .preflight(&request, target, SimulationLimitsV1::default())
+        .unwrap();
+
+    let resident_limit = plan.resident_bytes();
+    let resident = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            SimulationLimitsV1 {
+                max_resident_bytes: resident_limit,
+                ..SimulationLimitsV1::default()
+            },
+            SimulationScheduleRequestV1::RecordCanonical { max_decisions: 4 },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        resident,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            invocation: None,
+            kind: SimulationExecutionErrorKindV1::ScheduleResidentLimit {
+                actual,
+                limit
+            },
+            ..
+        }) if actual > limit && limit == resident_limit
+    ));
 
     let oversized = admitted
         .simulate_scheduled(
@@ -5087,14 +5395,18 @@ fn invalid_atomic_and_fence_metadata_never_reaches_simulation() {
 
 #[test]
 fn scoped_atomic_add_is_deterministic_across_partial_multi_workgroup_schedules_and_replay() {
-    let module = admitted(atomic_module(
+    let canonical = VerifiedCanonicalKernelIrV7::from_module(atomic_module(
         AtomicKind::Add,
         ScalarType::U32,
         AddressSpace::Global,
         SynchronizationScope::System,
         MemoryOrdering::Relaxed,
         None,
-    ));
+    ))
+    .unwrap();
+    let identity = *canonical.identity();
+    let module =
+        AdmittedSimulationModuleV1::admit(canonical, SimulationLimitsV1::default()).unwrap();
     let request = atomic_request(
         ScalarBitsV1::u32(0),
         ScalarBitsV1::u32(1),
@@ -5123,12 +5435,28 @@ fn scoped_atomic_add_is_deterministic_across_partial_multi_workgroup_schedules_a
         first.conflict_assessment(),
         SimulationConflictAssessmentV1::ConflictsObserved { .. }
     ));
+    let binding = PersistedSimulationScheduleBindingV1::new(
+        PersistedSimulationScheduleArtifactV1::CanonicalKirV7,
+        identity,
+        [0xa7; 32],
+        401,
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+    );
+    let persisted = PersistedSimulationScheduleDocumentV1::from_canonical_bytes(
+        &PersistedSimulationScheduleDocumentV1::encode_record(
+            binding,
+            first.schedule_record().unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let replayed = module
         .simulate_scheduled(
             &request,
             SimulationTargetV1::amdgpu_64(),
             SimulationLimitsV1::default(),
-            SimulationScheduleRequestV1::Replay(first.schedule_record().unwrap()),
+            SimulationScheduleRequestV1::Replay(persisted.record()),
         )
         .unwrap();
     assert_eq!(scalar_buffer_bits(&replayed), 10);

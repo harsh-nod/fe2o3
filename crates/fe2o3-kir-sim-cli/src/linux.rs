@@ -15,12 +15,14 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
-    ScalarBitsV1, SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
+    MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,
+    PersistedSimulationScheduleBindingV1, PersistedSimulationScheduleDocumentV1, ScalarBitsV1,
+    SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
     SimulationConflictAssessmentV1, SimulationErrorV1, SimulationExecutionErrorKindV1,
     SimulationExecutionErrorV1, SimulationExecutionV1, SimulationInvocationV1, SimulationLimitsV1,
     SimulationMemoryConflictV1, SimulationPreflightErrorV1, SimulationRequestV1,
-    SimulationScheduleIdentityV1, SimulationSiteV1, SimulationTargetV1, UnsupportedFeatureV1,
-    UnsupportedSimulationSiteV1,
+    SimulationScheduleIdentityV1, SimulationScheduleRequestV1, SimulationSiteV1,
+    SimulationTargetV1, UnsupportedFeatureV1, UnsupportedSimulationSiteV1,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, PROC_SUPER_MAGIC, ResolveFlags, fchmod, fstat, fstatfs, fsync,
@@ -33,8 +35,7 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str =
-    "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH]";
+const USAGE: &str = "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH]";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const ERROR_SCHEMA: &str = "fe2o3-simulation-error-v1";
@@ -52,6 +53,7 @@ const MAX_ERROR_FUNCTION_BYTES: usize = 16 * 1024;
 const MAX_UNSUPPORTED_JSON_BYTES: usize = MAX_ERROR_BYTES - 128 * 1024;
 const HEX_INPUT_CHUNK_BYTES: usize = 4 * 1024;
 const MAX_UNSUPPORTED_FINDINGS: usize = 128;
+const DEFAULT_MAX_SCHEDULE_DECISIONS: usize = 1 << 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,6 +98,7 @@ enum InputCode {
     SimulationBundle,
     Request,
     DebugSidecar,
+    SemanticSchedule,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -120,6 +123,8 @@ struct ErrorDocument {
     site: Option<SiteDocument>,
     #[serde(skip_serializing_if = "Option::is_none")]
     publication_state: Option<PublicationState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_published: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +201,7 @@ impl Failure {
                 invocation: None,
                 site: None,
                 publication_state: None,
+                schedule_published: None,
             }),
             None,
         )
@@ -211,6 +217,15 @@ impl Failure {
         let mut failure = Self::new(Stage::Input, kind, message);
         failure.0.input = Some(code);
         failure
+    }
+
+    fn after_schedule_published(mut self) -> Self {
+        self.0.schedule_published = Some(true);
+        self.0.message = bounded_error_message(format!(
+            "semantic schedule publication completed before result delivery failed: {}",
+            self.0.message
+        ));
+        self
     }
 
     fn preflight(error: SimulationPreflightErrorV1) -> Self {
@@ -263,6 +278,7 @@ impl Failure {
                 invocation: None,
                 site: None,
                 publication_state: None,
+                schedule_published: None,
             }),
             Some(UnsupportedFailure {
                 total,
@@ -293,6 +309,7 @@ impl Failure {
                 invocation,
                 site,
                 publication_state: None,
+                schedule_published: None,
             }),
             None,
         )
@@ -375,6 +392,24 @@ struct Options {
     program: ProgramInput,
     request: OsString,
     output: Option<OsString>,
+    schedule: ScheduleOption,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ScheduleOption {
+    None,
+    RecordCanonical {
+        output: OsString,
+        max_decisions: usize,
+    },
+    RecordSeeded {
+        output: OsString,
+        seed: u64,
+        max_decisions: usize,
+    },
+    Replay {
+        input: OsString,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -858,6 +893,7 @@ pub(crate) fn run_captured_kir_v7(
         Path::new(&request),
         expected_request,
         output,
+        ScheduleOption::None,
         SimulationTargetV1::amdgpu_64(),
         None,
     );
@@ -950,6 +986,19 @@ pub(crate) fn load_debug_sidecar_v1(
     })
 }
 
+pub(crate) fn load_debug_simulation_schedule_v1(
+    path: OsString,
+    input: &crate::AdmittedSimulationInputV1,
+) -> Result<PersistedSimulationScheduleDocumentV1, crate::SimulationInputErrorV1> {
+    load_persisted_schedule(Path::new(&path), input).map_err(|failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
+    })
+}
+
 fn serialized_tag(value: impl Serialize) -> String {
     match serde_json::to_value(value) {
         Ok(serde_json::Value::String(tag)) => tag,
@@ -972,13 +1021,14 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
                 Path::new(&options.request),
                 None,
                 options.output,
+                options.schedule,
                 SimulationTargetV1::amdgpu_64(),
                 None,
             )
         }
         ProgramInput::Bundle(path) => {
             let admitted = load_admitted_bundle(Path::new(&path), Path::new(&options.request))?;
-            run_with_admitted_input(admitted.input, options.output)
+            run_with_admitted_input(admitted.input, options.output, options.schedule)
         }
     }
 }
@@ -988,34 +1038,146 @@ fn run_with_captured_kir(
     request: &Path,
     expected_request: Option<crate::SimulationRequestIdentityV1>,
     output: Option<OsString>,
+    schedule: ScheduleOption,
     target: SimulationTargetV1,
-    bundle_subject: Option<[u8; 32]>,
+    bundle_identity: Option<([u8; 32], [u8; 32])>,
 ) -> Result<(), Failure> {
-    let input = load_admitted_input(kir, request, expected_request, target, bundle_subject)?;
-    run_with_admitted_input(input, output)
+    let input = load_admitted_input(kir, request, expected_request, target, bundle_identity)?;
+    run_with_admitted_input(input, output, schedule)
 }
 
 fn run_with_admitted_input(
     input: crate::AdmittedSimulationInputV1,
     output: Option<OsString>,
+    schedule: ScheduleOption,
 ) -> Result<(), Failure> {
-    let execution = input
-        .module
-        .simulate(
+    let binding = schedule_binding(&input);
+    let replay = match &schedule {
+        ScheduleOption::Replay { input: path } => {
+            Some(load_persisted_schedule(Path::new(path), &input)?)
+        }
+        _ => None,
+    };
+    let execution = match (&schedule, replay.as_ref()) {
+        (ScheduleOption::None, None) => input.module.simulate(
             &input.request,
             input.simulation_target,
             input.simulation_limits,
-        )
-        .map_err(|error| match error {
-            SimulationErrorV1::Preflight(error) => Failure::preflight(error),
-            SimulationErrorV1::Execution(error) => Failure::execution(error),
-        })?;
+        ),
+        (ScheduleOption::RecordCanonical { max_decisions, .. }, None) => {
+            input.module.simulate_scheduled(
+                &input.request,
+                input.simulation_target,
+                input.simulation_limits,
+                SimulationScheduleRequestV1::RecordCanonical {
+                    max_decisions: *max_decisions,
+                },
+            )
+        }
+        (
+            ScheduleOption::RecordSeeded {
+                seed,
+                max_decisions,
+                ..
+            },
+            None,
+        ) => input.module.simulate_scheduled(
+            &input.request,
+            input.simulation_target,
+            input.simulation_limits,
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: *seed,
+                max_decisions: *max_decisions,
+            },
+        ),
+        (ScheduleOption::Replay { .. }, Some(document)) => input.module.simulate_scheduled(
+            &input.request,
+            input.simulation_target,
+            input.simulation_limits,
+            SimulationScheduleRequestV1::Replay(document.record()),
+        ),
+        _ => unreachable!("schedule option and admitted replay document remain paired"),
+    }
+    .map_err(|error| match error {
+        SimulationErrorV1::Preflight(error) => Failure::preflight(error),
+        SimulationErrorV1::Execution(error) => Failure::execution(error),
+    })?;
+    let schedule_output = match &schedule {
+        ScheduleOption::RecordCanonical { output, .. }
+        | ScheduleOption::RecordSeeded { output, .. } => {
+            let record = execution.schedule_record().ok_or_else(|| {
+                Failure::new(
+                    Stage::Output,
+                    ErrorKind::OutputSerializationFailed,
+                    "successful scheduled recording did not retain a record",
+                )
+            })?;
+            let bytes = PersistedSimulationScheduleDocumentV1::encode_record(binding, record)
+                .map_err(|error| {
+                    Failure::new(
+                        Stage::Output,
+                        ErrorKind::OutputSerializationFailed,
+                        bounded_display(&error),
+                    )
+                })?;
+            Some((output.clone(), bytes))
+        }
+        ScheduleOption::None | ScheduleOption::Replay { .. } => None,
+    };
     drop(input);
+    drop(replay);
     let maximum = measure_success_bytes(&execution)?;
-    match output {
+    let publishes_schedule = schedule_output.is_some();
+    if let Some((path, bytes)) = schedule_output {
+        publish_payload(
+            Path::new(&path),
+            MAX_PERSISTED_SCHEDULE_BYTES_V1,
+            |writer| writer.write_all(&bytes),
+        )?;
+    }
+    let result = match output {
         Some(path) => publish_transactionally(Path::new(&path), &execution, maximum),
         None => write_success_stdout(&execution, maximum),
+    };
+    if publishes_schedule {
+        result.map_err(Failure::after_schedule_published)
+    } else {
+        result
     }
+}
+
+fn schedule_binding(
+    input: &crate::AdmittedSimulationInputV1,
+) -> PersistedSimulationScheduleBindingV1 {
+    input.persisted_schedule_binding()
+}
+
+fn load_persisted_schedule(
+    path: &Path,
+    input: &crate::AdmittedSimulationInputV1,
+) -> Result<PersistedSimulationScheduleDocumentV1, Failure> {
+    let bytes = secure_read(
+        path,
+        MAX_PERSISTED_SCHEDULE_BYTES_V1,
+        InputCode::SemanticSchedule,
+        "persisted semantic schedule V1",
+    )?;
+    let document =
+        PersistedSimulationScheduleDocumentV1::from_canonical_bytes(&bytes).map_err(|error| {
+            Failure::input(
+                InputCode::SemanticSchedule,
+                ErrorKind::ScheduleCodecRejected,
+                bounded_display(&error),
+            )
+        })?;
+    if document.binding() != input.persisted_schedule_binding() {
+        return Err(Failure::input(
+            InputCode::SemanticSchedule,
+            ErrorKind::ScheduleBindingMismatch,
+            "persisted schedule does not match the exact admitted artifact, request, target, and limits",
+        ));
+    }
+    Ok(document)
 }
 
 fn load_admitted_bundle(
@@ -1054,7 +1216,7 @@ fn load_admitted_bundle(
         request,
         None,
         target,
-        Some(*bundle.subject_identity()),
+        Some((*bundle.identity().as_bytes(), *bundle.subject_identity())),
     )?;
     if input.kir_sha256 != *bundle.canonical_kir_v7_identity().digest()
         || u64::try_from(bundle.canonical_kir_v7().len()).ok()
@@ -1085,7 +1247,7 @@ fn load_admitted_input(
     request: &Path,
     expected_request: Option<crate::SimulationRequestIdentityV1>,
     target: SimulationTargetV1,
-    bundle_subject: Option<[u8; 32]>,
+    bundle_identity: Option<([u8; 32], [u8; 32])>,
 ) -> Result<crate::AdmittedSimulationInputV1, Failure> {
     if kir.len() > MAX_KIR_BYTES {
         return Err(Failure::input(
@@ -1141,14 +1303,26 @@ fn load_admitted_input(
         )
     })?;
     let request = prepare_request_for_target(document, target)?;
+    let (simulation_bundle_identity, simulation_bundle_subject) = bundle_identity
+        .map_or((None, None), |(identity, subject)| {
+            (Some(identity), Some(subject))
+        });
     Ok(crate::AdmittedSimulationInputV1 {
         kir_sha256: *admitted.identity().digest(),
         request_sha256: Sha256::digest(&request_bytes).into(),
+        request_bytes: u64::try_from(request_bytes.len()).map_err(|_| {
+            Failure::input(
+                InputCode::Request,
+                ErrorKind::InputTooLarge,
+                "simulation request length exceeds the persisted identity range",
+            )
+        })?,
         module: admitted,
         request,
         simulation_limits: limits,
         simulation_target: target,
-        simulation_bundle_subject: bundle_subject,
+        simulation_bundle_subject,
+        simulation_bundle_identity,
     })
 }
 
@@ -1177,6 +1351,11 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
     let mut bundle = None;
     let mut request = None;
     let mut output = None;
+    let mut record_canonical_schedule = None;
+    let mut record_seeded_schedule = None;
+    let mut replay_schedule = None;
+    let mut schedule_seed = None;
+    let mut schedule_max_decisions = None;
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
         let (slot, name) = if argument == OsStr::new("--kir-v7") {
@@ -1187,6 +1366,19 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             (&mut request, "--request")
         } else if argument == OsStr::new("--output") {
             (&mut output, "--output")
+        } else if argument == OsStr::new("--record-canonical-schedule") {
+            (
+                &mut record_canonical_schedule,
+                "--record-canonical-schedule",
+            )
+        } else if argument == OsStr::new("--record-seeded-schedule") {
+            (&mut record_seeded_schedule, "--record-seeded-schedule")
+        } else if argument == OsStr::new("--replay-schedule") {
+            (&mut replay_schedule, "--replay-schedule")
+        } else if argument == OsStr::new("--schedule-seed") {
+            (&mut schedule_seed, "--schedule-seed")
+        } else if argument == OsStr::new("--schedule-max-decisions") {
+            (&mut schedule_max_decisions, "--schedule-max-decisions")
         } else {
             return Err(Failure::new(
                 Stage::Arguments,
@@ -1198,14 +1390,14 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
-                format!("{name} requires a path; {USAGE}"),
+                format!("{name} requires a value; {USAGE}"),
             )
         })?;
         if value.is_empty() || slot.replace(value).is_some() {
             return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
-                format!("{name} requires one nonempty path; {USAGE}"),
+                format!("{name} requires one nonempty value; {USAGE}"),
             ));
         }
     }
@@ -1227,6 +1419,64 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             ));
         }
     };
+    let max_decisions = match schedule_max_decisions.as_ref() {
+        Some(value) => parse_schedule_usize(value, "--schedule-max-decisions").and_then(
+            |value| {
+                if value == 0 || value > MAX_SCHEDULE_DECISIONS_V1 {
+                    Err(Failure::new(
+                        Stage::Arguments,
+                        ErrorKind::InvalidCommandLine,
+                        format!(
+                            "--schedule-max-decisions must be from 1 through {MAX_SCHEDULE_DECISIONS_V1}; {USAGE}"
+                        ),
+                    ))
+                } else {
+                    Ok(value)
+                }
+            },
+        )?,
+        None => DEFAULT_MAX_SCHEDULE_DECISIONS,
+    };
+    let seed = schedule_seed
+        .as_ref()
+        .map(|value| parse_schedule_u64(value, "--schedule-seed"))
+        .transpose()?;
+    let schedule = match (
+        record_canonical_schedule,
+        record_seeded_schedule,
+        replay_schedule,
+    ) {
+        (None, None, None) if seed.is_none() && schedule_max_decisions.is_none() => {
+            ScheduleOption::None
+        }
+        (Some(output), None, None) if seed.is_none() => ScheduleOption::RecordCanonical {
+            output,
+            max_decisions,
+        },
+        (None, Some(output), None) => ScheduleOption::RecordSeeded {
+            output,
+            seed: seed.ok_or_else(|| {
+                Failure::new(
+                    Stage::Arguments,
+                    ErrorKind::InvalidCommandLine,
+                    format!("--record-seeded-schedule requires --schedule-seed; {USAGE}"),
+                )
+            })?,
+            max_decisions,
+        },
+        (None, None, Some(input)) if seed.is_none() && schedule_max_decisions.is_none() => {
+            ScheduleOption::Replay { input }
+        }
+        _ => {
+            return Err(Failure::new(
+                Stage::Arguments,
+                ErrorKind::InvalidCommandLine,
+                format!(
+                    "record-canonical, record-seeded, and replay schedule modes are mutually exclusive, and seed/decision bounds apply only to recording; {USAGE}"
+                ),
+            ));
+        }
+    };
     Ok(Options {
         program,
         request: request.ok_or_else(|| {
@@ -1237,6 +1487,42 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             )
         })?,
         output,
+        schedule,
+    })
+}
+
+fn parse_schedule_u64(value: &OsStr, name: &str) -> Result<u64, Failure> {
+    let value = value.to_str().ok_or_else(|| {
+        Failure::new(
+            Stage::Arguments,
+            ErrorKind::InvalidCommandLine,
+            format!("{name} must be an unsigned decimal integer; {USAGE}"),
+        )
+    })?;
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(Failure::new(
+            Stage::Arguments,
+            ErrorKind::InvalidCommandLine,
+            format!("{name} must be an unsigned decimal integer; {USAGE}"),
+        ));
+    }
+    value.parse().map_err(|_| {
+        Failure::new(
+            Stage::Arguments,
+            ErrorKind::InvalidCommandLine,
+            format!("{name} exceeds u64; {USAGE}"),
+        )
+    })
+}
+
+fn parse_schedule_usize(value: &OsStr, name: &str) -> Result<usize, Failure> {
+    let value = parse_schedule_u64(value, name)?;
+    usize::try_from(value).map_err(|_| {
+        Failure::new(
+            Stage::Arguments,
+            ErrorKind::InvalidCommandLine,
+            format!("{name} exceeds this host; {USAGE}"),
+        )
     })
 }
 
@@ -2622,6 +2908,8 @@ struct ErrorDocumentView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     publication_state: Option<PublicationState>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    schedule_published: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     unsupported: Option<UnsupportedSummary<'a>>,
 }
 
@@ -2709,6 +2997,7 @@ fn error_document_view(error: &Failure) -> ErrorDocumentView<'_> {
         invocation: error.0.invocation.as_ref(),
         site: error.0.site.as_ref(),
         publication_state: error.0.publication_state,
+        schedule_published: error.0.schedule_published,
         unsupported,
     }
 }
@@ -2820,6 +3109,7 @@ mod tests {
         );
         assert_eq!(options.request, OsString::from("request"));
         assert_eq!(options.output, Some(OsString::from("output")));
+        assert_eq!(options.schedule, ScheduleOption::None);
     }
 
     #[test]

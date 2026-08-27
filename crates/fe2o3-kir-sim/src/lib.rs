@@ -42,7 +42,9 @@ pub use preflight::{
     UnsupportedSimulationReportV1, UnsupportedSimulationSiteV1,
 };
 pub use schedule::{
-    MAX_SCHEDULE_DECISIONS_V1, SimulationScheduleCoverageV1, SimulationScheduleDecisionV1,
-    SimulationScheduleIdentityV1, SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1,
-    SimulationScheduleRequestV1,
+    MAX_PERSISTED_SCHEDULE_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1,
+    PersistedSimulationScheduleArtifactV1, PersistedSimulationScheduleBindingV1,
+    PersistedSimulationScheduleCodecErrorV1, PersistedSimulationScheduleDocumentV1,
+    SimulationScheduleCoverageV1, SimulationScheduleDecisionV1, SimulationScheduleIdentityV1,
+    SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
 };

@@ -19,6 +19,16 @@ and semantic-KIR transaction. V1 exposes resolved call-site spans only;
 synthetic KIR operations, source variables, and macro expansion stacks remain
 typed unavailable rather than being inferred.
 
+`--replay-schedule SCHEDULE.json` securely admits the canonical persisted
+semantic schedule and requires its exact raw-KIR/bundle route, KIR, complete
+bundle identity and subject, request bytes, target, and limits to match this
+debugger input before capture. The debugger configuration identity additionally
+binds the schedule context, transcript, and exact decision-record integrity.
+Protocol revisions still govern interactive navigation of the resulting
+immutable transcript; they are not simulator schedule revisions. This is
+deterministic CPU semantic replay, not GPU scheduling, timing, race-freedom,
+equivalence, or performance evidence.
+
 The simulator exposes work-item, logical wave, workgroup, KIR operation, SSA,
 allocation-relative ordinary and integer-atomic memory, fence order points,
 barrier, and committed-memory observations. Atomic watchpoints match one

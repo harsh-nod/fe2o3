@@ -71,6 +71,15 @@ caller bound, a fixed hard cap, fallible reservation, and resident-byte
 admission. Unrecorded canonical execution retains no decision vector and never
 fails a legacy run because of the recording bound.
 
+`PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
+form for that same record. It adds exact raw-KIR versus simulation-bundle route,
+bundle subject when present, request byte identity, target profile, and every
+simulation limit. Strict decode rejects unknown, duplicate, null, trailing,
+noncanonical, oversized, structurally invalid, and integrity-corrupt input.
+Decoding grants no authority: callers compare the retained binding to already
+admitted inputs, then ordinary replay still performs every context,
+runnable-decision, coverage, and transcript check.
+
 Before any mutable execution state is created, preflight visits the complete
 call graph reachable from the selected kernel, checks target-specific constants,
 SSA frame size, and statically known acyclic call depth. Recursive internal

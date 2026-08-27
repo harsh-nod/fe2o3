@@ -1,7 +1,8 @@
 #![cfg(target_os = "linux")]
 
+use std::fmt::Write as _;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,10 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent,
     MAX_SIMULATION_BUNDLE_BYTES_V1, Module, ScalarType, Signature,
-    SimulationCompilerExecutionBindingV1, SimulationProductionKirIdentityV1,
+    SimulationCompilerExecutionBindingV1, SimulationDebugMapV1, SimulationProductionKirIdentityV1,
     SimulationSourceLineageV1, Terminator, Type, ValueId, VerifiedCanonicalKernelIrV7,
     VerifiedCanonicalKernelIrV8, VerifiedSimulationBundleV1,
 };
+use fe2o3_kir_sim::MAX_PERSISTED_SCHEDULE_BYTES_V1;
+use sha2::{Digest, Sha256};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -73,7 +76,19 @@ fn canonical_noop_with_buffer() -> Vec<u8> {
         .into_canonical_bytes()
 }
 
+fn canonical_noop_with_buffer_variant() -> Vec<u8> {
+    let mut module = noop_with_buffer_module();
+    module.id = "cli-command-test-variant".into();
+    VerifiedCanonicalKernelIrV7::from_module(module)
+        .unwrap()
+        .into_canonical_bytes()
+}
+
 fn simulation_bundle(target: &str) -> Vec<u8> {
+    simulation_bundle_with_debug_map(target, None)
+}
+
+fn simulation_bundle_with_debug_map(target: &str, debug_map: Option<&[u8]>) -> Vec<u8> {
     let module = noop_with_buffer_module();
     let production = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
     let production_identity = SimulationProductionKirIdentityV1::v8(
@@ -87,7 +102,9 @@ fn simulation_bundle(target: &str) -> Vec<u8> {
         production_identity,
         target,
         VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
-        None,
+        debug_map.map(|bytes| {
+            SimulationDebugMapV1::from_unverified_canonical_bytes(bytes.to_vec()).unwrap()
+        }),
     )
     .unwrap()
     .into_canonical_bytes()
@@ -112,9 +129,48 @@ fn help_is_a_successful_input_free_command() {
         assert!(output.status.success());
         assert_eq!(
             String::from_utf8(output.stdout).unwrap(),
-            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH]\n"
+            "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH] [--record-canonical-schedule PATH [--schedule-max-decisions COUNT] | --record-seeded-schedule PATH --schedule-seed U64 [--schedule-max-decisions COUNT] | --replay-schedule PATH]\n"
         );
         assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn schedule_modes_and_record_only_parameters_are_mutually_exclusive() {
+    for arguments in [
+        vec![
+            "--record-canonical-schedule",
+            "canonical.json",
+            "--replay-schedule",
+            "replay.json",
+        ],
+        vec![
+            "--record-canonical-schedule",
+            "canonical.json",
+            "--record-seeded-schedule",
+            "seeded.json",
+            "--schedule-seed",
+            "7",
+        ],
+        vec!["--record-seeded-schedule", "seeded.json"],
+        vec!["--replay-schedule", "replay.json", "--schedule-seed", "7"],
+        vec![
+            "--replay-schedule",
+            "replay.json",
+            "--schedule-max-decisions",
+            "8",
+        ],
+    ] {
+        let output = binary()
+            .args(["--kir-v7", "missing.kir", "--request", "missing.json"])
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["stage"], "arguments");
+        assert_eq!(error["kind"], "invalid_command_line");
     }
 }
 
@@ -141,6 +197,10 @@ fn bundle_targets_execute_exact_embedded_kir_without_authority() {
         assert_eq!(
             admitted.input().simulation_bundle_subject(),
             Some(*admitted.bundle().subject_identity())
+        );
+        assert_eq!(
+            admitted.input().simulation_bundle_identity(),
+            Some(*admitted.bundle().identity().as_bytes())
         );
         assert!(!admitted.grants_proof_authority());
         assert!(!admitted.grants_artifact_authority());
@@ -354,6 +414,372 @@ fn successful_stdout_is_complete_machine_readable_json() {
 }
 
 #[test]
+fn canonical_and_seeded_schedules_persist_and_replay_for_raw_kir() {
+    let directory = TestDirectory::new();
+    let (kir, request) = write_success_fixture(&directory);
+
+    for (record_flag, seed, expected_identity) in [
+        (
+            "--record-canonical-schedule",
+            None,
+            "workgroup_major_local_zyx_cooperative_v1",
+        ),
+        (
+            "--record-seeded-schedule",
+            Some("18446744073709551615"),
+            "workgroup_major_seeded_runnable_cooperative_v1",
+        ),
+    ] {
+        let schedule = directory
+            .path()
+            .join(format!("{}.json", record_flag.trim_start_matches("--")));
+        let mut record = binary();
+        record
+            .arg("--kir-v7")
+            .arg(&kir)
+            .arg("--request")
+            .arg(&request)
+            .arg(record_flag)
+            .arg(&schedule)
+            .args(["--schedule-max-decisions", "8"]);
+        if let Some(seed) = seed {
+            record.args(["--schedule-seed", seed]);
+        }
+        let output = record.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["schedule"]["identity"], expected_identity);
+        let schedule_bytes = fs::read(&schedule).unwrap();
+        assert!(!schedule_bytes.ends_with(b"\n"));
+        assert_eq!(
+            fs::metadata(&schedule).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let persisted: serde_json::Value = serde_json::from_slice(&schedule_bytes).unwrap();
+        assert_eq!(persisted["schema"], "fe2o3-simulation-schedule-v1");
+        assert_eq!(persisted["artifact"]["kind"], "canonical_kir_v7");
+        assert_eq!(persisted["schedule"]["identity"], expected_identity);
+        assert_eq!(persisted["coverage"]["complete"], true);
+        assert_eq!(persisted["decisions"].as_array().unwrap().len(), 2);
+        if seed.is_some() {
+            let mut schedule_sha256 = String::with_capacity(64);
+            for byte in Sha256::digest(&schedule_bytes) {
+                write!(&mut schedule_sha256, "{byte:02x}").unwrap();
+            }
+            assert_eq!(schedule_bytes.len(), 1_346);
+            assert_eq!(
+                schedule_sha256,
+                "a3d0a28479bf6ee12a9bb10745903a208f815213aa94771768407b662eb369cc"
+            );
+        }
+
+        let replay = binary()
+            .arg("--kir-v7")
+            .arg(&kir)
+            .arg("--request")
+            .arg(&request)
+            .arg("--replay-schedule")
+            .arg(&schedule)
+            .output()
+            .unwrap();
+        assert!(
+            replay.status.success(),
+            "{}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+        let replayed: serde_json::Value = serde_json::from_slice(&replay.stdout).unwrap();
+        assert_eq!(replayed["schedule"]["identity"], expected_identity);
+        assert_eq!(
+            replayed["schedule"]["transcript_sha256"],
+            result["schedule"]["transcript_sha256"]
+        );
+        assert_eq!(replayed["arguments"], result["arguments"]);
+    }
+}
+
+#[test]
+fn bundle_schedule_binds_exact_bundle_subject_and_embedded_kir() {
+    let directory = TestDirectory::new();
+    let bundle = directory.path().join("kernel.fe2sim");
+    let request = directory.path().join("request.json");
+    let schedule = directory.path().join("schedule.json");
+    fs::write(
+        &bundle,
+        simulation_bundle_with_debug_map("gfx942:xnack-", Some(b"debug-map-a")),
+    )
+    .unwrap();
+    fs::write(
+        &request,
+        br#"{"schema":"fe2o3-simulation-request-v1","kernel":"kernel","grid":[2,1,1],"workgroup":[1,1,1],"arguments":[{"kind":"buffer","element":"u8","access":"read_only","alignment":1,"bytes":"0x2a"}]}"#,
+    )
+    .unwrap();
+
+    let recorded = binary()
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .args(["--schedule-max-decisions", "8"])
+        .output()
+        .unwrap();
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&schedule).unwrap()).unwrap();
+    assert_eq!(persisted["artifact"]["kind"], "simulation_bundle_v1");
+    assert_eq!(
+        persisted["artifact"]["bundle_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        persisted["artifact"]["subject_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+
+    let replayed = binary()
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+
+    let substituted_bundle = directory.path().join("substituted.fe2sim");
+    fs::write(
+        &substituted_bundle,
+        simulation_bundle_with_debug_map("gfx942:xnack-", Some(b"debug-map-b")),
+    )
+    .unwrap();
+    let substituted = binary()
+        .arg("--bundle")
+        .arg(substituted_bundle)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(!substituted.status.success());
+    assert!(substituted.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&substituted.stderr).unwrap();
+    assert_eq!(error["kind"], "schedule_binding_mismatch");
+
+    let raw_kir = directory.path().join("kernel.kir");
+    fs::write(&raw_kir, canonical_noop_with_buffer()).unwrap();
+    let substituted = binary()
+        .arg("--kir-v7")
+        .arg(raw_kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(!substituted.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&substituted.stderr).unwrap();
+    assert_eq!(error["kind"], "schedule_binding_mismatch");
+    assert_eq!(error["input"], "semantic_schedule");
+}
+
+#[test]
+fn hostile_schedule_inputs_and_stale_requests_fail_before_execution() {
+    let directory = TestDirectory::new();
+    let (kir, request) = write_success_fixture(&directory);
+    let schedule = directory.path().join("schedule.json");
+    let recorded = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .args(["--schedule-max-decisions", "8"])
+        .output()
+        .unwrap();
+    assert!(recorded.status.success());
+
+    let original_request = fs::read(&request).unwrap();
+    let mut stale_request = original_request.clone();
+    stale_request.push(b'\n');
+    fs::write(&request, stale_request).unwrap();
+    let stale = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&stale.stderr).unwrap();
+    assert_eq!(error["kind"], "schedule_binding_mismatch");
+    fs::write(&request, original_request).unwrap();
+
+    let variant_kir = directory.path().join("variant.kir");
+    fs::write(&variant_kir, canonical_noop_with_buffer_variant()).unwrap();
+    let substituted = binary()
+        .arg("--kir-v7")
+        .arg(&variant_kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&schedule)
+        .output()
+        .unwrap();
+    assert!(!substituted.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&substituted.stderr).unwrap();
+    assert_eq!(error["kind"], "schedule_binding_mismatch");
+
+    let schedule_text = String::from_utf8(fs::read(&schedule).unwrap()).unwrap();
+    for (name, substituted) in [
+        (
+            "limits",
+            schedule_text.replacen("\"max_events\":1,", "\"max_events\":2,", 1),
+        ),
+        (
+            "target",
+            schedule_text.replacen(
+                "\"identity\":\"amdgpu_64_little_endian_v1\",\"index_bits\":64",
+                "\"identity\":\"little_endian_index32_v1\",\"index_bits\":32",
+                1,
+            ),
+        ),
+    ] {
+        let path = directory.path().join(format!("{name}-substitution.json"));
+        fs::write(&path, substituted).unwrap();
+        let rejected = binary()
+            .arg("--kir-v7")
+            .arg(&kir)
+            .arg("--request")
+            .arg(&request)
+            .arg("--replay-schedule")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success(), "{name}");
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+        assert_eq!(error["kind"], "schedule_binding_mismatch", "{name}");
+    }
+
+    let noncanonical = directory.path().join("noncanonical.json");
+    let mut bytes = fs::read(&schedule).unwrap();
+    bytes.push(b'\n');
+    fs::write(&noncanonical, bytes).unwrap();
+    let invalid = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--replay-schedule")
+        .arg(&noncanonical)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(error["kind"], "schedule_codec_rejected");
+
+    let linked = directory.path().join("linked.json");
+    symlink(&schedule, &linked).unwrap();
+    for path in [linked, PathBuf::from("/dev/null")] {
+        let rejected = binary()
+            .arg("--kir-v7")
+            .arg(&kir)
+            .arg("--request")
+            .arg(&request)
+            .arg("--replay-schedule")
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+        assert!(matches!(
+            error["kind"].as_str(),
+            Some("input_open_failed" | "input_not_regular")
+        ));
+        assert_eq!(error["input"], "semantic_schedule");
+    }
+
+    let oversized = directory.path().join("oversized.json");
+    fs::File::create(&oversized)
+        .unwrap()
+        .set_len(u64::try_from(MAX_PERSISTED_SCHEDULE_BYTES_V1).unwrap() + 1)
+        .unwrap();
+    let rejected = binary()
+        .arg("--kir-v7")
+        .arg(kir)
+        .arg("--request")
+        .arg(request)
+        .arg("--replay-schedule")
+        .arg(oversized)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr).unwrap();
+    assert_eq!(error["kind"], "input_too_large");
+}
+
+#[test]
+fn schedule_recording_is_no_replace_and_emits_nothing_on_execution_failure() {
+    let directory = TestDirectory::new();
+    let (kir, request) = write_success_fixture(&directory);
+    let existing = directory.path().join("existing.json");
+    fs::write(&existing, b"retained").unwrap();
+    let rejected = binary()
+        .arg("--kir-v7")
+        .arg(&kir)
+        .arg("--request")
+        .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&existing)
+        .args(["--schedule-max-decisions", "8"])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    assert_eq!(fs::read(&existing).unwrap(), b"retained");
+
+    let absent = directory.path().join("absent.json");
+    let failed = binary()
+        .arg("--kir-v7")
+        .arg(kir)
+        .arg("--request")
+        .arg(request)
+        .arg("--record-canonical-schedule")
+        .arg(&absent)
+        .args(["--schedule-max-decisions", "1"])
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(!absent.exists());
+    let error: serde_json::Value = serde_json::from_slice(&failed.stderr).unwrap();
+    assert_eq!(error["kind"], "execution_schedule_decision_limit");
+}
+
+#[test]
 fn successful_output_is_private_durable_no_replace_json() {
     let directory = TestDirectory::new();
     let (kir, request) = write_success_fixture(&directory);
@@ -435,10 +861,11 @@ fn failures_are_stable_json_with_input_identity() {
 }
 
 #[test]
-fn closed_stdout_reports_real_epipe_without_gpu_runtime() {
+fn recorded_schedule_is_disclosed_when_later_stdout_epipe_occurs() {
     let directory = TestDirectory::new();
     let kir = directory.path().join("kernel.kir");
     let request = directory.path().join("request.json");
+    let schedule = directory.path().join("schedule.json");
     fs::write(&kir, canonical_noop_with_buffer()).unwrap();
     let bytes = "00".repeat(4 * 1024 * 1024);
     fs::write(
@@ -454,6 +881,9 @@ fn closed_stdout_reports_real_epipe_without_gpu_runtime() {
         .arg(&kir)
         .arg("--request")
         .arg(&request)
+        .arg("--record-canonical-schedule")
+        .arg(&schedule)
+        .args(["--schedule-max-decisions", "8"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -464,6 +894,10 @@ fn closed_stdout_reports_real_epipe_without_gpu_runtime() {
     let value: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(value["stage"], "output");
     assert_eq!(value["kind"], "output_write_failed");
+    assert_eq!(value["schedule_published"], true);
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(schedule).unwrap()).unwrap();
+    assert_eq!(persisted["schema"], "fe2o3-simulation-schedule-v1");
 }
 
 #[test]
