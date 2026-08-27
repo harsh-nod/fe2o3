@@ -1,8 +1,9 @@
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BarrierSemantics, BasicBlock, Constant, Convergence, Function,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module,
-    Operation, OperationKind, ScalarType, Signature, SynchronizationScope, TargetCapability,
-    Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, WorkgroupBarrier,
+    AccessMode, AddressSpace, Atomic, AtomicKind, BarrierSemantics, BasicBlock, Constant,
+    Convergence, Function, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent, MemoryAccess,
+    MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature, SynchronizationScope,
+    TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrV7,
+    WorkgroupBarrier,
 };
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
@@ -66,6 +67,52 @@ fn fill_module() -> Module {
             x: LaunchExtent::Dynamic,
         },
     ));
+    module
+}
+
+fn atomic_add_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(fe2o3_kernel_ir::BlockId(0));
+    block.operations.push(op(
+        2,
+        scalar.clone(),
+        OperationKind::Atomic(Atomic {
+            kind: AtomicKind::Add,
+            pointer: ValueId(0),
+            value: Some(ValueId(1)),
+            compare: None,
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+            scope: SynchronizationScope::System,
+            ordering: MemoryOrdering::AcquireRelease,
+            failure_ordering: None,
+        }),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let capability = TargetCapability::Atomic {
+        width_bits: 32,
+        address_space: AddressSpace::Global,
+        max_scope: SynchronizationScope::System,
+    };
+    let mut entry = Function::kernel_entry(
+        "atomic_add_impl",
+        Signature::new(vec![pointer, scalar], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    entry.required_capabilities.insert(capability.clone());
+    let mut kernel = Kernel::new(
+        "atomic_add",
+        "atomic_add_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.required_capabilities.insert(capability.clone());
+    let mut module = Module::new("debugger-tests::atomic-add");
+    module.required_capabilities.insert(capability);
+    module.functions.push(entry);
+    module.kernels.push(kernel);
     module
 }
 
@@ -265,6 +312,80 @@ fn simulator_derived_transcript_contains_committed_values_and_hierarchy() {
     assert_eq!(hierarchy.wave, 0);
     assert_eq!(hierarchy.lane, 0);
     assert_eq!(hierarchy.active_mask, 0b11);
+}
+
+#[test]
+fn atomic_and_ordinary_memory_watchpoints_stop_once_on_one_atomic_operation() {
+    let verified = VerifiedCanonicalKernelIrV7::from_module(atomic_add_module()).unwrap();
+    let admitted =
+        AdmittedSimulationModuleV1::admit(verified, SimulationLimitsV1::default()).unwrap();
+    let buffer = BufferArgumentV1::from_scalars(
+        AccessMode::ReadWrite,
+        4,
+        &[ScalarBitsV1::u32(5)],
+        SimulationTargetV1::amdgpu_64(),
+    )
+    .unwrap();
+    let request = SimulationRequestV1::new(
+        "atomic_add",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(buffer),
+            SimulationArgumentV1::Scalar(ScalarBitsV1::u32(1)),
+        ],
+    );
+    let run = capture_debugger_run_v1(
+        &admitted,
+        &request,
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        SimulationDebugCaptureLimitsV1::new(16, 256, 16, 1_024).unwrap(),
+        DebuggerLimitsV1::new(1_024, 16_384, 1 << 20).unwrap(),
+        DebugWaveWidthV1::Wave32,
+    );
+    assert!(run.execution.is_ok());
+    assert_eq!(
+        run.transcript
+            .records()
+            .iter()
+            .filter(|record| matches!(
+                record.kind,
+                SimulationDebugRecordKindV1::Memory {
+                    access: SimulationDebugMemoryAccessV1::AtomicReadWriteCommitted,
+                    ..
+                }
+            ))
+            .count(),
+        1
+    );
+
+    for access in [
+        DebugWatchAccessV1::Atomic,
+        DebugWatchAccessV1::Read,
+        DebugWatchAccessV1::Write,
+        DebugWatchAccessV1::ReadWrite,
+    ] {
+        let mut session = DebugSessionV1::new(run.transcript.clone());
+        session
+            .add_watchpoint(DebugWatchpointV1 {
+                id: 7,
+                allocation: 1,
+                byte_offset: 0,
+                byte_len: 4,
+                access,
+                scope: DebugScopeSelectorV1::Dispatch,
+                value_equals: Some(ScalarBitsV1::u32(6)),
+                enabled: true,
+            })
+            .unwrap();
+        assert!(matches!(
+            session.continue_forward(),
+            DebugNavigationV1::Stopped(stop)
+                if stop.reason == fe2o3_kir_debugger::DebugStopReasonV1::Watchpoint(7)
+        ));
+        assert!(matches!(session.continue_forward(), DebugNavigationV1::End));
+    }
 }
 
 #[test]

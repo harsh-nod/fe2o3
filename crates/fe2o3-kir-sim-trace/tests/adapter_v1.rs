@@ -1,9 +1,9 @@
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, BasicBlock, BlockId, Constant, Convergence,
-    Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
-    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
-    SynchronizationScope, TargetCapability, Terminator, Type, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrV7, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BlockId,
+    Constant, Convergence, Fence, Function, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
+    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
+    ScalarType, Signature, SynchronizationScope, TargetCapability, Terminator, Type, ValueDef,
+    ValueId, VerifiedCanonicalKernelIrV7, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, IndexWidthV1, ScalarBitsV1, SimulationArgumentV1,
@@ -14,9 +14,9 @@ use fe2o3_kir_sim_trace::{
 };
 use fe2o3_semantic_trace::{
     AddressSpaceV1, AllocationEventV1, BarrierActionV1, CaptureEndBoundaryV1, DiagnosticKindV1,
-    DispatchEventV1, DispatchOutcomeV1, ExecutionLevelV1, KirSitePointV1, OperationEventV1,
-    TraceBoundsV1, TraceCompletenessV1, TraceEventKindV1, WaveWidthV1, decode_trace_v1,
-    encode_trace_v1,
+    DispatchEventV1, DispatchOutcomeV1, ExecutionLevelV1, KirSitePointV1, MemoryAccessKindV1,
+    OperationEventV1, TraceBoundsV1, TraceCompletenessV1, TraceEventKindV1, WaveWidthV1,
+    decode_trace_v1, encode_trace_v1,
 };
 
 fn op(result: u32, value: u32) -> Operation {
@@ -200,6 +200,57 @@ fn empty_buffer_module() -> Module {
     module
 }
 
+fn atomic_fence_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        Operation::effect_free(
+            ValueDef::new(ValueId(2), scalar.clone()),
+            OperationKind::Atomic(Atomic {
+                kind: AtomicKind::Add,
+                pointer: ValueId(0),
+                value: Some(ValueId(1)),
+                compare: None,
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+                scope: SynchronizationScope::System,
+                ordering: MemoryOrdering::AcquireRelease,
+                failure_ordering: None,
+            }),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Fence(Fence {
+                memory_scope: SynchronizationScope::System,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::SequentiallyConsistent,
+                    [AddressSpace::Global],
+                ),
+            }),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let capability = TargetCapability::Atomic {
+        width_bits: 32,
+        address_space: AddressSpace::Global,
+        max_scope: SynchronizationScope::System,
+    };
+    let mut entry = Function::kernel_entry(
+        "entry",
+        Signature::new(vec![pointer, scalar], vec![]),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    entry.required_capabilities.insert(capability.clone());
+    let mut kernel = Kernel::new("kernel", "entry", domain(1));
+    kernel.required_capabilities.insert(capability.clone());
+    let mut module = Module::new("trace-atomic-fence");
+    module.required_capabilities.insert(capability);
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    module
+}
+
 fn zero_count_alloca_module() -> Module {
     let mut block = BasicBlock::new(BlockId(0));
     block.operations.push(Operation::effect_free(
@@ -290,6 +341,67 @@ fn exact_claim_tail_mask_and_codec_are_deterministic() {
     assert_eq!(tail, 1);
     let encoded = encode_trace_v1(&first.trace).unwrap();
     assert_eq!(decode_trace_v1(&encoded).unwrap(), first.trace);
+}
+
+#[test]
+fn atomic_range_and_fence_site_survive_the_semantic_trace_projection() {
+    let module = admitted(atomic_fence_module());
+    let buffer = BufferArgumentV1::from_scalars(
+        AccessMode::ReadWrite,
+        4,
+        &[ScalarBitsV1::u32(5)],
+        SimulationTargetV1::amdgpu_64(),
+    )
+    .unwrap();
+    let outcome = simulate_with_semantic_trace_v1(
+        &module,
+        &SimulationRequestV1::new(
+            "kernel",
+            [1, 1, 1],
+            [1, 1, 1],
+            vec![
+                SimulationArgumentV1::Buffer(buffer),
+                SimulationArgumentV1::Scalar(ScalarBitsV1::u32(2)),
+            ],
+        ),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+        profile(WaveWidthV1::Wave64, 100),
+    )
+    .unwrap();
+    assert!(outcome.execution.is_ok());
+    let atomics = outcome
+        .trace
+        .events()
+        .iter()
+        .filter_map(|event| match (event.site()?, event.kind()) {
+            (site, TraceEventKindV1::Memory(memory))
+                if memory.kind() == MemoryAccessKindV1::Atomic =>
+            {
+                Some((site.point(), memory.byte_offset(), memory.byte_len()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(atomics, vec![(KirSitePointV1::Operation(0), 0, 4)]);
+    assert!(outcome.trace.events().iter().any(|event| {
+        matches!(
+            (event.site(), event.kind()),
+            (
+                Some(site),
+                TraceEventKindV1::Operation(OperationEventV1::Begin(_))
+            ) if site.point() == KirSitePointV1::Operation(1)
+        )
+    }));
+    assert!(
+        outcome
+            .trace
+            .events()
+            .iter()
+            .all(|event| !matches!(event.kind(), TraceEventKindV1::Barrier(_)))
+    );
+    let encoded = encode_trace_v1(&outcome.trace).unwrap();
+    assert_eq!(decode_trace_v1(&encoded).unwrap(), outcome.trace);
 }
 
 #[test]

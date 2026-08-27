@@ -14,7 +14,12 @@ load, launch, or GPU-equivalence authority.
   Function names, block IDs, and source names never become occurrence identity.
 - All emitted facts are Observed by CpuKirSimulator during CpuKirSimulation.
 - Static LDS create/release events have workgroup scope. Completed LDS reads and
-  writes and barrier arrivals have exact lane scope. One release event has
+  writes, integer atomics, and barrier arrivals have exact lane scope. Atomic
+  accesses retain the trace schema's atomic kind and allocation-relative range;
+  their exact operation, scope, ordering, and compare-exchange metadata remain
+  bound through the canonical KIR site. Fence order points retain their
+  operation begin/end and exact KIR site because trace V1 has no separate fence
+  payload; the adapter does not mislabel them as barriers. One release event has
   workgroup scope for each compatible phase. Its participant count remains on
   the ephemeral simulator event; semantic trace V1 consumers recover the active
   logical participants from invocation scopes rather than from an invented wave

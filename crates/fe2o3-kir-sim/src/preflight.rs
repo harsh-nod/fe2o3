@@ -1566,8 +1566,17 @@ fn scan_operation(
             }
         }
         OperationKind::Barrier(_) => reject!(UnsupportedFeatureV1::Barrier),
-        OperationKind::Atomic(_) => reject!(UnsupportedFeatureV1::Atomic),
-        OperationKind::Fence(_) => reject!(UnsupportedFeatureV1::Fence),
+        OperationKind::Atomic(atomic) => {
+            if let Some(Type::Pointer(pointer)) = value_types.get(&atomic.pointer) {
+                scan_memory_type(
+                    &pointer.pointee,
+                    pointer.address_space,
+                    &mut |feature| reject!(feature),
+                    target,
+                );
+            }
+        }
+        OperationKind::Fence(_) => {}
         OperationKind::WorkgroupBarrier(_) => {}
         OperationKind::WorkgroupMemory(memory) => {
             if memory.extent.is_dynamic() {

@@ -9,11 +9,11 @@ use std::fmt;
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
-    ComparePredicate, Constant, Function, FunctionId, FunctionRole, IndexKind, IntrinsicKind,
-    MemoryAccess, Module, Operation, OperationKind, ScalarType, Terminator, Type, UnaryOp,
-    ValueDef, ValueId, VerifiedCanonicalKernelIrIdentityV7, WorkgroupBarrier,
-    WorkgroupMemoryExtent,
+    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BasicBlock, BinaryOp, BlockId, CastKind,
+    CheckedBinaryOperator, ComparePredicate, Constant, Fence, Function, FunctionId, FunctionRole,
+    IndexKind, IntrinsicKind, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
+    ScalarType, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
+    VerifiedCanonicalKernelIrIdentityV7, WorkgroupBarrier, WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -70,6 +70,27 @@ pub enum SimulationEventKindV1 {
         allocation: u64,
         offset: usize,
         bytes: usize,
+    },
+    /// One indivisible integer atomic observation under the selected CPU schedule.
+    MemoryAtomic {
+        allocation: u64,
+        offset: usize,
+        bytes: usize,
+        kind: AtomicKind,
+        previous: Option<ScalarBitsV1>,
+        committed: Option<ScalarBitsV1>,
+        compare_exchange_success: Option<bool>,
+        scope: SynchronizationScope,
+        ordering: MemoryOrdering,
+        failure_ordering: Option<MemoryOrdering>,
+    },
+    /// A scoped memory-order point. It does not synchronize invocation execution.
+    MemoryFence {
+        memory_scope: SynchronizationScope,
+        ordering: MemoryOrdering,
+        /// Bits 0 through 4 represent private, workgroup, global, constant,
+        /// and generic address spaces, respectively.
+        address_space_mask: u8,
     },
     /// An allocation that existed before the first invocation became observable.
     AllocationPreexisting {
@@ -1007,6 +1028,28 @@ impl Memory {
         Ok(())
     }
 
+    fn mark_workgroup_atomic(
+        &mut self,
+        pointer: &PointerValue,
+        width: usize,
+    ) -> Result<(), SimulationExecutionErrorKindV1> {
+        if pointer.address_space != AddressSpace::Workgroup {
+            return Ok(());
+        }
+        let allocation = self.allocations.get_mut(&pointer.allocation).ok_or(
+            SimulationExecutionErrorKindV1::DanglingPointer {
+                allocation: pointer.allocation,
+            },
+        )?;
+        let end = pointer
+            .byte_offset
+            .checked_add(width)
+            .ok_or(SimulationExecutionErrorKindV1::PointerOffsetOverflow)?;
+        allocation.workgroup_published[pointer.byte_offset..end].fill(true);
+        allocation.workgroup_writer[pointer.byte_offset..end].fill(0);
+        Ok(())
+    }
+
     fn publish_workgroup(&mut self) {
         for allocation in self
             .allocations
@@ -1535,6 +1578,17 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 action,
                 phase,
                 participants,
+            },
+        );
+    }
+
+    fn debug_fence(&mut self, site: CompactSite, fence: &Fence) {
+        self.deliver_debug(
+            site,
+            SimulationDebugRecordKindV1::Fence {
+                memory_scope: fence.memory_scope,
+                ordering: fence.semantics.ordering,
+                address_space_mask: address_space_mask(&fence.semantics.address_spaces),
             },
         );
     }
@@ -4404,10 +4458,22 @@ fn execute_operation(
         OperationKind::WorkgroupMemory(memory) => one(RuntimeValue::Pointer(
             engine.workgroup_pointer(site, memory)?,
         )),
+        OperationKind::Atomic(atomic) => execute_atomic(engine, values, atomic, &site),
+        OperationKind::Fence(fence) => {
+            let address_space_mask = address_space_mask(&fence.semantics.address_spaces);
+            engine.event(
+                &site,
+                SimulationEventKindV1::MemoryFence {
+                    memory_scope: fence.memory_scope,
+                    ordering: fence.semantics.ordering,
+                    address_space_mask,
+                },
+            )?;
+            engine.debug_fence(site, fence);
+            Ok(SmallResults::None)
+        }
         OperationKind::MemoryIntrinsic(_)
         | OperationKind::Barrier(_)
-        | OperationKind::Atomic(_)
-        | OperationKind::Fence(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
@@ -4419,6 +4485,259 @@ fn execute_operation(
             ),
         )),
     }
+}
+
+fn execute_atomic(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    atomic: &Atomic,
+    site: &CompactSite,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    let RuntimeValue::Pointer(pointer) = runtime_value(engine, values, atomic.pointer, site)?
+    else {
+        return Err(engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(atomic.pointer),
+                expected: "atomic pointer",
+            },
+        ));
+    };
+    let pointer = pointer.clone();
+    let operand = atomic
+        .value
+        .map(|value| scalar_value(engine, values, value, site))
+        .transpose()?;
+    let compare = atomic
+        .compare
+        .map(|value| scalar_value(engine, values, value, site))
+        .transpose()?;
+    let invocation = engine.invocation.ok_or_else(|| {
+        engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::InternalInvariant("atomic invocation"),
+        )
+    })?;
+
+    let previous = if atomic.kind == AtomicKind::Store {
+        None
+    } else {
+        Some(
+            engine
+                .memory
+                .load(&pointer, atomic.access, engine.target, invocation)
+                .map_err(|kind| engine.at(*site, kind))?,
+        )
+    };
+    let (committed, compare_exchange_success) = match atomic.kind {
+        AtomicKind::Load => (None, None),
+        AtomicKind::Store => (operand, None),
+        AtomicKind::CompareExchange => {
+            let old = previous.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("atomic compare old value"),
+                )
+            })?;
+            let expected = compare.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("atomic compare operand"),
+                )
+            })?;
+            let success = old == expected;
+            (success.then_some(operand).flatten(), Some(success))
+        }
+        kind => {
+            let old = previous.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("atomic RMW old value"),
+                )
+            })?;
+            let operand = operand.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("atomic RMW operand"),
+                )
+            })?;
+            (
+                Some(
+                    atomic_rmw_value(kind, old, operand, engine.target)
+                        .map_err(|kind| engine.at(*site, kind))?,
+                ),
+                None,
+            )
+        }
+    };
+
+    let width = if let Some(value) = committed {
+        engine
+            .memory
+            .validate_store(&pointer, atomic.access, value, engine.target)
+            .map_err(|kind| engine.at(*site, kind))?
+    } else {
+        engine.target.scalar_bytes(pointer.element).ok_or_else(|| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "preflighted atomic scalar width",
+                ),
+            )
+        })?
+    };
+
+    if pointer.address_space == AddressSpace::Global {
+        engine.record_access(
+            site,
+            pointer.allocation,
+            pointer.byte_offset,
+            width,
+            committed.is_some(),
+        )?;
+    }
+    engine.event(
+        site,
+        SimulationEventKindV1::MemoryAtomic {
+            allocation: pointer.allocation,
+            offset: pointer.byte_offset,
+            bytes: width,
+            kind: atomic.kind,
+            previous,
+            committed,
+            compare_exchange_success,
+            scope: atomic.scope,
+            ordering: atomic.ordering,
+            failure_ordering: atomic.failure_ordering,
+        },
+    )?;
+
+    let debug_access = match (previous, committed) {
+        (Some(_), Some(_)) => SimulationDebugMemoryAccessV1::AtomicReadWriteCommitted,
+        (Some(_), None) => SimulationDebugMemoryAccessV1::AtomicRead,
+        (None, Some(_)) => SimulationDebugMemoryAccessV1::AtomicWriteCommitted,
+        (None, None) => {
+            return Err(engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant("empty atomic effect"),
+            ));
+        }
+    };
+    let debug_value = committed.or(previous).ok_or_else(|| {
+        engine.at(
+            *site,
+            SimulationExecutionErrorKindV1::InternalInvariant("atomic debug value"),
+        )
+    })?;
+    if let Some(value) = committed {
+        let prepared = match engine.memory.prepare_store(&pointer, width) {
+            Ok(prepared) => prepared,
+            Err(kind) => {
+                return Err(SimulationExecutionErrorV1 {
+                    invocation: engine.invocation,
+                    site: Some(engine.materialize_site(*site)),
+                    kind,
+                    observation_failure: None,
+                });
+            }
+        };
+        prepared.commit(value);
+        engine
+            .memory
+            .mark_workgroup_atomic(&pointer, width)
+            .map_err(|kind| engine.at(*site, kind))?;
+    }
+    engine.debug_memory(*site, debug_access, &pointer, width, debug_value);
+
+    Ok(match atomic.kind {
+        AtomicKind::Store => SmallResults::None,
+        AtomicKind::CompareExchange => {
+            let old = previous.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "compare-exchange result old value",
+                    ),
+                )
+            })?;
+            let success = compare_exchange_success.ok_or_else(|| {
+                engine.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "compare-exchange result outcome",
+                    ),
+                )
+            })?;
+            SmallResults::Two(
+                RuntimeValue::Scalar(old),
+                RuntimeValue::Scalar(ScalarBitsV1::boolean(success)),
+            )
+        }
+        _ => SmallResults::One(RuntimeValue::Scalar(previous.ok_or_else(|| {
+            engine.at(
+                *site,
+                SimulationExecutionErrorKindV1::InternalInvariant("atomic result old value"),
+            )
+        })?)),
+    })
+}
+
+fn atomic_rmw_value(
+    kind: AtomicKind,
+    old: ScalarBitsV1,
+    operand: ScalarBitsV1,
+    target: SimulationTargetV1,
+) -> Result<ScalarBitsV1, SimulationExecutionErrorKindV1> {
+    if old.ty() != operand.ty() || !old.ty().is_integer() || old.ty() == ScalarType::Index {
+        return Err(SimulationExecutionErrorKindV1::InternalInvariant(
+            "preflighted integer atomic operands",
+        ));
+    }
+    let width = scalar_width(old, target)?;
+    let bits = match kind {
+        AtomicKind::Exchange => operand.bits(),
+        AtomicKind::Add => old.bits().wrapping_add(operand.bits()) & mask(width),
+        AtomicKind::Subtract => old.bits().wrapping_sub(operand.bits()) & mask(width),
+        AtomicKind::Min if old.ty().is_signed_integer() => {
+            if signed_value(old, target)? <= signed_value(operand, target)? {
+                old.bits()
+            } else {
+                operand.bits()
+            }
+        }
+        AtomicKind::Max if old.ty().is_signed_integer() => {
+            if signed_value(old, target)? >= signed_value(operand, target)? {
+                old.bits()
+            } else {
+                operand.bits()
+            }
+        }
+        AtomicKind::Min => old.bits().min(operand.bits()),
+        AtomicKind::Max => old.bits().max(operand.bits()),
+        AtomicKind::BitAnd => old.bits() & operand.bits(),
+        AtomicKind::BitOr => old.bits() | operand.bits(),
+        AtomicKind::BitXor => old.bits() ^ operand.bits(),
+        AtomicKind::Load | AtomicKind::Store | AtomicKind::CompareExchange => {
+            return Err(SimulationExecutionErrorKindV1::InternalInvariant(
+                "non-RMW atomic dispatch",
+            ));
+        }
+    };
+    ScalarBitsV1::new(old.ty(), bits & mask(width), target)
+        .map_err(|_| SimulationExecutionErrorKindV1::InternalInvariant("atomic result bits"))
+}
+
+fn address_space_mask(address_spaces: &std::collections::BTreeSet<AddressSpace>) -> u8 {
+    address_spaces.iter().fold(0_u8, |mask, address_space| {
+        let bit = match address_space {
+            AddressSpace::Private => 0,
+            AddressSpace::Workgroup => 1,
+            AddressSpace::Global => 2,
+            AddressSpace::Constant => 3,
+            AddressSpace::Generic => 4,
+        };
+        mask | (1_u8 << bit)
+    })
 }
 
 fn execute_scalar_load(

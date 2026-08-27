@@ -94,6 +94,9 @@ impl KirSiteCatalogV1 {
                             | OperationKind::Store { access, .. } => {
                                 Some(map_address_space(access.address_space))
                             }
+                            OperationKind::Atomic(atomic) => {
+                                Some(map_address_space(atomic.access.address_space))
+                            }
                             _ => None,
                         };
                         let workgroup_barrier =
@@ -950,6 +953,23 @@ impl<'a> TraceCollectorV1<'a> {
                 MemoryAccessKindV1::Write,
                 &event.site,
             ),
+            SimulationEventKindV1::MemoryAtomic {
+                allocation,
+                offset,
+                bytes,
+                ..
+            } => self.record_memory(
+                scope,
+                site,
+                *allocation,
+                *offset,
+                *bytes,
+                MemoryAccessKindV1::Atomic,
+                &event.site,
+            ),
+            // Trace V1 binds the exact KIR site, whose operation carries the complete
+            // fence semantics; its existing operation begin/end pair is the durable event.
+            SimulationEventKindV1::MemoryFence { .. } => {}
             SimulationEventKindV1::WorkgroupBarrierArrive { phase } => {
                 let Some(barrier) = self.catalog.workgroup_barrier_event(&event.site) else {
                     self.truncation = Some(TruncationReasonV1::ProducerFailure);

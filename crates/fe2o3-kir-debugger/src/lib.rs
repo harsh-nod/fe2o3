@@ -259,7 +259,8 @@ fn record_cost(record: &SimulationDebugRecordV1) -> (usize, usize) {
             (values, memory)
         }
         SimulationDebugRecordKindV1::Memory { .. } => (1, 0),
-        SimulationDebugRecordKindV1::WorkgroupBarrier { .. } => (0, 0),
+        SimulationDebugRecordKindV1::WorkgroupBarrier { .. }
+        | SimulationDebugRecordKindV1::Fence { .. } => (0, 0),
     }
 }
 
@@ -615,6 +616,7 @@ impl DebugHitConditionV1 {
 pub enum DebugWatchAccessV1 {
     Read,
     Write,
+    Atomic,
     ReadWrite,
 }
 
@@ -1404,9 +1406,18 @@ fn watchpoint_matches(
         (
             DebugWatchAccessV1::Read,
             SimulationDebugMemoryAccessV1::Read
+                | SimulationDebugMemoryAccessV1::AtomicRead
+                | SimulationDebugMemoryAccessV1::AtomicReadWriteCommitted
         ) | (
             DebugWatchAccessV1::Write,
             SimulationDebugMemoryAccessV1::WriteCommitted
+                | SimulationDebugMemoryAccessV1::AtomicWriteCommitted
+                | SimulationDebugMemoryAccessV1::AtomicReadWriteCommitted
+        ) | (
+            DebugWatchAccessV1::Atomic,
+            SimulationDebugMemoryAccessV1::AtomicRead
+                | SimulationDebugMemoryAccessV1::AtomicWriteCommitted
+                | SimulationDebugMemoryAccessV1::AtomicReadWriteCommitted
         ) | (DebugWatchAccessV1::ReadWrite, _)
     );
     let ranges_overlap = byte_offset

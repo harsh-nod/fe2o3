@@ -16,8 +16,11 @@ not compiler execution, source authorship, hardware observation, or authority.
 When a bundle has no map, source features remain typed `unavailable`.
 
 The simulator exposes work-item, logical wave, workgroup, KIR operation, SSA,
-allocation-relative memory, barrier, and committed-memory observations. Reverse
-navigation is deterministic transcript replay; forward stepping includes
+allocation-relative ordinary and integer-atomic memory, fence order points,
+barrier, and committed-memory observations. Atomic watchpoints match one
+indivisible atomic record; read/write watchpoints include atomic records with
+the corresponding effect. Reverse navigation is deterministic transcript
+replay; forward stepping includes
 frame-aware over/out. It is not GPU reverse execution;
 logical waves are visualization partitions, not hardware wave observations.
 

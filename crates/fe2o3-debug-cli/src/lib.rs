@@ -2410,15 +2410,7 @@ impl SimulatorBackendV1 {
                 WatchAccessV1::Read => DebugWatchAccessV1::Read,
                 WatchAccessV1::Write => DebugWatchAccessV1::Write,
                 WatchAccessV1::Any => DebugWatchAccessV1::ReadWrite,
-                WatchAccessV1::Atomic => {
-                    return self.unavailable(
-                        request_id,
-                        DebugOperationNameV1::SetWatchpoints,
-                        DebugCapabilityNameV1::Watchpoints,
-                        CapabilityUnavailableReasonV1::NotRepresented,
-                        "atomic memory accesses are not represented by the admitted CPU simulator subset",
-                    );
-                }
+                WatchAccessV1::Atomic => DebugWatchAccessV1::Atomic,
             };
             let byte_offset = match usize::try_from(spec.byte_offset) {
                 Ok(value) => value,
@@ -3566,6 +3558,7 @@ impl SimulatorBackendV1 {
                 SimulationDebugRecordKindV1::Checkpoint { .. } => EventCategoryV1::Operation,
                 SimulationDebugRecordKindV1::Memory { .. } => EventCategoryV1::Memory,
                 SimulationDebugRecordKindV1::WorkgroupBarrier { .. } => EventCategoryV1::Barrier,
+                SimulationDebugRecordKindV1::Fence { .. } => EventCategoryV1::Operation,
             },
             provenance: EventProvenanceV1::SimulatedObservation,
         })
@@ -3613,6 +3606,7 @@ impl SimulatorBackendV1 {
                     SimulationDebugRecordKindV1::WorkgroupBarrier { .. } => {
                         EventCategoryV1::Barrier
                     }
+                    SimulationDebugRecordKindV1::Fence { .. } => EventCategoryV1::Operation,
                 }
         }) {
             return false;

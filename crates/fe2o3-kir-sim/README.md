@@ -86,11 +86,24 @@ an unchanged 128 KiB native thread stack. Large ordinary-operation and
 non-return-terminator evaluators remain separate leaf calls from the cooperative
 scheduler; exact compiler stack-frame sizes are diagnostic measurements, not a
 stable ABI.
-Floating-point operations, external calls, generic barriers, atomics, fences,
-dynamic or non-scalar workgroup memory, wave operations, matrix operations,
-gfx950 LDS transpose operations, memory intrinsics, and inline assembly are
-rejected by this profile. Workgroup barriers do not simulate physical waves,
-atomics, cache behavior, timing, or performance.
+Verified V7 integer atomics are supported for every represented fixed width,
+operation, legal ordering, and legal scope over global and workgroup memory.
+Each atomic executes as one indivisible mutation in the selected deterministic
+CPU schedule; add and subtract use fixed-width wrapping semantics, signed
+minimum/maximum compare two's-complement values, and compare-exchange reports
+and commits its exact success or failure outcome. Workgroup atomic writes are
+immediately visible to later atomic operations in the same simulated workgroup.
+Fences are explicit scoped order points in the sequential interpreter and do
+not synchronize which invocation executes next. Atomic and fence events retain
+their KIR semantics and allocation-relative provenance, and atomic debug
+records distinguish read, committed-write, and read-modify-write observations.
+
+Floating-point operations and atomics, generic-address-space atomics, external
+calls, generic barriers, dynamic or non-scalar workgroup memory, wave
+operations, matrix operations, gfx950 LDS transpose operations, memory
+intrinsics, and inline assembly remain typed unsupported states. The sequential
+CPU mutation and fence order model does not simulate physical waves, caches,
+GPU timing, GPU performance, or prove memory-model race freedom.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
@@ -161,8 +174,11 @@ authority, launch authority, timing, or performance.
 
 `simulate_debugged_with_sink` is an opt-in observation path for deterministic
 CPU debugging. It emits bounded before/after-operation snapshots derived from
-the live interpreter frames, plus successful reads and committed writes with
-typed values. Snapshot collections are either complete or carry an explicit
+the live interpreter frames, plus successful ordinary and atomic memory
+observations, committed writes, and fence order points with typed values and
+semantics. Atomic watchpoints stop once per indivisible atomic operation;
+read/write watchpoints also match the corresponding atomic access. Snapshot
+collections are either complete or carry an explicit
 unavailable reason; they are never silently partial. A debug sink can stop its
 own delivery without stopping or changing simulation. Debug records are
 separate from the stable `SimulationEventV1` adapter and Semantic Trace V1.

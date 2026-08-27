@@ -1,28 +1,46 @@
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, BasicBlock, BinaryOp, BlockId,
-    CheckedBinaryOperator, ComparePredicate, Constant, Convergence, Function, IndexKind,
-    IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
-    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
-    SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueDef,
-    ValueId, VerifiedCanonicalKernelIrV7, WaveOperation, WaveOperationKind, WaveWidth,
-    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    AccessMode, AddressSpace, Atomic, AtomicKind, Axis, BarrierSemantics, BasicBlock, BinaryOp,
+    BlockId, CheckedBinaryOperator, ComparePredicate, Constant, Convergence, DiagnosticCode, Fence,
+    Function, IndexKind, IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel,
+    LaunchDomain, LaunchExtent, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
+    ScalarType, Signature, SwitchCase, SynchronizationScope, TargetCapability, Terminator, Type,
+    UnaryOp, ValueDef, ValueId, VerifiedCanonicalKernelIrV7, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    verify_module,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
     EventPolicyV1, MAX_REPORTED_UNSUPPORTED_FINDINGS_V1,
     MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1, ScalarBitsV1,
     SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
-    SimulationConflictAssessmentV1, SimulationDebugCaptureLimitsV1, SimulationDebugRecordV1,
-    SimulationDebugSinkControlV1, SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1,
-    SimulationEventSinkControlV1, SimulationEventSinkV1, SimulationEventV1,
-    SimulationExecutionErrorKindV1, SimulationExecutionOutcomeV1, SimulationLimitsV1,
-    SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleIdentityV1,
-    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationTargetV1,
-    UnsupportedFeatureV1,
+    SimulationConflictAssessmentV1, SimulationDebugCaptureLimitsV1, SimulationDebugMemoryAccessV1,
+    SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSinkControlV1,
+    SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
+    SimulationEventSinkV1, SimulationEventV1, SimulationExecutionErrorKindV1,
+    SimulationExecutionOutcomeV1, SimulationLimitsV1, SimulationPreflightErrorV1,
+    SimulationRequestV1, SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1,
+    SimulationScheduleRequestV1, SimulationTargetV1, UnsupportedFeatureV1,
 };
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(result), ty), kind)
+}
+
+fn atomic_scalar_buffer(
+    value: ScalarBitsV1,
+    initialized: bool,
+    alignment: u32,
+) -> BufferArgumentV1 {
+    let width = usize::from(value.ty().bit_width().unwrap().div_ceil(8));
+    BufferArgumentV1::new(
+        value.ty(),
+        AccessMode::ReadWrite,
+        alignment,
+        value.bits().to_le_bytes()[..width].to_vec(),
+        vec![initialized; width],
+        SimulationTargetV1::amdgpu_64(),
+    )
+    .unwrap()
 }
 
 fn admitted(module: Module) -> AdmittedSimulationModuleV1 {
@@ -4257,6 +4275,942 @@ fn schedule_record_bounds_are_fail_closed_without_changing_default_step_failures
         legacy,
         SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
             kind: SimulationExecutionErrorKindV1::StepLimit { limit: 2 },
+            ..
+        })
+    ));
+}
+
+fn atomic_capability(
+    scalar: ScalarType,
+    address_space: AddressSpace,
+    scope: SynchronizationScope,
+) -> TargetCapability {
+    TargetCapability::Atomic {
+        width_bits: scalar.bit_width().unwrap(),
+        address_space,
+        max_scope: scope,
+    }
+}
+
+fn atomic_module(
+    kind: AtomicKind,
+    scalar: ScalarType,
+    address_space: AddressSpace,
+    scope: SynchronizationScope,
+    ordering: MemoryOrdering,
+    failure_ordering: Option<MemoryOrdering>,
+) -> Module {
+    let scalar_ty = Type::Scalar(scalar);
+    let pointer_ty = Type::pointer(scalar_ty.clone(), address_space, AccessMode::ReadWrite);
+    let results = match kind {
+        AtomicKind::Store => vec![],
+        AtomicKind::CompareExchange => vec![
+            ValueDef::new(ValueId(3), scalar_ty.clone()),
+            ValueDef::new(ValueId(4), Type::BOOL),
+        ],
+        _ => vec![ValueDef::new(ValueId(3), scalar_ty.clone())],
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(Operation::new(
+        results,
+        OperationKind::Atomic(Atomic {
+            kind,
+            pointer: ValueId(0),
+            value: (kind != AtomicKind::Load).then_some(ValueId(1)),
+            compare: (kind == AtomicKind::CompareExchange).then_some(ValueId(2)),
+            access: MemoryAccess::new(
+                address_space,
+                u32::from(scalar.bit_width().unwrap().div_ceil(8)),
+            ),
+            scope,
+            ordering,
+            failure_ordering,
+        }),
+    ));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let capabilities = if matches!(scalar.bit_width(), Some(8 | 16 | 32 | 64)) {
+        std::collections::BTreeSet::from([atomic_capability(scalar, address_space, scope)])
+    } else {
+        // V7 represents i128/u128 atomics, but its hardware capability vocabulary
+        // deliberately has no 128-bit atomic capability to declare.
+        std::collections::BTreeSet::new()
+    };
+    let mut entry = Function::kernel_entry(
+        "atomic_impl",
+        Signature::new(vec![pointer_ty, scalar_ty.clone(), scalar_ty], vec![]),
+        vec![ValueId(0), ValueId(1), ValueId(2)],
+        vec![block],
+    );
+    entry.required_capabilities = capabilities.clone();
+    let mut kernel = Kernel::new("atomic", "atomic_impl", dynamic_domain_1d());
+    kernel.required_capabilities = capabilities.clone();
+    let mut module = Module::new("sim-tests::atomic");
+    module.required_capabilities = capabilities;
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    module
+}
+
+fn atomic_request(
+    initial: ScalarBitsV1,
+    operand: ScalarBitsV1,
+    compare: ScalarBitsV1,
+    grid: u64,
+    workgroup: u32,
+) -> SimulationRequestV1 {
+    SimulationRequestV1::new(
+        "atomic",
+        [grid, 1, 1],
+        [workgroup, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(atomic_scalar_buffer(
+                initial,
+                true,
+                u32::from(initial.ty().bit_width().unwrap().div_ceil(8)),
+            )),
+            SimulationArgumentV1::Scalar(operand),
+            SimulationArgumentV1::Scalar(compare),
+        ],
+    )
+}
+
+fn scalar_buffer_bits(execution: &fe2o3_kir_sim::SimulationExecutionV1) -> u128 {
+    let bytes = execution.buffer(0).unwrap().bytes();
+    let mut raw = [0_u8; 16];
+    raw[..bytes.len()].copy_from_slice(bytes);
+    u128::from_le_bytes(raw)
+}
+
+#[test]
+fn every_integer_atomic_kind_has_exact_outcomes_and_one_semantic_event() {
+    let cases: [(AtomicKind, u32, u32, Option<bool>); 11] = [
+        (AtomicKind::Load, 0xf0, 0xf0, None),
+        (AtomicKind::Store, 0xf0, 0x0f, None),
+        (AtomicKind::Exchange, 0xf0, 0x0f, None),
+        (AtomicKind::CompareExchange, 0xf0, 0x0f, Some(true)),
+        (AtomicKind::Add, 0xf0, 0xff, None),
+        (AtomicKind::Subtract, 0xf0, 0xe1, None),
+        (AtomicKind::Min, 0xf0, 0x0f, None),
+        (AtomicKind::Max, 0xf0, 0xf0, None),
+        (AtomicKind::BitAnd, 0xf0, 0x00, None),
+        (AtomicKind::BitOr, 0xf0, 0xff, None),
+        (AtomicKind::BitXor, 0xf0, 0xff, None),
+    ];
+    for (kind, initial, expected, expected_cas) in cases {
+        let module = atomic_module(
+            kind,
+            ScalarType::U32,
+            AddressSpace::Global,
+            SynchronizationScope::System,
+            MemoryOrdering::Relaxed,
+            (kind == AtomicKind::CompareExchange).then_some(MemoryOrdering::Relaxed),
+        );
+        let request = atomic_request(
+            ScalarBitsV1::u32(initial),
+            ScalarBitsV1::u32(0x0f),
+            ScalarBitsV1::u32(initial),
+            1,
+            1,
+        );
+        let mut events = Collector::default();
+        let execution = admitted(module)
+            .simulate_observed_with_sink(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+                &mut events,
+            )
+            .unwrap();
+        assert_eq!(
+            scalar_buffer_bits(&execution),
+            u128::from(expected),
+            "{kind:?}"
+        );
+        let atomic_events = events
+            .0
+            .iter()
+            .filter_map(|event| match &event.kind {
+                SimulationEventKindV1::MemoryAtomic {
+                    kind: actual,
+                    compare_exchange_success,
+                    ..
+                } => Some((*actual, *compare_exchange_success)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(atomic_events, vec![(kind, expected_cas)]);
+    }
+
+    let module = atomic_module(
+        AtomicKind::CompareExchange,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+        MemoryOrdering::AcquireRelease,
+        Some(MemoryOrdering::Acquire),
+    );
+    let request = atomic_request(
+        ScalarBitsV1::u32(7),
+        ScalarBitsV1::u32(9),
+        ScalarBitsV1::u32(8),
+        1,
+        1,
+    );
+    let mut events = Collector::default();
+    let execution = admitted(module)
+        .simulate_observed_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut events,
+        )
+        .unwrap();
+    assert_eq!(scalar_buffer_bits(&execution), 7);
+    assert!(events.0.iter().any(|event| matches!(
+        event.kind,
+        SimulationEventKindV1::MemoryAtomic {
+            kind: AtomicKind::CompareExchange,
+            committed: None,
+            compare_exchange_success: Some(false),
+            ..
+        }
+    )));
+}
+
+#[test]
+fn atomics_cover_every_fixed_integer_width_signed_order_and_wrapping() {
+    let types = [
+        ScalarType::I8,
+        ScalarType::I16,
+        ScalarType::I32,
+        ScalarType::I64,
+        ScalarType::I128,
+        ScalarType::U8,
+        ScalarType::U16,
+        ScalarType::U32,
+        ScalarType::U64,
+        ScalarType::U128,
+    ];
+    for scalar in types {
+        let width = scalar.bit_width().unwrap();
+        let all_ones = if width == 128 {
+            u128::MAX
+        } else {
+            (1_u128 << width) - 1
+        };
+        let initial = ScalarBitsV1::new(scalar, all_ones, SimulationTargetV1::amdgpu_64()).unwrap();
+        let one = ScalarBitsV1::new(scalar, 1, SimulationTargetV1::amdgpu_64()).unwrap();
+        let module = atomic_module(
+            AtomicKind::Add,
+            scalar,
+            AddressSpace::Global,
+            SynchronizationScope::Device,
+            MemoryOrdering::SequentiallyConsistent,
+            None,
+        );
+        let execution = admitted(module)
+            .simulate(
+                &atomic_request(initial, one, one, 1, 1),
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+            )
+            .unwrap();
+        assert_eq!(scalar_buffer_bits(&execution), 0, "{scalar:?} wrapping add");
+    }
+
+    for (kind, expected) in [(AtomicKind::Min, -9_i32), (AtomicKind::Max, -2_i32)] {
+        let initial = ScalarBitsV1::i32(-2);
+        let operand = ScalarBitsV1::i32(-9);
+        let execution = admitted(atomic_module(
+            kind,
+            ScalarType::I32,
+            AddressSpace::Global,
+            SynchronizationScope::Device,
+            MemoryOrdering::AcquireRelease,
+            None,
+        ))
+        .simulate(
+            &atomic_request(initial, operand, operand, 1, 1),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(scalar_buffer_bits(&execution) as u32 as i32, expected);
+    }
+}
+
+#[test]
+fn all_legal_atomic_scopes_orderings_and_compare_exchange_failures_execute() {
+    let scopes = [
+        SynchronizationScope::Subgroup,
+        SynchronizationScope::Workgroup,
+        SynchronizationScope::Device,
+        SynchronizationScope::System,
+    ];
+    let orderings = [
+        MemoryOrdering::Relaxed,
+        MemoryOrdering::Acquire,
+        MemoryOrdering::Release,
+        MemoryOrdering::AcquireRelease,
+        MemoryOrdering::SequentiallyConsistent,
+    ];
+    for scope in scopes {
+        for ordering in orderings {
+            let execution = admitted(atomic_module(
+                AtomicKind::Exchange,
+                ScalarType::U32,
+                AddressSpace::Global,
+                scope,
+                ordering,
+                None,
+            ))
+            .simulate(
+                &atomic_request(
+                    ScalarBitsV1::u32(1),
+                    ScalarBitsV1::u32(2),
+                    ScalarBitsV1::u32(0),
+                    1,
+                    1,
+                ),
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+            )
+            .unwrap();
+            assert_eq!(scalar_buffer_bits(&execution), 2, "{scope:?} {ordering:?}");
+        }
+    }
+
+    let failure_pairs = [
+        (MemoryOrdering::Relaxed, MemoryOrdering::Relaxed),
+        (MemoryOrdering::Acquire, MemoryOrdering::Relaxed),
+        (MemoryOrdering::Acquire, MemoryOrdering::Acquire),
+        (MemoryOrdering::Release, MemoryOrdering::Relaxed),
+        (MemoryOrdering::AcquireRelease, MemoryOrdering::Relaxed),
+        (MemoryOrdering::AcquireRelease, MemoryOrdering::Acquire),
+        (
+            MemoryOrdering::SequentiallyConsistent,
+            MemoryOrdering::Relaxed,
+        ),
+        (
+            MemoryOrdering::SequentiallyConsistent,
+            MemoryOrdering::Acquire,
+        ),
+        (
+            MemoryOrdering::SequentiallyConsistent,
+            MemoryOrdering::SequentiallyConsistent,
+        ),
+    ];
+    for (success, failure) in failure_pairs {
+        let execution = admitted(atomic_module(
+            AtomicKind::CompareExchange,
+            ScalarType::U32,
+            AddressSpace::Global,
+            SynchronizationScope::System,
+            success,
+            Some(failure),
+        ))
+        .simulate(
+            &atomic_request(
+                ScalarBitsV1::u32(3),
+                ScalarBitsV1::u32(9),
+                ScalarBitsV1::u32(7),
+                1,
+                1,
+            ),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+        assert_eq!(scalar_buffer_bits(&execution), 3, "{success:?}/{failure:?}");
+    }
+}
+
+fn workgroup_atomic_module() -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(
+        scalar.clone(),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    );
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        op(
+            2,
+            pointer,
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: scalar.clone(),
+                extent: WorkgroupMemoryExtent::Static(1),
+                alignment: 4,
+            }),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Atomic(Atomic {
+                kind: AtomicKind::Store,
+                pointer: ValueId(2),
+                value: Some(ValueId(0)),
+                compare: None,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+                scope: SynchronizationScope::Workgroup,
+                ordering: MemoryOrdering::Release,
+                failure_ordering: None,
+            }),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ),
+        op(
+            3,
+            scalar,
+            OperationKind::Atomic(Atomic {
+                kind: AtomicKind::Add,
+                pointer: ValueId(2),
+                value: Some(ValueId(1)),
+                compare: None,
+                access: MemoryAccess::new(AddressSpace::Workgroup, 4),
+                scope: SynchronizationScope::Subgroup,
+                ordering: MemoryOrdering::AcquireRelease,
+                failure_ordering: None,
+            }),
+        ),
+    ];
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let capabilities = std::collections::BTreeSet::from([
+        TargetCapability::WorkgroupMemory,
+        TargetCapability::WorkgroupBarrier,
+        atomic_capability(
+            ScalarType::U32,
+            AddressSpace::Workgroup,
+            SynchronizationScope::Workgroup,
+        ),
+    ]);
+    let mut entry = Function::kernel_entry(
+        "workgroup_atomic_impl",
+        Signature::new(
+            vec![Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::U32)],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1)],
+        vec![block],
+    );
+    entry.required_capabilities = capabilities.clone();
+    let mut kernel = Kernel::new(
+        "workgroup_atomic",
+        "workgroup_atomic_impl",
+        dynamic_domain_1d(),
+    );
+    kernel.required_capabilities = capabilities.clone();
+    let mut module = Module::new("sim-tests::workgroup-atomic");
+    module.required_capabilities = capabilities;
+    module.functions.push(entry);
+    module.kernels.push(kernel);
+    module
+}
+
+#[test]
+fn workgroup_atomics_publish_across_full_and_partial_workgroups() {
+    let request = SimulationRequestV1::new(
+        "workgroup_atomic",
+        [5, 1, 1],
+        [4, 1, 1],
+        vec![
+            SimulationArgumentV1::Scalar(ScalarBitsV1::u32(0)),
+            SimulationArgumentV1::Scalar(ScalarBitsV1::u32(1)),
+        ],
+    );
+    let mut debug = DebugCollector::default();
+    let execution = admitted(workgroup_atomic_module())
+        .simulate_debugged_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationDebugCaptureLimitsV1::new(16, 256, 16, 1_024).unwrap(),
+            &mut debug,
+        )
+        .unwrap();
+    assert_eq!(execution.workgroups_visited(), 2);
+    assert_eq!(execution.invocations_executed(), 5);
+    assert_eq!(
+        debug
+            .0
+            .iter()
+            .filter(|record| matches!(
+                record.kind,
+                SimulationDebugRecordKindV1::Memory {
+                    access: SimulationDebugMemoryAccessV1::AtomicReadWriteCommitted,
+                    ..
+                }
+            ))
+            .count(),
+        5
+    );
+}
+
+fn fence_module() -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    for scope in [
+        SynchronizationScope::Subgroup,
+        SynchronizationScope::Workgroup,
+        SynchronizationScope::Device,
+        SynchronizationScope::System,
+    ] {
+        for ordering in [
+            MemoryOrdering::Acquire,
+            MemoryOrdering::Release,
+            MemoryOrdering::AcquireRelease,
+            MemoryOrdering::SequentiallyConsistent,
+        ] {
+            block.operations.push(Operation::new(
+                vec![],
+                OperationKind::Fence(Fence {
+                    memory_scope: scope,
+                    semantics: BarrierSemantics::new(
+                        ordering,
+                        [AddressSpace::Global, AddressSpace::Generic],
+                    ),
+                }),
+            ));
+        }
+    }
+    for scope in [
+        SynchronizationScope::Subgroup,
+        SynchronizationScope::Workgroup,
+    ] {
+        block.operations.push(Operation::new(
+            vec![],
+            OperationKind::Fence(Fence {
+                memory_scope: scope,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+            }),
+        ));
+    }
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let entry = Function::kernel_entry(
+        "fence_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    let mut module = Module::new("sim-tests::fence");
+    module.functions.push(entry);
+    module
+        .kernels
+        .push(Kernel::new("fence", "fence_impl", dynamic_domain_1d()));
+    module
+}
+
+#[test]
+fn every_legal_fence_scope_order_and_address_space_is_an_explicit_order_point() {
+    let mut debug = DebugCollector::default();
+    admitted(fence_module())
+        .simulate_debugged_with_sink(
+            &SimulationRequestV1::new("fence", [1, 1, 1], [1, 1, 1], vec![]),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationDebugCaptureLimitsV1::new(16, 256, 16, 1_024).unwrap(),
+            &mut debug,
+        )
+        .unwrap();
+    let fences = debug
+        .0
+        .iter()
+        .filter_map(|record| match record.kind {
+            SimulationDebugRecordKindV1::Fence {
+                memory_scope,
+                ordering,
+                address_space_mask,
+            } => Some((memory_scope, ordering, address_space_mask)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fences.len(), 18);
+    assert!(
+        fences
+            .iter()
+            .all(|(_, ordering, mask)| { *ordering != MemoryOrdering::Relaxed && *mask != 0 })
+    );
+}
+
+#[test]
+fn atomic_memory_failures_are_typed_and_store_initializes_without_reading() {
+    let module = admitted(atomic_module(
+        AtomicKind::Add,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::Device,
+        MemoryOrdering::Relaxed,
+        None,
+    ));
+    for (buffer, expected) in [
+        (
+            atomic_scalar_buffer(ScalarBitsV1::u32(1), true, 1),
+            "misaligned",
+        ),
+        (
+            BufferArgumentV1::new(
+                ScalarType::U32,
+                AccessMode::ReadWrite,
+                4,
+                vec![],
+                vec![],
+                SimulationTargetV1::amdgpu_64(),
+            )
+            .unwrap(),
+            "out-of-bounds",
+        ),
+        (
+            atomic_scalar_buffer(ScalarBitsV1::u32(1), false, 4),
+            "uninitialized",
+        ),
+    ] {
+        let request = SimulationRequestV1::new(
+            "atomic",
+            [1, 1, 1],
+            [1, 1, 1],
+            vec![
+                SimulationArgumentV1::Buffer(buffer),
+                SimulationArgumentV1::Scalar(ScalarBitsV1::u32(1)),
+                SimulationArgumentV1::Scalar(ScalarBitsV1::u32(1)),
+            ],
+        );
+        let error = module
+            .simulate(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+            )
+            .expect_err(expected);
+        assert!(matches!(
+            (expected, error),
+            (
+                "misaligned",
+                SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                    kind: SimulationExecutionErrorKindV1::MisalignedAccess { .. },
+                    ..
+                })
+            ) | (
+                "out-of-bounds",
+                SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                    kind: SimulationExecutionErrorKindV1::OutOfBounds { .. },
+                    ..
+                })
+            ) | (
+                "uninitialized",
+                SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                    kind: SimulationExecutionErrorKindV1::UninitializedRead { .. },
+                    ..
+                })
+            )
+        ));
+    }
+
+    let store = admitted(atomic_module(
+        AtomicKind::Store,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::Device,
+        MemoryOrdering::Release,
+        None,
+    ));
+    let request = SimulationRequestV1::new(
+        "atomic",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(atomic_scalar_buffer(ScalarBitsV1::u32(0), false, 4)),
+            SimulationArgumentV1::Scalar(ScalarBitsV1::u32(17)),
+            SimulationArgumentV1::Scalar(ScalarBitsV1::u32(0)),
+        ],
+    );
+    let execution = store
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert_eq!(scalar_buffer_bits(&execution), 17);
+    assert!(
+        execution
+            .buffer(0)
+            .unwrap()
+            .initialized()
+            .iter()
+            .all(|byte| *byte)
+    );
+}
+
+#[test]
+fn unsupported_atomic_scalar_and_generic_space_remain_exact_typed_preflight_states() {
+    let generic = admitted(atomic_module(
+        AtomicKind::Exchange,
+        ScalarType::U32,
+        AddressSpace::Generic,
+        SynchronizationScope::Device,
+        MemoryOrdering::Relaxed,
+        None,
+    ));
+    let wrong_arguments = vec![
+        SimulationArgumentV1::Scalar(ScalarBitsV1::u32(0)),
+        SimulationArgumentV1::Scalar(ScalarBitsV1::u32(0)),
+        SimulationArgumentV1::Scalar(ScalarBitsV1::u32(0)),
+    ];
+    let report = |module: &AdmittedSimulationModuleV1| match module
+        .preflight(
+            &SimulationRequestV1::new("atomic", [1, 1, 1], [1, 1, 1], wrong_arguments.clone()),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap_err()
+    {
+        SimulationPreflightErrorV1::Unsupported(report) => report,
+        other => panic!("expected typed unsupported report, found {other:?}"),
+    };
+    for scalar in [
+        ScalarType::F16,
+        ScalarType::Bf16,
+        ScalarType::F32,
+        ScalarType::F64,
+    ] {
+        let float = admitted(atomic_module(
+            AtomicKind::Add,
+            scalar,
+            AddressSpace::Global,
+            SynchronizationScope::Device,
+            MemoryOrdering::Relaxed,
+            None,
+        ));
+        assert!(report(&float).findings().iter().any(|finding| matches!(
+            finding.feature,
+            UnsupportedFeatureV1::FloatType(actual) if actual == scalar
+        )));
+    }
+    assert!(report(&generic).findings().iter().any(|finding| {
+        finding.feature == UnsupportedFeatureV1::UnsupportedAddressSpace(AddressSpace::Generic)
+    }));
+}
+
+#[test]
+fn invalid_atomic_and_fence_metadata_never_reaches_simulation() {
+    let mut invalid = atomic_module(
+        AtomicKind::Load,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::Invocation,
+        MemoryOrdering::Release,
+        None,
+    );
+    let body = invalid.functions[0].body.as_mut().unwrap();
+    body.blocks[0].operations.push(Operation::new(
+        vec![],
+        OperationKind::Fence(Fence {
+            memory_scope: SynchronizationScope::Invocation,
+            semantics: BarrierSemantics::new(MemoryOrdering::Relaxed, []),
+        }),
+    ));
+    let errors = verify_module(&invalid).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidAtomic));
+    assert!(errors.contains(DiagnosticCode::InvalidFence));
+
+    for address_space in [AddressSpace::Private, AddressSpace::Constant] {
+        let errors = verify_module(&atomic_module(
+            AtomicKind::Add,
+            ScalarType::U32,
+            address_space,
+            SynchronizationScope::System,
+            MemoryOrdering::Relaxed,
+            None,
+        ))
+        .unwrap_err();
+        assert!(errors.contains(DiagnosticCode::InvalidAtomic));
+    }
+    let errors = verify_module(&atomic_module(
+        AtomicKind::Add,
+        ScalarType::Bool,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+    ))
+    .unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidAtomic));
+
+    let mut index = atomic_module(
+        AtomicKind::Add,
+        ScalarType::U64,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+    );
+    index.required_capabilities.clear();
+    index.kernels[0].required_capabilities.clear();
+    index.functions[0].required_capabilities.clear();
+    index.functions[0].signature.parameters = vec![
+        Type::pointer(Type::INDEX, AddressSpace::Global, AccessMode::ReadWrite),
+        Type::INDEX,
+        Type::INDEX,
+    ];
+    let operation = &mut index.functions[0].body.as_mut().unwrap().blocks[0].operations[0];
+    operation.results[0].ty = Type::INDEX;
+    let OperationKind::Atomic(atomic) = &mut operation.kind else {
+        unreachable!()
+    };
+    atomic.access.alignment = 8;
+    let errors = verify_module(&index).unwrap_err();
+    assert!(errors.contains(DiagnosticCode::InvalidAtomic));
+
+    for address_space in [AddressSpace::Private, AddressSpace::Constant] {
+        let mut fence = fence_module();
+        fence.functions[0].body.as_mut().unwrap().blocks[0].operations[0] = Operation::new(
+            vec![],
+            OperationKind::Fence(Fence {
+                memory_scope: SynchronizationScope::System,
+                semantics: BarrierSemantics::new(MemoryOrdering::AcquireRelease, [address_space]),
+            }),
+        );
+        let errors = verify_module(&fence).unwrap_err();
+        assert!(errors.contains(DiagnosticCode::InvalidFence));
+    }
+}
+
+#[test]
+fn scoped_atomic_add_is_deterministic_across_partial_multi_workgroup_schedules_and_replay() {
+    let module = admitted(atomic_module(
+        AtomicKind::Add,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+        MemoryOrdering::Relaxed,
+        None,
+    ));
+    let request = atomic_request(
+        ScalarBitsV1::u32(0),
+        ScalarBitsV1::u32(1),
+        ScalarBitsV1::u32(0),
+        10,
+        4,
+    );
+    let run = |seed| {
+        module
+            .simulate_scheduled(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+                SimulationScheduleRequestV1::RecordSeeded {
+                    seed,
+                    max_decisions: 64,
+                },
+            )
+            .unwrap()
+    };
+    let first = run(0x000a_701c);
+    let same = run(0x000a_701c);
+    assert_eq!(scalar_buffer_bits(&first), 10);
+    assert_eq!(first.schedule_record(), same.schedule_record());
+    assert!(matches!(
+        first.conflict_assessment(),
+        SimulationConflictAssessmentV1::ConflictsObserved { .. }
+    ));
+    let replayed = module
+        .simulate_scheduled(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::Replay(first.schedule_record().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(scalar_buffer_bits(&replayed), 10);
+    assert_eq!(
+        first.schedule_transcript_identity(),
+        replayed.schedule_transcript_identity()
+    );
+}
+
+struct RejectAtomics;
+
+impl SimulationEventSinkV1 for RejectAtomics {
+    fn record(
+        &mut self,
+        event: &SimulationEventV1,
+    ) -> Result<(), fe2o3_kir_sim::SimulationEventSinkErrorV1> {
+        if matches!(event.kind, SimulationEventKindV1::MemoryAtomic { .. }) {
+            Err(fe2o3_kir_sim::SimulationEventSinkErrorV1 {
+                detail: "atomic rejected".into(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn atomic_event_budget_and_sink_rejection_fail_before_a_committed_observation() {
+    let module = admitted(atomic_module(
+        AtomicKind::Exchange,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+        MemoryOrdering::SequentiallyConsistent,
+        None,
+    ));
+    let mut request = atomic_request(
+        ScalarBitsV1::u32(3),
+        ScalarBitsV1::u32(9),
+        ScalarBitsV1::u32(0),
+        1,
+        1,
+    );
+    request.events = EventPolicyV1::Enabled;
+    let mut retained = Collector::default();
+    let error = module
+        .simulate_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1 {
+                max_events: 4,
+                ..SimulationLimitsV1::default()
+            },
+            &mut retained,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::EventLimit { limit: 4 },
+            ..
+        })
+    ));
+    assert!(
+        retained
+            .0
+            .iter()
+            .all(|event| !matches!(event.kind, SimulationEventKindV1::MemoryAtomic { .. }))
+    );
+
+    let error = module
+        .simulate_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            &mut RejectAtomics,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::EventSinkFailure(_),
             ..
         })
     ));

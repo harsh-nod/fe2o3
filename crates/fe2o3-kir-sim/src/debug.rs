@@ -1,4 +1,6 @@
-use fe2o3_kernel_ir::{AccessMode, AddressSpace, BlockId, ScalarType, ValueId};
+use fe2o3_kernel_ir::{
+    AccessMode, AddressSpace, BlockId, MemoryOrdering, ScalarType, SynchronizationScope, ValueId,
+};
 use std::error::Error;
 use std::fmt;
 
@@ -203,6 +205,12 @@ pub enum SimulationDebugCheckpointPhaseV1 {
 pub enum SimulationDebugMemoryAccessV1 {
     Read,
     WriteCommitted,
+    /// An atomic load, or a compare-exchange whose comparison failed.
+    AtomicRead,
+    /// An atomic store with no old-value result.
+    AtomicWriteCommitted,
+    /// One indivisible atomic read-modify-write whose committed value is recorded.
+    AtomicReadWriteCommitted,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,6 +238,14 @@ pub enum SimulationDebugRecordKindV1 {
         action: SimulationDebugBarrierActionV1,
         phase: u64,
         participants: u32,
+    },
+    /// A scoped memory-order point. It is not an execution barrier.
+    Fence {
+        memory_scope: SynchronizationScope,
+        ordering: MemoryOrdering,
+        /// Bits 0 through 4 represent private, workgroup, global, constant,
+        /// and generic address spaces, respectively.
+        address_space_mask: u8,
     },
 }
 
