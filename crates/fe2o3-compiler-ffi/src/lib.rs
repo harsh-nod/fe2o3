@@ -20,6 +20,7 @@ mod final_compiler_module_commitment_v3;
 mod inert_semantic_module_handoff_v3;
 mod module_handoff;
 mod module_handoff_v2;
+mod production_gfx942_ocml;
 mod production_gfx950_ocml;
 mod symbol_manifest;
 
@@ -71,6 +72,12 @@ pub use module_handoff::{
 pub use module_handoff_v2::{
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffPartsV2,
     CompilerModuleHandoffV2, MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+};
+pub use production_gfx942_ocml::{
+    PRODUCTION_GFX942_OCML_EXP_F32_ABI_V1, PRODUCTION_GFX942_OCML_EXP_F32_EFFECTS_V1,
+    PRODUCTION_GFX942_OCML_EXP_F32_SYMBOL_V1, ProductionGfx942CompilerFfiEnvelopeKindV1,
+    construct_production_gfx942_ocml_exp_envelope_v1,
+    inspect_production_gfx942_compiler_ffi_envelope_v1,
 };
 pub use production_gfx950_ocml::{
     PRODUCTION_GFX950_OCML_EXP_F32_ABI_V1, PRODUCTION_GFX950_OCML_EXP_F32_EFFECTS_V1,

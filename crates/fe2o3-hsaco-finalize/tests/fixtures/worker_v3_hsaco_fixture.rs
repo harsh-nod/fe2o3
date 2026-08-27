@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 mod worker_v3_hsaco_test_support;
 
 const WORKER_ID: &str = "fixture-worker-v3-hsaco-v1";
-const PAYLOAD_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
+const PAYLOAD_MARKER: &[u8] = b"; FE2O3/TEST-HSACO-PAYLOAD/V2-HEX:";
 const SCALAR_LLVM_BUILD_IDENTITY: &str =
     "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
 
@@ -21,14 +21,14 @@ fn main() {
         .filter(|_| scalar)
         .map(scalar_fixture_for_module);
     let output = if let Some(fixture) = &scalar_fixture {
-        fixture.bytes.as_slice()
+        fixture.bytes.clone()
     } else if let Some(compiler_input) = compiler_input {
         hsaco_payload(compiler_input)
     } else {
         find_hsaco_input(field(&request, 6))
     };
     let mut diagnostics = if scalar {
-        scalar_diagnostics(compiler_input.unwrap(), output)
+        scalar_diagnostics(compiler_input.unwrap(), &output)
     } else {
         Vec::new()
     };
@@ -37,7 +37,7 @@ fn main() {
         diagnostics.sort();
     }
     io::stdout()
-        .write_all(&response(&request, is_v2, output, &diagnostics, selector))
+        .write_all(&response(&request, is_v2, &output, &diagnostics, selector))
         .unwrap();
 }
 
@@ -183,7 +183,7 @@ fn hex(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn find_hsaco_input(inputs: &[u8]) -> &[u8] {
+fn find_hsaco_input(inputs: &[u8]) -> Vec<u8> {
     let count = u32::from_le_bytes(inputs[..4].try_into().unwrap()) as usize;
     let mut offset = 4;
     for _ in 0..count {
@@ -196,7 +196,11 @@ fn find_hsaco_input(inputs: &[u8]) -> &[u8] {
             .position(|window| window == PAYLOAD_MARKER)
             .map(|position| &payload[position + PAYLOAD_MARKER.len()..])
         {
-            return payload;
+            let encoded = payload
+                .split(|byte| *byte == b'\n')
+                .next()
+                .expect("embedded payload has one line");
+            return hex_decode(encoded).expect("embedded HSACO payload is canonical lowercase hex");
         }
         offset += length;
     }
@@ -208,12 +212,34 @@ fn input_payload(input: &[u8]) -> &[u8] {
     &input[41..41 + length]
 }
 
-fn hsaco_payload(input: &[u8]) -> &[u8] {
+fn hsaco_payload(input: &[u8]) -> Vec<u8> {
     let position = input
         .windows(PAYLOAD_MARKER.len())
         .position(|window| window == PAYLOAD_MARKER)
         .expect("V2 compiler module contains no embedded HSACO");
-    &input[position + PAYLOAD_MARKER.len()..]
+    let encoded = input[position + PAYLOAD_MARKER.len()..]
+        .split(|byte| *byte == b'\n')
+        .next()
+        .expect("embedded payload has one line");
+    hex_decode(encoded).expect("embedded HSACO payload is canonical lowercase hex")
+}
+
+fn hex_decode(encoded: &[u8]) -> Option<Vec<u8>> {
+    if encoded.len() % 2 != 0 {
+        return None;
+    }
+    encoded
+        .chunks_exact(2)
+        .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
+        .collect()
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn field(bytes: &[u8], wanted: u16) -> &[u8] {
