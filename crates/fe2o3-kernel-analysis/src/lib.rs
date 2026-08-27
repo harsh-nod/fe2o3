@@ -8,7 +8,7 @@
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod control_flow;
-mod kernel_check_pipeline;
+mod kernel_check_model;
 #[cfg(feature = "authenticated-machine-effect")]
 mod machine_effect;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -74,7 +74,7 @@ pub use control_flow::{
     MAX_CONTROL_FLOW_NATURAL_LOOPS, MAX_CONTROL_FLOW_STORAGE_ITEMS, MAX_CONTROL_FLOW_WORK_UNITS,
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
-pub use kernel_check_pipeline::*;
+pub use kernel_check_model::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use machine_effect::*;
 #[cfg(feature = "authenticated-machine-effect")]
