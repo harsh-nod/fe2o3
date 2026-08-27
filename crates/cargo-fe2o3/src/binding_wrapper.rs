@@ -884,54 +884,45 @@ fn resolve_command_executable_with_path(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct CompleteReviewedChildEnvironmentV2 {
+struct CompleteReviewedChildEnvironment {
     entries: Vec<(OsString, OsString)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FixedReviewedInheritedInputV2 {
+enum FixedReviewedInheritedInput {
     CargoManifestDir,
-    QualificationOracle,
     Target,
 }
 
-impl FixedReviewedInheritedInputV2 {
-    const ALL: [Self; 3] = [
-        Self::CargoManifestDir,
-        Self::QualificationOracle,
-        Self::Target,
-    ];
+impl FixedReviewedInheritedInput {
+    const ALL: [Self; 2] = [Self::CargoManifestDir, Self::Target];
 
     const fn name(self) -> &'static str {
         match self {
             Self::CargoManifestDir => "CARGO_MANIFEST_DIR",
-            Self::QualificationOracle => "FE2O3_QUALIFICATION_ORACLE_V1",
             Self::Target => "FE2O3_TARGET",
         }
     }
 
-    fn accepts(self, value: &OsStr, qualification_oracle: Option<&OsStr>) -> bool {
+    fn accepts(self, value: &OsStr) -> bool {
         match self {
             Self::CargoManifestDir => {
                 let path = Path::new(value);
                 path.is_absolute() && os_bytes(value).len() <= 4096
             }
-            Self::QualificationOracle => qualification_oracle == Some(value),
             Self::Target => matches!(value.to_str(), Some("gfx942:xnack-" | "gfx950:xnack-")),
         }
     }
 }
 
-impl CompleteReviewedChildEnvironmentV2 {}
-
 fn materialize_production_child_environment(
     profile: Option<BuildCompileEnvironmentProfileV1>,
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
-) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
+) -> Result<Option<CompleteReviewedChildEnvironment>, BindingWrapperError> {
     match profile {
         Some(BuildCompileEnvironmentProfileV1::ProductionAmd) => {
-            materialize_closed_child_environment(command, inherited, None, "production").map(Some)
+            materialize_closed_child_environment(command, inherited, "production").map(Some)
         }
         None => Ok(None),
     }
@@ -940,9 +931,8 @@ fn materialize_production_child_environment(
 fn materialize_closed_child_environment(
     command: &mut Command,
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
-    qualification_oracle: Option<&OsStr>,
     profile: &str,
-) -> Result<CompleteReviewedChildEnvironmentV2, BindingWrapperError> {
+) -> Result<CompleteReviewedChildEnvironment, BindingWrapperError> {
     let inherited = inherited.into_iter().collect::<BTreeMap<_, _>>();
     for name in inherited.keys() {
         if rejected_reviewed_inherited_environment(name) {
@@ -953,19 +943,14 @@ fn materialize_closed_child_environment(
     }
 
     let mut final_environment = BTreeMap::new();
-    for input in FixedReviewedInheritedInputV2::ALL {
-        if input == FixedReviewedInheritedInputV2::QualificationOracle
-            && qualification_oracle.is_none()
-        {
-            continue;
-        }
+    for input in FixedReviewedInheritedInput::ALL {
         let name = input.name();
         let value = inherited.get(OsStr::new(name)).ok_or_else(|| {
             BindingWrapperError::BuildObservation(format!(
                 "{profile} fixed environment is missing required {name}"
             ))
         })?;
-        if !input.accepts(value, qualification_oracle) {
+        if !input.accepts(value) {
             return Err(BindingWrapperError::BuildObservation(format!(
                 "{profile} fixed environment has invalid {name}"
             )));
@@ -996,7 +981,7 @@ fn materialize_closed_child_environment(
     }
     command.env_clear();
     command.envs(&final_environment);
-    Ok(CompleteReviewedChildEnvironmentV2 {
+    Ok(CompleteReviewedChildEnvironment {
         entries: final_environment.into_iter().collect(),
     })
 }

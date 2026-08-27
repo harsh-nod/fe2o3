@@ -209,9 +209,6 @@ impl ProductionCompilerModuleHandoffIntake {
     }
 }
 
-/// Legacy protected V2 transport retained only for explicit qualification
-/// routes. It is not selectable from the production intake.
-
 #[derive(Debug)]
 pub(crate) enum ProductionCompilerModuleHandoffIntakeError {
     ParentCustody(ParentRustcInvocationCustodyError),
