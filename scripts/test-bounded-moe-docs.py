@@ -9,18 +9,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs/bounded-moe-v1.md"
-CANONICAL_SOURCE = (
-    ROOT / "crates/rustc-codegen-fe2o3/src/moe_top2_source_kir_correspondence.rs"
-)
-PROOF_TEST = ROOT / "crates/fe2o3-verifier/tests/moe_expert_compact_plan_v1.rs"
+PROOF = ROOT / "examples/moe_expert_v1/verus/compact_plan_v1.rs"
 NEGATIVE_MANIFEST = (
-    ROOT / "crates/fe2o3-verifier/verus/moe_expert_compact_plan_v1/NEGATIVE_SHA256"
+    ROOT / "examples/moe_expert_v1/verus/compact_plan/NEGATIVE_SHA256"
 )
 README = ROOT / "README.md"
 TESTING = ROOT / "docs/testing.md"
 ROADMAP = ROOT / "docs/implementation-roadmap-v2.md"
 EXAMPLE = ROOT / "examples/moe_expert_v1/README.md"
 CI_LOCAL = ROOT / "scripts/ci-local.sh"
+COMPACT_PLAN_RUNNER = ROOT / "scripts/test-moe-expert-compact-plan-verus.sh"
 PRODUCTION_ABSENCE = (
     ROOT
     / "crates/fe2o3-host/tests/ui/production_application_handoff"
@@ -41,7 +39,6 @@ RETIRED_PATHS = [
 
 RETAINED_COMMANDS = [
     "python3 scripts/test-bounded-moe-docs.py",
-    "cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1",
 ]
 
 
@@ -90,8 +87,8 @@ def validate_ci_dispatch(ci_local: str) -> None:
 
 def main() -> None:
     doc = DOC.read_text(encoding="utf-8")
-    source = CANONICAL_SOURCE.read_text(encoding="utf-8")
-    proof_test = PROOF_TEST.read_text(encoding="utf-8")
+    proof = PROOF.read_text(encoding="utf-8")
+    compact_plan_runner = COMPACT_PLAN_RUNNER.read_text(encoding="utf-8")
     owned_docs = {
         "README": README.read_text(encoding="utf-8"),
         "bounded MoE evidence": doc,
@@ -102,20 +99,19 @@ def main() -> None:
 
     validate_ci_dispatch(CI_LOCAL.read_text(encoding="utf-8"))
 
-    source_entries = re.findall(r'canonical\.push\(\s*"([^"]+)"', source)
-    doc_entries = re.findall(r"^\|\s*\d+\s*\|\s*`([^`]+)`\s*\|", doc, re.MULTILINE)
-    require(len(source_entries) == 31, "source canonical table is no longer 31 entries")
-    require(doc_entries == source_entries, "documented canonical table drifted from source")
 
     require(
-        "mutations=7 obligations=19" in proof_test,
-        "proof transcript no longer pins 19 obligations and seven mutations",
+        "pub proof fn compact_plan_assurance_boundary_is_inert_v1" in proof,
+        "compact-plan example proof boundary is missing",
+    )
+    require(
+        "mutations=7 obligations=19" in compact_plan_runner,
+        "proof runner no longer pins 19 obligations and seven mutations",
     )
     require(
         len(NEGATIVE_MANIFEST.read_text(encoding="utf-8").splitlines()) == 7,
         "negative manifest no longer contains seven mutations",
     )
-    require("assert_eq!(checked_vectors, 625);" in proof_test, "625-vector test drifted")
 
     for marker in [
         "## Retired host routes",

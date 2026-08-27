@@ -1,9 +1,8 @@
-//! Retained filesystem admission for the general-GEMM Verus runtime closure.
+//! Retained filesystem admission for the workload-neutral functional-refinement runtime.
 //!
-//! This module admits the exact reviewed V2 filesystem closure, retains the
-//! opened objects, and owns the internal fixed-descriptor execution boundary.
-//! It cannot construct schedule proof evidence; only the typed general-GEMM
-//! entry point can validate exact outputs and mint non-authoritative evidence.
+//! This private backend retains the exact pinned verifier runtime and executes only sealed,
+//! compiler-generated proof sources. Admission does not establish a proof or grant compiler,
+//! artifact, publication, or launch authority.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -15,27 +14,14 @@ use sha2::{Digest, Sha256};
 use crate::CanonicalGeneratedVerusProofInputV3;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "general_gemm_runtime_closure_v2_linux.rs"]
+#[path = "retained_functional_refinement_runtime_v1_linux.rs"]
 mod linux;
 
-/// Exact installed manifest filename.
-pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME: &str =
-    "GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest";
 pub(crate) const FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME: &str =
     "FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest";
-
-/// SHA-256 of the byte-canonical reviewed runtime manifest.
-pub const GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256: [u8; 32] = [
-    0x47, 0x00, 0xaa, 0x94, 0xee, 0x57, 0x27, 0x0c, 0x7e, 0x76, 0x54, 0x0b, 0x38, 0x70, 0x00, 0x4c,
-    0x89, 0x39, 0x73, 0x4b, 0x86, 0x98, 0xe7, 0x5b, 0x95, 0x04, 0xfd, 0xc6, 0x41, 0x77, 0x24, 0xfa,
-];
-
-const MANIFEST_BYTES: &[u8] =
-    include_bytes!("../verus/pins/GENERAL_GEMM_RUNTIME_CLOSURE_V2.manifest");
 const FUNCTIONAL_REFINEMENT_MANIFEST_BYTES: &[u8] =
     include_bytes!("../verus/pins/FUNCTIONAL_REFINEMENT_RUNTIME_V1.manifest");
 const RUST_TARGET_PINS: &[u8] = include_bytes!("../verus/pins/rust_target_1_97_1.sha256");
-const CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-general-gemm-runtime-closure-v2\0";
 const FUNCTIONAL_REFINEMENT_CLOSURE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/FUNCTIONAL-REFINEMENT/RETAINED-RUNTIME/V1\0";
 const TARGET_PREFIX: &str = "toolchain/lib/rustlib/x86_64-unknown-linux-gnu/lib";
@@ -44,11 +30,11 @@ const MAX_RUNTIME_FILES: usize = 128;
 const MAX_RUNTIME_DIRECTORIES: usize = 32;
 const MAX_RELATIVE_PATH_BYTES: usize = 512;
 const MAX_TARGET_FILE_BYTES: u64 = 70 * 1024 * 1024;
-
 /// Stable category for a runtime-closure admission failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GeneralGemmRuntimeClosureErrorKindV2 {
+pub enum RetainedFunctionalRefinementRuntimeErrorKindV1 {
     /// The retained closure is available only on Linux.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     UnsupportedPlatform,
     /// A path or canonical pin record is malformed.
     InvalidManifest,
@@ -78,14 +64,14 @@ pub enum GeneralGemmRuntimeClosureErrorKindV2 {
 
 /// Failure to admit or revalidate the retained runtime closure.
 #[derive(Debug)]
-pub struct GeneralGemmRuntimeClosureErrorV2 {
-    kind: GeneralGemmRuntimeClosureErrorKindV2,
+pub struct RetainedFunctionalRefinementRuntimeErrorV1 {
+    kind: RetainedFunctionalRefinementRuntimeErrorKindV1,
     detail: String,
 }
 
-impl GeneralGemmRuntimeClosureErrorV2 {
+impl RetainedFunctionalRefinementRuntimeErrorV1 {
     pub(crate) fn new(
-        kind: GeneralGemmRuntimeClosureErrorKindV2,
+        kind: RetainedFunctionalRefinementRuntimeErrorKindV1,
         detail: impl Into<String>,
     ) -> Self {
         Self {
@@ -95,277 +81,33 @@ impl GeneralGemmRuntimeClosureErrorV2 {
     }
 
     /// Returns the stable failure category.
-    pub const fn kind(&self) -> GeneralGemmRuntimeClosureErrorKindV2 {
+    pub const fn kind(&self) -> RetainedFunctionalRefinementRuntimeErrorKindV1 {
         self.kind
     }
 }
 
-impl fmt::Display for GeneralGemmRuntimeClosureErrorV2 {
+impl fmt::Display for RetainedFunctionalRefinementRuntimeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "general GEMM runtime closure V2: {}",
+            "functional-refinement retained runtime: {}",
             self.detail
         )
     }
 }
 
-impl std::error::Error for GeneralGemmRuntimeClosureErrorV2 {}
-
-/// Domain-separated identity of the reviewed runtime manifest and target pins.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[repr(transparent)]
-pub struct GeneralGemmRuntimeClosureIdentityV2([u8; 32]);
-
-impl GeneralGemmRuntimeClosureIdentityV2 {
-    /// Returns the exact identity bytes.
-    pub const fn as_bytes(self) -> [u8; 32] {
-        self.0
-    }
-}
-
-/// Non-copyable lease over one retained, exact runtime-closure generation.
-///
-/// Opening this lease does not run a proof and grants no compiler, artifact,
-/// publication, or launch authority.
-pub struct GeneralGemmVerusRuntimeClosureLeaseV2 {
-    root: PathBuf,
-    identity: GeneralGemmRuntimeClosureIdentityV2,
-    owner_process: u32,
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    retained: linux::RetainedRuntimeClosureV2,
-}
-
-/// One exact proof source selected from the reviewed retained closure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum GeneralGemmProofSourceV2 {
-    ScalarGemm,
-    Reference,
-    Vectorized,
-    VectorTailWrong,
-    EpilogueWrong,
-    MachineClaimWrong,
-}
-
-impl GeneralGemmProofSourceV2 {
-    pub(crate) const fn relative_to_proof_directory(self) -> &'static str {
-        match self {
-            Self::ScalarGemm => "scalar_gemm_v1.rs",
-            Self::Reference => "general_gemm_reference_schedule_v1.rs",
-            Self::Vectorized => "general_gemm_vectorized_schedule_v1.rs",
-            Self::VectorTailWrong => "negative/general_gemm_vector_tail_wrong.rs",
-            Self::EpilogueWrong => "negative/general_gemm_epilogue_wrong.rs",
-            Self::MachineClaimWrong => "negative/general_gemm_machine_claim_wrong.rs",
-        }
-    }
-
-    pub(crate) const fn embedded_bytes(self) -> &'static [u8] {
-        match self {
-            Self::ScalarGemm => SCALAR_GEMM_SOURCE,
-            Self::Reference => GENERAL_GEMM_REFERENCE_SOURCE,
-            Self::Vectorized => GENERAL_GEMM_VECTORIZED_SOURCE,
-            Self::VectorTailWrong => GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
-            Self::EpilogueWrong => GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
-            Self::MachineClaimWrong => GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
-        }
-    }
-}
-
+impl std::error::Error for RetainedFunctionalRefinementRuntimeErrorV1 {}
 /// Bounded output from one directly executed retained `rust_verify` process.
-pub(crate) struct GeneralGemmRuntimeProcessOutputV2 {
+pub(crate) struct RetainedFunctionalRefinementRuntimeOutputV1 {
     pub(crate) exit_code: Option<i32>,
     pub(crate) signal: Option<i32>,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
 }
-
-impl fmt::Debug for GeneralGemmVerusRuntimeClosureLeaseV2 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("GeneralGemmVerusRuntimeClosureLeaseV2")
-            .field("root", &self.root)
-            .field("identity", &self.identity)
-            .field("owner_process", &self.owner_process)
-            .finish_non_exhaustive()
-    }
-}
-
-impl GeneralGemmVerusRuntimeClosureLeaseV2 {
-    /// Opens the exact root-owned runtime closure without following links.
-    pub fn open(root: impl AsRef<Path>) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
-        let root = root.as_ref();
-        validate_absolute_path(root)?;
-        validate_runtime_root_path(root)?;
-        let manifest = ManifestV2::parse_reviewed()?;
-        let identity = closure_identity();
-        let owner_process = std::process::id();
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            let retained = linux::RetainedRuntimeClosureV2::open_protected(root, &manifest)?;
-            Ok(Self {
-                root: root.to_path_buf(),
-                identity,
-                owner_process,
-                retained,
-            })
-        }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        {
-            let _ = manifest;
-            Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
-                "retained no-follow runtime admission requires Linux",
-            ))
-        }
-    }
-
-    /// Returns the caller-supplied diagnostic root path.
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Returns the reviewed manifest-and-target-pin identity.
-    pub const fn identity(&self) -> GeneralGemmRuntimeClosureIdentityV2 {
-        self.identity
-    }
-
-    /// Revalidates every retained path edge, object, and exact directory inventory.
-    pub fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
-        if std::process::id() != self.owner_process {
-            return Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::OwnerProcessChanged,
-                "runtime closure lease crossed a process boundary",
-            ));
-        }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            self.retained.revalidate()
-        }
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        {
-            Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
-                "retained no-follow runtime admission requires Linux",
-            ))
-        }
-    }
-
-    pub(crate) fn execute_rust_verify(
-        &self,
-        source: GeneralGemmProofSourceV2,
-        deadline: Instant,
-        output_limit: usize,
-    ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
-        self.revalidate()?;
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        let result = linux::execute_rust_verify(&self.retained, source, deadline, output_limit);
-        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
-            "direct retained rust_verify execution requires Linux x86-64",
-        ));
-        self.revalidate()?;
-        result
-    }
-}
-
-fn closure_identity() -> GeneralGemmRuntimeClosureIdentityV2 {
-    let mut digest = Sha256::new();
-    digest.update(CLOSURE_IDENTITY_DOMAIN);
-    put_blob(&mut digest, MANIFEST_BYTES);
-    put_blob(&mut digest, RUST_TARGET_PINS);
-    GeneralGemmRuntimeClosureIdentityV2(digest.finalize().into())
-}
-
 fn put_blob(digest: &mut Sha256, value: &[u8]) {
     digest.update((value.len() as u64).to_le_bytes());
     digest.update(value);
 }
-
-const GENERAL_GEMM_MODEL_SOURCE: &[u8] =
-    include_bytes!("../verus/general_gemm_schedule_model_v1.rs");
-const SCALAR_GEMM_SOURCE: &[u8] = include_bytes!("../verus/scalar_gemm_v1.rs");
-const GENERAL_GEMM_REFERENCE_SOURCE: &[u8] =
-    include_bytes!("../verus/general_gemm_reference_schedule_v1.rs");
-const GENERAL_GEMM_VECTORIZED_SOURCE: &[u8] =
-    include_bytes!("../verus/general_gemm_vectorized_schedule_v1.rs");
-const GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE: &[u8] =
-    include_bytes!("../verus/general_gemm_numerical_contract_v1.rs");
-const GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_vector_tail_wrong.rs");
-const GENERAL_GEMM_EPILOGUE_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_epilogue_wrong.rs");
-const GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_machine_claim_wrong.rs");
-const GENERAL_GEMM_NUMERICAL_KIR_REFINEMENT_CLAIM_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_numerical_kir_refinement_claim_wrong.rs");
-const GENERAL_GEMM_NUMERICAL_MFMA_CLAIM_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_numerical_mfma_claim_wrong.rs");
-const GENERAL_GEMM_NUMERICAL_MFMA_DESCRIPTOR_CLAIM_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs");
-const GENERAL_GEMM_NUMERICAL_ORDER_CLAIM_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_numerical_order_claim_wrong.rs");
-const GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE: &[u8] =
-    include_bytes!("../verus/negative/general_gemm_numerical_widening_wrong.rs");
-const GENERAL_GEMM_NUMERICAL_PROPERTY_MANIFEST_SOURCE: &[u8] =
-    include_bytes!("../verus/pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest");
-
-const REVIEWED_GENERAL_GEMM_SOURCES: [(&str, &[u8]); 14] = [
-    (
-        "proof/general_gemm_numerical_contract_v1.rs",
-        GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE,
-    ),
-    (
-        "proof/general_gemm_reference_schedule_v1.rs",
-        GENERAL_GEMM_REFERENCE_SOURCE,
-    ),
-    (
-        "proof/general_gemm_schedule_model_v1.rs",
-        GENERAL_GEMM_MODEL_SOURCE,
-    ),
-    (
-        "proof/general_gemm_vectorized_schedule_v1.rs",
-        GENERAL_GEMM_VECTORIZED_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_epilogue_wrong.rs",
-        GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_machine_claim_wrong.rs",
-        GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_numerical_kir_refinement_claim_wrong.rs",
-        GENERAL_GEMM_NUMERICAL_KIR_REFINEMENT_CLAIM_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_numerical_mfma_claim_wrong.rs",
-        GENERAL_GEMM_NUMERICAL_MFMA_CLAIM_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs",
-        GENERAL_GEMM_NUMERICAL_MFMA_DESCRIPTOR_CLAIM_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_numerical_order_claim_wrong.rs",
-        GENERAL_GEMM_NUMERICAL_ORDER_CLAIM_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_numerical_widening_wrong.rs",
-        GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE,
-    ),
-    (
-        "proof/negative/general_gemm_vector_tail_wrong.rs",
-        GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
-    ),
-    (
-        "proof/pins/GENERAL_GEMM_NUMERICAL_PROPERTIES_V1.manifest",
-        GENERAL_GEMM_NUMERICAL_PROPERTY_MANIFEST_SOURCE,
-    ),
-    ("proof/scalar_gemm_v1.rs", SCALAR_GEMM_SOURCE),
-];
-
 pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
     root: PathBuf,
     identity: [u8; 32],
@@ -374,12 +116,9 @@ pub(crate) struct RetainedGeneratedVerusRuntimeBackendV1 {
     retained: linux::RetainedRuntimeClosureV2,
 }
 
-pub(crate) type RetainedGeneratedVerusRuntimeBackendErrorV1 = GeneralGemmRuntimeClosureErrorV2;
-pub(crate) type RetainedGeneratedVerusRuntimeBackendOutputV1 = GeneralGemmRuntimeProcessOutputV2;
-
 pub(crate) fn open_retained_generated_verus_runtime_v1(
     root: &Path,
-) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedGeneratedVerusRuntimeBackendErrorV1> {
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
     validate_absolute_path(root)?;
     validate_runtime_root_path(root)?;
     let manifest = ManifestV2::parse_functional_refinement_runtime_v1()?;
@@ -398,8 +137,8 @@ pub(crate) fn open_retained_generated_verus_runtime_v1(
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
         let _ = (manifest, identity, owner_process);
-        Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+        Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
             "retained no-follow runtime admission requires Linux",
         ))
     }
@@ -414,10 +153,10 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         self.identity
     }
 
-    pub(crate) fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    pub(crate) fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         if std::process::id() != self.owner_process {
-            return Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::OwnerProcessChanged,
+            return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::OwnerProcessChanged,
                 "runtime closure lease crossed a process boundary",
             ));
         }
@@ -427,8 +166,8 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         }
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
         {
-            Err(GeneralGemmRuntimeClosureErrorV2::new(
-                GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+            Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+                RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
                 "retained no-follow runtime admission requires Linux",
             ))
         }
@@ -439,7 +178,10 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
         source: &CanonicalGeneratedVerusProofInputV3,
         deadline: Instant,
         output_limit: usize,
-    ) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+    ) -> Result<
+        RetainedFunctionalRefinementRuntimeOutputV1,
+        RetainedFunctionalRefinementRuntimeErrorV1,
+    > {
         self.revalidate()?;
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         let result = linux::execute_functional_refinement_generated_rust_verify(
@@ -449,8 +191,8 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
             output_limit,
         );
         #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-        let result = Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::UnsupportedPlatform,
+        let result = Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
             "sealed generated rust_verify execution requires Linux x86-64",
         ));
         self.revalidate()?;
@@ -466,7 +208,7 @@ fn functional_refinement_closure_identity_v1() -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn validate_absolute_path(path: &Path) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if !path.is_absolute()
         || path.as_os_str().is_empty()
         || path
@@ -474,32 +216,34 @@ fn validate_absolute_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureEr
             .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
         || path == Path::new("/")
     {
-        return Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+        return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
             "runtime root must be a normalized absolute non-root path",
         ));
     }
     Ok(())
 }
 
-fn validate_runtime_root_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn validate_runtime_root_path(
+    path: &Path,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     const PARENT: &str = "/opt/fe2o3/verus-runtime-v2";
     let relative = path.strip_prefix(PARENT).map_err(|_| {
-        GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+        RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
             "runtime root must be one canonical child of /opt/fe2o3/verus-runtime-v2",
         )
     })?;
     let mut components = relative.components();
     let Some(Component::Normal(name)) = components.next() else {
-        return Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+        return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
             "runtime root must name one versioned child directory",
         ));
     };
     let Some(name) = name.to_str() else {
-        return Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+        return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
             "runtime-root version is not UTF-8",
         ));
     };
@@ -510,8 +254,8 @@ fn validate_runtime_root_path(path: &Path) -> Result<(), GeneralGemmRuntimeClosu
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
-        return Err(GeneralGemmRuntimeClosureErrorV2::new(
-            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+        return Err(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
             "runtime root has a noncanonical version component",
         ));
     }
@@ -560,72 +304,8 @@ pub(super) struct ManifestV2 {
 }
 
 impl ManifestV2 {
-    fn parse_reviewed() -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
-        if MANIFEST_BYTES.len() > MAX_MANIFEST_BYTES
-            || Sha256::digest(MANIFEST_BYTES).as_slice()
-                != GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
-            || !MANIFEST_BYTES.ends_with(b"\n")
-            || MANIFEST_BYTES.ends_with(b"\n\n")
-        {
-            return Err(invalid_manifest(
-                "reviewed manifest identity or framing differs",
-            ));
-        }
-        let source = std::str::from_utf8(MANIFEST_BYTES)
-            .map_err(|_| invalid_manifest("reviewed manifest is not UTF-8"))?;
-        let mut lines = source.lines();
-        for expected in [
-            "format|fe2o3-general-gemm-runtime-closure-v2",
-            "platform|linux-x86_64",
-            "root-mode|0555",
-            "manifest-mode|0444",
-            "verus-version|0.2026.08.02.b677dd5",
-            "rust-toolchain|1.97.1-x86_64-unknown-linux-gnu",
-            "rustc-commit|8bab26f4f68e0e26f0bb7960be334d5b520ea452",
-            "llvm-version|22.1.6",
-            "launcher-excluded|4713704|ad2669f579d898ede53f2bf84e80a1daf4e3578739b0f5807ef209a0c9f382dd",
-            "rustup-excluded|20838840|4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10",
-            "rust-target-pins|62|6303|f32b5f5de52152a9a9706759532fdbdac4d3a6ed63a1efb3c56a0ec9025faffd",
-        ] {
-            if lines.next() != Some(expected) {
-                return Err(invalid_manifest("reviewed manifest header differs"));
-            }
-        }
-        if RUST_TARGET_PINS.len() != 6303
-            || RUST_TARGET_PINS.lines().count() != 62
-            || Sha256::digest(RUST_TARGET_PINS).as_slice()
-                != decode_sha256(
-                    "f32b5f5de52152a9a9706759532fdbdac4d3a6ed63a1efb3c56a0ec9025faffd",
-                )?
-        {
-            return Err(invalid_manifest("Rust target pin identity differs"));
-        }
-
-        let interpreter_line = lines
-            .next()
-            .ok_or_else(|| invalid_manifest("interpreter record is missing"))?;
-        let interpreter_fields = interpreter_line.split('|').collect::<Vec<_>>();
-        if interpreter_fields.len() != 5 || interpreter_fields[0] != "interpreter" {
-            return Err(invalid_manifest("interpreter record is malformed"));
-        }
-        let interpreter = InterpreterSpecV2 {
-            requested: absolute_manifest_path(interpreter_fields[1])?,
-            canonical: absolute_manifest_path(interpreter_fields[2])?,
-            size: parse_decimal(interpreter_fields[3])?,
-            sha256: decode_sha256(interpreter_fields[4])?,
-            links: Vec::new(),
-        };
-        let manifest = parse_remaining_manifest(
-            lines,
-            interpreter,
-            MANIFEST_BYTES,
-            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
-        )?;
-        validate_reviewed_general_gemm_sources(&manifest.files)?;
-        Ok(manifest)
-    }
-
-    fn parse_functional_refinement_runtime_v1() -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    fn parse_functional_refinement_runtime_v1()
+    -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         const MANIFEST_SHA256: [u8; 32] = [
             0xff, 0xef, 0x09, 0xbd, 0x24, 0x0c, 0x90, 0xe7, 0x2c, 0xbf, 0xf3, 0x1a, 0x82, 0xbc,
             0x51, 0x73, 0xc7, 0x96, 0xba, 0x7a, 0xb9, 0xaf, 0x23, 0x92, 0x45, 0xe7, 0xad, 0x89,
@@ -675,13 +355,13 @@ impl ManifestV2 {
         files: Vec<FileSpecV2>,
     ) -> Self {
         let children = expected_children(
-            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
+            FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME,
             &directories,
             &files,
         )
         .expect("valid synthetic manifest");
         Self {
-            manifest_name: GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME,
+            manifest_name: FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME,
             root_mode: 0o555,
             manifest_mode: 0o444,
             manifest_bytes,
@@ -693,30 +373,10 @@ impl ManifestV2 {
     }
 }
 
-fn validate_reviewed_general_gemm_sources(
-    files: &[FileSpecV2],
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
-    for (path, bytes) in REVIEWED_GENERAL_GEMM_SOURCES {
-        let specification = files
-            .iter()
-            .find(|specification| specification.path == Path::new(path))
-            .ok_or_else(|| invalid_manifest("reviewed general GEMM source is absent"))?;
-        if specification.mode != 0o444
-            || specification.size != Some(bytes.len() as u64)
-            || specification.sha256 != <[u8; 32]>::from(Sha256::digest(bytes))
-        {
-            return Err(invalid_manifest(
-                "reviewed general GEMM source identity differs",
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn parse_reviewed_header(
     lines: &mut std::str::Lines<'_>,
     format: &str,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     for expected in [
         format,
         "platform|linux-x86_64",
@@ -737,7 +397,7 @@ fn parse_reviewed_header(
     Ok(())
 }
 
-fn validate_rust_target_pins() -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn validate_rust_target_pins() -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if RUST_TARGET_PINS.len() != 6303
         || RUST_TARGET_PINS.lines().count() != 62
         || Sha256::digest(RUST_TARGET_PINS).as_slice()
@@ -750,7 +410,7 @@ fn validate_rust_target_pins() -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
 
 fn parse_interpreter(
     lines: &mut std::str::Lines<'_>,
-) -> Result<InterpreterSpecV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<InterpreterSpecV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     let interpreter_line = lines
         .next()
         .ok_or_else(|| invalid_manifest("interpreter record is missing"))?;
@@ -772,7 +432,7 @@ fn parse_remaining_manifest(
     mut interpreter: InterpreterSpecV2,
     manifest_bytes: &'static [u8],
     manifest_name: &'static str,
-) -> Result<ManifestV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<ManifestV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     for _ in 0..2 {
         let line = lines
             .next()
@@ -845,7 +505,9 @@ fn parse_remaining_manifest(
     })
 }
 
-fn append_target_pins(files: &mut Vec<FileSpecV2>) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn append_target_pins(
+    files: &mut Vec<FileSpecV2>,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let source = std::str::from_utf8(RUST_TARGET_PINS)
         .map_err(|_| invalid_manifest("target pins are not UTF-8"))?;
     let mut prior = None;
@@ -876,7 +538,10 @@ fn expected_children(
     manifest_name: &'static str,
     directories: &[DirectorySpecV2],
     files: &[FileSpecV2],
-) -> Result<BTreeMap<PathBuf, BTreeMap<PathBuf, EntryKindV2>>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<
+    BTreeMap<PathBuf, BTreeMap<PathBuf, EntryKindV2>>,
+    RetainedFunctionalRefinementRuntimeErrorV1,
+> {
     let declared = directories
         .iter()
         .map(|directory| directory.path.clone())
@@ -926,14 +591,14 @@ fn expected_children(
     Ok(children)
 }
 
-fn parse_mode(value: &str) -> Result<u32, GeneralGemmRuntimeClosureErrorV2> {
+fn parse_mode(value: &str) -> Result<u32, RetainedFunctionalRefinementRuntimeErrorV1> {
     if value.len() != 4 || !value.starts_with('0') {
         return Err(invalid_manifest("mode is not four-digit octal"));
     }
     u32::from_str_radix(value, 8).map_err(|_| invalid_manifest("mode is not octal"))
 }
 
-fn parse_decimal(value: &str) -> Result<u64, GeneralGemmRuntimeClosureErrorV2> {
+fn parse_decimal(value: &str) -> Result<u64, RetainedFunctionalRefinementRuntimeErrorV1> {
     if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
         return Err(invalid_manifest("decimal field is not canonical"));
     }
@@ -942,7 +607,7 @@ fn parse_decimal(value: &str) -> Result<u64, GeneralGemmRuntimeClosureErrorV2> {
         .map_err(|_| invalid_manifest("decimal field is invalid"))
 }
 
-fn decode_sha256(value: &str) -> Result<[u8; 32], GeneralGemmRuntimeClosureErrorV2> {
+fn decode_sha256(value: &str) -> Result<[u8; 32], RetainedFunctionalRefinementRuntimeErrorV1> {
     if value.len() != 64
         || !value
             .bytes()
@@ -957,7 +622,7 @@ fn decode_sha256(value: &str) -> Result<[u8; 32], GeneralGemmRuntimeClosureError
     Ok(result)
 }
 
-fn hex_nibble(value: u8) -> Result<u8, GeneralGemmRuntimeClosureErrorV2> {
+fn hex_nibble(value: u8) -> Result<u8, RetainedFunctionalRefinementRuntimeErrorV1> {
     match value {
         b'0'..=b'9' => Ok(value - b'0'),
         b'a'..=b'f' => Ok(value - b'a' + 10),
@@ -965,7 +630,9 @@ fn hex_nibble(value: u8) -> Result<u8, GeneralGemmRuntimeClosureErrorV2> {
     }
 }
 
-fn relative_manifest_path(value: &str) -> Result<PathBuf, GeneralGemmRuntimeClosureErrorV2> {
+fn relative_manifest_path(
+    value: &str,
+) -> Result<PathBuf, RetainedFunctionalRefinementRuntimeErrorV1> {
     let path = PathBuf::from(value);
     if value.is_empty()
         || value.len() > MAX_RELATIVE_PATH_BYTES
@@ -979,22 +646,26 @@ fn relative_manifest_path(value: &str) -> Result<PathBuf, GeneralGemmRuntimeClos
     Ok(path)
 }
 
-fn absolute_manifest_path(value: &str) -> Result<PathBuf, GeneralGemmRuntimeClosureErrorV2> {
+fn absolute_manifest_path(
+    value: &str,
+) -> Result<PathBuf, RetainedFunctionalRefinementRuntimeErrorV1> {
     let path = PathBuf::from(value);
     validate_absolute_path(&path)?;
     Ok(path)
 }
 
-fn normalized_link_target(value: &str) -> Result<PathBuf, GeneralGemmRuntimeClosureErrorV2> {
+fn normalized_link_target(
+    value: &str,
+) -> Result<PathBuf, RetainedFunctionalRefinementRuntimeErrorV1> {
     if value.is_empty() || value.len() > MAX_RELATIVE_PATH_BYTES || value.as_bytes().contains(&0) {
         return Err(invalid_manifest("interpreter link target is malformed"));
     }
     Ok(PathBuf::from(value))
 }
 
-fn invalid_manifest(detail: impl Into<String>) -> GeneralGemmRuntimeClosureErrorV2 {
-    GeneralGemmRuntimeClosureErrorV2::new(
-        GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+fn invalid_manifest(detail: impl Into<String>) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    RetainedFunctionalRefinementRuntimeErrorV1::new(
+        RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
         detail,
     )
 }
@@ -1014,20 +685,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reviewed_manifest_and_target_pins_are_canonical() {
-        let manifest = ManifestV2::parse_reviewed().unwrap();
-        assert_eq!(manifest.directories.len(), 11);
-        assert_eq!(manifest.files.len(), 94);
-        assert!(manifest.interpreter.is_some());
-        assert_eq!(
-            Sha256::digest(MANIFEST_BYTES).as_slice(),
-            GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_SHA256
-        );
-        assert_ne!(closure_identity().as_bytes(), [0; 32]);
-    }
-
-    #[test]
-    fn functional_refinement_runtime_has_no_workload_proof_inventory() {
+    fn manifest_has_no_workload_proof_inventory() {
         let manifest = ManifestV2::parse_functional_refinement_runtime_v1().unwrap();
         assert_eq!(
             manifest.manifest_name,
@@ -1046,43 +704,6 @@ mod tests {
                 .all(|entry| !entry.path.starts_with("proof"))
         );
         assert_ne!(functional_refinement_closure_identity_v1(), [0; 32]);
-        assert_ne!(
-            functional_refinement_closure_identity_v1(),
-            closure_identity().as_bytes()
-        );
-    }
-
-    #[test]
-    fn reviewed_proof_source_substitution_invalidates_the_manifest_contract() {
-        let mut manifest = ManifestV2::parse_reviewed().unwrap();
-        let source = manifest
-            .files
-            .iter_mut()
-            .find(|source| source.path == Path::new("proof/general_gemm_reference_schedule_v1.rs"))
-            .unwrap();
-        source.sha256[0] ^= 1;
-        assert_eq!(
-            validate_reviewed_general_gemm_sources(&manifest.files)
-                .unwrap_err()
-                .kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
-        );
-    }
-
-    #[test]
-    fn reviewed_scalar_source_is_exactly_the_typed_retained_source() {
-        let manifest = ManifestV2::parse_reviewed().unwrap();
-        let source = manifest
-            .files
-            .iter()
-            .find(|source| source.path == Path::new("proof/scalar_gemm_v1.rs"))
-            .unwrap();
-        assert_eq!(source.size, Some(SCALAR_GEMM_SOURCE.len() as u64));
-        assert_eq!(source.sha256, Sha256::digest(SCALAR_GEMM_SOURCE).as_slice());
-        assert_eq!(
-            GeneralGemmProofSourceV2::ScalarGemm.embedded_bytes(),
-            SCALAR_GEMM_SOURCE
-        );
     }
 
     #[test]
@@ -1103,7 +724,7 @@ mod tests {
                 validate_runtime_root_path(Path::new(path))
                     .unwrap_err()
                     .kind(),
-                GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest
+                RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest
             );
         }
     }

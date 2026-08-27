@@ -3,9 +3,9 @@ set -eu
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
-proof="$repo_root/crates/fe2o3-verifier/verus/moe_expert_compact_plan_v1.rs"
-negative_dir="$repo_root/crates/fe2o3-verifier/verus/moe_expert_compact_plan_v1_negative"
-pin_dir="$repo_root/crates/fe2o3-verifier/verus/moe_expert_compact_plan_v1"
+proof="$repo_root/examples/moe_expert_v1/verus/compact_plan_v1.rs"
+negative_dir="$repo_root/examples/moe_expert_v1/verus/compact_plan_negative"
+pin_dir="$repo_root/examples/moe_expert_v1/verus/compact_plan"
 negative_manifest="$pin_dir/NEGATIVE_SHA256"
 source_checker="$repo_root/examples/wave64_collectives_v1/check-proof-source.py"
 closure_checker="$repo_root/examples/row_softmax_v1/verify-verus-closure.sh"

@@ -994,7 +994,6 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-text",
- "fe2o3-verifier",
  "object 0.39.1",
  "reserved-fe2o3-symbols",
  "rmpv",
@@ -1270,20 +1269,6 @@ name = "fe2o3-pliron-owner-core"
 version = "0.1.0"
 dependencies = [
  "pliron",
-]
-
-[[package]]
-name = "fe2o3-pliron-worker-v2"
-version = "0.1.0"
-dependencies = [
- "fe2o3-amdgcn-pliron-llvm",
- "fe2o3-artifact-transaction",
- "fe2o3-compiler-ffi",
- "fe2o3-hsaco-finalize",
- "fe2o3-llvm-handoff",
- "fe2o3-llvm-text",
- "fe2o3-llvm-worker-handoff",
- "sha2 0.11.0",
 ]
 
 [[package]]
@@ -1579,17 +1564,13 @@ version = "0.1.0"
 dependencies = [
  "dialect-kernel",
  "ed25519-dalek",
- "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-lineage",
  "fe2o3-contracts",
  "fe2o3-functional-proof",
- "fe2o3-kernel-descriptor",
- "fe2o3-kernel-ir",
  "fe2o3-pliron",
  "fe2o3-proof-contracts",
  "fe2o3-rustc-front",
- "proc-macro2",
  "rand_core 0.6.4",
  "rustix",
  "sha2 0.11.0",

@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::Write;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Instant;
 
 #[cfg(test)]
@@ -20,20 +18,18 @@ use sha2::{Digest, Sha256};
 
 use crate::CanonicalGeneratedVerusProofInputV3;
 use crate::authenticated_verus_execution_v2::{
-    ADDRESS_SPACE_LIMIT_V2, BoundedProcessGroupFailureV2, CORE_LIMIT_V2, DATA_LIMIT_V2,
-    FILE_LIMIT_V2, supervise_bounded_process_group_v2, validate_controller_security_v2,
+    ADDRESS_SPACE_LIMIT_V2, CORE_LIMIT_V2, DATA_LIMIT_V2, FILE_LIMIT_V2,
 };
 
 #[cfg(test)]
-use super::GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME;
+use super::{DirectorySpecV2, FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME};
 use super::{
-    EntryKindV2, FileSpecV2, GeneralGemmProofSourceV2, GeneralGemmRuntimeClosureErrorKindV2,
-    GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2, InterpreterSpecV2,
-    MAX_TARGET_FILE_BYTES, ManifestV2,
+    EntryKindV2, FileSpecV2, InterpreterSpecV2, MAX_TARGET_FILE_BYTES, ManifestV2,
+    RetainedFunctionalRefinementRuntimeErrorKindV1, RetainedFunctionalRefinementRuntimeErrorV1,
+    RetainedFunctionalRefinementRuntimeOutputV1,
 };
 #[path = "functional_refinement_process_tree_v1_linux.rs"]
 mod functional_refinement_process_tree_v1;
-
 const MAX_DIRECTORY_ENTRIES: usize = 256;
 const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -46,38 +42,12 @@ const DIST_DIRECTORY_FD: RawFd = 182;
 const TOOLCHAIN_DIRECTORY_FD: RawFd = 183;
 const TOOLCHAIN_LIB_DIRECTORY_FD: RawFd = 184;
 const SYSTEM_LIB_DIRECTORY_FD: RawFd = 185;
-const PROOF_DIRECTORY_FD: RawFd = 186;
 const GENERATED_PROOF_SOURCE_FD: RawFd = 187;
 
 const GENERATED_PROOF_SOURCE_SEALS: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)
     .union(SealFlags::SHRINK)
     .union(SealFlags::SEAL);
-
-const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
-const F_SETFD: i32 = 2;
-const FD_CLOEXEC: i32 = 1;
-const PR_SET_NO_NEW_PRIVS: i32 = 38;
-const RLIMIT_FSIZE: i32 = 1;
-const RLIMIT_DATA: i32 = 2;
-const RLIMIT_CORE: i32 = 4;
-const RLIMIT_AS: i32 = 9;
-
-#[repr(C)]
-struct ResourceLimitV2 {
-    current: u64,
-    maximum: u64,
-}
-
-unsafe extern "C" {
-    fn close_range(first: u32, last: u32, flags: u32) -> i32;
-    fn dup2(old_descriptor: i32, new_descriptor: i32) -> i32;
-    fn fchdir(descriptor: i32) -> i32;
-    fn fcntl(descriptor: i32, command: i32, ...) -> i32;
-    fn prctl(option: i32, ...) -> i32;
-    fn setrlimit(resource: i32, limit: *const ResourceLimitV2) -> i32;
-    fn umask(mask: u32) -> u32;
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ObjectSnapshotV2 {
@@ -95,7 +65,10 @@ struct ObjectSnapshotV2 {
 }
 
 impl ObjectSnapshotV2 {
-    fn capture(file: &File, context: &str) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    fn capture(
+        file: &File,
+        context: &str,
+    ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         fstat(file)
             .map(|stat| Self {
                 device: stat.st_dev,
@@ -205,7 +178,7 @@ impl RetainedRuntimeClosureV2 {
     pub(super) fn open_protected(
         root: &Path,
         manifest: &ManifestV2,
-    ) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         Self::open_with_policy(
             root,
             manifest,
@@ -221,7 +194,7 @@ impl RetainedRuntimeClosureV2 {
         root: &Path,
         manifest: &ManifestV2,
         policy: ProtectionPolicyV2,
-    ) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         let path_anchors = open_directory_anchors(root, &policy)?;
         let retained_root = duplicate_directory(
             &path_anchors
@@ -302,7 +275,7 @@ impl RetainedRuntimeClosureV2 {
         )? != manifest.manifest_bytes
         {
             return Err(error(
-                GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch,
                 "installed runtime manifest bytes differ from the reviewed manifest",
             ));
         }
@@ -328,7 +301,7 @@ impl RetainedRuntimeClosureV2 {
                 .filter(|total| *total <= MAX_TOTAL_RUNTIME_BYTES)
                 .ok_or_else(|| {
                     error(
-                        GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+                        RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch,
                         "runtime closure exceeds its total byte bound",
                     )
                 })?;
@@ -351,7 +324,7 @@ impl RetainedRuntimeClosureV2 {
         Ok(retained)
     }
 
-    pub(super) fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    pub(super) fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         self.journal.ensure_clean()?;
         revalidate_anchor_edges(&self.path_anchors, "runtime root")?;
         for directory in self.directories.values() {
@@ -392,7 +365,7 @@ impl RetainedRuntimeClosureV2 {
             let actual = scan_inventory(&directory.file, &directory.path)?;
             if actual != directory.expected_children {
                 return Err(error(
-                    GeneralGemmRuntimeClosureErrorKindV2::InventoryMismatch,
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch,
                     format!(
                         "runtime directory inventory changed: {}",
                         display_relative(&directory.path)
@@ -434,26 +407,32 @@ impl RetainedRuntimeClosureV2 {
         self.journal.ensure_clean()
     }
 
-    fn required_file(&self, path: &Path) -> Result<&File, GeneralGemmRuntimeClosureErrorV2> {
+    fn required_file(
+        &self,
+        path: &Path,
+    ) -> Result<&File, RetainedFunctionalRefinementRuntimeErrorV1> {
         self.files
             .iter()
             .find(|retained| retained.path == path)
             .map(|retained| &retained.file)
             .ok_or_else(|| {
                 error(
-                    GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
                     format!("reviewed runtime manifest lacks {}", path.display()),
                 )
             })
     }
 
-    fn required_directory(&self, path: &Path) -> Result<&File, GeneralGemmRuntimeClosureErrorV2> {
+    fn required_directory(
+        &self,
+        path: &Path,
+    ) -> Result<&File, RetainedFunctionalRefinementRuntimeErrorV1> {
         self.directories
             .get(path)
             .map(|retained| &retained.file)
             .ok_or_else(|| {
                 error(
-                    GeneralGemmRuntimeClosureErrorKindV2::InvalidManifest,
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::InvalidManifest,
                     format!("reviewed runtime manifest lacks {}", path.display()),
                 )
             })
@@ -463,7 +442,7 @@ impl RetainedRuntimeClosureV2 {
         &self,
     ) -> Result<
         Vec<functional_refinement_process_tree_v1::AllowedRuntimeExecutableV1>,
-        GeneralGemmRuntimeClosureErrorV2,
+        RetainedFunctionalRefinementRuntimeErrorV1,
     > {
         let mut executables = Vec::new();
         for file in &self.files {
@@ -485,7 +464,7 @@ impl RetainedRuntimeClosureV2 {
             )?
             .ok_or_else(|| {
                 error(
-                    GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch,
                     "retained interpreter is not one x86-64 ELF executable image",
                 )
             })?;
@@ -498,7 +477,7 @@ impl RetainedRuntimeClosureV2 {
     fn open_for_test(
         root: &Path,
         manifest: &ManifestV2,
-    ) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         let root_file = open(
             root,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -519,187 +498,14 @@ impl RetainedRuntimeClosureV2 {
     }
 }
 
-pub(super) fn execute_rust_verify(
-    runtime: &RetainedRuntimeClosureV2,
-    source: GeneralGemmProofSourceV2,
-    deadline: Instant,
-    output_limit: usize,
-) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
-    execute_rust_verify_common(
-        runtime,
-        &format!(
-            "/proc/self/fd/{PROOF_DIRECTORY_FD}/{}",
-            source.relative_to_proof_directory()
-        ),
-        None,
-        deadline,
-        output_limit,
-    )
-}
-
 pub(super) fn execute_functional_refinement_generated_rust_verify(
     runtime: &RetainedRuntimeClosureV2,
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
-) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
     functional_refinement_process_tree_v1::execute(runtime, source, deadline, output_limit)
-}
-
-fn execute_rust_verify_common(
-    runtime: &RetainedRuntimeClosureV2,
-    source_argument: &str,
-    generated_source: Option<&File>,
-    deadline: Instant,
-    output_limit: usize,
-) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
-    validate_controller_security_v2().map_err(|failure| {
-        process_error(
-            format!("authenticated controller preflight failed: {failure}"),
-            GeneralGemmRuntimeClosureErrorKindV2::Process,
-        )
-    })?;
-    if output_limit == 0 {
-        return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::OutputTooLarge,
-            "proof output bound is zero",
-        ));
-    }
-    if Instant::now() >= deadline {
-        return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
-            "retained proof deadline elapsed before spawn",
-        ));
-    }
-
-    let rust_verify = runtime.required_file(Path::new("dist/rust_verify"))?;
-    let z3 = runtime.required_file(Path::new("dist/z3"))?;
-    let dist = runtime.required_directory(Path::new("dist"))?;
-    let toolchain = runtime.required_directory(Path::new("toolchain"))?;
-    let toolchain_lib = runtime.required_directory(Path::new("toolchain/lib"))?;
-    let system_lib = runtime.required_directory(Path::new("system-lib"))?;
-    let empty = runtime.required_directory(Path::new("empty"))?;
-
-    // Generated proofs do not inherit the reviewed workload-source directory. This keeps their
-    // execution authority limited to the pinned tool assets and their sealed source.
-    let mut source_files = vec![
-        rust_verify,
-        z3,
-        dist,
-        toolchain,
-        toolchain_lib,
-        system_lib,
-        empty,
-    ];
-    let proof_index = if generated_source.is_none() {
-        let index = source_files.len();
-        source_files.push(runtime.required_directory(Path::new("proof"))?);
-        Some(index)
-    } else {
-        None
-    };
-    let generated_index = generated_source.map(|generated_source| {
-        let index = source_files.len();
-        source_files.push(generated_source);
-        index
-    });
-    let sources = duplicate_child_sources(&source_files)?;
-    let mut inherited = vec![
-        (sources[0].as_raw_fd(), RUST_VERIFY_FD, true),
-        (sources[1].as_raw_fd(), Z3_FD, false),
-        (sources[2].as_raw_fd(), DIST_DIRECTORY_FD, false),
-        (sources[3].as_raw_fd(), TOOLCHAIN_DIRECTORY_FD, false),
-        (sources[4].as_raw_fd(), TOOLCHAIN_LIB_DIRECTORY_FD, false),
-        (sources[5].as_raw_fd(), SYSTEM_LIB_DIRECTORY_FD, false),
-    ];
-    if let Some(index) = proof_index {
-        inherited.push((sources[index].as_raw_fd(), PROOF_DIRECTORY_FD, false));
-    }
-    if let Some(index) = generated_index {
-        inherited.push((sources[index].as_raw_fd(), GENERATED_PROOF_SOURCE_FD, false));
-    }
-    let empty_descriptor = sources[6].as_raw_fd();
-
-    let mut command = Command::new(format!("/proc/self/fd/{RUST_VERIFY_FD}"));
-    command
-        .arg(source_argument)
-        .args([
-            "--crate-type",
-            "lib",
-            "--triggers-mode",
-            "silent",
-            "--no-cheating",
-            "--num-threads",
-            "1",
-            "--sysroot",
-        ])
-        .arg(format!("/proc/self/fd/{TOOLCHAIN_DIRECTORY_FD}"))
-        .env_clear()
-        .env("VERUS_ROOT", format!("/proc/self/fd/{DIST_DIRECTORY_FD}"))
-        .env("VERUS_Z3_PATH", format!("/proc/self/fd/{Z3_FD}"))
-        .env(
-            "LD_LIBRARY_PATH",
-            format!(
-                "/proc/self/fd/{TOOLCHAIN_LIB_DIRECTORY_FD}:/proc/self/fd/{SYSTEM_LIB_DIRECTORY_FD}"
-            ),
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-
-    // SAFETY: the callback uses only async-signal-safe syscalls and raw descriptors captured
-    // above. No allocation, lock, environment lookup, or path lookup occurs after fork.
-    unsafe {
-        command.pre_exec(move || prepare_proof_child(&inherited, empty_descriptor));
-    }
-    let mut child = command.spawn().map_err(|source| {
-        process_error(
-            format!("spawn retained rust_verify: {source}"),
-            GeneralGemmRuntimeClosureErrorKindV2::Process,
-        )
-    })?;
-    let output = supervise_bounded_process_group_v2(&mut child, deadline, output_limit).map_err(
-        |failure| {
-            let kind = match failure.kind() {
-                BoundedProcessGroupFailureV2::TimedOut => {
-                    GeneralGemmRuntimeClosureErrorKindV2::TimedOut
-                }
-                BoundedProcessGroupFailureV2::OutputTooLarge => {
-                    GeneralGemmRuntimeClosureErrorKindV2::OutputTooLarge
-                }
-                BoundedProcessGroupFailureV2::Process => {
-                    GeneralGemmRuntimeClosureErrorKindV2::Process
-                }
-            };
-            process_error(failure.detail(), kind)
-        },
-    )?;
-    Ok(GeneralGemmRuntimeProcessOutputV2 {
-        exit_code: output.exit_code,
-        signal: output.signal,
-        stdout: output.stdout,
-        stderr: output.stderr,
-    })
-}
-
-fn duplicate_child_sources(
-    files: &[&File],
-) -> Result<Vec<OwnedFd>, GeneralGemmRuntimeClosureErrorV2> {
-    let mut next = 200;
-    let mut descriptors = Vec::with_capacity(files.len());
-    for file in files {
-        let descriptor = rustix::io::fcntl_dupfd_cloexec(file, next)
-            .map_err(|source| io_error("normalize proof child descriptor", source))?;
-        next = descriptor.as_raw_fd().checked_add(1).ok_or_else(|| {
-            error(
-                GeneralGemmRuntimeClosureErrorKindV2::Process,
-                "proof child descriptor space exhausted",
-            )
-        })?;
-        descriptors.push(descriptor);
-    }
-    Ok(descriptors)
 }
 
 struct SealedGeneratedProofSourceV3 {
@@ -710,7 +516,7 @@ struct SealedGeneratedProofSourceV3 {
 impl SealedGeneratedProofSourceV3 {
     fn create(
         source: &CanonicalGeneratedVerusProofInputV3,
-    ) -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    ) -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         let mut file = memfd_create(
             "fe2o3-generated-verus-proof-v3",
             MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
@@ -738,7 +544,7 @@ impl SealedGeneratedProofSourceV3 {
     fn revalidate(
         &self,
         source: &CanonicalGeneratedVerusProofInputV3,
-    ) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         let current = ObjectSnapshotV2::capture(&self.file, "generated proof memfd")?;
         if current != self.snapshot
             || current.file_type() != FileType::RegularFile
@@ -767,68 +573,8 @@ impl SealedGeneratedProofSourceV3 {
     }
 }
 
-fn prepare_proof_child(
-    inherited: &[(RawFd, RawFd, bool)],
-    empty_descriptor: RawFd,
-) -> io::Result<()> {
-    // SAFETY: close_range only changes close-on-exec flags for descriptors in this process.
-    if unsafe { close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    for &(source, destination, close_on_exec) in inherited {
-        // SAFETY: both values are live integer descriptors captured before fork.
-        if unsafe { dup2(source, destination) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: fcntl operates on the just-duplicated descriptor and takes an integer flag.
-        if unsafe {
-            fcntl(
-                destination,
-                F_SETFD,
-                if close_on_exec { FD_CLOEXEC } else { 0 },
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    // SAFETY: the retained empty directory descriptor remains open until exec.
-    if unsafe { fchdir(empty_descriptor) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: umask has no failure mode and accepts the supplied permission bits.
-    unsafe { umask(0o077) };
-    // SAFETY: PR_SET_NO_NEW_PRIVS with argument 1 requires no pointer arguments.
-    if unsafe { prctl(PR_SET_NO_NEW_PRIVS, 1_i32, 0_i32, 0_i32, 0_i32) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    for (resource, value) in [
-        (RLIMIT_AS, ADDRESS_SPACE_LIMIT_V2),
-        (RLIMIT_DATA, DATA_LIMIT_V2),
-        (RLIMIT_FSIZE, FILE_LIMIT_V2),
-        (RLIMIT_CORE, CORE_LIMIT_V2),
-    ] {
-        let limit = ResourceLimitV2 {
-            current: value,
-            maximum: value,
-        };
-        // SAFETY: setrlimit reads one initialized fixed-layout value during pre-exec setup.
-        if unsafe { setrlimit(resource, &limit) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    Ok(())
-}
-
-fn process_error(
-    detail: impl Into<String>,
-    kind: GeneralGemmRuntimeClosureErrorKindV2,
-) -> GeneralGemmRuntimeClosureErrorV2 {
-    error(kind, detail)
-}
-
 impl RetainedInterpreterV2 {
-    fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         revalidate_anchor_edges(&self.anchors, "system interpreter")?;
         if ObjectSnapshotV2::capture(&self.file.file, "retained system interpreter")?
             != self.file.snapshot
@@ -843,7 +589,7 @@ impl RetainedInterpreterV2 {
 }
 
 impl RetainedSymlinkV2 {
-    fn revalidate(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    fn revalidate(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         let reopened = open_symlink_beneath(&self.parent, &self.name)?;
         let snapshot = ObjectSnapshotV2::capture(&reopened, "reopened interpreter symlink")?;
         if snapshot != self.snapshot
@@ -862,7 +608,7 @@ impl RetainedSymlinkV2 {
 
 fn retain_interpreter(
     specification: &InterpreterSpecV2,
-) -> Result<RetainedInterpreterV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<RetainedInterpreterV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     let policy = ProtectionPolicyV2 {
         owner: 0,
         group: 0,
@@ -894,7 +640,7 @@ fn retain_interpreter(
         != specification.canonical
     {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal,
             "system PT_INTERP chain resolves to a different object",
         ));
     }
@@ -908,10 +654,10 @@ fn retain_interpreter(
 fn retain_symlink(
     path: &Path,
     expected_target: &Path,
-) -> Result<RetainedSymlinkV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<RetainedSymlinkV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     let parent_path = path.parent().ok_or_else(|| {
         error(
-            GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal,
             "interpreter link has no parent",
         )
     })?;
@@ -941,7 +687,7 @@ fn retain_symlink(
         || read_link(&parent, &name)? != expected_target
     {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal,
             format!("system interpreter link differs: {}", path.display()),
         ));
     }
@@ -958,7 +704,7 @@ fn retain_symlink(
 fn open_directory_anchors(
     path: &Path,
     policy: &ProtectionPolicyV2,
-) -> Result<Vec<PathAnchorV2>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<Vec<PathAnchorV2>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let root = open(
         "/",
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -997,7 +743,7 @@ fn open_directory_anchors(
 fn open_file_anchors(
     path: &Path,
     policy: &ProtectionPolicyV2,
-) -> Result<Vec<PathAnchorV2>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<Vec<PathAnchorV2>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let parent = path
         .parent()
         .expect("validated absolute file path has a parent");
@@ -1024,7 +770,7 @@ fn open_file_anchors(
 fn revalidate_anchor_edges(
     anchors: &[PathAnchorV2],
     label: &str,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     for (index, anchor) in anchors.iter().enumerate() {
         if ObjectSnapshotV2::capture(&anchor.file, label)?.object_identity() != anchor.identity {
             return Err(changed(format!(
@@ -1052,10 +798,10 @@ fn revalidate_anchor_edges(
 fn validate_anchor_protection(
     snapshot: ObjectSnapshotV2,
     context: &str,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if snapshot.owner != 0 || snapshot.group != 0 || snapshot.permissions() & 0o022 != 0 {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::Protection,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
             format!("{context} is not root-owned and protected"),
         ));
     }
@@ -1067,11 +813,11 @@ fn validate_directory(
     expected_mode: u32,
     policy: &ProtectionPolicyV2,
     context: &str,
-) -> Result<ObjectSnapshotV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<ObjectSnapshotV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     let snapshot = ObjectSnapshotV2::capture(file, context)?;
     if snapshot.file_type() != FileType::Directory {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::ObjectType,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType,
             format!("{context} is not a directory"),
         ));
     }
@@ -1080,7 +826,7 @@ fn validate_directory(
         || snapshot.permissions() != expected_mode
     {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::Protection,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
             format!("{context} ownership or mode differs"),
         ));
     }
@@ -1091,12 +837,12 @@ fn retain_file(
     file: File,
     specification: &FileSpecV2,
     policy: &ProtectionPolicyV2,
-) -> Result<RetainedFileV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<RetainedFileV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     let context = format!("runtime file {}", specification.path.display());
     let before = ObjectSnapshotV2::capture(&file, &context)?;
     if before.file_type() != FileType::RegularFile {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::ObjectType,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType,
             format!("{context} is not a regular file"),
         ));
     }
@@ -1107,7 +853,7 @@ fn retain_file(
         || before.size < 0
     {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::Protection,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
             format!("{context} ownership, links, mode, or size differs"),
         ));
     }
@@ -1116,7 +862,7 @@ fn retain_file(
         || specification.size.is_none() && size > MAX_TARGET_FILE_BYTES
     {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch,
             format!("{context} size differs"),
         ));
     }
@@ -1124,7 +870,7 @@ fn retain_file(
     let after = ObjectSnapshotV2::capture(&file, &context)?;
     if before != after || digest != specification.sha256 {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch,
             format!("{context} changed or has a different SHA-256"),
         ));
     }
@@ -1137,12 +883,12 @@ fn retain_file(
 
 fn validate_all_inventories(
     directories: &BTreeMap<PathBuf, RetainedDirectoryV2>,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     for directory in directories.values() {
         let actual = scan_inventory(&directory.file, &directory.path)?;
         if actual != directory.expected_children {
             return Err(error(
-                GeneralGemmRuntimeClosureErrorKindV2::InventoryMismatch,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch,
                 format!(
                     "runtime directory inventory differs: {}",
                     display_relative(&directory.path)
@@ -1156,7 +902,7 @@ fn validate_all_inventories(
 fn scan_inventory(
     directory: &File,
     path: &Path,
-) -> Result<BTreeMap<PathBuf, EntryKindV2>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<BTreeMap<PathBuf, EntryKindV2>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let scan = openat(
         directory,
         ".",
@@ -1181,7 +927,7 @@ fn scan_inventory(
         }
         if actual.len() >= MAX_DIRECTORY_ENTRIES {
             return Err(error(
-                GeneralGemmRuntimeClosureErrorKindV2::InventoryMismatch,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch,
                 format!("directory has too many entries: {}", path.display()),
             ));
         }
@@ -1193,14 +939,14 @@ fn scan_inventory(
             FileType::RegularFile => EntryKindV2::File,
             _ => {
                 return Err(error(
-                    GeneralGemmRuntimeClosureErrorKindV2::ObjectType,
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType,
                     format!("runtime inventory contains a non-file entry: {name:?}"),
                 ));
             }
         };
         if actual.insert(PathBuf::from(name), kind).is_some() {
             return Err(error(
-                GeneralGemmRuntimeClosureErrorKindV2::InventoryMismatch,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch,
                 "runtime directory returned a duplicate name",
             ));
         }
@@ -1212,7 +958,7 @@ fn hash_exact_file(
     file: &File,
     size: u64,
     path: &Path,
-) -> Result<[u8; 32], GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<[u8; 32], RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut digest = Sha256::new();
     let mut offset = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -1223,7 +969,7 @@ fn hash_exact_file(
             .map_err(|error| io_error(format!("hash runtime file {}", path.display()), error))?;
         if count == 0 {
             return Err(error(
-                GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged,
                 format!("runtime file shortened while hashing: {}", path.display()),
             ));
         }
@@ -1236,7 +982,7 @@ fn hash_exact_file(
         != 0
     {
         return Err(error(
-            GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged,
             format!("runtime file grew while hashing: {}", path.display()),
         ));
     }
@@ -1247,10 +993,10 @@ fn read_exact_file(
     file: &File,
     size: u64,
     path: &Path,
-) -> Result<Vec<u8>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<Vec<u8>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let length = usize::try_from(size).map_err(|_| {
         error(
-            GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch,
             format!("runtime file is too large to read: {}", path.display()),
         )
     })?;
@@ -1273,7 +1019,7 @@ fn read_exact_file(
 fn duplicate_directory(
     directory: &File,
     context: &str,
-) -> Result<File, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<File, RetainedFunctionalRefinementRuntimeErrorV1> {
     openat(
         directory,
         ".",
@@ -1288,7 +1034,7 @@ fn open_directory_beneath(
     parent: &File,
     name: &OsStr,
     no_cross_device: bool,
-) -> Result<File, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<File, RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut resolve =
         ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS;
     if no_cross_device {
@@ -1313,7 +1059,7 @@ fn open_directory_beneath(
 fn open_regular_beneath(
     parent: &File,
     name: &OsStr,
-) -> Result<File, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<File, RetainedFunctionalRefinementRuntimeErrorV1> {
     openat2(
         parent,
         Path::new(name),
@@ -1336,7 +1082,7 @@ fn open_regular_beneath(
 fn open_symlink_beneath(
     parent: &File,
     name: &OsStr,
-) -> Result<File, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<File, RetainedFunctionalRefinementRuntimeErrorV1> {
     openat2(
         parent,
         Path::new(name),
@@ -1348,7 +1094,10 @@ fn open_symlink_beneath(
     .map_err(|error| open_error(format!("retain interpreter symlink: {name:?}"), error))
 }
 
-fn read_link(parent: &File, name: &OsStr) -> Result<PathBuf, GeneralGemmRuntimeClosureErrorV2> {
+fn read_link(
+    parent: &File,
+    name: &OsStr,
+) -> Result<PathBuf, RetainedFunctionalRefinementRuntimeErrorV1> {
     let target = readlinkat(parent, Path::new(name), Vec::new())
         .map_err(|error| io_error(format!("read interpreter symlink: {name:?}"), error))?;
     Ok(PathBuf::from(OsString::from_vec(target.into_bytes())))
@@ -1359,13 +1108,17 @@ struct MutationJournalV2 {
 }
 
 impl MutationJournalV2 {
-    fn new() -> Result<Self, GeneralGemmRuntimeClosureErrorV2> {
+    fn new() -> Result<Self, RetainedFunctionalRefinementRuntimeErrorV1> {
         inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK)
             .map(|descriptor| Self { descriptor })
             .map_err(|error| io_error("create runtime mutation journal", error))
     }
 
-    fn watch(&self, directory: &File, path: &Path) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    fn watch(
+        &self,
+        directory: &File,
+        path: &Path,
+    ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
         let flags = inotify::WatchFlags::ATTRIB
             | inotify::WatchFlags::CLOSE_WRITE
@@ -1388,7 +1141,7 @@ impl MutationJournalV2 {
             })
     }
 
-    fn ensure_clean(&self) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+    fn ensure_clean(&self) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
         let mut storage = [std::mem::MaybeUninit::uninit(); 16 * 1024];
         let mut reader = inotify::Reader::new(&self.descriptor, &mut storage);
         match reader.next() {
@@ -1406,13 +1159,13 @@ impl MutationJournalV2 {
 fn open_error(
     context: impl Into<String>,
     value: rustix::io::Errno,
-) -> GeneralGemmRuntimeClosureErrorV2 {
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     let kind = if matches!(value, rustix::io::Errno::LOOP | rustix::io::Errno::XDEV) {
-        GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal
+        RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal
     } else if matches!(value, rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR) {
-        GeneralGemmRuntimeClosureErrorKindV2::ObjectType
+        RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType
     } else {
-        GeneralGemmRuntimeClosureErrorKindV2::Io
+        RetainedFunctionalRefinementRuntimeErrorKindV1::Io
     };
     error(kind, format!("{}: {value}", context.into()))
 }
@@ -1420,9 +1173,9 @@ fn open_error(
 fn io_error(
     context: impl Into<String>,
     value: rustix::io::Errno,
-) -> GeneralGemmRuntimeClosureErrorV2 {
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     error(
-        GeneralGemmRuntimeClosureErrorKindV2::Io,
+        RetainedFunctionalRefinementRuntimeErrorKindV1::Io,
         format!("{}: {value}", context.into()),
     )
 }
@@ -1430,22 +1183,25 @@ fn io_error(
 fn io_std_error(
     context: impl Into<String>,
     value: std::io::Error,
-) -> GeneralGemmRuntimeClosureErrorV2 {
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     error(
-        GeneralGemmRuntimeClosureErrorKindV2::Io,
+        RetainedFunctionalRefinementRuntimeErrorKindV1::Io,
         format!("{}: {value}", context.into()),
     )
 }
 
-fn changed(detail: impl Into<String>) -> GeneralGemmRuntimeClosureErrorV2 {
-    error(GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged, detail)
+fn changed(detail: impl Into<String>) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    error(
+        RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged,
+        detail,
+    )
 }
 
 fn error(
-    kind: GeneralGemmRuntimeClosureErrorKindV2,
+    kind: RetainedFunctionalRefinementRuntimeErrorKindV1,
     detail: impl Into<String>,
-) -> GeneralGemmRuntimeClosureErrorV2 {
-    GeneralGemmRuntimeClosureErrorV2::new(kind, detail)
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    RetainedFunctionalRefinementRuntimeErrorV1::new(kind, detail)
 }
 
 fn display_relative(path: &Path) -> String {
@@ -1463,11 +1219,11 @@ mod tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use super::ManifestV2;
     use super::*;
-    use crate::general_gemm_runtime_closure_v2::{DirectorySpecV2, ManifestV2};
 
     static NEXT_TEST: AtomicU64 = AtomicU64::new(0);
-    static SYNTHETIC_MANIFEST: &[u8] = b"synthetic-general-gemm-runtime-v2\n";
+    static SYNTHETIC_MANIFEST: &[u8] = b"synthetic-functional-refinement-runtime-v1\n";
 
     struct TestClosure {
         root: PathBuf,
@@ -1483,7 +1239,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let root = std::env::temp_dir().join(format!(
-                "fe2o3-general-gemm-runtime-v2-{}-{}",
+                "fe2o3-functional-refinement-runtime-v1-{}-{}",
                 std::process::id(),
                 NEXT_TEST.fetch_add(1, Ordering::Relaxed)
             ));
@@ -1511,12 +1267,12 @@ mod tests {
                 })
                 .collect();
             fs::write(
-                root.join(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
+                root.join(FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME),
                 SYNTHETIC_MANIFEST,
             )
             .unwrap();
             fs::set_permissions(
-                root.join(GENERAL_GEMM_RUNTIME_CLOSURE_V2_MANIFEST_NAME),
+                root.join(FUNCTIONAL_REFINEMENT_RUNTIME_V1_MANIFEST_NAME),
                 fs::Permissions::from_mode(0o444),
             )
             .unwrap();
@@ -1539,7 +1295,9 @@ mod tests {
             }
         }
 
-        fn open(&self) -> Result<RetainedRuntimeClosureV2, GeneralGemmRuntimeClosureErrorV2> {
+        fn open(
+            &self,
+        ) -> Result<RetainedRuntimeClosureV2, RetainedFunctionalRefinementRuntimeErrorV1> {
             RetainedRuntimeClosureV2::open_for_test(&self.root, &self.manifest)
         }
 
@@ -1604,8 +1362,8 @@ mod tests {
         let error = RetainedRuntimeClosureV2::open_for_test(&link, &tree.manifest).unwrap_err();
         assert!(matches!(
             error.kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ObjectType
-                | GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType
+                | RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal
         ));
     }
 
@@ -1622,8 +1380,8 @@ mod tests {
         let error = tree.open().unwrap_err();
         assert!(matches!(
             error.kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ObjectType
-                | GeneralGemmRuntimeClosureErrorKindV2::SymlinkOrTraversal
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ObjectType
+                | RetainedFunctionalRefinementRuntimeErrorKindV1::SymlinkOrTraversal
         ));
     }
 
@@ -1635,7 +1393,7 @@ mod tests {
         tree.seal_directory("empty");
         assert_eq!(
             tree.open().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::InventoryMismatch
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch
         );
 
         let tree = TestClosure::new();
@@ -1644,7 +1402,7 @@ mod tests {
         tree.seal_directory("lib/nested");
         assert_eq!(
             tree.open().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::InventoryMismatch
+            RetainedFunctionalRefinementRuntimeErrorKindV1::InventoryMismatch
         );
     }
 
@@ -1666,7 +1424,7 @@ mod tests {
         tree.seal_directory("lib");
         assert_eq!(
             tree.open().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ContentMismatch
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ContentMismatch
         );
 
         let mut tree = TestClosure::new();
@@ -1675,7 +1433,7 @@ mod tests {
         tree.outside.push(outside);
         assert_eq!(
             tree.open().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::Protection
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection
         );
     }
 
@@ -1691,7 +1449,7 @@ mod tests {
         fs::write(tree.root.join("lib/data"), b"persistent-evil").unwrap();
         assert_eq!(
             retained.revalidate().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged
         );
 
         let tree = TestClosure::new();
@@ -1704,7 +1462,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
         assert_eq!(
             retained.revalidate().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged
         );
     }
 
@@ -1720,7 +1478,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
         assert_eq!(
             retained.revalidate().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged
         );
 
         let mut tree = TestClosure::new();
@@ -1730,7 +1488,7 @@ mod tests {
         tree.outside.push(displaced_root);
         assert_eq!(
             retained.revalidate().unwrap_err().kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::ClosureChanged
+            RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged
         );
     }
 
@@ -1775,64 +1533,5 @@ mod tests {
         );
         assert!(rustix::io::pwrite(&sealed.file, b"x", 0).is_err());
         sealed.revalidate(&source).unwrap();
-    }
-
-    #[test]
-    fn proof_child_boundary_clears_environment_and_installs_only_explicit_inputs() {
-        let tree = TestClosure::new();
-        let _process_guard = RUNTIME_CLOSURE_PROCESS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let empty = File::open(tree.root.join("empty")).unwrap();
-        let source = File::open(tree.root.join("lib")).unwrap();
-        let generated_input = CanonicalGeneratedVerusProofInputV3::new(
-            b"verus! { proof fn generated() {} }\n".to_vec(),
-        )
-        .unwrap();
-        let generated = SealedGeneratedProofSourceV3::create(&generated_input).unwrap();
-        let normalized = rustix::io::fcntl_dupfd_cloexec(&source, 200).unwrap();
-        let normalized_generated =
-            rustix::io::fcntl_dupfd_cloexec(&generated.file, normalized.as_raw_fd() + 1).unwrap();
-        let source_descriptor = normalized.as_raw_fd();
-        let generated_descriptor = normalized_generated.as_raw_fd();
-        let empty_descriptor = empty.as_raw_fd();
-        let empty_path = tree.root.join("empty");
-        let inherited = [
-            (source_descriptor, PROOF_DIRECTORY_FD, false),
-            (generated_descriptor, GENERATED_PROOF_SOURCE_FD, false),
-        ];
-        let script = format!(
-            "test \"$ONLY_EXACT_ENV\" = retained && \
-             test -z \"${{HOME+x}}\" && \
-             test \"$(pwd -P)\" = \"{}\" && \
-             test \"$(/usr/bin/cat /proc/self/fd/{PROOF_DIRECTORY_FD}/data)\" = vstd-data-v2 && \
-             test \"$(/usr/bin/cat /proc/self/fd/{GENERATED_PROOF_SOURCE_FD})\" = 'verus! {{ proof fn generated() {{}} }}' && \
-             test ! -e /proc/self/fd/{source_descriptor} && \
-             test ! -e /proc/self/fd/{generated_descriptor} && \
-             test \"$(umask)\" = 0077 && \
-             /usr/bin/grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status && \
-             printf prepared",
-            empty_path.display()
-        );
-        let mut command = Command::new("/bin/sh");
-        command
-            .args(["-c", &script])
-            .env_clear()
-            .env("ONLY_EXACT_ENV", "retained")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // SAFETY: this is the production async-signal-safe child preparation callback over
-        // descriptors retained for the entire spawn operation.
-        unsafe {
-            command.pre_exec(move || prepare_proof_child(&inherited, empty_descriptor));
-        }
-        let output = command.output().unwrap();
-        assert!(
-            output.status.success(),
-            "child preparation failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert_eq!(output.stdout, b"prepared");
     }
 }

@@ -59,7 +59,6 @@ Run the retained checks from the repository root:
 
 ```sh
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
 cargo test --locked -p rustc-codegen-fe2o3 \

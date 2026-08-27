@@ -59,8 +59,6 @@ mod pliron_sparse_index;
 mod pliron_tensor_layout;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
-#[cfg(feature = "authenticated-machine-effect")]
-mod scalar_gemm_v1_physical_machine_effect;
 mod ssa;
 mod uniformity;
 
@@ -121,8 +119,6 @@ pub use pliron_sparse_index::*;
 pub use pliron_tensor_layout::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_workgroup_memory::*;
-#[cfg(feature = "authenticated-machine-effect")]
-pub use scalar_gemm_v1_physical_machine_effect::*;
 pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
     place_pruned_ssa_parameters,

@@ -6,9 +6,10 @@
 
 use std::{error::Error, fmt, path::Path, time::Instant};
 
-use crate::{
-    CanonicalGeneratedVerusProofInputV3, RetainedGeneratedVerusRuntimeBackendErrorV1,
-    RetainedGeneratedVerusRuntimeBackendOutputV1, open_retained_generated_verus_runtime_v1,
+use crate::CanonicalGeneratedVerusProofInputV3;
+use crate::retained_functional_refinement_runtime_v1::{
+    RetainedFunctionalRefinementRuntimeErrorV1, RetainedFunctionalRefinementRuntimeOutputV1,
+    RetainedGeneratedVerusRuntimeBackendV1, open_retained_generated_verus_runtime_v1,
 };
 
 /// Domain-separated identity of the exact workload-neutral verifier runtime.
@@ -28,7 +29,7 @@ impl FunctionalRefinementVerusRuntimeIdentityV1 {
 /// Opening or revalidating the runtime does not establish a proof or grant compiler authority.
 pub struct FunctionalRefinementVerusRuntimeLeaseV1 {
     identity: FunctionalRefinementVerusRuntimeIdentityV1,
-    backend: crate::RetainedGeneratedVerusRuntimeBackendV1,
+    backend: RetainedGeneratedVerusRuntimeBackendV1,
 }
 
 impl fmt::Debug for FunctionalRefinementVerusRuntimeLeaseV1 {
@@ -92,10 +93,10 @@ pub(crate) struct FunctionalRefinementRuntimeProcessOutputV1 {
     pub(crate) stderr: Vec<u8>,
 }
 
-impl From<RetainedGeneratedVerusRuntimeBackendOutputV1>
+impl From<RetainedFunctionalRefinementRuntimeOutputV1>
     for FunctionalRefinementRuntimeProcessOutputV1
 {
-    fn from(output: RetainedGeneratedVerusRuntimeBackendOutputV1) -> Self {
+    fn from(output: RetainedFunctionalRefinementRuntimeOutputV1) -> Self {
         Self {
             exit_code: output.exit_code,
             signal: output.signal,
@@ -120,7 +121,7 @@ impl fmt::Display for FunctionalRefinementRuntimeErrorV1 {
 impl Error for FunctionalRefinementRuntimeErrorV1 {}
 
 fn runtime_error_from_backend(
-    error: RetainedGeneratedVerusRuntimeBackendErrorV1,
+    error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> FunctionalRefinementRuntimeErrorV1 {
     FunctionalRefinementRuntimeErrorV1 {
         detail: format!(

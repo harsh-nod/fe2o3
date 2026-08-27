@@ -12,8 +12,6 @@
 //! work, and neither path grants proof or GPU authority. The legacy planning path
 //! retains caller-supplied identities for compatibility.
 
-mod alpha_zeta_manifest;
-mod alpha_zeta_proof;
 mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
@@ -21,56 +19,20 @@ mod authenticated_verus_execution_v2;
 mod compiler_proof_binding_v3;
 mod control_flow_binding;
 mod executor;
-mod flash_attention_memory_v1;
 mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
-mod general_gemm_numerical_v1;
-mod general_gemm_proof_numerical_evidence_v1;
-mod general_gemm_proof_v1;
-mod general_gemm_property_closure_v1;
-mod general_gemm_runtime_closure_v2;
 mod generated_verus_proof_input_v3;
 mod mir_pliron_per_compilation_verus_v1;
 mod model;
-mod moe_expert_compact_plan_v1;
-mod moe_routing_memory_v1;
 mod monomorphization_dead_binding;
 mod multi_kernel_proof;
 mod persistent_freshness;
 mod plan;
 mod proof_capsule;
 mod result;
-mod row_softmax_certificate;
-mod scalar_gemm_hardware_evidence;
-mod scalar_gemm_proof;
-mod scalar_gemm_v1;
-mod scalar_gemm_verus_execution_v2;
+mod retained_functional_refinement_runtime_v1;
 mod static_view_proof;
 
-pub use alpha_zeta_manifest::{
-    ALPHA_ZETA_LOCKFILE_PATH_V1, ALPHA_ZETA_PACKAGE_MANIFEST_PATH_V1,
-    ALPHA_ZETA_PERMISSION_MODEL_PATH_V1, ALPHA_ZETA_PROOF_HARNESS_PATH_V1,
-    ALPHA_ZETA_RUST_MODEL_PATH_V1, ALPHA_ZETA_SHARED_BODY_PATH_V1, ALPHA_ZETA_TOOLCHAIN_PATH_V1,
-    ALPHA_ZETA_WORKSPACE_MANIFEST_PATH_V1, AlphaZetaDependencyEdgeV1, AlphaZetaDependencyKindV1,
-    AlphaZetaProofSourcesV1, AlphaZetaSourceFileIdentityV1, AlphaZetaSourceRoleV1,
-    AlphaZetaTrustedConstructKindV1, AlphaZetaTrustedConstructV1, AlphaZetaTrustedInventoryV1,
-    MAX_GFX942_ALPHA_ZETA_DEPENDENCY_EDGES_V1, MAX_GFX942_ALPHA_ZETA_SOURCE_BYTES_V1,
-    MAX_GFX942_ALPHA_ZETA_SOURCE_FILES_V1, MAX_GFX942_ALPHA_ZETA_SOURCE_TREE_BYTES_V1,
-    MAX_GFX942_ALPHA_ZETA_TRUSTED_CONSTRUCTS_V1,
-};
-pub use alpha_zeta_proof::{
-    AlphaZetaExecutableEvidenceReviewV1, AlphaZetaExecutionReviewV1, AlphaZetaProofErrorV1,
-    AlphaZetaReviewLedgerV1, ExecutableEvidenceAlphaZetaExecutionV1,
-    GFX942_ALPHA_ZETA_AUTHENTICATED_PROPERTIES_V1, GFX942_ALPHA_ZETA_MODEL_VERSION_V1,
-    GFX942_ALPHA_ZETA_PROOF_DOMAIN_V1, GFX942_ALPHA_ZETA_PROOF_VERSION_V1,
-    GFX942_ALPHA_ZETA_REQUIRED_PROPERTIES_V1, GFX942_ALPHA_ZETA_REVIEW_DOMAIN_V1,
-    GFX942_ALPHA_ZETA_SET_DOMAIN_V1, GFX942_XNACK_MINUS_TARGET_V1, Gfx942AlphaZetaKernelV1,
-    Gfx942AlphaZetaProofInputV1, Gfx942XnackMinusTargetIdentityV1,
-    InertAlphaZetaExecutableEvidenceSetV1, MAX_GFX942_ALPHA_ZETA_REVIEW_RECORDS_V1,
-    ReviewedAlphaZetaExecutionV1, ReviewedAlphaZetaProofSetV1, alpha_zeta_abi_identity_v1,
-    alpha_zeta_inert_configuration_v1, alpha_zeta_launch_identity_v1,
-    record_descriptive_alpha_zeta_execution_v1, record_inert_alpha_zeta_executable_evidence_v1,
-};
 pub use artifact_record::{
     ArtifactProofEvidenceV1, ArtifactRecordConversionError, ReviewedInvocationIdentityV1,
     canonical_invocation_digest, convert_to_artifact_proof_record,
@@ -129,7 +91,6 @@ pub use executor::{
     ExecutionError, ExecutionErrorKind, ExecutionLimits, ExecutionPath, ExecutionStage,
     ExecutionSuccess, MAX_CAPTURE_BYTES, OutputStream, ProcessOutput, execute_recorder,
 };
-pub use flash_attention_memory_v1::*;
 pub use functional_refinement_receipt_v2::{
     FunctionalRefinementVerusExecutionErrorKindV2, FunctionalRefinementVerusExecutionErrorV2,
     PreparedFunctionalRefinementReceiptV2,
@@ -141,11 +102,6 @@ pub use functional_refinement_runtime_v1::{
     FunctionalRefinementRuntimeErrorV1, FunctionalRefinementVerusRuntimeIdentityV1,
     FunctionalRefinementVerusRuntimeLeaseV1,
 };
-pub use general_gemm_numerical_v1::*;
-pub use general_gemm_proof_numerical_evidence_v1::*;
-pub use general_gemm_proof_v1::*;
-pub use general_gemm_property_closure_v1::*;
-pub use general_gemm_runtime_closure_v2::*;
 pub use generated_verus_proof_input_v3::{
     CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3,
     GeneratedVerusProofInputIdentityV3, MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3,
@@ -163,8 +119,6 @@ pub use model::{
     MeasuredToolIdentity, ModelError, ProofOutcome, ProofProperty, ProofRequestV1,
     ProofTargetIdentity, Text, TrustedItem, VerificationModelIdentity,
 };
-pub use moe_expert_compact_plan_v1::*;
-pub use moe_routing_memory_v1::*;
 pub use monomorphization_dead_binding::{
     MONOMORPHIZATION_DEAD_BINDING_DOMAIN_V1, MONOMORPHIZATION_DEAD_BINDING_VERSION_V1,
     MonomorphizationDeadBindingErrorV1, MonomorphizationDeadClaimV1,
@@ -209,57 +163,6 @@ pub use proof_capsule::{
 };
 pub use result::{
     MAX_RESULT_BYTES, ProofResultV1, RecorderTermination, ResultError, parse_recorder_result,
-};
-pub use row_softmax_certificate::{
-    AuthenticatedRowSoftmaxVerificationCertificateIdentityV1,
-    AuthenticatedRowSoftmaxVerificationCertificateV1,
-    RowSoftmaxVerificationCertificateAuthenticationErrorV1,
-    RowSoftmaxVerificationCertificateObservationV1, RowSoftmaxVerificationFileObservationV1,
-    authenticate_row_softmax_verification_certificate_v1,
-};
-pub use scalar_gemm_hardware_evidence::{
-    SCALAR_GEMM_COV6_IMPLICIT_KERNARG_BYTES_V1, SCALAR_GEMM_EXPLICIT_KERNARG_BYTES_V1,
-    SCALAR_GEMM_HARDWARE_EVIDENCE_DOMAIN_V1, SCALAR_GEMM_HARDWARE_EVIDENCE_VERSION_V1,
-    SCALAR_GEMM_HARDWARE_EXPECTATION_DOMAIN_V1, SCALAR_GEMM_HARDWARE_FORMAL_CLAIMS_V1,
-    SCALAR_GEMM_HARDWARE_MAX_CASE_NAME_BYTES_V1, SCALAR_GEMM_HARDWARE_MAX_CASES_V1,
-    SCALAR_GEMM_KERNARG_ALIGNMENT_V1, SCALAR_GEMM_TOTAL_KERNARG_BYTES_V1,
-    SCALAR_GEMM_WAVEFRONT_SIZE_V1, ScalarGemmAdjacentCanaryObservationV1,
-    ScalarGemmArtifactObservationV1, ScalarGemmDispatchObservationV1,
-    ScalarGemmFrontendObservationV1, ScalarGemmHardwareCaseExpectationV1,
-    ScalarGemmHardwareCaseObservationV1, ScalarGemmHardwareEvidenceErrorV1,
-    ScalarGemmHardwareEvidenceExpectationV1, ScalarGemmHardwareEvidenceRecorderV1,
-    ScalarGemmHardwareFormalClaimV1, ScalarGemmHardwareObservedFactsV1,
-    ScalarGemmHsaLoadObservationV1, ScalarGemmInputImmutabilityObservationV1,
-    ScalarGemmKernelAdmissionObservationV1, ScalarGemmOutputObservationV1,
-    ScalarGemmProtectedHardwareEvidenceV1, ScalarGemmUnloadObservationV1,
-    ScalarGemmWorkerExchangeObservationV1,
-};
-pub use scalar_gemm_proof::{
-    MAX_SCALAR_GEMM_PROOF_REVIEWS_V1, MAX_SCALAR_GEMM_PROOF_SOURCE_BYTES_V1,
-    ReviewedScalarGemmProofV1, SCALAR_GEMM_PROOF_DOMAIN_V1, SCALAR_GEMM_PROOF_MODEL_VERSION_V1,
-    SCALAR_GEMM_PROOF_REQUIRED_PROPERTIES_V1, SCALAR_GEMM_PROOF_REVIEW_DOMAIN_V1,
-    SCALAR_GEMM_PROOF_SOURCE_PATH_V1, SCALAR_GEMM_PROOF_TARGET_V1, SCALAR_GEMM_PROOF_VERSION_V1,
-    ScalarGemmProofErrorV1, ScalarGemmProofProfileV1, ScalarGemmProofReviewLedgerV1,
-    ScalarGemmProofReviewV1, ScalarGemmProofSourceV1, review_scalar_gemm_proof_v1,
-};
-pub use scalar_gemm_v1::{
-    SCALAR_GEMM_COVERAGE_PROFILE_V1, SCALAR_GEMM_F32_NUMERICAL_CONTRACT_V1,
-    SCALAR_GEMM_GLOBAL_ADDRESS_SPACE_V1, SCALAR_GEMM_MAX_GRID_THREADS_V1,
-    SCALAR_GEMM_MAX_MODEL_WORK_ITEMS_V1, SCALAR_GEMM_ROOT_SYMBOL_V1, SCALAR_GEMM_TARGET_V1,
-    SCALAR_GEMM_WORKGROUP_THREADS_V1, ScalarGemmBufferRegionV1, ScalarGemmDotRecurrenceV1,
-    ScalarGemmDotStepV1, ScalarGemmF32NumericalContractV1, ScalarGemmHostAdmissionErrorV1,
-    ScalarGemmHostAdmissionV1, ScalarGemmHostRequestV1, ScalarGemmInvocationV1,
-    ScalarGemmModelErrorV1, ScalarGemmShapeV1, ScalarGemmToolchainV1, admit_scalar_gemm_host_v1,
-    evaluate_scalar_gemm_abstract_invocation_v1, scalar_gemm_accesses_are_in_bounds_v1,
-    scalar_gemm_canonical_domain_initializes_output_v1, scalar_gemm_f32_oracle_v1,
-    scalar_gemm_flattened_index_is_correct_v1, scalar_gemm_output_initialized_by_invocation_v1,
-    scalar_gemm_writers_are_injective_v1,
-};
-pub use scalar_gemm_verus_execution_v2::{
-    AuthenticatedScalarGemmVerusProofV2, MAX_SCALAR_GEMM_VERUS_OUTPUT_BYTES_V2,
-    MAX_SCALAR_GEMM_VERUS_TIMEOUT_SECONDS_V2, SCALAR_GEMM_VERUS_THEOREMS_V2,
-    ScalarGemmVerifiedTheoremV2, ScalarGemmVerusExecutionErrorKindV2,
-    ScalarGemmVerusExecutionErrorV2, execute_scalar_gemm_verus_proof_v2,
 };
 pub use static_view_proof::{
     STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,

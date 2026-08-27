@@ -17,12 +17,10 @@ mod descriptor_source;
 mod external_device_library_manifest;
 mod external_device_library_provider_set;
 mod final_compiler_module_commitment_v3;
-mod flash_attention_sections;
 mod inert_semantic_module_handoff_v3;
 mod module_handoff;
 mod module_handoff_v2;
 mod production_gfx950_ocml;
-mod row_softmax_sections;
 mod symbol_manifest;
 
 pub use descriptor_source::{
@@ -56,14 +54,6 @@ pub use final_compiler_module_commitment_v3::{
     FinalCompilerModuleContentIdentityV3, InertFinalCompilerModuleCommitmentV3,
     MAX_FINAL_COMPILER_MODULE_COMMITMENT_BYTES_V3,
 };
-pub use flash_attention_sections::{
-    DecodedFlashAttentionCompilerSectionsV1, FLASH_ATTENTION_AUTHORITY_BYTES_V1,
-    FLASH_ATTENTION_AUTHORITY_SECTION_NAME_V1,
-    FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1,
-    FLASH_ATTENTION_OCML_EXP_BOUNDARY_BYTES_V1, FLASH_ATTENTION_OCML_EXP_BOUNDARY_SECTION_NAME_V1,
-    FlashAttentionCompilerSectionsErrorV1, MAX_FLASH_ATTENTION_AUTHORITY_TRANSCRIPT_BYTES_V1,
-    decode_flash_attention_compiler_sections_v1,
-};
 pub use inert_semantic_module_handoff_v3::{
     INERT_COMPILER_MODULE_PAIR_BINDING_BYTES_V3, INERT_COMPILER_MODULE_PAIR_BINDING_MAGIC_V3,
     INERT_COMPILER_MODULE_PAIR_BINDING_VERSION_V3, INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_MAGIC_V3,
@@ -87,13 +77,6 @@ pub use production_gfx950_ocml::{
     PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1, ProductionGfx950CompilerFfiEnvelopeKindV1,
     construct_production_gfx950_ocml_exp_envelope_v1,
     inspect_production_gfx950_compiler_ffi_envelope_v1,
-};
-pub use row_softmax_sections::{
-    DecodedRowSoftmaxCompilerSectionsV1, MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1,
-    ROW_SOFTMAX_AUTHORITY_BYTES_V1, ROW_SOFTMAX_AUTHORITY_SECTION_NAME_V1,
-    ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_SECTION_NAME_V1, ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_BYTES_V1,
-    ROW_SOFTMAX_EXPONENTIAL_BOUNDARY_SECTION_NAME_V1, RowSoftmaxCompilerSectionsErrorV1,
-    decode_row_softmax_compiler_sections_v1,
 };
 pub use symbol_manifest::{
     CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestIdentityV1,

@@ -191,22 +191,18 @@ weighted combine. Its executable CPU schedule and independent oracle still
 provide source/CPU evidence, while the original pinned Verus model verifies 15
 logical expert-memory obligations and rejects six named mutations.
 
-The [bounded MoE V1 checkpoint](docs/bounded-moe-v1.md) adds three separate,
-narrower joins. The router's rustc admission now emits a private same-session
-structural diagnostic over rustc-loaded source, the complete checked `FnAbi`
-identity and bounded projection, full imported-MIR diagnostics, and a canonical
-31-entry KIR/profile table. A separate inert `E4/C4/routes16/width16/tile256`
-compact-plan model verifies 19 Verus obligations, rejects seven mutations, and
-is differentially checked across all 625 valid count vectors. Neither is a
-MIR-to-KIR refinement proof or an authority-bearing proof receipt.
+The [bounded MoE V1 checkpoint](docs/bounded-moe-v1.md) retains a standalone
+`E4/C4/routes16/width16/tile256` compact-plan example that verifies 19 Verus
+obligations and rejects seven mutations. It is not a MIR-to-KIR refinement proof
+or an authority-bearing proof receipt.
 
 The former MoE V1/V2 host bridges, generated adapters, exact top-2 lifecycle,
 and workload-specific HSA launcher were non-production qualification
 alternatives. They have been removed so MoE execution cannot bypass the sole
 Worker V3 application, descriptor, argument, HSA, and unload lifecycle. The
-ordinary Rust kernels, rustc/KIR diagnostics, compact-plan verifier and Verus
-evidence, and independent source/oracle tests remain. MoE hardware execution
-through Worker V3 is still pending and no parity promotion is claimed.
+ordinary Rust kernels, compact-plan Verus example evidence, and independent
+source/oracle tests remain. MoE hardware execution through Worker V3 is still pending and no parity promotion is claimed.
+
 The current [general tiled GEMM](examples/tiled_gemm_general_v1/README.md) is an ordinary safe Rust `#[kernel]` example on the shared MIR -> ranked PLIRON -> KIR pipeline. Its dynamic dimensions, strides, tails, MFMA layout, and epilogue exercise workload-neutral compiler checks; the retired fixed Slice 1 standalone composition and its separate observation records have been removed.
 
 The source/IR groundwork landed under

@@ -3,7 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
-proof="$repo_root/crates/fe2o3-verifier/verus/scalar_gemm_v1.rs"
+proof="$script_dir/verus/scalar_gemm_v1.rs"
 require_verus=0
 
 if [ "${1:-}" = "--require" ]; then

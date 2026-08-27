@@ -350,8 +350,7 @@ deleted. Follow-on work provides canonical durable
 lease reacquisition, sealed finalizer intent, a bounded Worker V2 envelope,
 Cargo publication and reconstruction of that inert envelope, the production V3
 descriptor handoff, and one-history persistent multi-kernel proof admission.
-The recovered Worker V2 host route is deleted. Bounded alpha/zeta proof records
-and physical machine-effect records also exist. The handoff is not protected production
+The recovered Worker V2 host route is deleted. The handoff is not protected production
 authority, the records are not production-bound to compiler origin and the
 exact payload, and no production `WorkerV3VerifierV1` exists.
 Therefore this is not production proof-authenticated safe
@@ -366,10 +365,9 @@ production application route. They duplicated pieces of argument admission,
 resource observation, lifecycle ownership, and dispatch around Worker V3 and
 have been removed.
 
-The fixed attributed Rust kernels, rustc source/ABI/KIR diagnostics, 31-entry
-canonical profile, compact-plan verifier, 19-obligation Verus model, seven
-negative mutations, and 625-vector differential test remain useful compiler
-and proof evidence. They do not grant runtime authority.
+The fixed attributed Rust kernels and the standalone 19-obligation Verus model
+with seven negative mutations remain useful example and proof evidence. They
+do not grant runtime authority.
 
 The remaining MoE milestone is one Worker V3 vertical slice: collect and lower
 the attributed kernels, publish one authenticated multi-kernel descriptor,

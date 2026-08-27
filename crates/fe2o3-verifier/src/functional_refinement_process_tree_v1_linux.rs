@@ -20,10 +20,11 @@ use super::{
     ADDRESS_SPACE_LIMIT_V2, CORE_LIMIT_V2, CanonicalGeneratedVerusProofInputV3, DIST_DIRECTORY_FD,
 };
 use super::{
-    DATA_LIMIT_V2, FILE_LIMIT_V2, GENERATED_PROOF_SOURCE_FD, GeneralGemmRuntimeClosureErrorKindV2,
-    GeneralGemmRuntimeClosureErrorV2, GeneralGemmRuntimeProcessOutputV2, ObjectIdentityV2,
-    ObjectSnapshotV2, RUST_VERIFY_FD, RetainedRuntimeClosureV2, SYSTEM_LIB_DIRECTORY_FD,
-    SealedGeneratedProofSourceV3, TOOLCHAIN_DIRECTORY_FD, TOOLCHAIN_LIB_DIRECTORY_FD, Z3_FD,
+    DATA_LIMIT_V2, FILE_LIMIT_V2, GENERATED_PROOF_SOURCE_FD, ObjectIdentityV2, ObjectSnapshotV2,
+    RUST_VERIFY_FD, RetainedFunctionalRefinementRuntimeErrorKindV1,
+    RetainedFunctionalRefinementRuntimeErrorV1, RetainedFunctionalRefinementRuntimeOutputV1,
+    RetainedRuntimeClosureV2, SYSTEM_LIB_DIRECTORY_FD, SealedGeneratedProofSourceV3,
+    TOOLCHAIN_DIRECTORY_FD, TOOLCHAIN_LIB_DIRECTORY_FD, Z3_FD,
 };
 
 const RLIMIT_CPU: i32 = 0;
@@ -247,7 +248,7 @@ pub(super) fn allowed_runtime_executable(
     file: &File,
     identity: ObjectIdentityV2,
     path: &Path,
-) -> Result<Option<AllowedRuntimeExecutableV1>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<Option<AllowedRuntimeExecutableV1>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let retained_file_bytes = rustix::fs::fstat(file)
         .map_err(|error| io_error("inspect runtime ELF length", error))?
         .st_size;
@@ -356,24 +357,25 @@ pub(super) fn execute(
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
-) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
         |error| {
             controller_error(
-                GeneralGemmRuntimeClosureErrorKindV2::Process,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::Process,
                 format!("controller security preflight failed: {error}"),
             )
         },
     )?;
     if output_limit == 0 {
         return Err(controller_error(
-            GeneralGemmRuntimeClosureErrorKindV2::OutputTooLarge,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
             "functional-refinement output bound is zero",
         ));
     }
     if Instant::now() >= deadline {
         return Err(controller_error(
-            GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
             "functional-refinement deadline elapsed before spawn",
         ));
     }
@@ -417,7 +419,7 @@ pub(super) fn execute(
             .map_err(|error| io_error("duplicate functional-refinement descriptor", error))?;
         next = descriptor.as_raw_fd().checked_add(1).ok_or_else(|| {
             controller_error(
-                GeneralGemmRuntimeClosureErrorKindV2::Process,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::Process,
                 "functional-refinement descriptor space exhausted",
             )
         })?;
@@ -472,7 +474,7 @@ pub(super) fn execute(
     }
     let mut child = command.spawn().map_err(|error| {
         controller_error(
-            GeneralGemmRuntimeClosureErrorKindV2::Process,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process,
             format!("spawn traced functional-refinement verifier: {error}"),
         )
     })?;
@@ -637,7 +639,8 @@ fn supervise(
     require_auxiliary_verifier: bool,
     deadline: Instant,
     output_limit: usize,
-) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
     let verifier =
         i32::try_from(child.id()).map_err(|_| process_failure("verifier PID overflow"))?;
     let mut tracees = BTreeMap::from([(
@@ -707,7 +710,7 @@ fn supervise(
             drain(&mut stderr, &mut stderr_capture, output_limit)?;
             if Instant::now() >= deadline {
                 return Err(controller_error(
-                    GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
                     "functional-refinement process tree exceeded its global deadline",
                 ));
             }
@@ -929,7 +932,7 @@ fn supervise(
         output_limit,
         deadline,
     )?;
-    Ok(GeneralGemmRuntimeProcessOutputV2 {
+    Ok(RetainedFunctionalRefinementRuntimeOutputV1 {
         exit_code: terminal.0,
         signal: terminal.1,
         stdout: stdout_capture.bytes,
@@ -937,7 +940,7 @@ fn supervise(
     })
 }
 
-fn set_trace_options(process: i32) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn set_trace_options(process: i32) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let options = PTRACE_O_TRACEFORK
         | PTRACE_O_TRACEVFORK
         | PTRACE_O_TRACECLONE
@@ -948,7 +951,7 @@ fn set_trace_options(process: i32) -> Result<(), GeneralGemmRuntimeClosureErrorV
     ptrace(PTRACE_SETOPTIONS, process, options)
 }
 
-fn event_child(process: i32) -> Result<i32, GeneralGemmRuntimeClosureErrorV2> {
+fn event_child(process: i32) -> Result<i32, RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut child = 0_usize;
     // SAFETY: GETEVENTMSG writes one machine word at the supplied pointer.
     if unsafe {
@@ -965,7 +968,10 @@ fn event_child(process: i32) -> Result<i32, GeneralGemmRuntimeClosureErrorV2> {
     i32::try_from(child).map_err(|_| process_failure("ptrace descendant PID overflow"))
 }
 
-fn continue_tracee(process: i32, signal: i32) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn continue_tracee(
+    process: i32,
+    signal: i32,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     ptrace(PTRACE_CONT, process, signal as usize)
 }
 
@@ -973,7 +979,7 @@ fn resume_tracee(
     tracees: &mut BTreeMap<i32, Tracee>,
     process: i32,
     signal: i32,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     continue_tracee(process, signal)?;
     tracees
         .get_mut(&process)
@@ -982,7 +988,11 @@ fn resume_tracee(
     Ok(())
 }
 
-fn ptrace(request: u32, process: i32, data: usize) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn ptrace(
+    request: u32,
+    process: i32,
+    data: usize,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     // SAFETY: ptrace interprets null address and the scalar data according to the request.
     if unsafe { linux_ptrace(request, process, std::ptr::null_mut(), data as *mut c_void) } < 0 {
         Err(io_process_failure("operate on traced proof process"))
@@ -994,14 +1004,14 @@ fn ptrace(request: u32, process: i32, data: usize) -> Result<(), GeneralGemmRunt
 fn wait_for_specific(
     process: i32,
     deadline: Instant,
-) -> Result<i32, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<i32, RetainedFunctionalRefinementRuntimeErrorV1> {
     loop {
         if let Some(status) = wait_for_specific_nonblocking(process)? {
             return Ok(status);
         }
         if Instant::now() >= deadline {
             return Err(controller_error(
-                GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
+                RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
                 "timed out waiting for traced proof process",
             ));
         }
@@ -1011,7 +1021,7 @@ fn wait_for_specific(
 
 fn wait_for_specific_nonblocking(
     process: i32,
-) -> Result<Option<i32>, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<Option<i32>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut status = 0;
     // SAFETY: waitpid writes one integer status for the exact traced PID.
     let result = unsafe { waitpid(process, &mut status, WAIT_NOHANG | WAIT_WALL) };
@@ -1042,7 +1052,7 @@ fn validate_executable(
     process: i32,
     expected: ObjectIdentityV2,
     label: &str,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if executable_identity(process)? != expected {
         return Err(process_failure(format!(
             "traced {label} executable identity differs"
@@ -1051,13 +1061,15 @@ fn validate_executable(
     Ok(())
 }
 
-fn executable_identity(process: i32) -> Result<ObjectIdentityV2, GeneralGemmRuntimeClosureErrorV2> {
+fn executable_identity(
+    process: i32,
+) -> Result<ObjectIdentityV2, RetainedFunctionalRefinementRuntimeErrorV1> {
     let file = File::open(format!("/proc/{process}/exe"))
         .map_err(|_| io_process_failure("open traced executable identity"))?;
     Ok(ObjectSnapshotV2::capture(&file, "traced executable")?.object_identity())
 }
 
-fn thread_group_id(process: i32) -> Result<i32, GeneralGemmRuntimeClosureErrorV2> {
+fn thread_group_id(process: i32) -> Result<i32, RetainedFunctionalRefinementRuntimeErrorV1> {
     let status = std::fs::read_to_string(format!("/proc/{process}/status"))
         .map_err(|_| io_process_failure("read traced thread-group identity"))?;
     if status.len() > 16 * 1024 {
@@ -1073,7 +1085,7 @@ fn thread_group_id(process: i32) -> Result<i32, GeneralGemmRuntimeClosureErrorV2
 fn validate_initial_descriptor_closure(
     process: i32,
     bindings: &[DescriptorBinding],
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     validate_exact_descriptor_closure(process, bindings, "rust_verify")
 }
 
@@ -1081,7 +1093,7 @@ fn validate_exact_descriptor_closure(
     process: i32,
     bindings: &[DescriptorBinding],
     label: &str,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut expected = vec![0, 1, 2];
     expected.extend(
         bindings
@@ -1103,7 +1115,7 @@ fn validate_exact_descriptor_closure(
 fn validate_bound_descriptor_identities(
     process: i32,
     bindings: &[DescriptorBinding],
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     for binding in bindings.iter().filter(|binding| !binding.close_on_exec) {
         let file = File::open(format!("/proc/{process}/fd/{}", binding.destination))
             .map_err(|_| io_process_failure("open inherited retained descriptor"))?;
@@ -1118,7 +1130,9 @@ fn validate_bound_descriptor_identities(
     Ok(())
 }
 
-fn descriptor_numbers(process: i32) -> Result<Vec<i32>, GeneralGemmRuntimeClosureErrorV2> {
+fn descriptor_numbers(
+    process: i32,
+) -> Result<Vec<i32>, RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut result = Vec::new();
     for entry in std::fs::read_dir(format!("/proc/{process}/fd"))
         .map_err(|_| io_process_failure("scan traced descriptor table"))?
@@ -1138,7 +1152,7 @@ fn validate_sensitive_syscall_request(
     process: i32,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_mappings: bool,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let registers = read_registers(process)?;
     match u32::try_from(registers.orig_rax) {
         Ok(CLONE3_SYSCALL) => validate_clone3_request(process, &registers),
@@ -1197,7 +1211,7 @@ fn validate_sensitive_syscall_request(
 fn validate_clone3_request(
     process: i32,
     registers: &UserRegistersX86_64,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if registers.rsi != CLONE3_ARGUMENT_BYTES || registers.rdi == 0 {
         return Err(process_failure(
             "clone3 argument size or pointer is not the pinned ABI",
@@ -1256,7 +1270,9 @@ fn validate_clone3_request(
     }
 }
 
-fn read_registers(process: i32) -> Result<UserRegistersX86_64, GeneralGemmRuntimeClosureErrorV2> {
+fn read_registers(
+    process: i32,
+) -> Result<UserRegistersX86_64, RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut registers = UserRegistersX86_64::default();
     // SAFETY: GETREGS writes one architecture-specific register structure.
     if unsafe {
@@ -1280,7 +1296,7 @@ fn validate_existing_mapping_range(
     start: u64,
     length: u64,
     allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if length == 0 {
         return Err(process_failure(
             "zero-length executable mprotect request is not admitted",
@@ -1357,7 +1373,7 @@ fn validate_nonexecutable_mapping_range(
     process: i32,
     start: u64,
     length: u64,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if length == 0 {
         return Err(process_failure(
             "zero-length mapping remap request is not admitted",
@@ -1408,7 +1424,9 @@ fn validate_nonexecutable_mapping_range(
     ))
 }
 
-fn parse_mapping_range(range: &str) -> Result<(u64, u64), GeneralGemmRuntimeClosureErrorV2> {
+fn parse_mapping_range(
+    range: &str,
+) -> Result<(u64, u64), RetainedFunctionalRefinementRuntimeErrorV1> {
     let (start, end) = range
         .split_once('-')
         .ok_or_else(|| process_failure("malformed process mapping range"))?;
@@ -1422,7 +1440,9 @@ fn parse_mapping_range(range: &str) -> Result<(u64, u64), GeneralGemmRuntimeClos
     Ok((start, end))
 }
 
-fn parse_mapping_file_offset(offset: &str) -> Result<u64, GeneralGemmRuntimeClosureErrorV2> {
+fn parse_mapping_file_offset(
+    offset: &str,
+) -> Result<u64, RetainedFunctionalRefinementRuntimeErrorV1> {
     u64::from_str_radix(offset, 16)
         .map_err(|_| process_failure("noncanonical process mapping file offset"))
 }
@@ -1432,7 +1452,7 @@ fn executable_object_range_is_allowed(
     offset: u64,
     length: u64,
     allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<bool, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<bool, RetainedFunctionalRefinementRuntimeErrorV1> {
     let end = offset
         .checked_add(length)
         .ok_or_else(|| process_failure("executable mapping file range overflow"))?;
@@ -1454,7 +1474,7 @@ fn mapping_file_range_is_allowed(
     offset: u64,
     length: u64,
     allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<bool, GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<bool, RetainedFunctionalRefinementRuntimeErrorV1> {
     let (major, minor) = device
         .split_once(':')
         .ok_or_else(|| process_failure("malformed process mapping device"))?;
@@ -1488,7 +1508,7 @@ fn mapping_file_range_is_allowed(
 fn validate_executable_mappings(
     process: i32,
     allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let maps = std::fs::read_to_string(format!("/proc/{process}/maps"))
         .map_err(|_| io_process_failure("read traced executable mappings"))?;
     if maps.len() > 1024 * 1024 {
@@ -1554,7 +1574,9 @@ fn validate_executable_mappings(
     Ok(())
 }
 
-fn terminate_tree(tracees: &BTreeMap<i32, Tracee>) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn terminate_tree(
+    tracees: &BTreeMap<i32, Tracee>,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut failures = Vec::new();
     let mut remaining = tracees
         .iter()
@@ -1674,7 +1696,7 @@ fn process_is_live(process: i32) -> io::Result<bool> {
     Ok(!matches!(state, b'Z' | b'X'))
 }
 
-fn continue_killed_tracee(process: i32) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+fn continue_killed_tracee(process: i32) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     // SAFETY: the tracee is stopped or already gone and only SIGKILL is injected.
     if unsafe {
         linux_ptrace(
@@ -1694,8 +1716,8 @@ fn continue_killed_tracee(process: i32) -> Result<(), GeneralGemmRuntimeClosureE
 
 fn reject_and_reap(
     tracees: &BTreeMap<i32, Tracee>,
-    execution_error: GeneralGemmRuntimeClosureErrorV2,
-) -> GeneralGemmRuntimeClosureErrorV2 {
+    execution_error: RetainedFunctionalRefinementRuntimeErrorV1,
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     match terminate_tree(tracees) {
         Ok(()) => execution_error,
         Err(cleanup_error) => process_failure(format!(
@@ -1706,7 +1728,7 @@ fn reject_and_reap(
 
 fn make_nonblocking(
     descriptor: &impl std::os::fd::AsFd,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let flags = rustix::fs::fcntl_getfl(descriptor)
         .map_err(|error| io_error("read proof output flags", error))?;
     rustix::fs::fcntl_setfl(descriptor, flags | OFlags::NONBLOCK)
@@ -1717,7 +1739,7 @@ fn drain(
     pipe: &mut impl Read,
     capture: &mut Capture,
     limit: usize,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut buffer = [0_u8; 4096];
     loop {
         match pipe.read(&mut buffer) {
@@ -1728,7 +1750,7 @@ fn drain(
             Ok(count) => {
                 if capture.bytes.len() > limit.saturating_sub(count) {
                     return Err(controller_error(
-                        GeneralGemmRuntimeClosureErrorKindV2::OutputTooLarge,
+                        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
                         "functional-refinement process exceeded its output bound",
                     ));
                 }
@@ -1747,7 +1769,7 @@ fn drain_to_eof(
     stderr_capture: &mut Capture,
     limit: usize,
     deadline: Instant,
-) -> Result<(), GeneralGemmRuntimeClosureErrorV2> {
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let grace = deadline.min(Instant::now() + Duration::from_millis(200));
     while (!stdout_capture.eof || !stderr_capture.eof) && Instant::now() < grace {
         drain(stdout, stdout_capture, limit)?;
@@ -1764,26 +1786,29 @@ fn drain_to_eof(
     Ok(())
 }
 
-fn process_failure(detail: impl Into<String>) -> GeneralGemmRuntimeClosureErrorV2 {
-    controller_error(GeneralGemmRuntimeClosureErrorKindV2::Process, detail)
+fn process_failure(detail: impl Into<String>) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    controller_error(
+        RetainedFunctionalRefinementRuntimeErrorKindV1::Process,
+        detail,
+    )
 }
 
-fn io_process_failure(context: &str) -> GeneralGemmRuntimeClosureErrorV2 {
+fn io_process_failure(context: &str) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     process_failure(format!("{context}: {}", io::Error::last_os_error()))
 }
 
-fn io_error(context: &str, error: rustix::io::Errno) -> GeneralGemmRuntimeClosureErrorV2 {
+fn io_error(context: &str, error: rustix::io::Errno) -> RetainedFunctionalRefinementRuntimeErrorV1 {
     controller_error(
-        GeneralGemmRuntimeClosureErrorKindV2::Io,
+        RetainedFunctionalRefinementRuntimeErrorKindV1::Io,
         format!("{context}: {error}"),
     )
 }
 
 fn controller_error(
-    kind: GeneralGemmRuntimeClosureErrorKindV2,
+    kind: RetainedFunctionalRefinementRuntimeErrorKindV1,
     detail: impl Into<String>,
-) -> GeneralGemmRuntimeClosureErrorV2 {
-    GeneralGemmRuntimeClosureErrorV2::new(
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    RetainedFunctionalRefinementRuntimeErrorV1::new(
         kind,
         format!(
             "functional-refinement process-tree controller: {}",
@@ -1797,7 +1822,10 @@ mod tests {
     use super::*;
 
     struct HostileRun {
-        result: Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2>,
+        result: Result<
+            RetainedFunctionalRefinementRuntimeOutputV1,
+            RetainedFunctionalRefinementRuntimeErrorV1,
+        >,
         first_descendant: i32,
         last_descendant: i32,
     }
@@ -1940,8 +1968,11 @@ mod tests {
     }
 
     fn expect_error(
-        result: Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2>,
-    ) -> GeneralGemmRuntimeClosureErrorV2 {
+        result: Result<
+            RetainedFunctionalRefinementRuntimeOutputV1,
+            RetainedFunctionalRefinementRuntimeErrorV1,
+        >,
+    ) -> RetainedFunctionalRefinementRuntimeErrorV1 {
         match result {
             Ok(_) => panic!("hostile proof process unexpectedly succeeded"),
             Err(error) => error,
@@ -2136,7 +2167,10 @@ mod tests {
             true,
         );
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
         assert!(
             error
                 .to_string()
@@ -2149,7 +2183,10 @@ mod tests {
     fn wrong_solver_exec_is_rejected() {
         let run = run_hostile("/bin/true; :", "/bin/false", Duration::from_secs(2), None);
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
         assert!(
             error.to_string().contains("executable identity differs"),
             "{error}"
@@ -2165,7 +2202,10 @@ mod tests {
             None,
         );
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
         assert!(
             error
                 .to_string()
@@ -2185,7 +2225,10 @@ mod tests {
             None,
         );
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
         assert!(
             error
                 .to_string()
@@ -2204,7 +2247,10 @@ mod tests {
             Some(&leaked),
         );
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
         assert!(error.to_string().contains("unexpected descriptor set"));
     }
 
@@ -2217,7 +2263,10 @@ mod tests {
             None,
         );
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
         assert!(
             error
                 .to_string()
@@ -2238,7 +2287,7 @@ mod tests {
         let error = expect_error(run.result);
         assert_eq!(
             error.kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::TimedOut,
+            RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
             "{error}"
         );
         assert_process_disappears(descendant);
@@ -2253,7 +2302,10 @@ mod tests {
             None,
         );
         let setsid = expect_error(setsid_run.result);
-        assert_eq!(setsid.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            setsid.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
 
         let python = ["/usr/bin/python3", "/bin/python3"]
             .into_iter()
@@ -2268,7 +2320,7 @@ mod tests {
         let setpgid = expect_error(setpgid_run.result);
         assert_eq!(
             setpgid.kind(),
-            GeneralGemmRuntimeClosureErrorKindV2::Process
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
         );
     }
 
@@ -2283,6 +2335,9 @@ mod tests {
         );
         let run = run_hostile(&script, python, Duration::from_secs(2), None);
         let error = expect_error(run.result);
-        assert_eq!(error.kind(), GeneralGemmRuntimeClosureErrorKindV2::Process);
+        assert_eq!(
+            error.kind(),
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Process
+        );
     }
 }
