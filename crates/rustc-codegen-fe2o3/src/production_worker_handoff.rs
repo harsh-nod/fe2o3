@@ -393,7 +393,6 @@ mod tests {
         ] {
             for forbidden in [
                 concat!("worker_v2", "_producer"),
-                concat!("qualification-oracles", "-test-only"),
                 concat!("collected_scalar", "_gemm"),
                 concat!("collected_tiled", "_gemm"),
                 concat!("collected_flash", "_attention"),

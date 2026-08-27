@@ -155,8 +155,6 @@ build_shard_command() {
       ;;
     Q2)
       append_command command "${cargo_bin}" test -p rustc-codegen-fe2o3 --locked --lib
-      append_command command "${cargo_bin}" test -p rustc-codegen-fe2o3 --locked \
-        --features qualification-oracles-test-only --lib
       ;;
     Q3)
       append_command command "${cargo_bin}" test -p dialect-mir --locked

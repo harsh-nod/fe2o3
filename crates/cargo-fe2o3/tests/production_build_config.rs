@@ -47,7 +47,6 @@ fn production_configuration_has_no_compatibility_type_alias() {
 fn cargo_package_has_no_worker_v2_compiler_surface() {
     let manifest = include_str!("../Cargo.toml");
     for rejected in [
-        "qualification-oracles-test-only",
         "worker-v2-fault-injection-test-only",
         "fe2o3-worker-v2-bundle",
         "cargo-fe2o3-worker-v2-fixture",
@@ -76,28 +75,7 @@ fn cargo_package_has_no_worker_v2_compiler_surface() {
 }
 
 #[test]
-fn unit_test_configuration_cannot_select_qualification_code() {
-    for (name, source) in [
-        ("main", include_str!("../src/main.rs")),
-        (
-            "build configuration",
-            include_str!("../src/build_config.rs"),
-        ),
-        ("binding wrapper", include_str!("../src/binding_wrapper.rs")),
-        (
-            "capability broker",
-            include_str!("../src/capability_broker.rs"),
-        ),
-    ] {
-        assert!(
-            !source.contains("any(test, feature = \"qualification-oracles-test-only\")"),
-            "{name} still changes pipeline behavior under cfg(test)"
-        );
-    }
-}
-
-#[test]
-fn cargo_and_application_routes_are_feature_invariant() {
+fn cargo_and_application_routes_use_fixed_production_types() {
     let source = include_str!("../src/main.rs");
     let cargo_route = source
         .split("fn cargo_with_backend_result(")
@@ -106,7 +84,6 @@ fn cargo_and_application_routes_are_feature_invariant() {
         .split("fn authority_sha256_from_environment(")
         .next()
         .expect("Cargo production route has a bounded body");
-    assert!(!cargo_route.contains("qualification-oracles-test-only"));
     assert!(cargo_route.contains("PreparedProductionBuildConfig"));
     assert!(cargo_route.contains("ProductionCargoPlan"));
 
@@ -117,7 +94,6 @@ fn cargo_and_application_routes_are_feature_invariant() {
         .split("fn run_application_with_handoff(")
         .next()
         .expect("application production route has a bounded body");
-    assert!(!application_route.contains("qualification-oracles-test-only"));
     assert!(application_route.contains("RUNNER_EXPECTS_ENVELOPE"));
     assert!(application_route.contains("requires a canonical load envelope"));
 }

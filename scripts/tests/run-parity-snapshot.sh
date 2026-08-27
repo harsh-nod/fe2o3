@@ -159,6 +159,11 @@ assert_contains $'argv\tQ2\t0000\t'
 [[ -f "${ARCHIVE}/logs/q3.log" ]] || fail 'Q3 log is missing'
 [[ -f "${ARCHIVE}/work/q2/output/invocations.tsv" ]] || fail 'Q2 output is missing'
 [[ -f "${ARCHIVE}/work/q3/output/invocations.tsv" ]] || fail 'Q3 output is missing'
+[[ "$(grep -c $'^cargo\t' "${ARCHIVE}/work/q2/output/invocations.tsv")" -eq 1 ]] ||
+  fail 'Q2 must execute the fixed rustc-codegen library test command exactly once'
+grep -Fq 'test -p rustc-codegen-fe2o3 --locked --lib' \
+  "${ARCHIVE}/work/q2/output/invocations.tsv" ||
+  fail 'Q2 did not execute the fixed rustc-codegen library test command'
 grep -Fq "${ARCHIVE}/work/q2/target" \
   "${ARCHIVE}/work/q2/output/invocations.tsv" || fail 'Q2 did not use its target directory'
 grep -Fq "${ARCHIVE}/work/q3/target" \

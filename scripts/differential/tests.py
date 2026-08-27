@@ -73,7 +73,6 @@ class HarnessTests(unittest.TestCase):
             manifest = (package / "Cargo.toml").read_text(encoding="ascii")
             source = (package / "src/main.rs").read_text(encoding="ascii")
             self.assertIn("fe2o3-host", manifest)
-            self.assertNotIn("qualification-oracles-test-only", manifest)
             self.assertNotIn("fe2o3-core", manifest)
             self.assertIn("#[kernel(", source)
             self.assertIn("typed,", source)

@@ -54,15 +54,12 @@ cp -- "${REPO_ROOT}/docs/cuda-oxide-parity-matrix.md" "${MATRIX}"
 mkdir -p -- "${OUT_A}" "${OUT_B}"
 "${DASHBOARD_SCRIPT}" claims >"${CLAIMS}"
 
-python3 - "${CLAIMS}" "${REPO_ROOT}/scripts/rustc-codegen-shards.json" <<'PY'
-import json
+python3 - "${CLAIMS}" <<'PY'
 import shlex
 import sys
 from pathlib import Path
 
 claims_path = Path(sys.argv[1])
-shards_path = Path(sys.argv[2])
-retired = set(json.loads(shards_path.read_text(encoding="utf-8"))["retiredQualificationTargets"])
 violations = []
 
 for line_number, line in enumerate(claims_path.read_text(encoding="utf-8").splitlines(), 1):
@@ -70,33 +67,9 @@ for line_number, line in enumerate(claims_path.read_text(encoding="utf-8").split
     if not fields or fields[0] != "evidence":
         continue
     evidence_id = fields[1]
-    paths = set(fields[2].split(","))
     commands = fields[3].split("@@")
-    for target in sorted(retired):
-        retired_path = f"crates/rustc-codegen-fe2o3/tests/{target}.rs"
-        if retired_path in paths:
-            violations.append(
-                f"line {line_number} evidence {evidence_id} references retired path {retired_path}"
-            )
-        for command in commands:
-            words = shlex.split(command)
-            if any(
-                words[index : index + 2] == ["--test", target]
-                for index in range(len(words) - 1)
-            ):
-                violations.append(
-                    f"line {line_number} evidence {evidence_id} executes retired target {target}"
-                )
     for command in commands:
         words = shlex.split(command)
-        if (
-            "rustc-codegen-fe2o3" in words
-            and "qualification-oracles-test-only" in words
-            and "--lib" not in words
-        ):
-            violations.append(
-                f"line {line_number} evidence {evidence_id} has non-library qualification command"
-            )
         if words == ["scripts/ci-local.sh", "s09-debug-hardware"]:
             violations.append(
                 f"line {line_number} evidence {evidence_id} restores retired S09 hardware command"

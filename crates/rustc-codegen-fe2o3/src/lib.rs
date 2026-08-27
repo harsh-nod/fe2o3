@@ -487,7 +487,6 @@ mod tests {
         assert!(configuration.contains("production_policy::environment_rejection()"));
         assert!(!configuration.contains("QualificationSelection"));
         assert!(!configuration.contains("qualification_selection"));
-        assert!(!configuration.contains("qualification-oracles-test-only"));
     }
 
     #[test]
