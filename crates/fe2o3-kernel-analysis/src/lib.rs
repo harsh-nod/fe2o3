@@ -30,6 +30,8 @@ mod pliron_launch_contract;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_memory_order;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_pass_contract;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_pipeline;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_presburger;
@@ -85,6 +87,8 @@ pub use pliron_ir_identity::*;
 pub use pliron_launch_contract::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_memory_order::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_pass_contract::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_pipeline::*;
 #[cfg(feature = "pliron-analysis")]
