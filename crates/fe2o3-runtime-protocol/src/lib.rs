@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod application_handoff_v3;
+mod compiler_execution_attestation;
 mod static_application;
 mod worker_v3_load_envelope;
 
@@ -20,6 +21,17 @@ pub use application_handoff_v3::{
     WorkerV3ApplicationHandoffProtocolErrorV1, WorkerV3ApplicationIdentityV1,
     WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceIdentityV1,
     WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1,
+};
+pub use compiler_execution_attestation::{
+    COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1, COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
+    CompilerExecutionAttestationChallengeIdentityV1, CompilerExecutionAttestationChallengeV1,
+    CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptIdentityV1,
+    CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestIdentityV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,

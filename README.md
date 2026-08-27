@@ -10,6 +10,7 @@ artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
 [compiler execution subject V1](docs/compiler-execution-subject-v1.md),
+[compiler execution attestation protocol V1](docs/compiler-execution-attestation-v1.md),
 [gfx942 scalar Worker V3 proof/executable binding](docs/gfx942-scalar-worker-v3-proof-executable-binding-v1.md),
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
@@ -90,11 +91,14 @@ backend derives a fixed 690-byte
 `InertCompilerExecutionSubjectV1` from the durable build attempt, exact V3
 transaction, complete compiler closure, rustc invocation, inventory and
 preflight, semantic capsule, final module commitment, and exact outer handoff.
-Strict consumption independently reconstructs identical bytes. This removes
-the descriptor-only producer seam and establishes the one subject required by
-a future protected issuer, but the subject is intentionally inert: no issuer,
-fresh challenge, authenticated receipt, restart carriage, or runtime trust
-join exists yet, so `CompilerExecutionProvenance` remains open.
+Strict consumption independently reconstructs identical bytes. A shared V1
+protocol now fixes the caller-pinned issuer policy, subject-bound challenge,
+complete request, Ed25519 receipt, and rollback transition as exact canonical
+records. This removes ambiguity at the future service boundary, but all of
+these values remain authority-free: no protected issuer owns the signing key,
+freshness source, process supervision, or durable replay ledger, and no receipt
+is carried through restart or joined by the runtime verifier. Consequently
+`CompilerExecutionProvenance` remains open.
 
 ## CUDA-Oxide status
 

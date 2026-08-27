@@ -104,7 +104,10 @@ The following work remains before `CompilerExecutionProvenance` can close:
 
 1. Invoke a caller-pinned protected issuer while live rustc custody and the
    canonical subject are both present.
-2. Bind a fresh challenge and exact issuer/runtime policy to the signed receipt.
+2. Instantiate the fixed
+   [compiler-execution attestation V1](compiler-execution-attestation-v1.md)
+   protocol with an issuer-owned fresh challenge, protected signing key, and
+   durable rollback ledger.
 3. Carry the receipt through V3 publication, crash recovery, load-envelope
    custody, and the application verification request in a new explicit wire
    schema.
