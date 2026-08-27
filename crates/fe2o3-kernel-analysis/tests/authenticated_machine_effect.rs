@@ -3,8 +3,10 @@
 use fe2o3_kernel_analysis::{
     AuthenticatedPhysicalMachineEffectErrorKindV1, AuthenticatedPhysicalMachineEffectLimitsV1,
     AuthenticatedPhysicalMachineEffectWorkerV1, DEFAULT_PHYSICAL_MACHINE_EFFECT_TIMEOUT_V1,
-    PhysicalMachineEffectBudgetV1, PhysicalMachineEffectEntryRequestV1,
-    PhysicalMachineEffectEvidenceErrorV1, inspect_physical_machine_effect_worker_candidate_v1,
+    PhysicalMachineAnalyzerIdentityV1, PhysicalMachineEffectBudgetV1,
+    PhysicalMachineEffectEntryRequestV1, PhysicalMachineEffectEvidenceErrorV1,
+    PhysicalMachineEffectWorkerPolicyV1, PhysicalMachineToolchainIdentityV1,
+    inspect_physical_machine_effect_worker_candidate_v1,
 };
 use rustix::fs::{OFlags, SealFlags};
 use std::{
@@ -89,6 +91,36 @@ fn configured_native_worker_uses_authenticated_identity_probe() {
     assert_eq!(worker.policy(), candidate.policy());
     assert_eq!(worker.analyzer_identity(), candidate.analyzer_identity());
     assert_eq!(worker.toolchain_identity(), candidate.toolchain_identity());
+}
+
+#[test]
+fn caller_policy_rejects_analyzer_and_toolchain_substitution() {
+    let candidate =
+        inspect_physical_machine_effect_worker_candidate_v1(fixture(), limits()).unwrap();
+    let exact = candidate.policy();
+    for substituted in [
+        PhysicalMachineEffectWorkerPolicyV1::new(
+            exact.executable(),
+            exact.runtime_closure(),
+            PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([0xc3; 32]),
+            exact.toolchain(),
+        )
+        .unwrap(),
+        PhysicalMachineEffectWorkerPolicyV1::new(
+            exact.executable(),
+            exact.runtime_closure(),
+            exact.analyzer(),
+            PhysicalMachineToolchainIdentityV1::from_sha256_bytes([0xd4; 32]),
+        )
+        .unwrap(),
+    ] {
+        assert!(matches!(
+            AuthenticatedPhysicalMachineEffectWorkerV1::open(fixture(), substituted, limits())
+                .unwrap_err()
+                .kind(),
+            AuthenticatedPhysicalMachineEffectErrorKindV1::IdentityMismatch
+        ));
+    }
 }
 
 fn temp_dir(name: &str) -> PathBuf {

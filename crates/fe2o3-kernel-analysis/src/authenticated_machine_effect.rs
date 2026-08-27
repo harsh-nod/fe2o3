@@ -96,7 +96,8 @@ impl PhysicalMachineWorkerExecutableIdentityV1 {
     }
 }
 
-/// Deployment-pinned executable and ASLR-stable file-object closure.
+/// Deployment-pinned executable, analyzer/toolchain identities, and ASLR-stable file-object
+/// closure.
 ///
 /// Per-execution mapping ranges, permissions, offsets, and object identities
 /// are bound separately in the authenticated receipt.
@@ -104,18 +105,24 @@ impl PhysicalMachineWorkerExecutableIdentityV1 {
 pub struct PhysicalMachineEffectWorkerPolicyV1 {
     executable: PhysicalMachineWorkerExecutableIdentityV1,
     runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
+    analyzer: PhysicalMachineAnalyzerIdentityV1,
+    toolchain: PhysicalMachineToolchainIdentityV1,
 }
 
 impl PhysicalMachineEffectWorkerPolicyV1 {
     pub fn new(
         executable: PhysicalMachineWorkerExecutableIdentityV1,
         runtime_closure: PhysicalMachineRuntimeClosureIdentityV1,
+        analyzer: PhysicalMachineAnalyzerIdentityV1,
+        toolchain: PhysicalMachineToolchainIdentityV1,
     ) -> Result<Self, AuthenticatedPhysicalMachineEffectErrorV1> {
         if executable.byte_len == 0
             || executable.byte_len > MAX_PHYSICAL_MACHINE_EFFECT_WORKER_BYTES_V1
             || executable.sha256 == [0; 32]
             || runtime_closure.byte_len == 0
             || runtime_closure.sha256 == [0; 32]
+            || analyzer.as_bytes() == [0; 32]
+            || toolchain.as_bytes() == [0; 32]
         {
             return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::InvalidPolicy,
@@ -124,6 +131,8 @@ impl PhysicalMachineEffectWorkerPolicyV1 {
         Ok(Self {
             executable,
             runtime_closure,
+            analyzer,
+            toolchain,
         })
     }
 
@@ -133,6 +142,14 @@ impl PhysicalMachineEffectWorkerPolicyV1 {
 
     pub const fn runtime_closure(self) -> PhysicalMachineRuntimeClosureIdentityV1 {
         self.runtime_closure
+    }
+
+    pub const fn analyzer(self) -> PhysicalMachineAnalyzerIdentityV1 {
+        self.analyzer
+    }
+
+    pub const fn toolchain(self) -> PhysicalMachineToolchainIdentityV1 {
+        self.toolchain
     }
 }
 
@@ -332,6 +349,7 @@ pub struct AuthenticatedPhysicalMachineEffectExecutionV1 {
     process_id: u32,
     process_start_ticks: u64,
     runtime_mapping_identity: PhysicalMachineRuntimeMappingIdentityV1,
+    request: PhysicalMachineEffectRequestV1,
     evidence: PhysicalMachineEffectEvidenceV1,
     canonical_receipt: Vec<u8>,
 }
@@ -371,6 +389,10 @@ impl AuthenticatedPhysicalMachineEffectExecutionV1 {
 
     pub const fn evidence(&self) -> &PhysicalMachineEffectEvidenceV1 {
         &self.evidence
+    }
+
+    pub const fn request(&self) -> &PhysicalMachineEffectRequestV1 {
+        &self.request
     }
 
     pub fn canonical_receipt_bytes(&self) -> &[u8] {
@@ -478,6 +500,8 @@ fn encode_receipt(
     push_u64(&mut output, policy.executable.byte_len);
     output.extend_from_slice(&policy.runtime_closure.sha256);
     push_u64(&mut output, policy.runtime_closure.byte_len);
+    output.extend_from_slice(&policy.analyzer.as_bytes());
+    output.extend_from_slice(&policy.toolchain.as_bytes());
     output.extend_from_slice(&challenge.as_bytes());
     push_u32(&mut output, process_id);
     push_u64(&mut output, process_start_ticks);
@@ -855,6 +879,11 @@ mod platform {
                     },
                 ));
             }
+            if analyzer != policy.analyzer || toolchain != policy.toolchain {
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                    AuthenticatedPhysicalMachineEffectErrorKindV1::IdentityMismatch,
+                ));
+            }
             result.analyzer_identity = analyzer;
             result.toolchain_identity = toolchain;
             Ok(result)
@@ -962,6 +991,7 @@ mod platform {
                 process_id: execution.observation.process_id,
                 process_start_ticks: execution.observation.start_ticks,
                 runtime_mapping_identity: execution.observation.runtime_mappings,
+                request,
                 evidence,
                 canonical_receipt,
             })
@@ -1106,6 +1136,8 @@ mod platform {
         let provisional = PhysicalMachineEffectWorkerPolicyV1 {
             executable,
             runtime_closure: PhysicalMachineRuntimeClosureIdentityV1::from_parts([1; 32], 1),
+            analyzer: PhysicalMachineAnalyzerIdentityV1::from_sha256_bytes([1; 32]),
+            toolchain: PhysicalMachineToolchainIdentityV1::from_sha256_bytes([1; 32]),
         };
         let worker = AuthenticatedPhysicalMachineEffectWorkerV1 {
             image,
@@ -1118,7 +1150,12 @@ mod platform {
         let (analyzer_identity, toolchain_identity, runtime_closure) =
             worker.probe_identities(limits, None)?;
         Ok(PhysicalMachineEffectWorkerCandidateV1 {
-            policy: PhysicalMachineEffectWorkerPolicyV1::new(executable, runtime_closure)?,
+            policy: PhysicalMachineEffectWorkerPolicyV1::new(
+                executable,
+                runtime_closure,
+                analyzer_identity,
+                toolchain_identity,
+            )?,
             analyzer_identity,
             toolchain_identity,
         })
