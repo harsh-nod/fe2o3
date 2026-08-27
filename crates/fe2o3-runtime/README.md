@@ -18,10 +18,14 @@ and rejects any changed read-only buffer after teardown. Because every
 low-level error after native mutation is terminal, the safe transition aborts
 instead of returning into application code.
 
-No production implementation of the unsafe authority trait exists yet. Only a
-reviewed Worker V3 verifier joined to compiler-generated invocation preparation
-may implement it. Successful parsing, materialization, request construction, or
-descriptive digest equality is not verifier or launch authority.
+`fe2o3-host` now has one private implementation of the unsafe authority trait.
+It is constructible only by consuming an authenticated Worker V3 executable,
+compiler-generated host-memory arguments, retained current-publication custody,
+runtime preparation, and one checked KFD device into a move-only invocation.
+The joined scalar-GEMM lane passes on MI300X with an explicitly synthetic test
+verifier. No reviewed production verifier exists yet. Successful parsing,
+materialization, request construction, synthetic verification, or descriptive
+digest equality is not production verifier authority.
 
 The opt-in `gfx942-lds-diagnostic` executes one SHA-pinned, loader-inspected LDS
 reduction through this same transition using an explicitly unsafe diagnostic

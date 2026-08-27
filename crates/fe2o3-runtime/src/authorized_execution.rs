@@ -39,12 +39,14 @@ use crate::{
 ///
 /// Implementations must be emitted only after one reviewed Worker V3 verifier has authenticated
 /// the exact compiler lineage, finalized artifact, generated Rust ABI and effect contract,
-/// machine effects, proof-to-executable binding, invocation arguments, launch geometry, alias and
-/// race discipline, bounds, initialization, and completion quiescence represented by the returned
-/// dispatch-contract identity. `device_unique_id` must identify the exact KFD device covered by
-/// those checks. `revalidate_currentness` must retain and recheck the same publication and evidence
-/// custody through the call. A false implementation can make safe code execute unauthorised native
-/// GPU memory accesses.
+/// machine effects, and proof-to-executable binding. The verifier may establish a universally
+/// quantified kernel theorem, but a trusted composition boundary must then instantiate it with
+/// the exact invocation arguments, launch geometry, alias and race discipline, bounds,
+/// initialization, and completion policy represented by the returned dispatch-contract identity.
+/// `device_unique_id` must identify the same checked KFD device retained by that composition.
+/// `revalidate_currentness` must retain and recheck the same publication and evidence custody
+/// through the call. A false implementation can make safe code execute unauthorised native GPU
+/// memory accesses.
 pub unsafe trait WorkerV3Gfx942ExecutionAuthorityV1 {
     type CurrentnessError;
 

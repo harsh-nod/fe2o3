@@ -207,7 +207,7 @@ pub(super) struct GeneratedDeviceSliceMetadata {
 pub(super) struct GeneratedArgumentBorrowV1<'allocation>(PhantomData<&'allocation ()>);
 
 impl GeneratedArgumentBorrowV1<'_> {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self(PhantomData)
     }
 }

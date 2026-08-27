@@ -513,12 +513,12 @@ fn validate_resources(
             "non-wave64 kernel",
         ));
     }
-    if resources.private_segment_fixed_size() != 0
-        || resources.sgpr_spill_count().unwrap_or(0) != 0
-        || resources.vgpr_spill_count().unwrap_or(0) != 0
-    {
+    // The spill-count metadata records compiler allocation statistics; it is not an AQL scratch
+    // allocation requirement. The descriptor's private-segment byte count is the authoritative
+    // packet resource. A nonzero count remains unsupported until scratch backing is implemented.
+    if resources.private_segment_fixed_size() != 0 {
         return Err(Gfx942RuntimePreparationErrorV1::UnsupportedResource(
-            "private segment or spill scratch",
+            "private segment scratch",
         ));
     }
     if resources.cluster_dims().is_some() {

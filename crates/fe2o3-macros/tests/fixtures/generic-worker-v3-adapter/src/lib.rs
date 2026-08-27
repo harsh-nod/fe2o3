@@ -52,11 +52,27 @@ pub fn assert_generated_adapters() {
     {
     }
 
+    fn assert_kfd_adapter<'allocation, K, Arguments>()
+    where
+        K: gpu_host::__generated::CompilerGeneratedKernelExpectationV1,
+        Arguments: gpu_host::__generated::CompilerGeneratedKfdArguments<'allocation, K>,
+    {
+    }
+
     assert_adapter::<transform_gpu::Marker, transform_gpu::Arguments<'static>>();
     assert_adapter::<combine_gpu::Marker, combine_gpu::Arguments<'static>>();
     assert_adapter::<
         multi_argument_kernel_gpu::Marker,
         multi_argument_kernel_gpu::Arguments<'static>,
+    >();
+    assert_kfd_adapter::<
+        multi_argument_kernel_gpu::Marker,
+        multi_argument_kernel_gpu::Arguments<
+            'static,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, f32>,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, f32>,
+            gpu_host::__generated::GeneratedKfdReadWriteSlice<'static, f32>,
+        >,
     >();
 }
 

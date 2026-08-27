@@ -2,10 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-use fe2o3_host::{
-    __hardware_test::application_handoff_observed_context_fixture_v1, KernelId,
-    consume_inherited_worker_v3_application_handoff_v1,
-};
+use fe2o3_host::{KernelId, consume_inherited_worker_v3_application_handoff_v1};
 use fe2o3_runtime_protocol::{
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
@@ -67,11 +64,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     let kernel = KernelId::from_bytes(decode_hex_32(fs::read_to_string(&arguments[0])?.trim())?);
     let target = arguments[1].to_str().ok_or("target is not UTF-8")?;
-    let observed = application_handoff_observed_context_fixture_v1(target);
     // SAFETY: the fixture has not created threads, signal handlers, descendants, or touched the
     // inherited handoff descriptors.
-    let recovered =
-        unsafe { consume_inherited_worker_v3_application_handoff_v1(kernel, &observed)? };
+    let recovered = unsafe { consume_inherited_worker_v3_application_handoff_v1(kernel)? };
+    if recovered.target().to_string() != target {
+        return Err("recovered artifact target differs from the expected target".into());
+    }
     recovered.revalidate_currentness()?;
     drop(recovered);
     fs::write(

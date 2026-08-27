@@ -1,0 +1,5 @@
+error[E0599]: no method named `device` found for reference `&RecoveredWorkerV3PinnedDescriptorV1` in the current scope
+ --> tests/ui/recovered_worker_v3_admission/device_is_unavailable.rs:4:25
+  |
+4 |     let _device = value.device();
+  |                         ^^^^^^ method not found in `&RecoveredWorkerV3PinnedDescriptorV1`

@@ -6,8 +6,8 @@
 //! assumptions and must instead be isolated from authority by a separate broker.
 
 use crate::{
-    KernelId, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
-    RecoveredWorkerV3PinnedDescriptorV1, admit_recovered_worker_v3_descriptor_v1,
+    KernelId, RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
+    admit_recovered_worker_v3_descriptor_v1,
 };
 use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
 use fe2o3_runtime_protocol::{
@@ -181,7 +181,6 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
 /// descriptor mutation. A hostile same-process caller violates this cooperative contract.
 pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
     kernel_id: KernelId,
-    observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
     let environment = take_inherited_environment();
     if INHERITED_HANDOFF_CLAIMED_V1
@@ -281,7 +280,6 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
         commitment,
         challenge,
         kernel_id,
-        observed,
     )
 }
 
@@ -295,7 +293,6 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     commitment: WorkerV3ApplicationHandoffCommitmentV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
     kernel_id: KernelId,
-    observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
     set_close_on_exec(&envelope, "Worker V3 envelope")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
@@ -357,7 +354,7 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     if recovered_envelope.as_slice() != retained.exact_envelope_bytes.as_ref() {
         return Err(WorkerV3ApplicationDescriptorHandoffErrorV1::RecoveredEnvelopeMismatch);
     }
-    let recovered = admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, observed)
+    let recovered = admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
     seal_descriptor_occurrences(&descriptor_identities)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;

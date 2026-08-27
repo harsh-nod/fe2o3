@@ -2,7 +2,7 @@ use crate::generated_argument_plan::validate_worker_v3_argument_packing;
 use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
     CompilerGeneratedKernelExpectationV1, DeviceIdentity, GeneratedArgumentPackingError,
-    GeneratedArgumentPackingPlanV1, RecoveredWorkerV3AdmissionErrorV1,
+    GeneratedArgumentPackingPlanV1, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
 };
 use fe2o3_amd_target::{AmdTargetId, ProductionAmdTargetProfileV1};
 use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
@@ -695,6 +695,7 @@ impl HsaImplicitKernargInitializationObservationV1 {
 /// executable unload; no stale generation can be loaded or turned over while native state lives.
 pub struct AuthorizedWorkerV3HsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
 }
@@ -704,19 +705,22 @@ pub(crate) fn authorize_worker_v3_hsa_load_v1<
     A: ReviewedHsaExecutableLifecycleAdapterV1,
 >(
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+    observed: ObservedContext,
     mut adapter: A,
 ) -> Result<AuthorizedWorkerV3HsaLoadV1<K, A>, WorkerV3HsaLoadAuthorizationErrorV1<A::Error>> {
     authenticated
         .revalidate_currentness()
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::CurrentPublication)?;
-    // SAFETY: only an unsafe reviewed adapter can enter this boundary. Its complete observation
-    // is checked against the admitted target and HIP device before load authority is returned.
+    // SAFETY: only an unsafe reviewed adapter can enter this migration boundary. Its complete
+    // observation is checked against the artifact target and separately supplied HIP context
+    // before load authority is returned.
     let environment = reviewed_adapter_call(|| unsafe { adapter.observe_environment() })
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::Adapter)?;
-    validate_environment_facts(authenticated.target(), authenticated.device(), &environment)
+    validate_environment_facts(authenticated.target(), observed.device(), &environment)
         .map_err(WorkerV3HsaLoadAuthorizationErrorV1::Environment)?;
     Ok(AuthorizedWorkerV3HsaLoadV1 {
         authenticated,
+        observed,
         adapter,
         environment,
     })
@@ -806,6 +810,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
         Ok(LoadedWorkerV3HsaExecutableV1 {
             authenticated: self.authenticated,
             current,
+            observed: self.observed,
             adapter: self.adapter,
             environment: self.environment,
             executable: Some(executable),
@@ -930,6 +935,7 @@ pub enum WorkerV3GeneratedDispatchErrorV1<E> {
 pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
     current: DurableCurrentLinkPublicationTokenV1,
+    observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
     executable: Option<A::Executable>,
@@ -989,7 +995,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
     }
 
     pub(crate) fn matches_observed_context(&self, observed: &crate::ObservedContext) -> bool {
-        let admitted = self.authenticated.admission().observed_context();
+        let admitted = &self.observed;
         observed.device() == admitted.device()
             && observed.same_context(admitted)
             && observed.same_launch_limits(admitted)
@@ -1260,8 +1266,16 @@ fn validate_environment_facts(
     };
     let required_runtime_target = AmdTargetId::parse(profile.device_target())
         .expect("typed production target profile must contain a canonical target ID");
+    let observed_target = device.target_id();
     if required_runtime_target != expected_target
-        || !expected_target.is_compatible_with_observed(&actual_target)
+        || !expected_target.is_compatible_with_observed(&observed_target)
+        || !required_runtime_target.is_compatible_with_observed(&observed_target)
+    {
+        return Err(HsaEnvironmentMismatch::Target {
+            actual: observed_target.to_string(),
+        });
+    }
+    if !expected_target.is_compatible_with_observed(&actual_target)
         || !required_runtime_target.is_compatible_with_observed(&actual_target)
         || environment.agent.target != actual_target
     {

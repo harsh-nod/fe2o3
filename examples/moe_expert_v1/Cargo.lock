@@ -140,6 +140,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-amdhsa-loader"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-aql"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
@@ -210,6 +222,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-drm-uapi"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-hip-sys"
 version = "0.1.0"
 dependencies = [
@@ -221,6 +237,7 @@ name = "fe2o3-host"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-ffi",
@@ -230,6 +247,8 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kfd",
+ "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "libc",
  "reserved-fe2o3-symbols",
@@ -286,6 +305,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kfd"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-aql",
+ "fe2o3-drm-uapi",
+ "fe2o3-kfd-uapi",
+ "fe2o3-runtime-model",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-kfd-uapi"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-llvm-handoff"
 version = "0.1.0"
 dependencies = [
@@ -330,6 +365,21 @@ dependencies = [
  "fe2o3-device",
  "fe2o3-host",
 ]
+
+[[package]]
+name = "fe2o3-runtime"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdhsa-loader",
+ "fe2o3-aql",
+ "fe2o3-hsaco",
+ "fe2o3-kfd",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-runtime-model"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-runtime-protocol"
@@ -482,7 +532,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -526,9 +576,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
 dependencies = [
  "proc-macro2",
  "quote",

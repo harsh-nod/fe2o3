@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
-    CompilerGeneratedKernelExpectationV1, DeviceIdentity, RecoveredWorkerV3AdmissionErrorV1,
+    CompilerGeneratedKernelExpectationV1, RecoveredWorkerV3AdmissionErrorV1,
     RecoveredWorkerV3PinnedDescriptorV1, WorkerV3HostLineageIdentityV1,
 };
 
@@ -24,6 +24,8 @@ pub enum WorkerV3SafetyPropertyV1 {
     Initialization,
     RaceFreedom,
     LaunchValidity,
+    Synchronization,
+    SemanticRefinement,
 }
 
 impl WorkerV3SafetyPropertyV1 {
@@ -35,6 +37,8 @@ impl WorkerV3SafetyPropertyV1 {
             Self::Initialization => 1 << 3,
             Self::RaceFreedom => 1 << 4,
             Self::LaunchValidity => 1 << 5,
+            Self::Synchronization => 1 << 6,
+            Self::SemanticRefinement => 1 << 7,
         }
     }
 }
@@ -44,14 +48,12 @@ impl WorkerV3SafetyPropertyV1 {
 pub struct WorkerV3SafetyPropertiesV1(u8);
 
 impl WorkerV3SafetyPropertiesV1 {
-    const KNOWN_BITS: u8 = (1 << 6) - 1;
+    const KNOWN_BITS: u8 = u8::MAX;
 
     pub const fn new(bits: u8) -> Option<Self> {
-        if bits & !Self::KNOWN_BITS == 0 {
-            Some(Self(bits))
-        } else {
-            None
-        }
+        // V1 assigns every bit in its u8 wire representation. Keep the fallible constructor
+        // signature stable so a later wire version can reject unknown bits without API churn.
+        Some(Self(bits))
     }
 
     pub const fn required() -> Self {
@@ -86,7 +88,6 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     descriptor: &'admission KernelDescriptorV1,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
-    device: &'admission DeviceIdentity,
     generated_host_contract: [u8; 32],
     _marker: PhantomData<fn() -> K>,
 }
@@ -174,10 +175,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
         self.code_object_version
     }
 
-    pub const fn device(&self) -> &DeviceIdentity {
-        self.device
-    }
-
     pub const fn marker_logical_name(&self) -> &'static str {
         K::LOGICAL_NAME
     }
@@ -202,9 +199,12 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// Implementations must authenticate immutable compiler and verifier executions under an
 /// approved policy. They must establish that the formal-memory and proof-binding receipts apply
 /// to this exact semantic capsule, descriptor, final HSACO, and generated Rust marker, and that
-/// every reported safety property covers all executable memory effects. The inert V3 receipts do
-/// not establish these claims by themselves. A false implementation can later authorize native
-/// code loading from safe generated code.
+/// every reported safety property covers all executable memory effects for every concrete
+/// invocation satisfying the generated ABI, effect, alias, initialization, and launch contracts.
+/// This is a universally quantified kernel theorem: the later safe composition boundary may
+/// instantiate it only with compiler-generated capabilities and independently checked physical
+/// runtime inputs. The inert V3 receipts do not establish these claims by themselves. A false
+/// implementation can later authorize native code loading from safe generated code.
 pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
     type Error;
 
@@ -330,8 +330,8 @@ impl WorkerV3VerificationDecisionV1 {
 
 /// Authenticated compiler/Verus state for one exact V3 executable.
 ///
-/// This value is linear and still grants no HSA load or launch authority. A later transition must
-/// bind it to a reviewed HSA runtime and a retained current-publication token.
+/// This value is linear and still grants no load or launch authority. A later runtime-specific
+/// transition must bind it to a checked live device and a retained current-publication token.
 pub struct AuthenticatedWorkerV3ExecutableV1<K> {
     admission: RecoveredWorkerV3PinnedDescriptorV1,
     verification: WorkerV3VerificationDecisionV1,
@@ -394,22 +394,19 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         self.admission.target()
     }
 
-    pub const fn device(&self) -> &DeviceIdentity {
-        self.admission.device()
-    }
-
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         self.admission.revalidate_currentness()
     }
 
     pub fn authorize_hsa_load<A: crate::ReviewedHsaExecutableLifecycleAdapterV1>(
         self,
+        observed: crate::ObservedContext,
         adapter: A,
     ) -> Result<
         crate::AuthorizedWorkerV3HsaLoadV1<K, A>,
         crate::WorkerV3HsaLoadAuthorizationErrorV1<A::Error>,
     > {
-        crate::hsa_executable_lifecycle::authorize_worker_v3_hsa_load_v1(self, adapter)
+        crate::hsa_executable_lifecycle::authorize_worker_v3_hsa_load_v1(self, observed, adapter)
     }
 
     pub const fn authenticates_verification_authority(&self) -> bool {
@@ -483,7 +480,6 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
         descriptor: admission.descriptor(),
         target: admission.target(),
         code_object_version: admission.code_object_version(),
-        device: admission.device(),
         generated_host_contract,
         _marker: PhantomData,
     })
@@ -619,6 +615,8 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
         WorkerV3SafetyPropertyV1::Initialization,
         WorkerV3SafetyPropertyV1::RaceFreedom,
         WorkerV3SafetyPropertyV1::LaunchValidity,
+        WorkerV3SafetyPropertyV1::Synchronization,
+        WorkerV3SafetyPropertyV1::SemanticRefinement,
     ] {
         if !decision.safety_properties.contains(property) {
             return Err(WorkerV3VerificationDecisionErrorV1::MissingSafetyProperty(
@@ -731,6 +729,30 @@ where
             Self::CurrentPublication(error) => Some(error),
             Self::Auditor(error) => Some(error),
             Self::Marker(_) | Self::UnsupportedGeneratedProfile => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_worker_v3_properties_are_explicit_and_complete() {
+        let required = WorkerV3SafetyPropertiesV1::required();
+        assert_eq!(required.bits(), u8::MAX);
+        assert_eq!(WorkerV3SafetyPropertiesV1::new(u8::MAX), Some(required));
+        for property in [
+            WorkerV3SafetyPropertyV1::Bounds,
+            WorkerV3SafetyPropertyV1::AddressOverflowFreedom,
+            WorkerV3SafetyPropertyV1::MemorySafety,
+            WorkerV3SafetyPropertyV1::Initialization,
+            WorkerV3SafetyPropertyV1::RaceFreedom,
+            WorkerV3SafetyPropertyV1::LaunchValidity,
+            WorkerV3SafetyPropertyV1::Synchronization,
+            WorkerV3SafetyPropertyV1::SemanticRefinement,
+        ] {
+            assert!(required.contains(property));
         }
     }
 }

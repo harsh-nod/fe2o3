@@ -3,6 +3,8 @@ mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
 mod generated_argument_plan;
+mod generated_kfd_arguments;
+mod generated_kfd_invocation;
 mod generated_worker_v3_dispatch;
 mod hsa_executable_lifecycle;
 mod prepared_launch;
@@ -101,13 +103,29 @@ pub use artifact_binding::{
     CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
     semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
+pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+pub use fe2o3_kfd::{
+    CheckedGfx942XnackMinusDevice, DeviceBindingError, DeviceSelector, KfdAdapterError,
+    KfdWithAdmittedUapi, OpenedKfd,
+};
 #[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
+};
+#[doc(hidden)]
+pub use generated_kfd_arguments::{
+    CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
+    GeneratedKfdCompletion, GeneratedKfdCompletionError, GeneratedKfdPackedArguments,
+    GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
+    GeneratedKfdSliceBinding,
+};
+pub use generated_kfd_invocation::{
+    GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
+    GeneratedWorkerV3KfdInvocationError,
 };
 #[doc(hidden)]
 pub use generated_worker_v3_dispatch::{
@@ -133,7 +151,9 @@ pub use prepared_launch::{
 };
 #[cfg(target_os = "linux")]
 pub use production_application::{
-    ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
+    ProductionWorkerV3ApplicationLoadErrorV1, ProductionWorkerV3KfdApplicationErrorV1,
+    ProductionWorkerV3KfdPreparationErrorV1, load_inherited_worker_v3_application_v1,
+    prepare_inherited_worker_v3_kfd_application_v1,
 };
 pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
@@ -169,17 +189,24 @@ pub use worker_v3_verification_admission::{
 #[doc(hidden)]
 pub mod __generated {
     #[cfg(target_os = "linux")]
-    pub use crate::production_application::load_admitted_worker_v3_application_v1;
+    pub use crate::production_application::{
+        load_admitted_worker_v3_application_v1, prepare_admitted_worker_v3_kfd_application_v1,
+    };
 
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-        CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
-        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedSliceArgumentPairV1, GeneratedWorkerV3ArgumentBindingV1,
-        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
+        CompilerGeneratedKernelProfileV1, CompilerGeneratedKfdArguments,
+        CompilerGeneratedSemanticWitnessErrorV1, CompilerGeneratedWorkerV3ArgumentsV1,
+        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
+        GeneratedKfdArgumentBinding, GeneratedKfdArgumentError, GeneratedKfdCompletion,
+        GeneratedKfdCompletionError, GeneratedKfdPackedArguments, GeneratedKfdPrepareError,
+        GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
+        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
+        GeneratedWorkerV3KfdInvocationError, GeneratedWorkerV3PrepareErrorV1,
         GeneratedWorkerV3PreparedInvocationV1, ValidatedCompilerGeneratedSemanticWitnessV1,
         semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
     };

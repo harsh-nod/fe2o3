@@ -21,7 +21,6 @@ use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
 use crate::application_descriptor_handoff::RetainedWorkerV3ApplicationDescriptorsV1;
-use crate::{DeviceIdentity, ObservedContext};
 
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
 
@@ -76,9 +75,10 @@ impl WorkerV3HostLineageEvidenceV1 {
 ///
 /// Construction independently binds the exact durable artifact to the linked precursor,
 /// compiler descriptor source, export manifest, physical metadata and ELF symbols, requested
-/// logical kernel, and observed exact production device. The value owns the move-only recovered
-/// envelope and its current publication lease, but exposes no HSACO bytes or load/launch
-/// transition.
+/// logical kernel, and exact production target. Physical device identity is deliberately absent:
+/// a runtime-specific transition must bind the authenticated artifact to a checked live device.
+/// The value owns the move-only recovered envelope and its current publication lease, but exposes
+/// no HSACO bytes or load/launch transition.
 pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     envelope: RecoveredWorkerV3LoadEnvelopeV1,
     outer_handoff: InertSemanticCompilerModuleHandoffV3,
@@ -86,7 +86,6 @@ pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     descriptor_index: usize,
     physical_kernel_index: usize,
     lineage: WorkerV3HostLineageEvidenceV1,
-    observed: ObservedContext,
     #[cfg(target_os = "linux")]
     application_descriptors: Option<RetainedWorkerV3ApplicationDescriptorsV1>,
 }
@@ -100,7 +99,6 @@ impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
             .field("target", &self.target())
             .field("code_object_version", &self.code_object_version())
             .field("lineage", &self.lineage.identity)
-            .field("device", self.device())
             .finish_non_exhaustive()
     }
 }
@@ -202,14 +200,6 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         &self.outer_handoff
     }
 
-    pub const fn device(&self) -> &DeviceIdentity {
-        self.observed.device()
-    }
-
-    pub(crate) const fn observed_context(&self) -> &ObservedContext {
-        &self.observed
-    }
-
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.inspection.hsaco().target()
     }
@@ -245,7 +235,6 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
 pub fn admit_recovered_worker_v3_descriptor_v1(
     envelope: RecoveredWorkerV3LoadEnvelopeV1,
     kernel_id: KernelId,
-    observed: &ObservedContext,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3AdmissionErrorV1> {
     envelope
         .wire()
@@ -266,7 +255,7 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
     let outer = InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().outer_handoff())
         .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
     validate_compiler_source_and_exports(&outer, &inspection)?;
-    validate_target_and_code_object(&outer, &inspection, observed)?;
+    validate_target_and_code_object(&outer, &inspection)?;
     let (descriptor_index, physical_kernel_index) =
         select_exact_kernel(&outer, &inspection, kernel_id)?;
     let lineage = derive_host_lineage_identity(
@@ -284,7 +273,6 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
         descriptor_index,
         physical_kernel_index,
         lineage,
-        observed: observed.clone(),
         #[cfg(target_os = "linux")]
         application_descriptors: None,
     })
@@ -483,7 +471,6 @@ fn validate_compiler_source_and_exports(
 fn validate_target_and_code_object(
     outer: &InertSemanticCompilerModuleHandoffV3,
     inspection: &FinalizedDescriptorInspection,
-    observed: &ObservedContext,
 ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
     let table = inspection.descriptor_table();
     let target = inspection.hsaco().target();
@@ -495,9 +482,6 @@ fn validate_target_and_code_object(
         || table.device_target().as_amd_target_id() != target
     {
         return Err(RecoveredWorkerV3AdmissionErrorV1::TargetMismatch);
-    }
-    if !target.is_compatible_with_observed(&observed.device().target_id()) {
-        return Err(RecoveredWorkerV3AdmissionErrorV1::ObservedTargetMismatch);
     }
     if inspection.hsaco().code_object_version() != CodeObjectVersion::V6
         || outer.module_handoff().code_object_version().number() != 6
@@ -588,7 +572,6 @@ pub enum RecoveredWorkerV3AdmissionErrorV1 {
     ExportManifestMismatch,
     UnsupportedTarget,
     TargetMismatch,
-    ObservedTargetMismatch,
     CodeObjectVersionMismatch,
     KernelNotFound,
     AmbiguousKernel,
@@ -656,8 +639,6 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
             Self::TargetMismatch => {
                 formatter.write_str("Worker V3 compiler, descriptor, and HSACO targets differ")
             }
-            Self::ObservedTargetMismatch => formatter
-                .write_str("Worker V3 artifact target is incompatible with the observed device"),
             Self::CodeObjectVersionMismatch => formatter
                 .write_str("Worker V3 host admission requires code-object V6 on every boundary"),
             Self::KernelNotFound => {

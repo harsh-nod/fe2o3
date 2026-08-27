@@ -38,16 +38,16 @@ use fe2o3_host::{
     GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
     GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
     HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
-    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaEnvironmentMismatch, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
     HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
     HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
     HsaRuntimeIdentityV1, HsaUnloadObservationV1, ProductionWorkerV3ApplicationLoadErrorV1,
     RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
     ReviewedHsaImplicitKernargAdapterV1, WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1,
-    WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuthenticationErrorV1,
-    WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
-    WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
-    audit_recovered_worker_v3_verification_v1,
+    WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3SafetyPropertiesV1,
+    WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
+    WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
+    admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
 };
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
@@ -1148,12 +1148,9 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!recovered.grants_launch_authority());
 
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     assert_eq!(admitted.descriptor().entry_name().as_str(), "vecadd");
     assert_eq!(
         admitted.descriptor().descriptor_symbol().as_str(),
@@ -1174,6 +1171,7 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
     let mut loaded = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
         admitted,
+        &observed,
         &mut ReviewedTestWorkerV3Verifier {
             substitute_finalized: false,
         },
@@ -1314,41 +1312,40 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
 #[test]
 fn v3_host_admission_rejects_an_unknown_kernel_identity() {
     let (_directory, recovered) = recovered_host_fixture();
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     assert!(matches!(
-        admit_recovered_worker_v3_descriptor_v1(
-            recovered,
-            KernelId::from_bytes([0xff; 32]),
-            &observed,
-        ),
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xff; 32])),
         Err(RecoveredWorkerV3AdmissionErrorV1::KernelNotFound)
     ));
 }
 
 #[test]
-fn v3_host_admission_rejects_incompatible_observed_target_features() {
+fn v3_host_load_rejects_incompatible_observed_target_features() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack+");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     assert!(matches!(
-        admit_recovered_worker_v3_descriptor_v1(
-            recovered,
-            KernelId::from_bytes([0xa1; 32]),
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+            admitted,
             &observed,
+            &mut ReviewedTestWorkerV3Verifier {
+                substitute_finalized: false,
+            },
+            ReviewedTestHsaAdapter::new().0,
         ),
-        Err(RecoveredWorkerV3AdmissionErrorV1::ObservedTargetMismatch)
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            WorkerV3HsaLoadAuthorizationErrorV1::Environment(HsaEnvironmentMismatch::Target { .. })
+        ))
     ));
 }
 
 #[test]
 fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
     let (_directory, recovered) = recovered_host_fixture();
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     let lineage = admitted.lineage_identity();
     let (finalized_sha256, finalized_length) = audit_recovered_worker_v3_verification_v1::<
         WorkerV3VecAddMarker,
@@ -1368,15 +1365,13 @@ fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
 fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     assert!(matches!(
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
+            &observed,
             &mut ReviewedTestWorkerV3Verifier {
                 substitute_finalized: true,
             },
@@ -1394,16 +1389,14 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
 fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     let (adapter, adapter_state) = ReviewedTestHsaAdapter::with_substituted_load_digest();
     assert!(matches!(
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
+            &observed,
             &mut ReviewedTestWorkerV3Verifier {
                 substitute_finalized: false,
             },

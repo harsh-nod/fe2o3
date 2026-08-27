@@ -1,0 +1,5 @@
+error[E0599]: no method named `device` found for reference `&WorkerV3VerificationRequestV1<'_, K>` in the current scope
+ --> tests/ui/worker_v3_verification_admission/request_device_is_unavailable.rs:6:27
+  |
+6 |     let _device = request.device();
+  |                           ^^^^^^ method not found in `&WorkerV3VerificationRequestV1<'_, K>`

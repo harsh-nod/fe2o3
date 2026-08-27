@@ -102,6 +102,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-amdhsa-loader"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-hsaco",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-aql"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-artifact-transaction"
 version = "0.1.0"
 dependencies = [
@@ -172,6 +184,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-drm-uapi"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-gfx950-low-precision"
 version = "0.1.0"
 dependencies = [
@@ -191,6 +207,7 @@ name = "fe2o3-host"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-compiler-ffi",
@@ -200,6 +217,8 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
+ "fe2o3-kfd",
+ "fe2o3-runtime",
  "fe2o3-runtime-protocol",
  "libc",
  "reserved-fe2o3-symbols",
@@ -256,6 +275,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-kfd"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-aql",
+ "fe2o3-drm-uapi",
+ "fe2o3-kfd-uapi",
+ "fe2o3-runtime-model",
+ "rustix",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-kfd-uapi"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-llvm-handoff"
 version = "0.1.0"
 dependencies = [
@@ -281,6 +316,21 @@ dependencies = [
  "reserved-fe2o3-symbols",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "fe2o3-runtime"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdhsa-loader",
+ "fe2o3-aql",
+ "fe2o3-hsaco",
+ "fe2o3-kfd",
+ "sha2",
+]
+
+[[package]]
+name = "fe2o3-runtime-model"
+version = "0.1.0"
 
 [[package]]
 name = "fe2o3-runtime-protocol"

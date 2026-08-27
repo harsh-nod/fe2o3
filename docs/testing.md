@@ -179,13 +179,21 @@ cargo test --locked -p fe2o3-host --test generated_spi_ui
 cargo test --locked -p fe2o3-host --test hsa_executable_lifecycle_ui
 cargo test --locked -p fe2o3-host --test worker_v3_verification_admission_ui
 cargo test --locked -p fe2o3-host --test production_application_handoff_ui
+cargo test --locked -p fe2o3-macros --test typed_kernel_fixtures
 cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-hooks --no-run
 ```
 
-The next hardware evidence must enter through the production Worker V3
-application and verifier, generated dispatch, completion, and a KFD runtime
-path. A fake verifier or externally selected legacy route cannot satisfy that
-gate.
+The macro fixture suite also checks the generated pure-KFD argument boundary:
+safe code cannot implement its unsafe generated trait, mutable host outputs
+remain exclusively borrowed, and HSA-backed and KFD-backed `Arguments`
+specializations cannot satisfy each other's generated trait.
+
+The generated KFD composition lane now covers authenticated Worker V3 typestate,
+generated dispatch, completion, and the KFD runtime with a synthetic verifier.
+The remaining production hardware gate must use the reviewed production
+verifier through the inherited KFD application transition and must obtain its
+artifact from the same build/publication transaction. A synthetic verifier,
+externally injected HSACO, or selected legacy route cannot satisfy that gate.
 
 ### Archived compiler evidence controller
 
@@ -264,9 +272,33 @@ FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO=/absolute/path/to/lds.hsaco \
 The smoke suite builds and runs all supported examples. Each example copies its
 result back to the host and checks it against a CPU-computed expected value.
 
+The joined generated scalar-GEMM lane exercises the production-shaped host and
+runtime boundary on one selected `gfx942:xnack-` KFD device:
+
+```text
+FE2O3_HIP_SYS_DISABLE=1 \
+FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO=/absolute/path/to/scalar-gemm.hsaco \
+FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID=0x6ced1647a296545c \
+cargo test --locked -p cargo-fe2o3 \
+  --features worker-v3-envelope-integration-test-only \
+  --test worker_v3_load_envelope_vertical \
+  synthetic_verifier_executes_real_scalar_gemm_through_joined_kfd_authority \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+On MI300X this passes the numerical CPU oracle, completion writeback, all three
+buffer lengths, and host canaries. It also holds the exact publication token and
+output borrows through KFD quiescence. The verifier in this test is explicitly
+synthetic and the HSACO path is externally injected, so the result proves the
+joined composition and native mechanics, not production compiler or proof
+authority. The test enters the same private preparation transition used by
+`prepare_inherited_worker_v3_kfd_application_v1`; a full inherited application
+process run remains a separate production gate.
+
 The host crate enforces the same split. Its feature-free build exposes the
-Worker V3 application, admission, verification, HSA load, and generated
-dispatch route. Worker V2 application recovery, embedded-artifact loading,
+Worker V3 application, admission, verification, private joined KFD invocation,
+and HSA-backed generated migration route. Worker V2 application recovery,
+embedded-artifact loading,
 direct HIP module/function loading, raw parameter packing, cooperative launch,
 and workload-specific host adapters are deleted in every feature configuration.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
