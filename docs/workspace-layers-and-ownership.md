@@ -164,20 +164,9 @@ Integration owns CLI composition, rustc codegen integration, qualification
 comparison, and end-to-end differential orchestration. Integration may compose
 any production layer but MUST NOT depend on examples or test fixtures.
 
-`fe2o3-compiler-api` defines one inert production request contract.
-`fe2o3-compiler-driver` owns exactly one configured backend and revalidates its
-bounded output. It has no implementation selector, shadow slot, or fallback.
-Qualification oracles remain separately feature-gated in
-`rustc-codegen-fe2o3` and cannot enter the feature-free production graph.
+`fe2o3-compiler-api` defines one inert production request contract. `cargo-fe2o3` and `rustc-codegen-fe2o3` own the sole managed production composition. No workload oracle is compiled; the legacy selector is rejected.
 
-`fe2o3-pliron-scalar-add-v1` is an intentionally narrow integration crate. It
-composes one checked-in backend fixture, the admitted Pliron/V2 lineage, the
-pinned upstream LLVM/in-process-LLD worker, exact HSACO finalization, and a
-sealed one-shot HSA consumer for `gfx942:xnack-`. It is not a general frontend,
-backend, authority framework, or reusable runtime API. In particular, its
-backend fixture is not Rust user source, and its compile-time checkout policy
-records repository/build provenance rather than an external signature or
-attestation. The qualifying runtime observed `gfx942:sramecc+:xnack-`, a COV6
+The retired scalar-add fixture join was never a general frontend or backend and has been removed. The qualifying runtime historically observed `gfx942:sramecc+:xnack-`, a COV6
 descriptor kernarg alignment of 8, and a runtime storage alignment of 16.
 
 ### Fixtures
@@ -223,10 +212,9 @@ it does not mean production compilation exists.
 | Dialects | One `dialect-*` crate per operation family | Seven target-neutral shells plus feature-gated `mir.*` shell landed |
 | Transformations | One `fe2o3-lower-*` family | Narrow context-bound MIR-to-kernel and kernel-to-GPU detached services landed; full production ladder remains open |
 | KIR bridge | `fe2o3-kir-pliron-bridge` | Opaque context-bound exact-byte V1-V5 envelope landed; complete semantic bridge gate remains open |
-| Bounded vertical-slice composition | `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture-to-MI300X scalar-add route landed with sealed one-shot consumption; Rust user-source integration, external attestation, and generalization remain open |
 | Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
 | AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
-| Driver | `fe2o3-compiler-driver` | Two-route API dispatch landed; production selection remains open and shadow stays inspect-only |
+| Production composition | `cargo-fe2o3`, `rustc-codegen-fe2o3` | One Worker V3 route from attributed Rust source; no workload oracle is compiled |
 
 Dialect agents MUST NOT edit central registration or production selection.
 They provide a registration function and focused tests for the integration

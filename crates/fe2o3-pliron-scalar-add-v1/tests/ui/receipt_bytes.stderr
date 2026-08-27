@@ -1,5 +1,0 @@
-error[E0599]: no method named `bytes` found for reference `&FinalizedRepositoryScalarAddV1` in the current scope
- --> tests/ui/receipt_bytes.rs:4:21
-  |
-4 |     let _ = receipt.bytes();
-  |                     ^^^^^ method not found in `&FinalizedRepositoryScalarAddV1`

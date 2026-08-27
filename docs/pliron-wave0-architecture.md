@@ -80,10 +80,7 @@ The following infrastructure is implemented:
 - `fe2o3-mir-model` owns the canonical, Pliron-independent MIR semantic model,
   executable schema, wire validation, control-flow analysis, and mem2reg
   implementation that previously lived behind `dialect-mir`.
-- `fe2o3-compiler-api` defines bounded target-neutral production requests,
-  snapshots, receipts, diagnostics, and outputs. `fe2o3-compiler-driver` owns
-  exactly one configured backend and revalidates its output. There is no
-  implementation selector, shadow slot, or fallback.
+- `fe2o3-compiler-api` defines bounded target-neutral production requests, snapshots, receipts, diagnostics, and outputs. `cargo-fe2o3` and `rustc-codegen-fe2o3` own the only production composition; there is no implementation selector, shadow slot, or fallback.
 - `fe2o3-proof-contracts` defines solver-neutral property, status, obligation,
   TCB, and correspondence records. Structural validation does not authenticate
   evidence, run a solver, or promote proof authority.
@@ -129,15 +126,7 @@ The following infrastructure is implemented:
   attempt-scoped compiler handoff into a sealed Worker V2 request. This record
   is inert: it authenticates no compiler executable and grants no worker,
   object, link, publication, load, or launch authority.
-- The graph-derived extractor (`62e66209e`), serializer (`3a3b43e90`), bridge
-  (`cb571012f`), hardened Worker (`fd6520d88`), exact inspector (`70f9c5ad7`),
-  measured-HSACO gate (`e016833d3`), move-only execution evidence
-  (`c9e8ca702`), sealed join (`62efd243e`), and runtime-alignment correction
-  (`228c88ed9`) are implemented.
-- `fe2o3-pliron-scalar-add-v1` is the dedicated join crate for this exact
-  profile. It combines compile-time checkout policy, finalization, and a sealed
-  one-shot HSA consumer; it is not a general backend, approval service, or
-  reusable runtime-policy layer.
+- The historical bounded scalar-add fixture path, exact Worker V2 join, and one-shot consumer have been retired. Current source enters the shared ranked-PLIRON and KIR production route.
 - `fe2o3-host-api` defines inert target-neutral compile/admit/load/dispatch/wait
   records. For issue
   [#135](https://github.com/harsh-nod/fe2o3/issues/135), which also remains

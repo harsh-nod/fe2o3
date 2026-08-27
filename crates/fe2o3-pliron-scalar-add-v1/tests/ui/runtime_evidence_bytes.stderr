@@ -1,5 +1,0 @@
-error[E0599]: no method named `hsaco_bytes` found for reference `&RuntimeEvidenceV1` in the current scope
- --> tests/ui/runtime_evidence_bytes.rs:4:22
-  |
-4 |     let _ = evidence.hsaco_bytes();
-  |                      ^^^^^^^^^^^ method not found in `&RuntimeEvidenceV1`

@@ -3,10 +3,7 @@
 This document defines the implementation shape for
 [#175](https://github.com/harsh-nod/fe2o3/issues/175). It narrows the compiler
 work under [#134](https://github.com/harsh-nod/fe2o3/issues/134) to one
-production transaction. Existing scalar, GEMM, attention, collective, and MoE
-implementations remain qualification oracles while their evidence migrates.
-They are not additional production architectures, and the convergence target
-deletes their executable implementations. Differential evidence may remain as
+production transaction. The former scalar, GEMM, attention, collective, and MoE compiler oracles have been deleted. They are not additional production architectures. Differential evidence may remain as
 inert fixtures or offline tools, never as another route in production crates.
 
 ## One transaction
@@ -69,7 +66,7 @@ and backend digests.
 | Compiler module handoff | Production has one mandatory protected-custody path and one V3 publication/consumption transaction. Before monomorphization, a device transaction must retain one admission containing both the authenticated gfx942 target and exact managed build attempt; preflight roots and post-monomorphization device work must agree exactly. The attempt and protected rustc invocation then move as one publication custody value, so no optional or late direct-publication branch remains. The ordinary publication branch and runtime schema selector are deleted. | Keep V1/V2 consumers confined to explicit qualification code until their oracles retire. |
 | Worker publication restart | `ManagedProductionBuild` has only `Fresh`, `Recovered`, and `Ready` states. It performs strict V3 preflight, one-shot consumption, direct LLVM/LLD execution, independent inspection, durable publication, and load-readiness recovery. | Join generated host interfaces and runtime authorization to the recovered production artifact. |
 | Application handoff | Production admits only the canonical Worker V3 load envelope. `cargo fe2o3 run` requires the authorized locked compiler closure, injects the required-envelope marker directly, rejects intermediate Cargo runners, and has no compiled no-envelope fallback. The neutral `fe2o3-runtime-protocol` crate owns the load-envelope custody transition, application handoff wire, and sealed static-application identity used by Cargo and the host. Cargo pins the application and V3 identity, binds the envelope, artifact directory, and ACK descriptors into a fresh occurrence, validates the challenge-bound ACK, and retains the current-publication lease through application exit. `fe2o3-host` exposes one `load_inherited_worker_v3_application_v1` transaction that performs exact descriptor recovery, reviewed compiler/Verus authentication, environment authorization, exact HSA load, and compiler-generated typed dispatch without returning intermediate authority. The host raw HIP `launch!`, module/function loader, parameter pack, launch configuration, cooperative launch, and embedded-artifact route are deleted in every feature configuration. Shared descriptor failures use the neutral `ApplicationDescriptorHandoffErrorV1`; the Worker V2 consumer, retained-descriptor path, and compatibility error alias are deleted. | Supply production verifier implementations and generated dispatch applications whose authenticated proof/effect evidence closes the kernel-specific obligations. |
-| Qualification isolation | Backend-only workload oracles and extraction drivers still require their package-local `qualification-oracles-test-only` feature, but they grant no production authority. `cargo-fe2o3` has no qualification feature, V1/V2 work state, restart module, workload parser, V2 fixture binary, simulation command, S09 broker profile, or `fe2o3-worker-v2-bundle` dependency. Cargo always prepares one concrete `PreparedProductionBuildConfig`, receives one mandatory `ManagedProductionBuild`, and completes the same Worker V3 transaction under every feature set. Application transfer is V3-only; stale V2 names remain only as rejection sentinels. Host-only dependency units use rustc's built-in LLVM backend and receive no fe2o3 route selector, managed compiler arguments, backend descriptor, or artifact custody. | Replace the remaining backend-only V2/exact-profile oracles with Worker V3 differential fixtures, then delete the backend qualification feature. |
+| Qualification isolation | Workload oracle features and executable oracle paths are deleted. `FE2O3_QUALIFICATION_ORACLE_V1` remains only as a rejected sentinel. Cargo always completes the same Worker V3 transaction under every feature set. | Keep historical V2 names confined to frozen wire compatibility used by Worker V3. |
 
 The Cargo package resolves its build-configuration API directly
 to `PreparedProductionBuildConfig`, with no feature-dependent compatibility
@@ -359,21 +356,14 @@ Migration follows these rules:
 Production became the sole unselected compiler transaction after the first scalar slice
 completed its compile, host-interface, artifact, and hardware gates. It has no
 selector. An incomplete production transaction now fails closed instead of silently
-entering legacy codegen. Retained backend oracles are absent from both default
-and all-feature library builds; they can compile only as inert unit-test
-fixtures and no longer accept `FE2O3_QUALIFICATION_ORACLE_V1` as backend
-configuration. Unselected host-only dependency units omit fe2o3's managed rustc
+entering legacy codegen. Backend workload oracles are absent from default, all-feature, and test builds. `FE2O3_QUALIFICATION_ORACLE_V1` is rejected as backend configuration. Unselected host-only dependency units omit fe2o3's managed rustc
 arguments and backend descriptor so rustc uses its built-in LLVM backend
 directly.
 
-The 2026-08-20 compiler review made this distinction structural. Qualification
-names come from one feature-gated table, while production has no corresponding
+The 2026-08-20 compiler review made this distinction structural. Production has no qualification table or corresponding
 variant or selector. The backend has one protected publication call, Cargo has
 one production intake without a schema selector, and production recovery is a
-separate state machine from V1/V2 qualification recovery. Shared oracle
-collection and frontend-record validation do not weaken the boundary:
-`ProductionCompilation` still receives only the move-only production closure
-and cannot call the oracle helper. See
+separate state machine from V1/V2 qualification recovery. Frontend-record validation does not weaken the boundary: `ProductionCompilation` receives only the move-only production closure and has no oracle helper. See
 `compiler-convergence-review-2026-08-20.md` for the deletion inventory and
 remaining complexity bounds.
 

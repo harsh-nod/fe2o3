@@ -47,7 +47,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-artifact-transaction
   fe2o3-completion
   fe2o3-compiler-api
-  fe2o3-compiler-driver
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
@@ -82,7 +81,6 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-semantic-trace
   fe2o3-runtime-model
   fe2o3-verifier
-  fe2o3-worker-v2-bundle
   reserved-fe2o3-symbols
 )
 

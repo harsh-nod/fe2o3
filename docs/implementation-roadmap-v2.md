@@ -33,10 +33,7 @@ but both issues remain open.
 - Canonical, Pliron-independent ownership now exists for the MIR model,
   compiler API, solver-neutral proof contracts, target-neutral host-operation
   contracts, and executable-free persistent-service model.
-- `fe2o3-compiler-driver` provides a fail-closed single-backend API contract
-  with no implementation selector or fallback. It is not yet the owner of the
-  rustc production composition; the current
-  implementation remains in `rustc-codegen-fe2o3`.
+- `cargo-fe2o3` and `rustc-codegen-fe2o3` now own the sole managed production composition. The retired standalone compiler driver has been removed.
 - `fe2o3-pliron` provides the pinned D0 context, private context identity,
   registration, bounded pass-plan shell, and owner-held textual bridge. The
   bridge recursively verifies operations and meters complete owner/session tree
@@ -96,15 +93,7 @@ assembly, and worker request admission before the graph owner is released. That
 admission checks an exact LLVM/LLD build policy but does not authenticate worker
 measurement, and it remains inert.
 
-The isolated measured upstream LLVM 22.1.8 target machine and in-process LLD
-remain the sole machine-code and HSACO authority. The bounded #159 and #161
-slices are closed by the six commits above. They required a new dedicated
-`fe2o3-pliron-scalar-add-v1` join and sealed one-shot consumer on top of the
-existing low-level HSA adapters. The COV6 descriptor establishes a 280-byte
-24+256 kernarg segment with alignment 8, while ROCr reports runtime alignment
-16; the consumer enforces the stricter runtime alignment. #160 is closed
-because its explicit-only premise was incorrect, not because the old runtime
-route was sufficient.
+The historical measured scalar-add slice established one bounded backend-fixture result, not a general compiler route. Its dedicated Worker V2 join and one-shot consumer are now retired; current Rust kernels use the shared ranked-PLIRON, KIR, target-backend, and Worker V3 pipeline.
 
 The successful MI300X run records
 `evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`

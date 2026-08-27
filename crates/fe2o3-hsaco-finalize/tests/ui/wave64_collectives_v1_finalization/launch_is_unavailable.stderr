@@ -1,5 +1,0 @@
-error[E0599]: no method named `launch` found for struct `PreparedFinalizedWave64CollectivesV1HsacoV1` in the current scope
- --> tests/ui/wave64_collectives_v1_finalization/launch_is_unavailable.rs:4:15
-  |
-4 |     admission.launch();
-  |               ^^^^^^ method not found in `PreparedFinalizedWave64CollectivesV1HsacoV1`

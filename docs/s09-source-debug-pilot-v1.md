@@ -40,19 +40,7 @@ process-consistency digest covers the executable object and bytes, raw argv
 including argv0, cwd object, protected source-tree identity, and the complete
 sorted child environment.
 
-For S09, the test harness builds the backend with
-`qualification-oracles-test-only`. The wrapper rejects credential-like
-inherited variables, admits only the required inherited `CARGO_MANIFEST_DIR`, fixed
-`FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-worker-v2`, and fixed
-`FE2O3_TARGET=gfx942:xnack-` inputs, applies the closed managed environment,
-then calls `env_clear()` and installs that exact environment. The parent puts
-the prepared consistency digest in an exact sealed 32-byte expectation at the
-fixed descriptor. After exec, the running compiler independently remeasures
-its executable, argv, cwd, protected source tree, and complete environment,
-reconstructs the digest, and compares it with the sealed parent expectation.
-Missing, replaced, writable, resized, zero, trailing, or inconsistent data
-fails closed. This comparison detects parent/child process-input drift; it is
-not an authentication or loader-history claim.
+The historical S09 workload-oracle harness has been removed. This document retains its process-consistency design as archival evidence only; it is not a runnable compiler route, authentication claim, or loader-history claim.
 
 The observed DefPath and symbol are opaque, canonical build observations.
 Their exact values may change when Cargo `-C metadata`, the dependency graph,

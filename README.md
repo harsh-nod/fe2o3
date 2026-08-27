@@ -207,55 +207,7 @@ Worker V3 application, descriptor, argument, HSA, and unload lifecycle. The
 ordinary Rust kernels, rustc/KIR diagnostics, compact-plan verifier and Verus
 evidence, and independent source/oracle tests remain. MoE hardware execution
 through Worker V3 is still pending and no parity promotion is claimed.
-The public [tiled GEMM V1 work](examples/tiled_gemm_v1/README.md) now combines
-the checked host contract with bounded production-directed LDS slices. An
-ordinary `#[kernel(typed, ...)]` Rust function contains the fixed `16x16x16`
-BF16/F32 algorithm. The compiler collector authenticates the exact attributed
-root, reviewed portable MIR operations and ABI, derives two distinct aligned
-512-byte LDS allocations, and consumes a single-use receipt to select the
-verified canonical Slice 1 Kernel IR. This is bounded source correspondence,
-not a general lowering or compiler-refinement proof. A separate identity-bound
-Verus source model discharges 96 obligations for exact lengths, LDS
-initialization, publish ordering, and unique output ownership; four hostile
-length, barrier, ownership, and portable-MIR identity mutations are rejected.
-
-The exact Slice 1 profile now continues through a sealed registry and direct
-upstream LLVM finalizer, without COMGR or shelling out to `llc` or `ld.lld`.
-The worker uses the LLVM target-machine and LLD library APIs, and the finalizer
-admits only the canonical COV6 descriptor and metadata. A generated borrowed
-host adapter then joins the exact finalized artifact to typed A/B/C regions.
-The public one-shot lifecycle has private, non-`Clone` states
-`Joined -> Loaded -> Completed -> Unloaded`; it exposes no finalized bytes,
-native handles, raw kernarg, or generic launch bypass.
-
-That path fixes the artifact target at `gfx942:xnack-`, accepts only a
-compatible observed target, and rechecks grid `[1,1,1]`, workgroup `[64,1,1]`,
-1,024 static LDS bytes, zero private and dynamic bytes, and a COV6 kernarg of 48
-explicit plus 256 hidden bytes. An exact MI300X `gfx942` run passed all 256
-output bits against the CPU reference, preserved A and B, and preserved every
-prefix/suffix guard canary. It used upstream LLVM 22.1.8 build
-`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1` and worker
-`fe2o3-worker-v1-sha256-6c3dfd5f784b3babe140006aba57a214a897b171860928440184fa201b6f96db`;
-the success receipt reported finalizer
-`078e9b523164b679ff7af3b4e819ad041713c53c6841399ac7cea95090f09774`
-and unload
-`df2f77ee798444a9e1fe5e27f219bdf720386eb8603a9a74fccc0df8efb3921c`.
-
-The K32 follow-on has two-phase IR, inspected upstream-LLVM machine shape, and
-a bounded Verus model for one through four K phases. Slice 3 adds an exact
-`M=64,N=48,K=16` padded-stride IR and lowering with workgroup-X/Y machine
-inspection. Slice 4 adds an exact `M=17,N=19,K=18` tail-safe, two-phase IR with
-predicated accesses, unconditional barriers, and `alpha=2,beta=-1`, alongside
-its bounded Verus edge model and inspected upstream-LLVM COV6 lowering.
-
-This makes the exact bounded Slice 1 functional and measured, but it is not
-production proof authority. The HSACO is identity-joined through the closed
-profile and canonical re-lowering; compiler-origin authentication, production
-Verus certificate consumption, and MIR/KIR/LLVM/ISA refinement are absent.
-General illegal-memory and race proofs, general shapes, and protected Slice 3/4
-execution also remain open. The older six-case LDS observation and
-[direct-global observation](docs/tiled-gemm-v1-mi300x-observation.md) remain
-separate evidence. No CUDA-Oxide parity row or count changes from this slice.
+The current [general tiled GEMM](examples/tiled_gemm_general_v1/README.md) is an ordinary safe Rust `#[kernel]` example on the shared MIR -> ranked PLIRON -> KIR pipeline. Its dynamic dimensions, strides, tails, MFMA layout, and epilogue exercise workload-neutral compiler checks; the retired fixed Slice 1 standalone composition and its separate observation records have been removed.
 
 The source/IR groundwork landed under
 [#85](https://github.com/harsh-nod/fe2o3/issues/85),
@@ -302,13 +254,7 @@ target lowering, and host execution into explicit ownership boundaries:
   These records validate representation and consistency. They do not prove a
   claim, compile a kernel, execute a service, or grant artifact/runtime
   authority.
-- Compiler composition: `fe2o3-compiler-driver` executes one production
-  request through one configured backend and has no selector or fallback slot.
-  Inspection is an observation of that transaction rather than another
-  compiler implementation. The production rustc backend likewise has no
-  selector. Temporary non-publishing migration oracles are compiled
-  only by the `qualification-oracles-test-only` backend feature and selected
-  by `FE2O3_QUALIFICATION_ORACLE_V1` in isolated integration tests.
+- Compiler composition: `cargo-fe2o3` drives the sole production rustc backend through one managed Worker V3 transaction. The production backend has no selector or fallback slot; inspection remains an observation of that transaction, not another compiler implementation. `FE2O3_QUALIFICATION_ORACLE_V1` is only a rejected legacy sentinel; no workload oracle is compiled.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
   Kernel IR sequence for structure, control flow, bounds obligations, race
   freedom, barrier convergence, and workgroup-memory initialization/reuse.
@@ -360,9 +306,7 @@ target lowering, and host execution into explicit ownership boundaries:
   `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
   `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`,
   `fe2o3-protected-publisher`, `fe2o3-verifier`, and
-  `fe2o3-differential`. `fe2o3-worker-v2-bundle` remains only for
-  qualification-oracle and compatibility tests; it is absent from the normal
-  feature-free dependency graphs of `cargo-fe2o3` and `fe2o3-host`.
+  `fe2o3-differential`. The retired Worker V2 bundle and standalone compiler routes are absent from the workspace; frozen V2 wire names remain only where Worker V3 still consumes their protocol representation.
 
 The machine-checked layer policy forbids dependencies that invert these
 ownership directions. The production-directed GPU finalizer continues to use
@@ -437,14 +381,6 @@ Safe ownership of resources used by asynchronous copies is documented in
   falls back to a workload-specific implementation. Historical emitters and
   exact workload paths remain only as migration evidence until equivalent
   production coverage permits their deletion.
-- A backend built with `qualification-oracles-test-only` and
-  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` exercises the exact `fill` or
-  three-slice `vecadd` kernel through imported MIR, canonical target-neutral
-  kernel IR, verification, exact-shape legalization, G1 AMDGPU lowering, and
-  the qualification artifact transaction. The oracle,
-  ABI, witness dataflow, bounds control flow, and accepted kernel shapes are
-  fail closed: invalid values and unsupported kernels remove stale generation
-  artifacts and never fall back or acquire production publication authority.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
   host buffers, events, synchronous transfers, and event-backed borrowed and
   owned asynchronous transfers. It exports no raw module, function, parameter
@@ -1025,17 +961,12 @@ To build or run one package directly:
 ```bash
 cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
-cargo test --locked -p rustc-codegen-fe2o3 \
-  --features qualification-oracles-test-only \
-  --test kernel_ir_codegen opt_in_vecadd_publishes_exact_g1_without_gpu \
-  -- --ignored --exact
 ```
 
-The first two commands enter the sole production route. The current vecadd
+Both commands enter the sole production route. The current vecadd
 application fails closed before dispatch because its Worker V3 application
 verifier has not yet been wired to the generated `Arguments`; it never falls
-back to the embedded V2 artifact. The third command is an isolated
-non-production qualification test. `FE2O3_CODEGEN_PIPELINE` is no longer
+back to the embedded V2 artifact. `FE2O3_CODEGEN_PIPELINE` is no longer
 accepted, and a production backend rejects `FE2O3_QUALIFICATION_ORACLE_V1`.
 
 The smoke command reads the same manifest and runs every GPU-selected example:

@@ -21,14 +21,9 @@ mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod first_build_worker_v2;
 mod first_build_worker_v3;
-mod flash_attention_v1_finalizer;
 mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
 mod link_plan;
-mod moe_top2_v1_artifact;
-mod moe_top2_v1_worker;
-mod pliron_scalar_add_v1_elf;
-mod pliron_scalar_add_v1_finalizer;
 mod request_construction;
 mod row_softmax_authority;
 mod row_softmax_certificate_join;
@@ -36,8 +31,6 @@ mod row_softmax_v1_artifact;
 mod row_softmax_v1_worker;
 mod scalar_gemm_v1_worker;
 mod tiled_gemm_v1_artifact;
-mod wave64_collectives_v1_artifact;
-mod wave64_collectives_v1_worker;
 mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
@@ -103,12 +96,6 @@ pub use first_build_worker_v3::{
     execute_protected_reproducible_first_build_worker_v3,
     preflight_protected_reproducible_first_build_worker_v3,
 };
-pub use flash_attention_v1_finalizer::{
-    FinalizedFlashAttentionV1ReceiptV1, FlashAttentionV1FinalizationErrorV1,
-    FlashAttentionV1FinalizationExpectationV1, FlashAttentionV1FinalizationReceiptIdentityV1,
-    FlashAttentionV1OcmlProviderPinsV1, FlashAttentionV1WorkerPinsV1,
-    finalize_flash_attention_v1_worker_v2_hsaco_v1,
-};
 pub use lds_gemm_finalizer::{
     ExactLdsGemmFinalizationErrorV1, FinalizedExactLdsGemmHsacoIdentityV1,
     FinalizedExactLdsGemmHsacoV1, finalize_exact_lds_gemm_compiler_import_v1,
@@ -125,25 +112,6 @@ pub use link_plan::{
     ContentIdentityV1, LinkInputV1, LinkOptionV1, LinkOutputV1, LinkPlanError, LinkPlanIdentityV1,
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
-};
-pub use moe_top2_v1_artifact::{
-    FinalizedMoeTop2V1HsacoIdentityV1, MoeTop2V1FinalizationErrorV1,
-    PreparedFinalizedMoeTop2V1HsacoV1, finalize_moe_top2_v1_worker_v2_hsaco_v1,
-};
-pub use moe_top2_v1_worker::{
-    InspectedMoeTop2V1WorkerV2HsacoV1, MoeTop2V1CompilerPinsV1, MoeTop2V1DirectWorkerExpectationV1,
-    MoeTop2V1DirectWorkerPinsV1, MoeTop2V1WorkerErrorV1, MoeTop2V1WorkerExchangeIdentityV1,
-    ValidatedMoeTop2V1WorkerExchangeV1, inspect_moe_top2_v1_worker_v2_hsaco_v1,
-    validate_moe_top2_v1_worker_exchange_v1,
-};
-pub use pliron_scalar_add_v1_finalizer::{
-    InspectedPlironScalarAddV1Hsaco, PLIRON_SCALAR_ADD_V1_DESCRIPTOR,
-    PLIRON_SCALAR_ADD_V1_EXPLICIT_KERNARG_BYTES, PLIRON_SCALAR_ADD_V1_IMPLICIT_KERNARG_BYTES,
-    PLIRON_SCALAR_ADD_V1_KERNARG_ALIGNMENT, PLIRON_SCALAR_ADD_V1_KERNARG_BYTES,
-    PLIRON_SCALAR_ADD_V1_KERNEL, PLIRON_SCALAR_ADD_V1_LLVM_BUILD_IDENTITY,
-    PLIRON_SCALAR_ADD_V1_TARGET, PlironScalarAddV1AmdhsaDescriptorIdentity,
-    PlironScalarAddV1ElfField, PlironScalarAddV1HsacoField, PlironScalarAddV1InspectionError,
-    PlironScalarAddV1MachineIdentity, inspect_pliron_scalar_add_v1_hsaco,
 };
 pub use request_construction::{
     CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
@@ -192,19 +160,6 @@ pub use tiled_gemm_v1_artifact::{
     FinalizedTiledGemmV1StructuralHsacoV1, InspectedTiledGemmV1StructuralWorkerV2HsacoV1,
     TiledGemmV1StructuralArtifactErrorV1, finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
     inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
-};
-pub use wave64_collectives_v1_artifact::{
-    FinalizedWave64CollectivesV1HsacoIdentityV1, PreparedFinalizedWave64CollectivesV1HsacoV1,
-    Wave64CollectivesV1FinalizationErrorV1, finalize_wave64_collectives_v1_worker_v2_hsaco_v1,
-};
-pub use wave64_collectives_v1_worker::{
-    InspectedWave64CollectivesV1WorkerV2HsacoV1, ValidatedWave64CollectivesV1WorkerExchangeV1,
-    Wave64CollectivesV1CompilerPinsV1, Wave64CollectivesV1DirectWorkerExpectationV1,
-    Wave64CollectivesV1DirectWorkerPinsV1, Wave64CollectivesV1WorkerErrorV1,
-    Wave64CollectivesV1WorkerExchangeIdentityV1,
-    construct_inert_wave64_collectives_v1_compiler_handoff_v1,
-    inspect_wave64_collectives_v1_worker_v2_hsaco_v1,
-    validate_wave64_collectives_v1_worker_exchange_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,

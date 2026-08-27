@@ -1,5 +1,0 @@
-error[E0599]: no method named `exact_finalized_bytes` found for struct `PreparedFinalizedWave64CollectivesV1HsacoV1` in the current scope
- --> tests/ui/wave64_collectives_v1_finalization/bytes_are_unavailable.rs:4:28
-  |
-4 |     let _bytes = admission.exact_finalized_bytes();
-  |                            ^^^^^^^^^^^^^^^^^^^^^ method not found in `PreparedFinalizedWave64CollectivesV1HsacoV1`

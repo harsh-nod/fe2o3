@@ -26,7 +26,6 @@
         "fe2o3-kernel-descriptor",
         "fe2o3-kernel-ir",
         "fe2o3-llvm-handoff",
-        "fe2o3-mir-kir-lineage",
         "fe2o3-mir-model",
         "fe2o3-process-identity",
         "fe2o3-proof-contracts",
@@ -95,8 +94,8 @@
         "fe2o3-kfd",
         "fe2o3-kir-sim",
         "fe2o3-kir-sim-trace",
-        "fe2o3-service-host",
-        "fe2o3-worker-v2-bundle"
+        "fe2o3-service-host"
+
       ]
     },
     {
@@ -104,7 +103,6 @@
       "packages": [
         "cargo-fe2o3",
         "fe2o3-amdgcn-pliron-llvm",
-        "fe2o3-compiler-driver",
         "fe2o3-differential",
         "fe2o3-general-gemm-compiler",
         "fe2o3-kir-sim-cli",
@@ -113,7 +111,6 @@
         "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
-        "fe2o3-pliron-scalar-add-v1",
         "fe2o3-pliron-worker-v2",
         "fe2o3-worker-v3-authority",
         "rustc-codegen-fe2o3"

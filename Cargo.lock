@@ -786,15 +786,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-compiler-driver"
-version = "0.1.0"
-dependencies = [
- "fe2o3-compiler-api",
- "fe2o3-kernel-ir",
- "sha2 0.11.0",
-]
-
-[[package]]
 name = "fe2o3-compiler-ffi"
 version = "0.1.0"
 dependencies = [
@@ -1199,10 +1190,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-mir-kir-lineage"
-version = "0.1.0"
-
-[[package]]
 name = "fe2o3-mir-model"
 version = "0.1.0"
 dependencies = [
@@ -1287,24 +1274,6 @@ name = "fe2o3-pliron-owner-core"
 version = "0.1.0"
 dependencies = [
  "pliron",
-]
-
-[[package]]
-name = "fe2o3-pliron-scalar-add-v1"
-version = "0.1.0"
-dependencies = [
- "fe2o3-amd-target",
- "fe2o3-amdgcn-pliron-llvm",
- "fe2o3-artifact-transaction",
- "fe2o3-artifacts",
- "fe2o3-core",
- "fe2o3-host",
- "fe2o3-hsa-runtime",
- "fe2o3-hsaco-finalize",
- "fe2o3-llvm-handoff",
- "fe2o3-pliron-worker-v2",
- "sha2 0.11.0",
- "trybuild",
 ]
 
 [[package]]
@@ -1630,23 +1599,6 @@ dependencies = [
  "sha2 0.11.0",
  "syn 2.0.117",
  "toml",
-]
-
-[[package]]
-name = "fe2o3-worker-v2-bundle"
-version = "0.1.0"
-dependencies = [
- "fe2o3-artifact-transaction",
- "fe2o3-artifacts",
- "fe2o3-build-authority",
- "fe2o3-compiler-ffi",
- "fe2o3-hsaco-finalize",
- "fe2o3-kernel-descriptor",
- "fe2o3-runtime-protocol",
- "fe2o3-rustc-invocation",
- "rmpv",
- "sha2 0.11.0",
- "trybuild",
 ]
 
 [[package]]

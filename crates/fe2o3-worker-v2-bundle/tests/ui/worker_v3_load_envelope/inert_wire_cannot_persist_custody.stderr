@@ -1,5 +1,0 @@
-error[E0599]: no method named `persist_durable_replay_custody_v1` found for reference `&WorkerV3LoadEnvelopeWireV1` in the current scope
- --> tests/ui/worker_v3_load_envelope/inert_wire_cannot_persist_custody.rs:6:19
-  |
-6 |     let _ = value.persist_durable_replay_custody_v1(output);
-  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `&WorkerV3LoadEnvelopeWireV1`

@@ -165,11 +165,7 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-artifact-transaction`: rustc-independent artifact ownership and publication protocol.
 - `rustc-codegen-fe2o3`: rustc codegen backend and HSACO toolchain helpers.
 - `fe2o3-compiler-api`: target-neutral compile request/result contracts.
-- `fe2o3-compiler-driver`: fail-closed single-route API dispatch; not yet the
-  production selector.
-- `fe2o3-pliron-scalar-add-v1`: exact backend-fixture lineage, checkout policy,
-  scalar finalizer join, and sealed one-shot HSA execution; not a general
-  backend, source frontend, approval service, or runtime policy.
+- `cargo-fe2o3` plus `rustc-codegen-fe2o3`: the sole managed production route from attributed Rust source through ranked PLIRON, KIR, target lowering, and Worker V3.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.

@@ -137,8 +137,6 @@ Run from the repository root with the pinned Rust toolchain:
 
 ```sh
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked -p rustc-codegen-fe2o3 \
-  --features qualification-oracles-test-only --test moe_top2_v1
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
@@ -146,6 +144,5 @@ cargo test --locked -p fe2o3-host \
   --test production_application_handoff_ui
 ```
 
-These checks establish only the retained source, compiler, proof, oracle, and
-production-route-absence claims above. No MoE hardware execution or
+These checks establish only the retained source, proof, and production-route-absence claims above. No MoE hardware execution or
 source-to-machine refinement claim follows from them.

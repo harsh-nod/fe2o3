@@ -1,5 +1,0 @@
-error[E0599]: no method named `into_execution` found for struct `FinalizedRepositoryScalarAddV1` in the current scope
- --> tests/ui/receipt_into_execution.rs:7:13
-  |
-7 |     receipt.into_execution()
-  |             ^^^^^^^^^^^^^^ method not found in `FinalizedRepositoryScalarAddV1`

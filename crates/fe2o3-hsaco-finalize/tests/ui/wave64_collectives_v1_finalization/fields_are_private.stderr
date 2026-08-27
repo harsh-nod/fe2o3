@@ -1,5 +1,0 @@
-error[E0616]: field `finalized` of struct `PreparedFinalizedWave64CollectivesV1HsacoV1` is private
- --> tests/ui/wave64_collectives_v1_finalization/fields_are_private.rs:4:32
-  |
-4 |     let _finalized = admission.finalized;
-  |                                ^^^^^^^^^ private field

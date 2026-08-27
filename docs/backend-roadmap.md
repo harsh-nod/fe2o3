@@ -14,9 +14,7 @@ The 2026-08-18 ownership refactor is infrastructure, not a compiler
 promotion. Issues [#134](https://github.com/harsh-nod/fe2o3/issues/134) and
 [#135](https://github.com/harsh-nod/fe2o3/issues/135) remain open. The working
 compiler enters one unselected production transaction inside
-`rustc-codegen-fe2o3`; legacy and exact-profile implementations compile only as
-qualification oracles. The separate compiler-driver contract is now
-single-backend but is not yet the owner of the rustc production composition.
+`rustc-codegen-fe2o3`; legacy and exact-profile compiler implementations have been removed. `FE2O3_QUALIFICATION_ORACLE_V1` is rejected, and the managed Worker V3 route is the only compiler composition.
 
 - Project naming and reserved symbol namespace use `fe2o3`.
 - `fe2o3-mir-model` now owns the canonical Pliron-independent MIR executable,
@@ -24,9 +22,7 @@ single-backend but is not yet the owner of the rustc production composition.
   implemented behind `dialect-mir`. `dialect-mir` remains a compatibility
   re-export and exposes a bounded Pliron `mir.*` module/function/block shell
   only with its non-default `pliron` feature.
-- `fe2o3-compiler-api` defines bounded target-neutral contracts for one
-  production request and output. `fe2o3-compiler-driver` owns exactly one
-  configured backend with no selector or fallback slot.
+- `fe2o3-compiler-api` defines bounded target-neutral contracts for one production request and output. `cargo-fe2o3` and `rustc-codegen-fe2o3` own the sole managed production composition, with no selector or fallback slot.
 - `fe2o3-pliron` pins Pliron v0.17.0 commit
   `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and implements a bounded D0
   context, private identity anchor, registration, verification, and pass-plan
@@ -98,16 +94,6 @@ single-backend but is not yet the owner of the rustc production composition.
   optimizes, emits relocatable ELF through pinned upstream LLVM target-machine
   APIs, and links HSACO through in-process LLD library APIs. It does not use
   COMGR or a command-line compiler or linker.
-- In a backend built with `qualification-oracles-test-only`,
-  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` selects the first integrated G1 qualification oracle:
-  imported device MIR is translated to canonical kernel IR, verified, strictly
-  legalized for the exact 1D `fill` shape, lowered by `fe2o3-amdgcn-model`
-  through the `dialect-amdgcn` compatibility facade, and published through the
-  existing transactional LLVM/object/HSACO path. Invalid selectors and
-  unsupported selected inputs fail without legacy fallback and remove stale
-  artifacts. With no oracle selected, compilation enters the sole production
-  route. `kernel-ir-v1` and workload-specific oracles require explicit
-  qualification selection and cannot complete a production device transaction.
   The removed `FE2O3_CODEGEN_PIPELINE` environment is rejected.
 - `fe2o3-amdgcn-model`, reached through the `dialect-amdgcn` compatibility
   facade, lowers that verified fill subset to deterministic AMDGPU LLVM. Its

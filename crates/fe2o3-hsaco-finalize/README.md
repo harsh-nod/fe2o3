@@ -210,7 +210,7 @@ and decodes the V3 claim, reacquires current artifact custody, completes the bui
 reconstructs the same production publication result after process-like restart. The lower
 transaction layer revalidates exact restart storage but cannot mint this authority from a raw
 binding in safe code. The completed result can now transfer into the strict, move-only
-`WorkerV3LoadEnvelopeV1` in `fe2o3-worker-v2-bundle`, publish exact durable custody, retire the
+`WorkerV3LoadEnvelopeV1` in `fe2o3-runtime-protocol`, publish exact durable custody, retire the
 duplicate replay intent, and reconstruct the same inert envelope after restart. The route does not
 yet provide application descriptor transfer, host admission before HSA, exclusive Cargo V3
 routing, authenticated compiler-produced descriptor-source evidence, or a gfx942

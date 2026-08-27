@@ -1,7 +1,0 @@
-error[E0277]: the trait bound `RepositoryScalarAddProfileV1: From<[u8; 32]>` is not satisfied
- --> tests/ui/policy_from_raw_bytes.rs:4:54
-  |
-4 |     let _: RepositoryScalarAddProfileV1 = [0_u8; 32].into();
-  |                                                      ^^^^ the trait `From<[u8; 32]>` is not implemented for `RepositoryScalarAddProfileV1`
-  |
-  = note: required for `[u8; 32]` to implement `Into<RepositoryScalarAddProfileV1>`

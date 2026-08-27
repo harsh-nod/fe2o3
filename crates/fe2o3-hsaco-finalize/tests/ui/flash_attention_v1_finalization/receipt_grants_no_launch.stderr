@@ -1,5 +1,0 @@
-error[E0599]: no method named `launch` found for struct `FinalizedFlashAttentionV1ReceiptV1` in the current scope
- --> tests/ui/flash_attention_v1_finalization/receipt_grants_no_launch.rs:4:13
-  |
-4 |     receipt.launch();
-  |             ^^^^^^ method not found in `FinalizedFlashAttentionV1ReceiptV1`

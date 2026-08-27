@@ -1,5 +1,0 @@
-error[E0599]: no method named `launch` found for struct `PreparedFinalizedMoeTop2V1HsacoV1` in the current scope
- --> tests/ui/moe_top2_v1_finalization/launch_is_unavailable.rs:4:13
-  |
-4 |     receipt.launch();
-  |             ^^^^^^ method not found in `PreparedFinalizedMoeTop2V1HsacoV1`

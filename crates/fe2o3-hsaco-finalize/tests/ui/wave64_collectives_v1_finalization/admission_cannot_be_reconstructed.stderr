@@ -1,7 +1,0 @@
-error: cannot construct `PreparedFinalizedWave64CollectivesV1HsacoV1` with struct literal syntax due to private fields
- --> tests/ui/wave64_collectives_v1_finalization/admission_cannot_be_reconstructed.rs:4:5
-  |
-4 |     PreparedFinalizedWave64CollectivesV1HsacoV1 {}
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: private fields `identity`, `exchange` and `finalized` that were not provided

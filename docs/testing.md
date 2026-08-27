@@ -112,12 +112,10 @@ or race freedom, or grant publication, load, launch, or parity authority.
 ## Retained bounded MoE evidence
 
 The obsolete MoE V1/V2 host routes and their workload-specific hardware
-launchers have been removed. Validate the remaining compiler, proof, source,
-oracle, and production-route-absence evidence with:
+launchers have been removed. Validate the remaining proof, source, and production-route-absence evidence with:
 
 ```text
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test moe_top2_v1
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
@@ -169,66 +167,6 @@ and checks the published code object. It does not dispatch either kernel. HSA
 multi-symbol lifecycle tests at this checkpoint use the reviewed adapter's
 host-side test boundary and likewise do not establish two-kernel hardware
 execution.
-
-## Bounded Pliron scalar-add MI300X slice
-
-Commits `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
-`228c88ed9` close one exact backend-fixture-to-MI300X scalar-add route. The code
-target is `gfx942:xnack-`; the qualifying device reports
-`gfx942:sramecc+:xnack-`. The backend fixture is not Rust user source. Run the
-ignored test on `mi300x` with the exact qualified files and lane variables:
-
-```text
-cd /home/harsh/fe2o3-pliron-final-current
-HSA_XNACK=0 \
-HIP_VISIBLE_DEVICES=0 \
-ROCR_VISIBLE_DEVICES=0 \
-FE2O3_RUN_REPOSITORY_SCALAR_ADD_V1_MI300X=1 \
-FE2O3_PLIRON_SCALAR_ADD_V1_WORKER=/home/harsh/fe2o3-pliron-integrated-worker-build/fe2o3-llvm-link-worker \
-FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_WORKER_BUILD_ID_FILE=/home/harsh/fe2o3-pliron-integrated-worker-build/fe2o3-worker-build-id.txt \
-FE2O3_PLIRON_SCALAR_ADD_V1_OBSERVED_LLVM_BUILD_ID_FILE=/home/harsh/upstream-llvm-fe2o3-v1-acceptance/evidence-v6/upstream-llvm-build-id.txt \
-cargo test --locked -p fe2o3-pliron-scalar-add-v1 \
-  --test gfx942_repository_scalar_add_v1_hardware \
-  repository_scalar_add_v1_isolated_mi300x \
-  -- --ignored --exact --nocapture
-```
-
-The qualified Worker executable has SHA-256
-`12c06e0da5d812c1db6f33450f99a8d70087c585eec552f7f8616077704361fd`
-and embedded build identity
-`fe2o3-worker-v1-sha256-a33996e00d152954305779c30174d7644f3fb8a54dd06f38d97c0f824aac6181`.
-It uses upstream LLVM identity
-`upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`.
-The expected HSACO is 4,984 bytes with SHA-256
-`011671a80384051232fb684c90afadd9b5e9d81c13d216238f15af55dd3880b1`;
-the pinned ROCr HSA 1.18 image SHA-256 is
-`7010eba894569c044749b71b63ff782080c4a91e19ff24d6dc93e857045ab37e`.
-The COV6 descriptor declares the 280-byte kernarg at alignment 8, while the
-runtime reports and supplies alignment 16.
-
-Success prints a marker beginning
-`FE2O3_REPOSITORY_SCALAR_ADD_V1_MI300X_OK`. The sealed, move-only consumer is
-the only typed route from the finalized receipt to load, dispatch, checking,
-and terminal unload. The marker is a canonical self-consistency record binding
-the bounded policy, artifact, runtime image, device, dispatch, result, canaries,
-and unload observations. Its fixed-order serialization is stable,
-but process-local runtime, agent, executable, dispatch, and kernarg identities
-may differ between runs. It is not an external signature, trusted CI
-attestation, general memory-safety or race-freedom proof, or CUDA-Oxide parity
-claim. The compile-time checkout policy likewise relies on repository/build
-provenance and is not separately authenticated. This test changes no parity
-row or dashboard count.
-
-The [general typed dispatch V1](general-typed-dispatch-v1.md) gate requires an
-archived run from a single commit that includes all focused commands above
-plus strict Clippy, the ignored Worker V2 test, and an opt-in MI300X execution
-test. That hardware test must load one executable, resolve and dispatch two
-differently typed kernels through the descriptor-driven path, compare outputs
-with independent CPU oracles and canary checks at boundary lengths, and record
-commit, rustc, worker, LLVM, ROCm, driver, and `gfx942` device identities. It
-must also run the contract's generated-expectation, packing, alias, artifact,
-proof, HSA identity, hidden-kernarg, queue, and lifetime rejection suite.
-Compilation or symbol resolution alone does not pass this gate.
 
 ## Historical alpha/zeta Worker V2 observation
 
@@ -347,20 +285,13 @@ scripts/ci-local.sh hardware-smoke
 ```
 
 The smoke suite builds and runs all supported examples. Each example copies its
-result back to the host and checks it against a CPU-computed expected value. It
-also runs both `fe2o3-fill` and `fe2o3-vecadd` through a backend built with
-`qualification-oracles-test-only` and selected by
-`FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1`, so the integrated verified-IR paths are
-exercised as explicit qualification routes independently of the sole
-production transaction. Generated HSACO inspection uses a strict
-qualification-specific metadata profile.
+result back to the host and checks it against a CPU-computed expected value.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated
 dispatch route. Worker V2 application recovery, embedded-artifact loading,
 direct HIP module/function loading, raw parameter packing, cooperative launch,
 and workload-specific host adapters are deleted in every feature configuration.
-The compatibility-named qualification feature enables no host execution path.
 `production_application_handoff_ui` compile-fails representative V2 entrypoint
 and runtime imports, including the retired embedded artifact contract, raw HIP
 surface, and generated vecadd `Kernel`, to guard that public API boundary. The macro fixture also
@@ -372,10 +303,7 @@ against the V3 API. The vecadd example has no embedded
 execution feature; it type-checks the V3 `Arguments` surface and fails closed
 before runtime dispatch until a production verifier is supplied.
 
-The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
-dependency graph contains `fe2o3-host/default` and
-`fe2o3-host/hardware-test-hooks`, but not
-`fe2o3-host/qualification-oracles-test-only`:
+The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its dependency graph contains the Worker V3 host consumer fixture and hardware test hooks, with no alternate compiler route:
 
 ```text
 cargo test --locked -p cargo-fe2o3 \

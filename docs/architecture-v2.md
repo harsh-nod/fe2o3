@@ -43,13 +43,7 @@ schema version migrates the same transaction; it does not add a route. Useful
 legacy comparisons may survive only as inert fixtures or offline differential
 tools with no artifact, load, or launch authority.
 
-The repository has not completed this deletion. The normal backend is now
-feature-invariant: even an all-feature library build contains no qualification
-selector or executable oracle route. `qualification-oracles-test-only` remains
-only as a `cfg(test)` container for compiler-side Worker V2 and workload oracle
-fixtures that have not yet been physically removed. `fe2o3-hsaco-finalize`
-also still houses shared V3 mechanics under V2-named modules. These are
-migration debt, not supported architectural variants.
+The repository has completed this route deletion. Default and all-feature backend builds contain no qualification selector or executable workload oracle. `FE2O3_QUALIFICATION_ORACLE_V1` remains only as a rejected legacy sentinel. `fe2o3-hsaco-finalize` still houses shared Worker V3 mechanics under frozen V2 protocol names where the live V3 graph consumes them; those names are wire history, not selectable routes.
 
 ## Current Implementation Snapshot
 
@@ -102,8 +96,7 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   target or choose a different ordering.
 - `fe2o3-runtime-protocol` owns the production load envelope, application
   handoff, and sealed static-application identity. Feature-free `cargo-fe2o3`
-  and `fe2o3-host` do not depend on `fe2o3-worker-v2-bundle`; that crate is a
-  qualification-only compatibility boundary. V1/V2/V3 suffixes that remain on
+  and `fe2o3-host` share the same Worker V3 runtime envelope. The retired Worker V2 bundle is no longer a workspace package. V1/V2/V3 suffixes that remain on
   records are frozen wire versions, not selectable compiler implementations.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
@@ -115,7 +108,7 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   machine-code inspection, and GPU execution remain separate claims.
 - The ownership refactor establishes canonical MIR, compiler, proof,
   host-operation, and service-model contracts; an explicit compiler
-  API/driver/dormant-legacy-adapter boundary; a pinned Pliron D0 shell; seven
+  API and sole managed Worker V3 composition boundary; a pinned Pliron D0 shell; seven
   target-neutral dialect shells; a feature-gated `mir.*` Pliron shell; an
   opaque context-bound exact-byte KIR/Pliron envelope; bounded MIR-to-kernel
   and kernel-to-GPU lowering services; an owner-held textual bridge; and an
@@ -124,7 +117,7 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   other observed MIR semantics terminally.
 - The Pliron LLVM lane has a live graph-derived extractor, deterministic bounded
   LLVM-assembly serializer, and a workload-neutral production handoff. Its
-  Worker V2 request bridge is retained only as a qualification oracle.
+  request bridge feeds the sole Worker V3 production transaction.
   `pliron-llvm` v0.17.0 is used with
   `default-features = false` for its typed dialect only. The bridge binds the
   exact request but grants no object, link, publication, load, or launch
@@ -132,17 +125,8 @@ architecture, centered on exact `gfx942:xnack-` profiles:
 - The closed gfx942 General GEMM profile retains target, module, global,
   function, CFG, instruction, type, and per-item policy on the live graph, with
   separately hashed bounded non-graph inputs for stage identities, device
-  libraries, origins, and obligations. Its older Worker V2 realization is now
-  a differential qualification oracle while those bounded semantics migrate
-  through the workload-neutral production handoff.
-- The bounded scalar closure comprises hardened Worker profile `fd6520d88`,
-  exact ELF and machine inspection `70f9c5ad7`, measured-HSACO gate
-  `e016833d3`, move-only Worker execution evidence `c9e8ca702`, the dedicated
-  repository-policy/finalizer/runtime join `62efd243e`, and descriptor-versus-
-  runtime alignment correction `228c88ed9`. The descriptor reports a 280-byte
-  COV6 kernarg segment with alignment 8; ROCr reports runtime alignment 16.
-  The dedicated `fe2o3-pliron-scalar-add-v1` consumer uses the stricter runtime
-  alignment and consumes the authorized execution once.
+  libraries, origins, and obligations. Its historical Worker V2 realization has been removed; the bounded semantics now enter the workload-neutral production handoff.
+- Historical bounded scalar-add Worker V2 execution remains documented only in repository history. Its standalone join and runtime consumer were retired after the production graph converged on the shared Rust-source Worker V3 path.
 - The exact MI300X run completed with
   `evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`
   against ROCr 1.18 runtime image
@@ -296,9 +280,7 @@ continue to point downward according to the machine-checked
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
 | `fe2o3-compiler-api` | Target-neutral request, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
-| `fe2o3-compiler-driver` | Single-backend fail-closed execution and output revalidation for the production compiler contract | Codegen ownership, artifact/runtime authority |
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
-| `fe2o3-pliron-scalar-add-v1` | Exact backend-fixture lineage, repository policy, scalar finalizer join, and sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated typed modules, prepared launches, argument ownership | MIR inspection, target lowering |
 | `fe2o3-core` | HIP resource wrappers, streams, events, buffers, capability observations; raw module and launch APIs only in qualification builds | Kernel type discovery |
@@ -419,21 +401,7 @@ stage receipts, evidence, and deterministic bounded LLVM-assembly serializer;
 Pliron handles, printer output, and upstream diagnostics are not canonical
 handoff data or authority.
 
-The bounded scalar implementation structurally parses its embedded backend
-fixture and reads operations, operands, results, types, and CFG from the live
-dialect graph. It retains a validated V1 sidecar for the AMDGPU calling
-convention, target attributes, module metadata, and evidence that v0.17.0
-cannot carry, then rejects any mismatch while constructing V2. This fixture is
-not Rust user source and does not establish general Rust-source lowering.
-
-The exact bytes flow through the hardened Worker, exact finalizer, move-only
-execution evidence, and a dedicated sealed consumer in
-`fe2o3-pliron-scalar-add-v1`. Existing low-level HSA adapters were reused, but
-the existing runtime route alone was not sufficient: the join crate adds the
-one-shot policy, artifact, device, ABI, dispatch, result, canary, and unload
-checks for this profile. The descriptor alignment is 8 while ROCr reports 16;
-the consumer requires the stricter runtime value. General typed lowering and
-generalized runtime policy remain future work.
+The retired scalar-add fixture route parsed a checked-in backend fixture rather than Rust user source and never established general Rust-source lowering. Its dedicated finalizer and one-shot consumer have been removed. Current kernels enter the shared ranked-PLIRON and KIR path from attributed Rust source before using the common target backend.
 The pinned surface and missing gfx942 semantics are audited in
 [pliron-llvm-gfx942-coverage.md](pliron-llvm-gfx942-coverage.md).
 
