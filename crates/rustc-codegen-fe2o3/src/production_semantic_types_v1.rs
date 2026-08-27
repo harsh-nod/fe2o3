@@ -952,10 +952,10 @@ fn find_niche_in_type_v1<'tcx>(
             && primitive_v1(context, niche.value) == source_niche.primitive()
             && SemanticScalarValidityRangeV1::new(niche.valid_range.start, niche.valid_range.end)
                 == source_niche.valid_range()
-            && matches!(
+            && (matches!(
                 layout.backend_repr,
                 BackendRepr::Scalar(_) | BackendRepr::ScalarPair(..)
-            )
+            ) || matches!(ty.kind(), TyKind::Adt(definition, _) if definition.is_enum()))
     }) {
         found
             .try_reserve(1)

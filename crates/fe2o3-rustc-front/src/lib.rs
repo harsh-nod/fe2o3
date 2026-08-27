@@ -6,6 +6,7 @@ mod decode;
 mod encode;
 mod error;
 mod kernel_contract_v1;
+mod kernel_resource_contract_v1;
 mod model;
 mod monomorphization_dead_v1;
 mod ordinary_rust_scalar_v1;
@@ -39,6 +40,14 @@ pub use kernel_contract_v1::{
     KernelFrontendContractDecodeErrorV1, KernelFrontendContractV1,
     KernelFrontendContractValidationErrorV1, MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1,
     decode_kernel_frontend_contract_v1, encode_kernel_frontend_contract_v1,
+};
+pub use kernel_resource_contract_v1::{
+    KERNEL_RESOURCE_CONTRACT_MAGIC_V1, KERNEL_RESOURCE_CONTRACT_VERSION_V1,
+    KERNEL_RESOURCE_REGISTRATION_KIND_V1, KERNEL_RESOURCE_REGISTRATION_MAGIC_V1,
+    KERNEL_RESOURCE_REGISTRATION_PREFIX_V1, KERNEL_RESOURCE_REGISTRATION_VERSION_V1,
+    KernelResourceContractDecodeErrorV1, KernelResourceContractV1,
+    KernelResourceContractValidationErrorV1, MAX_KERNEL_RESOURCE_CONTRACT_BYTES_V1,
+    decode_kernel_resource_contract_v1, encode_kernel_resource_contract_v1,
 };
 pub use model::{
     BasicBlockV1, BlockIdV1, FrontendUnitV1, FunctionIdentityV1, FunctionRoleV1,

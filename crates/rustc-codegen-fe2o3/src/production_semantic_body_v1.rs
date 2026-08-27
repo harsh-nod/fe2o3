@@ -968,8 +968,26 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     CastKind::PointerWithExposedProvenance => {
                         SemanticCastKindV1::PointerWithExposedProvenance
                     }
-                    CastKind::Transmute | CastKind::PointerCoercion(..) | CastKind::Subtype => {
-                        return Err(unsupported("unsupported Cast rvalue", block, statement));
+                    CastKind::Transmute => {
+                        return Err(unsupported(
+                            "unsupported Transmute Cast rvalue",
+                            block,
+                            statement,
+                        ));
+                    }
+                    CastKind::PointerCoercion(..) => {
+                        return Err(unsupported(
+                            "unsupported PointerCoercion Cast rvalue",
+                            block,
+                            statement,
+                        ));
+                    }
+                    CastKind::Subtype => {
+                        return Err(unsupported(
+                            "unsupported Subtype Cast rvalue",
+                            block,
+                            statement,
+                        ));
                     }
                 },
                 operand: self.construct_operand(operand, block, statement)?,
@@ -2071,6 +2089,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950LdsTransposePublish
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
+        | ProductionTerminalExpansionV1::DynamicLdsExactCurrent
+        | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
@@ -2081,7 +2101,8 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
-        | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate => Some(4),
+        | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
+        | ProductionTerminalExpansionV1::WorkgroupReduceSum => Some(4),
         ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2

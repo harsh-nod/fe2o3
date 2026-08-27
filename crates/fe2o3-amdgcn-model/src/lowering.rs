@@ -4000,6 +4000,20 @@ fn collect_intrinsic_declarations<'a>(
     for lowerer in lowerers {
         let body = lowerer.function.body.as_ref().expect("definition required");
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            if let OperationKind::Intrinsic(intrinsic) = &operation.kind
+                && let IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::WorkgroupCount,
+                    ..
+                } = intrinsic.kind
+            {
+                insert_intrinsic(
+                    &mut declarations,
+                    AmdgcnIntrinsic::DispatchPtr,
+                    "ptr addrspace(4)",
+                    "",
+                    IntrinsicAttribute::ReadNone,
+                );
+            }
             match &operation.kind {
                 OperationKind::Intrinsic(intrinsic)
                     if matches!(
@@ -4049,14 +4063,11 @@ fn collect_intrinsic_declarations<'a>(
                             IntrinsicAttribute::ReadNone,
                         );
                     }
-                    for dim in [Dim::X, Dim::Y]
-                        .into_iter()
-                        .take(usize::from(rank.saturating_sub(1)))
-                    {
+                    if rank > 1 {
                         insert_intrinsic(
                             &mut declarations,
-                            AmdgcnIntrinsic::GridSize(dim),
-                            "i32",
+                            AmdgcnIntrinsic::DispatchPtr,
+                            "ptr addrspace(4)",
                             "",
                             IntrinsicAttribute::ReadNone,
                         );
@@ -4839,8 +4850,18 @@ impl<'a> FunctionLowerer<'a> {
         }
         writeln!(
             output,
-            "  {result}.grid.x.i32 = call i32 @{}()",
-            AmdgcnIntrinsic::GridSize(Dim::X).llvm_name()
+            "  {result}.dispatch = call ptr addrspace(4) @{}()",
+            AmdgcnIntrinsic::DispatchPtr.llvm_name()
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.x.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 12"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.x.i32 = load i32, ptr addrspace(4) {result}.grid.x.ptr, align 4"
         )
         .unwrap();
         writeln!(
@@ -4859,8 +4880,12 @@ impl<'a> FunctionLowerer<'a> {
         }
         writeln!(
             output,
-            "  {result}.grid.y.i32 = call i32 @{}()",
-            AmdgcnIntrinsic::GridSize(Dim::Y).llvm_name()
+            "  {result}.grid.y.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 16"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  {result}.grid.y.i32 = load i32, ptr addrspace(4) {result}.grid.y.ptr, align 4"
         )
         .unwrap();
         writeln!(
@@ -5474,7 +5499,10 @@ impl<'a> FunctionLowerer<'a> {
                             kind: IndexKind::Global,
                             axis: Axis::X,
                         } | IntrinsicKind::InvocationIndex {
-                            kind: IndexKind::Local,
+                            kind: IndexKind::Local
+                                | IndexKind::Workgroup
+                                | IndexKind::WorkgroupSize
+                                | IndexKind::WorkgroupCount,
                             axis: Axis::X,
                         }
                     ) || (matches!(
@@ -6467,6 +6495,7 @@ impl<'a> FunctionLowerer<'a> {
         if self.emit_workgroup_memory_declarations(&mut output) {
             writeln!(output).unwrap();
         }
+        let invocation_intrinsics = collect_intrinsic_declarations(std::iter::once(self));
         writeln!(
             output,
             "declare i32 @{}() #1",
@@ -6479,6 +6508,23 @@ impl<'a> FunctionLowerer<'a> {
             AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
         )
         .unwrap();
+        for (symbol, declaration) in invocation_intrinsics {
+            if symbol == AmdgcnIntrinsic::DispatchPtr.llvm_name() {
+                debug_assert_eq!(declaration.result, "ptr addrspace(4)");
+                debug_assert_eq!(declaration.arguments, "");
+                debug_assert_eq!(declaration.attribute, IntrinsicAttribute::ReadNone);
+                writeln!(output, "declare ptr addrspace(4) @{symbol}() #1").unwrap();
+            } else if (symbol.starts_with("llvm.amdgcn.workitem.id.")
+                || symbol.starts_with("llvm.amdgcn.workgroup.id."))
+                && symbol != AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+                && symbol != AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+            {
+                debug_assert_eq!(declaration.result, "i32");
+                debug_assert_eq!(declaration.arguments, "");
+                debug_assert_eq!(declaration.attribute, IntrinsicAttribute::ReadNone);
+                writeln!(output, "declare i32 @{symbol}() #1").unwrap();
+            }
+        }
         if has_workgroup_barrier && !self.target.requires_physical_workgroup_barrier() {
             writeln!(
                 output,
@@ -6982,33 +7028,92 @@ impl<'a> FunctionLowerer<'a> {
                     writeln!(output, "  {result} = add i64 {result}.group, 0").unwrap();
                     return Ok(());
                 }
-                if matches!(
-                    intrinsic.kind,
+                match intrinsic.kind {
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::Global,
                         axis: Axis::X,
-                    }
-                ) {
-                    self.emit_logical_global_id(output, &result);
-                    return Ok(());
-                }
-                writeln!(
-                    output,
-                    "  {result}.local.i32 = call i32 @{}()",
-                    AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
-                )
-                .unwrap();
-                writeln!(
-                    output,
-                    "  {result}.local = zext i32 {result}.local.i32 to i64"
-                )
-                .unwrap();
-                match intrinsic.kind {
+                    } => self.emit_logical_global_id(output, &result),
                     IntrinsicKind::InvocationIndex {
                         kind: IndexKind::Local,
                         axis: Axis::X,
                     } => {
+                        writeln!(
+                            output,
+                            "  {result}.local.i32 = call i32 @{}()",
+                            AmdgcnIntrinsic::WorkItemId(Dim::X).llvm_name()
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.local = zext i32 {result}.local.i32 to i64"
+                        )
+                        .unwrap();
                         writeln!(output, "  {result} = add i64 {result}.local, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Workgroup,
+                        axis: Axis::X,
+                    } => {
+                        writeln!(
+                            output,
+                            "  {result}.group.i32 = call i32 @{}()",
+                            AmdgcnIntrinsic::WorkGroupId(Dim::X).llvm_name()
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.group = zext i32 {result}.group.i32 to i64"
+                        )
+                        .unwrap();
+                        writeln!(output, "  {result} = add i64 {result}.group, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupSize,
+                        axis: Axis::X,
+                    } => {
+                        let extent = self
+                            .workgroup_size
+                            .expect("validated workgroup-size intrinsic")
+                            .x;
+                        writeln!(output, "  {result} = add i64 {extent}, 0").unwrap();
+                    }
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::WorkgroupCount,
+                        axis: Axis::X,
+                    } => {
+                        let extent = self
+                            .workgroup_size
+                            .expect("validated workgroup-count intrinsic")
+                            .x;
+                        writeln!(
+                            output,
+                            "  {result}.dispatch = call ptr addrspace(4) @{}()",
+                            AmdgcnIntrinsic::DispatchPtr.llvm_name()
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) {result}.dispatch, i64 12"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.grid.i32 = load i32, ptr addrspace(4) {result}.grid.ptr, align 4"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.grid = zext i32 {result}.grid.i32 to i64"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  {result}.rounded = add i64 {result}.grid, {}",
+                            extent - 1
+                        )
+                        .unwrap();
+                        writeln!(output, "  {result} = udiv i64 {result}.rounded, {extent}")
+                            .unwrap();
                     }
                     _ => unreachable!("preflight rejected unsupported intrinsic"),
                 }

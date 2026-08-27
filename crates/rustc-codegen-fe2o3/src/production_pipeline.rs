@@ -408,7 +408,7 @@ impl FormalMemoryAdmittedProductionCompilation {
         entry.required_capabilities.insert(wave);
         fe2o3_kernel_ir::verify_module(&target_module)
             .map_err(ProductionPipelineError::TargetBinding)?;
-        let dialect_llvm_ir = match target_profile {
+        let lowering = match target_profile {
             fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
                 dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(
                     &target_module,
@@ -421,8 +421,8 @@ impl FormalMemoryAdmittedProductionCompilation {
                     &kernel_id,
                 )
             }
-        }
-        .map_err(ProductionPipelineError::TargetLowering)?;
+        };
+        let dialect_llvm_ir = lowering.map_err(ProductionPipelineError::TargetLowering)?;
         let llvm_ir = bind_production_upstream_llvm_layout_v1(dialect_llvm_ir)
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
         Ok(TargetLoweredProductionCompilation {

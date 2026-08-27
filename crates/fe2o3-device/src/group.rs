@@ -208,9 +208,9 @@ impl<'invocation> Workgroup<'invocation> {
             u64::from(id.z()),
             u64::from(size.x()),
             u64::from(size.y()),
-        )?;
+        );
         Some(Self {
-            size: size.volume()?,
+            size: size.volume(),
             thread_rank,
             _invocation: PhantomData,
             _not_send_sync: PhantomData,
@@ -441,19 +441,8 @@ impl Group for ActiveLaneGroup<'_> {
     }
 }
 
-const fn linear_rank_3d(x: u64, y: u64, z: u64, extent_x: u64, extent_y: u64) -> Option<u64> {
-    let zy = match z.checked_mul(extent_y) {
-        Some(value) => value,
-        None => return None,
-    };
-    let row = match zy.checked_add(y) {
-        Some(value) => value,
-        None => return None,
-    };
-    match row.checked_mul(extent_x) {
-        Some(value) => value.checked_add(x),
-        None => None,
-    }
+const fn linear_rank_3d(x: u64, y: u64, z: u64, extent_x: u64, extent_y: u64) -> u64 {
+    (z * extent_y + y) * extent_x + x
 }
 
 #[cfg(test)]

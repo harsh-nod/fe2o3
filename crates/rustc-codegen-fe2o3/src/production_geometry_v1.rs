@@ -64,6 +64,28 @@ pub(crate) fn derive_production_geometry_v1(
         .source_contract()
         .launch()
         .ok_or(ProductionGeometryErrorV1::MissingSourceWorkgroup)?;
+    let semantic_resources = entry
+        .source_contract()
+        .resources()
+        .map(|resources| {
+            (
+                resources.static_shared_memory_bytes(),
+                resources.max_dynamic_shared_memory_bytes(),
+            )
+        })
+        .unwrap_or_default();
+    let descriptor_resources = (
+        source_launch.static_shared_memory_bytes(),
+        source_launch.max_dynamic_shared_memory_bytes(),
+    );
+    if semantic_resources != descriptor_resources {
+        return Err(ProductionGeometryErrorV1::SourceResourceMismatch {
+            semantic_static: semantic_resources.0,
+            semantic_dynamic: semantic_resources.1,
+            descriptor_static: descriptor_resources.0,
+            descriptor_dynamic: descriptor_resources.1,
+        });
+    }
     derive_production_geometry_from_launch_for_target_v1(
         module,
         semantic_launch.required(),
@@ -380,6 +402,12 @@ pub(crate) enum ProductionGeometryErrorV1 {
         semantic: [u32; 3],
         descriptor: [u32; 3],
     },
+    SourceResourceMismatch {
+        semantic_static: u32,
+        semantic_dynamic: u32,
+        descriptor_static: u32,
+        descriptor_dynamic: u32,
+    },
     KernelClosure,
     IncompleteKirCallClosure,
     MissingKirWorkgroup,
@@ -434,6 +462,15 @@ impl fmt::Display for ProductionGeometryErrorV1 {
             } => write!(
                 formatter,
                 "semantic workgroup {semantic:?} disagrees with authenticated descriptor source {descriptor:?}",
+            ),
+            Self::SourceResourceMismatch {
+                semantic_static,
+                semantic_dynamic,
+                descriptor_static,
+                descriptor_dynamic,
+            } => write!(
+                formatter,
+                "semantic workgroup resources static={semantic_static}, dynamic={semantic_dynamic} disagree with authenticated descriptor source static={descriptor_static}, dynamic={descriptor_dynamic}",
             ),
             Self::KernelClosure => {
                 formatter.write_str("target-bound KIR must contain exactly one kernel")

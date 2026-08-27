@@ -186,6 +186,8 @@ pub(crate) struct CompilerKernelFrontendContractRecordV1 {
     target_symbol: String,
     canonical_bytes: Vec<u8>,
     contract: fe2o3_rustc_front::KernelFrontendContractV1,
+    resource_canonical_bytes: Option<Vec<u8>>,
+    resource_contract: Option<fe2o3_rustc_front::KernelResourceContractV1>,
     reachable_assembly: ReachableAssemblySummaryV1,
 }
 
@@ -237,6 +239,10 @@ impl CompilerKernelFrontendContractRecordV1 {
             target_symbol: authenticated.target_symbol().to_owned(),
             canonical_bytes: authenticated.canonical_bytes().to_vec(),
             contract: authenticated.contract(),
+            resource_canonical_bytes: authenticated
+                .resource_canonical_bytes()
+                .map(ToOwned::to_owned),
+            resource_contract: authenticated.resource_contract(),
             reachable_assembly: authenticated.reachable_assembly(),
         }
     }
@@ -247,6 +253,16 @@ impl CompilerKernelFrontendContractRecordV1 {
 
     pub(crate) const fn contract(&self) -> fe2o3_rustc_front::KernelFrontendContractV1 {
         self.contract
+    }
+
+    pub(crate) fn resource_canonical_bytes(&self) -> Option<&[u8]> {
+        self.resource_canonical_bytes.as_deref()
+    }
+
+    pub(crate) const fn resource_contract(
+        &self,
+    ) -> Option<fe2o3_rustc_front::KernelResourceContractV1> {
+        self.resource_contract
     }
 
     pub(crate) const fn reachable_assembly(&self) -> ReachableAssemblySummaryV1 {

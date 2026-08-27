@@ -678,6 +678,11 @@ impl ProductionRankedSemanticProgramV1 {
 pub(crate) enum ProductionRankedProjectionErrorV1 {
     SemanticOwner(ProductionSemanticMirErrorV1),
     Incomplete(&'static str),
+    MissingAllocationProvenance {
+        local: u32,
+        projections: usize,
+        ty: u32,
+    },
     UnprovenAssert {
         block: usize,
         kind: &'static str,
@@ -715,6 +720,14 @@ impl fmt::Display for ProductionRankedProjectionErrorV1 {
                     "semantic-to-ranked projection incomplete: {detail}"
                 )
             }
+            Self::MissingAllocationProvenance {
+                local,
+                projections,
+                ty,
+            } => write!(
+                formatter,
+                "semantic-to-ranked projection incomplete: address formation lacks authenticated allocation provenance for local _{local} (type {ty}, {projections} projection(s))",
+            ),
             Self::UnprovenAssert {
                 block,
                 kind,
@@ -788,6 +801,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
             Self::Compile { error, .. } => Some(error),
             Self::ReferenceEffectJoin(error) => Some(error),
             Self::Incomplete(_)
+            | Self::MissingAllocationProvenance { .. }
             | Self::UnprovenAssert { .. }
             | Self::Unsupported(_)
             | Self::Construction(_) => None,
@@ -10944,17 +10958,52 @@ fn allocation_operand_local_v1(
     let source = function.locals().get(place.local().index() as usize)?;
     let source_type = types.get(source.ty().index() as usize)?;
     let result_type = types.get(place.ty().index() as usize)?;
-    let SemanticBackendReprV1::Scalar(source_scalar) = source_type.layout().backend_repr() else {
-        return None;
+    let result_pointer = match result_type.layout().backend_repr() {
+        SemanticBackendReprV1::Scalar(pointer)
+            if matches!(
+                pointer.primitive(),
+                SemanticBackendPrimitiveV1::Pointer { .. }
+            ) =>
+        {
+            pointer.primitive()
+        }
+        _ => return None,
     };
-    matches!(
-        source_scalar.primitive(),
-        SemanticBackendPrimitiveV1::Pointer { .. }
-    )
-    .then_some(())
-    .filter(|_| source_type.abi_properties().first_pointee().is_some())
-    .filter(|_| matches!(result_type.shape(), SemanticTypeShapeV1::Pointer(_)))
-    .map(|_| place.local())
+    if !matches!(result_type.shape(), SemanticTypeShapeV1::Pointer(_))
+        || source_type.abi_properties().first_pointee().is_none()
+    {
+        return None;
+    }
+    match source_type.layout().backend_repr() {
+        SemanticBackendReprV1::Scalar(source_scalar)
+            if source_scalar.primitive() == result_pointer =>
+        {
+            Some(place.local())
+        }
+        SemanticBackendReprV1::ScalarPair { first, .. } if first.primitive() == result_pointer => {
+            let [projection] = place.projections() else {
+                return None;
+            };
+            let SemanticProjectionKindV1::Field(0) = projection.kind() else {
+                return None;
+            };
+            let fields = match source_type.shape() {
+                SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
+                    fields
+                }
+                _ => return None,
+            };
+            (fields.fields().first() == Some(&place.ty())
+                && source_type
+                    .layout()
+                    .fields()
+                    .source_order_offsets_bytes()
+                    .and_then(|offsets| offsets.first())
+                    == Some(&0))
+            .then_some(place.local())
+        }
+        _ => None,
+    }
 }
 
 fn simple_call_destination(
@@ -12043,9 +12092,13 @@ fn project_address_formation(
             .get(local_index)
             .copied()
             .flatten()
-            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "address formation lacks authenticated allocation provenance",
-            ))?;
+            .ok_or(
+                ProductionRankedProjectionErrorV1::MissingAllocationProvenance {
+                    local: place.local().index(),
+                    projections: place.projections().len(),
+                    ty: local.ty().index(),
+                },
+            )?;
     }
     Ok(())
 }
@@ -15381,10 +15434,16 @@ mod tests {
 
             let mut hostile_contracts = synthetic_local_contracts(&function);
             hostile_contracts.allocations[3] = None;
-            assert_unsupported(
+            assert!(matches!(
                 audit_function_with_local_contracts(&function, &hostile_contracts),
-                "address formation lacks authenticated allocation provenance",
-            );
+                Err(
+                    ProductionRankedProjectionErrorV1::MissingAllocationProvenance {
+                        local: 3,
+                        projections: 1,
+                        ty: 2,
+                    }
+                )
+            ));
         }
     }
 
@@ -17221,6 +17280,108 @@ mod tests {
         assert_eq!(
             provenance.stable_argument_origins,
             vec![None, Some(0), None, None]
+        );
+    }
+
+    #[test]
+    fn scalar_pair_field_zero_preserves_authenticated_first_pointer_provenance() {
+        let pointer_primitive = SemanticBackendPrimitiveV1::pointer(1, 8, 8);
+        let pointer_scalar = SemanticBackendScalarV1::initialized(
+            pointer_primitive,
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        let length_scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 64, 8),
+            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+        );
+        let mut types = projection_types();
+        types[POINTER_TYPE.index() as usize] = SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(118)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(118)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(8),
+                8,
+                SemanticBackendReprV1::scalar(pointer_scalar),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Pointer(
+                SemanticPointerTypeV1::new(
+                    SCALAR_TYPE,
+                    SemanticMutabilityV1::Mutable,
+                    1,
+                    64,
+                    SemanticPointerMetadataV1::None,
+                )
+                .unwrap(),
+            ),
+        );
+        let scalar_pair = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(
+            SemanticTypeDeclV1::new(
+                SemanticTypeIdentityV1::from_sha256(bytes(119)),
+                SemanticLayoutIdentityV1::from_sha256(bytes(119)),
+                SemanticTypeLayoutV1::with_exact_rustc_layout(
+                    16,
+                    8,
+                    SemanticFieldsShapeV1::arbitrary(vec![0, 8], vec![0, 1]).unwrap(),
+                    SemanticRustcVariantsV1::Single { index: 0 },
+                    SemanticBackendReprV1::scalar_pair(pointer_scalar, length_scalar),
+                    None,
+                    false,
+                    None,
+                    8,
+                    0,
+                    SemanticTypeLayoutDetailsV1::Aggregate(
+                        SemanticAggregateLayoutV1::new(vec![0, 8], vec![]).unwrap(),
+                    ),
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Aggregate(
+                    SemanticAggregateTypeV1::new(vec![POINTER_TYPE, SCALAR_TYPE]).unwrap(),
+                ),
+            )
+            .with_rustc_abi_properties(
+                SemanticTypeAbiPropertiesV1::new(false, false).with_scalar_pointee_info(
+                    Some(
+                        SemanticAbiPointeeInfoV1::new(SemanticAbiPointeeKindV1::Raw, 0, 1).unwrap(),
+                    ),
+                    None,
+                ),
+            ),
+        );
+        let function = projection_function_with_locals(
+            vec![block(119, vec![], SemanticTerminatorKindV1::Return)],
+            vec![
+                local(119, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(120, scalar_pair, SemanticLocalRoleV1::Argument(0)),
+                local(121, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let field = |index| {
+            SemanticOperandV1::Copy(
+                SemanticPlaceV1::new(
+                    SemanticLocalIdV1::from_index(1),
+                    vec![
+                        SemanticProjectionV1::new(
+                            SemanticProjectionKindV1::Field(index),
+                            POINTER_TYPE,
+                        )
+                        .unwrap(),
+                    ],
+                    POINTER_TYPE,
+                )
+                .unwrap(),
+            )
+        };
+
+        assert_eq!(
+            allocation_operand_local_v1(&types, &function, &field(0)),
+            Some(SemanticLocalIdV1::from_index(1)),
+        );
+        assert_eq!(
+            allocation_operand_local_v1(&types, &function, &field(1)),
+            None
         );
     }
 

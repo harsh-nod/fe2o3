@@ -393,6 +393,7 @@ impl<T> DisjointSlice<T, GridExclusive> {
     ///
     /// `GridExclusive` has no safe `ThreadIndex` producer, so no non-leader
     /// invocation can access this view through another safe indexing API.
+    #[inline(never)]
     #[rustc_diagnostic_item = "fe2o3_device_disjoint_slice_get_mut_exclusive"]
     pub fn get_mut_exclusive(&mut self, _leader: &GridLeader, index: usize) -> Option<&mut T> {
         // SAFETY: the capability establishes the unique executing invocation,

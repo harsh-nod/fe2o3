@@ -333,6 +333,7 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
     /// The dynamic allocation must contain exactly one slot per invocation in
     /// `group`. Consuming it prevents ordinary typed LDS access while the
     /// collective owns the shared region; no pointer is exposed to callers.
+    #[inline(always)]
     pub fn from_dynamic_lds(
         group: &'group Workgroup<'group>,
         lds: DynamicLds<'group, T, LdsUninitialized>,
@@ -342,12 +343,16 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
             return Err(WorkgroupCollectiveScratchError::UnsupportedWorkgroupSize { size });
         }
         let required = size as u32;
-        let provided = u32::try_from(lds.len()).unwrap_or(u32::MAX);
-        if provided != required || lds.len() != required as usize {
+        let slots = lds.len();
+        let provided = if slots > u32::MAX as usize {
+            u32::MAX
+        } else {
+            slots as u32
+        };
+        if provided != required || slots != required as usize {
             return Err(WorkgroupCollectiveScratchError::SlotCountMismatch { required, provided });
         }
-        let (base, slots) = lds.into_collective_raw_parts();
-        debug_assert_eq!(slots, required as usize);
+        let (base, _) = lds.into_collective_raw_parts();
         Ok(Self {
             base,
             slots: required,

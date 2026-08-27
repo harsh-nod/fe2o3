@@ -350,8 +350,20 @@ fn dump_authenticated_frontend_contracts(
     }
     let bytes = contracts
         .iter()
-        .map(|record| record.canonical_bytes().len())
+        .map(|record| {
+            record.canonical_bytes().len()
+                + record.resource_canonical_bytes().map_or(0, <[u8]>::len)
+        })
         .sum::<usize>();
+    let resources = contracts.iter().fold((0_u64, 0_u64), |total, record| {
+        let Some(resources) = record.resource_contract() else {
+            return total;
+        };
+        (
+            total.0 + u64::from(resources.static_shared_memory_bytes()),
+            total.1 + u64::from(resources.max_dynamic_shared_memory_bytes()),
+        )
+    });
     let assembly_blocks = contracts
         .iter()
         .map(|record| record.reachable_assembly().blocks() as usize)
@@ -373,8 +385,10 @@ fn dump_authenticated_frontend_contracts(
         )
     });
     eprintln!(
-        "[rustc-codegen-fe2o3] authenticated {} kernel frontend contract(s), {bytes} canonical byte(s), {assembly_blocks} reachable asm block(s), {effectful} effectful declaration(s), operand/options union {:#x}/{:#x}",
+        "[rustc-codegen-fe2o3] authenticated {} kernel frontend contract(s), {bytes} canonical byte(s), resource bytes static/dynamic {}/{}, {assembly_blocks} reachable asm block(s), {effectful} effectful declaration(s), operand/options union {:#x}/{:#x}",
         contracts.len(),
+        resources.0,
+        resources.1,
         operand_options.0,
         operand_options.1
     );

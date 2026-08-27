@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x88, 0x3a, 0x01, 0x48, 0x6d, 0xe1, 0x92, 0xc1, 0x9a, 0x8f, 0x77, 0x09, 0xe5, 0x65, 0x5c, 0xa6,
-    0x8c, 0x5a, 0xb0, 0x46, 0x87, 0xfa, 0xf4, 0xc8, 0xa1, 0xce, 0x7b, 0x77, 0xb9, 0xec, 0x2e, 0x42,
+    0x98, 0x29, 0xa5, 0x36, 0x5d, 0x8f, 0xa4, 0xc2, 0x9d, 0xcf, 0x79, 0xe7, 0x37, 0xe5, 0xe3, 0x76,
+    0x8f, 0x28, 0x99, 0xec, 0xe4, 0xb1, 0x37, 0x5a, 0xdb, 0x3a, 0xad, 0x4d, 0x14, 0xfb, 0x36, 0x8f,
 ];
 #[allow(
     dead_code,
@@ -78,8 +78,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x93, 0xe3, 0x1d, 0x99, 0x9f, 0x51, 0x30, 0x20, 0x6e, 0xd6, 0xe1, 0xdd, 0xe6, 0x03, 0xf9, 0x77,
-    0x50, 0x01, 0x96, 0xaa, 0x76, 0x0e, 0x85, 0x39, 0x99, 0xe1, 0x69, 0x54, 0x46, 0x2f, 0x3d, 0xc8,
+    0x65, 0x12, 0x36, 0x57, 0xa3, 0x8a, 0xe3, 0x4e, 0x29, 0x24, 0x76, 0x10, 0x30, 0x68, 0xe7, 0xf1,
+    0x93, 0x6c, 0x5c, 0x3b, 0x09, 0xaa, 0x7e, 0xac, 0xae, 0x88, 0x4e, 0xff, 0x0b, 0x6b, 0xda, 0x85,
 ];
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -441,6 +441,7 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupLdsScope,
     WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
+    DynamicLdsIntoCollectiveRawParts,
     Invocation3D,
     Invocation3DCurrent,
     ThreadIndexX,
@@ -645,6 +646,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DynamicLdsExactCurrent,
         "fe2o3_device_dynamic_lds_exact_current_v1",
         "fe2o3_device::DynamicLds::<T>::exact_current",
+    ),
+    (
+        TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
+        "fe2o3_device_dynamic_lds_into_collective_raw_parts_v1",
+        "fe2o3_device::DynamicLds::<T>::into_collective_raw_parts",
     ),
     (
         TrustedDeviceItem::Invocation3D,
@@ -1922,6 +1928,9 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::WorkgroupLdsScope => "fe2o3_device::lds::WorkgroupLdsScope",
         TrustedDeviceItem::WorkgroupLdsScopeCurrent => "fe2o3_device::lds::{impl#2}::current",
         TrustedDeviceItem::DynamicLdsExactCurrent => "fe2o3_device::lds::{impl#4}::exact_current",
+        TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
+            "fe2o3_device::lds::{impl#4}::into_collective_raw_parts"
+        }
         TrustedDeviceItem::Invocation3D => "fe2o3_device::thread::Invocation3D",
         TrustedDeviceItem::Invocation3DCurrent => "fe2o3_device::thread::{impl#6}::current",
         TrustedDeviceItem::Gfx942CollectivesContext => {
@@ -2119,6 +2128,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
         TrustedDeviceItem::WorkgroupLdsScope
             | TrustedDeviceItem::WorkgroupLdsScopeCurrent
             | TrustedDeviceItem::DynamicLdsExactCurrent
+            | TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
             | TrustedDeviceItem::Invocation3D
             | TrustedDeviceItem::Invocation3DCurrent
             | TrustedDeviceItem::ThreadIndexX
@@ -4163,6 +4173,7 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
+            TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::ThreadIndexX,
@@ -4460,6 +4471,7 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScope,
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
+            TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::Gfx942CollectivesContext,

@@ -2263,17 +2263,77 @@ fn dynamic_higher_rank_domains_preserve_xyz_workgroups_and_workgroup_size_is_man
         )));
         assert!(llvm.contains("call i32 @llvm.amdgcn.workitem.id.y()"));
         assert!(llvm.contains("call i32 @llvm.amdgcn.workgroup.id.y()"));
-        assert!(llvm.contains("call i32 @llvm.amdgcn.grid.size.x()"));
+        assert!(llvm.contains("call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()"));
+        assert!(llvm.contains("getelementptr inbounds i8, ptr addrspace(4)"));
+        assert!(llvm.contains("i64 12"));
         if rank == 2 {
             assert!(llvm.contains(".row = mul i64"));
-            assert!(!llvm.contains("call i32 @llvm.amdgcn.grid.size.y()"));
+            assert!(!llvm.contains("i64 16"));
         } else {
             assert!(llvm.contains("call i32 @llvm.amdgcn.workitem.id.z()"));
             assert!(llvm.contains("call i32 @llvm.amdgcn.workgroup.id.z()"));
-            assert!(llvm.contains("call i32 @llvm.amdgcn.grid.size.y()"));
+            assert!(llvm.contains("i64 16"));
             assert!(llvm.contains(".plane_row_scaled = mul i64"));
         }
     }
+}
+
+#[test]
+fn workgroup_count_and_size_use_dispatch_and_authenticated_descriptor_geometry() {
+    let mut module = fill_module();
+    let entry = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
+    entry.operations.push(op(
+        20,
+        Type::INDEX,
+        OperationKind::Intrinsic(IntrinsicOperation::new(
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::WorkgroupCount,
+                axis: Axis::X,
+            },
+            Type::INDEX,
+        )),
+    ));
+    entry.operations.push(op(
+        21,
+        Type::INDEX,
+        OperationKind::Intrinsic(IntrinsicOperation::new(
+            IntrinsicKind::InvocationIndex {
+                kind: IndexKind::WorkgroupSize,
+                axis: Axis::X,
+            },
+            Type::INDEX,
+        )),
+    ));
+
+    let llvm = lower_kernel_to_llvm_ir(&module, &KernelId::new("fill")).unwrap();
+    assert!(llvm.contains("%v20.dispatch = call ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()"));
+    assert!(llvm.contains(
+        "%v20.grid.ptr = getelementptr inbounds i8, ptr addrspace(4) %v20.dispatch, i64 12"
+    ));
+    assert!(llvm.contains("%v20.grid.i32 = load i32, ptr addrspace(4) %v20.grid.ptr, align 4"));
+    assert!(llvm.contains("%v20.grid = zext i32 %v20.grid.i32 to i64"));
+    assert!(llvm.contains("%v20.rounded = add i64 %v20.grid, 63"));
+    assert!(llvm.contains("%v20 = udiv i64 %v20.rounded, 64"));
+    assert!(llvm.contains("%v21 = add i64 64, 0"));
+    assert_occurrences(
+        &llvm,
+        "declare ptr addrspace(4) @llvm.amdgcn.dispatch.ptr()",
+        1,
+    );
+
+    let OperationKind::Intrinsic(intrinsic) =
+        &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[3].kind
+    else {
+        panic!("workgroup-count intrinsic expected")
+    };
+    intrinsic.kind = IntrinsicKind::InvocationIndex {
+        kind: IndexKind::WorkgroupCount,
+        axis: Axis::Y,
+    };
+    assert_eq!(
+        first_code(&module, "fill"),
+        LoweringDiagnosticCode::InputVerification(DiagnosticCode::InvalidLaunchDomain)
+    );
 }
 
 #[test]

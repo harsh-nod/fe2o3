@@ -180,6 +180,15 @@ impl AdmittedInertSemanticMirV1 {
         Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V6))
     }
 
+    /// Decodes bytes canonical specifically under the closed V7
+    /// source-resource schema.
+    pub fn decode_exact_v7_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V7))
+    }
+
     fn decode_for_schema(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -197,6 +206,7 @@ impl AdmittedInertSemanticMirV1 {
         let request = decoder.request()?;
         decoder.finish()?;
         let admitted = match expected_wire_version {
+            Some(SemanticMirWireVersionV1::V7) => request.admit_exact_v7(limits)?,
             Some(SemanticMirWireVersionV1::V6) => request.admit_exact_v6(limits)?,
             Some(SemanticMirWireVersionV1::V5) => request.admit_exact_v5(limits)?,
             Some(SemanticMirWireVersionV1::V4) => request.admit_exact_v4(limits)?,
@@ -1161,10 +1171,23 @@ impl<'a> CanonicalDecoderV1<'a> {
             )
             .map_err(Into::into)
         })?;
+        let resources = if self.wire_version >= SemanticMirWireVersionV1::V7 {
+            self.option("kernel resources", |decoder| {
+                SemanticKernelResourceContractV1::new(decoder.u32()?, decoder.u32()?)
+                    .map_err(Into::into)
+            })?
+        } else {
+            None
+        };
         Ok(SemanticKernelEntryV1::new(
             export_symbol,
             kernel_binding_identity,
-            SemanticKernelSourceContractV1::new(launch, unsafe_assembly, reachable_assembly)?,
+            SemanticKernelSourceContractV1::new_with_resources(
+                launch,
+                resources,
+                unsafe_assembly,
+                reachable_assembly,
+            )?,
         ))
     }
 
@@ -1415,7 +1438,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V6 {
-            51
+            54
         } else if self.wire_version >= SemanticMirWireVersionV1::V5 {
             44
         } else {
@@ -1714,6 +1737,24 @@ impl<'a> CanonicalDecoderV1<'a> {
                     1 => SemanticSubgroupReductionKindV1::Maximum,
                     _ => unreachable!(),
                 },
+            },
+            52 => SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+                scope: SemanticTypeIdV1(self.u32()?),
+                dynamic_lds: SemanticTypeIdV1(self.u32()?),
+                element_storage: SemanticTypeIdV1(self.u32()?),
+                elements: self.u64()?,
+            },
+            53 => SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+                workgroup: SemanticTypeIdV1(self.u32()?),
+                context: SemanticTypeIdV1(self.u32()?),
+                scratch: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
+            54 => SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+                dynamic_lds: SemanticTypeIdV1(self.u32()?),
+                raw_parts: SemanticTypeIdV1(self.u32()?),
+                element_storage: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
             },
             _ => unreachable!(),
         })
@@ -3016,6 +3057,24 @@ mod tests {
             SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(SemanticAxisV1::Y),
             SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(SemanticAxisV1::Z),
             SemanticCompilerIntrinsicOperationV1::GridDimension(SemanticAxisV1::X),
+            SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent {
+                scope: t(0),
+                dynamic_lds: t(1),
+                element_storage: t(2),
+                elements: 64,
+            },
+            SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum {
+                workgroup: t(0),
+                context: t(1),
+                scratch: t(2),
+                element: t(3),
+            },
+            SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts {
+                dynamic_lds: t(0),
+                raw_parts: t(1),
+                element_storage: t(2),
+                element: t(3),
+            },
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
             SemanticCompilerIntrinsicOperationV1::WaveBarrier,
             SemanticCompilerIntrinsicOperationV1::FabsF32,
@@ -3715,12 +3774,14 @@ mod tests {
                 SemanticKernelBindingIdentityV1(identity(112)),
                 SemanticKernelSourceContractV1::new(None, None, None).unwrap(),
             ),
-            encode_kernel_entry,
+            |writer, entry| encode_kernel_entry(writer, entry, SemanticMirWireVersionV1::V6),
             |decoder| decoder.kernel_entry(),
         );
-        component_round_trip(entry.clone(), encode_kernel_entry, |decoder| {
-            decoder.kernel_entry()
-        });
+        component_round_trip(
+            entry.clone(),
+            |writer, entry| encode_kernel_entry(writer, entry, SemanticMirWireVersionV1::V6),
+            |decoder| decoder.kernel_entry(),
+        );
 
         let source_origin = SemanticSourceOriginV1::new(
             SemanticSourceFileIdentityV1(identity(110)),

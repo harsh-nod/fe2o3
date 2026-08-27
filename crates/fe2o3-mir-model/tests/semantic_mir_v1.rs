@@ -3839,6 +3839,68 @@ fn transparent_result_wrapper_requires_exact_forwarding_and_no_computation() {
     assert_eq!(computing.select_kernel_body_v1(), None);
 }
 
+#[test]
+fn direct_unit_kernel_remains_selected_with_a_retained_helper() {
+    let unit = SemanticTypeIdV1::from_index(0);
+    let unit_abi = |identity| {
+        SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256(bytes(identity)),
+            layout_identity(identity),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap()
+    };
+    let root = function(
+        1,
+        unit_abi(1),
+        vec![
+            local(1, unit, SemanticLocalRoleV1::Return),
+            local(2, unit, SemanticLocalRoleV1::Temporary),
+        ],
+        vec![
+            block(
+                1,
+                vec![],
+                SemanticTerminatorKindV1::Call(
+                    SemanticDirectCallV1::new(
+                        SemanticFunctionIdV1::from_index(1),
+                        vec![],
+                        Some(SemanticCallDestinationV1::new(
+                            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], unit)
+                                .unwrap(),
+                            SemanticControlFlowEdgeV1::new(
+                                SemanticEdgeRoleV1::CallReturn,
+                                SemanticBlockIdV1::from_index(1),
+                            ),
+                        )),
+                        SemanticUnwindActionV1::Unreachable,
+                    )
+                    .unwrap(),
+                ),
+            ),
+            block(2, vec![], SemanticTerminatorKindV1::Return),
+        ],
+    );
+    let helper = function(
+        2,
+        unit_abi(2),
+        vec![local(3, unit, SemanticLocalRoleV1::Return)],
+        vec![block(3, vec![], SemanticTerminatorKindV1::Return)],
+    );
+    let admitted = request(vec![unit_type(1)], vec![], vec![root, helper])
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+
+    let selection = admitted.select_kernel_body_v1().unwrap();
+    assert_eq!(selection.root().index(), 0);
+    assert_eq!(selection.body().index(), 0);
+    assert!(!selection.has_transparent_result_wrapper());
+}
+
 fn direct_enum_type_with_seed(
     tag_offset: u64,
     second_discriminant: u128,

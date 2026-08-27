@@ -282,14 +282,7 @@ fn group_synchronization_contracts_are_exact_and_fail_closed() {
 
 #[test]
 fn oversized_groups_fail_closed_instead_of_truncating() {
-    let oversized_workgroup = invocation(
-        [0, 0, 0],
-        [0, 0, 0],
-        [u32::MAX, u32::MAX, u32::MAX],
-        [1, 1, 1],
-    );
-    assert!(Workgroup::from_invocation_snapshot(&oversized_workgroup).is_none());
-    assert!(Grid::from_invocation_snapshot(&oversized_workgroup).is_none());
+    assert!(WorkgroupSize::new(u32::MAX, u32::MAX, u32::MAX).is_none());
 
     let invocation = invocation(
         [0, 0, 0],

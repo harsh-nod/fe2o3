@@ -586,6 +586,67 @@ fn every_source_contract_field_is_canonical() {
 }
 
 #[test]
+fn source_resources_select_v7_and_round_trip_exactly() {
+    let build_request = |static_bytes, dynamic_bytes| {
+        let resources = SemanticKernelResourceContractV1::new(static_bytes, dynamic_bytes).unwrap();
+        let contract = SemanticKernelSourceContractV1::new_with_resources(
+            Some(launch()),
+            Some(resources),
+            None,
+            None,
+        )
+        .unwrap();
+        let entry = SemanticKernelEntryV1::new(
+            SemanticLinkSymbolV1::new(b"resource_kernel".to_vec()).unwrap(),
+            SemanticKernelBindingIdentityV1::from_sha256(bytes(71)),
+            contract,
+        );
+        request(
+            vec![function(1, SemanticFunctionRoleV1::KernelRoot).with_kernel_entry(entry)],
+            vec![SemanticFunctionIdV1::from_index(0)],
+        )
+    };
+
+    let admitted = build_request(256, 0)
+        .admit(SemanticMirLimitsV1::default())
+        .unwrap();
+    assert_eq!(admitted.wire_version(), SemanticMirWireVersionV1::V7);
+    let decoded = AdmittedInertSemanticMirV1::decode_exact_v7_canonical(
+        admitted.canonical_encoding(),
+        SemanticMirLimitsV1::default(),
+    )
+    .unwrap();
+    let resources = decoded.functions()[0]
+        .kernel_entry()
+        .unwrap()
+        .source_contract()
+        .resources()
+        .unwrap();
+    assert_eq!(resources.static_shared_memory_bytes(), 256);
+    assert_eq!(resources.max_dynamic_shared_memory_bytes(), 0);
+
+    assert!(matches!(
+        build_request(256, 0).admit_exact_v6(SemanticMirLimitsV1::default()),
+        Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+            requested: SemanticMirWireVersionV1::V6,
+            required: SemanticMirWireVersionV1::V7,
+        })
+    ));
+    assert_ne!(
+        kernel_digest(source_contract()),
+        kernel_digest(
+            SemanticKernelSourceContractV1::new_with_resources(
+                Some(launch()),
+                Some(SemanticKernelResourceContractV1::new(256, 0).unwrap()),
+                None,
+                None,
+            )
+            .unwrap(),
+        )
+    );
+}
+
+#[test]
 fn launch_and_unsafe_assembly_contracts_fail_closed() {
     let unsafe_entry = SemanticKernelEntryV1::new(
         SemanticLinkSymbolV1::new(b"unsafe_kernel".to_vec()).unwrap(),
@@ -619,6 +680,14 @@ fn launch_and_unsafe_assembly_contracts_fail_closed() {
     ));
     assert!(matches!(
         SemanticKernelLaunchBoundsV1::new(None, None, Some(1)),
+        Err(SemanticMirErrorV1::InvalidKernelEntry)
+    ));
+    assert!(matches!(
+        SemanticKernelResourceContractV1::new(0, 0),
+        Err(SemanticMirErrorV1::InvalidKernelEntry)
+    ));
+    assert!(matches!(
+        SemanticKernelResourceContractV1::new(u32::MAX, 1),
         Err(SemanticMirErrorV1::InvalidKernelEntry)
     ));
 

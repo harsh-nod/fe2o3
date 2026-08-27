@@ -47,7 +47,7 @@ pub const PRODUCTION_GFX942_RUSTC_FEATURES_V1: &str = "-wavefrontsize32,+wavefro
 pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1: &str =
     "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS";
 /// Parent-owned rustc arguments for production target crates.
-pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Zinline-mir=yes -Copt-level=2 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
+pub const PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Zinline-mir=yes -Zinline-mir-hint-threshold=1000 -Copt-level=2 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
 
 /// Exact Cargo/rustc target triple admitted by the first gfx950 production profile.
 pub const PRODUCTION_GFX950_RUSTC_TARGET_V1: &str = "amdgcn-amd-amdhsa";
