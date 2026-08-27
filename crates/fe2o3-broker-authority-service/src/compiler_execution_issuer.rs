@@ -604,6 +604,19 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
     pub const fn grants_compiler_authority(&self) -> bool {
         false
     }
+
+    pub(crate) fn try_clone_service_root(
+        &self,
+    ) -> Result<OwnedFd, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        self.validate_continuity()?;
+        self.service
+            .try_clone_service_root()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)
+    }
+
+    pub(crate) const fn signing_key(&self) -> &SigningKey {
+        &self.signing_key.key
+    }
 }
 
 fn inspect_key_seals(

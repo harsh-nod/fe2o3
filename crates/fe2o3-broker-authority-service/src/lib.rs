@@ -107,6 +107,8 @@ compile_error!(
 #[cfg(target_os = "linux")]
 mod compiler_execution_issuer;
 #[cfg(target_os = "linux")]
+mod compiler_execution_issuer_durable;
+#[cfg(target_os = "linux")]
 mod durable_session_consume;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -120,6 +122,13 @@ pub use compiler_execution_issuer::{
     ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
     ProtectedIssuerProcessV1, SEALED_STATIC_ISSUER_RUNTIME_CLOSURE_V1,
     current_static_issuer_measurements_v1, sealed_static_issuer_runtime_measurement_v1,
+};
+#[cfg(target_os = "linux")]
+pub use compiler_execution_issuer_durable::{
+    COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V1, CompilerExecutionIssuerAckV1,
+    CompilerExecutionIssuerRecoveryV1, ProtectedCompilerExecutionChallengeV1,
+    ProtectedCompilerExecutionIssuerErrorV1, ProtectedCompilerExecutionIssuerV1,
+    ProtectedCompilerExecutionOccurrenceV1, ProtectedCompilerExecutionReceiptV1,
 };
 #[cfg(target_os = "linux")]
 pub use durable_session_consume::{

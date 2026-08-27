@@ -100,10 +100,15 @@ shared Linux admission primitive and an issuer-admission owner that requires an
 irreversibly hardened process, a loader-independent static executable matching
 the caller policy, and an immutable service-owned sealed signing-key image.
 It retains and remeasures the exact executable and key at every continuity
-boundary, but exposes no signing operation. Freshness, supervised compiler
-occurrence, durable replay state, receipt carriage, and the runtime verifier
-join remain absent. Consequently `CompilerExecutionProvenance` remains open.
-See [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md).
+boundary. A signed fixed-width singleton journal now durably commits fresh
+subject-bound challenges and exact receipts, recovers only immediate legal
+successors, re-emits prepared/issued outputs after crashes, and advances its
+rollback chain idempotently. Its signing APIs remain unreachable without the
+still-missing protected compiler-occurrence producer. The bounded service loop,
+receipt carriage, external rollback verifier, and Worker V3 join also remain
+absent. Consequently `CompilerExecutionProvenance` remains open. See
+[protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md)
+and [durable issuer state V1](docs/compiler-execution-issuer-durable-v1.md).
 
 ## CUDA-Oxide status
 

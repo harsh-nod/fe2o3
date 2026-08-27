@@ -71,19 +71,20 @@ metadata, seals, bytes, in-memory key, and policy public key are compared again
 at every continuity boundary. Neither the key bytes nor a raw key descriptor
 is exposed by the API.
 
-## Remaining Issuer Work
+## Durable Issuer State
 
-This admission must be consumed by one durable state machine before signing is
-enabled. That state machine must own nonce generation, sequence and rollback
-state, challenge-before-release durability, request/subject comparison,
-receipt-before-release durability, exact receipt replay after crashes, and
-idempotent acknowledgment. A separate supervised-occurrence protocol must let
-the service independently reconstruct the exact compiler-execution subject.
+This admission is now consumed by one
+[signed crash-safe state machine](compiler-execution-issuer-durable-v1.md). It
+owns OS nonce generation, sequence and rollback state,
+challenge-before-release durability, exact request/subject comparison,
+receipt-before-release durability, crash replay, singleton exclusion, and
+idempotent acknowledgment. The signing entry points remain unreachable because
+no public constructor can create the required supervised-occurrence token.
 
-Only after those pieces exist can a bounded `SOCK_SEQPACKET` service loop call
-the existing canonical protocol signer. Worker V3 must then carry and verify
-the receipt under its own current rollback ledger. Until that complete chain
-lands, `CompilerExecutionProvenance` remains open.
+The remaining issuer work is the independently supervised compiler-occurrence
+producer and a bounded `SOCK_SEQPACKET` service loop. Worker V3 must then carry
+and verify the receipt under its own protected current rollback ledger. Until
+that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification
 

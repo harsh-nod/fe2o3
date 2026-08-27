@@ -149,5 +149,9 @@ The protocol suite must retain:
 - multi-step rollback-chain and replay rejection checks; and
 - compile-fail coverage proving the verified result is move-only.
 
-These tests qualify only the codec and pinned-key signature boundary. Protected
-service and MI300X end-to-end tests are separate required milestones.
+These tests qualify only the codec and pinned-key signature boundary. The
+[protected issuer admission](compiler-execution-issuer-admission-v1.md) and
+[durable issuer state](compiler-execution-issuer-durable-v1.md) now implement
+the local protected signer foundation. Supervised compiler transport, Worker V3
+carriage and verification, and MI300X end-to-end tests remain separate required
+milestones.
