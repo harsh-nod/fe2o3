@@ -84,6 +84,8 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
+  fe2o3-debug-cli
+  fe2o3-debug-protocol
   fe2o3-differential
   fe2o3-drm-uapi
   fe2o3-hsaco
@@ -95,6 +97,7 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-kernel-analysis
   fe2o3-kernel-descriptor
   fe2o3-kernel-ir
+  fe2o3-kir-debugger
   fe2o3-kir-sim
   fe2o3-kir-sim-cli
   fe2o3-kir-sim-trace

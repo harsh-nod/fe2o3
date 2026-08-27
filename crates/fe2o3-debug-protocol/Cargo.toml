@@ -1,0 +1,13 @@
+[package]
+name = "fe2o3-debug-protocol"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded agent-native debugger protocol for fe2o3 simulator and KFD backends."
+
+[dependencies]
+serde.workspace = true
+serde_json = "1"
+

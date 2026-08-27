@@ -1,11 +1,23 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod debug;
 mod execute;
 mod model;
 mod preflight;
 mod resident;
 
+pub use debug::{
+    MAX_DEBUG_ALLOCATIONS_PER_CHECKPOINT_V1, MAX_DEBUG_FRAMES_PER_CHECKPOINT_V1,
+    MAX_DEBUG_MEMORY_BYTES_PER_CHECKPOINT_V1, MAX_DEBUG_VALUES_PER_CHECKPOINT_V1,
+    NoopSimulationDebugSinkV1, SimulationDebugAllocationV1, SimulationDebugBarrierActionV1,
+    SimulationDebugBindingV1, SimulationDebugCaptureLimitFieldV1,
+    SimulationDebugCaptureLimitsErrorV1, SimulationDebugCaptureLimitsV1,
+    SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1, SimulationDebugFrameV1,
+    SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1, SimulationDebugRecordV1,
+    SimulationDebugSinkControlV1, SimulationDebugSinkV1, SimulationDebugSiteV1,
+    SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+};
 pub use execute::{
     DivergentWorkgroupBarrierV1, MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1,
     SimulationConflictAssessmentV1, SimulationErrorV1, SimulationEventKindV1,

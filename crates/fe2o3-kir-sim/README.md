@@ -131,3 +131,11 @@ conflicting access pair.
 Simulation results are observations only. They do not establish source-to-KIR
 refinement, proof discharge, GPU equivalence, artifact authority, load
 authority, launch authority, timing, or performance.
+
+`simulate_debugged_with_sink` is an opt-in observation path for deterministic
+CPU debugging. It emits bounded before/after-operation snapshots derived from
+the live interpreter frames, plus successful reads and committed writes with
+typed values. Snapshot collections are either complete or carry an explicit
+unavailable reason; they are never silently partial. A debug sink can stop its
+own delivery without stopping or changing simulation. Debug records are
+separate from the stable `SimulationEventV1` adapter and Semantic Trace V1.

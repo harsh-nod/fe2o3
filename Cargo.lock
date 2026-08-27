@@ -845,6 +845,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-debug-cli"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-debug-protocol",
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-debugger",
+ "fe2o3-kir-sim",
+ "fe2o3-kir-sim-cli",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-debug-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fe2o3-device"
 version = "0.1.0"
 dependencies = [
@@ -1081,6 +1103,7 @@ dependencies = [
  "fe2o3-drm-uapi",
  "fe2o3-kfd-uapi",
  "fe2o3-runtime-model",
+ "libc",
  "rustix",
  "sha2 0.11.0",
 ]
@@ -1090,6 +1113,14 @@ name = "fe2o3-kfd-uapi"
 version = "0.1.0"
 dependencies = [
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-kir-debugger"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
 ]
 
 [[package]]

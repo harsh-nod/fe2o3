@@ -7,6 +7,39 @@ mod schema;
 use std::path::Path;
 use std::process::ExitCode;
 
+use fe2o3_kir_sim::{AdmittedSimulationModuleV1, SimulationLimitsV1, SimulationRequestV1};
+
+/// Exact, strictly parsed simulator inputs admitted through the standalone
+/// command's hardened file boundary.
+#[derive(Debug)]
+pub struct AdmittedSimulationInputV1 {
+    pub module: AdmittedSimulationModuleV1,
+    pub request: SimulationRequestV1,
+    pub simulation_limits: SimulationLimitsV1,
+    pub kir_sha256: [u8; 32],
+    pub request_sha256: [u8; 32],
+}
+
+/// Bounded failure returned while securely loading debugger simulator inputs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SimulationInputErrorV1 {
+    pub stage: String,
+    pub code: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for SimulationInputErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "simulation input admission failed at {} ({}): {}",
+            self.stage, self.code, self.message
+        )
+    }
+}
+
+impl std::error::Error for SimulationInputErrorV1 {}
+
 #[cfg(not(target_os = "linux"))]
 use std::io::Write as _;
 
@@ -123,5 +156,30 @@ pub fn bind_request_v1(path: &Path) -> Result<SimulationRequestIdentityV1, Strin
     {
         let _ = path;
         Err("fe2o3 simulation request binding requires Linux".to_owned())
+    }
+}
+
+/// Securely captures, strictly parses, and admits one exact KIR V7 image and
+/// simulation request for a debugger session. This is the same ingestion path
+/// used by `fe2o3-kir-sim`; callers never parse either document themselves.
+pub fn load_debug_simulation_input_v1(
+    kir_v7: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_input_v1(
+            kir_v7.as_os_str().to_owned(),
+            request.as_os_str().to_owned(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (kir_v7, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation input admission requires Linux".to_owned(),
+        })
     }
 }

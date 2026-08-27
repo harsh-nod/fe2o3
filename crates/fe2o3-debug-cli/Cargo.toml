@@ -1,0 +1,22 @@
+[package]
+name = "fe2o3-debug-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Agent-native standalone debugger for deterministic fe2o3 KIR simulation."
+
+[dependencies]
+fe2o3-debug-protocol.workspace = true
+fe2o3-kernel-ir.workspace = true
+fe2o3-kir-debugger.workspace = true
+fe2o3-kir-sim.workspace = true
+fe2o3-kir-sim-cli.workspace = true
+serde.workspace = true
+serde_json = "1"
+sha2.workspace = true
+
+[[bin]]
+name = "fe2o3-debug"
+path = "src/main.rs"

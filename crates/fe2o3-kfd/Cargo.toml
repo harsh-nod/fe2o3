@@ -36,8 +36,11 @@ fe2o3-aql.workspace = true
 fe2o3-drm-uapi.workspace = true
 fe2o3-kfd-uapi.workspace = true
 fe2o3-runtime-model.workspace = true
-rustix = { workspace = true, features = ["mm", "param"] }
+rustix = { workspace = true, features = ["mm", "param", "pipe", "process", "thread"] }
 sha2.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"

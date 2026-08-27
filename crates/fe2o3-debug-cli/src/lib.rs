@@ -1,0 +1,3198 @@
+#![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
+
+use std::collections::BTreeMap;
+use std::env;
+use std::ffi::{OsStr, OsString};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use fe2o3_debug_protocol::*;
+use fe2o3_kernel_ir::{AddressSpace, ScalarType, ValueId};
+use fe2o3_kir_debugger::{
+    DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
+    DebugNavigationV1, DebugPredicateV1, DebugScopeSelectorV1, DebugSessionV1, DebugSiteSelectorV1,
+    DebugStopReasonV1, DebugStopV1, DebugTerminalFaultV1, DebugTranscriptCompletenessV1,
+    DebugTranscriptTruncationV1, DebugWatchAccessV1, DebugWatchpointV1, DebugWaveWidthV1,
+    DebuggerLimitsV1, capture_debugger_run_v1, hierarchy_for_invocation_v1,
+};
+use fe2o3_kir_sim::{
+    AdmittedSimulationModuleV1, ScalarBitsV1, SimulationDebugBarrierActionV1,
+    SimulationDebugBindingV1, SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1,
+    SimulationDebugCollectionV1, SimulationDebugFrameV1, SimulationDebugRecordKindV1,
+    SimulationDebugRecordV1, SimulationDebugValueV1, SimulationErrorV1, SimulationInvocationV1,
+    SimulationTargetV1,
+};
+use fe2o3_kir_sim_cli::{
+    AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_simulation_input_v1,
+};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+
+const USAGE: &str =
+    "usage: fe2o3-debug sim --kir-v7 PATH --request PATH [--protocol jsonl] [--wave-width 32|64]";
+const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
+const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
+
+#[derive(Debug)]
+struct OptionsV1 {
+    kir_v7: PathBuf,
+    request: PathBuf,
+    wave_width: DebugWaveWidthV1,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConvertErrorV1 {
+    Unavailable(
+        DebugCapabilityNameV1,
+        CapabilityUnavailableReasonV1,
+        &'static str,
+    ),
+    Invalid(&'static str),
+}
+
+fn simulator_capabilities() -> Vec<CapabilityViewV1> {
+    use CapabilityAvailabilityV1::{Available, Unavailable};
+    use CapabilityUnavailableReasonV1::{
+        LogicalVisualizationOnly, NotExposedByBackend, NotRepresented, RequiresAuthenticatedMap,
+    };
+    use DebugCapabilityNameV1::*;
+    vec![
+        capability(HierarchyInspection, Available, None),
+        capability(KirSites, Available, None),
+        capability(SourceSites, Unavailable, Some(RequiresAuthenticatedMap)),
+        capability(Breakpoints, Available, None),
+        capability(Watchpoints, Available, None),
+        capability(ForwardStep, Available, None),
+        capability(ReverseStep, Available, None),
+        capability(Pause, Unavailable, Some(NotExposedByBackend)),
+        capability(DeterministicReplay, Available, None),
+        capability(KirSsaValues, Available, None),
+        capability(
+            SourceVariableValues,
+            Unavailable,
+            Some(RequiresAuthenticatedMap),
+        ),
+        capability(RegisterValues, Unavailable, Some(NotRepresented)),
+        capability(AllocationRelativeMemory, Available, None),
+        capability(SemanticTrace, Available, None),
+        capability(
+            HardwareWaveState,
+            Unavailable,
+            Some(LogicalVisualizationOnly),
+        ),
+        capability(KfdDispatchControl, Unavailable, Some(NotExposedByBackend)),
+    ]
+}
+
+const fn capability(
+    name: DebugCapabilityNameV1,
+    availability: CapabilityAvailabilityV1,
+    reason: Option<CapabilityUnavailableReasonV1>,
+) -> CapabilityViewV1 {
+    CapabilityViewV1 {
+        name,
+        availability,
+        reason,
+    }
+}
+
+fn convert_scope_selector(scope: ExecutionScopeSelectorV1) -> DebugScopeSelectorV1 {
+    match scope {
+        ExecutionScopeSelectorV1::Dispatch => DebugScopeSelectorV1::Dispatch,
+        ExecutionScopeSelectorV1::Workgroup { workgroup } => {
+            DebugScopeSelectorV1::Workgroup(workgroup.map(u64::from))
+        }
+        ExecutionScopeSelectorV1::Wave { workgroup, wave } => DebugScopeSelectorV1::Wave {
+            workgroup: workgroup.map(u64::from),
+            wave,
+        },
+        ExecutionScopeSelectorV1::Lane {
+            workgroup,
+            wave,
+            lane,
+        } => DebugScopeSelectorV1::Lane {
+            workgroup: workgroup.map(u64::from),
+            wave,
+            lane,
+        },
+    }
+}
+
+fn convert_hit_condition(condition: HitConditionV1) -> Result<DebugHitConditionV1, ConvertErrorV1> {
+    match condition.comparison {
+        IntegerComparisonV1::Equal => Ok(DebugHitConditionV1::Equal(condition.count)),
+        IntegerComparisonV1::GreaterOrEqual => Ok(DebugHitConditionV1::AtLeast(condition.count)),
+        IntegerComparisonV1::GreaterThan => condition
+            .count
+            .checked_add(1)
+            .map(DebugHitConditionV1::AtLeast)
+            .ok_or(ConvertErrorV1::Invalid("hit condition count overflows")),
+        _ => Err(ConvertErrorV1::Unavailable(
+            DebugCapabilityNameV1::Breakpoints,
+            CapabilityUnavailableReasonV1::NotRepresented,
+            "V1 replay hit conditions support equal, greater-than, and greater-or-equal counts",
+        )),
+    }
+}
+
+fn convert_predicate(
+    predicate: &PredicateV1,
+) -> Result<(DebugPredicateV1, Option<usize>), ConvertErrorV1> {
+    match predicate {
+        PredicateV1::Compare {
+            left,
+            comparison,
+            right,
+        } => {
+            if !matches!(
+                comparison,
+                IntegerComparisonV1::Equal | IntegerComparisonV1::NotEqual
+            ) {
+                return Err(ConvertErrorV1::Unavailable(
+                    DebugCapabilityNameV1::Breakpoints,
+                    CapabilityUnavailableReasonV1::NotRepresented,
+                    "V1 replay value predicates support exact equality and inequality",
+                ));
+            }
+            let (path, constant) = match (predicate_path(left), predicate_constant(right)) {
+                (Ok(path), Ok(constant)) => (path, constant),
+                _ => match (predicate_path(right), predicate_constant(left)) {
+                    (Ok(path), Ok(constant)) => (path, constant),
+                    _ => {
+                        return Err(ConvertErrorV1::Unavailable(
+                            DebugCapabilityNameV1::Breakpoints,
+                            CapabilityUnavailableReasonV1::NotRepresented,
+                            "value predicates require one scalar SSA path and one typed constant",
+                        ));
+                    }
+                },
+            };
+            let value = match comparison {
+                IntegerComparisonV1::Equal => DebugPredicateV1::ScalarEquals {
+                    frame_depth: path.frame_depth,
+                    value: path.value,
+                    expected: constant,
+                },
+                IntegerComparisonV1::NotEqual => DebugPredicateV1::ScalarNotEquals {
+                    frame_depth: path.frame_depth,
+                    value: path.value,
+                    expected: constant,
+                },
+                _ => unreachable!(),
+            };
+            Ok((value, Some(path.function_ordinal)))
+        }
+        PredicateV1::All { predicates } | PredicateV1::Any { predicates } => {
+            let mut converted = Vec::with_capacity(predicates.len());
+            let mut function = None;
+            for child in predicates {
+                let (child, child_function) = convert_predicate(child)?;
+                function = merge_function(function, child_function)?;
+                converted.push(child);
+            }
+            let predicate = if matches!(predicate, PredicateV1::All { .. }) {
+                DebugPredicateV1::And(converted)
+            } else {
+                DebugPredicateV1::Or(converted)
+            };
+            Ok((predicate, function))
+        }
+        PredicateV1::Not { predicate_value } => {
+            let (child, function) = convert_predicate(predicate_value)?;
+            Ok((DebugPredicateV1::Not(Box::new(child)), function))
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PredicatePathV1 {
+    function_ordinal: usize,
+    frame_depth: u32,
+    value: ValueId,
+}
+
+fn predicate_path(operand: &PredicateOperandV1) -> Result<PredicatePathV1, ConvertErrorV1> {
+    let PredicateOperandV1::Value { path } = operand else {
+        return Err(ConvertErrorV1::Invalid(
+            "predicate operand is not a value path",
+        ));
+    };
+    if !path.components.is_empty() {
+        return Err(ConvertErrorV1::Unavailable(
+            DebugCapabilityNameV1::Breakpoints,
+            CapabilityUnavailableReasonV1::NotRepresented,
+            "aggregate predicate paths are not represented by scalar SSA replay predicates",
+        ));
+    }
+    let ValueRootV1::Ssa {
+        function_ordinal,
+        frame,
+        value_ordinal,
+    } = &path.root
+    else {
+        return Err(ConvertErrorV1::Unavailable(
+            DebugCapabilityNameV1::KirSsaValues,
+            CapabilityUnavailableReasonV1::NotRepresented,
+            "replay predicates require a KIR SSA value root",
+        ));
+    };
+    Ok(PredicatePathV1 {
+        function_ordinal: usize::try_from(*function_ordinal)
+            .map_err(|_| ConvertErrorV1::Invalid("predicate function ordinal does not fit host"))?,
+        frame_depth: u32::try_from(frame - 1)
+            .map_err(|_| ConvertErrorV1::Invalid("predicate frame does not fit host"))?,
+        value: ValueId(
+            u32::try_from(*value_ordinal)
+                .map_err(|_| ConvertErrorV1::Invalid("predicate value ordinal exceeds KIR V7"))?,
+        ),
+    })
+}
+
+fn predicate_constant(operand: &PredicateOperandV1) -> Result<ScalarBitsV1, ConvertErrorV1> {
+    match operand {
+        PredicateOperandV1::Bool { value } => Ok(ScalarBitsV1::boolean(*value)),
+        PredicateOperandV1::Integer {
+            signed,
+            bits,
+            value,
+        } => {
+            let ty = integer_scalar_type(*signed, *bits).ok_or(ConvertErrorV1::Unavailable(
+                DebugCapabilityNameV1::Breakpoints,
+                CapabilityUnavailableReasonV1::NotRepresented,
+                "predicate integer constants must have a KIR scalar width from 8 through 128 bits",
+            ))?;
+            let raw = u128::from_str_radix(value.trim_start_matches("0x"), 16).map_err(|_| {
+                ConvertErrorV1::Invalid("predicate constant is not bounded hexadecimal")
+            })?;
+            ScalarBitsV1::new(ty, raw, SimulationTargetV1::amdgpu_64())
+                .map_err(|_| ConvertErrorV1::Invalid("predicate constant is outside its type"))
+        }
+        PredicateOperandV1::Value { .. } => Err(ConvertErrorV1::Invalid(
+            "predicate operand is not a constant",
+        )),
+    }
+}
+
+fn merge_function(
+    left: Option<usize>,
+    right: Option<usize>,
+) -> Result<Option<usize>, ConvertErrorV1> {
+    match (left, right) {
+        (Some(left), Some(right)) if left != right => Err(ConvertErrorV1::Unavailable(
+            DebugCapabilityNameV1::Breakpoints,
+            CapabilityUnavailableReasonV1::NotRepresented,
+            "one replay value predicate cannot span multiple KIR functions",
+        )),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn integer_scalar_type(signed: bool, bits: u16) -> Option<ScalarType> {
+    match (signed, bits) {
+        (true, 8) => Some(ScalarType::I8),
+        (true, 16) => Some(ScalarType::I16),
+        (true, 32) => Some(ScalarType::I32),
+        (true, 64) => Some(ScalarType::I64),
+        (true, 128) => Some(ScalarType::I128),
+        (false, 8) => Some(ScalarType::U8),
+        (false, 16) => Some(ScalarType::U16),
+        (false, 32) => Some(ScalarType::U32),
+        (false, 64) => Some(ScalarType::U64),
+        (false, 128) => Some(ScalarType::U128),
+        _ => None,
+    }
+}
+
+fn page_bounds(
+    page: PageRequestV1,
+    query: OpaqueIdentityV1,
+    total: usize,
+) -> Result<(usize, usize, Option<PageCursorV1>), &'static str> {
+    let (start, limit) = page_window(page, query)?;
+    if start > total {
+        return Err("page cursor is outside the result set");
+    }
+    let end = start.saturating_add(limit).min(total);
+    let next = page_next(start, end - start, total, query)?;
+    Ok((start, end, next))
+}
+
+fn page_window(
+    page: PageRequestV1,
+    query: OpaqueIdentityV1,
+) -> Result<(usize, usize), &'static str> {
+    let start = match page.cursor {
+        Some(cursor) => {
+            if cursor.query_identity != query {
+                return Err("page cursor does not match this query and session revision");
+            }
+            usize::try_from(cursor.position).map_err(|_| "page cursor does not fit this host")?
+        }
+        None => 0,
+    };
+    Ok((start, usize::from(page.limit)))
+}
+
+fn page_next(
+    start: usize,
+    returned: usize,
+    total: usize,
+    query: OpaqueIdentityV1,
+) -> Result<Option<PageCursorV1>, &'static str> {
+    if start > total {
+        return Err("page cursor is outside the result set");
+    }
+    let end = start
+        .checked_add(returned)
+        .ok_or("page result position overflow")?;
+    Ok((end < total).then(|| PageCursorV1 {
+        query_identity: query,
+        position: u64::try_from(end).unwrap_or(u64::MAX),
+    }))
+}
+
+fn restore_cursor(session: &mut DebugSessionV1, cursor: Option<usize>) {
+    match cursor {
+        Some(index) => {
+            let _ = session.seek_record_index(index);
+        }
+        None => {
+            let _ = session.seek_entry();
+        }
+    }
+}
+
+fn record_matches_step(
+    record: &SimulationDebugRecordV1,
+    granularity: StepGranularityV1,
+    scope: &DebugScopeSelectorV1,
+    width: DebugWaveWidthV1,
+    baseline: Option<fe2o3_kir_debugger::DebugHierarchyV1>,
+) -> bool {
+    if !scope.matches(record.invocation, width) {
+        return false;
+    }
+    let hierarchy = hierarchy_for_invocation_v1(record.invocation, width);
+    match granularity {
+        StepGranularityV1::Event => true,
+        StepGranularityV1::Operation => {
+            matches!(record.kind, SimulationDebugRecordKindV1::Checkpoint { .. })
+        }
+        StepGranularityV1::MemoryAccess => {
+            matches!(record.kind, SimulationDebugRecordKindV1::Memory { .. })
+        }
+        StepGranularityV1::BarrierPhase => {
+            matches!(
+                record.kind,
+                SimulationDebugRecordKindV1::WorkgroupBarrier { .. }
+            )
+        }
+        StepGranularityV1::Lane => baseline.is_none_or(|baseline| {
+            (baseline.workgroup, baseline.wave, baseline.lane)
+                != (hierarchy.workgroup, hierarchy.wave, hierarchy.lane)
+        }),
+        StepGranularityV1::Wave => baseline.is_none_or(|baseline| {
+            (baseline.workgroup, baseline.wave) != (hierarchy.workgroup, hierarchy.wave)
+        }),
+        StepGranularityV1::Workgroup => {
+            baseline.is_none_or(|baseline| baseline.workgroup != hierarchy.workgroup)
+        }
+        StepGranularityV1::Over | StepGranularityV1::Out | StepGranularityV1::Source => false,
+    }
+}
+
+fn navigation_stop(navigation: DebugNavigationV1, failed_execution: bool) -> StopViewV1 {
+    match navigation {
+        DebugNavigationV1::Stopped(stop) => stop_view(stop),
+        DebugNavigationV1::Beginning => StopViewV1 {
+            reason: StopReasonV1::Entry,
+            breakpoint_id: None,
+            watchpoint_id: None,
+            outcome: ExecutionOutcomeV1::Active,
+            exact: true,
+        },
+        DebugNavigationV1::End => StopViewV1 {
+            reason: StopReasonV1::Completed,
+            breakpoint_id: None,
+            watchpoint_id: None,
+            outcome: if failed_execution {
+                ExecutionOutcomeV1::Failed
+            } else {
+                ExecutionOutcomeV1::Completed
+            },
+            exact: true,
+        },
+        DebugNavigationV1::BudgetExhausted(_) => StopViewV1 {
+            reason: StopReasonV1::ResourceExhaustion,
+            breakpoint_id: None,
+            watchpoint_id: None,
+            outcome: ExecutionOutcomeV1::Active,
+            exact: false,
+        },
+        DebugNavigationV1::TranscriptTruncated(_) => StopViewV1 {
+            reason: StopReasonV1::ResourceExhaustion,
+            breakpoint_id: None,
+            watchpoint_id: None,
+            outcome: ExecutionOutcomeV1::Active,
+            exact: false,
+        },
+        DebugNavigationV1::Unavailable(_) => StopViewV1 {
+            reason: StopReasonV1::ResourceExhaustion,
+            breakpoint_id: None,
+            watchpoint_id: None,
+            outcome: ExecutionOutcomeV1::Active,
+            exact: false,
+        },
+    }
+}
+
+fn stop_view(stop: DebugStopV1) -> StopViewV1 {
+    let (reason, breakpoint_id, watchpoint_id, outcome) = match stop.reason {
+        DebugStopReasonV1::Step => (StopReasonV1::Step, None, None, ExecutionOutcomeV1::Active),
+        DebugStopReasonV1::Breakpoint(id) => (
+            StopReasonV1::Breakpoint,
+            Some(id),
+            None,
+            ExecutionOutcomeV1::Active,
+        ),
+        DebugStopReasonV1::Watchpoint(id) => (
+            StopReasonV1::Watchpoint,
+            None,
+            Some(id),
+            ExecutionOutcomeV1::Active,
+        ),
+        DebugStopReasonV1::Fault => (StopReasonV1::Fault, None, None, ExecutionOutcomeV1::Failed),
+    };
+    StopViewV1 {
+        reason,
+        breakpoint_id,
+        watchpoint_id,
+        outcome,
+        exact: true,
+    }
+}
+
+fn workgroup_u32(workgroup: [u64; 3]) -> Option<[u32; 3]> {
+    Some([
+        u32::try_from(workgroup[0]).ok()?,
+        u32::try_from(workgroup[1]).ok()?,
+        u32::try_from(workgroup[2]).ok()?,
+    ])
+}
+
+fn protocol_scope_for_invocation(
+    invocation: SimulationInvocationV1,
+    width: DebugWaveWidthV1,
+) -> Option<ExecutionScopeV1> {
+    let hierarchy = hierarchy_for_invocation_v1(invocation, width);
+    Some(ExecutionScopeV1::Lane {
+        workgroup: workgroup_u32(hierarchy.workgroup)?,
+        wave: hierarchy.wave,
+        lane: hierarchy.lane,
+        logical_workitem: hierarchy.global,
+        active_mask: hierarchy.active_mask,
+        wave_width: width.lanes(),
+        interpretation: WaveInterpretationV1::LogicalVisualization,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ScopeKeyV1 {
+    Dispatch,
+    Workgroup([u32; 3]),
+    Wave([u32; 3], u32),
+    Lane([u32; 3], u32, u16),
+}
+
+impl ScopeKeyV1 {
+    const fn from_scope(scope: ExecutionScopeV1) -> Self {
+        match scope {
+            ExecutionScopeV1::Dispatch => Self::Dispatch,
+            ExecutionScopeV1::Workgroup { workgroup } => Self::Workgroup(workgroup),
+            ExecutionScopeV1::Wave {
+                workgroup, wave, ..
+            } => Self::Wave(workgroup, wave),
+            ExecutionScopeV1::Lane {
+                workgroup,
+                wave,
+                lane,
+                ..
+            } => Self::Lane(workgroup, wave, lane),
+        }
+    }
+
+    fn matches_invocation(
+        self,
+        invocation: SimulationInvocationV1,
+        width: DebugWaveWidthV1,
+    ) -> bool {
+        if self == Self::Dispatch {
+            return true;
+        }
+        let hierarchy = hierarchy_for_invocation_v1(invocation, width);
+        let Some(workgroup) = workgroup_u32(hierarchy.workgroup) else {
+            return false;
+        };
+        match self {
+            Self::Dispatch => true,
+            Self::Workgroup(expected) => workgroup == expected,
+            Self::Wave(expected, wave) => workgroup == expected && hierarchy.wave == wave,
+            Self::Lane(expected, wave, lane) => {
+                workgroup == expected && hierarchy.wave == wave && hierarchy.lane == lane
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ScopeObservationV1 {
+    first: Option<usize>,
+    last: Option<usize>,
+    contains_cursor: bool,
+    representative: Option<SimulationInvocationV1>,
+    barrier_waiting: u32,
+}
+
+fn update_scope_observation(
+    observation: &mut ScopeObservationV1,
+    record_index: usize,
+    cursor: usize,
+) {
+    observation.first.get_or_insert(record_index);
+    observation.last = Some(record_index);
+    observation.contains_cursor |= record_index == cursor;
+}
+
+fn active_workgroup_participants(invocation: SimulationInvocationV1) -> u32 {
+    invocation
+        .workgroup
+        .into_iter()
+        .zip(invocation.workgroup_size)
+        .zip(invocation.launch_extent)
+        .try_fold(1_u64, |product, ((group, size), extent)| {
+            let start = group.checked_mul(u64::from(size))?;
+            let live = extent.saturating_sub(start).min(u64::from(size));
+            product.checked_mul(live)
+        })
+        .and_then(|participants| u32::try_from(participants).ok())
+        .unwrap_or(0)
+}
+
+fn scope_barrier_population(scope: ExecutionScopeV1, observation: ScopeObservationV1) -> u32 {
+    match scope {
+        ExecutionScopeV1::Dispatch | ExecutionScopeV1::Workgroup { .. } => observation
+            .representative
+            .map(active_workgroup_participants)
+            .unwrap_or(0),
+        ExecutionScopeV1::Wave { active_mask, .. } => active_mask.count_ones(),
+        ExecutionScopeV1::Lane { .. } => 1,
+    }
+}
+
+fn scope_states_for_records(
+    records: &[SimulationDebugRecordV1],
+    terminal_fault: Option<&DebugTerminalFaultV1>,
+    cursor: Option<usize>,
+    scopes: &[ExecutionScopeV1],
+    wave_width: DebugWaveWidthV1,
+) -> Vec<ScopeStateV1> {
+    let Some(cursor) = cursor else {
+        return vec![ScopeStateV1::NotStarted; scopes.len()];
+    };
+    let mut observations = vec![ScopeObservationV1::default(); scopes.len()];
+    let mut indices = BTreeMap::new();
+    let mut group_indices: BTreeMap<[u32; 3], Vec<usize>> = BTreeMap::new();
+    for (index, scope) in scopes.iter().copied().enumerate() {
+        let key = ScopeKeyV1::from_scope(scope);
+        indices.insert(key, index);
+        let group = match key {
+            ScopeKeyV1::Workgroup(group)
+            | ScopeKeyV1::Wave(group, _)
+            | ScopeKeyV1::Lane(group, _, _) => Some(group),
+            ScopeKeyV1::Dispatch => None,
+        };
+        if let Some(group) = group {
+            group_indices.entry(group).or_default().push(index);
+        }
+    }
+    for (record_index, record) in records.iter().enumerate() {
+        let hierarchy = hierarchy_for_invocation_v1(record.invocation, wave_width);
+        let Some(workgroup) = workgroup_u32(hierarchy.workgroup) else {
+            if let Some(index) = indices.get(&ScopeKeyV1::Dispatch).copied() {
+                let observation = &mut observations[index];
+                update_scope_observation(observation, record_index, cursor);
+                if record_index <= cursor {
+                    observation.representative = Some(record.invocation);
+                }
+            }
+            continue;
+        };
+        for key in [
+            ScopeKeyV1::Dispatch,
+            ScopeKeyV1::Workgroup(workgroup),
+            ScopeKeyV1::Wave(workgroup, hierarchy.wave),
+            ScopeKeyV1::Lane(workgroup, hierarchy.wave, hierarchy.lane),
+        ] {
+            if let Some(index) = indices.get(&key).copied() {
+                let observation = &mut observations[index];
+                update_scope_observation(observation, record_index, cursor);
+                if record_index <= cursor {
+                    observation.representative = Some(record.invocation);
+                }
+            }
+        }
+        if record_index > cursor {
+            continue;
+        }
+        match record.kind {
+            SimulationDebugRecordKindV1::WorkgroupBarrier {
+                action: SimulationDebugBarrierActionV1::Arrive,
+                ..
+            } => {
+                for key in [
+                    ScopeKeyV1::Dispatch,
+                    ScopeKeyV1::Workgroup(workgroup),
+                    ScopeKeyV1::Wave(workgroup, hierarchy.wave),
+                    ScopeKeyV1::Lane(workgroup, hierarchy.wave, hierarchy.lane),
+                ] {
+                    if let Some(index) = indices.get(&key).copied() {
+                        observations[index].barrier_waiting =
+                            observations[index].barrier_waiting.saturating_add(1);
+                    }
+                }
+            }
+            SimulationDebugRecordKindV1::WorkgroupBarrier {
+                action: SimulationDebugBarrierActionV1::Release,
+                ..
+            } => {
+                if let Some(index) = indices.get(&ScopeKeyV1::Dispatch).copied() {
+                    observations[index].barrier_waiting = 0;
+                }
+                if let Some(group) = group_indices.get(&workgroup) {
+                    for index in group.iter().copied() {
+                        observations[index].barrier_waiting = 0;
+                        observations[index].last = Some(record_index);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let terminal_fault = (cursor == records.len())
+        .then_some(terminal_fault)
+        .flatten();
+    scopes
+        .iter()
+        .copied()
+        .zip(observations)
+        .map(|(scope, observed)| {
+            let key = ScopeKeyV1::from_scope(scope);
+            if terminal_fault.is_some_and(|fault| {
+                key == ScopeKeyV1::Dispatch
+                    || fault
+                        .invocation
+                        .is_some_and(|invocation| key.matches_invocation(invocation, wave_width))
+            }) {
+                return ScopeStateV1::Failed;
+            }
+            let (Some(first), Some(last)) = (observed.first, observed.last) else {
+                return ScopeStateV1::Unavailable;
+            };
+            if cursor < first {
+                return ScopeStateV1::NotStarted;
+            }
+            if cursor > last || cursor == records.len() {
+                return ScopeStateV1::Completed;
+            }
+            let population = scope_barrier_population(scope, observed);
+            if population != 0 && observed.barrier_waiting >= population {
+                return ScopeStateV1::BarrierBlocked;
+            }
+            if observed.barrier_waiting != 0 {
+                return ScopeStateV1::Runnable;
+            }
+            if observed.contains_cursor {
+                ScopeStateV1::Running
+            } else {
+                ScopeStateV1::Runnable
+            }
+        })
+        .collect()
+}
+
+fn selector_requests_unsupported_root(
+    selector: &ValueSelectorV1,
+    requested: ValueRootClassV1,
+) -> bool {
+    match selector {
+        ValueSelectorV1::All => false,
+        ValueSelectorV1::Roots { roots } => roots.contains(&requested),
+        ValueSelectorV1::Paths { paths } => paths.iter().any(|path| {
+            matches!(
+                (&path.root, requested),
+                (ValueRootV1::Register { .. }, ValueRootClassV1::Register)
+                    | (
+                        ValueRootV1::SourceVariable { .. },
+                        ValueRootClassV1::SourceVariable
+                    )
+            )
+        }),
+    }
+}
+
+fn value_for_path(path: ValuePathV1, frames: &[SimulationDebugFrameV1]) -> DebugValueV1 {
+    let unavailable = |path| DebugValueV1 {
+        path,
+        availability: ValueAvailabilityV1::Unavailable {
+            reason: ValueUnavailableReasonV1::NotInScope,
+        },
+    };
+    if !path.components.is_empty() {
+        return DebugValueV1 {
+            path,
+            availability: ValueAvailabilityV1::Unavailable {
+                reason: ValueUnavailableReasonV1::NotRepresented,
+            },
+        };
+    }
+    let non_ssa_reason = match &path.root {
+        ValueRootV1::SourceVariable { .. } => ValueUnavailableReasonV1::RequiresAuthenticatedMap,
+        ValueRootV1::Register { .. } => ValueUnavailableReasonV1::UnsupportedByBackend,
+        ValueRootV1::Argument { .. } => ValueUnavailableReasonV1::NotRepresented,
+        ValueRootV1::Ssa { .. } => ValueUnavailableReasonV1::NotInScope,
+    };
+    let ValueRootV1::Ssa {
+        function_ordinal,
+        frame,
+        value_ordinal,
+    } = path.root
+    else {
+        return DebugValueV1 {
+            path,
+            availability: ValueAvailabilityV1::Unavailable {
+                reason: non_ssa_reason,
+            },
+        };
+    };
+    let (Ok(function), Ok(depth), Ok(value)) = (
+        usize::try_from(function_ordinal),
+        u32::try_from(frame - 1),
+        u32::try_from(value_ordinal),
+    ) else {
+        return unavailable(path);
+    };
+    let Some(frame) = frames
+        .iter()
+        .find(|candidate| candidate.function_ordinal == function && candidate.depth == depth)
+    else {
+        return unavailable(path);
+    };
+    let SimulationDebugCollectionV1::Captured(bindings) = &frame.values else {
+        return DebugValueV1 {
+            path,
+            availability: ValueAvailabilityV1::Unavailable {
+                reason: ValueUnavailableReasonV1::Truncated,
+            },
+        };
+    };
+    let Some(binding) = bindings
+        .iter()
+        .find(|binding| binding.value == ValueId(value))
+    else {
+        return unavailable(path);
+    };
+    DebugValueV1 {
+        path,
+        availability: availability_for_observed(&binding.observed),
+    }
+}
+
+fn value_for_binding(
+    frame: &SimulationDebugFrameV1,
+    binding: &SimulationDebugBindingV1,
+) -> DebugValueV1 {
+    DebugValueV1 {
+        path: ValuePathV1 {
+            root: ValueRootV1::Ssa {
+                function_ordinal: u64::try_from(frame.function_ordinal).unwrap_or(u64::MAX),
+                frame: u64::from(frame.depth).saturating_add(1),
+                value_ordinal: u64::from(binding.value.0),
+            },
+            components: Vec::new(),
+        },
+        availability: availability_for_observed(&binding.observed),
+    }
+}
+
+fn availability_for_observed(observed: &SimulationDebugValueV1) -> ValueAvailabilityV1 {
+    match observed {
+        SimulationDebugValueV1::Scalar(value) => {
+            let (value_type, width) = protocol_scalar_type(*value);
+            ValueAvailabilityV1::Captured {
+                value_type,
+                value: CapturedValueV1::Bits {
+                    bits: fixed_width_bits(value.bits(), width),
+                },
+                provenance: ValueProvenanceV1::SimulatedObservation,
+            }
+        }
+        SimulationDebugValueV1::Pointer {
+            allocation,
+            byte_offset,
+            address_space,
+            ..
+        }
+        | SimulationDebugValueV1::Slice {
+            allocation,
+            byte_offset,
+            address_space,
+            ..
+        } => ValueAvailabilityV1::Captured {
+            value_type: DebugValueTypeV1::Pointer {
+                address_space: protocol_address_space(*address_space),
+            },
+            value: CapturedValueV1::AllocationRelativePointer {
+                allocation: AllocationIdentityV1 {
+                    ordinal: *allocation,
+                    generation: 0,
+                },
+                byte_offset: u64::try_from(*byte_offset).unwrap_or(u64::MAX),
+            },
+            provenance: ValueProvenanceV1::SimulatedObservation,
+        },
+    }
+}
+
+fn protocol_scalar_type(value: ScalarBitsV1) -> (DebugValueTypeV1, u16) {
+    match value.ty() {
+        ScalarType::Bool => (DebugValueTypeV1::Bool, 1),
+        ScalarType::Index => (DebugValueTypeV1::Index { bits: 64 }, 64),
+        ty => {
+            let width = ty.bit_width().unwrap_or(128);
+            (
+                DebugValueTypeV1::Integer {
+                    signed: ty.is_signed_integer(),
+                    bits: width,
+                },
+                width,
+            )
+        }
+    }
+}
+
+fn fixed_width_bits(value: u128, bits: u16) -> String {
+    format!("0x{value:0width$x}", width = usize::from(bits).div_ceil(4))
+}
+
+fn current_ssa_values(session: &DebugSessionV1, maximum: usize) -> Vec<DebugValueV1> {
+    let DebugInspectionV1::Available(frames) = session.stack() else {
+        return Vec::new();
+    };
+    frames
+        .iter()
+        .flat_map(|frame| {
+            let SimulationDebugCollectionV1::Captured(bindings) = &frame.values else {
+                return Vec::new().into_iter();
+            };
+            bindings
+                .iter()
+                .map(|binding| value_for_binding(frame, binding))
+                .collect::<Vec<_>>()
+                .into_iter()
+        })
+        .take(maximum)
+        .collect()
+}
+
+const fn protocol_address_space(address_space: AddressSpace) -> AddressSpaceV1 {
+    match address_space {
+        AddressSpace::Private => AddressSpaceV1::Private,
+        AddressSpace::Workgroup => AddressSpaceV1::Workgroup,
+        AddressSpace::Global => AddressSpaceV1::Global,
+        AddressSpace::Constant => AddressSpaceV1::Constant,
+        AddressSpace::Generic => AddressSpaceV1::Generic,
+    }
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(2 + bytes.len().saturating_mul(2));
+    output.push_str("0x");
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+fn initialization_bits(initialized: &[bool]) -> String {
+    let mut bytes = vec![0_u8; initialized.len().div_ceil(8)];
+    for (index, initialized) in initialized.iter().copied().enumerate() {
+        if initialized {
+            bytes[index / 8] |= 1 << (index % 8);
+        }
+    }
+    hex_bytes(&bytes)
+}
+
+const fn inspection_unavailable_value_reason(
+    reason: DebugInspectionUnavailableV1,
+) -> ValueUnavailableReasonV1 {
+    match reason {
+        DebugInspectionUnavailableV1::SourceNotBound => {
+            ValueUnavailableReasonV1::RequiresAuthenticatedMap
+        }
+        DebugInspectionUnavailableV1::Stack(_)
+        | DebugInspectionUnavailableV1::Values(_)
+        | DebugInspectionUnavailableV1::Memory(_) => ValueUnavailableReasonV1::Truncated,
+        DebugInspectionUnavailableV1::UnknownValue | DebugInspectionUnavailableV1::UnknownFrame => {
+            ValueUnavailableReasonV1::NotInScope
+        }
+        DebugInspectionUnavailableV1::NoCurrentRecord
+        | DebugInspectionUnavailableV1::NotCheckpoint => ValueUnavailableReasonV1::NotCaptured,
+        DebugInspectionUnavailableV1::UnknownAllocation
+        | DebugInspectionUnavailableV1::RangeOverflow
+        | DebugInspectionUnavailableV1::OutOfBounds
+        | DebugInspectionUnavailableV1::NonScalarValue
+        | DebugInspectionUnavailableV1::SourceUnavailable => {
+            ValueUnavailableReasonV1::NotRepresented
+        }
+    }
+}
+
+const fn transcript_truncation_reason(
+    reason: DebugTranscriptTruncationV1,
+) -> CaptureTruncationReasonV1 {
+    match reason {
+        DebugTranscriptTruncationV1::RecordLimit => CaptureTruncationReasonV1::EventLimit,
+        DebugTranscriptTruncationV1::ValueLimit | DebugTranscriptTruncationV1::MemoryByteLimit => {
+            CaptureTruncationReasonV1::ResidentLimit
+        }
+        DebugTranscriptTruncationV1::AllocationFailure => {
+            CaptureTruncationReasonV1::ProducerFailure
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct TraceHeaderV1 {
+    schema: &'static str,
+    configuration_identity: OpaqueIdentityV1,
+    backend: DebugBackendV1,
+    simulated: bool,
+    hardware_observed: bool,
+    performance_prediction: bool,
+    wave_interpretation: WaveInterpretationV1,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BootstrapErrorV1<'a> {
+    schema: &'static str,
+    status: &'static str,
+    stage: &'a str,
+    code: &'a str,
+    message: &'a str,
+}
+
+pub fn main() -> ExitCode {
+    let options = match parse_options(env::args_os().skip(1)) {
+        Ok(options) => options,
+        Err(message) => {
+            write_bootstrap_error("arguments", "invalid_command_line", &message);
+            return ExitCode::FAILURE;
+        }
+    };
+    let admitted = match load_debug_simulation_input_v1(&options.kir_v7, &options.request) {
+        Ok(input) => input,
+        Err(error) => {
+            write_input_error(&error);
+            return ExitCode::FAILURE;
+        }
+    };
+    let backend = match SimulatorBackendV1::new(admitted, options.wave_width) {
+        Ok(backend) => backend,
+        Err(message) => {
+            write_bootstrap_error("backend", "simulation_capture_failed", &message);
+            return ExitCode::FAILURE;
+        }
+    };
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let mut reader = BufReader::new(stdin.lock());
+    let mut writer = BufWriter::new(stdout.lock());
+    match run_jsonl_v1(backend, &mut reader, &mut writer) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            write_bootstrap_error("output", "protocol_stream_failed", &message);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1, String> {
+    let mut arguments = arguments.peekable();
+    if arguments.next().as_deref() != Some(OsStr::new("sim")) {
+        return Err(USAGE.to_owned());
+    }
+    let mut kir_v7 = None;
+    let mut request = None;
+    let mut protocol_seen = false;
+    let mut wave_width = DebugWaveWidthV1::Wave64;
+    while let Some(option) = arguments.next() {
+        let value = arguments
+            .next()
+            .ok_or_else(|| format!("option {option:?} requires a value; {USAGE}"))?;
+        if option == OsStr::new("--kir-v7") {
+            set_once(&mut kir_v7, PathBuf::from(value), "--kir-v7")?;
+        } else if option == OsStr::new("--request") {
+            set_once(&mut request, PathBuf::from(value), "--request")?;
+        } else if option == OsStr::new("--protocol") {
+            if protocol_seen || value != OsStr::new("jsonl") {
+                return Err(format!(
+                    "--protocol must appear at most once and equal jsonl; {USAGE}"
+                ));
+            }
+            protocol_seen = true;
+        } else if option == OsStr::new("--wave-width") {
+            wave_width = match value.to_str() {
+                Some("32") => DebugWaveWidthV1::Wave32,
+                Some("64") => DebugWaveWidthV1::Wave64,
+                _ => return Err(format!("--wave-width must be 32 or 64; {USAGE}")),
+            };
+        } else {
+            return Err(format!("unknown option {option:?}; {USAGE}"));
+        }
+    }
+    Ok(OptionsV1 {
+        kir_v7: kir_v7.ok_or_else(|| format!("--kir-v7 is required; {USAGE}"))?,
+        request: request.ok_or_else(|| format!("--request is required; {USAGE}"))?,
+        wave_width,
+    })
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<(), String> {
+    if slot.replace(value).is_some() {
+        return Err(format!("{name} may appear only once; {USAGE}"));
+    }
+    Ok(())
+}
+
+fn write_input_error(error: &SimulationInputErrorV1) {
+    write_bootstrap_error(&error.stage, &error.code, &error.message);
+}
+
+fn write_bootstrap_error(stage: &str, code: &str, message: &str) {
+    let document = BootstrapErrorV1 {
+        schema: "fe2o3-debug-bootstrap-error-v1",
+        status: "error",
+        stage,
+        code,
+        message,
+    };
+    let stderr = io::stderr();
+    let mut stderr = stderr.lock();
+    let _ = serde_json::to_writer(&mut stderr, &document);
+    let _ = stderr.write_all(b"\n");
+}
+
+pub fn run_admitted_jsonl_v1<R: BufRead, W: Write>(
+    input: AdmittedSimulationInputV1,
+    wave_width: DebugWaveWidthV1,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), String> {
+    let backend = SimulatorBackendV1::new(input, wave_width)?;
+    run_jsonl_v1(backend, reader, writer)
+}
+
+fn run_jsonl_v1<R: BufRead, W: Write>(
+    mut backend: SimulatorBackendV1,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), String> {
+    let limits = backend.protocol_limits;
+    loop {
+        let request = match read_request_line_v1(reader, limits) {
+            Ok(Some(request)) => request,
+            Ok(None) => break,
+            Err(error) => {
+                let response = backend.codec_error(error);
+                write_response(writer, &response, limits)?;
+                break;
+            }
+        };
+        let terminate = matches!(request, DebugRequestV1::Terminate { .. });
+        let response = backend.handle(request);
+        write_response(writer, &response, limits)?;
+        if terminate && matches!(response, DebugResponseV1::Ok { .. }) {
+            break;
+        }
+    }
+    writer
+        .flush()
+        .map_err(|_| "failed to flush debugger responses".to_owned())
+}
+
+fn write_response<W: Write>(
+    writer: &mut W,
+    response: &DebugResponseV1,
+    limits: ProtocolLimitsV1,
+) -> Result<(), String> {
+    match encode_response_line_v1(response, limits) {
+        Ok(bytes) => writer
+            .write_all(&bytes)
+            .map_err(|_| "failed to write debugger response".to_owned()),
+        Err(ProtocolCodecErrorV1::ResponseTooLarge) => {
+            let fallback = DebugResponseV1::Error {
+                schema: ResponseSchemaV1::V1,
+                request_id: response_request_id(response),
+                operation: response_operation(response),
+                session: response_session(response),
+                error: DebugErrorV1 {
+                    stage: DebugErrorStageV1::Output,
+                    code: DebugErrorCodeV1::ResponseTooLarge,
+                    message: "response exceeds the configured JSONL bound".to_owned(),
+                    state_changed: false,
+                },
+            };
+            let bytes = encode_response_line_v1(&fallback, limits)
+                .map_err(|error| format!("failed to encode bounded fallback: {error}"))?;
+            writer
+                .write_all(&bytes)
+                .map_err(|_| "failed to write bounded fallback response".to_owned())
+        }
+        Err(error) => Err(format!("failed to encode debugger response: {error}")),
+    }?;
+    writer
+        .flush()
+        .map_err(|_| "failed to flush debugger response".to_owned())
+}
+
+fn response_request_id(response: &DebugResponseV1) -> Option<u64> {
+    match response {
+        DebugResponseV1::Ok { request_id, .. }
+        | DebugResponseV1::Unavailable { request_id, .. } => Some(*request_id),
+        DebugResponseV1::Error { request_id, .. } => *request_id,
+    }
+}
+
+fn response_operation(response: &DebugResponseV1) -> Option<DebugOperationNameV1> {
+    match response {
+        DebugResponseV1::Ok { operation, .. } | DebugResponseV1::Unavailable { operation, .. } => {
+            Some(*operation)
+        }
+        DebugResponseV1::Error { operation, .. } => *operation,
+    }
+}
+
+fn response_session(response: &DebugResponseV1) -> Option<SessionViewV1> {
+    match response {
+        DebugResponseV1::Ok { session, .. } | DebugResponseV1::Unavailable { session, .. } => {
+            Some(*session)
+        }
+        DebugResponseV1::Error { session, .. } => *session,
+    }
+}
+
+struct SimulatorBackendV1 {
+    module: AdmittedSimulationModuleV1,
+    session: DebugSessionV1,
+    wave_width: DebugWaveWidthV1,
+    configuration_identity: OpaqueIdentityV1,
+    revision: u64,
+    command_count: u64,
+    terminated: bool,
+    failed_execution: bool,
+    last_stop: Option<StopViewV1>,
+    next_breakpoint_id: u64,
+    next_watchpoint_id: u64,
+    breakpoint_specs: BTreeMap<u64, BreakpointSpecV1>,
+    watchpoint_specs: BTreeMap<u64, WatchpointSpecV1>,
+    protocol_limits: ProtocolLimitsV1,
+}
+
+impl SimulatorBackendV1 {
+    fn new(input: AdmittedSimulationInputV1, wave_width: DebugWaveWidthV1) -> Result<Self, String> {
+        let capture_limits =
+            SimulationDebugCaptureLimitsV1::new(64, 4_096, 16_384, 16 * 1024 * 1024)
+                .map_err(|error| error.to_string())?;
+        let debugger_limits = DebuggerLimitsV1::new(1_000_000, 16_000_000, 256 * 1024 * 1024)
+            .map_err(|error| error.to_string())?;
+        let run = capture_debugger_run_v1(
+            &input.module,
+            &input.request,
+            SimulationTargetV1::amdgpu_64(),
+            input.simulation_limits,
+            capture_limits,
+            debugger_limits,
+            wave_width,
+        );
+        if let Err(SimulationErrorV1::Preflight(error)) = &run.execution {
+            return Err(error.to_string());
+        }
+        let failed_execution = matches!(run.execution, Err(SimulationErrorV1::Execution(_)));
+        let configuration_identity =
+            configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+        Ok(Self {
+            module: input.module,
+            session: DebugSessionV1::new(run.transcript),
+            wave_width,
+            configuration_identity,
+            revision: 0,
+            command_count: 0,
+            terminated: false,
+            failed_execution,
+            last_stop: None,
+            next_breakpoint_id: 1,
+            next_watchpoint_id: 1,
+            breakpoint_specs: BTreeMap::new(),
+            watchpoint_specs: BTreeMap::new(),
+            protocol_limits: ProtocolLimitsV1::default(),
+        })
+    }
+
+    fn codec_error(&self, error: ProtocolCodecErrorV1) -> DebugResponseV1 {
+        DebugResponseV1::Error {
+            schema: ResponseSchemaV1::V1,
+            request_id: None,
+            operation: None,
+            session: Some(self.session_view()),
+            error: DebugErrorV1 {
+                stage: DebugErrorStageV1::Framing,
+                code: if error == ProtocolCodecErrorV1::InvalidJson {
+                    DebugErrorCodeV1::InvalidJson
+                } else {
+                    DebugErrorCodeV1::InvalidRequest
+                },
+                message: bounded_message(error.code()),
+                state_changed: false,
+            },
+        }
+    }
+
+    fn session_view(&self) -> SessionViewV1 {
+        let state = if self.terminated {
+            SessionStateV1::Terminated
+        } else {
+            SessionStateV1::Stopped
+        };
+        SessionViewV1 {
+            backend: DebugBackendV1::CpuKirSimulator,
+            execution_kind: ExecutionKindV1::CpuKirSimulation,
+            state,
+            revision: self.revision,
+            configuration_identity: self.configuration_identity,
+            cursor: DebugCursorV1 {
+                configuration_identity: self.configuration_identity,
+                event_sequence: self.cursor_sequence(),
+                state_revision: self.revision,
+            },
+            simulated: true,
+            hardware_observed: false,
+            performance_prediction: false,
+        }
+    }
+
+    fn cursor_sequence(&self) -> u64 {
+        self.session
+            .cursor_record_index()
+            .and_then(|index| u64::try_from(index).ok())
+            .map_or(0, |index| index.saturating_add(1))
+    }
+
+    fn handle(&mut self, request: DebugRequestV1) -> DebugResponseV1 {
+        let id = request.request_id();
+        let operation = request.operation();
+        if request.expected_revision() != self.revision {
+            return self.error(
+                Some(id),
+                Some(operation),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::StaleRevision,
+                "expected_revision does not match the current session revision",
+            );
+        }
+        if self.terminated {
+            return self.error(
+                Some(id),
+                Some(operation),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::InvalidState,
+                "debug session is terminated",
+            );
+        }
+        if self.command_count == MAX_SESSION_COMMANDS_V1 {
+            return self.error(
+                Some(id),
+                Some(operation),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "debug session command budget is exhausted",
+            );
+        }
+        self.command_count += 1;
+        self.handle_admitted(request)
+    }
+
+    fn ok(
+        &self,
+        request_id: u64,
+        operation: DebugOperationNameV1,
+        result: DebugResultV1,
+    ) -> DebugResponseV1 {
+        DebugResponseV1::Ok {
+            schema: ResponseSchemaV1::V1,
+            request_id,
+            operation,
+            session: self.session_view(),
+            result: Box::new(result),
+        }
+    }
+
+    fn unavailable(
+        &self,
+        request_id: u64,
+        operation: DebugOperationNameV1,
+        capability: DebugCapabilityNameV1,
+        reason: CapabilityUnavailableReasonV1,
+        detail: &str,
+    ) -> DebugResponseV1 {
+        DebugResponseV1::Unavailable {
+            schema: ResponseSchemaV1::V1,
+            request_id,
+            operation,
+            session: self.session_view(),
+            unavailable: CapabilityUnavailableV1 {
+                capability,
+                reason,
+                state_changed: false,
+                detail: bounded_message(detail),
+            },
+        }
+    }
+
+    fn error(
+        &self,
+        request_id: Option<u64>,
+        operation: Option<DebugOperationNameV1>,
+        stage: DebugErrorStageV1,
+        code: DebugErrorCodeV1,
+        message: &str,
+    ) -> DebugResponseV1 {
+        DebugResponseV1::Error {
+            schema: ResponseSchemaV1::V1,
+            request_id,
+            operation,
+            session: Some(self.session_view()),
+            error: DebugErrorV1 {
+                stage,
+                code,
+                message: bounded_message(message),
+                state_changed: false,
+            },
+        }
+    }
+
+    fn bump_revision(&mut self) -> Result<(), ()> {
+        self.revision = self.revision.checked_add(1).ok_or(())?;
+        Ok(())
+    }
+
+    fn handle_admitted(&mut self, request: DebugRequestV1) -> DebugResponseV1 {
+        match request {
+            DebugRequestV1::DiscoverCapabilities { request_id, .. } => self.ok(
+                request_id,
+                DebugOperationNameV1::DiscoverCapabilities,
+                DebugResultV1::Capabilities {
+                    capabilities: simulator_capabilities(),
+                },
+            ),
+            DebugRequestV1::GetState { request_id, .. } => self.ok(
+                request_id,
+                DebugOperationNameV1::GetState,
+                DebugResultV1::State {
+                    snapshot: self.snapshot_availability(),
+                },
+            ),
+            DebugRequestV1::SetBreakpoints {
+                request_id,
+                breakpoints,
+                ..
+            } => self.set_breakpoints(request_id, breakpoints),
+            DebugRequestV1::RemoveBreakpoints {
+                request_id,
+                breakpoint_ids,
+                ..
+            } => self.remove_breakpoints(request_id, &breakpoint_ids),
+            DebugRequestV1::ListBreakpoints {
+                request_id, page, ..
+            } => self.list_breakpoints(request_id, page),
+            DebugRequestV1::SetWatchpoints {
+                request_id,
+                watchpoints,
+                ..
+            } => self.set_watchpoints(request_id, watchpoints),
+            DebugRequestV1::RemoveWatchpoints {
+                request_id,
+                watchpoint_ids,
+                ..
+            } => self.remove_watchpoints(request_id, &watchpoint_ids),
+            DebugRequestV1::ListWatchpoints {
+                request_id, page, ..
+            } => self.list_watchpoints(request_id, page),
+            DebugRequestV1::Continue {
+                request_id,
+                max_events,
+                ..
+            } => self.continue_forward(request_id, max_events),
+            DebugRequestV1::Pause { request_id, .. } => self.unavailable(
+                request_id,
+                DebugOperationNameV1::Pause,
+                DebugCapabilityNameV1::Pause,
+                CapabilityUnavailableReasonV1::NotExposedByBackend,
+                "the deterministic simulator is synchronously stopped between JSONL requests",
+            ),
+            DebugRequestV1::Step {
+                request_id,
+                direction,
+                granularity,
+                count,
+                focus,
+                ..
+            } => self.step(request_id, direction, granularity, count, focus),
+            DebugRequestV1::Seek {
+                request_id, cursor, ..
+            } => self.seek(request_id, cursor),
+            DebugRequestV1::InspectScope {
+                request_id,
+                scope,
+                include_children,
+                page,
+                ..
+            } => self.inspect_scope(request_id, scope, include_children, page),
+            DebugRequestV1::InspectValues {
+                request_id,
+                scope,
+                frame,
+                selector,
+                page,
+                ..
+            } => self.inspect_values(request_id, scope, frame, selector, page),
+            DebugRequestV1::ReadMemory {
+                request_id,
+                allocation,
+                byte_offset,
+                byte_len,
+                ..
+            } => self.read_memory(request_id, allocation, byte_offset, byte_len),
+            DebugRequestV1::QueryEvents {
+                request_id,
+                filter,
+                page,
+                ..
+            } => self.query_events(request_id, filter, page),
+            DebugRequestV1::ExportTrace {
+                request_id,
+                max_bytes,
+                ..
+            } => self.export_trace(request_id, max_bytes),
+            DebugRequestV1::Terminate { request_id, .. } => {
+                if self.bump_revision().is_err() {
+                    return self.error(
+                        Some(request_id),
+                        Some(DebugOperationNameV1::Terminate),
+                        DebugErrorStageV1::Session,
+                        DebugErrorCodeV1::ResourceLimit,
+                        "session revision is exhausted",
+                    );
+                }
+                self.terminated = true;
+                self.last_stop = Some(StopViewV1 {
+                    reason: StopReasonV1::Terminated,
+                    breakpoint_id: None,
+                    watchpoint_id: None,
+                    outcome: ExecutionOutcomeV1::Cancelled,
+                    exact: true,
+                });
+                self.ok(
+                    request_id,
+                    DebugOperationNameV1::Terminate,
+                    DebugResultV1::Terminated,
+                )
+            }
+        }
+    }
+
+    fn set_breakpoints(
+        &mut self,
+        request_id: u64,
+        specs: Vec<BreakpointSpecV1>,
+    ) -> DebugResponseV1 {
+        let count = specs.len();
+        if self.breakpoint_specs.len().saturating_add(specs.len())
+            > self.protocol_limits.max_breakpoints
+        {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetBreakpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "breakpoint session bound would be exceeded",
+            );
+        }
+        let Some(end_id) = self
+            .next_breakpoint_id
+            .checked_add(u64::try_from(specs.len()).unwrap_or(u64::MAX))
+        else {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetBreakpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "breakpoint identity space is exhausted",
+            );
+        };
+        let mut converted = Vec::new();
+        if converted.try_reserve_exact(specs.len()).is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetBreakpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "breakpoint conversion allocation failed",
+            );
+        }
+        for (offset, spec) in specs.iter().enumerate() {
+            let id = self.next_breakpoint_id + u64::try_from(offset).unwrap_or(u64::MAX);
+            match self.convert_breakpoint(id, spec) {
+                Ok(value) => converted.push(value),
+                Err(ConvertErrorV1::Unavailable(capability, reason, detail)) => {
+                    return self.unavailable(
+                        request_id,
+                        DebugOperationNameV1::SetBreakpoints,
+                        capability,
+                        reason,
+                        detail,
+                    );
+                }
+                Err(ConvertErrorV1::Invalid(detail)) => {
+                    return self.error(
+                        Some(request_id),
+                        Some(DebugOperationNameV1::SetBreakpoints),
+                        DebugErrorStageV1::Protocol,
+                        DebugErrorCodeV1::InvalidRequest,
+                        detail,
+                    );
+                }
+            }
+        }
+        if self.session.add_breakpoints_atomic(converted).is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetBreakpoints),
+                DebugErrorStageV1::Backend,
+                DebugErrorCodeV1::BackendFailure,
+                "replay debugger rejected the atomic breakpoint set",
+            );
+        }
+        if self.bump_revision().is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetBreakpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "session revision is exhausted",
+            );
+        }
+        for (offset, spec) in specs.into_iter().enumerate() {
+            let id = self.next_breakpoint_id + u64::try_from(offset).unwrap_or(u64::MAX);
+            self.breakpoint_specs.insert(id, spec);
+        }
+        self.next_breakpoint_id = end_id;
+        self.ok(
+            request_id,
+            DebugOperationNameV1::SetBreakpoints,
+            DebugResultV1::Acknowledged {
+                accepted: u32::try_from(count).unwrap_or(u32::MAX),
+            },
+        )
+    }
+
+    fn remove_breakpoints(&mut self, request_id: u64, ids: &[u64]) -> DebugResponseV1 {
+        if ids.iter().any(|id| !self.breakpoint_specs.contains_key(id)) {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::RemoveBreakpoints),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::InvalidRequest,
+                "remove_breakpoints contains an unknown breakpoint identity",
+            );
+        }
+        for id in ids {
+            let removed = self.session.remove_breakpoint(*id);
+            debug_assert!(removed);
+            self.breakpoint_specs.remove(id);
+        }
+        if self.bump_revision().is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::RemoveBreakpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "session revision is exhausted",
+            );
+        }
+        self.ok(
+            request_id,
+            DebugOperationNameV1::RemoveBreakpoints,
+            DebugResultV1::Acknowledged {
+                accepted: u32::try_from(ids.len()).unwrap_or(u32::MAX),
+            },
+        )
+    }
+
+    fn list_breakpoints(&self, request_id: u64, page: PageRequestV1) -> DebugResponseV1 {
+        let query = self.query_identity(b"list-breakpoints", &[]);
+        let (start, end, next_cursor) = match page_bounds(page, query, self.breakpoint_specs.len())
+        {
+            Ok(bounds) => bounds,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::ListBreakpoints),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let breakpoints = self
+            .breakpoint_specs
+            .iter()
+            .skip(start)
+            .take(end - start)
+            .map(|(id, spec)| BreakpointViewV1 {
+                breakpoint_id: *id,
+                spec: spec.clone(),
+                hit_count: self.session.breakpoint_hit_count(*id).unwrap_or(0),
+            })
+            .collect();
+        self.ok(
+            request_id,
+            DebugOperationNameV1::ListBreakpoints,
+            DebugResultV1::Breakpoints {
+                breakpoints,
+                next_cursor,
+            },
+        )
+    }
+
+    fn convert_breakpoint(
+        &self,
+        id: u64,
+        spec: &BreakpointSpecV1,
+    ) -> Result<DebugBreakpointV1, ConvertErrorV1> {
+        let scope =
+            convert_scope_selector(spec.scope.unwrap_or(ExecutionScopeSelectorV1::Dispatch));
+        let hit_condition = spec.hit_condition.map(convert_hit_condition).transpose()?;
+        let (site, predicate) = match &spec.kind {
+            BreakpointKindV1::Site { site, phase } => {
+                let point = match site.point {
+                    KirSitePointV1::Operation { operation_ordinal } => operation_ordinal,
+                    KirSitePointV1::BlockEntry | KirSitePointV1::Terminator => {
+                        return Err(ConvertErrorV1::Unavailable(
+                            DebugCapabilityNameV1::KirSites,
+                            CapabilityUnavailableReasonV1::NotRepresented,
+                            "V1 simulator checkpoints are operation sites, not block-entry or terminator sites",
+                        ));
+                    }
+                };
+                let function_ordinal = usize::try_from(site.function_ordinal).map_err(|_| {
+                    ConvertErrorV1::Invalid("function ordinal does not fit this host")
+                })?;
+                let operation = u32::try_from(point).map_err(|_| {
+                    ConvertErrorV1::Invalid("operation ordinal is outside KIR V7 bounds")
+                })?;
+                let function = self.module.module().functions.get(function_ordinal).ok_or(
+                    ConvertErrorV1::Invalid("breakpoint function ordinal is unknown"),
+                )?;
+                let body = function
+                    .body
+                    .as_ref()
+                    .ok_or(ConvertErrorV1::Invalid("breakpoint function has no body"))?;
+                let block_index = usize::try_from(site.block_ordinal)
+                    .map_err(|_| ConvertErrorV1::Invalid("block ordinal does not fit this host"))?;
+                let block = body.blocks.get(block_index).ok_or(ConvertErrorV1::Invalid(
+                    "breakpoint block ordinal is unknown",
+                ))?;
+                if block.operations.get(operation as usize).is_none() {
+                    return Err(ConvertErrorV1::Invalid(
+                        "breakpoint operation ordinal is unknown",
+                    ));
+                }
+                (
+                    DebugSiteSelectorV1 {
+                        function_ordinal: Some(function_ordinal),
+                        block: Some(block.id),
+                        operation: Some(operation),
+                        phase: Some(match phase {
+                            OperationStopPhaseV1::BeforeOperation => {
+                                SimulationDebugCheckpointPhaseV1::BeforeOperation
+                            }
+                            OperationStopPhaseV1::AfterOperation => {
+                                SimulationDebugCheckpointPhaseV1::AfterOperation
+                            }
+                        }),
+                    },
+                    DebugPredicateV1::True,
+                )
+            }
+            BreakpointKindV1::Value { predicate } => {
+                let (predicate, function_ordinal) = convert_predicate(predicate)?;
+                (
+                    DebugSiteSelectorV1 {
+                        function_ordinal,
+                        block: None,
+                        operation: None,
+                        phase: None,
+                    },
+                    predicate,
+                )
+            }
+            BreakpointKindV1::Source { .. } => {
+                return Err(ConvertErrorV1::Unavailable(
+                    DebugCapabilityNameV1::SourceSites,
+                    CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                    "source breakpoints require an exact-KIR authenticated source map",
+                ));
+            }
+            BreakpointKindV1::Barrier { .. } => {
+                return Err(ConvertErrorV1::Unavailable(
+                    DebugCapabilityNameV1::Breakpoints,
+                    CapabilityUnavailableReasonV1::NotRepresented,
+                    "barrier records can be stepped and queried, but V1 replay breakpoint filters are operation/value based",
+                ));
+            }
+            BreakpointKindV1::Diagnostic { .. } => {
+                return Err(ConvertErrorV1::Unavailable(
+                    DebugCapabilityNameV1::Breakpoints,
+                    CapabilityUnavailableReasonV1::NotRepresented,
+                    "diagnostic-class breakpoints are not represented by the V1 replay breakpoint engine",
+                ));
+            }
+        };
+        Ok(DebugBreakpointV1 {
+            id,
+            site,
+            scope,
+            predicate,
+            hit_condition,
+            enabled: spec.enabled,
+        })
+    }
+
+    fn set_watchpoints(
+        &mut self,
+        request_id: u64,
+        specs: Vec<WatchpointSpecV1>,
+    ) -> DebugResponseV1 {
+        if self.watchpoint_specs.len().saturating_add(specs.len())
+            > self.protocol_limits.max_watchpoints
+        {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetWatchpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "watchpoint session bound would be exceeded",
+            );
+        }
+        let count = specs.len();
+        let Some(end_id) = self
+            .next_watchpoint_id
+            .checked_add(u64::try_from(count).unwrap_or(u64::MAX))
+        else {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetWatchpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "watchpoint identity space is exhausted",
+            );
+        };
+        let mut converted = Vec::new();
+        if converted.try_reserve_exact(count).is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetWatchpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "watchpoint conversion allocation failed",
+            );
+        }
+        for (offset, spec) in specs.iter().enumerate() {
+            if spec.allocation.generation != 0 {
+                return self.unavailable(
+                    request_id,
+                    DebugOperationNameV1::SetWatchpoints,
+                    DebugCapabilityNameV1::Watchpoints,
+                    CapabilityUnavailableReasonV1::NotRepresented,
+                    "CPU simulation allocations have generation zero",
+                );
+            }
+            if spec.timing != MemoryStopPhaseV1::AfterCommit {
+                return self.unavailable(
+                    request_id,
+                    DebugOperationNameV1::SetWatchpoints,
+                    DebugCapabilityNameV1::Watchpoints,
+                    CapabilityUnavailableReasonV1::NotCaptured,
+                    "the replay transcript exposes successful reads and committed writes, not pre-commit writes",
+                );
+            }
+            let access = match spec.access {
+                WatchAccessV1::Read => DebugWatchAccessV1::Read,
+                WatchAccessV1::Write => DebugWatchAccessV1::Write,
+                WatchAccessV1::Any => DebugWatchAccessV1::ReadWrite,
+                WatchAccessV1::Atomic => {
+                    return self.unavailable(
+                        request_id,
+                        DebugOperationNameV1::SetWatchpoints,
+                        DebugCapabilityNameV1::Watchpoints,
+                        CapabilityUnavailableReasonV1::NotRepresented,
+                        "atomic memory accesses are not represented by the admitted CPU simulator subset",
+                    );
+                }
+            };
+            let byte_offset = match usize::try_from(spec.byte_offset) {
+                Ok(value) => value,
+                Err(_) => {
+                    return self.error(
+                        Some(request_id),
+                        Some(DebugOperationNameV1::SetWatchpoints),
+                        DebugErrorStageV1::Protocol,
+                        DebugErrorCodeV1::InvalidRequest,
+                        "watchpoint byte offset does not fit this host",
+                    );
+                }
+            };
+            let byte_len = match usize::try_from(spec.byte_len) {
+                Ok(value) => value,
+                Err(_) => {
+                    return self.error(
+                        Some(request_id),
+                        Some(DebugOperationNameV1::SetWatchpoints),
+                        DebugErrorStageV1::Protocol,
+                        DebugErrorCodeV1::InvalidRequest,
+                        "watchpoint byte length does not fit this host",
+                    );
+                }
+            };
+            converted.push(DebugWatchpointV1 {
+                id: self.next_watchpoint_id + u64::try_from(offset).unwrap_or(u64::MAX),
+                allocation: spec.allocation.ordinal,
+                byte_offset,
+                byte_len,
+                access,
+                scope: convert_scope_selector(
+                    spec.scope.unwrap_or(ExecutionScopeSelectorV1::Dispatch),
+                ),
+                value_equals: None,
+                enabled: spec.enabled,
+            });
+        }
+        if self.session.add_watchpoints_atomic(converted).is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetWatchpoints),
+                DebugErrorStageV1::Backend,
+                DebugErrorCodeV1::BackendFailure,
+                "replay debugger rejected the atomic watchpoint set",
+            );
+        }
+        if self.bump_revision().is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::SetWatchpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "session revision is exhausted",
+            );
+        }
+        for (offset, spec) in specs.into_iter().enumerate() {
+            self.watchpoint_specs.insert(
+                self.next_watchpoint_id + u64::try_from(offset).unwrap_or(u64::MAX),
+                spec,
+            );
+        }
+        self.next_watchpoint_id = end_id;
+        self.ok(
+            request_id,
+            DebugOperationNameV1::SetWatchpoints,
+            DebugResultV1::Acknowledged {
+                accepted: u32::try_from(count).unwrap_or(u32::MAX),
+            },
+        )
+    }
+
+    fn remove_watchpoints(&mut self, request_id: u64, ids: &[u64]) -> DebugResponseV1 {
+        if ids.iter().any(|id| !self.watchpoint_specs.contains_key(id)) {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::RemoveWatchpoints),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::InvalidRequest,
+                "remove_watchpoints contains an unknown watchpoint identity",
+            );
+        }
+        for id in ids {
+            let removed = self.session.remove_watchpoint(*id);
+            debug_assert!(removed);
+            self.watchpoint_specs.remove(id);
+        }
+        if self.bump_revision().is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::RemoveWatchpoints),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "session revision is exhausted",
+            );
+        }
+        self.ok(
+            request_id,
+            DebugOperationNameV1::RemoveWatchpoints,
+            DebugResultV1::Acknowledged {
+                accepted: u32::try_from(ids.len()).unwrap_or(u32::MAX),
+            },
+        )
+    }
+
+    fn list_watchpoints(&self, request_id: u64, page: PageRequestV1) -> DebugResponseV1 {
+        let query = self.query_identity(b"list-watchpoints", &[]);
+        let (start, end, next_cursor) = match page_bounds(page, query, self.watchpoint_specs.len())
+        {
+            Ok(bounds) => bounds,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::ListWatchpoints),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let watchpoints = self
+            .watchpoint_specs
+            .iter()
+            .skip(start)
+            .take(end - start)
+            .map(|(id, spec)| WatchpointViewV1 {
+                watchpoint_id: *id,
+                spec: spec.clone(),
+                hit_count: self.session.watchpoint_hit_count(*id).unwrap_or(0),
+            })
+            .collect();
+        self.ok(
+            request_id,
+            DebugOperationNameV1::ListWatchpoints,
+            DebugResultV1::Watchpoints {
+                watchpoints,
+                next_cursor,
+            },
+        )
+    }
+
+    fn continue_forward(&mut self, request_id: u64, max_events: u64) -> DebugResponseV1 {
+        let Ok(max_events) = usize::try_from(max_events) else {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::Continue),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::ResourceLimit,
+                "max_events does not fit this host",
+            );
+        };
+        let before = self.cursor_sequence();
+        let navigation = self.session.continue_forward_bounded(max_events);
+        self.finish_control(
+            request_id,
+            DebugOperationNameV1::Continue,
+            before,
+            navigation,
+        )
+    }
+
+    fn step(
+        &mut self,
+        request_id: u64,
+        direction: StepDirectionV1,
+        granularity: StepGranularityV1,
+        count: u32,
+        focus: Option<ExecutionScopeSelectorV1>,
+    ) -> DebugResponseV1 {
+        if granularity == StepGranularityV1::Source {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::Step,
+                DebugCapabilityNameV1::SourceSites,
+                CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                "source stepping requires an exact-KIR authenticated source map",
+            );
+        }
+        if direction == StepDirectionV1::Reverse
+            && matches!(
+                granularity,
+                StepGranularityV1::Over | StepGranularityV1::Out
+            )
+        {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::Step,
+                DebugCapabilityNameV1::ReverseStep,
+                CapabilityUnavailableReasonV1::NotExposedByBackend,
+                "reverse frame-aware over/out is not exposed by the V1 replay engine",
+            );
+        }
+        let before = self.cursor_sequence();
+        let saved = self.session.cursor_record_index();
+        let scope = convert_scope_selector(focus.unwrap_or(ExecutionScopeSelectorV1::Dispatch));
+        let mut navigation = DebugNavigationV1::Beginning;
+        for _ in 0..count {
+            navigation = match (direction, granularity) {
+                (StepDirectionV1::Forward, StepGranularityV1::Over) => {
+                    self.session.step_over(&scope)
+                }
+                (StepDirectionV1::Forward, StepGranularityV1::Out) => self.session.step_out(&scope),
+                _ => self.step_filtered(direction, granularity, &scope),
+            };
+            if matches!(navigation, DebugNavigationV1::Unavailable(_)) {
+                restore_cursor(&mut self.session, saved);
+                return self.unavailable(
+                    request_id,
+                    DebugOperationNameV1::Step,
+                    DebugCapabilityNameV1::ForwardStep,
+                    CapabilityUnavailableReasonV1::NotCaptured,
+                    "the requested replay step has no captured frame state at the current cursor",
+                );
+            }
+            if matches!(
+                navigation,
+                DebugNavigationV1::Beginning | DebugNavigationV1::End
+            ) {
+                break;
+            }
+        }
+        self.finish_control(request_id, DebugOperationNameV1::Step, before, navigation)
+    }
+
+    fn step_filtered(
+        &mut self,
+        direction: StepDirectionV1,
+        granularity: StepGranularityV1,
+        scope: &DebugScopeSelectorV1,
+    ) -> DebugNavigationV1 {
+        let records = self.session.transcript().records();
+        let cursor = self.session.cursor_record_index();
+        let baseline = self.session.current_hierarchy();
+        let candidate = match direction {
+            StepDirectionV1::Forward => {
+                let start = cursor.map_or(0, |index| index.saturating_add(1));
+                (start..records.len()).find(|index| {
+                    record_matches_step(
+                        &records[*index],
+                        granularity,
+                        scope,
+                        self.wave_width,
+                        baseline,
+                    )
+                })
+            }
+            StepDirectionV1::Reverse => {
+                let Some(start) = cursor.and_then(|index| index.checked_sub(1)) else {
+                    return self.session.seek_entry();
+                };
+                (0..=start).rev().find(|index| {
+                    record_matches_step(
+                        &records[*index],
+                        granularity,
+                        scope,
+                        self.wave_width,
+                        baseline,
+                    )
+                })
+            }
+        };
+        if let Some(index) = candidate {
+            self.session.seek_record_index(index)
+        } else {
+            match direction {
+                StepDirectionV1::Forward => self
+                    .session
+                    .seek_record_index(self.session.transcript().records().len()),
+                StepDirectionV1::Reverse => self.session.seek_entry(),
+            }
+        }
+    }
+
+    fn seek(&mut self, request_id: u64, cursor: DebugCursorV1) -> DebugResponseV1 {
+        if cursor.configuration_identity != self.configuration_identity
+            || cursor.state_revision != self.revision
+        {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::Seek),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::InvalidCursor,
+                "seek cursor is not bound to the current configuration and revision",
+            );
+        }
+        let record_count = self.session.transcript().records().len();
+        let maximum = u64::try_from(record_count)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        if cursor.event_sequence > maximum {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::Seek),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::InvalidCursor,
+                "seek cursor is outside the captured transcript",
+            );
+        }
+        let before = self.cursor_sequence();
+        let navigation = if cursor.event_sequence == 0 {
+            self.session.seek_entry()
+        } else {
+            self.session.seek_record_index(
+                usize::try_from(cursor.event_sequence - 1).expect("bounded by record count"),
+            )
+        };
+        self.finish_control(request_id, DebugOperationNameV1::Seek, before, navigation)
+    }
+
+    fn finish_control(
+        &mut self,
+        request_id: u64,
+        operation: DebugOperationNameV1,
+        before: u64,
+        navigation: DebugNavigationV1,
+    ) -> DebugResponseV1 {
+        let after = self.cursor_sequence();
+        let stop = navigation_stop(navigation, self.failed_execution);
+        let visible_stop_changed = self.last_stop.as_ref() != Some(&stop);
+        if (after != before || visible_stop_changed) && self.bump_revision().is_err() {
+            return self.error(
+                Some(request_id),
+                Some(operation),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "session revision is exhausted",
+            );
+        }
+        self.last_stop = Some(stop.clone());
+        self.ok(
+            request_id,
+            operation,
+            DebugResultV1::Control {
+                stop: Some(stop),
+                snapshot: self.snapshot_availability(),
+                events_advanced: before.abs_diff(after),
+            },
+        )
+    }
+
+    fn inspect_scope(
+        &self,
+        request_id: u64,
+        scope: ExecutionScopeSelectorV1,
+        include_children: bool,
+        page: PageRequestV1,
+    ) -> DebugResponseV1 {
+        let query_bytes = serde_json::to_vec(&(scope, include_children)).unwrap_or_default();
+        let query = self.query_identity(b"inspect-scope", &query_bytes);
+        let (start, limit) = match page_window(page, query) {
+            Ok(window) => window,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::InspectScope),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let mut scopes = Vec::new();
+        if scopes.try_reserve_exact(limit).is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::InspectScope),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "scope page allocation failed",
+            );
+        }
+        let records = self.session.transcript().records();
+        let mut total = 0_usize;
+        {
+            let mut emit = |candidate: ExecutionScopeV1| {
+                if total >= start && scopes.len() < limit {
+                    scopes.push(candidate);
+                }
+                total = total.saturating_add(1);
+            };
+            match scope {
+                ExecutionScopeSelectorV1::Dispatch => {
+                    emit(ExecutionScopeV1::Dispatch);
+                    if include_children {
+                        // Simulator transcripts are workgroup-major, so adjacent deduplication
+                        // enumerates observed workgroups with constant scratch space.
+                        let mut previous = None;
+                        for record in records {
+                            let group = record.invocation.workgroup;
+                            if previous == Some(group) {
+                                continue;
+                            }
+                            previous = Some(group);
+                            if let Some(workgroup) = workgroup_u32(group) {
+                                emit(ExecutionScopeV1::Workgroup { workgroup });
+                            }
+                        }
+                    }
+                }
+                ExecutionScopeSelectorV1::Workgroup { workgroup } => {
+                    emit(ExecutionScopeV1::Workgroup { workgroup });
+                    if include_children {
+                        let group64 = workgroup.map(u64::from);
+                        let mut waves = [None; 32];
+                        for record in records
+                            .iter()
+                            .filter(|record| record.invocation.workgroup == group64)
+                        {
+                            let hierarchy =
+                                hierarchy_for_invocation_v1(record.invocation, self.wave_width);
+                            if let Some(slot) = waves.get_mut(hierarchy.wave as usize) {
+                                slot.get_or_insert(record.invocation);
+                            }
+                        }
+                        for (wave, invocation) in waves.into_iter().enumerate() {
+                            let Some(invocation) = invocation else {
+                                continue;
+                            };
+                            let hierarchy =
+                                hierarchy_for_invocation_v1(invocation, self.wave_width);
+                            emit(ExecutionScopeV1::Wave {
+                                workgroup,
+                                wave: u32::try_from(wave).expect("wave table index fits u32"),
+                                active_mask: hierarchy.active_mask,
+                                wave_width: self.wave_width.lanes(),
+                                interpretation: WaveInterpretationV1::LogicalVisualization,
+                            });
+                        }
+                    }
+                }
+                ExecutionScopeSelectorV1::Wave { workgroup, wave } => {
+                    let group64 = workgroup.map(u64::from);
+                    if let Some(invocation) = records
+                        .iter()
+                        .find(|record| {
+                            let hierarchy =
+                                hierarchy_for_invocation_v1(record.invocation, self.wave_width);
+                            hierarchy.workgroup == group64 && hierarchy.wave == wave
+                        })
+                        .map(|record| record.invocation)
+                    {
+                        let hierarchy = hierarchy_for_invocation_v1(invocation, self.wave_width);
+                        emit(ExecutionScopeV1::Wave {
+                            workgroup,
+                            wave,
+                            active_mask: hierarchy.active_mask,
+                            wave_width: self.wave_width.lanes(),
+                            interpretation: WaveInterpretationV1::LogicalVisualization,
+                        });
+                        if include_children {
+                            let mut lanes = [None; 64];
+                            for record in records {
+                                let candidate =
+                                    hierarchy_for_invocation_v1(record.invocation, self.wave_width);
+                                if candidate.workgroup == group64 && candidate.wave == wave {
+                                    lanes[usize::from(candidate.lane)]
+                                        .get_or_insert(record.invocation);
+                                }
+                            }
+                            for (lane, invocation) in lanes.into_iter().enumerate() {
+                                let Some(invocation) = invocation else {
+                                    continue;
+                                };
+                                emit(ExecutionScopeV1::Lane {
+                                    workgroup,
+                                    wave,
+                                    lane: u16::try_from(lane).expect("lane table index fits u16"),
+                                    logical_workitem: invocation.global,
+                                    active_mask: hierarchy.active_mask,
+                                    wave_width: self.wave_width.lanes(),
+                                    interpretation: WaveInterpretationV1::LogicalVisualization,
+                                });
+                            }
+                        }
+                    }
+                }
+                ExecutionScopeSelectorV1::Lane {
+                    workgroup,
+                    wave,
+                    lane,
+                } => {
+                    let group64 = workgroup.map(u64::from);
+                    if let Some(invocation) = records
+                        .iter()
+                        .find(|record| {
+                            let hierarchy =
+                                hierarchy_for_invocation_v1(record.invocation, self.wave_width);
+                            hierarchy.workgroup == group64
+                                && hierarchy.wave == wave
+                                && hierarchy.lane == lane
+                        })
+                        .map(|record| record.invocation)
+                    {
+                        let hierarchy = hierarchy_for_invocation_v1(invocation, self.wave_width);
+                        emit(ExecutionScopeV1::Lane {
+                            workgroup,
+                            wave,
+                            lane,
+                            logical_workitem: invocation.global,
+                            active_mask: hierarchy.active_mask,
+                            wave_width: self.wave_width.lanes(),
+                            interpretation: WaveInterpretationV1::LogicalVisualization,
+                        });
+                    }
+                }
+            }
+        }
+        let next_cursor = match page_next(start, scopes.len(), total, query) {
+            Ok(next) => next,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::InspectScope),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let states = self.scope_states(&scopes);
+        let views: Vec<_> = scopes
+            .into_iter()
+            .zip(states)
+            .map(|(scope, state)| ScopeViewV1 { state, scope })
+            .collect();
+        self.ok(
+            request_id,
+            DebugOperationNameV1::InspectScope,
+            DebugResultV1::Scopes {
+                scopes: views,
+                next_cursor,
+            },
+        )
+    }
+
+    fn scope_states(&self, scopes: &[ExecutionScopeV1]) -> Vec<ScopeStateV1> {
+        scope_states_for_records(
+            self.session.transcript().records(),
+            self.session.transcript().terminal_fault(),
+            self.session.cursor_record_index(),
+            scopes,
+            self.wave_width,
+        )
+    }
+
+    fn inspect_values(
+        &self,
+        request_id: u64,
+        scope: ExecutionScopeSelectorV1,
+        frame: Option<u64>,
+        selector: ValueSelectorV1,
+        page: PageRequestV1,
+    ) -> DebugResponseV1 {
+        if frame == Some(0) {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::InspectValues),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::InvalidRequest,
+                "frame identities are one-based",
+            );
+        }
+        if selector_requests_unsupported_root(&selector, ValueRootClassV1::Register) {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectValues,
+                DebugCapabilityNameV1::RegisterValues,
+                CapabilityUnavailableReasonV1::NotRepresented,
+                "CPU KIR simulation does not expose hardware registers",
+            );
+        }
+        if selector_requests_unsupported_root(&selector, ValueRootClassV1::SourceVariable) {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectValues,
+                DebugCapabilityNameV1::SourceVariableValues,
+                CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                "source variables require an exact-KIR authenticated source map",
+            );
+        }
+        let Some(record) = self.session.current() else {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectValues,
+                DebugCapabilityNameV1::KirSsaValues,
+                CapabilityUnavailableReasonV1::NotCaptured,
+                "the current cursor has no operation checkpoint",
+            );
+        };
+        let selected_scope = convert_scope_selector(scope);
+        if !selected_scope.matches(record.invocation, self.wave_width) {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectValues,
+                DebugCapabilityNameV1::KirSsaValues,
+                CapabilityUnavailableReasonV1::OutsideCaptureScope,
+                "the requested scope is not the current replay invocation",
+            );
+        }
+        let SimulationDebugRecordKindV1::Checkpoint { stack, .. } = &record.kind else {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectValues,
+                DebugCapabilityNameV1::KirSsaValues,
+                CapabilityUnavailableReasonV1::NotCaptured,
+                "SSA values are captured only at operation checkpoints",
+            );
+        };
+        let SimulationDebugCollectionV1::Captured(frames) = stack else {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectValues,
+                DebugCapabilityNameV1::KirSsaValues,
+                CapabilityUnavailableReasonV1::Truncated,
+                "the checkpoint stack or values exceeded its capture bound",
+            );
+        };
+        let requested_depth = match frame {
+            Some(value) => match u32::try_from(value - 1) {
+                Ok(depth) => Some(depth),
+                Err(_) => {
+                    return self.error(
+                        Some(request_id),
+                        Some(DebugOperationNameV1::InspectValues),
+                        DebugErrorStageV1::Protocol,
+                        DebugErrorCodeV1::InvalidRequest,
+                        "frame identity exceeds the simulator frame range",
+                    );
+                }
+            },
+            None => None,
+        };
+        let mut values: Vec<DebugValueV1> = match &selector {
+            ValueSelectorV1::Paths { paths } => paths
+                .iter()
+                .map(|path| value_for_path(path.clone(), frames))
+                .collect(),
+            ValueSelectorV1::All | ValueSelectorV1::Roots { .. } => frames
+                .iter()
+                .filter(|candidate| requested_depth.is_none_or(|depth| candidate.depth == depth))
+                .flat_map(|candidate| {
+                    let SimulationDebugCollectionV1::Captured(bindings) = &candidate.values else {
+                        return Vec::new().into_iter();
+                    };
+                    bindings
+                        .iter()
+                        .map(|binding| value_for_binding(candidate, binding))
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                })
+                .collect(),
+        };
+        let query_bytes = serde_json::to_vec(&(scope, frame, &selector, self.cursor_sequence()))
+            .unwrap_or_default();
+        let query = self.query_identity(b"inspect-values", &query_bytes);
+        let (start, end, next_cursor) = match page_bounds(page, query, values.len()) {
+            Ok(bounds) => bounds,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::InspectValues),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        values = values.drain(start..end).collect();
+        let anchor = self
+            .current_anchor(frame)
+            .expect("current checkpoint has a representable anchor");
+        self.ok(
+            request_id,
+            DebugOperationNameV1::InspectValues,
+            DebugResultV1::Values {
+                snapshot: anchor,
+                values,
+                next_cursor,
+            },
+        )
+    }
+
+    fn read_memory(
+        &self,
+        request_id: u64,
+        allocation: AllocationIdentityV1,
+        byte_offset: u64,
+        byte_len: u64,
+    ) -> DebugResponseV1 {
+        let Some(snapshot) = self.current_anchor(None) else {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::ReadMemory,
+                DebugCapabilityNameV1::AllocationRelativeMemory,
+                CapabilityUnavailableReasonV1::NotCaptured,
+                "the current cursor has no captured operation memory snapshot",
+            );
+        };
+        if allocation.generation != 0 {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::ReadMemory,
+                DebugCapabilityNameV1::AllocationRelativeMemory,
+                CapabilityUnavailableReasonV1::NotRepresented,
+                "CPU simulation allocations have generation zero",
+            );
+        }
+        let (Ok(offset), Ok(length)) = (usize::try_from(byte_offset), usize::try_from(byte_len))
+        else {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::ReadMemory),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::InvalidRequest,
+                "memory read range does not fit this host",
+            );
+        };
+        let memory = match self.session.memory(allocation.ordinal, offset, length) {
+            DebugInspectionV1::Available(slice) => MemoryReadV1 {
+                allocation,
+                byte_offset,
+                requested_bytes: byte_len,
+                returned_bytes: byte_len,
+                availability: MemoryAvailabilityV1::Captured {
+                    address_space: protocol_address_space(slice.address_space),
+                    bytes: hex_bytes(&slice.bytes),
+                    initialized: initialization_bits(&slice.initialized),
+                    truncated: false,
+                },
+            },
+            DebugInspectionV1::Unavailable(reason) => MemoryReadV1 {
+                allocation,
+                byte_offset,
+                requested_bytes: byte_len,
+                returned_bytes: 0,
+                availability: MemoryAvailabilityV1::Unavailable {
+                    reason: inspection_unavailable_value_reason(reason),
+                },
+            },
+        };
+        self.ok(
+            request_id,
+            DebugOperationNameV1::ReadMemory,
+            DebugResultV1::Memory { snapshot, memory },
+        )
+    }
+
+    fn query_events(
+        &self,
+        request_id: u64,
+        filter: EventFilterV1,
+        page: PageRequestV1,
+    ) -> DebugResponseV1 {
+        let query_bytes = serde_json::to_vec(&filter).unwrap_or_default();
+        let query = self.query_identity(b"query-events", &query_bytes);
+        let (start, limit) = match page_window(page, query) {
+            Ok(window) => window,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::QueryEvents),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let mut events = Vec::new();
+        if events.try_reserve_exact(limit).is_err() {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::QueryEvents),
+                DebugErrorStageV1::Session,
+                DebugErrorCodeV1::ResourceLimit,
+                "event page allocation failed",
+            );
+        }
+        let mut total = 0_usize;
+        for event in self
+            .session
+            .transcript()
+            .records()
+            .iter()
+            .filter(|record| self.record_matches_event_filter(record, &filter))
+            .filter_map(|record| self.event_view(record))
+        {
+            if total >= start && events.len() < limit {
+                events.push(event);
+            }
+            total = total.saturating_add(1);
+        }
+        let next_cursor = match page_next(start, events.len(), total, query) {
+            Ok(next) => next,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::QueryEvents),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        self.ok(
+            request_id,
+            DebugOperationNameV1::QueryEvents,
+            DebugResultV1::Events {
+                events,
+                next_cursor,
+            },
+        )
+    }
+
+    fn export_trace(&self, request_id: u64, max_bytes: u64) -> DebugResponseV1 {
+        let response_bound = self
+            .protocol_limits
+            .max_response_line_bytes
+            .saturating_sub(8 * 1024)
+            / 2;
+        let requested = usize::try_from(max_bytes).unwrap_or(usize::MAX);
+        let byte_bound = requested.min(response_bound);
+        let header = TraceHeaderV1 {
+            schema: TRACE_HEADER_SCHEMA_V1,
+            configuration_identity: self.configuration_identity,
+            backend: DebugBackendV1::CpuKirSimulator,
+            simulated: true,
+            hardware_observed: false,
+            performance_prediction: false,
+            wave_interpretation: WaveInterpretationV1::LogicalVisualization,
+        };
+        let mut bytes = match serde_json::to_vec(&header) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::ExportTrace),
+                    DebugErrorStageV1::Output,
+                    DebugErrorCodeV1::OutputFailure,
+                    "failed to serialize the trace header",
+                );
+            }
+        };
+        bytes.push(b'\n');
+        if bytes.len() > byte_bound {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::ExportTrace),
+                DebugErrorStageV1::Protocol,
+                DebugErrorCodeV1::ResourceLimit,
+                "max_bytes is too small for the trace header",
+            );
+        }
+        let mut emitted = 0_u64;
+        let mut byte_truncated = false;
+        for record in self.session.transcript().records() {
+            let Some(event) = self.event_view(record) else {
+                continue;
+            };
+            let line = match serde_json::to_vec(&event) {
+                Ok(line) => line,
+                Err(_) => {
+                    return self.error(
+                        Some(request_id),
+                        Some(DebugOperationNameV1::ExportTrace),
+                        DebugErrorStageV1::Output,
+                        DebugErrorCodeV1::OutputFailure,
+                        "failed to serialize a trace event",
+                    );
+                }
+            };
+            if bytes
+                .len()
+                .checked_add(line.len().saturating_add(1))
+                .is_none_or(|total| total > byte_bound)
+            {
+                byte_truncated = true;
+                break;
+            }
+            bytes.extend_from_slice(&line);
+            bytes.push(b'\n');
+            emitted = emitted.saturating_add(1);
+        }
+        let completeness = if byte_truncated {
+            CaptureCompletenessV1::Truncated {
+                reason: CaptureTruncationReasonV1::ByteLimit,
+                emitted_events: emitted,
+                dropped_events: u64::try_from(self.session.transcript().records().len())
+                    .ok()
+                    .map(|total| total.saturating_sub(emitted)),
+            }
+        } else {
+            match self.session.transcript().completeness() {
+                DebugTranscriptCompletenessV1::Complete => CaptureCompletenessV1::Complete,
+                DebugTranscriptCompletenessV1::Truncated(reason) => {
+                    CaptureCompletenessV1::Truncated {
+                        reason: transcript_truncation_reason(reason),
+                        emitted_events: emitted,
+                        dropped_events: None,
+                    }
+                }
+            }
+        };
+        let trace_identity = nonzero_identity(Sha256::digest(&bytes).into());
+        self.ok(
+            request_id,
+            DebugOperationNameV1::ExportTrace,
+            DebugResultV1::Trace {
+                trace_identity,
+                canonical_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                bytes: hex_bytes(&bytes),
+                completeness,
+            },
+        )
+    }
+
+    fn event_view(&self, record: &SimulationDebugRecordV1) -> Option<DebugEventViewV1> {
+        Some(DebugEventViewV1 {
+            sequence: record.ordinal.saturating_add(1),
+            scope: protocol_scope_for_invocation(record.invocation, self.wave_width)?,
+            site: self.protocol_site(record),
+            category: match record.kind {
+                SimulationDebugRecordKindV1::Checkpoint { .. } => EventCategoryV1::Operation,
+                SimulationDebugRecordKindV1::Memory { .. } => EventCategoryV1::Memory,
+                SimulationDebugRecordKindV1::WorkgroupBarrier { .. } => EventCategoryV1::Barrier,
+            },
+            provenance: EventProvenanceV1::SimulatedObservation,
+        })
+    }
+
+    fn record_matches_event_filter(
+        &self,
+        record: &SimulationDebugRecordV1,
+        filter: &EventFilterV1,
+    ) -> bool {
+        let sequence = record.ordinal.saturating_add(1);
+        if filter.sequence_start.is_some_and(|start| sequence < start)
+            || filter.sequence_end.is_some_and(|end| sequence > end)
+        {
+            return false;
+        }
+        if filter.scope.is_some_and(|scope| {
+            !convert_scope_selector(scope).matches(record.invocation, self.wave_width)
+        }) {
+            return false;
+        }
+        if filter
+            .site
+            .is_some_and(|site| self.protocol_site(record) != Some(site))
+        {
+            return false;
+        }
+        if let Some(allocation) = filter.allocation
+            && (allocation.generation != 0
+                || !matches!(
+                    record.kind,
+                    SimulationDebugRecordKindV1::Memory {
+                        allocation: actual,
+                        ..
+                    } if actual == allocation.ordinal
+                ))
+        {
+            return false;
+        }
+        if filter.category.is_some_and(|category| {
+            category
+                != match record.kind {
+                    SimulationDebugRecordKindV1::Checkpoint { .. } => EventCategoryV1::Operation,
+                    SimulationDebugRecordKindV1::Memory { .. } => EventCategoryV1::Memory,
+                    SimulationDebugRecordKindV1::WorkgroupBarrier { .. } => {
+                        EventCategoryV1::Barrier
+                    }
+                }
+        }) {
+            return false;
+        }
+        true
+    }
+
+    fn protocol_site(&self, record: &SimulationDebugRecordV1) -> Option<KirSiteV1> {
+        let function = self
+            .module
+            .module()
+            .functions
+            .get(record.site.function_ordinal)?;
+        let body = function.body.as_ref()?;
+        let block_ordinal = body
+            .blocks
+            .iter()
+            .position(|block| block.id == record.site.block)?;
+        Some(KirSiteV1 {
+            function_ordinal: u64::try_from(record.site.function_ordinal).ok()?,
+            block_ordinal: u64::try_from(block_ordinal).ok()?,
+            point: KirSitePointV1::Operation {
+                operation_ordinal: u64::from(record.site.operation),
+            },
+        })
+    }
+
+    fn current_anchor(&self, frame: Option<u64>) -> Option<DebugSnapshotAnchorV1> {
+        let record = self.session.current()?;
+        if !matches!(record.kind, SimulationDebugRecordKindV1::Checkpoint { .. }) {
+            return None;
+        }
+        Some(DebugSnapshotAnchorV1 {
+            cursor: self.session_view().cursor,
+            scope: protocol_scope_for_invocation(record.invocation, self.wave_width)?,
+            site: self.protocol_site(record).map(|kir| SemanticSiteViewV1 {
+                kir,
+                source: SourceSiteAvailabilityV1::Unavailable {
+                    reason: SourceSiteUnavailableReasonV1::RequiresAuthenticatedMap,
+                },
+            }),
+            frame,
+            occurrence: frame.map(|_| 1),
+        })
+    }
+
+    fn snapshot_availability(&self) -> SnapshotAvailabilityV1 {
+        let Some(anchor) = self.current_anchor(None) else {
+            return SnapshotAvailabilityV1::Unavailable {
+                reason: SnapshotUnavailableReasonV1::NotCaptured,
+            };
+        };
+        let values = current_ssa_values(&self.session, self.protocol_limits.max_response_items);
+        SnapshotAvailabilityV1::Captured {
+            snapshot: Box::new(DebugSnapshotV1 {
+                anchor,
+                stop: self.last_stop.clone().unwrap_or(StopViewV1 {
+                    reason: StopReasonV1::Step,
+                    breakpoint_id: None,
+                    watchpoint_id: None,
+                    outcome: ExecutionOutcomeV1::Active,
+                    exact: true,
+                }),
+                values,
+            }),
+        }
+    }
+
+    fn query_identity(&self, label: &[u8], query: &[u8]) -> OpaqueIdentityV1 {
+        let mut digest = Sha256::new();
+        digest.update(b"fe2o3-debug-page-v1\0");
+        digest.update(label);
+        digest.update(self.configuration_identity.as_bytes());
+        digest.update(self.revision.to_le_bytes());
+        digest.update(query);
+        nonzero_identity(digest.finalize().into())
+    }
+}
+
+fn configuration_identity(
+    kir: [u8; 32],
+    request: [u8; 32],
+    wave_width: DebugWaveWidthV1,
+) -> OpaqueIdentityV1 {
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-debug-sim-config-v1\0");
+    digest.update(kir);
+    digest.update(request);
+    digest.update(wave_width.lanes().to_le_bytes());
+    nonzero_identity(digest.finalize().into())
+}
+
+fn nonzero_identity(mut bytes: [u8; 32]) -> OpaqueIdentityV1 {
+    if bytes == [0; 32] {
+        bytes[31] = 1;
+    }
+    OpaqueIdentityV1::new(bytes).expect("identity is made nonzero")
+}
+
+fn bounded_message(message: &str) -> String {
+    let mut result = String::new();
+    for character in message.chars().filter(|character| !character.is_control()) {
+        if result.len() + character.len_utf8() > MAX_TEXT_BYTES_V1 {
+            break;
+        }
+        result.push(character);
+    }
+    if result.is_empty() {
+        result.push_str("debug operation failed");
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn barrier_record(
+        ordinal: u64,
+        lane: u32,
+        kind: SimulationDebugRecordKindV1,
+    ) -> SimulationDebugRecordV1 {
+        SimulationDebugRecordV1 {
+            ordinal,
+            invocation: SimulationInvocationV1 {
+                global: [u64::from(lane), 0, 0],
+                workgroup: [0, 0, 0],
+                local: [lane, 0, 0],
+                workgroup_size: [2, 1, 1],
+                workgroup_count: [1, 1, 1],
+                launch_extent: [2, 1, 1],
+            },
+            site: fe2o3_kir_sim::SimulationDebugSiteV1 {
+                function_ordinal: if matches!(&kind, SimulationDebugRecordKindV1::Checkpoint { .. })
+                {
+                    0
+                } else {
+                    1
+                },
+                block: fe2o3_kernel_ir::BlockId(0),
+                operation: 0,
+            },
+            kind,
+        }
+    }
+
+    fn empty_checkpoint() -> SimulationDebugRecordKindV1 {
+        SimulationDebugRecordKindV1::Checkpoint {
+            phase: SimulationDebugCheckpointPhaseV1::AfterOperation,
+            stack: SimulationDebugCollectionV1::Captured(vec![]),
+            memory: SimulationDebugCollectionV1::Captured(vec![]),
+        }
+    }
+
+    #[test]
+    fn command_line_is_closed_and_wave_width_is_explicit() {
+        let options = parse_options(
+            [
+                "sim",
+                "--kir-v7",
+                "kernel.kir",
+                "--request",
+                "request.json",
+                "--protocol",
+                "jsonl",
+                "--wave-width",
+                "32",
+            ]
+            .into_iter()
+            .map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.kir_v7, PathBuf::from("kernel.kir"));
+        assert_eq!(options.request, PathBuf::from("request.json"));
+        assert_eq!(options.wave_width, DebugWaveWidthV1::Wave32);
+
+        for arguments in [
+            vec!["sim", "--kir-v7", "kernel.kir", "--request"],
+            vec![
+                "sim",
+                "--kir-v7",
+                "kernel.kir",
+                "--request",
+                "request.json",
+                "--protocol",
+                "stdio",
+            ],
+            vec![
+                "sim",
+                "--kir-v7",
+                "one.kir",
+                "--kir-v7",
+                "two.kir",
+                "--request",
+                "request.json",
+            ],
+        ] {
+            assert!(parse_options(arguments.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
+    #[test]
+    fn page_cursor_is_bound_to_query_identity_and_range() {
+        let first = nonzero_identity([1; 32]);
+        let other = nonzero_identity([2; 32]);
+        let page = PageRequestV1 {
+            cursor: Some(PageCursorV1 {
+                query_identity: first,
+                position: 2,
+            }),
+            limit: 2,
+        };
+        assert_eq!(
+            page_bounds(page, first, 5),
+            Ok((
+                2,
+                4,
+                Some(PageCursorV1 {
+                    query_identity: first,
+                    position: 4,
+                })
+            ))
+        );
+        assert!(page_bounds(page, other, 5).is_err());
+        assert!(
+            page_bounds(
+                PageRequestV1 {
+                    cursor: Some(PageCursorV1 {
+                        query_identity: first,
+                        position: 6,
+                    }),
+                    limit: 1,
+                },
+                first,
+                5,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn error_text_is_control_free_nonempty_and_bounded() {
+        let message = bounded_message(&format!("\0{}\n", "x".repeat(MAX_TEXT_BYTES_V1 + 10)));
+        assert!(!message.is_empty());
+        assert!(message.len() <= MAX_TEXT_BYTES_V1);
+        assert!(!message.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn barrier_residency_persists_and_aggregate_mixed_state_is_deterministic() {
+        let records = vec![
+            barrier_record(
+                0,
+                0,
+                SimulationDebugRecordKindV1::WorkgroupBarrier {
+                    action: SimulationDebugBarrierActionV1::Arrive,
+                    phase: 0,
+                    participants: 1,
+                },
+            ),
+            barrier_record(1, 0, empty_checkpoint()),
+            barrier_record(
+                2,
+                1,
+                SimulationDebugRecordKindV1::WorkgroupBarrier {
+                    action: SimulationDebugBarrierActionV1::Arrive,
+                    phase: 0,
+                    participants: 1,
+                },
+            ),
+            barrier_record(3, 1, empty_checkpoint()),
+            barrier_record(
+                4,
+                0,
+                SimulationDebugRecordKindV1::WorkgroupBarrier {
+                    action: SimulationDebugBarrierActionV1::Release,
+                    phase: 0,
+                    participants: 2,
+                },
+            ),
+            barrier_record(5, 1, empty_checkpoint()),
+        ];
+        let scopes = [
+            ExecutionScopeV1::Dispatch,
+            ExecutionScopeV1::Workgroup {
+                workgroup: [0, 0, 0],
+            },
+            ExecutionScopeV1::Wave {
+                workgroup: [0, 0, 0],
+                wave: 0,
+                active_mask: 0b11,
+                wave_width: 32,
+                interpretation: WaveInterpretationV1::LogicalVisualization,
+            },
+            ExecutionScopeV1::Lane {
+                workgroup: [0, 0, 0],
+                wave: 0,
+                lane: 0,
+                logical_workitem: [0, 0, 0],
+                active_mask: 0b11,
+                wave_width: 32,
+                interpretation: WaveInterpretationV1::LogicalVisualization,
+            },
+            ExecutionScopeV1::Lane {
+                workgroup: [0, 0, 0],
+                wave: 0,
+                lane: 1,
+                logical_workitem: [1, 0, 0],
+                active_mask: 0b11,
+                wave_width: 32,
+                interpretation: WaveInterpretationV1::LogicalVisualization,
+            },
+        ];
+        let states = |cursor| {
+            scope_states_for_records(
+                &records,
+                None,
+                Some(cursor),
+                &scopes,
+                DebugWaveWidthV1::Wave32,
+            )
+        };
+
+        assert_eq!(
+            states(0),
+            vec![
+                ScopeStateV1::Runnable,
+                ScopeStateV1::Runnable,
+                ScopeStateV1::Runnable,
+                ScopeStateV1::BarrierBlocked,
+                ScopeStateV1::NotStarted,
+            ]
+        );
+        assert_eq!(states(1)[3], ScopeStateV1::BarrierBlocked);
+        assert_eq!(states(2), vec![ScopeStateV1::BarrierBlocked; scopes.len()]);
+        assert_eq!(states(3), vec![ScopeStateV1::BarrierBlocked; scopes.len()]);
+        assert_eq!(
+            states(4),
+            vec![
+                ScopeStateV1::Running,
+                ScopeStateV1::Running,
+                ScopeStateV1::Running,
+                ScopeStateV1::Running,
+                ScopeStateV1::Runnable,
+            ]
+        );
+        assert_eq!(
+            states(5),
+            vec![
+                ScopeStateV1::Running,
+                ScopeStateV1::Running,
+                ScopeStateV1::Running,
+                ScopeStateV1::Completed,
+                ScopeStateV1::Running,
+            ]
+        );
+    }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "fe2o3-kir-debugger"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Bounded deterministic replay debugging for fe2o3 Kernel IR simulation."
+
+[dependencies]
+fe2o3-kernel-ir.workspace = true
+fe2o3-kir-sim.workspace = true
+
+[lib]
+name = "fe2o3_kir_debugger"
+path = "src/lib.rs"
