@@ -997,7 +997,7 @@ run_rocm_compile() {
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
         --test production_general_matrix_driver_v1 \
-        safe_dynamic_matrix_kernel_uses_the_single_production_pipeline -- \
+        dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof -- \
         --ignored --exact
   run_step rocm-production-transaction \
     env "${loader_environment_removals[@]}" \

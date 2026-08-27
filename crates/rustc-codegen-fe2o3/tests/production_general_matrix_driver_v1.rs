@@ -36,7 +36,7 @@ fn workspace() -> PathBuf {
 
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
-fn safe_dynamic_matrix_kernel_uses_the_single_production_pipeline() {
+fn dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof() {
     let scratch = ScratchDirectory::new();
     let example = workspace().join("examples/tiled_gemm_general_v1");
     let llvm_path = scratch.path.join("kernel.ll");
@@ -74,18 +74,17 @@ fn safe_dynamic_matrix_kernel_uses_the_single_production_pipeline() {
         .expect("run production gfx942 extraction");
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
     assert!(
-        output.status.success(),
-        "safe dynamic matrix kernel failed production extraction:\n{stderr}"
+        !output.status.success(),
+        "dynamic matrix kernel unexpectedly bypassed the production race proof boundary"
     );
     assert!(
         stderr.contains(
-            "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942:xnack- LLVM;"
-        )
-            && stderr.contains("semantic function(s)")
-            && stderr.contains("correspondence block(s)")
-            && stderr.contains("ranked dynamic-index discharge(s)")
-            && stderr.contains("artifact/launch authority false"),
-        "production extraction omitted mandatory pipeline evidence:\n{stderr}"
+            "error[FE2O3-RACE-002]: cannot prove race freedom for dynamic launch dimension 0"
+        ) && stderr.contains(
+            "help: retain a bounded launch contract or supply a symbolic disjointness proof"
+        ) && stderr.contains("ranked PLIRON before rejected lowering:")
+            && stderr.contains("lowering stopped before target IR or artifact emission"),
+        "production extraction omitted the exact fail-closed race diagnostic:\n{stderr}"
     );
     for forbidden in [
         "kernel-ir-v1",
@@ -99,22 +98,8 @@ fn safe_dynamic_matrix_kernel_uses_the_single_production_pipeline() {
         );
     }
 
-    let llvm = std::fs::read_to_string(&llvm_path).expect("read extracted gfx942 LLVM");
-    assert_eq!(
-        llvm.matches("call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(")
-            .count(),
-        1,
-        "production LLVM must contain exactly one MFMA operation in the dynamic K-loop body",
-    );
     assert!(
-        llvm.contains("target triple = \"amdgcn-amd-amdhsa\"")
-            && llvm.matches("define amdgpu_kernel").count() == 1
-            && llvm.contains("!reqd_work_group_size"),
-        "production LLVM omitted the exact AMDGPU kernel ABI",
-    );
-    let binding = std::fs::read_to_string(&binding_path).expect("read crate binding handoff");
-    assert!(
-        binding.trim().len() == 64 && binding.trim().bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "extractor emitted a malformed crate binding handoff",
+        !llvm_path.exists(),
+        "rejected production analysis emitted target LLVM"
     );
 }
