@@ -1,6 +1,8 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: PASS
-// CHECK: PASS
+// EXPECT: REJECT
+// CHECK: error[FE2O3-RACE-002]
+// CHECK: dynamic launch dimension 0
+// CHECK: explicit compiler-validated success/value contract
 builtin.func @race_checked_tiled_2d_dynamic_layout: builtin.function <(kernel.index , kernel.index , kernel.index ) -> ()>
 {
   ^entry_block1v1(rows_v0: kernel.index , columns_v1: kernel.index , stride_v2: kernel.index ):

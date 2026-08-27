@@ -719,7 +719,7 @@ fn checked_tiled_overflowing_invocation_is_not_proved_injective() {
 }
 
 #[test]
-fn checked_tiled_raw_invocation_is_injective_for_a_dynamic_launch() {
+fn checked_tiled_raw_marker_cannot_authorize_a_dynamic_launch() {
     let context = &mut setup();
     let function = function(context, "checked_tiled_dynamic_raw_invocation");
     let entry = function.get_entry_block(context);
@@ -769,11 +769,124 @@ fn checked_tiled_raw_invocation_is_injective_for_a_dynamic_launch() {
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
 
-    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+    ));
 }
 
 #[test]
-fn checked_tiled_equivalent_distinct_layout_constants_are_one_injective_family() {
+fn checked_tiled_marker_shape_cannot_replace_validity_and_success_proofs() {
+    #[derive(Clone, Copy, Debug)]
+    enum HostileMarker {
+        MissingSuccessEdge,
+        ComponentEqualsElements,
+        ComponentOutOfRange,
+        DynamicComponent,
+        TooSmallStride,
+    }
+
+    for hostile in [
+        HostileMarker::MissingSuccessEdge,
+        HostileMarker::ComponentEqualsElements,
+        HostileMarker::ComponentOutOfRange,
+        HostileMarker::DynamicComponent,
+        HostileMarker::TooSmallStride,
+    ] {
+        let context = &mut setup();
+        let function = function(context, "hostile_checked_tiled_marker");
+        let entry = function.get_entry_block(context);
+        let access_block = block(context, &function, "access");
+        let exit = block(context, &function, "exit");
+        let output = view(context, vec![4096], MemorySpaceAttr::Global);
+        let invocation = InvocationIndexOp::new(context, 0, 2);
+        let component_constant = IndexConstantOp::new(
+            context,
+            match hostile {
+                HostileMarker::MissingSuccessEdge
+                | HostileMarker::DynamicComponent
+                | HostileMarker::TooSmallStride => 0,
+                HostileMarker::ComponentEqualsElements => 4,
+                HostileMarker::ComponentOutOfRange => 5,
+            },
+        );
+        let rows = IndexConstantOp::new(context, 16);
+        let columns = IndexConstantOp::new(context, 16);
+        let stride = IndexConstantOp::new(
+            context,
+            if matches!(hostile, HostileMarker::TooSmallStride) {
+                1
+            } else {
+                16
+            },
+        );
+        let component = if matches!(hostile, HostileMarker::DynamicComponent) {
+            invocation.result(context)
+        } else {
+            component_constant.result(context)
+        };
+        let tiled = CheckedTiledIndex2DOp::new(
+            context,
+            invocation.result(context),
+            component,
+            rows.result(context),
+            columns.result(context),
+            stride.result(context),
+            [64, 16, 16, 4],
+        );
+        let extent = IndexConstantOp::new(context, 4096);
+        let guard = IndexLessThanBranchOp::new(
+            context,
+            tiled.result(context),
+            extent.result(context),
+            access_block,
+            exit,
+        );
+        let write = access(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            tiled.result(context),
+        );
+        let to_exit = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        for operation in [
+            output.get_operation(),
+            invocation.get_operation(),
+            component_constant.get_operation(),
+            rows.get_operation(),
+            columns.get_operation(),
+            stride.get_operation(),
+            tiled.get_operation(),
+            extent.get_operation(),
+            guard.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        append(context, access_block, &write);
+        append(context, access_block, &to_exit);
+        append(context, exit, &ret);
+
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        assert_eq!(
+            report.status(),
+            KernelCheckStatusV1::Incomplete,
+            "raw marker {hostile:?} must not grant a proof: {report:?}"
+        );
+        assert!(matches!(
+            report.findings(),
+            [RankedRaceFindingV1::UnresolvedIndex { .. }]
+        ));
+        assert!(report.findings()[0].to_string().contains(
+            "help: express the address as checked affine index arithmetic with explicit extent guards"
+        ));
+    }
+}
+
+#[test]
+fn checked_tiled_equivalent_layout_markers_do_not_supply_success_semantics() {
     let context = &mut setup();
     let function = function(context, "checked_tiled_distinct_layout_constants");
     let entry = function.get_entry_block(context);
@@ -861,11 +974,16 @@ fn checked_tiled_equivalent_distinct_layout_constants_are_one_injective_family()
     append(context, third_access, &to_exit);
     append(context, exit, &ret);
 
-    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+    ));
 }
 
 #[test]
-fn checked_tiled_dynamic_layout_requires_one_grid_uniform_identity() {
+fn checked_tiled_dynamic_layout_never_authorizes_a_raw_marker() {
     #[derive(Clone, Copy, Debug)]
     enum LayoutCase {
         SharedEntryArguments,
@@ -984,19 +1102,11 @@ fn checked_tiled_dynamic_layout_requires_one_grid_uniform_identity() {
         append(context, exit, &ret);
 
         let report = run_pliron_ranked_race_check_v1(context, &function);
-        match case {
-            LayoutCase::SharedEntryArguments => assert!(
-                report.is_clean(),
-                "shared grid-uniform layout must prove disjoint: {report:?}"
-            ),
-            LayoutCase::DifferentEntryArguments | LayoutCase::InvocationVarying => {
-                assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
-                assert!(matches!(
-                    report.findings(),
-                    [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
-                ));
-            }
-        }
+        assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+        assert!(matches!(
+            report.findings(),
+            [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+        ));
     }
 }
 
@@ -1132,7 +1242,7 @@ fn nonlinear_dynamic_mapping_remains_incomplete_even_with_finite_guards() {
 }
 
 #[test]
-fn checked_row_striped_raw_invocation_is_injective_for_a_dynamic_launch() {
+fn checked_row_striped_raw_marker_cannot_authorize_a_dynamic_launch() {
     let context = &mut setup();
     let function = function(context, "checked_row_striped_dynamic_raw_invocation");
     let entry = function.get_entry_block(context);
@@ -1185,11 +1295,16 @@ fn checked_row_striped_raw_invocation_is_injective_for_a_dynamic_launch() {
     append(context, access_block, &write);
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
-    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+    ));
 }
 
 #[test]
-fn checked_row_striped_shared_dynamic_layout_is_injective() {
+fn checked_row_striped_shared_dynamic_layout_marker_is_not_authority() {
     let context = &mut setup();
     let (function, layout) =
         function_with_index_arguments(context, "checked_row_striped_dynamic_layout", 3);
@@ -1266,7 +1381,12 @@ fn checked_row_striped_shared_dynamic_layout_is_injective() {
     append(context, third_access, &to_exit);
     append(context, exit, &ret);
 
-    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+    ));
 }
 
 #[test]

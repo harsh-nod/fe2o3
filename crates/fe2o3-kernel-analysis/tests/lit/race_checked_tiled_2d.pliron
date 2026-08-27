@@ -1,6 +1,8 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
-// EXPECT: PASS
-// CHECK: PASS
+// EXPECT: REJECT
+// CHECK: error[FE2O3-RACE-002]
+// CHECK: access dimension 0 has unresolved index
+// CHECK: explicit compiler-validated success/value contract
 builtin.func @race_checked_tiled_2d: builtin.function <() -> ()>
 {
   ^entry_block1v1():

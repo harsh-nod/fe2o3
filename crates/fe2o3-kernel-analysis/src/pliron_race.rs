@@ -29,7 +29,7 @@ use pliron::{
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::PlironTraceFailureV1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
-use crate::pliron_sparse_index::{SparseAffineIndexV1, SparseIndexFactV1};
+use crate::pliron_sparse_index::SparseAffineIndexV1;
 use crate::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_PRESBURGER_WORK_UNITS_V1,
     PlironPresburgerAnalysisV1, PresburgerCollisionDecisionV1, PresburgerMachineIntSemanticsV1,
@@ -174,7 +174,7 @@ impl fmt::Display for RankedRaceFindingV1 {
                 value,
             } => write!(
                 formatter,
-                "error[FE2O3-RACE-002]: cannot prove race freedom at block {block} op {operation}; access dimension {dimension} has unresolved index {value}",
+                "error[FE2O3-RACE-002]: cannot prove race freedom at block {block} op {operation}; access dimension {dimension} has unresolved index {value}; help: express the address as checked affine index arithmetic with explicit extent guards, or retain a compiler-validated value and success edge whose semantics the race analysis supports",
             ),
             Self::EffectInstanceLimitExceeded { actual, limit } => write!(
                 formatter,
@@ -606,8 +606,6 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
 
     let invocation_bounds = invocation_upper_bounds_by_block(context, function);
     if symbolically_proves_disjoint(
-        context,
-        function,
         &effects,
         &sparse,
         &launch_extents,
@@ -925,18 +923,11 @@ fn insert_witness(state: &mut AddressStateV1, witness: RankedRaceWitnessV1) {
 }
 
 fn symbolically_proves_disjoint(
-    context: &Context,
-    function: &FuncOp,
     effects: &[EffectV1],
     sparse: &SparseIndexAnalysisV1,
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
-    let entry_arguments = function
-        .get_entry_block(context)
-        .deref(context)
-        .arguments()
-        .collect::<HashSet<_>>();
     let mut by_view: HashMap<u64, Vec<&EffectV1>> = HashMap::new();
     for effect in effects {
         by_view
@@ -1011,16 +1002,6 @@ fn symbolically_proves_disjoint(
                     )
             })
             .collect::<Vec<_>>();
-        if tiled_2d_effect_family_is_injective(&relevant, sparse, launch_extents, &entry_arguments)
-            || row_striped_2d_effect_family_is_injective(
-                &relevant,
-                sparse,
-                launch_extents,
-                &entry_arguments,
-            )
-        {
-            continue;
-        }
         let mut representative = None;
         for effect in relevant {
             let Some(first) = representative else {
@@ -1147,86 +1128,6 @@ fn atomics_are_device_compatible(first: &EffectV1, second: &EffectV1) -> bool {
             })
 }
 
-fn row_striped_2d_effect_family_is_injective(
-    effects: &[&EffectV1],
-    sparse: &SparseIndexAnalysisV1,
-    launch_extents: &[u64],
-    entry_arguments: &HashSet<Value>,
-) -> bool {
-    let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
-        return false;
-    };
-    if effects.iter().any(|effect| effect.indices.len() != 1) {
-        return false;
-    }
-    let first_fact = sparse.fact(*first_index);
-    let Some(first) = first_fact.checked_row_striped_2d() else {
-        return false;
-    };
-    for effect in effects.iter().skip(1) {
-        let index_fact = sparse.fact(effect.indices[0]);
-        let Some(index) = index_fact.checked_row_striped_2d() else {
-            return false;
-        };
-        if index.invocation() != first.invocation()
-            || !same_invocation_invariant_index_formula(
-                &index.runtime_layout(),
-                &first.runtime_layout(),
-                sparse,
-                entry_arguments,
-            )
-            || index.geometry() != first.geometry()
-        {
-            return false;
-        }
-    }
-    checked_structured_invocations_are_injective(&[first.invocation().clone()], launch_extents)
-}
-
-fn tiled_2d_effect_family_is_injective(
-    effects: &[&EffectV1],
-    sparse: &SparseIndexAnalysisV1,
-    launch_extents: &[u64],
-    entry_arguments: &HashSet<Value>,
-) -> bool {
-    let Some(first_index) = effects.first().and_then(|effect| effect.indices.first()) else {
-        return false;
-    };
-    if effects.iter().any(|effect| effect.indices.len() != 1) {
-        return false;
-    }
-    let first_fact = sparse.fact(*first_index);
-    let Some(first) = first_fact.checked_tiled_2d() else {
-        return false;
-    };
-    for effect in effects.iter().skip(1) {
-        let index_fact = sparse.fact(effect.indices[0]);
-        let Some(index) = index_fact.checked_tiled_2d() else {
-            return false;
-        };
-        if index.invocation() != first.invocation()
-            || !same_invocation_invariant_index_formula(
-                &index.runtime_layout(),
-                &first.runtime_layout(),
-                sparse,
-                entry_arguments,
-            )
-            || index.geometry() != first.geometry()
-        {
-            return false;
-        }
-    }
-    checked_structured_invocations_are_injective(&[first.invocation().clone()], launch_extents)
-}
-
-fn checked_structured_invocations_are_injective(
-    facts: &[SparseAffineIndexV1],
-    launch_extents: &[u64],
-) -> bool {
-    affine_facts_are_injective(facts, launch_extents)
-        || affine_facts_contain_unit_coordinate_embedding(facts, launch_extents)
-}
-
 fn affine_facts_contain_unit_coordinate_embedding(
     facts: &[SparseAffineIndexV1],
     launch_extents: &[u64],
@@ -1260,44 +1161,6 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
             .iter()
             .zip(second)
             .all(|(first, second)| sparse.fact(*first) == sparse.fact(*second))
-}
-
-fn same_invocation_invariant_index_formula(
-    first: &[Value],
-    second: &[Value],
-    sparse: &SparseIndexAnalysisV1,
-    entry_arguments: &HashSet<Value>,
-) -> bool {
-    first.len() == second.len()
-        && first.iter().zip(second).all(|(first, second)| {
-            // Production function entry arguments are launch-invariant ABI
-            // inputs. A block argument or opaque operation result receives no
-            // such authority merely because two accesses reuse the same SSA
-            // value.
-            if first == second && entry_arguments.contains(first) {
-                return true;
-            }
-            let first_fact = sparse.fact(*first);
-            let second_fact = sparse.fact(*second);
-            first_fact == second_fact && sparse_fact_is_invocation_invariant(&first_fact)
-        })
-}
-
-fn sparse_fact_is_invocation_invariant(fact: &SparseIndexFactV1) -> bool {
-    match fact {
-        SparseIndexFactV1::Affine(affine) => affine
-            .coefficients()
-            .iter()
-            .all(|coefficient| *coefficient == 0),
-        SparseIndexFactV1::Remainder { dividend, .. } => dividend
-            .coefficients()
-            .iter()
-            .all(|coefficient| *coefficient == 0),
-        SparseIndexFactV1::Unknown
-        | SparseIndexFactV1::MachineOverflow(_)
-        | SparseIndexFactV1::CheckedTiled2D(_)
-        | SparseIndexFactV1::CheckedRowStriped2D(_) => false,
-    }
 }
 
 fn affine_map_is_injective(
