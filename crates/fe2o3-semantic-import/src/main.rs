@@ -47,18 +47,15 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
             },
             limits,
         ),
-        CommandV1::Rocprofv3AttManifest | CommandV1::NormalizedRocgdbS09 => {
-            let binding = SparseImportBindingV1 {
+        CommandV1::Rocprofv3AttManifest => import_rocprofv3_att_manifest_v1(
+            &input,
+            SparseImportBindingV1 {
                 kernel_ir_claim: request.kernel_ir_claim()?,
                 artifact: request.artifact_claim()?,
                 launch: request.launch()?,
-            };
-            if request.command == CommandV1::Rocprofv3AttManifest {
-                import_rocprofv3_att_manifest_v1(&input, binding, limits)
-            } else {
-                import_normalized_rocgdb_s09_v1(&input, binding, limits)
-            }
-        }
+            },
+            limits,
+        ),
     }
     .map_err(|_| CliErrorV1::new("import", "source evidence failed bounded import validation"))?;
     drop(input);
@@ -77,7 +74,6 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
 enum CommandV1 {
     Rocprofv3Json,
     Rocprofv3AttManifest,
-    NormalizedRocgdbS09,
 }
 
 #[derive(Debug)]
@@ -175,7 +171,6 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
     let command = match arguments.first().and_then(|value| value.to_str()) {
         Some("rocprofv3-json") => CommandV1::Rocprofv3Json,
         Some("rocprofv3-att-manifest") => CommandV1::Rocprofv3AttManifest,
-        Some("rocgdb-s09") => CommandV1::NormalizedRocgdbS09,
         _ => return Err(CliErrorV1::new("arguments", usage())),
     };
     let mut request = ParsedRequestV1 {
@@ -423,7 +418,7 @@ fn parse_triplet(value: &str) -> Result<[u64; 3], CliErrorV1> {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-trace-import {rocprofv3-json|rocprofv3-att-manifest|rocgdb-s09} --kir-sha256 HEX --kir-len N --wave-width {32|64} [command-specific flags]"
+    "usage: fe2o3-trace-import {rocprofv3-json|rocprofv3-att-manifest} --kir-sha256 HEX --kir-len N --wave-width {32|64} [command-specific flags]"
 }
 
 #[derive(Debug)]

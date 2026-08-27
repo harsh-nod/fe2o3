@@ -43,7 +43,6 @@ pub enum CaptureToolFamilyV1 {
     Rocprofv3Counters,
     Rocprofv3PcSampling,
     Rocprofv3Att,
-    NormalizedRocgdb,
     FutureDirectKfd,
 }
 
@@ -75,7 +74,6 @@ pub enum CaptureFactV1 {
     ObservedMemoryFault,
     BarrierPhaseEvents,
     ObservedDiagnosticOrFault,
-    NormalizedDebuggerTranscript,
     AttCaptureManifest,
     HardwareCounterMeasurements,
     PcSampleDistribution,
@@ -347,7 +345,6 @@ enum TraceSourceV1 {
     Simulator,
     RocprofDispatchJson,
     RocprofAttManifest,
-    NormalizedRocgdb,
     KfdClaim,
     Other,
 }
@@ -364,9 +361,6 @@ impl FactInventoryV1 {
         inventory.insert(CaptureFactV1::KernelIrClaim);
         if trace.header().artifact().is_some() {
             inventory.insert(CaptureFactV1::ArtifactBindingClaim);
-        }
-        if source == TraceSourceV1::NormalizedRocgdb {
-            inventory.insert(CaptureFactV1::NormalizedDebuggerTranscript);
         }
         if source == TraceSourceV1::RocprofAttManifest {
             inventory.insert(CaptureFactV1::AttCaptureManifest);
@@ -611,29 +605,6 @@ pub(crate) fn plan_next_capture(
                     why: "reproduces checked semantic memory outcomes and allocation bounds without requiring a GPU; it can distinguish a semantic bounds/lifecycle fault from an unreproduced hardware-only symptom",
                 },
             )?;
-            if !inventory.contains(CaptureFactV1::ObservedMemoryFault) {
-                add_step(
-                    &mut steps,
-                    &mut planned,
-                    CaptureStepSpecV1 {
-                        tool: CaptureToolFamilyV1::NormalizedRocgdb,
-                        tool_status: CaptureToolStatusV1::SupportedImporter,
-                        target: fault_target(trace, observed_site),
-                        facts: &[
-                            CaptureFactV1::NormalizedDebuggerTranscript,
-                            CaptureFactV1::ArtifactBindingClaim,
-                        ],
-                        overhead: CaptureOverheadTierV1::High,
-                        storage: CaptureStorageTierV1::Small,
-                        compute_unit_selection:
-                            CaptureComputeUnitSelectionV1::UnspecifiedNotRepresentedByTraceV1,
-                        privilege: CapturePrivilegeRequirementV1::DebuggerAccess,
-                        attach: CaptureAttachRequirementV1::AttachOrLaunchUnderDebugger,
-                        exclusions: &[],
-                        why: "records an artifact-bound debugger stop transcript for a hardware-only symptom; normalized evidence intentionally does not preserve raw addresses, registers, or numeric wave/lane identifiers",
-                    },
-                )?;
-            }
             push_unsupported(
                 &mut unsupported,
                 direct_kfd_unsupported(CaptureFactV1::AuthenticatedDirectKfdDispatch),
@@ -835,15 +806,6 @@ pub(crate) fn plan_next_capture(
                     fact: CaptureFactV1::OutputComparison,
                     reason: UnsupportedCaptureReasonV1::NotRepresentedByTraceV1,
                     detail: "Trace V1 does not carry input/output values or a reference-output comparison",
-                },
-            )?;
-            push_unsupported(
-                &mut unsupported,
-                UnsupportedCaptureFactV1 {
-                    tool: CaptureToolFamilyV1::NormalizedRocgdb,
-                    fact: CaptureFactV1::RegisterOrSourceValues,
-                    reason: UnsupportedCaptureReasonV1::NormalizationRedactsRequiredScope,
-                    detail: "the current normalization removes register/value state and numeric wave/lane scope",
                 },
             )?;
             push_unsupported(
@@ -1103,11 +1065,6 @@ fn trace_source(trace: &TraceV1) -> TraceSourceV1 {
         {
             TraceSourceV1::RocprofAttManifest
         }
-        ProducerKindV1::RocgdbImporter
-            if producer.name().as_str() == "normalized-rocgdb-s09-import" =>
-        {
-            TraceSourceV1::NormalizedRocgdb
-        }
         ProducerKindV1::KfdHardwareCollector => TraceSourceV1::KfdClaim,
         _ => TraceSourceV1::Other,
     }
@@ -1116,7 +1073,6 @@ fn trace_source(trace: &TraceV1) -> TraceSourceV1 {
 const fn source_claim_fact(source: TraceSourceV1) -> CaptureFactV1 {
     match source {
         TraceSourceV1::RocprofAttManifest => CaptureFactV1::AttCaptureManifest,
-        TraceSourceV1::NormalizedRocgdb => CaptureFactV1::NormalizedDebuggerTranscript,
         TraceSourceV1::Simulator
         | TraceSourceV1::RocprofDispatchJson
         | TraceSourceV1::KfdClaim
@@ -1170,45 +1126,6 @@ fn reproduction_target(site: Option<CaptureSiteV1>) -> CaptureTargetV1 {
     CaptureTargetV1 {
         scope: CaptureExecutionScopeV1::ReproductionDispatch,
         observed_site: site,
-    }
-}
-
-fn fault_target(trace: &TraceV1, site: Option<CaptureSiteV1>) -> CaptureTargetV1 {
-    let scope = trace
-        .events()
-        .iter()
-        .find(|event| {
-            event.provenance() == FactProvenanceV1::Observed && observed_fault(event).is_some()
-        })
-        .map(|event| capture_scope(event.scope().level()))
-        .unwrap_or(CaptureExecutionScopeV1::ReproductionDispatch);
-    CaptureTargetV1 {
-        scope,
-        observed_site: site,
-    }
-}
-
-fn capture_scope(level: ExecutionLevelV1) -> CaptureExecutionScopeV1 {
-    match level {
-        ExecutionLevelV1::Dispatch => CaptureExecutionScopeV1::ReproductionDispatch,
-        ExecutionLevelV1::Workgroup { workgroup } => {
-            CaptureExecutionScopeV1::SelectedWorkgroup { workgroup }
-        }
-        ExecutionLevelV1::Wave {
-            workgroup, wave, ..
-        } => CaptureExecutionScopeV1::SelectedWave { workgroup, wave },
-        ExecutionLevelV1::Lane {
-            workgroup,
-            wave,
-            lane,
-            logical_workitem,
-            ..
-        } => CaptureExecutionScopeV1::SelectedLane {
-            workgroup,
-            wave,
-            lane,
-            logical_workitem,
-        },
     }
 }
 
@@ -1286,7 +1203,6 @@ const fn fact_relevant(goal: CaptureGoalV1, fact: CaptureFactV1) -> bool {
                 | CaptureFactV1::FaultAllocationLayout
                 | CaptureFactV1::ObservedMemoryFault
                 | CaptureFactV1::ObservedDiagnosticOrFault
-                | CaptureFactV1::NormalizedDebuggerTranscript
         ),
         CaptureGoalV1::BarrierDivergence => matches!(
             fact,
@@ -1317,7 +1233,6 @@ const fn fact_relevant(goal: CaptureGoalV1, fact: CaptureFactV1) -> bool {
                 | CaptureFactV1::SimulatorControlFlow
                 | CaptureFactV1::MemoryAccessOutcomes
                 | CaptureFactV1::ObservedDiagnosticOrFault
-                | CaptureFactV1::NormalizedDebuggerTranscript
         ),
     }
 }

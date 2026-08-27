@@ -1,6 +1,6 @@
 # fe2o3 semantic import
 
-`fe2o3-semantic-import` converts bounded debugger and profiler evidence into
+`fe2o3-semantic-import` converts bounded profiler evidence into
 canonical Semantic Trace V1 without loading a GPU runtime or opening a device.
 It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
 
@@ -23,11 +23,6 @@ It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
   event-empty partial capture. Referenced wave files, decoded
   instructions, raw `.att`/`.out`, `code.json`, and snapshots are not opened or
   parsed by this manifest adapter.
-- `rocgdb-s09` accepts canonical LF-delimited evidence produced by the existing
-  S09 `normalize_rocgdb` policy. It rejects raw hexadecimal addresses, numeric
-  process/lane/wave identifiers, duplicate marker intervals, and mismatched
-  HSACO bindings. Since normalization deliberately removes the numeric scope
-  needed by Trace V1, the result is an event-empty partial capture.
 
 Every typed-library result includes the exact, domain-separated raw-source
 content identity plus imported and unavailable fact lists in `ImportedTraceV1`.
@@ -64,19 +59,12 @@ fe2o3-trace-import rocprofv3-att-manifest \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
   < ui_output_agent_N_dispatch_N/filenames.json > att.fe2o3tr1
-
-fe2o3-trace-import rocgdb-s09 \
-  --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
-  --artifact-sha256 HSACO_SHA256 --artifact-len HSACO_BYTES --artifact-format 1 \
-  --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
-  < normalized-rocgdb.txt > debug.fe2o3tr1
 ```
 
 `--artifact-sha256`, `--artifact-len`, and `--artifact-format` must appear
-together. They are optional for profiler inputs and required for ROCgdb S09 so
-the normalized `hsaco_sha256` fact is checked. Duplicate flags are rejected. Use `fe2o3-trace-query`
-against the output for capability discovery, dispatch summaries, and bounded
-agent-facing queries.
+together. They are optional metadata for profiler inputs. Duplicate flags are
+rejected. Use `fe2o3-trace-query` against the output for capability discovery,
+dispatch summaries, and bounded agent-facing queries.
 
 Raw `.att`/`.out`, compute-viewer wave JSON, PCs, register values, source-line
 text, and inferred performance are outside this adapter. They need a future

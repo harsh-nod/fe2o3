@@ -80,7 +80,7 @@ fn simulator_memory_plan_contains_only_missing_facts_in_stable_order() {
         plan.disposition(),
         CapturePlanDispositionV1::AdditionalCaptureRequiredWithUnsupportedFacts
     );
-    assert_eq!(plan.steps().len(), 2);
+    assert_eq!(plan.steps().len(), 1);
     assert_eq!(plan.steps()[0].tool(), CaptureToolFamilyV1::SimulatorTrace);
     assert_eq!(
         plan.steps()[0].required_facts(),
@@ -88,15 +88,6 @@ fn simulator_memory_plan_contains_only_missing_facts_in_stable_order() {
             CaptureFactV1::MemoryAccessOutcomes,
             CaptureFactV1::FaultAllocationLayout,
         ]
-    );
-    assert_eq!(
-        plan.steps()[1].tool(),
-        CaptureToolFamilyV1::NormalizedRocgdb
-    );
-    assert!(
-        plan.steps()[1]
-            .required_facts()
-            .contains(&CaptureFactV1::NormalizedDebuggerTranscript)
     );
     assert!(plan.unsupported().iter().any(|unsupported| {
         unsupported.tool == CaptureToolFamilyV1::FutureDirectKfd

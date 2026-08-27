@@ -246,77 +246,6 @@ fn installed_rocprofiler_1_1_att_manifest_is_accepted() {
     ));
 }
 
-fn normalized_rocgdb() -> Vec<u8> {
-    format!(
-        "FE2O3_S09_BEGIN\nFE2O3_S09_BINDING\nhsaco_sha256 = {}\nFE2O3_S09_GPU_CONTEXT\nThread <THREAD> for process <PID> hit breakpoint with AMDGPU Lane <LANE> and AMDGPU Wave <WAVE>\nmemory://<PID>#offset=0x<ADDR>&size=<SIZE>\nFE2O3_S09_END\n",
-        "aa".repeat(32)
-    )
-    .into_bytes()
-}
-
-#[test]
-fn normalized_rocgdb_binds_evidence_without_inventing_events() {
-    let source = normalized_rocgdb();
-    let imported =
-        import_normalized_rocgdb_s09_v1(&source, sparse_binding(), ImportLimitsV1::default())
-            .unwrap();
-    assert_eq!(
-        imported.source_kind(),
-        ImportSourceKindV1::NormalizedRocgdbS09
-    );
-    assert_eq!(
-        imported.imported_facts(),
-        &[ImportedFactV1::DebuggerCaptureTranscript]
-    );
-    assert!(imported.trace().events().is_empty());
-    assert_eq!(
-        imported.trace().header().artifact().unwrap().digest(),
-        identity(0xaa)
-    );
-    assert_eq!(
-        &decode_trace_v1(&encode_trace_v1(imported.trace()).unwrap()).unwrap(),
-        imported.trace()
-    );
-}
-
-#[test]
-fn normalized_rocgdb_rejects_raw_or_mismatched_evidence() {
-    for hostile in [
-        normalized_rocgdb().replace(b"0x<ADDR>", b"0xdeadbeef"),
-        normalized_rocgdb().replace(b"AMDGPU Lane <LANE>", b"AMDGPU Lane 1:2:3"),
-        normalized_rocgdb().replace(b"process <PID>", b"process 1234"),
-        normalized_rocgdb().replace(b"Thread <THREAD>", b"Thread 6"),
-        normalized_rocgdb().replace(
-            b"FE2O3_S09_END\n",
-            b"memory://1234#offset=0x<ADDR>&size=<SIZE>\nFE2O3_S09_END\n",
-        ),
-    ] {
-        assert!(matches!(
-            import_normalized_rocgdb_s09_v1(&hostile, sparse_binding(), ImportLimitsV1::default()),
-            Err(ImportErrorV1::InvalidRocgdbNormalization)
-        ));
-    }
-    let mut mismatched = sparse_binding();
-    mismatched.artifact = Some(ArtifactClaimV1 {
-        identity: identity(0xbb),
-        ..artifact()
-    });
-    assert!(matches!(
-        import_normalized_rocgdb_s09_v1(
-            &normalized_rocgdb(),
-            mismatched,
-            ImportLimitsV1::default()
-        ),
-        Err(ImportErrorV1::ArtifactBindingMismatch)
-    ));
-    let mut absent = sparse_binding();
-    absent.artifact = None;
-    assert!(matches!(
-        import_normalized_rocgdb_s09_v1(&normalized_rocgdb(), absent, ImportLimitsV1::default()),
-        Err(ImportErrorV1::ArtifactBindingRequired)
-    ));
-}
-
 #[test]
 fn source_limits_apply_before_parsing_at_exact_boundary() {
     let limits = ImportLimitsV1::new(16).unwrap();
@@ -443,6 +372,11 @@ fn cli_is_stdin_only_deterministic_and_rejects_duplicate_flags() {
         path_like.stderr,
         b"{\"error\":\"arguments\",\"message\":\"every flag requires one value\"}\n"
     );
+
+    let retired = run_cli(&["rocgdb-s09"], b"ignored");
+    assert_eq!(retired.status.code(), Some(1));
+    assert!(retired.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&retired.stderr).contains("rocgdb-s09"));
 }
 
 #[test]

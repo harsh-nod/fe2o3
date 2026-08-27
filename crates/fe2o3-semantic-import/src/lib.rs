@@ -17,12 +17,9 @@ pub const MAX_IMPORT_SOURCE_BYTES_V1: u64 = 8 * 1024 * 1024;
 pub const MAX_IMPORT_OUTPUT_BYTES_V1: u64 = 64 * 1024;
 pub const MAX_ROCPROF_PROCESSES_V1: usize = 4_096;
 pub const MAX_ROCPROF_DISPATCHES_PER_PROCESS_V1: usize = 65_536;
-pub const MAX_ROCGDB_LINES_V1: usize = 65_536;
 pub const ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.rocprofv3-json.source.v1\0";
 pub const ROCPROF_ATT_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"fe2o3.rocprofv3-att-manifest.source.v1\0";
-pub const NORMALIZED_ROCGDB_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
-    b"fe2o3.normalized-rocgdb-s09.source.v1\0";
 
 const SOURCE_FORMAT_VERSION_V1: u16 = 1;
 const IMPORT_EVENT_LIMIT_V1: u64 = 2;
@@ -102,14 +99,12 @@ pub struct SparseImportBindingV1 {
 pub enum ImportSourceKindV1 {
     Rocprofv3Json,
     Rocprofv3AttManifest,
-    NormalizedRocgdbS09,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImportedFactV1 {
     DispatchEnvelope,
     AttCaptureManifest,
-    DebuggerCaptureTranscript,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -333,46 +328,6 @@ pub fn import_rocprofv3_att_manifest_v1(
     })
 }
 
-/// Imports canonical S09-normalized ROCgdb evidence. Numeric wave/lane IDs,
-/// addresses, and runtime handles have already been removed by the normalizer;
-/// consequently the transcript cannot establish semantic execution events.
-pub fn import_normalized_rocgdb_s09_v1(
-    source: &[u8],
-    binding: SparseImportBindingV1,
-    limits: ImportLimitsV1,
-) -> Result<ImportedTraceV1, ImportErrorV1> {
-    validate_source_size(source, limits)?;
-    if binding.artifact.is_none() {
-        return Err(ImportErrorV1::ArtifactBindingRequired);
-    }
-    validate_normalized_rocgdb(source, binding.artifact)?;
-    let source_identity = source_identity(NORMALIZED_ROCGDB_SOURCE_IDENTITY_DOMAIN_V1, source)?;
-    let dispatch = imported_dispatch_identity(
-        b"fe2o3.normalized-rocgdb-s09.dispatch.v1\0",
-        source_identity.digest(),
-        0,
-    )?;
-    let trace = build_trace(
-        ProducerKindV1::RocgdbImporter,
-        ExecutionKindV1::RocgdbImport,
-        "normalized-rocgdb-s09-import",
-        binding.kernel_ir_claim,
-        binding.artifact,
-        dispatch,
-        binding.launch,
-        Vec::new(),
-        partial_boundaries(),
-    )?;
-    Ok(ImportedTraceV1 {
-        trace,
-        source_kind: ImportSourceKindV1::NormalizedRocgdbS09,
-        source_identity,
-        imported_facts: &[ImportedFactV1::DebuggerCaptureTranscript],
-        unavailable_facts: &SPARSE_UNAVAILABLE,
-        selected_record_ordinal: None,
-    })
-}
-
 fn validate_source_size(source: &[u8], limits: ImportLimitsV1) -> Result<(), ImportErrorV1> {
     let actual = u64::try_from(source.len()).map_err(|_| ImportErrorV1::SizeOverflow)?;
     if actual == 0 {
@@ -535,78 +490,8 @@ fn derived_identity(
     OpaqueIdentityV1::new(digest.finalize().into()).map_err(ImportErrorV1::Trace)
 }
 
-fn validate_normalized_rocgdb(
-    source: &[u8],
-    artifact: Option<ArtifactClaimV1>,
-) -> Result<(), ImportErrorV1> {
-    let text =
-        std::str::from_utf8(source).map_err(|_| ImportErrorV1::InvalidRocgdbNormalization)?;
-    if text.contains('\0') || text.contains('\r') || !text.ends_with('\n') || text.contains("\n\n")
-    {
-        return Err(ImportErrorV1::InvalidRocgdbNormalization);
-    }
-    let mut lines = text.lines();
-    if lines.next() != Some("FE2O3_S09_BEGIN") || text.lines().last() != Some("FE2O3_S09_END") {
-        return Err(ImportErrorV1::InvalidRocgdbNormalization);
-    }
-    let line_count = text.lines().count();
-    if line_count > MAX_ROCGDB_LINES_V1
-        || text.matches("FE2O3_S09_BEGIN").count() != 1
-        || text.matches("FE2O3_S09_END").count() != 1
-        || contains_raw_hex_address(text)
-        || contains_noncanonical_token(
-            text,
-            "memory://",
-            "memory://<PID>#offset=0x<ADDR>&size=<SIZE>",
-        )
-        || contains_unredacted_prefixed_number(text, "Thread ")
-        || contains_unredacted_prefixed_number(text, "process ")
-        || contains_unredacted_prefixed_number(text, "AMDGPU Lane ")
-        || contains_unredacted_prefixed_number(text, "AMDGPU Wave ")
-    {
-        return Err(ImportErrorV1::InvalidRocgdbNormalization);
-    }
-    if let Some(artifact) = artifact {
-        let expected = lowercase_hex(artifact.identity.as_bytes());
-        let binding_line = format!("hsaco_sha256 = {expected}");
-        if text.lines().filter(|line| *line == binding_line).count() != 1 {
-            return Err(ImportErrorV1::ArtifactBindingMismatch);
-        }
-    }
-    Ok(())
-}
-
-fn contains_noncanonical_token(text: &str, prefix: &str, canonical: &str) -> bool {
-    text.match_indices(prefix)
-        .any(|(position, _)| !text[position..].starts_with(canonical))
-}
-
 fn valid_tool_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_TOOL_VERSION_BYTES_V1 && !value.contains('\0')
-}
-
-fn contains_raw_hex_address(text: &str) -> bool {
-    text.as_bytes()
-        .windows(3)
-        .any(|window| window[0] == b'0' && window[1] == b'x' && (window[2].is_ascii_hexdigit()))
-}
-
-fn contains_unredacted_prefixed_number(text: &str, prefix: &str) -> bool {
-    text.match_indices(prefix).any(|(position, _)| {
-        text.as_bytes()
-            .get(position + prefix.len())
-            .is_some_and(u8::is_ascii_digit)
-    })
-}
-
-fn lowercase_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(char::from(HEX[usize::from(byte >> 4)]));
-        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    output
 }
 
 #[derive(Deserialize)]
@@ -856,9 +741,6 @@ pub enum ImportErrorV1 {
     TimestampOrder,
     InvalidLaunchGeometry,
     InvalidAttManifest,
-    InvalidRocgdbNormalization,
-    ArtifactBindingRequired,
-    ArtifactBindingMismatch,
     Trace(TraceValidationErrorV1),
 }
 
@@ -886,14 +768,6 @@ impl fmt::Display for ImportErrorV1 {
             Self::InvalidAttManifest => {
                 formatter.write_str("invalid rocprofv3 ATT filenames.json evidence")
             }
-            Self::InvalidRocgdbNormalization => {
-                formatter.write_str("ROCgdb evidence is not canonical normalized S09 text")
-            }
-            Self::ArtifactBindingRequired => {
-                formatter.write_str("normalized ROCgdb import requires an artifact identity")
-            }
-            Self::ArtifactBindingMismatch => formatter
-                .write_str("normalized ROCgdb evidence does not bind the supplied artifact"),
             Self::Trace(error) => {
                 write!(formatter, "Semantic Trace V1 rejected the import: {error}")
             }
