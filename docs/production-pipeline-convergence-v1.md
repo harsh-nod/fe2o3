@@ -452,8 +452,8 @@ load or launch authority.
    MIR-to-KIR receipt; no profile-selected semantic replacement remains.
 5. **Parameterized GEMM:** ordinary attributed Rust GEMM reaches inspected
    HSACO through the production transaction; #173 remains only an oracle.
-6. **Worker V3/KFD execution:** the source-bound artifact enters the sole
-   application/verifier graph and pure-Rust KFD packet submission path.
+ 6. **Worker V3/KFD execution:** the source-bound artifact enters the sole
+    application/verifier graph and pure-Rust KFD packet submission path.
 7. **Selector convergence:** all exact-profile production selectors are gone,
    default kernel compilation uses the one transaction, and unsupported code
    fails without fallback.

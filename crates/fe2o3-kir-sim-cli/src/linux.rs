@@ -878,6 +878,33 @@ pub(crate) fn bind_request_v1(
     })
 }
 
+pub(crate) fn load_debug_simulation_input_v1(
+    kir_v7: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationInputV1, crate::SimulationInputErrorV1> {
+    let result = (|| {
+        let kir = secure_read(
+            Path::new(&kir_v7),
+            MAX_KIR_BYTES,
+            InputCode::KirV7,
+            "canonical KIR V7",
+        )?;
+        load_admitted_input(&kir, Path::new(&request), None)
+    })();
+    result.map_err(|failure: Failure| crate::SimulationInputErrorV1 {
+        stage: serialized_tag(failure.0.stage),
+        code: serialized_tag(failure.0.kind),
+        message: failure.0.message.clone(),
+    })
+}
+
+fn serialized_tag(value: impl Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(tag)) => tag,
+        _ => "internal_serialization_failure".to_owned(),
+    }
+}
+
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
     let options = parse_options(arguments)?;
     let kir = secure_read(
@@ -894,6 +921,31 @@ fn run_with_captured_kir(
     options: Options,
     expected_request: Option<crate::SimulationRequestIdentityV1>,
 ) -> Result<(), Failure> {
+    let input = load_admitted_input(kir, Path::new(&options.request), expected_request)?;
+    let execution = input
+        .module
+        .simulate(
+            &input.request,
+            SimulationTargetV1::amdgpu_64(),
+            input.simulation_limits,
+        )
+        .map_err(|error| match error {
+            SimulationErrorV1::Preflight(error) => Failure::preflight(error),
+            SimulationErrorV1::Execution(error) => Failure::execution(error),
+        })?;
+    drop(input);
+    let maximum = measure_success_bytes(&execution)?;
+    match options.output {
+        Some(path) => publish_transactionally(Path::new(&path), &execution, maximum),
+        None => write_success_stdout(&execution, maximum),
+    }
+}
+
+fn load_admitted_input(
+    kir: &[u8],
+    request: &Path,
+    expected_request: Option<crate::SimulationRequestIdentityV1>,
+) -> Result<crate::AdmittedSimulationInputV1, Failure> {
     if kir.len() > MAX_KIR_BYTES {
         return Err(Failure::input(
             InputCode::KirV7,
@@ -921,7 +973,7 @@ fn run_with_captured_kir(
         )
     })?;
     let request_bytes = secure_read(
-        Path::new(&options.request),
+        request,
         MAX_REQUEST_BYTES,
         InputCode::Request,
         "simulation request",
@@ -947,21 +999,14 @@ fn run_with_captured_kir(
             ),
         )
     })?;
-    drop(request_bytes);
     let request = prepare_request(document)?;
-    let execution = admitted
-        .simulate(&request, SimulationTargetV1::amdgpu_64(), limits)
-        .map_err(|error| match error {
-            SimulationErrorV1::Preflight(error) => Failure::preflight(error),
-            SimulationErrorV1::Execution(error) => Failure::execution(error),
-        })?;
-    drop(request);
-    drop(admitted);
-    let maximum = measure_success_bytes(&execution)?;
-    match options.output {
-        Some(path) => publish_transactionally(Path::new(&path), &execution, maximum),
-        None => write_success_stdout(&execution, maximum),
-    }
+    Ok(crate::AdmittedSimulationInputV1 {
+        kir_sha256: *admitted.identity().digest(),
+        request_sha256: Sha256::digest(&request_bytes).into(),
+        module: admitted,
+        request,
+        simulation_limits: limits,
+    })
 }
 
 const fn cli_simulation_limits() -> SimulationLimitsV1 {
@@ -3073,6 +3118,11 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), expected);
         }
+        assert_eq!(serialized_tag(Stage::KirAdmission), "kir_admission");
+        assert_eq!(
+            serialized_tag(ErrorKind::InputOpenFailed),
+            "input_open_failed"
+        );
         assert_eq!(
             schedule_name(SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1),
             "workgroup_major_local_zyx_cooperative_v1"

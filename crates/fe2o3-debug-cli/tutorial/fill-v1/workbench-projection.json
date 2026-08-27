@@ -1,0 +1,2158 @@
+{
+  "schema": "fe2o3-debug-workbench-fixture-v1",
+  "source": {
+    "kernel": "crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir",
+    "request": "crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json",
+    "protocol_requests": "crates/fe2o3-debug-cli/tutorial/fill-v1/requests.jsonl",
+    "protocol_responses": "crates/fe2o3-debug-cli/tutorial/fill-v1/responses.jsonl",
+    "protocol_responses_sha256": "d779b816f636d3d31fd66aa5731b67a55f18f0932a91b7df67a0797582869cc6"
+  },
+  "capabilities": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 1,
+    "operation": "discover_capabilities",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 0,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 0,
+        "state_revision": 0
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "capabilities",
+      "capabilities": [
+        {
+          "name": "hierarchy_inspection",
+          "availability": "available"
+        },
+        {
+          "name": "kir_sites",
+          "availability": "available"
+        },
+        {
+          "name": "source_sites",
+          "availability": "unavailable",
+          "reason": "requires_authenticated_map"
+        },
+        {
+          "name": "breakpoints",
+          "availability": "available"
+        },
+        {
+          "name": "watchpoints",
+          "availability": "available"
+        },
+        {
+          "name": "forward_step",
+          "availability": "available"
+        },
+        {
+          "name": "reverse_step",
+          "availability": "available"
+        },
+        {
+          "name": "pause",
+          "availability": "unavailable",
+          "reason": "not_exposed_by_backend"
+        },
+        {
+          "name": "deterministic_replay",
+          "availability": "available"
+        },
+        {
+          "name": "kir_ssa_values",
+          "availability": "available"
+        },
+        {
+          "name": "source_variable_values",
+          "availability": "unavailable",
+          "reason": "requires_authenticated_map"
+        },
+        {
+          "name": "register_values",
+          "availability": "unavailable",
+          "reason": "not_represented"
+        },
+        {
+          "name": "allocation_relative_memory",
+          "availability": "available"
+        },
+        {
+          "name": "semantic_trace",
+          "availability": "available"
+        },
+        {
+          "name": "hardware_wave_state",
+          "availability": "unavailable",
+          "reason": "logical_visualization_only"
+        },
+        {
+          "name": "kfd_dispatch_control",
+          "availability": "unavailable",
+          "reason": "not_exposed_by_backend"
+        }
+      ]
+    }
+  },
+  "breakpoint_stop": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 6,
+    "operation": "continue",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 3,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 5,
+        "state_revision": 3
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "control",
+      "stop": {
+        "reason": "breakpoint",
+        "breakpoint_id": 1,
+        "outcome": "active",
+        "exact": true
+      },
+      "snapshot": {
+        "status": "captured",
+        "snapshot": {
+          "anchor": {
+            "cursor": {
+              "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+              "event_sequence": 5,
+              "state_revision": 3
+            },
+            "scope": {
+              "level": "lane",
+              "workgroup": [
+                0,
+                0,
+                0
+              ],
+              "wave": 0,
+              "lane": 0,
+              "logical_workitem": [
+                0,
+                0,
+                0
+              ],
+              "active_mask": 15,
+              "wave_width": 64,
+              "interpretation": "logical_visualization"
+            },
+            "site": {
+              "kir": {
+                "function_ordinal": 0,
+                "block_ordinal": 0,
+                "point": {
+                  "kind": "operation",
+                  "operation_ordinal": 2
+                }
+              },
+              "source": {
+                "status": "unavailable",
+                "reason": "requires_authenticated_map"
+              }
+            }
+          },
+          "stop": {
+            "reason": "breakpoint",
+            "breakpoint_id": 1,
+            "outcome": "active",
+            "exact": true
+          },
+          "values": [
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 0
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "pointer",
+                  "address_space": "global"
+                },
+                "value": {
+                  "encoding": "allocation_relative_pointer",
+                  "allocation": {
+                    "ordinal": 1,
+                    "generation": 0
+                  },
+                  "byte_offset": 0
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 1
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "index",
+                  "bits": 64
+                },
+                "value": {
+                  "encoding": "bits",
+                  "bits": "0x0000000000000000"
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 2
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "pointer",
+                  "address_space": "global"
+                },
+                "value": {
+                  "encoding": "allocation_relative_pointer",
+                  "allocation": {
+                    "ordinal": 1,
+                    "generation": 0
+                  },
+                  "byte_offset": 0
+                },
+                "provenance": "simulated_observation"
+              }
+            }
+          ]
+        }
+      },
+      "events_advanced": 5
+    }
+  },
+  "hierarchy": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 7,
+    "operation": "inspect_scope",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 3,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 5,
+        "state_revision": 3
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "scopes",
+      "scopes": [
+        {
+          "scope": {
+            "level": "workgroup",
+            "workgroup": [
+              0,
+              0,
+              0
+            ]
+          },
+          "state": "running"
+        },
+        {
+          "scope": {
+            "level": "wave",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "state": "running"
+        }
+      ]
+    }
+  },
+  "values": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 8,
+    "operation": "inspect_values",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 3,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 5,
+        "state_revision": 3
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "values",
+      "snapshot": {
+        "cursor": {
+          "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+          "event_sequence": 5,
+          "state_revision": 3
+        },
+        "scope": {
+          "level": "lane",
+          "workgroup": [
+            0,
+            0,
+            0
+          ],
+          "wave": 0,
+          "lane": 0,
+          "logical_workitem": [
+            0,
+            0,
+            0
+          ],
+          "active_mask": 15,
+          "wave_width": 64,
+          "interpretation": "logical_visualization"
+        },
+        "site": {
+          "kir": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "source": {
+            "status": "unavailable",
+            "reason": "requires_authenticated_map"
+          }
+        }
+      },
+      "values": [
+        {
+          "path": {
+            "root": {
+              "kind": "ssa",
+              "function_ordinal": 0,
+              "frame": 1,
+              "value_ordinal": 0
+            },
+            "components": []
+          },
+          "availability": {
+            "status": "captured",
+            "value_type": {
+              "kind": "pointer",
+              "address_space": "global"
+            },
+            "value": {
+              "encoding": "allocation_relative_pointer",
+              "allocation": {
+                "ordinal": 1,
+                "generation": 0
+              },
+              "byte_offset": 0
+            },
+            "provenance": "simulated_observation"
+          }
+        },
+        {
+          "path": {
+            "root": {
+              "kind": "ssa",
+              "function_ordinal": 0,
+              "frame": 1,
+              "value_ordinal": 1
+            },
+            "components": []
+          },
+          "availability": {
+            "status": "captured",
+            "value_type": {
+              "kind": "index",
+              "bits": 64
+            },
+            "value": {
+              "encoding": "bits",
+              "bits": "0x0000000000000000"
+            },
+            "provenance": "simulated_observation"
+          }
+        },
+        {
+          "path": {
+            "root": {
+              "kind": "ssa",
+              "function_ordinal": 0,
+              "frame": 1,
+              "value_ordinal": 2
+            },
+            "components": []
+          },
+          "availability": {
+            "status": "captured",
+            "value_type": {
+              "kind": "pointer",
+              "address_space": "global"
+            },
+            "value": {
+              "encoding": "allocation_relative_pointer",
+              "allocation": {
+                "ordinal": 1,
+                "generation": 0
+              },
+              "byte_offset": 0
+            },
+            "provenance": "simulated_observation"
+          }
+        }
+      ]
+    }
+  },
+  "watchpoint_stop": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 10,
+    "operation": "continue",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 5,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 8,
+        "state_revision": 5
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "control",
+      "stop": {
+        "reason": "watchpoint",
+        "watchpoint_id": 1,
+        "outcome": "active",
+        "exact": true
+      },
+      "snapshot": {
+        "status": "unavailable",
+        "reason": "not_captured"
+      },
+      "events_advanced": 3
+    }
+  },
+  "post_write_step": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 11,
+    "operation": "step",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 6,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 9,
+        "state_revision": 6
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "control",
+      "stop": {
+        "reason": "step",
+        "outcome": "active",
+        "exact": true
+      },
+      "snapshot": {
+        "status": "captured",
+        "snapshot": {
+          "anchor": {
+            "cursor": {
+              "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+              "event_sequence": 9,
+              "state_revision": 6
+            },
+            "scope": {
+              "level": "lane",
+              "workgroup": [
+                0,
+                0,
+                0
+              ],
+              "wave": 0,
+              "lane": 0,
+              "logical_workitem": [
+                0,
+                0,
+                0
+              ],
+              "active_mask": 15,
+              "wave_width": 64,
+              "interpretation": "logical_visualization"
+            },
+            "site": {
+              "kir": {
+                "function_ordinal": 0,
+                "block_ordinal": 0,
+                "point": {
+                  "kind": "operation",
+                  "operation_ordinal": 3
+                }
+              },
+              "source": {
+                "status": "unavailable",
+                "reason": "requires_authenticated_map"
+              }
+            }
+          },
+          "stop": {
+            "reason": "step",
+            "outcome": "active",
+            "exact": true
+          },
+          "values": [
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 0
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "pointer",
+                  "address_space": "global"
+                },
+                "value": {
+                  "encoding": "allocation_relative_pointer",
+                  "allocation": {
+                    "ordinal": 1,
+                    "generation": 0
+                  },
+                  "byte_offset": 0
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 1
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "index",
+                  "bits": 64
+                },
+                "value": {
+                  "encoding": "bits",
+                  "bits": "0x0000000000000000"
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 2
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "pointer",
+                  "address_space": "global"
+                },
+                "value": {
+                  "encoding": "allocation_relative_pointer",
+                  "allocation": {
+                    "ordinal": 1,
+                    "generation": 0
+                  },
+                  "byte_offset": 0
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 3
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "integer",
+                  "signed": false,
+                  "bits": 32
+                },
+                "value": {
+                  "encoding": "bits",
+                  "bits": "0x00000011"
+                },
+                "provenance": "simulated_observation"
+              }
+            }
+          ]
+        }
+      },
+      "events_advanced": 1
+    }
+  },
+  "memory": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 12,
+    "operation": "read_memory",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 6,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 9,
+        "state_revision": 6
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "memory",
+      "snapshot": {
+        "cursor": {
+          "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+          "event_sequence": 9,
+          "state_revision": 6
+        },
+        "scope": {
+          "level": "lane",
+          "workgroup": [
+            0,
+            0,
+            0
+          ],
+          "wave": 0,
+          "lane": 0,
+          "logical_workitem": [
+            0,
+            0,
+            0
+          ],
+          "active_mask": 15,
+          "wave_width": 64,
+          "interpretation": "logical_visualization"
+        },
+        "site": {
+          "kir": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "source": {
+            "status": "unavailable",
+            "reason": "requires_authenticated_map"
+          }
+        }
+      },
+      "memory": {
+        "allocation": {
+          "ordinal": 1,
+          "generation": 0
+        },
+        "byte_offset": 0,
+        "requested_bytes": 4,
+        "returned_bytes": 4,
+        "availability": {
+          "status": "captured",
+          "address_space": "global",
+          "bytes": "0x11000000",
+          "initialized": "0x0f",
+          "truncated": false
+        }
+      }
+    }
+  },
+  "events": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 13,
+    "operation": "query_events",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 6,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 9,
+        "state_revision": 6
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "events",
+      "events": [
+        {
+          "sequence": 1,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 2,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 3,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 4,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 5,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 6,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 7,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 8,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "memory",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 9,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 0,
+            "logical_workitem": [
+              0,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 10,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 11,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 12,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 13,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 14,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 15,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 16,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 17,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "memory",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 18,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 1,
+            "logical_workitem": [
+              1,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 19,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 20,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 21,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 22,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 23,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 24,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 25,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 26,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "memory",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 27,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 2,
+            "logical_workitem": [
+              2,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 28,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 29,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 0
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 30,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 31,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 1
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 32,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 33,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 2
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 34,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 35,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "memory",
+          "provenance": "simulated_observation"
+        },
+        {
+          "sequence": 36,
+          "scope": {
+            "level": "lane",
+            "workgroup": [
+              0,
+              0,
+              0
+            ],
+            "wave": 0,
+            "lane": 3,
+            "logical_workitem": [
+              3,
+              0,
+              0
+            ],
+            "active_mask": 15,
+            "wave_width": 64,
+            "interpretation": "logical_visualization"
+          },
+          "site": {
+            "function_ordinal": 0,
+            "block_ordinal": 0,
+            "point": {
+              "kind": "operation",
+              "operation_ordinal": 3
+            }
+          },
+          "category": "operation",
+          "provenance": "simulated_observation"
+        }
+      ]
+    }
+  },
+  "reverse_step": {
+    "status": "ok",
+    "schema": "fe2o3-debug-response-v1",
+    "request_id": 14,
+    "operation": "step",
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 7,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 7,
+        "state_revision": 7
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "result": {
+      "result": "control",
+      "stop": {
+        "reason": "step",
+        "outcome": "active",
+        "exact": true
+      },
+      "snapshot": {
+        "status": "captured",
+        "snapshot": {
+          "anchor": {
+            "cursor": {
+              "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+              "event_sequence": 7,
+              "state_revision": 7
+            },
+            "scope": {
+              "level": "lane",
+              "workgroup": [
+                0,
+                0,
+                0
+              ],
+              "wave": 0,
+              "lane": 0,
+              "logical_workitem": [
+                0,
+                0,
+                0
+              ],
+              "active_mask": 15,
+              "wave_width": 64,
+              "interpretation": "logical_visualization"
+            },
+            "site": {
+              "kir": {
+                "function_ordinal": 0,
+                "block_ordinal": 0,
+                "point": {
+                  "kind": "operation",
+                  "operation_ordinal": 3
+                }
+              },
+              "source": {
+                "status": "unavailable",
+                "reason": "requires_authenticated_map"
+              }
+            }
+          },
+          "stop": {
+            "reason": "step",
+            "outcome": "active",
+            "exact": true
+          },
+          "values": [
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 0
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "pointer",
+                  "address_space": "global"
+                },
+                "value": {
+                  "encoding": "allocation_relative_pointer",
+                  "allocation": {
+                    "ordinal": 1,
+                    "generation": 0
+                  },
+                  "byte_offset": 0
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 1
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "index",
+                  "bits": 64
+                },
+                "value": {
+                  "encoding": "bits",
+                  "bits": "0x0000000000000000"
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 2
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "pointer",
+                  "address_space": "global"
+                },
+                "value": {
+                  "encoding": "allocation_relative_pointer",
+                  "allocation": {
+                    "ordinal": 1,
+                    "generation": 0
+                  },
+                  "byte_offset": 0
+                },
+                "provenance": "simulated_observation"
+              }
+            },
+            {
+              "path": {
+                "root": {
+                  "kind": "ssa",
+                  "function_ordinal": 0,
+                  "frame": 1,
+                  "value_ordinal": 3
+                },
+                "components": []
+              },
+              "availability": {
+                "status": "captured",
+                "value_type": {
+                  "kind": "integer",
+                  "signed": false,
+                  "bits": 32
+                },
+                "value": {
+                  "encoding": "bits",
+                  "bits": "0x00000011"
+                },
+                "provenance": "simulated_observation"
+              }
+            }
+          ]
+        }
+      },
+      "events_advanced": 2
+    }
+  },
+  "limitations": [
+    {
+      "status": "unavailable",
+      "schema": "fe2o3-debug-response-v1",
+      "request_id": 15,
+      "operation": "inspect_values",
+      "session": {
+        "backend": "cpu_kir_simulator",
+        "execution_kind": "cpu_kir_simulation",
+        "state": "stopped",
+        "revision": 7,
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "cursor": {
+          "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+          "event_sequence": 7,
+          "state_revision": 7
+        },
+        "simulated": true,
+        "hardware_observed": false,
+        "performance_prediction": false
+      },
+      "unavailable": {
+        "capability": "register_values",
+        "reason": "not_represented",
+        "state_changed": false,
+        "detail": "CPU KIR simulation does not expose hardware registers"
+      }
+    },
+    {
+      "status": "unavailable",
+      "schema": "fe2o3-debug-response-v1",
+      "request_id": 16,
+      "operation": "step",
+      "session": {
+        "backend": "cpu_kir_simulator",
+        "execution_kind": "cpu_kir_simulation",
+        "state": "stopped",
+        "revision": 7,
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "cursor": {
+          "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+          "event_sequence": 7,
+          "state_revision": 7
+        },
+        "simulated": true,
+        "hardware_observed": false,
+        "performance_prediction": false
+      },
+      "unavailable": {
+        "capability": "source_sites",
+        "reason": "requires_authenticated_map",
+        "state_changed": false,
+        "detail": "source stepping requires an exact-KIR authenticated source map"
+      }
+    }
+  ],
+  "trace": {
+    "session": {
+      "backend": "cpu_kir_simulator",
+      "execution_kind": "cpu_kir_simulation",
+      "state": "stopped",
+      "revision": 8,
+      "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+      "cursor": {
+        "configuration_identity": "62bd7d6a2f3c107f5d8c85e92abb9889bce3347f90a70f14673ab86510145f71",
+        "event_sequence": 7,
+        "state_revision": 8
+      },
+      "simulated": true,
+      "hardware_observed": false,
+      "performance_prediction": false
+    },
+    "trace_identity": "fead5b2c95e85aef5337d3057c3a10257a2bfe933148847bac1745b699801047",
+    "canonical_bytes": 12459,
+    "completeness": {
+      "status": "complete"
+    }
+  }
+}

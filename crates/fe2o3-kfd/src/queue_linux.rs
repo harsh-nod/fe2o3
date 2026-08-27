@@ -372,15 +372,36 @@ impl LinuxKfdRuntimeEnabledV1 {
     }
 
     pub(crate) fn disable(
+        self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<LinuxKfdRuntimeDisabledV1, LinuxDoorbellErrorV1> {
+        self.disable_at_phase(kfd, opener_pid, KfdRuntimeLifecyclePhaseV1::EventDestroyed)
+    }
+
+    pub(crate) fn disable_debug_target(
+        self,
+        kfd: BorrowedFd<'_>,
+        opener_pid: u32,
+    ) -> Result<LinuxKfdRuntimeDisabledV1, LinuxDoorbellErrorV1> {
+        self.disable_at_phase(
+            kfd,
+            opener_pid,
+            KfdRuntimeLifecyclePhaseV1::EnabledBeforeQueue,
+        )
+    }
+
+    fn disable_at_phase(
         mut self,
         kfd: BorrowedFd<'_>,
         opener_pid: u32,
+        required_phase: KfdRuntimeLifecyclePhaseV1,
     ) -> Result<LinuxKfdRuntimeDisabledV1, LinuxDoorbellErrorV1> {
         if let Err(error) = self.check_binding(kfd, opener_pid) {
             self.poisoned = true;
             return Err(error);
         }
-        if self.phase != KfdRuntimeLifecyclePhaseV1::EventDestroyed {
+        if self.phase != required_phase {
             self.poisoned = true;
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "disable before queue and event destruction",
@@ -408,7 +429,7 @@ impl LinuxKfdRuntimeEnabledV1 {
         self.active = false;
         self.phase = admit_runtime_transition(
             self.phase,
-            KfdRuntimeLifecyclePhaseV1::EventDestroyed,
+            required_phase,
             KfdRuntimeLifecyclePhaseV1::Disabled,
         )?;
         Ok(LinuxKfdRuntimeDisabledV1 {
@@ -428,7 +449,7 @@ impl Drop for LinuxKfdRuntimeEnabledV1 {
 }
 
 impl LinuxKfdRuntimeDisabledV1 {
-    fn complete(mut self) {
+    pub(crate) fn complete(mut self) {
         let _ = self.gate.take();
     }
 }

@@ -350,9 +350,9 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -822,6 +822,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-debug-cli"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-debug-protocol",
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-debugger",
+ "fe2o3-kir-sim",
+ "fe2o3-kir-sim-cli",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-debug-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fe2o3-device"
 version = "0.1.0"
 dependencies = [
@@ -1033,6 +1055,7 @@ dependencies = [
  "fe2o3-drm-uapi",
  "fe2o3-kfd-uapi",
  "fe2o3-runtime-model",
+ "libc",
  "rustix",
  "sha2 0.11.0",
 ]
@@ -1042,6 +1065,14 @@ name = "fe2o3-kfd-uapi"
 version = "0.1.0"
 dependencies = [
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-kir-debugger"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-kernel-ir",
+ "fe2o3-kir-sim",
 ]
 
 [[package]]
@@ -3399,9 +3430,9 @@ dependencies = [
 
 [[package]]
 name = "wide"
-version = "1.6.1"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de2aaf408e58689c2096682331b1f42bb2d9f2ed6b11560407d023cd0a6c634e"
+checksum = "8cf05ca94c9fba0c51316899caa1d1e74a064fc310a5efa7375e614343d415be"
 dependencies = [
  "bytemuck",
  "safe_arch",

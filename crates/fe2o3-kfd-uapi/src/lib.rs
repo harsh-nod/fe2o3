@@ -8,8 +8,10 @@
 //! a later syscall adapter. The admitted schema is pinned to KFD UAPI 1.18 as
 //! shipped by the active AMDGPU 6.16.13 DKMS driver on the MI300X test host.
 
+mod debug_trap;
 mod event;
 
+pub use debug_trap::*;
 pub use event::*;
 
 use core::mem::{align_of, offset_of, size_of};

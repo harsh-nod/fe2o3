@@ -24,10 +24,15 @@ use crate::resident::{
     reserved_hash_map_bytes, reserved_vec_bytes,
 };
 use crate::{
-    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1, ScalarBitsV1,
-    SharedBufferV1, SimulationArgumentV1, SimulationInvocationV1, SimulationLimitsV1,
-    SimulationPlanV1, SimulationPreflightErrorV1, SimulationRequestV1, SimulationSiteV1,
-    SimulationTargetV1,
+    AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1,
+    NoopSimulationDebugSinkV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
+    SimulationDebugAllocationV1, SimulationDebugBarrierActionV1, SimulationDebugBindingV1,
+    SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1,
+    SimulationDebugFrameV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
+    SimulationDebugRecordV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
+    SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+    SimulationInvocationV1, SimulationLimitsV1, SimulationPlanV1, SimulationPreflightErrorV1,
+    SimulationRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
@@ -540,6 +545,39 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_with_event_policy(request, target, limits, EventPolicyV1::Enabled, sink)
     }
 
+    /// Runs the ordinary simulator while recording an independent bounded debug observation.
+    ///
+    /// Debug records are derived from live interpreter state and do not alter the stable
+    /// [`SimulationEventV1`] stream. Stopping the debug sink only stops debug delivery; the
+    /// deterministic simulation continues to completion.
+    pub fn simulate_debugged_with_sink(
+        &self,
+        request: &SimulationRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        capture: SimulationDebugCaptureLimitsV1,
+        debug_sink: &mut impl SimulationDebugSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight(request, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: capture,
+            },
+            &mut event_sink,
+            debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     fn simulate_with_event_policy(
         &self,
         request: &SimulationRequestV1,
@@ -551,8 +589,21 @@ impl AdmittedSimulationModuleV1 {
         let plan = self
             .preflight(request, target, limits)
             .map_err(SimulationErrorV1::Preflight)?;
-        execute(self, request, target, limits, policy, plan, sink)
-            .map_err(SimulationErrorV1::Execution)
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+            },
+            sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
     }
 }
 
@@ -973,6 +1024,10 @@ struct Engine<'a, S> {
     policy: EventPolicyV1,
     memory: Memory,
     sink: &'a mut S,
+    debug_capture: SimulationDebugCaptureLimitsV1,
+    debug_sink: &'a mut dyn SimulationDebugSinkV1,
+    debug_records: u64,
+    debug_delivery_stopped: bool,
     steps: u64,
     events: u64,
     reserved_event_closures: u64,
@@ -1004,6 +1059,185 @@ enum SwitchLookup {
     None,
     Index(HashMap<u128, usize>),
     Integer(HashMap<(ScalarType, u128), usize>),
+}
+
+fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
+    match value {
+        RuntimeValue::Scalar(value) => SimulationDebugValueV1::Scalar(*value),
+        RuntimeValue::Pointer(value) => SimulationDebugValueV1::Pointer {
+            allocation: value.allocation,
+            byte_offset: value.byte_offset,
+            element: value.element,
+            address_space: value.address_space,
+            access: value.access,
+            lower_bound: value.lower_bound,
+            upper_bound: value.upper_bound,
+        },
+        RuntimeValue::Slice(value) => SimulationDebugValueV1::Slice {
+            allocation: value.allocation,
+            elements: value.elements,
+            element: value.element,
+            address_space: value.address_space,
+            access: value.access,
+            byte_offset: value.byte_offset,
+            byte_len: value.byte_len,
+        },
+    }
+}
+
+fn capture_debug_stack(
+    frames: &[RuntimeFrame<'_>],
+    function_module_indices: &[usize],
+    limits: SimulationDebugCaptureLimitsV1,
+) -> SimulationDebugCollectionV1<SimulationDebugFrameV1> {
+    if frames.len() > limits.max_frames_per_checkpoint() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::FrameLimit,
+            required: u64::try_from(frames.len()).unwrap_or(u64::MAX),
+        };
+    }
+    let value_count = frames.iter().try_fold(0_usize, |count, frame| {
+        count.checked_add(frame.values.len())
+    });
+    let Some(value_count) = value_count else {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::ValueLimit,
+            required: u64::MAX,
+        };
+    };
+    if value_count > limits.max_values_per_checkpoint() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::ValueLimit,
+            required: u64::try_from(value_count).unwrap_or(u64::MAX),
+        };
+    }
+    let mut captured = Vec::new();
+    if captured.try_reserve_exact(frames.len()).is_err() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+            required: u64::try_from(frames.len()).unwrap_or(u64::MAX),
+        };
+    }
+    for (depth, frame) in frames.iter().enumerate() {
+        let mut ordered = Vec::new();
+        if ordered.try_reserve_exact(frame.values.len()).is_err() {
+            return SimulationDebugCollectionV1::Unavailable {
+                reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+                required: u64::try_from(value_count).unwrap_or(u64::MAX),
+            };
+        }
+        ordered.extend(frame.values.iter());
+        ordered.sort_unstable_by_key(|(value, _)| **value);
+        let mut values = Vec::new();
+        if values.try_reserve_exact(ordered.len()).is_err() {
+            return SimulationDebugCollectionV1::Unavailable {
+                reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+                required: u64::try_from(value_count).unwrap_or(u64::MAX),
+            };
+        }
+        values.extend(
+            ordered
+                .into_iter()
+                .map(|(value, observed)| SimulationDebugBindingV1 {
+                    value: *value,
+                    observed: debug_value(observed),
+                }),
+        );
+        let Some(function_ordinal) = function_module_indices.get(frame.function_index).copied()
+        else {
+            return SimulationDebugCollectionV1::Unavailable {
+                reason: SimulationDebugUnavailableReasonV1::NotCaptured,
+                required: 0,
+            };
+        };
+        captured.push(SimulationDebugFrameV1 {
+            depth: u32::try_from(depth).unwrap_or(u32::MAX),
+            function_ordinal,
+            block: frame.current,
+            next_operation: frame
+                .function
+                .body
+                .as_ref()
+                .and_then(|body| body.blocks.get(frame.current_index))
+                .and_then(|block| block.operations.get(frame.operation))
+                .and_then(|_| u32::try_from(frame.operation).ok()),
+            values: SimulationDebugCollectionV1::Captured(values),
+        });
+    }
+    SimulationDebugCollectionV1::Captured(captured)
+}
+
+fn capture_debug_memory(
+    memory: &Memory,
+    limits: SimulationDebugCaptureLimitsV1,
+) -> SimulationDebugCollectionV1<SimulationDebugAllocationV1> {
+    if memory.allocations.len() > limits.max_allocations_per_checkpoint() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::AllocationLimit,
+            required: u64::try_from(memory.allocations.len()).unwrap_or(u64::MAX),
+        };
+    }
+    let Some(byte_count) = memory
+        .allocations
+        .values()
+        .try_fold(0_usize, |count, allocation| {
+            count
+                .checked_add(allocation.bytes.len())?
+                .checked_add(allocation.initialized.len())
+        })
+    else {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::MemoryByteLimit,
+            required: u64::MAX,
+        };
+    };
+    if byte_count > limits.max_memory_bytes_per_checkpoint() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::MemoryByteLimit,
+            required: u64::try_from(byte_count).unwrap_or(u64::MAX),
+        };
+    }
+    let mut ordered = Vec::new();
+    if ordered.try_reserve_exact(memory.allocations.len()).is_err() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+            required: u64::try_from(memory.allocations.len()).unwrap_or(u64::MAX),
+        };
+    }
+    ordered.extend(memory.allocations.iter());
+    ordered.sort_unstable_by_key(|(id, _)| **id);
+    let mut captured = Vec::new();
+    if captured.try_reserve_exact(ordered.len()).is_err() {
+        return SimulationDebugCollectionV1::Unavailable {
+            reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+            required: u64::try_from(ordered.len()).unwrap_or(u64::MAX),
+        };
+    }
+    for (id, allocation) in ordered {
+        let mut bytes = Vec::new();
+        let mut initialized = Vec::new();
+        if bytes.try_reserve_exact(allocation.bytes.len()).is_err()
+            || initialized
+                .try_reserve_exact(allocation.initialized.len())
+                .is_err()
+        {
+            return SimulationDebugCollectionV1::Unavailable {
+                reason: SimulationDebugUnavailableReasonV1::AllocationFailure,
+                required: u64::try_from(byte_count).unwrap_or(u64::MAX),
+            };
+        }
+        bytes.extend_from_slice(&allocation.bytes);
+        initialized.extend(allocation.initialized.iter().copied());
+        captured.push(SimulationDebugAllocationV1 {
+            allocation: *id,
+            address_space: allocation.address_space,
+            access: allocation.access,
+            alignment: allocation.alignment,
+            bytes,
+            initialized,
+        });
+    }
+    SimulationDebugCollectionV1::Captured(captured)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1154,6 +1388,101 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             function_ordinal: self.function_module_indices[site.function],
             block: site.block,
             operation: site.operation,
+        }
+    }
+
+    fn debug_checkpoint(
+        &mut self,
+        frames: &[RuntimeFrame<'_>],
+        site: CompactSite,
+        phase: SimulationDebugCheckpointPhaseV1,
+    ) {
+        if self.debug_delivery_stopped {
+            return;
+        }
+        let stack = capture_debug_stack(frames, &self.function_module_indices, self.debug_capture);
+        let memory = capture_debug_memory(&self.memory, self.debug_capture);
+        self.deliver_debug(
+            site,
+            SimulationDebugRecordKindV1::Checkpoint {
+                phase,
+                stack,
+                memory,
+            },
+        );
+    }
+
+    fn debug_memory(
+        &mut self,
+        site: CompactSite,
+        access: SimulationDebugMemoryAccessV1,
+        pointer: &PointerValue,
+        byte_len: usize,
+        value: ScalarBitsV1,
+    ) {
+        self.deliver_debug(
+            site,
+            SimulationDebugRecordKindV1::Memory {
+                access,
+                allocation: pointer.allocation,
+                byte_offset: pointer.byte_offset,
+                byte_len,
+                address_space: pointer.address_space,
+                value: SimulationDebugValueV1::Scalar(value),
+            },
+        );
+    }
+
+    fn debug_barrier(
+        &mut self,
+        site: CompactSite,
+        action: SimulationDebugBarrierActionV1,
+        phase: u64,
+        participants: u32,
+    ) {
+        self.deliver_debug(
+            site,
+            SimulationDebugRecordKindV1::WorkgroupBarrier {
+                action,
+                phase,
+                participants,
+            },
+        );
+    }
+
+    fn deliver_debug(&mut self, site: CompactSite, kind: SimulationDebugRecordKindV1) {
+        if self.debug_delivery_stopped {
+            return;
+        }
+        let (Some(invocation), Some(operation)) = (self.invocation, site.operation) else {
+            return;
+        };
+        let module_index = self.function_module_indices[site.function];
+        let record = SimulationDebugRecordV1 {
+            ordinal: self.debug_records,
+            invocation,
+            site: SimulationDebugSiteV1 {
+                function_ordinal: module_index,
+                block: site.block,
+                operation,
+            },
+            kind,
+        };
+        match self.debug_sink.record(record) {
+            SimulationDebugSinkControlV1::Continue => {
+                if let Some(next) = self.debug_records.checked_add(1) {
+                    self.debug_records = next;
+                } else {
+                    self.debug_delivery_stopped = true;
+                }
+            }
+            SimulationDebugSinkControlV1::Stop => {
+                self.debug_records = self.debug_records.saturating_add(1);
+                self.debug_delivery_stopped = true;
+            }
+            SimulationDebugSinkControlV1::DropAndStop => {
+                self.debug_delivery_stopped = true;
+            }
         }
     }
 
@@ -1364,6 +1693,13 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 .mark_workgroup_store(pointer, width, invocation)
                 .map_err(|kind| self.at(*site, kind))?;
         }
+        self.debug_memory(
+            *site,
+            SimulationDebugMemoryAccessV1::WriteCommitted,
+            pointer,
+            width,
+            value,
+        );
         Ok(())
     }
 
@@ -1882,15 +2218,28 @@ fn build_execution_indices<'a>(
     ))
 }
 
-fn execute(
-    admitted: &AdmittedSimulationModuleV1,
-    request: &SimulationRequestV1,
+struct ExecutionConfiguration {
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
     policy: EventPolicyV1,
     plan: SimulationPlanV1,
+    debug_capture: SimulationDebugCaptureLimitsV1,
+}
+
+fn execute(
+    admitted: &AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    configuration: ExecutionConfiguration,
     sink: &mut impl SimulationEventSinkV1,
+    debug_sink: &mut impl SimulationDebugSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
+    let ExecutionConfiguration {
+        target,
+        limits,
+        policy,
+        plan,
+        debug_capture,
+    } = configuration;
     let indices =
         build_execution_indices(&admitted.module, &plan.reachable_function_indices, target)?;
     let actual_index_resident_bytes =
@@ -1952,6 +2301,10 @@ fn execute(
         policy,
         memory,
         sink,
+        debug_capture,
+        debug_sink,
+        debug_records: 0,
+        debug_delivery_stopped: !debug_capture.is_enabled(),
         steps: 0,
         events: 0,
         reserved_event_closures: 0,
@@ -2242,6 +2595,12 @@ fn execute_workgroup_machines<'a>(
                 participants,
             },
         )?;
+        engine.debug_barrier(
+            site,
+            SimulationDebugBarrierActionV1::Release,
+            phase,
+            participants,
+        );
         engine.publish_workgroup();
         phase = phase.checked_add(1).ok_or_else(|| {
             engine.at(
@@ -2782,6 +3141,28 @@ impl<'a> InvocationMachine<'a> {
         }
 
         loop {
+            let checkpoint_site = self.frames.get(self.active_depth - 1).and_then(|frame| {
+                if !frame.block_entered {
+                    return None;
+                }
+                let block = frame
+                    .function
+                    .body
+                    .as_ref()?
+                    .blocks
+                    .get(frame.current_index)?;
+                block
+                    .operations
+                    .get(frame.operation)
+                    .map(|_| operation_site(frame.function_index, block, frame.operation))
+            });
+            if let Some(site) = checkpoint_site {
+                engine.debug_checkpoint(
+                    &self.frames[..self.active_depth],
+                    site,
+                    SimulationDebugCheckpointPhaseV1::BeforeOperation,
+                );
+            }
             let action = {
                 let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
                     engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
@@ -2799,6 +3180,15 @@ impl<'a> InvocationMachine<'a> {
                     return Err(error);
                 }
             };
+            if let Some(site) = checkpoint_site
+                && matches!(&action, FrameAction::Continue | FrameAction::Barrier { .. })
+            {
+                engine.debug_checkpoint(
+                    &self.frames[..self.active_depth],
+                    site,
+                    SimulationDebugCheckpointPhaseV1::AfterOperation,
+                );
+            }
             match action {
                 FrameAction::Continue => {}
                 FrameAction::Barrier { site, barrier } => {
@@ -2925,6 +3315,11 @@ impl<'a> InvocationMachine<'a> {
                     caller.operation += 1;
                     self.frames[self.active_depth].incoming = returned;
                     self.frames[self.active_depth].incoming.clear();
+                    engine.debug_checkpoint(
+                        &self.frames[..self.active_depth],
+                        site,
+                        SimulationDebugCheckpointPhaseV1::AfterOperation,
+                    );
                 }
             }
         }
@@ -2957,6 +3352,7 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
         let site = terminator_site(frame.function_index, block);
         engine.event(&site, SimulationEventKindV1::BlockEnter)?;
         frame.block_entered = true;
+        return Ok(FrameAction::Continue);
     }
 
     if let Some(operation) = block.operations.get(frame.operation) {
@@ -3000,6 +3396,7 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
                 &site,
                 SimulationEventKindV1::WorkgroupBarrierArrive { phase },
             )?;
+            engine.debug_barrier(site, SimulationDebugBarrierActionV1::Arrive, phase, 1);
             frame.active_operation = None;
             engine.end_lifecycle(
                 &site,
@@ -3747,6 +4144,13 @@ fn execute_scalar_load(
             bytes,
         },
     )?;
+    engine.debug_memory(
+        *site,
+        SimulationDebugMemoryAccessV1::Read,
+        pointer_value,
+        bytes,
+        value,
+    );
     Ok(value)
 }
 

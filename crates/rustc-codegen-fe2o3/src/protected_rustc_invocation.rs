@@ -64,9 +64,9 @@ impl AdmittedProtectedRustcInvocationV1 {
         self,
         observation: RustcProcessObservationV1,
     ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
-        let admitted = validate_capability(self.capability, observation)?;
+        validate_retained_capability(&self.capability, observation)?;
         Ok(FinishedProtectedRustcInvocationV3 {
-            capability: admitted.capability,
+            capability: self.capability,
         })
     }
 }
@@ -83,10 +83,25 @@ impl FinishedProtectedRustcInvocationV3 {
         self.capability.descriptor()
     }
 
-    /// Revalidates the retained immutable capability without projecting it to
-    /// a copyable publication credential.
-    pub(crate) fn revalidate(&self) -> Result<(), String> {
-        self.capability.revalidate()
+    /// Repeats the complete live-process and immutable-capability admission immediately before a
+    /// protected publication transition.
+    pub(crate) fn revalidate_for_publication(&self) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        self.capability
+            .revalidate()
+            .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
+        let observation = RustcProcessObservationV1::capture(self.capability.descriptor())?;
+        validate_retained_capability(&self.capability, observation)
+    }
+
+    #[cfg(test)]
+    fn revalidate_for_publication_with_observation(
+        &self,
+        observation: RustcProcessObservationV1,
+    ) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        self.capability
+            .revalidate()
+            .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
+        validate_retained_capability(&self.capability, observation)
     }
 }
 
@@ -313,6 +328,14 @@ fn validate_capability(
     capability: RustcInvocationCapabilityV1,
     observation: RustcProcessObservationV1,
 ) -> Result<AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1> {
+    validate_retained_capability(&capability, observation)?;
+    Ok(AdmittedProtectedRustcInvocationV1 { capability })
+}
+
+fn validate_retained_capability(
+    capability: &RustcInvocationCapabilityV1,
+    observation: RustcProcessObservationV1,
+) -> Result<(), ProtectedRustcInvocationErrorV1> {
     let descriptor = capability.descriptor();
     let closure = descriptor.compiler_closure();
 
@@ -374,7 +397,7 @@ fn validate_capability(
     capability
         .revalidate()
         .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
-    Ok(AdmittedProtectedRustcInvocationV1 { capability })
+    Ok(())
 }
 
 fn closed_sha256_observation(
