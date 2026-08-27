@@ -113,200 +113,48 @@ generic evidence can never satisfy an FFI-bound evidence API. A caller can indep
 generic request with similar inputs and symbol strings, but that request and its output carry zero
 FFI provenance. Its API and wire bytes are unchanged, and no V1-to-V2 conversion exists.
 
-## Worker V2 HSACO admission and publication
+## Worker V3 HSACO admission and publication
 
-Worker Protocol V2 is a separate framing domain connected to the managed Cargo build flow. After
-consuming the compiler handoff, `execute_reproducible_first_build_worker_v2` derives exact import,
-export, kernel-entry, kernel-descriptor, helper, and unresolved-import roles from the retained
-manifest rather than accepting an operator-supplied final-symbol list. It binds the pinned
-executable, worker and LLVM build identities, target, code-object version, structured options,
-complete envelope identity, compiler module, every external provider, final symbol closure, and
-output bound. A GenericLink candidate establishes the first-build output identity; success requires
-the V2 execution to reproduce those bytes exactly. Both executions use the supervised production
-worker's pinned upstream LLVM module, optimization, and target-machine APIs plus the in-process LLD
-library API. They use no COMGR and do not invoke `clang`, `llc`, or `ld.lld` as subprocesses.
+Worker Protocol V2 remains the supervised LLVM/LLD engine wire format used by the
+current compiler handoff. It is not a public artifact route. The standalone raw
+Worker V2 inspection, canonical-finalization, and publication APIs have been
+retired, along with exact tiled-GEMM, row-softmax, and workgroup-sync finalizer
+specializations.
 
-### Protected Worker V3 execution
-
-`execute_protected_reproducible_first_build_worker_v3` is the strict V3 transaction entry. It
-consumes `ConsumedCompilerModuleHandoffV3` directly and accepts no V1 or V2 transaction fallback.
-The caller must also provide the exact durable V3 publication receipt and parent-retained compiler
-closure. Before worker execution, the entry strictly redecodes the complete outer handoff and
-checks its attempt, slot, transaction, outer identity, semantic capsule, invocation digest,
-compiler closure, capsule-to-module pair, final-module commitment, and embedded V2 module
+`execute_protected_reproducible_first_build_worker_v3` is the production
+transaction entry. It consumes `ConsumedCompilerModuleHandoffV3` directly and
+accepts no V1 or V2 transaction fallback. The caller provides the exact durable
+V3 publication receipt and parent-retained compiler closure. Before execution,
+the entry redecodes the complete outer handoff and checks its attempt, slot,
+transaction, semantic capsule, invocation digest, compiler closure,
+capsule-to-module pair, final-module commitment, and embedded compiler-module
 relationships.
 
-The embedded V2 value is the compiler module carried by the V3 schema; it is decoded as worker
-input without constructing or projecting a consumed V2 transaction. A V3-specific binding is
-included in both direct-worker request identities. Successful evidence binds that complete binding,
-the measured worker declaration, canonical link plan, and exact bootstrap and replay request and
-response bytes. Execution reuses the existing supervised upstream LLVM/LLD engine and Worker V2
-wire format, with no COMGR path or legacy transaction fallback.
+The V3 path reuses the bounded upstream LLVM/LLD engine and its V2-framed worker
+exchange. This retained internal mechanism does not expose a standalone Worker
+V2 admission or publication authority. Raw output enters only through
+`inspect_protected_production_v1_worker_v3_raw_hsaco_v1`, which derives the
+target, code-object version, symbol closure, descriptor state, and launch
+contract from the exact retained V3 evidence and independent HSACO inspection.
+Callers cannot supply or weaken those facts.
 
-`prepare_protected_worker_v3_compact_finalizer_replay_v2` consumes the finalized V3 owner and
-moves its unique outer-handoff, provider, and finalized-HSACO allocations into a restart owner. Its
-side-by-side V2 transcript retains the attempt-local handoff slot and transaction identity needed
-to rederive the complete V3 binding after process loss; V1 bytes remain unchanged. The canonical
-transcript is bounded by the shared `2,195,505`-byte artifact-transaction storage cap and stores
-only request/response metadata shells rather than duplicate module, provider, request, response,
-raw-HSACO, or finalized-HSACO payloads.
+`finalize_inspected_protected_worker_v3_hsaco_v1` consumes that V3 inspection.
+It patches only a valid zero-digest canonical `.fe2o3.kd.v1` table, reparses the
+result, and checks target, kernel closure, ABI, resource, and launch observations
+against the retained inspection. Descriptor-free output fails closed as
+`MissingAuthenticatedProtectedDescriptorSourceEvidenceV3`; executable metadata
+is never used to invent Rust ABI, layout, effect, or source claims.
 
-`prepare_protected_worker_v3_hsaco_publication_v1` seals the durable publication plan internally;
-callers cannot supply a plan or decompose the move-only owner into storage parts. Persistence and
-restart recovery run one common validator that decodes the exact outer handoff, rederives the V3
-binding, reconstructs both canonical worker exchanges, recovers the inert first-build evidence,
-re-inspects raw HSACO derived from the finalized artifact, re-finalizes it, and requires the exact
-source, finalization, plan, and finalized bytes to match. The recovered value remains inert and
-grants no publication, load, or launch authority.
+`prepare_protected_worker_v3_compact_finalizer_replay_v2` moves the finalized
+owner into a bounded restart transcript without duplicating the large module,
+provider, request, response, raw-HSACO, or finalized-HSACO payloads. Publication
+preparation, persistence, and recovery rederive the V3 binding, replay both
+worker exchanges, re-inspect and re-finalize the raw HSACO, and require exact
+source, plan, finalization, and byte identities before durable publication.
 
-These checks establish structural consistency and retain current consumed-transaction evidence.
-They do not authenticate compiler origin, independently prove what implementation produced a
-measured worker binary, prove compiler correctness or kernel semantics, or grant link, publication,
-load, or launch authority.
-
-`inspect_worker_v2_raw_hsaco_v1` then consumes the sealed reproducibility evidence and independently
-checks the exact raw HSACO against its retained lineage, target, code-object version, symbol-role
-manifest, defined-symbol closure, descriptors, and `gfx942` launch metadata. It accepts no caller
-replacement for those policies. Raw admission remains distinct from canonical `.fe2o3.kd.v1`
-descriptor-table finalization; `cargo-fe2o3` selects descriptor-free COV5 raw compatibility or
-descriptor-bearing COV6 canonical finalization before publication.
-
-`finalize_inspected_worker_v2_hsaco_v1` is the typed bridge from that admitted raw evidence to the
-existing canonical finalizer. When the raw HSACO contains one valid zero-digest `.fe2o3.kd.v1`, it
-patches only the digest, independently verifies the result, cross-checks target, code-object
-version, kernel closure, and launch metadata against the retained raw policy, and returns an opaque
-`PreparedFinalizedWorkerV2HsacoV1`. The value privately retains both raw and finalized lineage.
-This is structural integrity evidence only: the embedded descriptor's compiler, source, ABI,
-layout, effect, and build-evidence claims remain unauthenticated.
-
-Descriptor-free compatibility output may omit `.fe2o3.kd.v1`. In that case the
-bridge returns an owning
-`MissingAuthenticatedDescriptorSourceEvidenceV1` blocker. It records the admitted lineage, target,
-code-object version, policy, and observed kernels but does not expose or fabricate a descriptor
-table. In particular, Rust ABI, layout, effect, and source claims are never inferred from
-executable metadata. Neither the structural result nor the blocker grants publication, loading, or
-launch authority. The bridge is connected to `cargo-fe2o3`; its publication policy permits raw
-COV5 only without a required load envelope and requires a present zero-digest descriptor for COV6.
-
-The raw and finalized preparation APIs consume admitted evidence and retain the durable plan,
-upstream evidence identity, publication kind, and exact bytes privately. Their matching publish
-APIs use the producer and live attempt registry to publish those exact bytes and an attempt-scoped
-durable provenance receipt. `cargo-fe2o3` persists the selected intent and exact raw/finalized
-lineage, supports new-process recovery at committed boundaries without respawning rustc, and then
-completes the same build attempt. This recovery authenticates continuity of the retained records;
-it does not authenticate compiler correctness or artifact semantics.
-
-Neither the handoff, reproducibility evidence, raw-HSACO admission, typed bridge, nor publication
-receipt authenticates the compiler or its origin, authenticates or binds Verus verification, grants
-HSA loading authority, or grants kernel-launch authority. On `mi300x`, the ignored
-`worker_v2_real_source_publishes_inspected_gfx942_hsaco` and
-`worker_v2_real_source_links_an_external_bitcode_provider` tests pass with an unoptimized Debug
-worker for `gfx942:xnack-`, through durable publication. Those tests do not load or launch the HSACO,
-and no optimized Release-worker result is claimed.
-
-The strict V3 durable bridge has a synthetic descriptor-bearing `vecadd` test that persists and
-independently replays finalizer lineage, publishes through a move-only verified authority, encodes
-and decodes the V3 claim, reacquires current artifact custody, completes the build attempt, and
-reconstructs the same production publication result after process-like restart. The lower
-transaction layer revalidates exact restart storage but cannot mint this authority from a raw
-binding in safe code. The completed result can now transfer into the strict, move-only
-`WorkerV3LoadEnvelopeV1` in `fe2o3-runtime-protocol`, publish exact durable custody, retire the
-duplicate replay intent, and reconstruct the same inert envelope after restart. The route does not
-yet provide application descriptor transfer, host admission before HSA, exclusive Cargo V3
-routing, authenticated compiler-produced descriptor-source evidence, or a gfx942
-compile/recover/load/launch numerical result.
-
-### Tiled GEMM V1 structural artifact policy
-
-`inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1` is a separate sealed
-specialization of Worker V2 raw admission. It preserves the existing generic
-WG256 policy and selects an exact WG64 contract only for the declared
-direct-global `tiled_gemm_v1` profile. Admission requires COV6,
-`gfx942:xnack-`, wave64, required workgroup `[64, 1, 1]`, maximum flat
-workgroup 64, zero LDS, exact entry and descriptor symbols, and one embedded
-unfinalized canonical descriptor table.
-
-Metadata must contain eight explicit fields for four slices: each global
-pointer is followed by its `u64` length at offsets `0, 8, ..., 56`. A and B use
-`u16` storage; C and D use `f32`. The explicit span is 64 bytes and the COV6
-implicit suffix starts at offset 64 with size 256, producing a 320-byte kernarg
-segment. Descriptor admission additionally requires exact subgroup, matrix,
-AMD-wave, and AMD-MFMA declarations plus the direct-global zero-LDS logical
-argument contract.
-
-This policy does not inspect `.text` or bind it to a trusted lowering. `u16`
-storage does not prove BF16 interpretation, and an AMD-MFMA capability
-declaration does not prove that the body contains or correctly uses an MFMA
-instruction. Synthetic tests intentionally use arbitrary `.text` bytes to
-make that boundary executable.
-
-`finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1` uses the existing
-in-process LLVM/LLD Worker V2 lineage and canonical finalizer. It independently
-verifies the finalized structural envelope, reruns exact metadata checks, and
-requires the finalized descriptor admission to equal the raw admission. It
-adds no COMGR or shell linker path. Canonical finalization does not add
-kernel-body or ISA-semantic validation.
-
-The older 288-byte frontend probe remains a separate evidence profile: eight
-BF16 plus four F32 by-value fragments and 32 explicit bytes. Substitution
-between that probe and this structural 320-byte profile fails closed. Neither
-typed result authenticates compiler or code origin, validates the kernel body,
-proves BF16/MFMA semantics or Verus verification, or grants publication, load,
-or launch authority.
-
-### Row-softmax V1 structural artifact policy
-
-`inspect_row_softmax_v1_structural_worker_v2_hsaco_v1` is a separate sealed
-Worker V2 specialization for `row_softmax_v1`. It requires COV6,
-`gfx942:xnack-`, wave64, required workgroup `[64, 1, 1]`, maximum flat
-workgroup 64, absent max-num-workgroups metadata, zero LDS and private segment,
-exact entry and descriptor symbols, and one unfinalized canonical descriptor
-table.
-The bound executable entry must be a real function symbol in an executable
-mapping, but its instruction bytes are not interpreted.
-
-The measured upstream LLVM 22.1.8 metadata must omit the kernel-kind field while
-decoding to Normal, emit `uses_dynamic_stack=false`, and omit uniform-workgroup,
-cluster, workgroup-processor, gfx revision, enqueue, workgroup-size-hint, and
-vector-type-hint fields. Source language must be exactly OpenCL C 2.0. SGPR,
-VGPR, AGPR, SGPR-spill, and VGPR-spill fields must be present with the measured
-values `42`, `88`, `44`, `44`, and `28`.
-
-The argument array must be present and contain exactly four explicit fields
-followed by nineteen COV6 hidden fields. The hidden sequence is block counts,
-group sizes, remainders, global offsets, grid dimensions, hostcall buffer,
-multigrid synchronization, heap V1, default queue, completion action, and queue
-pointer at the exact LLVM-emitted offsets and sizes. Missing, reordered,
-duplicated, qualified, or additional arguments fail closed.
-
-Metadata and the canonical descriptor must agree on two F32 slice pairs:
-`input: &[f32]` and `output: DisjointSlice<f32>`, with pointer/length fields at
-offsets `0, 8, 16, 24`. The explicit span is 32 bytes and the COV6 implicit
-suffix starts there with size 256, for 288 bytes total. Capability and build
-evidence remain unauthenticated declarations.
-
-The fixed row length of 64 is not present as a runtime value in descriptor or
-AMDHSA metadata, so artifact admission cannot validate either slice length or
-an actual host launch. The value is only an intended host-profile requirement,
-not a property exposed by admitted artifact evidence. Arbitrary `.text`
-remains structurally admissible. No
-result proves functional softmax, an `exp` implementation, reduction order,
-NaN/infinity behavior, numerical error bounds, memory safety, non-aliasing,
-race freedom, or Verus verification. It authenticates neither source nor
-compiler origin and grants no publication, HSA load, or launch authority.
-
-`finalize_row_softmax_v1_structural_worker_v2_hsaco_v1` uses the same existing
-upstream LLVM/LLD Worker V2 lineage and canonical descriptor finalizer. It adds
-no COMGR path and independently repeats the exact structural checks after
-digest finalization.
-
-The separate row release gate binds this profile to a manifest-only commit and
-requires two fresh builds against one caller-supplied reviewed manifest digest.
-That is host-specific compiler/code-object integrity evidence. It is not origin
-authentication, GPU execution, source-to-machine refinement, or runtime
-authority.
-
-Both inspected and finalized profile values retain their generic Worker V2
-lineage privately. They cannot be converted into generic prepared-finalization
-or publication values, and profile finalization consumes inspected evidence so
-the same admission cannot be replayed.
+These checks establish structural consistency and custody for the sole Worker
+V3 route. They do not authenticate compiler origin, prove compiler refinement or
+kernel semantics, prove what implementation produced a measured worker binary,
+or independently grant HSA load or launch authority. The scalar-GEMM descriptor
+validator is retained because Worker V3 authority consumes it; no scalar-GEMM
+worker publication route is retained.

@@ -25,24 +25,14 @@ mod lds_gemm_finalizer;
 mod lds_gemm_profile_registry;
 mod link_plan;
 mod request_construction;
-mod row_softmax_authority;
-mod row_softmax_certificate_join;
-mod row_softmax_v1_artifact;
-mod row_softmax_v1_worker;
 mod scalar_gemm_v1_worker;
-mod tiled_gemm_v1_artifact;
 mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v2_hsaco_admission;
 mod worker_v2_hsaco_finalization;
-mod worker_v2_hsaco_publication;
 mod worker_v3_compact_finalizer_replay;
 mod worker_v3_hsaco_publication;
-mod workgroup_lds_reduction_v1_profile;
-mod workgroup_scoped_atomic_v1_profile;
-mod workgroup_sync_v1_artifact;
-mod workgroup_sync_v1_worker;
 
 pub use compiler_ffi_bridge::{
     ExpectedFinalDefinedSymbolsClaimIdentityV1, ExpectedFinalDefinedSymbolsClaimV1,
@@ -126,40 +116,8 @@ pub use reserved_fe2o3_symbols::{
     MAX_GENERAL_TYPED_V3_SEMANTIC_WITNESS_BYTES_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
     derive_device_ffi_contract_id_v1,
 };
-pub use row_softmax_authority::{
-    MAX_ROW_SOFTMAX_V1_AUTHORITY_TRANSCRIPT_BYTES, MAX_ROW_SOFTMAX_V1_REVIEWED_SOURCE_BYTES,
-    ROW_SOFTMAX_V1_PROVIDER_ITEM_COUNT, ROW_SOFTMAX_V1_PROVIDER_ITEMS,
-    RowSoftmaxV1AuthorityPolicyErrorV1, RowSoftmaxV1AuthorityPolicyV1,
-    RowSoftmaxV1CompilerClosurePolicyV1, RowSoftmaxV1ProviderItemV1,
-    RowSoftmaxV1ProviderManifestV1, derive_row_softmax_v1_provider_source_identity_v1,
-};
-pub use row_softmax_certificate_join::{
-    PreparedProtectedRowSoftmaxV1AdmissionV1, ProtectedRowSoftmaxV1AdmissionErrorV1,
-    ProtectedRowSoftmaxV1AdmissionIdentityV1, prepare_protected_row_softmax_v1_admission_v1,
-};
-pub use row_softmax_v1_artifact::{
-    FinalizedRowSoftmaxV1StructuralHsacoV1, InspectedRowSoftmaxV1StructuralWorkerV2HsacoV1,
-    RowSoftmaxV1StructuralArtifactErrorV1, finalize_row_softmax_v1_structural_worker_v2_hsaco_v1,
-    inspect_row_softmax_v1_structural_worker_v2_hsaco_v1,
-};
-pub use row_softmax_v1_worker::{
-    InspectedRowSoftmaxV1DirectWorkerHsacoV1, ROW_SOFTMAX_V1_UPSTREAM_LLVM_BUILD_IDENTITY_V1,
-    ROW_SOFTMAX_V1_WORKER_COMPLETE_DIAGNOSTIC_V1, RowSoftmaxV1DirectWorkerErrorV1,
-    RowSoftmaxV1DirectWorkerExchangeIdentityV1, RowSoftmaxV1DirectWorkerExpectationV1,
-    RowSoftmaxV1DirectWorkerPinsV1, RowSoftmaxV1OcmlProviderPinsV1,
-    ValidatedRowSoftmaxV1DirectWorkerExchangeV1, inspect_row_softmax_v1_direct_worker_hsaco_v1,
-    validate_row_softmax_v1_direct_worker_exchange_v1,
-};
 pub use scalar_gemm_v1_worker::{
-    InspectedScalarGemmV1WorkerV2HsacoV1, ScalarGemmV1WorkerExchangeIdentityV1,
-    ScalarGemmV1WorkerValidationErrorV1, ValidatedScalarGemmV1WorkerExchangeV1,
-    inspect_scalar_gemm_v1_worker_v2_hsaco_v1, validate_scalar_gemm_v1_kernel_descriptor_v1,
-    validate_scalar_gemm_v1_worker_exchange_v1,
-};
-pub use tiled_gemm_v1_artifact::{
-    FinalizedTiledGemmV1StructuralHsacoV1, InspectedTiledGemmV1StructuralWorkerV2HsacoV1,
-    TiledGemmV1StructuralArtifactErrorV1, finalize_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
-    inspect_tiled_gemm_v1_structural_worker_v2_hsaco_v1,
+    ScalarGemmV1WorkerValidationErrorV1, validate_scalar_gemm_v1_kernel_descriptor_v1,
 };
 pub use worker_executor::{
     DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,
@@ -184,41 +142,17 @@ pub use worker_protocol_v2::{
     WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
 };
 pub use worker_v2_hsaco_admission::{
-    CanonicalDescriptorSectionObservationV1, InspectedProtectedRawWorkerV2HsacoIdentityV1,
-    InspectedProtectedRawWorkerV2HsacoV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
-    InspectedProtectedRawWorkerV3HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
-    InspectedRawWorkerV2HsacoV1, ObservedWorkerV2KernelSymbolsV1, SealedWorkerV2ResponseIdentityV1,
-    WorkerV2RawHsacoInspectionError, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
-    WorkerV2RawLaunchContractV1, inspect_general_gemm_worker_v2_raw_hsaco_v1,
-    inspect_production_v1_worker_v2_raw_hsaco_v1,
-    inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
+    CanonicalDescriptorSectionObservationV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    InspectedProtectedRawWorkerV3HsacoV1, ObservedWorkerV2KernelSymbolsV1,
+    SealedWorkerV2ResponseIdentityV1, WorkerV2RawHsacoInspectionError,
+    WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
-    inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 pub use worker_v2_hsaco_finalization::{
-    DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV2HsacoIdentityV2,
-    FinalizedProtectedWorkerV3HsacoIdentityV1, FinalizedWorkerV2HsacoIdentityV1,
-    MAX_PROTECTED_WORKER_V2_FINALIZER_LINEAGE_BYTES_V2,
-    MissingAuthenticatedDescriptorSourceEvidenceV1,
-    MissingAuthenticatedProtectedDescriptorSourceEvidenceV2,
+    DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
     MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
-    PreparedFinalizedProtectedWorkerV2HsacoV2, PreparedFinalizedProtectedWorkerV3HsacoV1,
-    PreparedFinalizedWorkerV2HsacoV1, ProtectedWorkerV2FinalizerLineageDecodeErrorV2,
-    ProtectedWorkerV2FinalizerLineageIdentityV2, ProtectedWorkerV2FinalizerLineageRouteV2,
-    ProtectedWorkerV2FinalizerLineageV2, WorkerV2HsacoFinalizationError,
-    finalize_inspected_protected_worker_v2_hsaco_v2,
-    finalize_inspected_protected_worker_v3_hsaco_v1, finalize_inspected_worker_v2_hsaco_v1,
-};
-pub use worker_v2_hsaco_publication::{
-    PreparedFinalizedProtectedWorkerV2HsacoPublicationV2,
-    PreparedFinalizedWorkerV2HsacoPublicationV1, PreparedProtectedWorkerV2HsacoPublicationV2,
-    PreparedWorkerV2HsacoPublicationV1, ProtectedWorkerV2HsacoPublicationRouteV2,
-    SealedProtectedWorkerV2HsacoPublicationIntentV2, SealedWorkerV2HsacoPublicationIntentV1,
-    WorkerV2HsacoPublicationError, WorkerV2HsacoPublicationRouteV1,
-    prepare_finalized_protected_worker_v2_hsaco_publication_v2,
-    prepare_finalized_worker_v2_hsaco_publication_v1,
-    prepare_protected_worker_v2_hsaco_publication_v2, prepare_worker_v2_hsaco_publication_v1,
-    publish_prepared_finalized_worker_v2_hsaco_v1, publish_prepared_worker_v2_hsaco_v1,
+    PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV2HsacoFinalizationError,
+    finalize_inspected_protected_worker_v3_hsaco_v1,
 };
 pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,
@@ -240,17 +174,6 @@ pub use worker_v3_hsaco_publication::{
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
-};
-pub use workgroup_sync_v1_artifact::{
-    FinalizedWorkgroupSyncHsacoIdentityV1, PreparedFinalizedWorkgroupSyncHsacoV1,
-    WorkgroupSyncFinalizationErrorV1, finalize_workgroup_sync_v1_worker_v2_hsaco_v1,
-};
-pub use workgroup_sync_v1_worker::{
-    InspectedWorkgroupSyncWorkerV2HsacoV1, ValidatedWorkgroupSyncWorkerExchangeV1,
-    WorkgroupSyncCompilerPinsV1, WorkgroupSyncDirectWorkerExpectationV1,
-    WorkgroupSyncDirectWorkerPinsV1, WorkgroupSyncProfileKindV1, WorkgroupSyncWorkerErrorV1,
-    WorkgroupSyncWorkerExchangeIdentityV1, construct_inert_workgroup_sync_v1_compiler_handoff_v1,
-    inspect_workgroup_sync_v1_worker_v2_hsaco_v1, validate_workgroup_sync_v1_worker_exchange_v1,
 };
 
 /// The only ELF section name recognized for a canonical V1 descriptor table.

@@ -21,10 +21,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, InertDecodedWorkerExchangeV2, InertFirstBuildWorkerV2EvidenceV1,
-    InspectedRawWorkerV2HsacoV1, WorkerCompilerFfiEnvelopeIdentityV2, WorkerInputKindV1,
-    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerProtocolError, WorkerRequestV2,
-    WorkerResponseV2, WorkerStageV1, WorkerV2RawHsacoInspectionError,
-    inspect_worker_v2_raw_hsaco_v1,
+    WorkerCompilerFfiEnvelopeIdentityV2, WorkerInputKindV1, WorkerOptimizationLevelV1,
+    WorkerOptionsV1, WorkerProtocolError, WorkerRequestV2, WorkerResponseV2, WorkerStageV1,
+    WorkerV2RawHsacoInspectionError,
+    worker_v2_hsaco_admission::{InspectedRawWorkerV2HsacoV1, inspect_worker_v2_raw_hsaco_v1},
 };
 
 const SCALAR_GEMM_V1_TARGET: &str = "gfx942:xnack-";

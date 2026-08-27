@@ -1,7 +1,6 @@
 #![cfg(target_os = "linux")]
 
 use std::{
-    any::TypeId,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -25,15 +24,12 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffV3,
 };
 use fe2o3_hsaco_finalize::{
-    CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV2EvidenceV1,
-    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoV1,
+    CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
     InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
     ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV2HsacoFinalizationError,
-    WorkerV2RawHsacoInspectionError, WorkerV3HsacoPublicationErrorV1,
-    execute_protected_reproducible_first_build_worker_v3,
+    WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
     finalize_inspected_protected_worker_v3_hsaco_v1,
-    inspect_protected_production_v1_worker_v2_raw_hsaco_v1,
     inspect_protected_production_v1_worker_v3_raw_hsaco_v1, inspect_unfinalized,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
@@ -883,24 +879,6 @@ fn raw_bytes_and_every_structural_hsaco_axis_are_checked() {
         );
         assert!(inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).is_err());
     }
-}
-
-#[test]
-fn v2_and_v3_admission_schemas_are_compile_time_separate() {
-    let _: fn(
-        InertProtectedFirstBuildWorkerV2EvidenceV1,
-    )
-        -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> =
-        inspect_protected_production_v1_worker_v2_raw_hsaco_v1;
-    let _: fn(
-        InertProtectedFirstBuildWorkerV3EvidenceV1,
-    )
-        -> Result<InspectedProtectedRawWorkerV3HsacoV1, WorkerV2RawHsacoInspectionError> =
-        inspect_protected_production_v1_worker_v3_raw_hsaco_v1;
-    assert_ne!(
-        TypeId::of::<InspectedProtectedRawWorkerV2HsacoV1>(),
-        TypeId::of::<InspectedProtectedRawWorkerV3HsacoV1>()
-    );
 }
 
 fn inspected(bytes: Vec<u8>, config: EvidenceConfig) -> InspectedProtectedRawWorkerV3HsacoV1 {

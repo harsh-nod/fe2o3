@@ -1,7 +1,0 @@
-error[E0277]: the trait bound `InspectedScalarGemmV1WorkerV2HsacoV1: From<Vec<u8>>` is not satisfied
- --> tests/ui/worker_v2_finalization/scalar_inspection_cannot_be_reconstructed_from_bytes.rs:4:11
-  |
-4 |     bytes.into()
-  |           ^^^^ the trait `From<Vec<u8>>` is not implemented for `InspectedScalarGemmV1WorkerV2HsacoV1`
-  |
-  = note: required for `Vec<u8>` to implement `Into<InspectedScalarGemmV1WorkerV2HsacoV1>`

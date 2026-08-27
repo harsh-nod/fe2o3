@@ -33,10 +33,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME,
     FinalizationError, FinalizedHsaco, FirstBuildWorkerV2IdentityV1, InertDecodedWorkerExchangeV2,
-    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV2HsacoIdentityV1,
-    InspectedProtectedRawWorkerV2HsacoV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
-    InspectedProtectedRawWorkerV3HsacoV1, InspectedRawWorkerV2HsacoIdentityV1,
-    InspectedRawWorkerV2HsacoV1, LinkInputV1, LinkOptionV1, LinkOutputV1, MAX_LINK_INPUTS,
+    InertProtectedFirstBuildWorkerV3EvidenceV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    InspectedProtectedRawWorkerV3HsacoV1, LinkInputV1, LinkOptionV1, LinkOutputV1, MAX_LINK_INPUTS,
     MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MAX_WORKER_EXECUTABLE_BYTES,
     MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
@@ -44,16 +42,17 @@ use crate::{
     ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffExpectationV3,
     ProtectedFirstBuildWorkerV2IdentityV1, ProtectedFirstBuildWorkerV3IdentityV1, ProvenanceNodeV1,
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerV2RawHsacoPolicyIdentityV1,
-    WorkerV2RawHsacoPolicyV1, WorkerV2RawLaunchContractV1,
-    finalize_allocated_read_only_unfinalized, finalize_unfinalized,
+    WorkerV2RawHsacoPolicyV1, finalize_allocated_read_only_unfinalized, finalize_unfinalized,
     first_build_worker_v2::{
         ProtectedFirstBuildReplayValidationV2, validate_protected_first_build_replay_v2,
     },
     inspect_unfinalized, verify_allocated_read_only_finalized, verify_finalized,
     worker_v2_hsaco_admission::{
-        ProtectedInspectionIdentityPreimageV2, WorkerV2RawLaunchDiagnosticProfileV1,
-        calculate_protected_inspection_identity_v2, calculate_response_identity_bytes_v1,
-        inspect_worker_v2_raw_hsaco_preimage_v1,
+        InspectedProtectedRawWorkerV2HsacoIdentityV1, InspectedProtectedRawWorkerV2HsacoV1,
+        InspectedRawWorkerV2HsacoIdentityV1, InspectedRawWorkerV2HsacoV1,
+        ProtectedInspectionIdentityPreimageV2, WorkerV2RawLaunchContractV1,
+        WorkerV2RawLaunchDiagnosticProfileV1, calculate_protected_inspection_identity_v2,
+        calculate_response_identity_bytes_v1, inspect_worker_v2_raw_hsaco_preimage_v1,
     },
 };
 

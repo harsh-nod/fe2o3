@@ -3,8 +3,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use fe2o3_hsaco::{KernelBindingError, MAX_HSACO_BYTES};
 use fe2o3_hsaco_finalize::{
     DEVICE_DESCRIPTOR_SECTION_ALIGNMENT, DEVICE_DESCRIPTOR_SECTION_NAME, FinalizationError,
-    RowSoftmaxV1CompilerClosurePolicyV1, finalize_unfinalized, inspect_finalized,
-    inspect_unfinalized, verify_finalized,
+    finalize_unfinalized, inspect_finalized, inspect_unfinalized, verify_finalized,
 };
 use fe2o3_kernel_descriptor::{
     AccessMode, BlockSizeV1, BuildEvidenceV1, CANONICAL_CODE_OBJECT_DIGEST_OFFSET,
@@ -29,34 +28,6 @@ const SYMTAB_SECTION_INDEX: usize = 5;
 const DESCRIPTOR_SECTION_INDEX: usize = 6;
 const TARGET: &str = "gfx1151";
 const GENERAL_V3_TARGET: &str = "gfx942:xnack-";
-
-#[test]
-fn row_compiler_closure_public_policy_matches_the_managed_wrapper_identity() {
-    let cargo = [0x11; 32];
-    let rustc = [0x22; 32];
-    let runtime = [0x33; 32];
-    let backend = [0x44; 32];
-    let policy = RowSoftmaxV1CompilerClosurePolicyV1::new(cargo, rustc, runtime, backend).unwrap();
-
-    let mut rustc_identity = Sha256::new();
-    rustc_identity.update(b"fe2o3-rustc-executable-runtime-identity-v1\0");
-    rustc_identity.update(rustc);
-    rustc_identity.update(runtime);
-    let mut closure_identity = Sha256::new();
-    closure_identity.update(b"fe2o3-compiler-closure-identity-v1\0");
-    closure_identity.update(cargo);
-    closure_identity.update(rustc_identity.finalize());
-    closure_identity.update(backend);
-
-    assert_eq!(policy.cargo_executable_sha256(), cargo);
-    assert_eq!(policy.rustc_executable_sha256(), rustc);
-    assert_eq!(policy.rustc_runtime_tree_sha256(), runtime);
-    assert_eq!(policy.codegen_backend_sha256(), backend);
-    assert_eq!(
-        policy.identity_sha256(),
-        closure_identity.finalize().as_slice()
-    );
-}
 
 #[derive(Clone, Copy)]
 enum GeneralV3Kernel {
