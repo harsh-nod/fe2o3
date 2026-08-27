@@ -2330,6 +2330,36 @@ mod unsigned_cast_recipe_tests {
             ),
             Err(ProductionRankedKernelErrorV1::NonEntryDefinition { block: 1 }),
         );
+
+        for source in [
+            ProductionRankedValueV1::BlockArgument {
+                block: 1,
+                argument: 0,
+            },
+            ProductionRankedValueV1::BlockArgument {
+                block: 0,
+                argument: 0,
+            },
+        ] {
+            assert_eq!(
+                ProductionRankedKernelV1::new(
+                    "foreign_unsigned_cast_block_argument",
+                    0,
+                    vec![
+                        ProductionRankedBlockV1::new(
+                            vec![cast(0, source, 32)],
+                            ProductionRankedTerminatorV1::Branch { target: 1 },
+                        ),
+                        ProductionRankedBlockV1::with_index_arguments(
+                            1,
+                            vec![],
+                            ProductionRankedTerminatorV1::Return,
+                        ),
+                    ],
+                ),
+                Err(ProductionRankedKernelErrorV1::UndefinedValue(source)),
+            );
+        }
     }
 }
 
@@ -3396,6 +3426,7 @@ fn validate_block_argument_values_v1(
             validate(*lhs)?;
             validate(*rhs)?;
         }
+        ProductionRankedOperationV1::IndexUnsignedCast { source, .. } => validate(*source)?,
         ProductionRankedOperationV1::DeterministicJoin { dependencies, .. } => {
             for dependency in dependencies {
                 validate(*dependency)?;
@@ -3528,7 +3559,6 @@ fn validate_block_argument_values_v1(
         }
         ProductionRankedOperationV1::ExecutionLayout { .. }
         | ProductionRankedOperationV1::IndexConstant { .. }
-        | ProductionRankedOperationV1::IndexUnsignedCast { .. }
         | ProductionRankedOperationV1::IndexUnknown { .. }
         | ProductionRankedOperationV1::InvocationIndex { .. }
         | ProductionRankedOperationV1::Barrier { .. }

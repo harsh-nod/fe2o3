@@ -268,6 +268,7 @@ struct ProjectedUniformInductionV1 {
     initial: ProductionRankedValueV1,
     bound: ProductionRankedValueV1,
     step: ProductionRankedValueV1,
+    source_progress: ProjectedSourceInductionCandidateV1,
     bound_cast: Option<ProjectedUnsignedCastCandidateV1>,
 }
 
@@ -275,6 +276,21 @@ impl ProjectedUniformInductionV1 {
     fn contains_block(&self, block: usize) -> bool {
         self.loop_blocks.binary_search(&block).is_ok()
     }
+}
+
+/// Exact semantic-MIR recurrence retained until the source update width and
+/// overflow behavior are replayed against the final ranked loop recipe.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedSourceInductionCandidateV1 {
+    induction: SemanticLocalIdV1,
+    induction_type: SemanticTypeIdV1,
+    header_statement: usize,
+    bound_operand: SemanticOperandV1,
+    latch_statement: usize,
+    step_operand: SemanticOperandV1,
+    step_value: u64,
+    ranked_bound: ProductionRankedValueV1,
+    ranked_step: ProductionRankedValueV1,
 }
 
 /// Candidate cast retained only until it is reconciled against the exact
@@ -5178,7 +5194,7 @@ fn project_intrinsic_contracts(
         operations,
         next_value,
     )?;
-    reconcile_and_emit_unsigned_casts_v1(
+    reconcile_source_progress_and_emit_unsigned_casts_v1(
         types,
         function,
         constants,
@@ -6310,7 +6326,11 @@ fn project_uniform_inductions_v1(
             }
         }
         let mut step = None;
-        for statement in function.blocks()[topology.latch].statements() {
+        for (statement_index, statement) in function.blocks()[topology.latch]
+            .statements()
+            .iter()
+            .enumerate()
+        {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
@@ -6333,7 +6353,7 @@ fn project_uniform_inductions_v1(
                 .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                     "a uniform induction has a non-canonical latch definition",
                 ))?;
-                if step.replace(candidate).is_some() {
+                if step.replace((statement_index, candidate)).is_some() {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
                         "a uniform induction has multiple latch definitions",
                     ));
@@ -6358,16 +6378,24 @@ fn project_uniform_inductions_v1(
                 ));
             }
         }
-        let (Some(initial), Some(step)) = (initial, step) else {
+        let (Some(initial), Some((latch_statement, step))) = (initial, step) else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction without exact initial and latch definitions",
             ));
         };
-        if positive_unsigned_constant_operand_v1(step, constants, types).is_none() {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+        let step_value = positive_unsigned_constant_operand_v1(step, constants, types).ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete(
                 "a uniform induction whose positive step is not statically established",
-            ));
-        }
+            ),
+        )?;
+        let source_step_operand = step.clone();
+        let induction_type = function
+            .locals()
+            .get(induction.index() as usize)
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction local is outside the authenticated type table",
+            ))?
+            .ty();
         let Some(initial) = project_uniform_switch_operand_v1(
             initial,
             constants,
@@ -6424,6 +6452,17 @@ fn project_uniform_inductions_v1(
             ranked_value: bound,
             bit_width,
         });
+        let source_progress = ProjectedSourceInductionCandidateV1 {
+            induction,
+            induction_type,
+            header_statement: comparison_index,
+            bound_operand: bound_operand.clone(),
+            latch_statement,
+            step_operand: source_step_operand,
+            step_value,
+            ranked_bound: bound,
+            ranked_step: step,
+        };
         inductions.push(ProjectedUniformInductionV1 {
             preheader: topology.preheader,
             header,
@@ -6434,6 +6473,7 @@ fn project_uniform_inductions_v1(
             initial,
             bound,
             step,
+            source_progress,
             bound_cast,
         });
     }
@@ -6475,7 +6515,7 @@ fn unsigned_bit_width_for_maximum_v1(maximum: u128) -> Option<u16> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reconcile_and_emit_unsigned_casts_v1(
+fn reconcile_source_progress_and_emit_unsigned_casts_v1(
     types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
@@ -6489,9 +6529,126 @@ fn reconcile_and_emit_unsigned_casts_v1(
     let mut reconciled = BTreeMap::new();
     let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
     for induction in inductions.iter() {
+        let source = &induction.source_progress;
+        let induction_type = function
+            .locals()
+            .get(source.induction.index() as usize)
+            .map(|local| local.ty())
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction has a stale local",
+            ))?;
+        let comparison = function
+            .blocks()
+            .get(induction.header)
+            .and_then(|block| block.statements().get(source.header_statement))
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction has a stale comparison site",
+            ))?;
+        let SemanticStatementKindV1::Assign(comparison) = comparison.kind() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction comparison is no longer an assignment",
+            ));
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right: bound_operand,
+        } = comparison.value().kind()
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction comparison is no longer an exact less-than",
+            ));
+        };
+        let compared_induction = resolve_loop_header_copy_alias_v1(
+            &function.blocks()[induction.header],
+            source.header_statement,
+            left,
+            local_definitions,
+        )?;
+        if induction_type != source.induction_type
+            || left.ty() != source.induction_type
+            || compared_induction != Some(source.induction)
+            || bound_operand != &source.bound_operand
+            || induction.bound != source.ranked_bound
+            || induction.step != source.ranked_step
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction comparison changed type or value",
+            ));
+        }
+        let bound_range = semantic_ranges
+            .range_at_operand(bound_operand, induction.header, source.header_statement)?
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction has no finite unsigned bound",
+            ))?;
+        let latch = function
+            .blocks()
+            .get(induction.latch)
+            .and_then(|block| block.statements().get(source.latch_statement))
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction has a stale latch site",
+            ))?;
+        let SemanticStatementKindV1::Assign(latch) = latch.kind() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction latch is no longer an assignment",
+            ));
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::Add,
+            left: latch_left,
+            right: latch_right,
+        } = latch.value().kind()
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction latch is not an ordinary Add",
+            ));
+        };
+        let replayed_step = if simple_operand_local(latch_left) == Some(source.induction) {
+            latch_right
+        } else if simple_operand_local(latch_right) == Some(source.induction) {
+            latch_left
+        } else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction latch no longer updates the same local",
+            ));
+        };
+        if !latch.destination().projections().is_empty()
+            || latch.destination().local() != source.induction
+            || latch.destination().ty() != source.induction_type
+            || latch.value().result_type() != source.induction_type
+            || latch_left.ty() != source.induction_type
+            || latch_right.ty() != source.induction_type
+            || replayed_step != &source.step_operand
+            || positive_unsigned_constant_operand_v1(replayed_step, constants, types)
+                != Some(source.step_value)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction latch changed type, step, or overflow semantics",
+            ));
+        }
+        let induction_maximum = semantic_ranges
+            .scalar_unsigned_maximum(source.induction_type)
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction does not use a supported unsigned scalar type",
+            ))?;
+        if bound_range.maximum != 0
+            && (bound_range.maximum - 1)
+                .checked_add(u128::from(source.step_value))
+                .is_none_or(|updated| updated > induction_maximum)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived source induction update may overflow its exact unsigned type",
+            ));
+        }
         let Some(range) = &induction.bound_cast else {
             continue;
         };
+        if range.header != induction.header || range.comparison_statement != source.header_statement
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast has a stale semantic statement site",
+            ));
+        }
         let statement = function
             .blocks()
             .get(range.header)
@@ -6514,9 +6671,7 @@ fn reconcile_and_emit_unsigned_casts_v1(
                 "a compiler-derived unsigned cast no longer names a loop comparison",
             ));
         };
-        let reconciled_width = semantic_ranges
-            .range_at_operand(source_operand, range.header, range.comparison_statement)?
-            .and_then(|proof| unsigned_bit_width_for_maximum_v1(proof.maximum));
+        let reconciled_width = unsigned_bit_width_for_maximum_v1(bound_range.maximum);
         if source_operand != &range.source_operand
             || source_operand.ty() != range.source_type
             || reconciled_width != Some(range.bit_width)
@@ -19121,7 +19276,7 @@ mod tests {
                         SemanticRvalueKindV1::Binary {
                             operation: SemanticBinaryOpV1::Add,
                             left: operand(induction),
-                            right: constant(16),
+                            right: constant(1),
                         },
                     )],
                     SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
@@ -19467,6 +19622,115 @@ mod tests {
         )
     }
 
+    fn widened_u64_induction_function(step: u64) -> SemanticFunctionDeclV1 {
+        widened_u64_induction_function_with_unchecked_latch(step, false)
+    }
+
+    fn widened_u64_induction_function_with_unchecked_latch(
+        step: u64,
+        unchecked: bool,
+    ) -> SemanticFunctionDeclV1 {
+        let induction = SemanticLocalIdV1::from_index(1);
+        let predicate = SemanticLocalIdV1::from_index(2);
+        let bound = SemanticLocalIdV1::from_index(3);
+        let narrow_bound = SemanticLocalIdV1::from_index(4);
+        let u64_place = |local| SemanticPlaceV1::new(local, vec![], U64_TYPE).unwrap();
+        let u32_place = |local| SemanticPlaceV1::new(local, vec![], SCALAR_TYPE).unwrap();
+        let u64_operand = |local| SemanticOperandV1::Copy(u64_place(local));
+        let u32_operand = |local| SemanticOperandV1::Copy(u32_place(local));
+        let assign = |destination: SemanticPlaceV1,
+                      result_type: SemanticTypeIdV1,
+                      value: SemanticRvalueKindV1| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                destination,
+                SemanticRvalueV1::new(result_type, value),
+            )))
+        };
+        let switch = SemanticTerminatorKindV1::SwitchInt {
+            discriminant: u32_operand(predicate),
+            targets: SemanticSwitchTargetsV1::new(
+                vec![SemanticSwitchTargetV1::new(
+                    0,
+                    cfg_edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                )],
+                cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+            )
+            .unwrap(),
+        };
+        projection_function_with_locals(
+            vec![
+                block(
+                    210,
+                    vec![
+                        assign(
+                            u64_place(induction),
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Use(typed_constant(U64_TYPE, 0, 8)),
+                        ),
+                        assign(
+                            u64_place(bound),
+                            U64_TYPE,
+                            SemanticRvalueKindV1::Cast {
+                                kind: SemanticCastKindV1::Integer,
+                                operand: u32_operand(narrow_bound),
+                            },
+                        ),
+                    ],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    211,
+                    vec![assign(
+                        u32_place(predicate),
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: u64_operand(induction),
+                            right: u64_operand(bound),
+                        },
+                    )],
+                    switch,
+                ),
+                block(
+                    212,
+                    vec![],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 3)),
+                ),
+                block(
+                    213,
+                    vec![assign(
+                        u64_place(induction),
+                        U64_TYPE,
+                        if unchecked {
+                            SemanticRvalueKindV1::UncheckedBinary(
+                                SemanticUncheckedBinaryRvalueV1::new(
+                                    SemanticUncheckedBinaryOpV1::Add,
+                                    u64_operand(induction),
+                                    typed_constant(U64_TYPE, u128::from(step), 8),
+                                ),
+                            )
+                        } else {
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::Add,
+                                left: u64_operand(induction),
+                                right: typed_constant(U64_TYPE, u128::from(step), 8),
+                            }
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(214, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(210, U64_TYPE, SemanticLocalRoleV1::Return),
+                local(211, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(212, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(213, U64_TYPE, SemanticLocalRoleV1::Temporary),
+                local(214, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+            ],
+        )
+    }
+
     fn project_test_inductions(
         function: &SemanticFunctionDeclV1,
     ) -> Result<
@@ -19478,15 +19742,29 @@ mod tests {
         ProductionRankedProjectionErrorV1,
     > {
         let types = projection_types();
+        project_test_inductions_with_types(&types, function)
+    }
+
+    fn project_test_inductions_with_types(
+        types: &[SemanticTypeDeclV1],
+        function: &SemanticFunctionDeclV1,
+    ) -> Result<
+        (
+            Vec<ProjectedUniformInductionV1>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
         let constants = constant_locals(function);
-        let origins = local_stable_argument_origins(&types, function).unwrap();
+        let origins = local_stable_argument_origins(types, function).unwrap();
         let definitions = local_definition_counts(function);
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let mut operations = Vec::new();
         let mut next_value = 0;
         let mut inductions = project_uniform_inductions_v1(
-            &types,
+            types,
             function,
             &constants,
             &origins,
@@ -19496,8 +19774,8 @@ mod tests {
             &mut operations,
             &mut next_value,
         )?;
-        reconcile_and_emit_unsigned_casts_v1(
-            &types,
+        reconcile_source_progress_and_emit_unsigned_casts_v1(
+            types,
             function,
             &constants,
             &origins,
@@ -19597,13 +19875,39 @@ mod tests {
     }
 
     #[test]
-    fn unsigned_cast_reconciliation_rejects_stale_type_and_value_substitution() {
-        let types = projection_types();
-        let function = multi_block_induction_function(
+    fn source_induction_width_rejects_u32_wrap_and_accepts_a_widened_u64_recurrence() {
+        let wrapping = multi_block_induction_function(
             InductionCfgShape::Chain,
             SemanticLocalRoleV1::Argument(0),
             16,
         );
+        assert_incomplete(
+            project_test_inductions(&wrapping),
+            "a compiler-derived source induction update may overflow its exact unsigned type",
+        );
+
+        let types = assertion_proof_types();
+        let widened = widened_u64_induction_function(16);
+        let (inductions, operations, _) =
+            project_test_inductions_with_types(&types, &widened).unwrap();
+        assert_eq!(inductions[0].source_progress.induction_type, U64_TYPE);
+        assert_eq!(inductions[0].source_progress.step_value, 16);
+        assert!(matches!(
+            operations.last(),
+            Some(ProductionRankedOperationV1::IndexUnsignedCast { bit_width: 32, .. })
+        ));
+
+        let unchecked = widened_u64_induction_function_with_unchecked_latch(16, true);
+        assert_incomplete(
+            project_test_inductions_with_types(&types, &unchecked),
+            "a uniform induction has a non-canonical latch definition",
+        );
+    }
+
+    #[test]
+    fn unsigned_cast_reconciliation_rejects_stale_type_and_value_substitution() {
+        let types = assertion_proof_types();
+        let function = widened_u64_induction_function(16);
         let constants = constant_locals(&function);
         let origins = local_stable_argument_origins(&types, &function).unwrap();
         let definitions = local_definition_counts(&function);
@@ -19631,7 +19935,7 @@ mod tests {
         let mut reconciled_inductions = inductions.clone();
         let mut reconciled_operations = operations.clone();
         let mut reconciled_next_value = next_value;
-        reconcile_and_emit_unsigned_casts_v1(
+        reconcile_source_progress_and_emit_unsigned_casts_v1(
             &types,
             &function,
             &constants,
@@ -19678,6 +19982,10 @@ mod tests {
                 5,
                 "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
             ),
+            (
+                6,
+                "a compiler-derived unsigned cast has a stale semantic statement site",
+            ),
         ] {
             let mut hostile = inductions.clone();
             let range = hostile[0].bound_cast.as_mut().unwrap();
@@ -19688,12 +19996,65 @@ mod tests {
                 3 => range.source_operand = constant(7),
                 4 => range.bit_width = 64,
                 5 => range.source_type = SemanticTypeIdV1::from_index(u32::MAX),
+                6 => range.header = usize::MAX,
                 _ => unreachable!(),
             }
             let mut hostile_operations = operations.clone();
             let mut hostile_next_value = next_value;
             assert_incomplete(
-                reconcile_and_emit_unsigned_casts_v1(
+                reconcile_source_progress_and_emit_unsigned_casts_v1(
+                    &types,
+                    &function,
+                    &constants,
+                    &origins,
+                    &definitions,
+                    &arguments,
+                    &mut hostile,
+                    &mut hostile_operations,
+                    &mut hostile_next_value,
+                ),
+                expected,
+            );
+        }
+
+        for mutation in 0_u8..7 {
+            let mut hostile = inductions.clone();
+            let source = &mut hostile[0].source_progress;
+            let expected = match mutation {
+                0 => {
+                    source.header_statement = usize::MAX;
+                    "a compiler-derived source induction has a stale comparison site"
+                }
+                1 => {
+                    source.latch_statement = usize::MAX;
+                    "a compiler-derived source induction has a stale latch site"
+                }
+                2 => {
+                    source.induction_type = SCALAR_TYPE;
+                    "a compiler-derived source induction comparison changed type or value"
+                }
+                3 => {
+                    source.step_operand = typed_constant(U64_TYPE, 1, 8);
+                    "a compiler-derived source induction latch changed type, step, or overflow semantics"
+                }
+                4 => {
+                    source.step_value = 1;
+                    "a compiler-derived source induction latch changed type, step, or overflow semantics"
+                }
+                5 => {
+                    source.ranked_bound = ProductionRankedValueV1::Argument(u32::MAX);
+                    "a compiler-derived source induction comparison changed type or value"
+                }
+                6 => {
+                    source.ranked_step = ProductionRankedValueV1::Argument(u32::MAX);
+                    "a compiler-derived source induction comparison changed type or value"
+                }
+                _ => unreachable!(),
+            };
+            let mut hostile_operations = operations.clone();
+            let mut hostile_next_value = next_value;
+            assert_incomplete(
+                reconcile_source_progress_and_emit_unsigned_casts_v1(
                     &types,
                     &function,
                     &constants,
@@ -19714,7 +20075,7 @@ mod tests {
         let function = multi_block_induction_function(
             InductionCfgShape::Chain,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         let (inductions, entry_operations, next_argument) =
             project_test_inductions(&function).unwrap();
@@ -19768,7 +20129,7 @@ mod tests {
         let function = multi_block_induction_function(
             InductionCfgShape::HeaderCopyAlias,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         let (inductions, entry_operations, next_argument) =
             project_test_inductions(&function).unwrap();
@@ -19795,7 +20156,7 @@ mod tests {
         let function = multi_block_induction_function(
             InductionCfgShape::Branched,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         let (inductions, entry_operations, next_argument) =
             project_test_inductions(&function).unwrap();
@@ -19835,7 +20196,7 @@ mod tests {
         let function = multi_block_induction_function(
             InductionCfgShape::Branched,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         let (inductions, entry_operations, next_argument) =
             project_test_inductions(&function).unwrap();
@@ -19898,7 +20259,7 @@ mod tests {
             ),
         ] {
             let function =
-                multi_block_induction_function(shape, SemanticLocalRoleV1::Argument(0), 16);
+                multi_block_induction_function(shape, SemanticLocalRoleV1::Argument(0), 1);
             match project_test_inductions(&function) {
                 Ok((inductions, _, _)) => assert!(
                     inductions.is_empty(),
@@ -19958,14 +20319,14 @@ mod tests {
         let reused = multi_block_induction_function(
             InductionCfgShape::ReusedComparisonLocal,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         assert_eq!(project_test_inductions(&reused).unwrap().0.len(), 1);
 
         let ambiguous = multi_block_induction_function(
             InductionCfgShape::MultipleHeaderComparisons,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         assert_incomplete(
             project_test_inductions(&ambiguous),
@@ -20026,7 +20387,7 @@ mod tests {
         let function = multi_block_induction_function(
             InductionCfgShape::AnalysisSplit,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
         let (blocks, _) = build_ranked_cfg(
@@ -20056,7 +20417,7 @@ mod tests {
         let function = multi_block_induction_function(
             InductionCfgShape::Chain,
             SemanticLocalRoleV1::Argument(0),
-            16,
+            1,
         );
         let (inductions, entry_operations, _) = project_test_inductions(&function).unwrap();
         let mut projected = (0..function.blocks().len())
