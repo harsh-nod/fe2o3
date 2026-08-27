@@ -352,6 +352,22 @@ each device, and creates, validates, and destroys one isolated compute AQL
 queue per device without packet submission or MMIO stores. It does not execute
 a kernel or claim application-level Worker V3 dispatch coverage.
 
+Supplying both diagnostic variables extends the lane with one exact-artifact
+packet in an isolated selected-device process:
+
+```text
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx942 \
+FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID=0x6ced1647a296545c \
+FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO=/absolute/path/to/lds.hsaco \
+  scripts/ci-local.sh hardware-smoke
+```
+
+The diagnostic refuses an HSACO whose SHA-256 differs from
+`ab6bda1e8af05b61c22753382e75dd6a9952db8e598eaac3cb5769863a618ed0`,
+expects the LDS reduction result `2080`, and checks both canary regions. It uses
+an explicit unsafe mechanics transition and therefore does not claim the still
+missing Worker V3 verifier authority.
+
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated
 dispatch route. Worker V2 application recovery, embedded-artifact loading,

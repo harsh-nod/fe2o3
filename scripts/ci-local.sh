@@ -735,6 +735,7 @@ run_runtime_pure_rust_policy() {
       --root fe2o3-kfd-uapi \
       --root fe2o3-amdhsa-loader \
       --root fe2o3-aql \
+      --root fe2o3-runtime \
       --root fe2o3-runtime-model
   run_step runtime-pure-rust-kfd-examples-build \
     env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
@@ -746,6 +747,10 @@ run_runtime_pure_rust_policy() {
         --example kfd-shared-gtt-memory-policy \
         --example kfd-queue-resources \
         --example kfd-compute-aql-queue-policy
+  run_step runtime-pure-rust-dispatch-diagnostic-build \
+    env CARGO_TARGET_DIR="${RUNTIME_PURE_RUST_TARGET_DIR}" \
+      cargo build --locked -p fe2o3-runtime --features hardware-diagnostic \
+        --example gfx942-lds-diagnostic
   run_step runtime-pure-rust-kfd-version-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
@@ -758,6 +763,10 @@ run_runtime_pure_rust_policy() {
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
       --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/kfd-device-identity"
+  run_step runtime-pure-rust-dispatch-diagnostic-elf \
+    python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
+      --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
+      --input "${RUNTIME_PURE_RUST_TARGET_DIR}/debug/examples/gfx942-lds-diagnostic"
   run_step runtime-pure-rust-kfd-memory-policy-elf \
     python3 "${RUNTIME_PURE_RUST_AUDITOR}" \
       --policy "${RUNTIME_PURE_RUST_POLICY}" elf \
@@ -1067,6 +1076,20 @@ run_hardware_smoke() {
   run_step hardware-kfd-compute-aql-queue \
     cargo run --locked -p fe2o3-kfd --features live-validation \
       --example kfd-compute-aql-queue -- --all
+  if [[ -n "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO:-}" || \
+        -n "${FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID:-}" ]]; then
+    if [[ -z "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO:-}" || \
+          -z "${FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID:-}" ]]; then
+      printf '%s\n' \
+        'KFD LDS diagnostic requires both FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO and FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID' >&2
+      return 2
+    fi
+    run_step hardware-kfd-lds-diagnostic \
+      cargo run --locked -p fe2o3-runtime --features hardware-diagnostic \
+        --example gfx942-lds-diagnostic -- \
+        "${FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID}" \
+        "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO}"
+  fi
 }
 
 run_s09_debug_hardware() {

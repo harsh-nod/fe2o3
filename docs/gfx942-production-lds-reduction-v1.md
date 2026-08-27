@@ -45,11 +45,19 @@ thirteen LDS reads, and fourteen physical `s_barrier` instructions.
 ## Execution boundary
 
 The repository intentionally removed the historical HSA qualification harness.
-This checkpoint therefore does not claim current GPU execution. The next
-executable gate must join this exact source-bound artifact to the sole Worker V3
-application, production verifier, generated dispatch, completion ownership, and
-pure-Rust KFD runtime. The existing scoped-atomic kernel is requalified only
-through the same compiler, worker, and descriptor-inspection harness.
+The exact source-bound HSACO now completes one current pure-Rust KFD diagnostic
+on the qualifying MI300X: the 64 values `1..=64` reduce to `2080`, input and
+output canaries remain unchanged, and queue/completion teardown succeeds. The
+runtime uses identical CPU/GPU virtual addresses for every BO and places the
+complete 256-byte static-plus-dynamic group allocation in the AQL packet.
+
+That diagnostic invokes the private mechanics through an explicit `unsafe`
+call. It grants no production authority and does not replace the next gate:
+the sole Worker V3 application and production verifier must authenticate the
+artifact, generated arguments, memory effects, launch, completion, and evidence
+chain before the KFD transition becomes safe. The scoped-atomic kernel is
+requalified only through the same compiler, worker, descriptor-inspection, and
+authorized runtime path.
 
 ## Defects closed
 
@@ -73,11 +81,14 @@ tests, the protected source-to-LLVM fixture, the
 deterministic LDS HSACO finalization/inspection test, and the deterministic
 scoped-atomic HSACO finalization/inspection test. Worker and LLVM build
 identities are read from the measured worker build directory rather than
-accepted from source defaults.
+accepted from source defaults. The pure-Rust runtime additionally passed its
+strict loader/request tests and the exact-artifact KFD canary diagnostic on
+MI300X `gfx942:xnack-` unique ID `6ced1647a296545c`.
 
 ## Boundary
 
-This proves one bounded source-to-HSACO path. It is not a proof of compiler
-refinement, current GPU execution, race freedom for arbitrary kernels, general
+This proves one bounded source-to-HSACO path and records one current measured
+execution of the exact bytes. It is not authenticated Worker V3 launch
+authority, compiler refinement, race freedom for arbitrary kernels, general
 barrier convergence, broad reduction/scan coverage, dynamic LDS, performance
 parity, or support beyond the admitted gfx942 target.

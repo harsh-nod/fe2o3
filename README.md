@@ -52,8 +52,12 @@ AMDGPU lowering, a compiler-bound handoff, the measured target-machine and
 in-process LLD worker, and COV6 descriptor inspection. Deterministic replay
 produces identical HSACO bytes with an exact 256-byte static-LDS contract. This
 route selects no workload profile and uses neither COMGR nor a shell linker. It
-does not grant load or launch authority; current executable evidence must enter
-through the Worker V3 application, production verifier, and KFD runtime.
+does not grant load or launch authority. The same SHA-pinned HSACO now also
+completes one explicitly unsafe, measured-only pure-Rust KFD diagnostic on the
+MI300X: all 64 inputs reduce to `2080`, allocation canaries remain intact, and
+queue/completion teardown succeeds. The diagnostic establishes native KFD/AQL
+mechanics only; production executable evidence must still enter through the
+Worker V3 application and verifier.
 
 ## CUDA-Oxide status
 
@@ -78,7 +82,8 @@ V2 admits only the full canonical `gfx942:xnack-` target, persists that binding
 in Kernel IR, and checks it against the Worker V2 envelope. The older V2
 compiler-created fixture remains separate, but the production `i32` WG64 LDS
 reduction now joins genuine Rust source to reproducible inspected HSACO through
-the one compiler transaction. Worker V3/KFD execution remains open. The
+the one compiler transaction. Unsafe exact-artifact KFD execution passes, while
+Worker V3-authorized KFD execution remains open. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 
