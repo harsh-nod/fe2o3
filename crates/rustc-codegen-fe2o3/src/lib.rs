@@ -606,7 +606,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                             invocation,
                         )
                         .and_then(|transaction| transaction.publish_worker_handoff())
-                        .map(|receipt| receipt.length());
+                        .map(|subject| subject.outer_handoff().byte_len());
                     match publication {
                         Ok(publication_length) => {
                             production_device_transaction_complete = true;

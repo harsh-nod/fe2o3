@@ -53,6 +53,7 @@ pub(crate) enum ProductionPipelineError {
     WorkerHandoffExtractionRequiresExtractionCustody,
     WorkerHandoff(crate::production_worker_handoff::ProductionWorkerHandoffError),
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
+    CompilerExecutionSubject(fe2o3_artifact_transaction::CompilerExecutionSubjectErrorV1),
 }
 
 impl fmt::Display for ProductionPipelineError {
@@ -115,6 +116,10 @@ impl fmt::Display for ProductionPipelineError {
             Self::StrictV3Publication(error) => {
                 write!(formatter, "production compilation strict V3 publication failed: {error}")
             }
+            Self::CompilerExecutionSubject(error) => write!(
+                formatter,
+                "production compilation compiler-execution subject failed: {error}"
+            ),
         }
     }
 }
@@ -136,6 +141,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::ProtectedRustcInvocation(error) => Some(error),
             Self::WorkerHandoff(error) => Some(error),
             Self::StrictV3Publication(error) => Some(error),
+            Self::CompilerExecutionSubject(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::RustcLineageMismatch
@@ -677,7 +683,7 @@ impl TargetLoweredProductionCompilation {
 
     fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineError>
+    ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
         let publication = self.prepare_worker_handoff()?;
         let invocation = (*publication.invocation)
@@ -699,13 +705,18 @@ impl TargetLoweredProductionCompilation {
         invocation
             .revalidate_for_publication()
             .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
-        fe2o3_artifact_transaction::publish_compiler_module_handoff_v3(
+        let receipt = fe2o3_artifact_transaction::publish_compiler_module_handoff_v3(
             &publication.output_dir,
             &publication.producer,
             publication.attempt,
             &strict_handoff,
         )
-        .map_err(ProductionPipelineError::StrictV3Publication)
+        .map_err(ProductionPipelineError::StrictV3Publication)?;
+        fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1::from_publication(
+            receipt,
+            &strict_handoff,
+        )
+        .map_err(ProductionPipelineError::CompilerExecutionSubject)
     }
 }
 
@@ -884,7 +895,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// or launch authority.
     pub(crate) fn publish_worker_handoff(
         self,
-    ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineError>
+    ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
         self.lower_production_target()?.publish_worker_handoff()
     }
@@ -1184,7 +1195,12 @@ mod tests {
             .find(concat!("publish_compiler_module_handoff", "_v3"))
             .map(|offset| lineage_finish + offset)
             .expect("strict V3 handoff publication remains present");
+        let execution_subject = pipeline[lineage_finish..]
+            .find("InertCompilerExecutionSubjectV1::from_publication")
+            .map(|offset| lineage_finish + offset)
+            .expect("strict publication derives one canonical compiler-execution subject");
         assert!(lineage_finish < final_revalidation && final_revalidation < durable_publication);
+        assert!(durable_publication < execution_subject);
     }
 
     #[test]

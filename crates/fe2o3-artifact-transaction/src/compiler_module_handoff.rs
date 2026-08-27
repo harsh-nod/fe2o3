@@ -5206,6 +5206,70 @@ mod semantic_v3 {
         }
 
         #[test]
+        fn compiler_execution_subject_is_identical_at_publication_and_consumption() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_subject_v1");
+            let attempt = begin(&temp.0, &producer, 31);
+            let handoff = outer(32);
+            let receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+
+            let published =
+                crate::InertCompilerExecutionSubjectV1::from_publication(receipt, &handoff)
+                    .unwrap();
+            assert_eq!(published.attempt(), attempt);
+            assert_eq!(published.slot(), CompilerModuleHandoffSlotV3::Default);
+            assert_eq!(
+                published.transaction_identity(),
+                receipt.transaction_identity()
+            );
+            assert_eq!(
+                published.rustc_invocation_sha256(),
+                handoff.capsule().invocation_digest().as_bytes()
+            );
+            assert_eq!(
+                published.compiler_closure(),
+                *handoff.capsule().compiler_closure()
+            );
+            assert_eq!(
+                published.outer_handoff().sha256(),
+                handoff.identity().sha256()
+            );
+            assert_eq!(
+                published.outer_handoff().byte_len(),
+                handoff.identity().byte_len()
+            );
+            assert_eq!(
+                crate::InertCompilerExecutionSubjectV1::decode(published.canonical_bytes())
+                    .unwrap(),
+                published
+            );
+
+            let consumed =
+                consume_compiler_module_handoff_v3(&temp.0, &producer, attempt, handoff.identity())
+                    .unwrap();
+            let reconstructed =
+                crate::InertCompilerExecutionSubjectV1::from_consumed(&consumed).unwrap();
+            assert_eq!(reconstructed, published);
+        }
+
+        #[test]
+        fn compiler_execution_subject_rejects_substituted_strict_handoff() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_subject_substitution_v1");
+            let attempt = begin(&temp.0, &producer, 33);
+            let handoff = outer(34);
+            let receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let substituted = outer(35);
+
+            assert!(matches!(
+                crate::InertCompilerExecutionSubjectV1::from_publication(receipt, &substituted),
+                Err(crate::CompilerExecutionSubjectErrorV1::HandoffIdentityMismatch)
+            ));
+        }
+
+        #[test]
         fn receipt_recovery_is_exact_inert_repeatable_and_nonconsuming() {
             let temp = TestDirectory::new();
             let producer = producer("recover_receipt_v3");
