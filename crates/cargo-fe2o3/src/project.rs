@@ -215,6 +215,10 @@ impl CargoProject {
         &self.invocation_dir
     }
 
+    pub(crate) fn workspace_root(&self) -> &PinnedDirectory {
+        &self.workspace_root
+    }
+
     pub(crate) fn target_path(&self) -> &Path {
         &self.target_path
     }

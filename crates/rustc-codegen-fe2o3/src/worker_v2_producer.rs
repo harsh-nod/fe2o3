@@ -2950,7 +2950,17 @@ mod tests {
             name: binding.to_owned(),
         };
         module.required_capabilities.insert(capability.clone());
-        module.functions[0].required_capabilities.insert(capability);
+        module.kernels[0]
+            .required_capabilities
+            .insert(capability.clone());
+        let entry = module.kernels[0].entry.clone();
+        module
+            .functions
+            .iter_mut()
+            .find(|function| function.id == entry)
+            .expect("fixture kernel entry")
+            .required_capabilities
+            .insert(capability);
         module
     }
 

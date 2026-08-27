@@ -1,0 +1,26 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: PASS
+// CHECK: PASS
+builtin.func @race_checked_tiled_2d_dynamic_layout: builtin.function <(kernel.index , kernel.index , kernel.index ) -> ()>
+{
+  ^entry_block1v1(rows_v0: kernel.index , columns_v1: kernel.index , stride_v2: kernel.index ):
+    v3 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,true,[4096]>)>;
+    v4 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 0]: <() -> (kernel.index )>;
+    v5 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    v6 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index )>;
+    v7 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 4096]: <() -> (kernel.index )>;
+    v8 = kernel.checked_tiled_index_2d (v4, v5, rows_v0, columns_v1, stride_v2) [] [kernel_lanes_per_tile: kernel.index_value 64, kernel_tile_rows: kernel.index_value 16, kernel_tile_columns: kernel.index_value 16, kernel_elements_per_lane: kernel.index_value 4]: <(kernel.index , kernel.index , kernel.index , kernel.index , kernel.index ) -> (kernel.index )>;
+    v9 = kernel.checked_tiled_index_2d (v4, v6, rows_v0, columns_v1, stride_v2) [] [kernel_lanes_per_tile: kernel.index_value 64, kernel_tile_rows: kernel.index_value 16, kernel_tile_columns: kernel.index_value 16, kernel_elements_per_lane: kernel.index_value 4]: <(kernel.index , kernel.index , kernel.index , kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.index_lt_br (v8, v7) [^first_block2v1, ^exit_block4v1] []: <(kernel.index , kernel.index ) -> ()>
+
+  ^first_block2v1():
+    kernel.access (v3, v8) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[4096]>, kernel.index ) -> ()>;
+    kernel.index_lt_br (v9, v7) [^second_block3v1, ^exit_block4v1] []: <(kernel.index , kernel.index ) -> ()>
+
+  ^second_block3v1():
+    kernel.access (v3, v9) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[4096]>, kernel.index ) -> ()>;
+    kernel.br () [^exit_block4v1] []: <() -> ()>
+
+  ^exit_block4v1():
+    kernel.return () [] []: <() -> ()>
+}

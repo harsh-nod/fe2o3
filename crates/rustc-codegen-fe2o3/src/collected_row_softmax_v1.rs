@@ -2541,8 +2541,9 @@ fn layout_mismatch(detail: impl Into<String>) -> CollectedRowSoftmaxErrorV1 {
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::linux::net::SocketAddrExt;
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{SocketAddr, UnixListener};
     use std::process::{Child, Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
@@ -2560,10 +2561,11 @@ mod tests {
 
     impl InvocationPeerFixture {
         fn spawn() -> Self {
+            let occurrence = NEXT_INVOCATION_PEER_TEST.fetch_add(1, Ordering::Relaxed);
             let directory = std::env::temp_dir().join(format!(
                 "fe2o3-row-invocation-peer-{}-{}",
                 std::process::id(),
-                NEXT_INVOCATION_PEER_TEST.fetch_add(1, Ordering::Relaxed)
+                occurrence,
             ));
             let mut builder = fs::DirBuilder::new();
             use std::os::unix::fs::DirBuilderExt as _;
@@ -2576,11 +2578,16 @@ mod tests {
             fs::write(
                 &source,
                 r#"use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+use std::os::linux::net::SocketAddrExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::net::{SocketAddr, UnixStream};
 
 fn main() {
-    let socket = std::env::args_os().nth(1).expect("missing peer socket");
-    let mut stream = UnixStream::connect(socket).expect("connect invocation peer helper");
+    let name = std::env::args_os().nth(1).expect("missing peer socket name");
+    let address = SocketAddr::from_abstract_name(name.as_os_str().as_bytes())
+        .expect("construct invocation peer helper address");
+    let mut stream = UnixStream::connect_addr(&address)
+        .expect("connect invocation peer helper");
     stream.write_all(&[1]).expect("publish invocation peer helper ready byte");
     let mut release = [0_u8; 1];
     stream.read_exact(&mut release).expect("read invocation peer helper release byte");
@@ -2590,7 +2597,8 @@ fn main() {
             )
             .expect("write invocation peer helper source");
             let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
-            let output = Command::new(rustc)
+            let mut command = Command::new(rustc);
+            command
                 .arg("--crate-name=fe2o3_invocation_peer_fixture")
                 .arg("--edition=2024")
                 .arg("-Copt-level=s")
@@ -2598,8 +2606,8 @@ fn main() {
                 .arg("-Cstrip=symbols")
                 .arg(&source)
                 .arg("-o")
-                .arg(&executable)
-                .output()
+                .arg(&executable);
+            let output = crate::process_execution::capture_output(&mut command)
                 .expect("compile invocation peer helper");
             assert!(
                 output.status.success(),
@@ -2611,17 +2619,24 @@ fn main() {
                 .expect("make invocation peer test executable owner-only");
             let expected_sha256 = fe2o3_process_identity::measure_executable_sha256_v3(&executable)
                 .expect("measure invocation peer test executable");
-            let socket = directory.join("peer.sock");
-            let listener = UnixListener::bind(&socket).expect("bind invocation peer test socket");
+            let socket_name = format!(
+                "fe2o3-row-invocation-peer-{}-{occurrence}",
+                std::process::id(),
+            );
+            let socket = SocketAddr::from_abstract_name(socket_name.as_bytes())
+                .expect("construct invocation peer test address");
+            let listener =
+                UnixListener::bind_addr(&socket).expect("bind invocation peer test socket");
             listener
                 .set_nonblocking(true)
                 .expect("make invocation peer listener nonblocking");
-            let mut child = Command::new(&executable)
-                .arg(&socket)
+            let mut command = Command::new(&executable);
+            command
+                .arg(&socket_name)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+                .stderr(Stdio::null());
+            let mut child = crate::process_execution::spawn(&mut command)
                 .expect("spawn invocation peer helper");
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut stream = loop {

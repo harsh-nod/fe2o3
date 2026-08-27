@@ -1,3 +1,6 @@
+#[path = "support/process.rs"]
+mod test_process;
+
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, DurablePublishedHsacoClaimV3,
@@ -403,7 +406,8 @@ fn every_boundary_survives_abrupt_process_death_and_exact_retry() {
             let envelope_path = state.directory.0.join("abrupt-envelope.v3");
             fs::write(&claim_path, state.claim.encode_canonical().unwrap()).unwrap();
             fs::write(&envelope_path, &state.envelope).unwrap();
-            let status = Command::new(std::env::current_exe().unwrap())
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
                 .arg("--exact")
                 .arg("abrupt_crash_child_terminates_at_one_exact_boundary")
                 .arg("--nocapture")
@@ -411,9 +415,8 @@ fn every_boundary_survives_abrupt_process_death_and_exact_retry() {
                 .env(ABRUPT_CLAIM, claim_path)
                 .env(ABRUPT_ENVELOPE, envelope_path)
                 .env(ABRUPT_BOUNDARY, boundary_index.to_string())
-                .env(ABRUPT_TIMING, timing_name)
-                .status()
-                .unwrap();
+                .env(ABRUPT_TIMING, timing_name);
+            let status = test_process::status(&mut command).unwrap();
             assert_eq!(
                 status.code(),
                 Some(i32::from(ABRUPT_EXIT_CODE)),
@@ -705,13 +708,13 @@ fn process_restart_recovery_uses_only_durable_state() {
     }
     let state = setup(60);
     state.publish_readiness();
-    let status = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .arg("--exact")
         .arg("process_restart_child_revalidates_terminal_custody")
         .arg("--nocapture")
-        .env(CHILD_OUTPUT, state.output())
-        .status()
-        .unwrap();
+        .env(CHILD_OUTPUT, state.output());
+    let status = test_process::status(&mut command).unwrap();
     assert!(status.success());
 }
 

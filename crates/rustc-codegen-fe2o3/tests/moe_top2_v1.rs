@@ -1,4 +1,5 @@
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::io::Write as _;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -13,6 +14,9 @@ use fe2o3_compiler_ffi::{
 };
 use sha2::{Digest as _, Sha256};
 
+#[path = "support/artifact_path_guard.rs"]
+mod artifact_path_guard;
+
 const PIPELINE: &str = "collected-moe-top2-v1";
 const CRATE_NAME: &str = "fe2o3_collected_moe_top2_v1_fixture";
 const REVIEWED_METADATA: &str = "fe2o3-moe-top2-v1-reviewed";
@@ -24,14 +28,14 @@ const SOURCE_REMAP: &str = "/fe2o3-reviewed-workspace/moe-top2-v1.rs";
 const WORKSPACE_REMAP: &str = "/fe2o3-reviewed-workspace";
 const SOURCE: &str = include_str!("../../../examples/moe_top2_v1/src/kernel.rs");
 const STRUCTURAL_CORRESPONDENCE: &str =
-    "decdfeaecdf9b08b29accfe34b36b103303eb081ee3bcf9691e4bc408e87672f";
+    "dbe774f4cd733c16c23f184e7ff33a967c6d1e413f7dc35c065808b70a8c3c14";
+const MODULE_OUTPUT_ENV: &str = "FE2O3_MOE_TOP2_MODULE_OUTPUT";
+const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_MOE_TOP2_CONFIGURED_GUARD_CHILD";
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static FRONTEND_DEPENDENCIES: OnceLock<Result<(), String>> = OnceLock::new();
 
 struct TestOutput {
     path: PathBuf,
-    guard_directory: PathBuf,
-    guard_identity: String,
 }
 
 struct CompileResult {
@@ -43,7 +47,6 @@ struct CompileResult {
 
 impl TestOutput {
     fn new(workspace: &Path) -> Self {
-        fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
         let path = cargo_target(workspace).join(format!(
             "moe-top2-v1-{}-{}",
             std::process::id(),
@@ -53,18 +56,7 @@ impl TestOutput {
             std::fs::remove_dir_all(&path).expect("remove stale MoE top-2 test output");
         }
         std::fs::create_dir_all(&path).expect("create MoE top-2 test output");
-        let guard_directory = path.join("artifact-path-guard");
-        std::fs::create_dir(&guard_directory).expect("create MoE artifact path guard");
-        std::fs::set_permissions(&guard_directory, std::fs::Permissions::from_mode(0o700))
-            .expect("secure MoE artifact path guard");
-        let metadata =
-            std::fs::metadata(&guard_directory).expect("inspect MoE artifact path guard");
-        let guard_identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
-        Self {
-            path,
-            guard_directory,
-            guard_identity,
-        }
+        Self { path }
     }
 }
 
@@ -274,11 +266,6 @@ fn compile(
         )
         .env("FE2O3_HSACO_DIR", &artifact_dir)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
-        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &output.guard_directory)
-        .env(
-            "FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY",
-            &output.guard_identity,
-        )
         .env("FE2O3_TARGET", profile.target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", PIPELINE)
         .output()
@@ -382,6 +369,21 @@ fn command_text(output: &Output) -> String {
     )
 }
 
+fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
+    if std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).is_some() {
+        return false;
+    }
+
+    let workspace = workspace();
+    let output = TestOutput::new(&workspace);
+    artifact_path_guard::rerun_current_test(
+        test_name,
+        CONFIGURED_ARTIFACT_GUARD_CHILD_ENV,
+        &output.path,
+        "MoE",
+    )
+}
+
 fn authenticated_authority(output: &Output) -> String {
     let text = command_text(output);
     let suffix = text
@@ -408,6 +410,11 @@ fn authenticated_structural_record(output: &Output) -> String {
 
 #[test]
 fn live_rustc_admission_emits_pinned_structural_record() {
+    if rerun_with_configured_artifact_path_guard(
+        "live_rustc_admission_emits_pinned_structural_record",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let result = compile(
@@ -484,6 +491,17 @@ fn live_rustc_admission_emits_pinned_structural_record() {
     let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
         .expect("decode exact canonical MoE top-2 Worker V2 handoff");
     assert_eq!(handoff.canonical_bytes(), consumed.bytes());
+    if let Some(destination) = std::env::var_os(MODULE_OUTPUT_ENV) {
+        let mut module_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .expect("create private MoE LLVM output");
+        module_file
+            .write_all(handoff.module_bytes())
+            .expect("write exact MoE LLVM output");
+    }
     assert_eq!(handoff.kind(), CompilerModuleKindV1::LlvmTextIr);
     assert_eq!(
         handoff.target().as_amd_target_id().to_string(),
@@ -513,6 +531,11 @@ fn live_rustc_admission_emits_pinned_structural_record() {
 
 #[test]
 fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
+    if rerun_with_configured_artifact_path_guard(
+        "hostile_source_mir_profile_and_ownership_mutations_fail_closed",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let baseline = compile(
@@ -789,6 +812,11 @@ fn hostile_source_mir_profile_and_ownership_mutations_fail_closed() {
 
 #[test]
 fn authority_is_location_independent_and_provider_source_bound() {
+    if rerun_with_configured_artifact_path_guard(
+        "authority_is_location_independent_and_provider_source_bound",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let output = TestOutput::new(&workspace);
     let location_a = output.path.join("canonical-workspace-a");

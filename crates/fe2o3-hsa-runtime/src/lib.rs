@@ -5,7 +5,16 @@ mod dispatch;
 mod environment;
 mod lifecycle;
 mod sys;
+#[cfg(test)]
+mod test_process_execution {
+    use std::io;
+    use std::process::{Command, ExitStatus};
 
+    pub(super) fn status(command: &mut Command) -> io::Result<ExitStatus> {
+        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn())
+            .and_then(|mut child| child.wait())
+    }
+}
 #[cfg(feature = "hardware-test-hooks")]
 pub use dispatch::ReviewedHsaHardwareTestBufferV1;
 pub use environment::{HsaRuntimeAdapterError, ReviewedHsaRuntimeAdapterV1};

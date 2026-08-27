@@ -128,8 +128,9 @@ reintroduced.
 
 Direct Cargo compilation of the standalone example is not an evidence lane:
 its typed router dependency requires the per-crate binding issued by the
-fe2o3 wrapper. The rustc-codegen integration test below exercises the retained
-compiler boundary.
+fe2o3 wrapper. The feature-enabled library test suite below exercises retained
+offline compiler fixtures. Selector-bearing integration targets are retired
+migration inventory and do not establish a compiler boundary.
 
 ## Reproduce the retained checks
 
@@ -138,7 +139,7 @@ Run from the repository root with the pinned Rust toolchain:
 ```sh
 python3 scripts/test-bounded-moe-docs.py
 cargo test --locked -p rustc-codegen-fe2o3 \
-  --features qualification-oracles-test-only --test moe_top2_v1
+  --features qualification-oracles-test-only --lib collected_moe_top2_v1::
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh

@@ -873,6 +873,10 @@ fn preflight_operation_kind(
             }
             Ok(())
         }
+        OperationKind::Gfx950LdsTranspose(_) => Err(unsupported_in_version(
+            version,
+            "gfx950 LDS transpose operation",
+        )),
         OperationKind::InlineAssembly(assembly) => {
             if version < KirVersion::V3 {
                 return Err(unsupported_in_version(

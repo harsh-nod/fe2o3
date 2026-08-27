@@ -222,6 +222,67 @@ fn assert_rejected(result: &Output, label: &str) {
     );
 }
 
+fn copy_tree(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination)
+        .unwrap_or_else(|error| panic!("create {}: {error}", destination.display()));
+    for entry in std::fs::read_dir(source)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source.display()))
+    {
+        let entry = entry.expect("read source-tree entry");
+        let file_type = entry.file_type().expect("inspect source-tree entry");
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)
+                .unwrap_or_else(|error| panic!("copy {}: {error}", entry.path().display()));
+        } else {
+            panic!(
+                "relocated workspace source is not a regular file: {}",
+                entry.path().display()
+            );
+        }
+    }
+}
+
+fn copy_relocated_workspace(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination).expect("create relocated workspace");
+    for file in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+        std::fs::copy(source.join(file), destination.join(file))
+            .unwrap_or_else(|error| panic!("copy relocated {file}: {error}"));
+    }
+    copy_tree(&source.join("crates"), &destination.join("crates"));
+    copy_tree(&source.join("examples"), &destination.join("examples"));
+}
+
+fn run_relocated_exact(workspace: &Path, target: &Path) -> Output {
+    let mut command = Command::new(env!("CARGO"));
+    command.current_dir(workspace).args(["test", "--locked"]);
+    if !cfg!(debug_assertions) {
+        command.arg("--release");
+    }
+    command
+        .args([
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+            "--test",
+            "wave64_collectives_v1",
+            "exact_phase_a_source_authenticates_complete_wave64_profile",
+            "--",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CARGO_TARGET_DIR", target)
+        .env("CARGO_INCREMENTAL", "0")
+        .env(REPORT_AUTHORITY_ENV, "1");
+    command
+        .output()
+        .expect("run relocated exact Wave64 profile")
+}
+
 fn run_clean_exact(
     workspace: &Path,
     target: &CleanCargoTarget,
@@ -376,7 +437,7 @@ fn exact_phase_a_source_authenticates_complete_wave64_profile() {
     for marker in [
         "authenticated exact source bytes",
         "separate reviewed profile namespace, distinct compiler-derived ordinary #[kernel(typed)] root",
-        "complete reachable portable-MIR closure 55043a3ac1aa25bd5e47588b61c0b5fedd0c9f4ebd1c59255d0cfdbbd306414c",
+        "complete reachable portable-MIR closure 19f6a406a8cbe9403565826a711299cbe2ff81e1797e8ffe75ea93d71ab94b7e",
         "3 ordered collectives, 3 lane-owned outputs",
         "exact grid [1, 1, 1]",
         "reviewed source-to-profile correspondence only",
@@ -517,4 +578,33 @@ fn hostile_source_and_compiler_profile_mutations_fail_closed() {
         let result = compile(&workspace, &output, label, SOURCE, profile);
         assert_rejected(&result, label);
     }
+}
+#[test]
+fn reachable_provider_helper_mutation_fails_closed() {
+    let workspace = workspace();
+    let output = TestOutput::new(&workspace);
+    let relocated = output.path.join("hostile-provider-workspace");
+    copy_relocated_workspace(&workspace, &relocated);
+
+    let group_source = relocated.join("crates/fe2o3-device/src/group.rs");
+    let source = std::fs::read_to_string(&group_source).expect("read relocated group source");
+    let hostile_source = mutation(
+        &source,
+        "pub fn from_wave64_snapshot(lane: &'wave WaveLane<Wave64>) -> Self {\n        Self {\n            lane: lane.get(),",
+        "pub fn from_wave64_snapshot(lane: &'wave WaveLane<Wave64>) -> Self {\n        Self {\n            lane: lane.get() ^ 1,",
+    );
+    std::fs::write(&group_source, hostile_source).expect("mutate relocated provider helper");
+
+    let hostile = run_relocated_exact(&relocated, &output.path.join("hostile-provider-target"));
+    let hostile_text = command_text(&hostile);
+    assert!(
+        !hostile.status.success(),
+        "mutated reachable provider helper authenticated"
+    );
+    assert!(
+        hostile_text.contains(
+            "safe execution provider source closure does not match the reviewed V1 identity"
+        ),
+        "provider helper mutation did not fail at trusted identity:\n{hostile_text}"
+    );
 }

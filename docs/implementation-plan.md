@@ -133,7 +133,7 @@ fe2o3 canonical V2 extraction, and fe2o3 deterministic LLVM assembly, not the
 upstream `pliron-llvm` LLVM-C exporter.
 
 The current D0 closure is Pliron v0.17.0 commit
-`2610651306ea3ba670f68d5d8b1e1159bcd521ed`. `fe2o3-pliron` provides a real
+`5bdf861bf03e7f20242b25717fb653336d02e487`. `fe2o3-pliron` provides a real
 context, private identity anchor, explicit bounded registration, and bounded
 pass-plan validation. It deliberately withholds generic pass execution because
 upstream pointers are contextless. The current graph admits `pliron-llvm` only
@@ -168,15 +168,17 @@ authority. The backend fixture is not Rust user source.
 - `fe2o3-compiler-driver`: fail-closed single-route API dispatch; not yet the
   production selector.
 - `fe2o3-pliron-scalar-add-v1`: exact backend-fixture lineage, checkout policy,
-  scalar finalizer join, and sealed one-shot HSA execution; not a general
-  backend, source frontend, approval service, or runtime policy.
+  authority, Worker execution join, and scalar finalization remain
+  feature-free; sealed one-shot HSA execution requires
+  `qualification-oracles-test-only`; not a general backend, source frontend,
+  approval service, or runtime policy.
 - `fe2o3-macros`: `#[kernel]` and future device extern annotations.
 - `reserved-fe2o3-symbols`: shared reserved symbol namespace.
 - `fe2o3-device`: no-std device API and intrinsic stubs.
 - `fe2o3-core`: HIP-backed context, stream, memory, event, and capability
-  runtime; raw module and launch authority is qualification-only.
-- `fe2o3-host`: generated typed preparation and Worker V3 dispatch; the raw
-  launch macro is qualification-only.
+  runtime; raw module and launch mechanics are private to crate unit tests.
+- `fe2o3-host`: generated Worker V3 arguments, verification admission, reviewed
+  HSA load/dispatch, and no alternate launch graph.
 - `fe2o3-mir-model`: canonical Pliron-independent MIR semantics and
   transformations.
 - `dialect-mir`: compatibility facade over that model and a bounded

@@ -1,5 +1,11 @@
 # S09 source-debug pilot V1
 
+> **Retired hardware lane:** this document records the historical bounded S09
+> experiment. Its Worker V2 debug-HSACO generator and HSA controller are not a
+> production route and are no longer dispatched by `ci-local.sh`. The offline
+> DWARF, transcript, containment, and finalization checkers remain tested. A
+> replacement must use production Worker V3 artifacts and the KFD runtime.
+
 This pilot preserves source metadata for the closed General V3 `alpha` kernel
 profile on exact target `gfx942:xnack-`. It is enabled only by Worker V2
 configuration value `s09-alpha-gfx942-o0-v1`, which requires COV6, `O0`,
@@ -40,8 +46,9 @@ process-consistency digest covers the executable object and bytes, raw argv
 including argv0, cwd object, protected source-tree identity, and the complete
 sorted child environment.
 
-For S09, the test harness builds the backend with
-`qualification-oracles-test-only`. The wrapper rejects credential-like
+Historically, the S09 test harness built the backend with
+`qualification-oracles-test-only`. That backend invocation is now retired;
+the following describes the archived custody design. The wrapper rejected credential-like
 inherited variables, admits only the required inherited `CARGO_MANIFEST_DIR`, fixed
 `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-worker-v2`, and fixed
 `FE2O3_TARGET=gfx942:xnack-` inputs, applies the closed managed environment,
@@ -277,16 +284,10 @@ the production command. A future protected controller and administrator must
 construct and install the production policy and manifest after selecting
 immutable inputs.
 
-The intended GPU-gated local capability invocation is:
-
-```text
-FE2O3_ALLOW_S09_DEBUG=1 \
-FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
-  scripts/ci-local.sh s09-debug-hardware
-```
+The former GPU-gated invocation is intentionally unavailable. Running
+`scripts/ci-local.sh s09-debug-hardware` fails with a retirement diagnostic
+until production Worker V3 debug artifacts and a KFD controller replace both
+retired dependencies.
 
 The compile portion performs the genuine direct LLVM/LLD alpha-only build and
 derives both identity records exclusively from the emitted HSACO. The

@@ -365,10 +365,10 @@ impl Drop for CompilerFixture {
 fn compiler_args(fixture: &CompilerFixture, crate_name: &str, metadata: &str) -> Vec<String> {
     static SYSROOT: OnceLock<String> = OnceLock::new();
     let sysroot = SYSROOT.get_or_init(|| {
-        let output = Command::new("rustc")
-            .args(["--print", "sysroot"])
-            .output()
-            .expect("query rustc sysroot");
+        let mut command = Command::new("rustc");
+        command.args(["--print", "sysroot"]);
+        let output =
+            crate::process_execution::capture_output(&mut command).expect("query rustc sysroot");
         assert!(output.status.success(), "rustc --print sysroot failed");
         String::from_utf8(output.stdout)
             .expect("UTF-8 rustc sysroot")

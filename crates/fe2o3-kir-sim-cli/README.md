@@ -11,6 +11,16 @@ observation only. It grants no source-refinement, proof, compiler, artifact,
 load, launch, GPU-equivalence, race-freedom, timing, performance, or performance
 prediction authority.
 
+The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
+
+    cargo run --locked -q -p fe2o3-kir-sim-cli --bin fe2o3-kir-sim -- \
+      --kir-v7 crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir \
+      --request crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json
+
+Its canonical builder, exact KIR bytes, request, complete expected result, and
+regression test are committed together. The fixture starts at exact KIR V7; it
+does not claim that a Rust source program produced those bytes.
+
 Inputs are regular files opened on Linux with openat2, O_NOFOLLOW, O_NONBLOCK,
 and RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS. FIFOs, devices, symlinks in any
 path component, oversized files, and files changed while read are rejected.

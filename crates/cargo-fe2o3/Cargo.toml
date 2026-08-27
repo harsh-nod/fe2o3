@@ -45,6 +45,7 @@ fe2o3-scalar-gemm-v1 = { path = "../../examples/scalar_gemm_v1", optional = true
 fe2o3-verifier.workspace = true
 fe2o3-worker-v3-authority = { workspace = true, optional = true }
 libc.workspace = true
+proc-macro2.workspace = true
 reserved-fe2o3-symbols.workspace = true
 rustix = { workspace = true, features = ["process"] }
 serde_json = "1"
@@ -67,7 +68,7 @@ path = "src/bin/fe2o3-rustc-wrapper.rs"
 
 [[bin]]
 name = "fe2o3-worker-v2-hsaco-fixture"
-path = "../fe2o3-hsaco-finalize/tests/fixtures/worker_v2_hsaco_fixture.rs"
+path = "tests/fixtures/worker_v2_hsaco_fixture.rs"
 test = false
 bench = false
 required-features = ["worker-v3-envelope-integration-test-only"]

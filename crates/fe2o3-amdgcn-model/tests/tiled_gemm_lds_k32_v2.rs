@@ -283,6 +283,7 @@ fn generic_exact_target_lowering_uses_workload_neutral_proofs() {
             .count(),
         2
     );
+    assert!(!llvm.contains("llvm.amdgcn.s.barrier"));
 }
 
 struct TemporaryDirectory(PathBuf);

@@ -49,14 +49,6 @@ case "$1" in
   workspace-test | verus | rocm-compile) ;;
   *) exit 90 ;;
 esac
-if [[ "$1" == rocm-compile ]]; then
-  printf 'worker-env\t%s\t%s\t%s\t%s\n' \
-    "${FE2O3_LLVM_LINK_WORKER}" \
-    "${FE2O3_LLVM_LINK_WORKER_BUILD_ID}" \
-    "${FE2O3_LLVM_BUILD_ID}" \
-    "${FE2O3_LLVM_AS}" \
-    >>"${FE2O3_EVIDENCE_OUTPUT_DIR}/invocations.tsv"
-fi
 EOF
 
   local script
@@ -101,28 +93,13 @@ set -Eeuo pipefail
 mkdir -p -- "\${FE2O3_EVIDENCE_OUTPUT_DIR}"
 printf 'cargo\\t%s\\t%s\\n' "\${CARGO_TARGET_DIR}" "\$*" \\
   >>"\${FE2O3_EVIDENCE_OUTPUT_DIR}/invocations.tsv"
-printf 'cargo-worker-env\\t%s\\t%s\\t%s\\t%s\\n' \\
-  "\${FE2O3_LLVM_LINK_WORKER-<unset>}" \\
-  "\${FE2O3_LLVM_LINK_WORKER_BUILD_ID-<unset>}" \\
-  "\${FE2O3_LLVM_BUILD_ID-<unset>}" \\
-  "\${FE2O3_LLVM_AS-<unset>}" \\
-  >>"\${FE2O3_EVIDENCE_OUTPUT_DIR}/invocations.tsv"
 exit ${exit_status}
 EOF
   cat >"${directory}/verus" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-  cat >"${directory}/llvm-link-worker" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  cat >"${directory}/llvm-as" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-  chmod 755 "${directory}/cargo" "${directory}/verus" \
-    "${directory}/llvm-link-worker" "${directory}/llvm-as"
+  chmod 755 "${directory}/cargo" "${directory}/verus"
 }
 
 readonly FIXTURE_REPO="${TEST_ROOT}/repo"
@@ -133,18 +110,14 @@ readonly ARCHIVE="${TEST_ROOT}/archive"
 readonly FAILURE_ARCHIVE="${TEST_ROOT}/failure-archive"
 readonly COLLISION_ARCHIVE="${TEST_ROOT}/collision-archive"
 readonly ATTACHED_ARCHIVE="${TEST_ROOT}/attached-archive"
-readonly WORKER_ARCHIVE="${TEST_ROOT}/worker-archive"
+readonly COMPILE_ARCHIVE="${TEST_ROOT}/compile-archive"
 readonly TEST_HOME="${TEST_ROOT}/home"
 readonly RECORDED_PATH="${PASS_BIN}:/usr/bin:/bin"
 readonly FAIL_PATH="${FAIL_BIN}:/usr/bin:/bin"
-readonly LLVM_LINK_WORKER="${PASS_BIN}/llvm-link-worker"
-readonly LLVM_AS="${PASS_BIN}/llvm-as"
-readonly LLVM_LINK_WORKER_BUILD_ID='fe2o3-worker-v1-sha256-0123456789abcdef'
-readonly LLVM_BUILD_ID='7.2.4'
 
 mkdir -p -- "${FIXTURE_REPO}" "${ATTACHED_REPO}" "${ARCHIVE}" \
   "${FAILURE_ARCHIVE}" "${COLLISION_ARCHIVE}" "${ATTACHED_ARCHIVE}" \
-  "${WORKER_ARCHIVE}" \
+  "${COMPILE_ARCHIVE}" \
   "${TEST_HOME}/.cargo" \
   "${TEST_HOME}/.rustup"
 write_fake_repo "${FIXTURE_REPO}"
@@ -155,7 +128,7 @@ git -C "${FIXTURE_REPO}" checkout --detach -q
 
 OUTPUT="$(${RUNNER} list)"
 assert_contains $'Q1\tcore'
-assert_contains $'GFX942-HARDWARE\toptional'
+assert_contains $'GFX942-HARDWARE\tunavailable'
 
 common_args=(
   --repo "${FIXTURE_REPO}"
@@ -243,15 +216,13 @@ printf 'dirty\n' >"${ATTACHED_REPO}/untracked"
 expect_failure "${RUNNER}" dry-run "${attached_args[@]}"
 assert_contains 'repository must be clean'
 
-printf 'fake hsaco\n' >"${ARCHIVE}/artifacts-vecadd.hsaco"
-OUTPUT="$(${RUNNER} dry-run "${common_args[@]}" --shard Q2 \
-  --gfx942-hardware --vecadd-hsaco artifacts-vecadd.hsaco)"
-assert_contains $'shard\tGFX942-HARDWARE'
-assert_contains 'FE2O3_GFX942_VECADD_HSACO'
+expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
+  --gfx942-hardware
+assert_contains 'gfx942 hardware shard is unavailable'
 
-worker_args=(
+compile_args=(
   --repo "${FIXTURE_REPO}"
-  --archive-root "${WORKER_ARCHIVE}"
+  --archive-root "${COMPILE_ARCHIVE}"
   --path "${RECORDED_PATH}"
   --home "${TEST_HOME}"
   --cargo-home "${TEST_HOME}/.cargo"
@@ -259,97 +230,42 @@ worker_args=(
   --timeout-seconds 30
   --shard Q2
   --gfx942-compile
-  --llvm-link-worker "${LLVM_LINK_WORKER}"
-  --llvm-link-worker-build-id "${LLVM_LINK_WORKER_BUILD_ID}"
-  --llvm-build-id "${LLVM_BUILD_ID}"
-  --llvm-as "${LLVM_AS}"
 )
 
 first_plan="$(FE2O3_LLVM_LINK_WORKER=/ambient/worker \
   FE2O3_LLVM_LINK_WORKER_BUILD_ID=ambient-worker-id \
   FE2O3_LLVM_BUILD_ID=ambient-llvm-id \
   FE2O3_LLVM_AS=/ambient/llvm-as \
-  "${RUNNER}" dry-run "${worker_args[@]}")"
-second_plan="$(${RUNNER} dry-run "${worker_args[@]}")"
+  "${RUNNER}" dry-run "${compile_args[@]}")"
+second_plan="$(${RUNNER} dry-run "${compile_args[@]}")"
 [[ "${first_plan}" == "${second_plan}" ]] ||
   fail 'gfx942 compile dry-run plan depends on ambient Worker V2 values'
 OUTPUT="${first_plan}"
 assert_contains $'shard\tGFX942-COMPILE'
-assert_contains $'environment\tGFX942-COMPILE\tFE2O3_LLVM_LINK_WORKER\t'"$(hex_encode "${LLVM_LINK_WORKER}")"
-assert_contains $'environment\tGFX942-COMPILE\tFE2O3_LLVM_LINK_WORKER_BUILD_ID\t'"$(hex_encode "${LLVM_LINK_WORKER_BUILD_ID}")"
-assert_contains $'environment\tGFX942-COMPILE\tFE2O3_LLVM_BUILD_ID\t'"$(hex_encode "${LLVM_BUILD_ID}")"
-assert_contains $'environment\tGFX942-COMPILE\tFE2O3_LLVM_AS\t'"$(hex_encode "${LLVM_AS}")"
-assert_contains $'tool\tGFX942-COMPILE\tllvm-link-worker\t'"${LLVM_LINK_WORKER}"
-assert_contains $'tool\tGFX942-COMPILE\tllvm-as\t'"${LLVM_AS}"
+assert_contains $'environment\tGFX942-COMPILE\tFE2O3_TARGET\t'"$(hex_encode gfx942)"
+[[ "${OUTPUT}" != *FE2O3_LLVM_LINK_WORKER* ]] ||
+  fail 'gfx942 compile plan retained Worker V2 environment'
+[[ "${OUTPUT}" != *kernel_ir_codegen* ]] ||
+  fail 'gfx942 compile plan retained the retired integration target'
 
 FE2O3_LLVM_LINK_WORKER=/ambient/worker \
   FE2O3_LLVM_LINK_WORKER_BUILD_ID=ambient-worker-id \
   FE2O3_LLVM_BUILD_ID=ambient-llvm-id \
   FE2O3_LLVM_AS=/ambient/llvm-as \
-  "${RUNNER}" run "${worker_args[@]}" >/dev/null
-readonly WORKER_INVOCATIONS="${WORKER_ARCHIVE}/work/gfx942-compile/output/invocations.tsv"
-readonly WORKER_RECORD="${WORKER_ARCHIVE}/records/gfx942-compile.tsv"
-[[ -f "${WORKER_INVOCATIONS}" ]] || fail 'gfx942 compile invocation output is missing'
-[[ -f "${WORKER_RECORD}" ]] || fail 'gfx942 compile result record is missing'
-expected_worker_env="${LLVM_LINK_WORKER}"$'\t'"${LLVM_LINK_WORKER_BUILD_ID}"$'\t'"${LLVM_BUILD_ID}"$'\t'"${LLVM_AS}"
-grep -Fq $'worker-env\t'"${expected_worker_env}" "${WORKER_INVOCATIONS}" ||
-  fail 'rocm compile did not receive the exact pinned Worker V2 environment'
-grep -Fq $'cargo-worker-env\t'"${expected_worker_env}" "${WORKER_INVOCATIONS}" ||
-  fail 'Worker V2 rustc test did not receive the exact pinned environment'
-grep -Fq $'environment\tFE2O3_LLVM_LINK_WORKER\t'"$(hex_encode "${LLVM_LINK_WORKER}")" "${WORKER_RECORD}" ||
-  fail 'result record omitted the Worker V2 executable environment'
-grep -Fq $'environment\tFE2O3_LLVM_LINK_WORKER_BUILD_ID\t'"$(hex_encode "${LLVM_LINK_WORKER_BUILD_ID}")" "${WORKER_RECORD}" ||
-  fail 'result record omitted the Worker V2 build ID'
-grep -Fq $'environment\tFE2O3_LLVM_BUILD_ID\t'"$(hex_encode "${LLVM_BUILD_ID}")" "${WORKER_RECORD}" ||
-  fail 'result record omitted the LLVM build ID'
-grep -Fq $'environment\tFE2O3_LLVM_AS\t'"$(hex_encode "${LLVM_AS}")" "${WORKER_RECORD}" ||
-  fail 'result record omitted the llvm-as environment'
-grep -Fq $'tool\tllvm-link-worker\t'"${LLVM_LINK_WORKER}"$'\t' "${WORKER_RECORD}" ||
-  fail 'result record omitted the Worker V2 executable identity'
-grep -Fq $'tool\tllvm-as\t'"${LLVM_AS}"$'\t' "${WORKER_RECORD}" ||
-  fail 'result record omitted the llvm-as executable identity'
-if grep -Fq ambient "${WORKER_INVOCATIONS}" || grep -Fq ambient "${WORKER_RECORD}"; then
+  "${RUNNER}" run "${compile_args[@]}" >/dev/null
+readonly COMPILE_INVOCATIONS="${COMPILE_ARCHIVE}/work/gfx942-compile/output/invocations.tsv"
+readonly COMPILE_RECORD="${COMPILE_ARCHIVE}/records/gfx942-compile.tsv"
+[[ -f "${COMPILE_INVOCATIONS}" ]] || fail 'gfx942 compile invocation output is missing'
+[[ -f "${COMPILE_RECORD}" ]] || fail 'gfx942 compile result record is missing'
+grep -Fq $'ci-local\trocm-compile\t' "${COMPILE_INVOCATIONS}" ||
+  fail 'gfx942 compile did not invoke the production ROCm lane'
+if grep -Fq ambient "${COMPILE_INVOCATIONS}" || grep -Fq ambient "${COMPILE_RECORD}"; then
   fail 'ambient Worker V2 values entered execution or its result record'
 fi
 
-expect_failure env \
-  FE2O3_LLVM_LINK_WORKER=/ambient/worker \
-  FE2O3_LLVM_LINK_WORKER_BUILD_ID=ambient-worker-id \
-  FE2O3_LLVM_BUILD_ID=ambient-llvm-id \
-  FE2O3_LLVM_AS=/ambient/llvm-as \
-  "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 --gfx942-compile
-assert_contains 'requires --llvm-link-worker'
-
 expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
-  --gfx942-compile \
-  --llvm-link-worker "${LLVM_LINK_WORKER}" \
-  --llvm-link-worker-build-id "${LLVM_LINK_WORKER_BUILD_ID}" \
-  --llvm-build-id "${LLVM_BUILD_ID}"
-assert_contains 'requires --llvm-as'
-
-expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
-  --gfx942-compile \
-  --llvm-link-worker relative/worker \
-  --llvm-link-worker-build-id "${LLVM_LINK_WORKER_BUILD_ID}" \
-  --llvm-build-id "${LLVM_BUILD_ID}" \
-  --llvm-as "${LLVM_AS}"
-assert_contains 'requires --llvm-link-worker with an absolute executable path'
-
-expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
-  --gfx942-compile \
-  --llvm-link-worker "${PASS_BIN}/llvm-link-worker;literal" \
-  --llvm-link-worker-build-id "${LLVM_LINK_WORKER_BUILD_ID}" \
-  --llvm-build-id "${LLVM_BUILD_ID}" \
-  --llvm-as "${LLVM_AS}"
-assert_contains 'requires --llvm-link-worker with an absolute executable path'
-
-expect_failure "${RUNNER}" dry-run "${common_args[@]}" --shard Q2 \
-  --gfx942-compile \
-  --llvm-link-worker "${LLVM_LINK_WORKER}" \
-  --llvm-link-worker-build-id $'bad\tid' \
-  --llvm-build-id "${LLVM_BUILD_ID}" \
-  --llvm-as "${LLVM_AS}"
-assert_contains 'bounded safe --llvm-link-worker-build-id'
+  --gfx942-compile --llvm-link-worker /retired/worker
+assert_contains 'unknown option: --llvm-link-worker'
 
 OUTPUT="$(${RUNNER} dry-run "${common_args[@]}" --shard Q7 \
   --verus "${PASS_BIN}/verus")"

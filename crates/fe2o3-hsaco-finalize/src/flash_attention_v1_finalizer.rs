@@ -53,12 +53,12 @@ const OCML_PROVIDER_BASENAMES: [&str; OCML_PROVIDER_FILE_COUNT] = [
     "oclc_finite_only_off.bc",
 ];
 const EXACT_HANDOFF_SHA256: [u8; 32] = [
-    0xd8, 0x26, 0xa2, 0xc9, 0xc9, 0x60, 0x29, 0x2a, 0x88, 0x33, 0xf2, 0x31, 0x06, 0xac, 0x6b, 0x99,
-    0xb3, 0x82, 0xab, 0xfc, 0xc2, 0x71, 0x56, 0x48, 0xc6, 0x76, 0x45, 0x4d, 0x4e, 0xcb, 0xd1, 0xb2,
+    0xc4, 0x00, 0x82, 0x65, 0xf5, 0x89, 0xaa, 0x4a, 0x7f, 0x7f, 0x99, 0xa4, 0xf9, 0x49, 0xf4, 0x20,
+    0x40, 0x28, 0x6a, 0xec, 0x95, 0x4c, 0x23, 0x1c, 0x3a, 0x6e, 0x8f, 0x34, 0x66, 0x3b, 0x6e, 0xc2,
 ];
 const EXACT_AUTHORITY_SHA256: [u8; FLASH_ATTENTION_AUTHORITY_BYTES_V1] = [
-    0x4c, 0xde, 0x34, 0xc0, 0x5c, 0xaa, 0xa8, 0x8b, 0x74, 0xc8, 0x42, 0x65, 0x1b, 0x08, 0x11, 0x46,
-    0x87, 0x1c, 0xeb, 0xdb, 0x46, 0x24, 0xf1, 0xa6, 0xb6, 0xea, 0x9a, 0x36, 0x4f, 0xa3, 0xd0, 0xd0,
+    0x7e, 0x13, 0x09, 0xa9, 0xcf, 0x8d, 0x8a, 0x83, 0x26, 0xf5, 0xe5, 0xc9, 0xbe, 0x55, 0x0d, 0x97,
+    0x6e, 0xbd, 0x99, 0x06, 0x4c, 0x1e, 0x8f, 0x28, 0x02, 0xb9, 0x44, 0x06, 0xca, 0x75, 0x30, 0xb9,
 ];
 const EXACT_OCML_EXP_BOUNDARY_SHA256: [u8; 32] = [
     0xdb, 0x91, 0x96, 0x57, 0x5c, 0xcc, 0xcc, 0xd8, 0x03, 0x53, 0xf5, 0xed, 0x04, 0xbc, 0x42, 0x5b,
@@ -68,7 +68,7 @@ const SUCCESS_DIAGNOSTICS: [&str; 8] = [
     "device_library.check=identity status=ok provider=gfx942-ocml-v1 roots=[__ocml_exp_f32] files=4",
     "post_link.check=exports status=ok symbols=[__ocml_exp_f32,flash_attention_causal_f32_b1_h1_n8_d16_v1,flash_attention_causal_f32_b1_h1_n8_d16_v1.kd]",
     "post_link.check=flash_attention_v1_profile status=ok shape=B1,H1,N8,D16 causal=true recurrence=online_strict_f32 workgroup=[64,1,1] retained_grid=[1,1,1] explicit_kernarg_size=64 kernarg_size=320 kernarg_align=8 group_size=0 private_size=0 wavefront_size=64 calls=0 spills=0 dynamic_stack=false descriptor_binding=byte_exact ocml_provider=measured_structural_only rust_descriptor_admission=required",
-    "post_link.check=flash_attention_v1_reproducibility status=ok llvm_build_identity=upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1 input_ir_sha256=cdbcfb2e9ab688ddc3275e632a88f05d510e3a799799fc8952e6180e074de09b linked_bitcode_sha256=46c7e4d163fd3e5dee25a694e1d60ec65f4df7fd68477c718730af3dd657f2f5 optimized_bitcode_sha256=1a9a39aeae72fd91276354dc0216de3b370ce0540a745ab2b66cc1c06de3eff6 object_sha256=1be71b56456b132b28f651b60653e4febfbb6c2047e846ee913582637b84f387 raw_hsaco_sha256=e4a5a7fff7272063c30877d3d5ad13defc523d27b26792c9197fceea27e061e2",
+    "post_link.check=flash_attention_v1_reproducibility status=ok llvm_build_identity=upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1 input_ir_sha256=25cc163bc1ee4d5dfbe90b535a2a9913de148f9496762b147ca95e6dda09aa33 linked_bitcode_sha256=f6cfd3083e2e7f539edbffdc4696c16a5af8bc513d5872f0ab2a9b7ee36e8d50 optimized_bitcode_sha256=7fcae92f41d0edb84da73ef65b4d2f148550f6be915411be81347106a75a65bd object_sha256=359d06a95a0483b4363140c8494f54f66acf0c58d6a0fd67b4f432eca0b3dc94 raw_hsaco_sha256=2ca9d787a2bb016da8f01a895b363fdea7eeab032c45ad7ab844e6317923b16c",
     "post_link.check=metadata status=ok kernels=1 target=amdgcn-amd-amdhsa--gfx942%3Axnack-",
     "post_link.check=target status=ok arch=gfx942 code_object_version=6 e_flags=0x64c",
     "post_link.check=unresolved status=ok symbols=[]",

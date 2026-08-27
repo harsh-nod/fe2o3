@@ -1398,7 +1398,8 @@ mod tests {
         drop(ledger);
         let executable = std::env::current_exe().unwrap();
         let spawn = || {
-            Command::new(&executable)
+            let mut command = Command::new(&executable);
+            command
                 .args([
                     "--ignored",
                     "--exact",
@@ -1408,9 +1409,8 @@ mod tests {
                 .env("FE2O3_LEDGER_TEST_DIRECTORY", directory.path())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap()
+                .stderr(Stdio::null());
+            crate::executor::spawn_artifact_coordinated_child(&mut command).unwrap()
         };
         let mut first = spawn();
         let mut second = spawn();
@@ -1452,7 +1452,8 @@ mod tests {
         let ready = directory.file("ready");
         let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args([
                 "--ignored",
                 "--exact",
@@ -1463,9 +1464,8 @@ mod tests {
             .env("FE2O3_LEDGER_TEST_READY", &ready)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::null());
+        let mut child = crate::executor::spawn_artifact_coordinated_child(&mut command).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while !ready.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
@@ -1520,7 +1520,8 @@ mod tests {
         let directory = TestDirectory::new();
         let (ledger, _) = LinuxLedger::create_new(directory.path()).unwrap();
         drop(ledger);
-        let status = Command::new(std::env::current_exe().unwrap())
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             .args([
                 "--ignored",
                 "--exact",
@@ -1531,9 +1532,8 @@ mod tests {
             .env("FE2O3_LEDGER_TEST_DIRECTORY", directory.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap();
+            .stderr(Stdio::null());
+        let status = crate::executor::status_artifact_coordinated_child(&mut command).unwrap();
         assert!(status.success());
 
         let (mut ledger, recovery) = LinuxLedger::open_existing(directory.path()).unwrap();

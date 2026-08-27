@@ -264,7 +264,8 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::GuardedLoad { .. }
         | OperationKind::Store { .. }
         | OperationKind::Atomic(_)
-        | OperationKind::Wave(_) => Some(()),
+        | OperationKind::Wave(_)
+        | OperationKind::Gfx950LdsTranspose(_) => Some(()),
     }
 }
 
@@ -380,8 +381,9 @@ fn add_plain_btree_set<T: Ord>(resident: &mut ResidentLedger, values: &BTreeSet<
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::{
-        AccessMode, BasicBlock, BlockId, Function, FunctionId, Kernel, LaunchDomain, LaunchExtent,
-        Module, Operation, Signature, Terminator, Type, ValueId,
+        AccessMode, BasicBlock, BlockId, Function, FunctionId, Gfx950LdsTransposeFormatV1,
+        Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, Kernel, LaunchDomain,
+        LaunchExtent, Module, Operation, Signature, Terminator, Type, ValueId,
     };
 
     fn spare_string(value: &str, capacity: usize) -> String {
@@ -480,5 +482,42 @@ mod tests {
             actual += reserved_bool_vec_bytes(1).unwrap();
         }
         assert!(partitioned >= actual);
+    }
+
+    #[test]
+    fn gfx950_lds_transpose_kinds_retain_no_operation_owned_heap() {
+        let format = Gfx950LdsTransposeFormatV1::Fp8E4M3;
+        let kinds = [
+            Gfx950LdsTransposeOperationKindV1::Current { format },
+            Gfx950LdsTransposeOperationKindV1::Stage {
+                format,
+                storage: ValueId(0),
+                source_slice: ValueId(1),
+                offset: ValueId(2),
+                rows: ValueId(3),
+                columns: ValueId(4),
+                stride: ValueId(5),
+                token_base: ValueId(6),
+                reduction_base: ValueId(7),
+            },
+            Gfx950LdsTransposeOperationKindV1::Publish {
+                format,
+                storage: ValueId(0),
+            },
+            Gfx950LdsTransposeOperationKindV1::Read {
+                format,
+                storage: ValueId(0),
+            },
+        ];
+
+        for kind in kinds {
+            let operation = Operation::new(
+                Vec::new(),
+                OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(kind)),
+            );
+            let mut resident = ResidentLedger::new(0);
+            add_operation(&mut resident, &operation).unwrap();
+            assert_eq!(resident.bytes(), 0, "{kind:?}");
+        }
     }
 }

@@ -19,12 +19,15 @@ adapters depend on that core rather than this full session shell. This crate
 depends on the core and publicly re-exports its existing API for downstream
 compatibility.
 
-The dependency is pinned to Pliron v0.17.0 commit
-`2610651306ea3ba670f68d5d8b1e1159bcd521ed`. The `pliron-derive` dependency
-used by `pliron` is sourced from that same Git workspace revision. This crate
-does not construct or lower LLVM operations. The workspace now pins
-`pliron-llvm` at the same revision for the isolated dialect smoke crate, and
-the first #144 slice defines a Pliron-independent canonical LLVM handoff.
+The dependency is pinned to reviewed Pliron v0.17.0 fork commit
+`5bdf861bf03e7f20242b25717fb653336d02e487`. It is a strict descendant of
+upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and adds
+the bounded mutation-attempt epoch used by the production analysis boundary.
+The `pliron-derive` dependency used by `pliron` is sourced from that same Git
+workspace revision and retains the reviewed source-tree identity. This crate
+does not construct or lower LLVM operations. The workspace pins `pliron-llvm`
+at the same revision for the isolated dialect smoke crate, and the first #144
+slice defines a Pliron-independent canonical LLVM handoff.
 
 The target integration permits `pliron-llvm` only for transient `llvm.*`
 dialect construction, transformation, and verification.

@@ -56,15 +56,31 @@ use sha2::{Digest, Sha256};
 
 include!("fixtures/worker_v2_hsaco_test_support.rs");
 
+const GFX942_TARGET: &str = "gfx942:xnack-";
+
+fn canonical_fixture_options() -> FixtureOptions<'static> {
+    FixtureOptions {
+        target: GFX942_TARGET,
+        ..FixtureOptions::valid()
+    }
+}
+
 #[test]
 fn canonical_fixture_controls_required_workgroup_metadata_presence() {
-    let present = fixture(FixtureOptions::valid());
+    let present = fixture(canonical_fixture_options());
+    assert_eq!(
+        fe2o3_hsaco::inspect(&present.bytes)
+            .unwrap()
+            .target()
+            .to_string(),
+        GFX942_TARGET
+    );
     assert_eq!(
         fe2o3_hsaco::inspect(&present.bytes).unwrap().kernels()[0].required_workgroup_size(),
         Some([256, 1, 1])
     );
 
-    let mut options = FixtureOptions::valid();
+    let mut options = canonical_fixture_options();
     options.include_required_workgroup_size = false;
     let omitted = fixture(options);
     assert_eq!(
@@ -75,9 +91,9 @@ fn canonical_fixture_controls_required_workgroup_metadata_presence() {
 
 #[test]
 fn missing_descriptor_source_returns_an_owning_fail_closed_blocker() {
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let raw =
-        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, "gfx942", 0x41, 0x51)).unwrap();
+        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, GFX942_TARGET, 0x41, 0x51)).unwrap();
     let raw_identity = raw.identity();
     let source_identity = raw.source_evidence_identity();
     let output_identity = raw.linked_output_identity();
@@ -100,7 +116,7 @@ fn missing_descriptor_source_returns_an_owning_fail_closed_blocker() {
     assert_eq!(blocker.raw_output_identity(), output_identity);
     assert_eq!(blocker.policy_identity(), policy_identity);
     assert_eq!(blocker.attempt(), attempt);
-    assert_eq!(blocker.target().to_string(), "gfx942");
+    assert_eq!(blocker.target().to_string(), GFX942_TARGET);
     assert_eq!(blocker.code_object_version(), CodeObjectVersion::V6);
     assert_eq!(blocker.observed_kernels().len(), 1);
     assert_eq!(blocker.observed_kernels()[0].entry(), "vecadd");
@@ -116,13 +132,14 @@ fn missing_descriptor_source_returns_an_owning_fail_closed_blocker() {
 
 #[test]
 fn structurally_finalizes_and_retains_raw_and_finalized_lineage() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw_bytes = fixture.bytes.clone();
     let unfinalized = inspect_unfinalized(&raw_bytes).unwrap();
     let digest_offset = unfinalized.location().digest_offset();
     let raw =
-        inspect_worker_v2_raw_hsaco_v1(evidence(raw_bytes.clone(), "gfx942", 0x42, 0x52)).unwrap();
+        inspect_worker_v2_raw_hsaco_v1(evidence(raw_bytes.clone(), GFX942_TARGET, 0x42, 0x52))
+            .unwrap();
     let raw_identity = raw.identity();
     let source_identity = raw.source_evidence_identity();
     let raw_output = raw.linked_output_identity();
@@ -143,7 +160,7 @@ fn structurally_finalizes_and_retains_raw_and_finalized_lineage() {
         prepared.finalized_output_identity()
     );
     assert_eq!(prepared.canonical_digest(), verified.digest());
-    assert_eq!(prepared.target().to_string(), "gfx942");
+    assert_eq!(prepared.target().to_string(), GFX942_TARGET);
     assert_eq!(prepared.code_object_version(), CodeObjectVersion::V6);
     assert!(prepared.canonical_descriptor_finalization_ran());
     assert!(!prepared.has_authenticated_descriptor_source_evidence());
@@ -164,11 +181,11 @@ fn structurally_finalizes_and_retains_raw_and_finalized_lineage() {
 
 #[test]
 fn descriptor_and_finalized_byte_tampering_fail_closed() {
-    let mut table = descriptor_table("gfx942");
+    let mut table = descriptor_table(GFX942_TARGET);
     table[16] = 1;
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw =
-        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, "gfx942", 0x43, 0x53)).unwrap();
+        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, GFX942_TARGET, 0x43, 0x53)).unwrap();
     assert!(matches!(
         finalize_inspected_worker_v2_hsaco_v1(raw),
         Err(WorkerV2HsacoFinalizationError::CanonicalFinalization(
@@ -176,11 +193,11 @@ fn descriptor_and_finalized_byte_tampering_fail_closed() {
         ))
     ));
 
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let text_offset = fixture.text_offset;
     let raw =
-        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, "gfx942", 0x44, 0x54)).unwrap();
+        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, GFX942_TARGET, 0x44, 0x54)).unwrap();
     let prepared = finalize_inspected_worker_v2_hsaco_v1(raw).unwrap();
     let mut tampered = prepared.exact_finalized_bytes().to_vec();
     tampered[text_offset] ^= 1;
@@ -192,16 +209,17 @@ fn descriptor_and_finalized_byte_tampering_fail_closed() {
 
 #[test]
 fn rejects_double_finalization() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw =
-        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, "gfx942", 0x45, 0x55)).unwrap();
+        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, GFX942_TARGET, 0x45, 0x55)).unwrap();
     let finalized = finalize_inspected_worker_v2_hsaco_v1(raw)
         .unwrap()
         .exact_finalized_bytes()
         .to_vec();
 
-    let raw = inspect_worker_v2_raw_hsaco_v1(evidence(finalized, "gfx942", 0x46, 0x56)).unwrap();
+    let raw =
+        inspect_worker_v2_raw_hsaco_v1(evidence(finalized, GFX942_TARGET, 0x46, 0x56)).unwrap();
     assert!(matches!(
         finalize_inspected_worker_v2_hsaco_v1(raw),
         Err(WorkerV2HsacoFinalizationError::CanonicalFinalization(
@@ -212,10 +230,18 @@ fn rejects_double_finalization() {
 
 #[test]
 fn rejects_descriptor_target_mismatch_without_weakening_raw_target_policy() {
-    let table = descriptor_table("gfx942:xnack-");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table("gfx942");
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw =
-        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, "gfx942", 0x47, 0x57)).unwrap();
+        inspect_worker_v2_raw_hsaco_v1(evidence(fixture.bytes, GFX942_TARGET, 0x47, 0x57)).unwrap();
+    assert_eq!(raw.target().to_string(), GFX942_TARGET);
+    assert_eq!(
+        decode_device_descriptor_table_v1(&table)
+            .unwrap()
+            .device_target()
+            .to_string(),
+        "gfx942"
+    );
 
     assert!(matches!(
         finalize_inspected_worker_v2_hsaco_v1(raw),
@@ -227,10 +253,10 @@ fn rejects_descriptor_target_mismatch_without_weakening_raw_target_policy() {
 
 #[test]
 fn finalization_identity_binds_lineage_separately_from_finalized_content() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
-    let first = prepare(fixture.bytes.clone(), "gfx942", 0x48, 0x58);
-    let other_lineage = prepare(fixture.bytes.clone(), "gfx942", 0x49, 0x59);
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
+    let first = prepare(fixture.bytes.clone(), GFX942_TARGET, 0x48, 0x58);
+    let other_lineage = prepare(fixture.bytes.clone(), GFX942_TARGET, 0x49, 0x59);
 
     assert_eq!(
         first.finalized_output_identity(),
@@ -245,7 +271,7 @@ fn finalization_identity_binds_lineage_separately_from_finalized_content() {
 
     let mut changed = fixture.bytes;
     changed[fixture.text_offset] ^= 1;
-    let changed = prepare(changed, "gfx942", 0x4a, 0x5a);
+    let changed = prepare(changed, GFX942_TARGET, 0x4a, 0x5a);
     assert_ne!(first.raw_output_identity(), changed.raw_output_identity());
     assert_ne!(
         first.finalized_output_identity(),
@@ -257,12 +283,12 @@ fn finalization_identity_binds_lineage_separately_from_finalized_content() {
 
 #[test]
 fn protected_missing_descriptor_retains_exact_v2_lineage() {
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let closure = compiler_closure(0x31);
     let slot = CompilerModuleHandoffSlotV2::GeneralGemmReference;
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x71,
         0x81,
         closure,
@@ -300,8 +326,8 @@ fn protected_missing_descriptor_retains_exact_v2_lineage() {
 
 #[test]
 fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw_bytes = fixture.bytes.clone();
     let digest_offset = inspect_unfinalized(&raw_bytes)
         .unwrap()
@@ -311,7 +337,7 @@ fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
     let slot = CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly;
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x72,
         0x82,
         closure,
@@ -364,12 +390,12 @@ fn protected_finalization_preserves_closure_handoff_and_exact_bytes() {
 
 #[test]
 fn typed_protected_construction_and_wire_replay_share_canonical_validation() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x74,
         0x84,
         compiler_closure(0x61),
@@ -405,12 +431,12 @@ fn typed_protected_construction_and_wire_replay_share_canonical_validation() {
 
 #[test]
 fn protected_finalizer_lineage_requires_both_exact_worker_outputs() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x21,
         0x31,
         compiler_closure(0x41),
@@ -443,12 +469,12 @@ fn protected_finalizer_lineage_requires_both_exact_worker_outputs() {
 
 #[test]
 fn protected_finalizer_lineage_rejects_canonical_manifest_role_disagreement() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x22,
         0x32,
         compiler_closure(0x42),
@@ -479,13 +505,13 @@ fn protected_finalizer_lineage_rejects_canonical_manifest_role_disagreement() {
 
 #[test]
 fn protected_finalizer_lineage_rejects_coordinated_module_and_exchange_substitution() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let closure = compiler_closure(0x43);
     let original = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes.clone(),
-        "gfx942",
+        GFX942_TARGET,
         0x23,
         0x33,
         closure,
@@ -495,7 +521,7 @@ fn protected_finalizer_lineage_rejects_coordinated_module_and_exchange_substitut
     let alternate =
         inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence_with_module_prefix(
             fixture.bytes,
-            "gfx942",
+            GFX942_TARGET,
             0x23,
             0x33,
             closure,
@@ -537,12 +563,12 @@ fn protected_finalizer_lineage_rejects_coordinated_module_and_exchange_substitut
 
 #[test]
 fn protected_finalizer_lineage_enforces_the_aggregate_wire_maximum() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x31,
         0x41,
         compiler_closure(0x51),
@@ -575,13 +601,13 @@ fn protected_finalizer_lineage_enforces_the_aggregate_wire_maximum() {
 
 #[test]
 fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let first = finalize_inspected_protected_worker_v2_hsaco_v2(
         inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
             fixture.bytes.clone(),
-            "gfx942",
+            GFX942_TARGET,
             0x75,
             0x85,
             compiler_closure(0x71),
@@ -593,7 +619,7 @@ fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
     let second = finalize_inspected_protected_worker_v2_hsaco_v2(
         inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
             fixture.bytes,
-            "gfx942",
+            GFX942_TARGET,
             0x75,
             0x85,
             compiler_closure(0x81),
@@ -666,11 +692,11 @@ fn protected_finalizer_lineage_rejects_resealed_substitutions_and_bad_bounds() {
 
 #[test]
 fn protected_finalizer_lineage_requires_the_exact_canonical_descriptor_table() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x76,
         0x86,
         compiler_closure(0x91),
@@ -681,7 +707,7 @@ fn protected_finalizer_lineage_requires_the_exact_canonical_descriptor_table() {
     let correct = decode_device_descriptor_table_v1(&table).unwrap();
     transcript.validate_descriptor_table(&correct).unwrap();
 
-    let substituted = coordinated_semantic_substitution_table("gfx942");
+    let substituted = coordinated_semantic_substitution_table(GFX942_TARGET);
     let correct_kernel = &correct.kernels()[0];
     let substituted_kernel = &substituted.kernels()[0];
     assert_eq!(
@@ -731,10 +757,10 @@ fn protected_finalizer_lineage_requires_the_exact_canonical_descriptor_table() {
 
 #[test]
 fn protected_finalizer_lineage_fails_closed_without_a_descriptor_section() {
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x77,
         0x87,
         compiler_closure(0x97),
@@ -742,7 +768,7 @@ fn protected_finalizer_lineage_fails_closed_without_a_descriptor_section() {
     ))
     .unwrap();
     let transcript = ProtectedWorkerV2FinalizerLineageV2::from_inspected(&raw).unwrap();
-    let candidate = decode_device_descriptor_table_v1(&descriptor_table("gfx942")).unwrap();
+    let candidate = decode_device_descriptor_table_v1(&descriptor_table(GFX942_TARGET)).unwrap();
     assert!(matches!(
         transcript.validate_descriptor_table(&candidate),
         Err(
@@ -758,8 +784,7 @@ fn protected_finalizer_lineage_preserves_cov6_explicit_only_kernarg_reconciliati
     let explicit_size = 40;
     let total_size = 296;
     let table = cov6_explicit_only_descriptor_table(explicit_size, total_size);
-    let mut options = FixtureOptions::valid();
-    options.target = "gfx942:xnack-";
+    let mut options = canonical_fixture_options();
     options.kernarg_segment_size_override = Some(u64::from(explicit_size));
     let mut fixture = fixture_with_descriptor_table(options, Some(&table));
     replace_fixture_metadata_with_explicit_only_cov6(&mut fixture.bytes, options, explicit_size);
@@ -785,7 +810,7 @@ fn protected_finalizer_lineage_preserves_cov6_explicit_only_kernarg_reconciliati
 
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
         fixture.bytes,
-        "gfx942:xnack-",
+        GFX942_TARGET,
         0x78,
         0x88,
         compiler_closure(0x98),
@@ -827,7 +852,7 @@ fn protected_finalizer_lineage_derives_and_joins_an_exact_two_kernel_table() {
 
     let raw = inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence_for_kernels(
         fixture.bytes,
-        "gfx942",
+        GFX942_TARGET,
         0x79,
         0x89,
         compiler_closure(0x99),
@@ -881,13 +906,13 @@ fn protected_finalizer_lineage_derives_and_joins_an_exact_two_kernel_table() {
 
 #[test]
 fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
-    let table = descriptor_table("gfx942");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = descriptor_table(GFX942_TARGET);
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let exact_raw = fixture.bytes.clone();
     let base = finalize_inspected_protected_worker_v2_hsaco_v2(
         inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
             fixture.bytes.clone(),
-            "gfx942",
+            GFX942_TARGET,
             0x73,
             0x83,
             compiler_closure(0x51),
@@ -903,7 +928,7 @@ fn every_closure_role_mutation_changes_only_protected_finalization_lineage() {
         let changed = finalize_inspected_protected_worker_v2_hsaco_v2(
             inspect_protected_worker_v2_raw_hsaco_v1(protected_evidence(
                 fixture.bytes.clone(),
-                "gfx942",
+                GFX942_TARGET,
                 0x73,
                 0x83,
                 changed_closure,
@@ -2512,7 +2537,7 @@ fn two_kernel_descriptor_table(
         CodeObjectVersion::V6,
         CompilerIdentityV1::new(text("rustc"), text("two-kernel-test"), [0xc6; 20]),
         ProducerIdentityV1::new(text("fe2o3-test"), text("two-kernel-test")),
-        DeviceTargetV1::parse("gfx942").unwrap(),
+        DeviceTargetV1::parse(GFX942_TARGET).unwrap(),
         vec![source],
         vec![layout],
         kernels,
@@ -2560,7 +2585,7 @@ fn two_kernel_metadata(kernels: &[(&str, &str)]) -> Vec<u8> {
         ),
         (
             Value::from("amdhsa.target"),
-            Value::from("amdgcn-amd-amdhsa--gfx942"),
+            Value::from("amdgcn-amd-amdhsa--gfx942:xnack-"),
         ),
         (Value::from("amdhsa.kernels"), Value::Array(kernels)),
     ]);
@@ -2703,7 +2728,7 @@ fn two_kernel_fixture(table: &[u8], metadata: &[u8], kernels: &[(&str, &str)]) -
     write_u32(&mut bytes, 20, 1);
     write_u64(&mut bytes, 32, ELF_HEADER_BYTES as u64);
     write_u64(&mut bytes, 40, section_table_offset as u64);
-    write_u32(&mut bytes, 48, target_flags("gfx942"));
+    write_u32(&mut bytes, 48, target_flags(GFX942_TARGET));
     write_u16(&mut bytes, 52, ELF_HEADER_BYTES as u16);
     write_u16(&mut bytes, 54, PROGRAM_HEADER_BYTES as u16);
     write_u16(&mut bytes, 56, PROGRAM_COUNT as u16);

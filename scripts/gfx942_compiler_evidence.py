@@ -2513,12 +2513,9 @@ def main() -> int:
                 raise EvidenceError("--self-test accepts no output paths")
             self_test(repo)
         else:
-            if args.run_root is None or args.evidence_root is None:
-                raise EvidenceError("RUN_ROOT and EVIDENCE_ROOT are required")
-            controller(
-                Path(args.run_root),
-                Path(args.evidence_root),
-                observe_candidate=args.observe_transition_candidate,
+            raise EvidenceError(
+                "gfx942 Worker V2 compiler capture is retired; use the production "
+                "Worker V3 compiler path before defining replacement evidence"
             )
     except (EvidenceError, HardeningError, OSError, UnicodeError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)

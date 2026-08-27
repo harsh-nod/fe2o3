@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x70, 0xc4, 0x69, 0x00, 0x83, 0x52, 0x98, 0xc1, 0x43, 0xc5, 0x47, 0x7b, 0xc2, 0xa2, 0x12, 0xc2,
-    0x6d, 0x76, 0x32, 0xc6, 0x7e, 0xf3, 0x7a, 0x25, 0xa0, 0x7a, 0x74, 0x30, 0xaa, 0x74, 0xa8, 0x11,
+    0x88, 0x3a, 0x01, 0x48, 0x6d, 0xe1, 0x92, 0xc1, 0x9a, 0x8f, 0x77, 0x09, 0xe5, 0x65, 0x5c, 0xa6,
+    0x8c, 0x5a, 0xb0, 0x46, 0x87, 0xfa, 0xf4, 0xc8, 0xa1, 0xce, 0x7b, 0x77, 0xb9, 0xec, 0x2e, 0x42,
 ];
 #[allow(
     dead_code,
@@ -78,8 +78,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x7d, 0x3b, 0xc4, 0x01, 0x04, 0xe9, 0x23, 0x27, 0xa3, 0xdb, 0x00, 0xcb, 0xdf, 0x4a, 0x34, 0x13,
-    0x9f, 0x70, 0x87, 0x4e, 0xc9, 0xc1, 0x95, 0xcb, 0x54, 0x10, 0x8a, 0x91, 0x10, 0xcf, 0x0b, 0x43,
+    0x93, 0xe3, 0x1d, 0x99, 0x9f, 0x51, 0x30, 0x20, 0x6e, 0xd6, 0xe1, 0xdd, 0xe6, 0x03, 0xf9, 0x77,
+    0x50, 0x01, 0x96, 0xaa, 0x76, 0x0e, 0x85, 0x39, 0x99, 0xe1, 0x69, 0x54, 0x46, 0x2f, 0x3d, 0xc8,
 ];
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -544,6 +544,10 @@ pub(crate) enum TrustedDeviceItem {
     Bf16MfmaMatrixBRowMajor,
     Bf16MfmaMatrixALoadZeroFilledV2,
     Bf16MfmaMatrixBLoadZeroFilledV2,
+    F32AccumulatorMatrixView,
+    F32AccumulatorMatrixViewError,
+    F32AccumulatorMatrixRowMajor,
+    F32AccumulatorMatrixLoadZeroFilledV1,
     DeviceMatrixMultiplyAccumulate,
     Gfx950Fp4E2M1Format,
     Gfx950Fp8E4M3Format,
@@ -1106,6 +1110,26 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
         "fe2o3_device_f32_accumulator_fragment_into_values_v1",
         "fe2o3_device::F32AccumulatorFragment::into_values",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixView,
+        "fe2o3_device_f32_accumulator_matrix_view_v1",
+        "fe2o3_device::F32AccumulatorMatrix",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixViewError,
+        "fe2o3_device_f32_accumulator_matrix_view_error_v1",
+        "fe2o3_device::F32AccumulatorMatrixViewError",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixRowMajor,
+        "fe2o3_device_f32_accumulator_matrix_row_major_v1",
+        "fe2o3_device::F32AccumulatorMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1,
+        "fe2o3_device_f32_accumulator_matrix_load_zero_filled_v1",
+        "fe2o3_device::F32AccumulatorMatrix::load_m16n16",
     ),
     (
         TrustedDeviceItem::Bf16MfmaMatrixView,
@@ -1974,6 +1998,16 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::F32AccumulatorFragmentIntoValues => {
             "fe2o3_device::tensor::{impl#5}::into_values"
         }
+        TrustedDeviceItem::F32AccumulatorMatrixView => "fe2o3_device::tensor::F32AccumulatorMatrix",
+        TrustedDeviceItem::F32AccumulatorMatrixViewError => {
+            "fe2o3_device::tensor::F32AccumulatorMatrixViewError"
+        }
+        TrustedDeviceItem::F32AccumulatorMatrixRowMajor => {
+            "fe2o3_device::tensor::{impl#21}::row_major"
+        }
+        TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1 => {
+            "fe2o3_device::tensor::{impl#21}::load_m16n16"
+        }
         TrustedDeviceItem::Bf16MfmaMatrixView => "fe2o3_device::tensor::Bf16MfmaMatrix",
         TrustedDeviceItem::Bf16MfmaMatrixViewError => "fe2o3_device::tensor::Bf16MatrixViewError",
         TrustedDeviceItem::Bf16MfmaMatrixARowMajor => "fe2o3_device::tensor::{impl#7}::row_major",
@@ -2133,6 +2167,10 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::F32AccumulatorFragment
             | TrustedDeviceItem::F32AccumulatorFragmentZero
             | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
+            | TrustedDeviceItem::F32AccumulatorMatrixView
+            | TrustedDeviceItem::F32AccumulatorMatrixViewError
+            | TrustedDeviceItem::F32AccumulatorMatrixRowMajor
+            | TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1
             | TrustedDeviceItem::Bf16MfmaMatrixView
             | TrustedDeviceItem::Bf16MfmaMatrixViewError
             | TrustedDeviceItem::Bf16MfmaMatrixARowMajor
@@ -3355,6 +3393,10 @@ mod tests {
             TrustedDeviceItem::StridedReadView2DError,
             TrustedDeviceItem::StridedReadView2DFromSharedSlice,
             TrustedDeviceItem::StridedReadView2DLoadOr,
+            TrustedDeviceItem::F32AccumulatorMatrixView,
+            TrustedDeviceItem::F32AccumulatorMatrixViewError,
+            TrustedDeviceItem::F32AccumulatorMatrixRowMajor,
+            TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1,
             TrustedDeviceItem::Bf16MfmaMatrixView,
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,
@@ -3959,8 +4001,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn source_closure_rejects_symlinks_and_nonregular_files() {
+        use std::os::fd::AsRawFd as _;
         use std::os::unix::fs::symlink;
-        use std::os::unix::net::UnixListener;
 
         let manifest_link = ProviderPackageFixture::new();
         let manifest = manifest_link.root.join("Cargo.toml");
@@ -4008,15 +4050,21 @@ mod tests {
             .is_err()
         );
 
-        let socket = ProviderPackageFixture::new();
-        let _listener = UnixListener::bind(socket.source_root().join("provider.sock")).unwrap();
-        assert!(
-            reviewed_provider_source_closure_identity(
-                &socket.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-            )
-            .is_err()
+        let nonregular = ProviderPackageFixture::new();
+        let source_root = fs::File::open(nonregular.source_root()).unwrap();
+        // SAFETY: the descriptor owns the fixture source directory and the relative name is a
+        // static NUL-terminated C string.
+        let result =
+            unsafe { libc::mkfifoat(source_root.as_raw_fd(), c"provider.fifo".as_ptr(), 0o600) };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(result, 0, "create nonregular source fixture: {error}");
+        let error = reviewed_provider_source_closure_identity(
+            &nonregular.root,
+            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
         );
+        let error = error.unwrap_err();
+        assert!(error.contains("provider.fifo"), "{error}");
+        assert!(error.contains("is not a regular file"), "{error}");
     }
 
     #[test]
@@ -4208,6 +4256,10 @@ mod tests {
             TrustedDeviceItem::F32AccumulatorFragment,
             TrustedDeviceItem::F32AccumulatorFragmentZero,
             TrustedDeviceItem::F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::F32AccumulatorMatrixView,
+            TrustedDeviceItem::F32AccumulatorMatrixViewError,
+            TrustedDeviceItem::F32AccumulatorMatrixRowMajor,
+            TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1,
             TrustedDeviceItem::Bf16MfmaMatrixView,
             TrustedDeviceItem::Bf16MfmaMatrixViewError,
             TrustedDeviceItem::Bf16MfmaMatrixARowMajor,

@@ -91,8 +91,9 @@ pub use tensor::{
     BF16_F32_MFMA_M, BF16_F32_MFMA_N, BF16_F32_MFMA_REDUCTION, BF16_F32_MFMA_WAVE_LANES,
     Bf16F32M16N16K16, Bf16MatrixViewError, Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment,
     Bf16MfmaBMatrix, Bf16MfmaFragment, Bf16MfmaMatrix, DeviceMatrix, F32AccumulatorFragment,
-    LdsTile16x16, LdsTileShapeError, MATRIX_CONTRACT_VERSION_V1, MfmaAccumulatorRowMajor,
-    MfmaLdsTile16x16, MfmaLdsXor4, MfmaOperandA, MfmaOperandB, MfmaRegisterTile16x16, RowMajorXor4,
+    F32AccumulatorMatrix, F32AccumulatorMatrixViewError, LdsTile16x16, LdsTileShapeError,
+    MATRIX_CONTRACT_VERSION_V1, MfmaAccumulatorRowMajor, MfmaLdsTile16x16, MfmaLdsXor4,
+    MfmaOperandA, MfmaOperandB, MfmaRegisterTile16x16, RowMajorXor4,
     gfx942_lds_bf16_tile_pair_m16x16_v1, gfx942_publish_lds_bf16_tile_pair_m16x16_v1,
 };
 pub use thread::{

@@ -797,19 +797,17 @@ mod tests {
             std::process::id()
         ));
         fs::write(&path, source).unwrap();
-        let output = Command::new(verus)
-            .arg(&path)
-            .args([
-                "--crate-type",
-                "lib",
-                "--triggers-mode",
-                "silent",
-                "--no-cheating",
-                "--num-threads",
-                "1",
-            ])
-            .output()
-            .unwrap();
+        let mut command = Command::new(verus);
+        command.arg(&path).args([
+            "--crate-type",
+            "lib",
+            "--triggers-mode",
+            "silent",
+            "--no-cheating",
+            "--num-threads",
+            "1",
+        ]);
+        let output = crate::executor::output_artifact_coordinated_child(&mut command).unwrap();
         fs::remove_file(path).unwrap();
         output
     }

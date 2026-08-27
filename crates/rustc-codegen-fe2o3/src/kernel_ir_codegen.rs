@@ -40,10 +40,6 @@ use std::fmt;
 use std::{fs, path::Path};
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-const FILL_KERNEL: &str = "fill";
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-const VECADD_KERNEL: &str = "vecadd";
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
 const NO_QUALIFICATION_FALLBACK_HINT: &str =
     "production compilation does not fall back to a qualification-only lowering route";
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -1575,52 +1571,60 @@ pub(crate) fn prepare_fill_collection(
     mut module: Module,
     expected_kernel_names: &[String],
 ) -> Result<Vec<PreparedDeviceKernel>, EmitError> {
+    let [authenticated_export] = expected_kernel_names else {
+        return Err(reject(format!(
+            "supports exactly one authenticated kernel export for the bounded fill or vecadd terminal profiles; collected {} exports; {NO_QUALIFICATION_FALLBACK_HINT}",
+            expected_kernel_names.len()
+        )));
+    };
+    if authenticated_export.len() > MAX_COMPILER_MODULE_SYMBOL_BYTES {
+        return Err(reject(format!(
+            "authenticated kernel export identity exceeds the {MAX_COMPILER_MODULE_SYMBOL_BYTES}-byte visible compiler-module bound; {NO_QUALIFICATION_FALLBACK_HINT}"
+        )));
+    }
+    enforce_compiler_module_bounds(&module).map_err(|error| {
+        reject(format!(
+            "authenticated kernel IR exceeds the bounded terminal-profile model: {error}; {NO_QUALIFICATION_FALLBACK_HINT}"
+        ))
+    })?;
     verify_module(&module).map_err(|errors| {
         reject(format!(
-            "received invalid verified kernel IR before fill legalization: {errors}"
+            "received invalid verified kernel IR before terminal-profile legalization: {errors}"
         ))
     })?;
 
-    let mut expected = expected_kernel_names.to_vec();
-    expected.sort();
-    let [kernel_name] = expected.as_slice() else {
+    let [translated_kernel] = module.kernels.as_slice() else {
+        let translated = module
+            .kernels
+            .iter()
+            .map(|kernel| kernel.id.as_str())
+            .collect::<Vec<_>>();
         return Err(reject(format!(
-            "supports exactly one kernel export from {FILL_KERNEL:?} or {VECADD_KERNEL:?}; collected {expected:?}; {NO_QUALIFICATION_FALLBACK_HINT}"
+            "translated kernel identities {translated:?} do not match the single collected kernel identity {authenticated_export:?}; {NO_QUALIFICATION_FALLBACK_HINT}"
         )));
     };
-    if !matches!(kernel_name.as_str(), FILL_KERNEL | VECADD_KERNEL) {
+    if translated_kernel.id.as_str() != authenticated_export {
         return Err(reject(format!(
-            "does not support kernel export {kernel_name:?}; expected {FILL_KERNEL:?} or {VECADD_KERNEL:?}; {NO_QUALIFICATION_FALLBACK_HINT}"
-        )));
-    }
-
-    let mut translated = module
-        .kernels
-        .iter()
-        .map(|kernel| kernel.id.as_str().to_string())
-        .collect::<Vec<_>>();
-    translated.sort();
-    if translated != expected {
-        return Err(reject(format!(
-            "translated kernel identities {translated:?} do not match collected kernel identities {expected:?}"
+            "translated kernel identity {:?} does not match collected kernel identity {authenticated_export:?}; {NO_QUALIFICATION_FALLBACK_HINT}",
+            translated_kernel.id.as_str()
         )));
     }
 
     let kernel = module
         .kernels
-        .iter_mut()
-        .find(|kernel| kernel.id.as_str() == kernel_name)
-        .expect("identity equality established the selected kernel");
+        .first_mut()
+        .expect("exactly one authenticated kernel was established");
     let required_workgroup_size = WorkgroupSize::new(WORKGROUP_X, 1, 1);
     match kernel.workgroup_size {
         None => kernel.workgroup_size = Some(required_workgroup_size),
         Some(observed) if observed == required_workgroup_size => {}
         Some(observed) => {
             return Err(reject(format!(
-                "`{kernel_name}` authenticated workgroup size {observed:?} conflicts with the exact {WORKGROUP_X}x1x1 executable profile"
+                "`{authenticated_export}` authenticated workgroup size {observed:?} conflicts with the exact {WORKGROUP_X}x1x1 executable profile"
             )));
         }
     }
+    let kernel_id = kernel.id.clone();
     let entry = kernel.entry.clone();
 
     let function = module
@@ -1628,46 +1632,67 @@ pub(crate) fn prepare_fill_collection(
         .iter_mut()
         .find(|function| function.id == entry)
         .expect("initial verification established the kernel entry");
-    let expected_parameters = match kernel_name.as_str() {
-        FILL_KERNEL => vec![writable_f32_slice()],
-        VECADD_KERNEL => vec![
-            readonly_f32_slice(),
-            readonly_f32_slice(),
-            writable_f32_slice(),
-        ],
-        _ => unreachable!("kernel admission checked the selected identity"),
-    };
-    if function.signature.parameters != expected_parameters
-        || !function.signature.results.is_empty()
-    {
-        return Err(reject(format!(
-            "`{kernel_name}` must have exact kernel IR signature {expected_parameters:?} -> (); found {:?} -> {:?}",
-            function.signature.parameters, function.signature.results
-        )));
-    }
     let body = function.body.as_mut().expect("verified kernel entry body");
-    match kernel_name.as_str() {
-        FILL_KERNEL => legalize_fill_body(body, &function.signature.parameters)?,
-        VECADD_KERNEL => legalize_vecadd_body(body, &function.signature.parameters)?,
-        _ => unreachable!("kernel admission checked the selected identity"),
-    }
+    legalize_terminal_profile_v1(
+        &kernel_id,
+        &function.signature.parameters,
+        &function.signature.results,
+        body,
+    )?;
 
     verify_module(&module).map_err(|errors| {
         reject(format!(
-            "{kernel_name} legalization produced invalid kernel IR and was not emitted: {errors}"
+            "{kernel_id} legalization produced invalid kernel IR and was not emitted: {errors}"
         ))
     })?;
-    let llvm_ir = dialect_amdgcn::lower_kernel_to_llvm_ir(&module, &KernelId::new(kernel_name))
-        .map_err(|errors| {
+    let llvm_ir =
+        dialect_amdgcn::lower_kernel_to_llvm_ir(&module, &kernel_id).map_err(|errors| {
             reject(format!(
-                "G1 AMDGPU lowering rejected `{kernel_name}`: {errors}"
+                "G1 AMDGPU lowering rejected `{kernel_id}`: {errors}"
             ))
         })?;
 
     Ok(vec![PreparedDeviceKernel {
-        name: kernel_name.to_string(),
+        name: kernel_id.as_str().to_string(),
         llvm_ir,
     }])
+}
+
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KernelIrV1TerminalProfile {
+    Fill,
+    Vecadd,
+}
+
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+fn legalize_terminal_profile_v1(
+    kernel_id: &KernelId,
+    parameters: &[Type],
+    results: &[Type],
+    body: &mut FunctionBody,
+) -> Result<(), EmitError> {
+    let fill_parameters = [writable_f32_slice()];
+    let vecadd_parameters = [
+        readonly_f32_slice(),
+        readonly_f32_slice(),
+        writable_f32_slice(),
+    ];
+    let profile = if results.is_empty() && parameters == fill_parameters {
+        KernelIrV1TerminalProfile::Fill
+    } else if results.is_empty() && parameters == vecadd_parameters {
+        KernelIrV1TerminalProfile::Vecadd
+    } else {
+        return Err(reject(format!(
+            "does not support kernel export {:?} with authenticated verified kernel IR signature {parameters:?} -> {results:?}; bounded terminal profiles require fill {fill_parameters:?} -> () or vecadd {vecadd_parameters:?} -> (); {NO_QUALIFICATION_FALLBACK_HINT}",
+            kernel_id.as_str()
+        )));
+    };
+
+    match profile {
+        KernelIrV1TerminalProfile::Fill => legalize_fill_body(body, parameters),
+        KernelIrV1TerminalProfile::Vecadd => legalize_vecadd_body(body, parameters),
+    }
 }
 
 /// Retains an audited, test-only observation of the rustc-imported matrix module.
@@ -1785,6 +1810,8 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
     let mut get_mut_calls = 0usize;
     let mut thread_index = None;
     let mut get_mut_index = None;
+    let mut output_slice = None;
+    let mut output_pointer = None;
 
     for block in &mut body.blocks {
         let mut legalized = Vec::with_capacity(block.operations.len() + 4);
@@ -1824,6 +1851,8 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
                 )?;
                 get_mut_calls += 1;
                 get_mut_index = Some(arguments[1]);
+                output_slice = Some(arguments[0]);
+                output_pointer = Some(operation.results[1].id);
 
                 let length = fresh_value(&mut next_value, Type::INDEX)?;
                 legalized.push(Operation::effect_free(
@@ -1879,8 +1908,300 @@ fn legalize_fill_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<()
         )));
     }
 
-    legalize_option_switches(body, FILL_KERNEL, &option_conditions)?;
+    let thread_index = thread_index.expect("exact call count checked");
+    let output_pointer = output_pointer.expect("exact get_mut call count checked");
+    let output_condition = *option_conditions
+        .iter()
+        .next()
+        .expect("exact get_mut call count checked");
+    let [expected_output] = body.parameters.as_slice() else {
+        unreachable!("fill signature and parameter count checked")
+    };
+    let expected_output = *expected_output;
+    if output_slice != Some(expected_output) {
+        return Err(reject(format!(
+            "fill DisjointSlice::get_mut must derive its pointer from output parameter {expected_output}; found {output_slice:?}"
+        )));
+    }
+
+    legalize_option_switches(body, "fill terminal profile", &option_conditions)?;
+    require_exact_fill_shape(
+        body,
+        expected_output,
+        thread_index,
+        output_pointer,
+        output_condition,
+    )
+}
+
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+fn require_exact_fill_shape(
+    body: &FunctionBody,
+    output: ValueId,
+    thread_index: ValueId,
+    output_pointer: ValueId,
+    output_condition: ValueId,
+) -> Result<(), EmitError> {
+    let mut thread_intrinsics = Vec::new();
+    let mut lengths = Vec::new();
+    let mut data_pointers = Vec::new();
+    let mut geps = Vec::new();
+    let mut compares = Vec::new();
+    let mut fill_values = Vec::new();
+    let mut stores = Vec::new();
+
+    for block in &body.blocks {
+        if !block.parameters.is_empty() {
+            return Err(reject(format!(
+                "fill terminal profile does not permit block parameters in {}",
+                block.id
+            )));
+        }
+        for operation in &block.operations {
+            match &operation.kind {
+                OperationKind::Intrinsic(intrinsic)
+                    if intrinsic == &IntrinsicOperation::global_id_1d() =>
+                {
+                    thread_intrinsics
+                        .push((fill_single_result(operation, &Type::INDEX)?, block.id));
+                }
+                OperationKind::SliceLength { slice } => lengths.push((
+                    fill_single_result(operation, &Type::INDEX)?,
+                    *slice,
+                    block.id,
+                )),
+                OperationKind::SliceData { slice } => data_pointers.push((
+                    fill_single_result(operation, &writable_f32_pointer())?,
+                    *slice,
+                    block.id,
+                )),
+                OperationKind::GetElementPointer { base, offset } => geps.push((
+                    fill_single_result(operation, &writable_f32_pointer())?,
+                    *base,
+                    *offset,
+                    block.id,
+                )),
+                OperationKind::Compare {
+                    predicate,
+                    lhs,
+                    rhs,
+                } => compares.push((
+                    fill_single_result(operation, &Type::BOOL)?,
+                    *predicate,
+                    *lhs,
+                    *rhs,
+                    block.id,
+                )),
+                OperationKind::Constant(Constant::F32Bits(bits)) => {
+                    fill_values.push((fill_single_result(operation, &Type::F32)?, *bits, block.id))
+                }
+                OperationKind::Store {
+                    pointer,
+                    value,
+                    access,
+                } => {
+                    if !operation.results.is_empty() {
+                        return Err(reject("fill store must not produce kernel IR results"));
+                    }
+                    stores.push((*pointer, *value, *access, block.id));
+                }
+                other => {
+                    return Err(reject(format!(
+                        "fill contains unsupported operation {other:?}; no alternate codegen route was attempted"
+                    )));
+                }
+            }
+        }
+    }
+
+    let [(observed_thread_index, thread_block)] = thread_intrinsics.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one legalized global thread intrinsic; found {}",
+            thread_intrinsics.len()
+        )));
+    };
+    if *observed_thread_index != thread_index {
+        return Err(reject(
+            "fill global thread intrinsic does not preserve the authenticated thread index",
+        ));
+    }
+    let [(length, length_slice, length_block)] = lengths.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one output length projection; found {}",
+            lengths.len()
+        )));
+    };
+    let [(data, data_slice, data_block)] = data_pointers.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one output data projection; found {}",
+            data_pointers.len()
+        )));
+    };
+    let [(gep, gep_base, gep_offset, gep_block)] = geps.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one output element pointer; found {}",
+            geps.len()
+        )));
+    };
+    if *length_slice != output
+        || *data_slice != output
+        || *gep != output_pointer
+        || *gep_base != *data
+        || *gep_offset != thread_index
+        || length_block != data_block
+        || data_block != gep_block
+    {
+        return Err(reject(
+            "fill output length, data, and element pointer must derive solely from the authenticated output and global thread index",
+        ));
+    }
+
+    let [(condition, predicate, compare_lhs, compare_rhs, compare_block)] = compares.as_slice()
+    else {
+        return Err(reject(format!(
+            "fill requires exactly one output bounds comparison; found {}",
+            compares.len()
+        )));
+    };
+    if (*condition, *predicate, *compare_lhs, *compare_rhs)
+        != (
+            output_condition,
+            ComparePredicate::LessThan,
+            thread_index,
+            *length,
+        )
+        || compare_block != length_block
+    {
+        return Err(reject(
+            "fill bounds comparison must guard the authenticated global index against the exact output length",
+        ));
+    }
+
+    let [(fill_value, fill_bits, fill_value_block)] = fill_values.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one f32 fill value; found {}",
+            fill_values.len()
+        )));
+    };
+    if *fill_bits != 42.5f32.to_bits() {
+        return Err(reject(
+            "fill value must remain the exact reviewed 42.5f32 bit pattern",
+        ));
+    }
+    let [(store_pointer, store_value, store_access, store_block)] = stores.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one disjoint f32 store; found {}",
+            stores.len()
+        )));
+    };
+    if (*store_pointer, *store_value, *store_access)
+        != (
+            output_pointer,
+            *fill_value,
+            MemoryAccess::new(AddressSpace::Global, 4),
+        )
+        || fill_value_block != store_block
+    {
+        return Err(reject(
+            "fill store must write the exact reviewed f32 value through the authenticated disjoint output pointer with aligned non-volatile global access",
+        ));
+    }
+
+    let mut branches = BTreeMap::new();
+    let mut conditional_branches = Vec::new();
+    let mut return_blocks = Vec::new();
+    let mut unreachable_blocks = Vec::new();
+    for block in &body.blocks {
+        match block.terminator.as_ref().expect("verified terminator") {
+            Terminator::Branch { target, arguments } if arguments.is_empty() => {
+                branches.insert(block.id, *target);
+            }
+            Terminator::ConditionalBranch {
+                condition,
+                then_target,
+                then_arguments,
+                else_target,
+                else_arguments,
+            } if then_arguments.is_empty() && else_arguments.is_empty() => {
+                conditional_branches.push((block.id, *condition, *then_target, *else_target));
+            }
+            Terminator::Return { values } if values.is_empty() => return_blocks.push(block.id),
+            Terminator::Unreachable => unreachable_blocks.push(block.id),
+            terminator => {
+                return Err(reject(format!(
+                    "fill contains unsupported terminator {terminator:?}; no alternate codegen route was attempted"
+                )));
+            }
+        }
+    }
+    let [(condition_block, branch_condition, then_target, else_target)] =
+        conditional_branches.as_slice()
+    else {
+        return Err(reject(format!(
+            "fill requires exactly one output-admission branch; found {}",
+            conditional_branches.len()
+        )));
+    };
+    let [return_block] = return_blocks.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one return block; found {}",
+            return_blocks.len()
+        )));
+    };
+    let [unreachable_block] = unreachable_blocks.as_slice() else {
+        return Err(reject(format!(
+            "fill requires exactly one retained Option trap block; found {}",
+            unreachable_blocks.len()
+        )));
+    };
+    let expected_blocks = [
+        *thread_block,
+        *length_block,
+        *condition_block,
+        *store_block,
+        *return_block,
+        *unreachable_block,
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let actual_blocks = body
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<BTreeSet<_>>();
+    if body.blocks.len() != 6
+        || expected_blocks.len() != 6
+        || actual_blocks != expected_blocks
+        || branches.len() != 3
+        || branches.get(thread_block) != Some(length_block)
+        || branches.get(length_block) != Some(condition_block)
+        || branches.get(store_block) != Some(return_block)
+        || *branch_condition != output_condition
+        || *then_target != *store_block
+        || *else_target != *return_block
+    {
+        return Err(reject(
+            "fill control-flow edges do not match global index, checked disjoint output, exact store, retained trap, and return",
+        ));
+    }
     Ok(())
+}
+
+#[cfg(all(test, feature = "qualification-oracles-test-only"))]
+fn fill_single_result(operation: &Operation, expected_type: &Type) -> Result<ValueId, EmitError> {
+    let [result] = operation.results.as_slice() else {
+        return Err(reject(format!(
+            "fill operation {:?} must have exactly one result",
+            operation.kind
+        )));
+    };
+    if &result.ty != expected_type {
+        return Err(reject(format!(
+            "fill operation {:?} has result type {:?}; expected {expected_type:?}",
+            operation.kind, result.ty
+        )));
+    }
+    Ok(result.id)
 }
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -2049,7 +2370,7 @@ fn legalize_vecadd_body(body: &mut FunctionBody, parameters: &[Type]) -> Result<
         )));
     }
 
-    legalize_option_switches(body, VECADD_KERNEL, &option_conditions)?;
+    legalize_option_switches(body, "vecadd terminal profile", &option_conditions)?;
     require_exact_vecadd_shape(
         body,
         parameters,
@@ -2710,6 +3031,9 @@ mod tests {
         MemoryAccess, Signature, SwitchCase,
     };
 
+    const FILL_KERNEL: &str = "fill";
+    const VECADD_KERNEL: &str = "vecadd";
+
     fn descriptor_source(entry: &str, descriptor: &str) -> CompilerDescriptorSourceV1 {
         let source_type =
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::F32));
@@ -2881,6 +3205,14 @@ mod tests {
             },
         ));
         module
+    }
+
+    fn reject_verified_fill(module: Module, case: &str) -> String {
+        verify_module(&module)
+            .unwrap_or_else(|errors| panic!("{case} must remain verified kernel IR: {errors}"));
+        prepare_fill_collection(module, &[FILL_KERNEL.to_string()])
+            .expect_err(case)
+            .to_string()
     }
 
     fn translated_vecadd() -> Module {
@@ -3121,13 +3453,187 @@ mod tests {
     }
 
     #[test]
-    fn kernel_admission_is_exact_and_never_falls_back() {
+    fn verified_fill_uses_the_authenticated_arbitrary_export_identity() {
+        const EXPORT: &str = "renamed_genuine_fill";
+        let mut first_module = translated_fill();
+        first_module.kernels[0].id = KernelId::new(EXPORT);
+        let mut second_module = translated_fill();
+        second_module.kernels[0].id = KernelId::new(EXPORT);
+
+        let first = prepare_fill_collection(first_module, &[EXPORT.to_string()])
+            .expect("renamed verified fill profile");
+        let second = prepare_fill_collection(second_module, &[EXPORT.to_string()])
+            .expect("deterministic renamed verified fill profile");
+
+        assert_eq!(first[0].name, EXPORT);
+        assert_eq!(first[0].llvm_ir, second[0].llvm_ir);
+        assert!(
+            first[0]
+                .llvm_ir
+                .contains("define amdgpu_kernel void @renamed_genuine_fill")
+        );
+        assert!(
+            !first[0]
+                .llvm_ir
+                .contains("define amdgpu_kernel void @fill(")
+        );
+    }
+
+    #[test]
+    fn collected_and_translated_kernel_identities_must_match_without_fallback() {
         let error = prepare_fill_collection(translated_fill(), &["saxpy".to_string()])
-            .expect_err("saxpy must remain unsupported by this qualification oracle");
+            .expect_err("collected identity must authenticate the translated KernelId");
 
         let text = error.to_string();
-        assert!(text.contains("does not support kernel export \"saxpy\""));
+        assert!(text.contains(
+            "translated kernel identity \"fill\" does not match collected kernel identity \"saxpy\""
+        ));
         assert!(text.contains("production compilation does not fall back"));
+    }
+
+    #[test]
+    fn authenticated_kernel_export_identity_is_bounded_before_profile_selection() {
+        let oversized = "x".repeat(MAX_COMPILER_MODULE_SYMBOL_BYTES + 1);
+        let mut module = translated_fill();
+        module.kernels[0].id = KernelId::new(oversized.clone());
+
+        let error = prepare_fill_collection(module, &[oversized])
+            .expect_err("oversized authenticated identity must fail closed");
+        let text = error.to_string();
+        assert!(text.contains("authenticated kernel export identity exceeds the 256-byte"));
+        assert!(text.contains("production compilation does not fall back"));
+    }
+
+    #[test]
+    fn fill_rejects_missing_extra_and_wrong_stores() {
+        let mut missing = translated_fill();
+        missing.functions[0].body.as_mut().expect("body").blocks[3]
+            .operations
+            .remove(1);
+        let error = reject_verified_fill(missing, "missing fill store must fail closed");
+        assert!(error.contains("fill requires exactly one disjoint f32 store; found 0"));
+
+        let mut extra = translated_fill();
+        let store = extra.functions[0].body.as_ref().expect("body").blocks[3].operations[1].clone();
+        extra.functions[0].body.as_mut().expect("body").blocks[3]
+            .operations
+            .push(store);
+        let error = reject_verified_fill(extra, "extra fill store must fail closed");
+        assert!(error.contains("fill requires exactly one disjoint f32 store; found 2"));
+
+        let mut wrong_access = translated_fill();
+        let OperationKind::Store { access, .. } = &mut wrong_access.functions[0]
+            .body
+            .as_mut()
+            .expect("body")
+            .blocks[3]
+            .operations[1]
+            .kind
+        else {
+            panic!("fill store")
+        };
+        *access = MemoryAccess::new(AddressSpace::Global, 8);
+        let error = reject_verified_fill(wrong_access, "wrong fill store access must fail closed");
+        assert!(error.contains("fill store must write the exact reviewed f32 value"));
+    }
+
+    #[test]
+    fn fill_rejects_wrong_value_and_pointer_dataflow() {
+        let mut wrong_value = translated_fill();
+        let OperationKind::Constant(Constant::F32Bits(bits)) =
+            &mut wrong_value.functions[0].body.as_mut().expect("body").blocks[3].operations[0].kind
+        else {
+            panic!("fill value")
+        };
+        *bits = 7.0f32.to_bits();
+        let error = reject_verified_fill(wrong_value, "wrong fill value must fail closed");
+        assert!(error.contains("fill value must remain the exact reviewed 42.5f32 bit pattern"));
+
+        let mut wrong_pointer = translated_fill();
+        let body = wrong_pointer.functions[0].body.as_mut().expect("body");
+        body.blocks[3].operations.insert(
+            1,
+            Operation::effect_free(
+                ValueDef::new(ValueId(10), writable_f32_pointer()),
+                OperationKind::GetElementPointer {
+                    base: ValueId(3),
+                    offset: ValueId(1),
+                },
+            ),
+        );
+        let OperationKind::Store { pointer, .. } = &mut body.blocks[3].operations[2].kind else {
+            panic!("fill store")
+        };
+        *pointer = ValueId(10);
+        let error = reject_verified_fill(wrong_pointer, "wrong fill pointer must fail closed");
+        assert!(error.contains("fill requires exactly one output element pointer; found 2"));
+    }
+
+    #[test]
+    fn fill_rejects_extra_non_call_operations() {
+        let mut extra_load = translated_fill();
+        extra_load.functions[0].body.as_mut().expect("body").blocks[3]
+            .operations
+            .insert(
+                1,
+                Operation::effect_free(
+                    ValueDef::new(ValueId(10), Type::F32),
+                    OperationKind::Load {
+                        pointer: ValueId(3),
+                        access: MemoryAccess::new(AddressSpace::Global, 4),
+                    },
+                ),
+            );
+        let error = reject_verified_fill(extra_load, "extra fill load must fail closed");
+        assert!(error.contains("fill contains unsupported operation Load"));
+
+        let mut extra_arithmetic = translated_fill();
+        extra_arithmetic.functions[0]
+            .body
+            .as_mut()
+            .expect("body")
+            .blocks[3]
+            .operations
+            .insert(
+                1,
+                Operation::effect_free(
+                    ValueDef::new(ValueId(10), Type::F32),
+                    OperationKind::Binary {
+                        op: BinaryOp::Add,
+                        lhs: ValueId(4),
+                        rhs: ValueId(4),
+                    },
+                ),
+            );
+        let error =
+            reject_verified_fill(extra_arithmetic, "extra fill arithmetic must fail closed");
+        assert!(error.contains("fill contains unsupported operation Binary"));
+
+        let mut extra_intrinsic = translated_fill();
+        extra_intrinsic.functions[0]
+            .body
+            .as_mut()
+            .expect("body")
+            .blocks[0]
+            .operations
+            .push(Operation::effect_free(
+                ValueDef::new(ValueId(10), Type::INDEX),
+                OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+            ));
+        let error = reject_verified_fill(extra_intrinsic, "extra fill intrinsic must fail closed");
+        assert!(error.contains("fill requires exactly one legalized global thread intrinsic"));
+    }
+
+    #[test]
+    fn fill_rejects_control_flow_substitution() {
+        let mut module = translated_fill();
+        module.functions[0].body.as_mut().expect("body").blocks[3].terminator =
+            Some(Terminator::Branch {
+                target: BlockId(5),
+                arguments: vec![],
+            });
+        let error = reject_verified_fill(module, "fill branch substitution must fail closed");
+        assert!(error.contains("fill control-flow edges do not match"));
     }
 
     #[test]
@@ -3153,6 +3659,24 @@ mod tests {
     }
 
     #[test]
+    fn verified_vecadd_uses_the_authenticated_arbitrary_export_identity() {
+        const EXPORT: &str = "renamed_genuine_vecadd";
+        let mut module = translated_vecadd();
+        module.kernels[0].id = KernelId::new(EXPORT);
+
+        let kernels = prepare_fill_collection(module, &[EXPORT.to_string()])
+            .expect("renamed verified vecadd profile");
+        let [kernel] = kernels.as_slice() else {
+            panic!("one renamed vecadd kernel")
+        };
+        assert_eq!(kernel.name, EXPORT);
+        assert!(kernel.llvm_ir.contains("@renamed_genuine_vecadd("));
+        assert_eq!(kernel.llvm_ir.matches("load float").count(), 2);
+        assert_eq!(kernel.llvm_ir.matches("fadd float").count(), 1);
+        assert_eq!(kernel.llvm_ir.matches("store float").count(), 1);
+    }
+
+    #[test]
     fn vecadd_rejects_non_exact_slice_abi() {
         let mut module = translated_vecadd();
         module.functions[0].signature.parameters[0] = writable_f32_slice();
@@ -3163,7 +3687,8 @@ mod tests {
         let error = prepare_fill_collection(module, &[VECADD_KERNEL.to_string()])
             .expect_err("writable input must be outside the exact vecadd ABI");
         let text = error.to_string();
-        assert!(text.contains("must have exact kernel IR signature"));
+        assert!(text.contains("does not support kernel export \"vecadd\""));
+        assert!(text.contains("bounded terminal profiles require fill"));
         assert!(!text.contains("G1 AMDGPU lowering"));
     }
 
@@ -3296,7 +3821,9 @@ mod tests {
 
     #[test]
     fn unsupported_trusted_helper_is_rejected_before_g1() {
+        const EXPORT: &str = "renamed_wrong_fill_body";
         let mut module = translated_fill();
+        module.kernels[0].id = KernelId::new(EXPORT);
         let function = &mut module.functions[0];
         let body = function.body.as_mut().expect("body");
         let OperationKind::Call { callee, .. } = &mut body.blocks[1].operations[0].kind else {
@@ -3309,8 +3836,8 @@ mod tests {
             signature,
         ));
 
-        let error = prepare_fill_collection(module, &[FILL_KERNEL.to_string()])
-            .expect_err("get_mut_at is outside the production fill subset");
+        let error = prepare_fill_collection(module, &[EXPORT.to_string()])
+            .expect_err("a renamed export cannot admit the wrong fill body");
         assert!(error.to_string().contains("does not support call"));
         assert!(error.to_string().contains("no alternate codegen route"));
     }
@@ -3519,12 +4046,22 @@ mod tests {
     #[test]
     fn exact_target_bound_module_cannot_lower_through_a_processor_only_alias() {
         let mut module = inert_compiler_module_fixture();
-        module
+        let exact_target = TargetCapability::Extension {
+            namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+        };
+        let entry = module.kernels[0].entry.clone();
+        module.required_capabilities.insert(exact_target.clone());
+        module.kernels[0]
             .required_capabilities
-            .insert(TargetCapability::Extension {
-                namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
-                name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
-            });
+            .insert(exact_target.clone());
+        module
+            .functions
+            .iter_mut()
+            .find(|function| function.id == entry)
+            .expect("fixture kernel entry")
+            .required_capabilities
+            .insert(exact_target);
 
         let exact = construct_inert_compiler_module_text_for_target_v1(
             &module,
@@ -3883,9 +4420,9 @@ mod tests {
             return;
         };
         require_row_softmax_layout_probe(release_gate, true);
-        let output = std::process::Command::new(&probe)
-            .output()
-            .unwrap_or_else(|error| {
+        let mut command = std::process::Command::new(&probe);
+        let output =
+            crate::process_execution::capture_output(&mut command).unwrap_or_else(|error| {
                 panic!("execute configured upstream LLVM layout probe: {error}")
             });
         assert!(

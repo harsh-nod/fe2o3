@@ -551,6 +551,10 @@ mod platform {
         .union(SealFlags::SHRINK)
         .union(SealFlags::SEAL);
 
+    fn spawn_worker(command: &mut Command) -> io::Result<Child> {
+        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn())
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct Snapshot {
         device: u64,
@@ -720,7 +724,7 @@ mod platform {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .process_group(0);
-            let mut child = command.spawn().map_err(|error| {
+            let mut child = spawn_worker(&mut command).map_err(|error| {
                 WorkerExecutionError::io(WorkerExecutionErrorKind::Spawn, error)
             })?;
             let capture = supervise(&mut child, request.canonical_bytes(), limits)?;
@@ -816,7 +820,7 @@ mod platform {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .process_group(0);
-            let mut child = command.spawn().map_err(|error| {
+            let mut child = spawn_worker(&mut command).map_err(|error| {
                 WorkerExecutionError::io(WorkerExecutionErrorKind::Spawn, error)
             })?;
             let capture = supervise(&mut child, request.canonical_bytes(), limits)?;

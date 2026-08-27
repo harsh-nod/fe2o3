@@ -85,6 +85,10 @@ def validate_ci_dispatch(ci_local: str) -> None:
     require(ci_local.count(docs_command) == 1, "CI must own one MoE docs check")
     require(docs_command in core, "generic-core CI must run the MoE docs check")
     require(docs_command not in generic, "generic CI must delegate through generic-core")
+    require(
+        generic.count("  run_generic_core\n") == 1,
+        "generic CI must delegate to generic-core exactly once",
+    )
 
 
 def main() -> None:

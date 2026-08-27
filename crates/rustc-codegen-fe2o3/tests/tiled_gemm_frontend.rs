@@ -1,13 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::{
-    fs::Permissions,
-    os::unix::fs::{MetadataExt, PermissionsExt},
-};
 
 #[path = "support/cargo_fe2o3.rs"]
 mod cargo_fe2o3;
+
+#[path = "support/artifact_path_guard.rs"]
+mod artifact_path_guard;
 
 fn backend_test_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -228,8 +227,10 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
         "genuine matrix call did not reach verified kernel IR:\n{stderr}"
     );
     assert!(
-        stderr.contains("does not support kernel export \"tiled_gemm_frontend_v1\""),
-        "genuine matrix call missed the expected post-translation boundary:\n{stderr}"
+        stderr.contains(
+            "authenticated workgroup size WorkgroupSize { x: 64, y: 1, z: 1 } conflicts with the exact 256x1x1 executable profile"
+        ),
+        "genuine matrix call missed the executable-profile preflight boundary:\n{stderr}"
     );
     assert!(!stderr.contains("has no classified trusted device identity"));
     assert!(!stderr.contains("MIR is unavailable for a device-reachable item"));
@@ -326,18 +327,9 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
     ));
     let _ = std::fs::remove_dir_all(&output);
     std::fs::create_dir_all(&output).expect("create local-spoof output directory");
-    let guard_directory = output.join("artifact-path-guard");
-    std::fs::create_dir(&guard_directory).expect("create local-spoof artifact path guard");
-    std::fs::set_permissions(&guard_directory, Permissions::from_mode(0o700))
-        .expect("secure local-spoof artifact path guard");
-    let guard_metadata =
-        std::fs::metadata(&guard_directory).expect("inspect local-spoof artifact path guard");
-    let guard_identity = format!(
-        "{:016x}:{:016x}",
-        guard_metadata.dev(),
-        guard_metadata.ino()
-    );
-    let spoof = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+    let mut spoof_command =
+        Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    spoof_command
         .current_dir(&workspace)
         .arg("crates/rustc-codegen-fe2o3/tests/fixtures/tiled-gemm-local-marker-spoof.rs")
         .args(["--edition=2024", "--crate-type=lib", "--crate-name"])
@@ -352,9 +344,13 @@ fn genuine_matrix_items_reach_verified_ir_and_local_markers_fail_closed() {
         .arg(output.join("libtiled_gemm_local_marker_spoof.rlib"))
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", "kernel-ir-v1")
-        .env("FE2O3_HSACO_DIR", output.join("artifacts"))
-        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", guard_directory)
-        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", guard_identity)
+        .env("FE2O3_HSACO_DIR", output.join("artifacts"));
+    artifact_path_guard::configure_command(
+        &mut spoof_command,
+        &output,
+        "tiled GEMM local marker spoof",
+    );
+    let spoof = spoof_command
         .output()
         .expect("compile local matrix marker spoof");
     let _ = std::fs::remove_dir_all(&output);

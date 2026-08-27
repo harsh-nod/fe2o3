@@ -54,7 +54,6 @@ unsafe extern "C" {
         environment: *const *const c_char,
         flags: c_int,
     ) -> c_int;
-    fn kill(pid: c_int, signal: c_int) -> c_int;
     fn prctl(option: c_int, ...) -> c_int;
     fn syscall(number: c_long, ...) -> c_long;
     fn write(descriptor: c_int, bytes: *const c_void, length: usize) -> isize;
@@ -385,73 +384,81 @@ impl AuthenticatedProcessV1 {
             set_tid_size: 0,
             cgroup: 0,
         };
-        // SAFETY: clone3 receives the exact kernel ABI record. No VM/thread sharing flags are
-        // used. The child calls only direct async-signal-safe syscalls over preallocated state and
-        // then execs or exits; the kernel writes pidfd_raw atomically before returning to parent.
-        let clone_result = unsafe {
-            syscall(
-                SYS_CLONE3,
-                &raw const clone_arguments,
-                std::mem::size_of::<CloneArgsV1>(),
-            )
-        };
-        if clone_result < 0 {
-            return Err(HostLinkError::new(
-                HostLinkErrorCodeV1::WorkerLaunch,
-                format!(
-                    "clone3(CLONE_PIDFD) exact static LLD child: {}",
-                    io::Error::last_os_error()
-                ),
-            ));
-        }
-        if clone_result == 0 {
-            // SAFETY: this branch is the post-clone child and never returns into Rust cleanup.
-            unsafe {
-                child_exec(
-                    tool.as_raw_fd(),
-                    null.as_raw_fd(),
-                    &child_descriptors,
-                    &exec_vector,
-                    exec_status_read.as_raw_fd(),
-                    exec_status_write.as_raw_fd(),
+        fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| {
+            // SAFETY: clone3 receives the exact kernel ABI record. No VM/thread sharing flags are
+            // used. The child calls only direct async-signal-safe syscalls over preallocated state
+            // and then execs or exits; the kernel writes pidfd_raw atomically before returning.
+            let clone_result = unsafe {
+                syscall(
+                    SYS_CLONE3,
+                    &raw const clone_arguments,
+                    std::mem::size_of::<CloneArgsV1>(),
                 )
+            };
+            if clone_result < 0 {
+                return Err(HostLinkError::new(
+                    HostLinkErrorCodeV1::WorkerLaunch,
+                    format!(
+                        "clone3(CLONE_PIDFD) exact static LLD child: {}",
+                        io::Error::last_os_error()
+                    ),
+                ));
             }
-        }
-        drop(exec_status_write);
-        let raw_pid = i32::try_from(clone_result).map_err(|_| {
-            HostLinkError::new(
-                HostLinkErrorCodeV1::WorkerIdentity,
-                "clone3 returned a static LLD PID outside Linux pid_t",
-            )
-        })?;
-        let pid = rustix::process::Pid::from_raw(raw_pid).ok_or_else(|| {
-            HostLinkError::new(
-                HostLinkErrorCodeV1::WorkerIdentity,
-                "clone3 returned an invalid zero static LLD PID",
-            )
-        })?;
-        if pidfd_raw < 0 {
-            // SAFETY: clone3 returned this positive PID, and failure to return its requested pidfd
-            // is a kernel contract failure. Kill is fail-closed cleanup only.
-            unsafe { kill(raw_pid, SIGKILL) };
-            return Err(HostLinkError::new(
-                HostLinkErrorCodeV1::WorkerIdentity,
-                "clone3 did not atomically return the requested pidfd",
-            ));
-        }
-        // SAFETY: CLONE_PIDFD wrote one newly owned descriptor to pidfd_raw for this parent.
-        let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
-        let mut process = Self {
-            pidfd: Some(pidfd),
-            reap_slot: Some(reap_slot),
-            pid,
-            successful_exit_observed: false,
-        };
-        if let Err(error) = await_exec_status(&exec_status_read, deadline) {
-            let _ = process.kill_and_defer_reap();
-            return Err(error);
-        }
-        Ok(process)
+            if clone_result == 0 {
+                // SAFETY: this branch is the post-clone child and never returns into Rust cleanup.
+                unsafe {
+                    child_exec(
+                        tool.as_raw_fd(),
+                        null.as_raw_fd(),
+                        &child_descriptors,
+                        &exec_vector,
+                        exec_status_read.as_raw_fd(),
+                        exec_status_write.as_raw_fd(),
+                    )
+                }
+            }
+            drop(exec_status_write);
+            let raw_pid = i32::try_from(clone_result).unwrap_or_else(|_| std::process::abort());
+            let pid =
+                rustix::process::Pid::from_raw(raw_pid).unwrap_or_else(|| std::process::abort());
+            if pidfd_raw < 0 {
+                let error = HostLinkError::new(
+                    HostLinkErrorCodeV1::WorkerIdentity,
+                    "clone3 did not atomically return the requested pidfd",
+                );
+                return match kill_and_reap_pid_synchronously(pid) {
+                    Ok(()) => Err(error),
+                    Err(cleanup_error) => Err(HostLinkError::new(
+                        HostLinkErrorCodeV1::WorkerIdentity,
+                        format!(
+                            "{}; synchronous child cleanup failed: {cleanup_error}",
+                            error.detail()
+                        ),
+                    )),
+                };
+            }
+            // SAFETY: CLONE_PIDFD wrote one newly owned descriptor to pidfd_raw for this parent.
+            let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd_raw) };
+            let mut process = Self {
+                pidfd: Some(pidfd),
+                reap_slot: Some(reap_slot),
+                pid,
+                successful_exit_observed: false,
+            };
+            if let Err(error) = await_exec_status(&exec_status_read, deadline) {
+                return match process.kill_and_reap_synchronously() {
+                    Ok(()) => Err(error),
+                    Err(cleanup_error) => Err(HostLinkError::new(
+                        error.code(),
+                        format!(
+                            "{}; synchronous child cleanup failed: {cleanup_error}",
+                            error.detail()
+                        ),
+                    )),
+                };
+            }
+            Ok(process)
+        })
     }
 
     pub(crate) fn pid(&self) -> u32 {
@@ -543,6 +550,27 @@ impl AuthenticatedProcessV1 {
         signal_error.map_or(Ok(()), Err)
     }
 
+    fn kill_and_reap_synchronously(&mut self) -> Result<(), HostLinkError> {
+        let Some(pidfd) = self.pidfd.as_ref() else {
+            return Ok(());
+        };
+        let signal_error =
+            match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
+                Ok(()) | Err(rustix::io::Errno::SRCH) => None,
+                Err(error) => Some(HostLinkError::new(
+                    HostLinkErrorCodeV1::WorkerIdentity,
+                    format!("pidfd-kill pre-exec static LLD child: {error}"),
+                )),
+            };
+        wait_for_pidfd_exit_synchronously(pidfd.as_fd(), self.pid);
+        drop(self.pidfd.take());
+        self.reap_slot
+            .take()
+            .expect("live authenticated process retains one reap slot")
+            .complete();
+        signal_error.map_or(Ok(()), Err)
+    }
+
     fn finish_or_defer_reap(&mut self) -> Option<rustix::process::WaitIdStatus> {
         let pidfd = self.pidfd.take()?;
         let slot = self
@@ -559,6 +587,41 @@ impl AuthenticatedProcessV1 {
                 slot.defer(pidfd);
                 None
             }
+        }
+    }
+}
+
+fn kill_and_reap_pid_synchronously(pid: rustix::process::Pid) -> Result<(), HostLinkError> {
+    let signal_error = match rustix::process::kill_process(pid, rustix::process::Signal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => None,
+        Err(error) => Some(HostLinkError::new(
+            HostLinkErrorCodeV1::WorkerIdentity,
+            format!("kill pre-exec static LLD child without pidfd: {error}"),
+        )),
+    };
+    wait_for_pid_exit_synchronously(pid);
+    signal_error.map_or(Ok(()), Err)
+}
+
+fn wait_for_pidfd_exit_synchronously(pidfd: BorrowedFd<'_>, pid: rustix::process::Pid) {
+    loop {
+        match rustix::process::waitid(
+            rustix::process::WaitId::PidFd(pidfd),
+            rustix::process::WaitIdOptions::EXITED,
+        ) {
+            Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => return,
+            Ok(None) | Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => return wait_for_pid_exit_synchronously(pid),
+        }
+    }
+}
+
+fn wait_for_pid_exit_synchronously(pid: rustix::process::Pid) {
+    loop {
+        match rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty()) {
+            Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => return,
+            Ok(None) | Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => std::process::abort(),
         }
     }
 }

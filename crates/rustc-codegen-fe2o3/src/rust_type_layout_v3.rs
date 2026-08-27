@@ -349,7 +349,7 @@ fn extract_argument<'tcx>(
     }
 
     Err(GeneralTypedExtractError::new(format!(
-        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, and genuine DisjointSlice values are accepted",
+        "{} has unsupported type `{ty}`; only bounded scalars, shared slices, genuine DisjointSlice values, and genuine DeviceGlobalMutPtr values are accepted",
         argument()
     )))
 }
@@ -1173,6 +1173,54 @@ mod tests {
         assert_eq!(abi.fields()[0].access(), Access::ReadOnly);
         assert_eq!(abi.fields()[1].access(), Access::ReadOnly);
         assert_eq!(abi.fields()[2].access(), Access::ReadWrite);
+    }
+
+    #[test]
+    fn global_mut_pointer_retains_exact_abi_ownership_and_identity() {
+        let pointer = argument(GeneralTypedArgumentKindV3::GlobalMutPointer(
+            RustScalarElementTypeV1::U32,
+        ));
+        let abi = build_abi(
+            "global_pointer",
+            "global_pointer",
+            std::slice::from_ref(&pointer),
+        )
+        .unwrap();
+        let field = &abi.fields()[0];
+
+        assert_eq!(abi.size(), 8);
+        assert_eq!(abi.alignment(), 8);
+        assert_eq!(field.offset(), 0);
+        assert_eq!(field.size(), 8);
+        assert_eq!(field.alignment(), 8);
+        assert_eq!(
+            field.kind(),
+            AbiKind::Pointer {
+                pointee_size: 4,
+                pointee_alignment: 4,
+            }
+        );
+        assert_eq!(field.mutability(), Mutability::Mutable);
+        assert_eq!(field.access(), Access::ReadWrite);
+        assert_eq!(field.address_space(), AddressSpace::Global);
+        assert_eq!(field.ownership(), ArgumentOwnership::UniqueBorrow);
+        assert_eq!(field.alias_class(), AliasClass::Exclusive);
+        assert_eq!(pointer.layout.abi_class(), RustcAbiClassV1::Scalar);
+        assert_eq!(pointer.layout.size(), 8);
+        assert_eq!(pointer.layout.abi_alignment(), 8);
+        assert_eq!(pointer.layout.components().len(), 1);
+        assert_eq!(
+            pointer.layout.components()[0].kind(),
+            RustPhysicalComponentKindV1::Pointer {
+                mutability: RustPointerMutabilityV1::Mut,
+                pointee: RustScalarElementTypeV1::U32,
+            }
+        );
+
+        let scalar = argument(GeneralTypedArgumentKindV3::Scalar(
+            RustScalarElementTypeV1::U64,
+        ));
+        assert_ne!(pointer.type_identity(), scalar.type_identity());
     }
 
     #[test]

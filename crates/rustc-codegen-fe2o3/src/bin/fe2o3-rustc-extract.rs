@@ -585,8 +585,9 @@ fn passthrough_command(executable: OsString, forwarded_args: Vec<OsString>) -> C
 }
 
 fn execute_passthrough(executable: OsString, forwarded_args: Vec<OsString>) -> Result<i32, String> {
-    let status = passthrough_command(executable, forwarded_args)
-        .status()
+    let mut command = passthrough_command(executable, forwarded_args);
+    let status = fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn())
+        .and_then(|mut child| child.wait())
         .map_err(|error| format!("failed to execute rustc passthrough: {error}"))?;
     Ok(exit_code(status))
 }
@@ -829,6 +830,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some(package_identity("1.0.0", 1)),
             )
             .unwrap() else {
@@ -998,6 +1000,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap() else {
@@ -1033,6 +1036,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(OsString::new()),
             Some(package_identity("1.0.0", 1)),
         )
@@ -1044,12 +1048,13 @@ mod tests {
     }
 
     #[test]
-    fn generic_and_legacy_llvm_outputs_are_exact_and_mutually_exclusive() {
+    fn extraction_outputs_are_exact_nonempty_and_mutually_exclusive() {
         let generic = prepare(
             compile_argv("unit", &["metadata"]),
             Some(OsString::from("unit")),
             None,
             Some(OsString::from("generic.ll")),
+            None,
             None,
             None,
             Some(package_identity("1.0.0", 1)),
@@ -1071,6 +1076,7 @@ mod tests {
             Some(OsString::from("generic.ll")),
             Some(OsString::from("gfx942.ll")),
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap_err();
@@ -1083,12 +1089,49 @@ mod tests {
             Some(OsString::new()),
             None,
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap_err();
         assert_eq!(
             empty_generic,
             format!("{EXTRACT_AMDGPU_LLVM_PATH_ENV_V1} must not be empty")
+        );
+
+        let handoff = prepare(
+            compile_argv("unit", &["metadata"]),
+            Some(OsString::from("unit")),
+            None,
+            None,
+            None,
+            Some(OsString::from("module.handoff")),
+            None,
+            Some(package_identity("1.0.0", 1)),
+        )
+        .unwrap();
+        let PreparedExtractionV1::Selected(SelectedExtractionV1 {
+            mode: ExtractionModeV1::Gfx942CompilerHandoff(output),
+            ..
+        }) = handoff
+        else {
+            panic!("compiler handoff output must select the handoff driver");
+        };
+        assert_eq!(output, "module.handoff");
+
+        let empty_handoff = prepare(
+            compile_argv("unit", &["metadata"]),
+            Some(OsString::from("unit")),
+            None,
+            None,
+            None,
+            Some(OsString::new()),
+            None,
+            Some(package_identity("1.0.0", 1)),
+        )
+        .unwrap_err();
+        assert_eq!(
+            empty_handoff,
+            format!("{EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} must not be empty")
         );
     }
 

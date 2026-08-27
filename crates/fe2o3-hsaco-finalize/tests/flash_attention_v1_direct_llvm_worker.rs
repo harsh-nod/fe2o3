@@ -59,6 +59,14 @@ fn nibble(value: u8) -> u8 {
     }
 }
 
+fn hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(output, "{byte:02x}").expect("write SHA-256 hex");
+    }
+    output
+}
+
 fn link_options() -> Vec<LinkOptionV1> {
     [
         ("code-object-version", "6"),
@@ -287,4 +295,13 @@ fn real_worker_produces_reproducible_opaque_flash_attention_v1_receipt() {
     assert!(!first.grants_publication_authority());
     assert!(!first.grants_load_authority());
     assert!(!first.grants_launch_authority());
+    eprintln!(
+        "handoff_sha256={} worker_sha256={} receipt_sha256={} finalization_sha256={} raw_output_sha256={} finalized_output_sha256={}",
+        hex(handoff.identity().sha256()),
+        hex(executable.sha256()),
+        hex(first.identity().as_bytes()),
+        hex(first.finalized_identity().as_bytes()),
+        hex(first.raw_output_identity().sha256()),
+        hex(first.finalized_output_identity().sha256()),
+    );
 }

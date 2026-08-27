@@ -102,6 +102,29 @@ fn disjoint_slice(
     .unwrap()
 }
 
+fn global_mut_pointer(
+    pointee: RustScalarElementTypeV1,
+    pointer_width: PointerWidth,
+) -> RustLayoutEvidenceV1 {
+    let width = pointer_width.bytes();
+    let alignment = width as u32;
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(pointee)),
+        RustcAbiClassV1::Scalar,
+        pointer_width,
+        width,
+        alignment,
+        vec![pointer(
+            0,
+            width,
+            alignment,
+            RustPointerMutabilityV1::Mut,
+            pointee,
+        )],
+    )
+    .unwrap()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -279,6 +302,101 @@ fn scalar_identity_mutations_are_domain_separated() {
     );
     assert_ne!(u32_64.type_identity(), i32_64.type_identity());
     assert_ne!(u32_64.type_identity(), shared_u32.type_identity());
+}
+
+#[test]
+fn global_mut_pointer_requires_one_exact_mutable_pointer_component() {
+    let exact = global_mut_pointer(RustScalarElementTypeV1::U32, PointerWidth::Bits64);
+    assert_eq!(exact.abi_class(), RustcAbiClassV1::Scalar);
+    assert_eq!(exact.size(), 8);
+    assert_eq!(exact.abi_alignment(), 8);
+    assert_eq!(exact.components().len(), 1);
+    assert_eq!(
+        exact.components()[0].kind(),
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: RustPointerMutabilityV1::Mut,
+            pointee: RustScalarElementTypeV1::U32,
+        }
+    );
+    assert_ne!(
+        exact.type_identity(),
+        scalar_layout(RustScalarElementTypeV1::U64, PointerWidth::Bits64).type_identity()
+    );
+    assert_ne!(
+        exact.type_identity(),
+        shared_slice(RustScalarElementTypeV1::U32, PointerWidth::Bits64).type_identity()
+    );
+
+    let source = || {
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(
+            RustScalarElementTypeV1::U32,
+        ))
+    };
+    let mutable_pointer = || {
+        pointer(
+            0,
+            8,
+            8,
+            RustPointerMutabilityV1::Mut,
+            RustScalarElementTypeV1::U32,
+        )
+    };
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::ScalarPair,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![mutable_pointer()],
+        )
+        .is_err()
+    );
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![pointer(
+                0,
+                8,
+                8,
+                RustPointerMutabilityV1::Const,
+                RustScalarElementTypeV1::U32,
+            )],
+        )
+        .is_err()
+    );
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![pointer(
+                0,
+                8,
+                8,
+                RustPointerMutabilityV1::Mut,
+                RustScalarElementTypeV1::I32,
+            )],
+        )
+        .is_err()
+    );
+    assert!(
+        RustLayoutEvidenceV1::new(
+            source(),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            16,
+            8,
+            vec![mutable_pointer(), usize_component(8, 8, 8)],
+        )
+        .is_err()
+    );
 }
 
 #[test]

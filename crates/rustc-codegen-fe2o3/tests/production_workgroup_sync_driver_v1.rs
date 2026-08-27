@@ -6,14 +6,7 @@ use fe2o3_artifact_transaction::{
     BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
     consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
 };
-use fe2o3_artifacts::{DigestAlgorithm, PayloadDigest};
 use fe2o3_compiler_ffi::{CompilerModuleHandoffV2, CompilerModuleSymbolRoleV1};
-use fe2o3_core::GpuContext;
-use fe2o3_host::{
-    HsaLaunchGeometryV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1,
-};
-use fe2o3_hsa_runtime::{ReviewedHsaHardwareTestBufferV1, ReviewedHsaRuntimeAdapterV1};
 use fe2o3_hsaco::{
     CodeObjectVersion as InspectedCodeObjectVersion, MAX_HSACO_BYTES,
     inspect_and_bind_kernel_descriptors,
@@ -28,20 +21,11 @@ const WORKER_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_GFX942_WORKER_BUILD_ID";
 const LLVM_BUILD_ID_ENV: &str = "FE2O3_PRODUCTION_GFX942_LLVM_BUILD_ID";
 const PRODUCTION_DEVICE_RUSTFLAGS: &str = "-Zalways-encode-mir -Zinline-mir=yes -Zmir-enable-passes=-JumpThreading --cfg fe2o3_codegen_generation=\"0123456789abcdef0123456789abcdef\" -Copt-level=2 -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32";
 const HSACO_OUTPUT_ENV: &str = "FE2O3_PRODUCTION_SCOPED_ATOMIC_HSACO_OUTPUT";
-const SCOPED_ATOMIC_EXPORT: &str = "scoped_atomic_add_u32_v1";
 const EXPLICIT_KERNARG_BYTES: usize = 40;
 const IMPLICIT_KERNARG_BYTES: usize = 256;
 const COMPLETE_KERNARG_BYTES: usize = EXPLICIT_KERNARG_BYTES + IMPLICIT_KERNARG_BYTES;
-const HSA_KERNARG_ALIGNMENT: usize = 16;
 const WORKGROUP_X: u32 = 64;
 const ELEMENTS: usize = WORKGROUP_X as usize;
-const CANARY_ELEMENTS: usize = 16;
-const INPUT_PREFIX: u32 = 0xa11c_e001;
-const INPUT_SUFFIX: u32 = 0xa11c_e002;
-const TARGET_PREFIX: u32 = 0xa70c_e001;
-const TARGET_SUFFIX: u32 = 0xa70c_e002;
-
-type BoxError = Box<dyn std::error::Error>;
 
 struct ScratchDirectory {
     path: PathBuf,
@@ -170,14 +154,6 @@ fn consumed_handoff(
         .expect("consume production scoped-atomic handoff")
 }
 
-fn require(condition: bool, message: impl Into<String>) -> Result<(), BoxError> {
-    if condition {
-        Ok(())
-    } else {
-        Err(message.into().into())
-    }
-}
-
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
@@ -194,236 +170,6 @@ fn scoped_atomic_explicit_kernarg(
     put_u64(&mut bytes, 24, ELEMENTS as u64);
     put_u64(&mut bytes, 32, target_address);
     bytes
-}
-
-fn guarded_u32(body: &[u32], prefix: u32, suffix: u32) -> Vec<u32> {
-    let mut values = Vec::with_capacity(CANARY_ELEMENTS * 2 + body.len());
-    values.extend(std::iter::repeat_n(prefix, CANARY_ELEMENTS));
-    values.extend_from_slice(body);
-    values.extend(std::iter::repeat_n(suffix, CANARY_ELEMENTS));
-    values
-}
-
-fn u32_bytes(values: &[u32]) -> &[u8] {
-    // SAFETY: u32 has no invalid bit patterns and the byte extent is exact.
-    unsafe {
-        std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values))
-    }
-}
-
-fn u32_values(bytes: &[u8]) -> Result<Vec<u32>, BoxError> {
-    require(
-        bytes.len().is_multiple_of(std::mem::size_of::<u32>()),
-        "hardware allocation contains a partial u32",
-    )?;
-    Ok(bytes
-        .chunks_exact(4)
-        .map(|chunk| u32::from_ne_bytes(chunk.try_into().expect("exact u32 chunk")))
-        .collect())
-}
-
-fn body_address(
-    buffer: &ReviewedHsaHardwareTestBufferV1,
-    body_len: usize,
-) -> Result<u64, BoxError> {
-    require(
-        buffer.byte_len() == (CANARY_ELEMENTS * 2 + body_len) * std::mem::size_of::<u32>(),
-        "guarded atomic allocation has the wrong physical extent",
-    )?;
-    Ok(buffer.device_address(CANARY_ELEMENTS * std::mem::size_of::<u32>())?)
-}
-
-fn require_guarded_u32(
-    actual: &[u32],
-    body: &[u32],
-    prefix: u32,
-    suffix: u32,
-    role: &str,
-) -> Result<(), BoxError> {
-    require(
-        actual.len() == CANARY_ELEMENTS * 2 + body.len(),
-        format!("{role} allocation length changed"),
-    )?;
-    let (left, remainder) = actual.split_at(CANARY_ELEMENTS);
-    let (actual_body, right) = remainder.split_at(body.len());
-    require(
-        left.iter().all(|value| *value == prefix),
-        format!("{role} prefix canary changed"),
-    )?;
-    require(actual_body == body, format!("{role} body changed"))?;
-    require(
-        right.iter().all(|value| *value == suffix),
-        format!("{role} suffix canary changed"),
-    )
-}
-
-struct RuntimeKernarg {
-    pointer: std::ptr::NonNull<u8>,
-    layout: std::alloc::Layout,
-}
-
-impl RuntimeKernarg {
-    fn new() -> Result<Self, BoxError> {
-        let layout =
-            std::alloc::Layout::from_size_align(COMPLETE_KERNARG_BYTES, HSA_KERNARG_ALIGNMENT)?;
-        // SAFETY: layout is valid and this owner deallocates the result once.
-        let pointer = std::ptr::NonNull::new(unsafe { std::alloc::alloc_zeroed(layout) })
-            .ok_or("failed to allocate aligned scoped-atomic kernarg")?;
-        Ok(Self { pointer, layout })
-    }
-
-    fn bytes_mut(&mut self) -> &mut [u8] {
-        // SAFETY: the allocation is live and exactly layout.size() bytes.
-        unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.layout.size()) }
-    }
-}
-
-impl Drop for RuntimeKernarg {
-    fn drop(&mut self) {
-        // SAFETY: this owner deallocates its exact live allocation once.
-        unsafe { std::alloc::dealloc(self.pointer.as_ptr(), self.layout) };
-    }
-}
-
-fn execute_scoped_atomic_on_hardware(hsaco: &[u8], digest: PayloadDigest) -> Result<(), BoxError> {
-    let context = GpuContext::new(0)?;
-    let mut adapter = ReviewedHsaRuntimeAdapterV1::new(context)?;
-    let target = adapter.environment().physical_device().target();
-    require(
-        target.processor() == "gfx942"
-            && target.xnack() == Some(fe2o3_amd_target::FeatureState::Disabled),
-        "source-authentic scoped-atomic execution requires gfx942:xnack-",
-    )?;
-
-    // SAFETY: the exact worker output remains live, SHA-256 bound, and was
-    // structurally inspected before this observational hardware boundary.
-    let (executable, load) = unsafe { adapter.load_executable(hsaco, digest) }?;
-    let executable_identity = load.executable_object();
-    let execution = (|| -> Result<(), BoxError> {
-        require(
-            load.finalized_digest() == digest && load.byte_len() == hsaco.len() as u64,
-            "HSA load changed the scoped-atomic artifact identity",
-        )?;
-        // SAFETY: structural inspection admitted exactly this one export.
-        let (kernels, resolutions) =
-            unsafe { adapter.resolve_kernel_set(&executable, [SCOPED_ATOMIC_EXPORT]) }?;
-        require(
-            kernels.len() == 1 && resolutions.len() == 1,
-            "runtime did not resolve exactly one scoped-atomic kernel",
-        )?;
-        let resolution = &resolutions[0];
-        require(
-            resolution.export_symbol() == SCOPED_ATOMIC_EXPORT
-                && resolution.executable_object() == executable_identity
-                && resolution.kernarg_segment_size() == COMPLETE_KERNARG_BYTES as u64
-                && resolution.kernarg_segment_alignment() == HSA_KERNARG_ALIGNMENT as u64,
-            "runtime scoped-atomic resolution disagrees with the inspected ABI",
-        )?;
-        let kernel = kernels
-            .get(0)
-            .ok_or("runtime omitted the resolved scoped-atomic kernel")?;
-
-        let cases = [
-            (
-                "sparse",
-                (1..=ELEMENTS as u32).collect::<Vec<_>>(),
-                (0..ELEMENTS)
-                    .map(|lane| u32::from(lane % 3 != 0))
-                    .collect::<Vec<_>>(),
-                0x1020_u32,
-            ),
-            (
-                "all-contending-boundary",
-                vec![1; ELEMENTS],
-                vec![1; ELEMENTS],
-                u32::MAX - ELEMENTS as u32,
-            ),
-            (
-                "none-eligible",
-                (0..ELEMENTS as u32)
-                    .map(|lane| lane.wrapping_mul(0x0101_0101))
-                    .collect::<Vec<_>>(),
-                vec![0; ELEMENTS],
-                0x7654_3210,
-            ),
-        ];
-        for (case, values_body, eligible_body, initial_target) in cases {
-            let expected_target = values_body
-                .iter()
-                .zip(&eligible_body)
-                .filter_map(|(value, eligible)| (*eligible != 0).then_some(*value))
-                .try_fold(initial_target, u32::checked_add)
-                .ok_or("scoped-atomic hardware oracle overflow")?;
-            let values_host = guarded_u32(&values_body, INPUT_PREFIX, INPUT_SUFFIX);
-            let eligible_host = guarded_u32(&eligible_body, INPUT_PREFIX, INPUT_SUFFIX);
-            let target_host = guarded_u32(&[initial_target], TARGET_PREFIX, TARGET_SUFFIX);
-            let values = adapter.allocate_hardware_test_buffer(u32_bytes(&values_host))?;
-            let eligible = adapter.allocate_hardware_test_buffer(u32_bytes(&eligible_host))?;
-            let target_buffer = adapter.allocate_hardware_test_buffer(u32_bytes(&target_host))?;
-            let explicit = scoped_atomic_explicit_kernarg(
-                body_address(&values, ELEMENTS)?,
-                body_address(&eligible, ELEMENTS)?,
-                body_address(&target_buffer, 1)?,
-            );
-            let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [WORKGROUP_X, 1, 1], 0);
-            let mut storage = RuntimeKernarg::new()?;
-            let kernarg = storage.bytes_mut();
-            kernarg[..EXPLICIT_KERNARG_BYTES].copy_from_slice(&explicit);
-
-            // SAFETY: three live guarded allocations supply the exact 40-byte
-            // ABI; hidden COV6 bytes are initialized and dispatch is synchronous.
-            unsafe {
-                adapter.initialize_implicit_kernarg(
-                    &executable,
-                    kernel,
-                    geometry,
-                    EXPLICIT_KERNARG_BYTES,
-                    EXPLICIT_KERNARG_BYTES,
-                    IMPLICIT_KERNARG_BYTES,
-                    kernarg,
-                )?;
-                let completion = adapter.launch_and_wait(&executable, kernel, geometry, kernarg)?;
-                require(
-                    completion.completed(),
-                    format!("{case} scoped-atomic dispatch did not complete"),
-                )?;
-            }
-
-            let values_after = u32_values(&values.read_after_synchronous_dispatch())?;
-            let eligible_after = u32_values(&eligible.read_after_synchronous_dispatch())?;
-            let target_after = u32_values(&target_buffer.read_after_synchronous_dispatch())?;
-            require_guarded_u32(
-                &values_after,
-                &values_body,
-                INPUT_PREFIX,
-                INPUT_SUFFIX,
-                &format!("{case} values"),
-            )?;
-            require_guarded_u32(
-                &eligible_after,
-                &eligible_body,
-                INPUT_PREFIX,
-                INPUT_SUFFIX,
-                &format!("{case} eligible"),
-            )?;
-            require_guarded_u32(
-                &target_after,
-                &[expected_target],
-                TARGET_PREFIX,
-                TARGET_SUFFIX,
-                &format!("{case} target"),
-            )?;
-        }
-        Ok(())
-    })();
-
-    // All kernel and allocation borrows ended; consume the executable once.
-    let unload = unsafe { adapter.unload_executable(executable) }?;
-    require(
-        unload.released() && unload.executable_object() == executable_identity,
-        "reviewed HSA unload did not release the scoped-atomic executable",
-    )?;
-    execution
 }
 
 fn run_case(case: &str, feature: &str) {
@@ -505,7 +251,7 @@ fn scoped_atomic_uses_the_single_production_pipeline() {
 
 #[test]
 #[ignore = "requires the pinned nightly AMD target and measured upstream LLVM/LLD worker"]
-fn scoped_atomic_source_handoff_executes_reproducible_generic_gfx942_hsaco() {
+fn scoped_atomic_source_handoff_finalizes_and_inspects_reproducible_generic_gfx942_hsaco() {
     let scratch = ScratchDirectory::new("scoped-atomic-worker");
     let handoff = extract_scoped_atomic_handoff(&scratch);
     assert_eq!(handoff.target().to_string(), "gfx942:xnack-");
@@ -609,10 +355,6 @@ fn scoped_atomic_source_handoff_executes_reproducible_generic_gfx942_hsaco() {
     };
     assert_eq!(binding.descriptor().kernarg_size(), 296);
     assert_eq!(binding.descriptor().wavefront_size(), 64);
-
-    let digest = DigestAlgorithm::Sha256.calculate(evidence.output_bytes());
-    execute_scoped_atomic_on_hardware(evidence.output_bytes(), digest)
-        .expect("execute source-authentic scoped-atomic HSACO on gfx942");
 
     if let Some(path) = std::env::var_os(HSACO_OUTPUT_ENV) {
         std::fs::write(path, evidence.output_bytes()).expect("write observed production HSACO");

@@ -60,6 +60,8 @@ mod pliron_transform_refinement;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
+mod process_execution;
+#[cfg(feature = "authenticated-machine-effect")]
 mod scalar_gemm_v1_physical_machine_effect;
 mod ssa;
 mod uniformity;

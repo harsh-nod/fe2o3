@@ -2294,6 +2294,9 @@ pub(crate) fn scalar_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorS
                     .unwrap(),
                 ],
             ),
+            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                unreachable!("scalar GEMM fixture has no global mutable pointer")
+            }
         };
         RustLayoutEvidenceV1::new(
             RustTypeEvidenceV1::new(shape),
@@ -2326,6 +2329,9 @@ pub(crate) fn scalar_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorS
                 GeneralTypedArgumentKindV3::Scalar(_) => AccessMode::ByValue,
                 GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
                 GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
+                GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                    unreachable!("scalar GEMM fixture has no global mutable pointer")
+                }
             },
             offset: offsets[index],
             layout: layout(kind),
@@ -2373,6 +2379,9 @@ pub(crate) fn tiled_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSo
             GeneralTypedArgumentKindV3::SharedSlice(element) => (element, false),
             GeneralTypedArgumentKindV3::DisjointSlice(element) => (element, true),
             GeneralTypedArgumentKindV3::Scalar(_) => unreachable!("tiled profile has no scalar"),
+            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                unreachable!("tiled profile has no global mutable pointer")
+            }
         };
         let shape = if disjoint {
             RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
@@ -2423,6 +2432,9 @@ pub(crate) fn tiled_gemm_v1_descriptor_source_for_test() -> CompilerDescriptorSo
                 GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
                 GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
                 GeneralTypedArgumentKindV3::Scalar(_) => unreachable!(),
+                GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                    unreachable!("tiled profile has no global mutable pointer")
+                }
             },
             offset: (index as u32) * 16,
             layout: layout(kind),
@@ -2478,6 +2490,9 @@ fn tiled_gemm_lds_slice1_descriptor_inputs_for_test() -> (
             GeneralTypedArgumentKindV3::Scalar(_) => {
                 unreachable!("LDS Slice 1 profile has no scalar")
             }
+            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                unreachable!("LDS Slice 1 profile has no global mutable pointer")
+            }
         };
         let shape = if disjoint {
             RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
@@ -2526,6 +2541,9 @@ fn tiled_gemm_lds_slice1_descriptor_inputs_for_test() -> (
                 GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
                 GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
                 GeneralTypedArgumentKindV3::Scalar(_) => unreachable!(),
+                GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                    unreachable!("LDS Slice 1 profile has no global mutable pointer")
+                }
             },
             offset: (index as u32) * 16,
             layout: layout(kind),
@@ -2586,6 +2604,9 @@ pub(crate) fn row_softmax_v1_descriptor_source_for_test() -> CompilerDescriptorS
             GeneralTypedArgumentKindV3::Scalar(_) => {
                 unreachable!("row-softmax profile has no scalar")
             }
+            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                unreachable!("row-softmax profile has no global mutable pointer")
+            }
         };
         let shape = if disjoint {
             RustSourceTypeShapeV1::disjoint_slice(element, RustDisjointIndexSpaceV1::Index1D)
@@ -2634,6 +2655,9 @@ pub(crate) fn row_softmax_v1_descriptor_source_for_test() -> CompilerDescriptorS
                 GeneralTypedArgumentKindV3::SharedSlice(_) => AccessMode::ReadOnly,
                 GeneralTypedArgumentKindV3::DisjointSlice(_) => AccessMode::ReadWrite,
                 GeneralTypedArgumentKindV3::Scalar(_) => unreachable!(),
+                GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                    unreachable!("row-softmax profile has no global mutable pointer")
+                }
             },
             offset: (index as u32) * 16,
             layout: layout(kind),
@@ -2990,7 +3014,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_ownership_only_discharges_aliases_involving_disjoint_slices() {
+    fn rust_ownership_only_discharges_aliases_involving_exclusive_arguments() {
         let arguments = vec![
             descriptor_argument(
                 0,
@@ -3008,6 +3032,11 @@ mod tests {
                 32,
             ),
             descriptor_argument(3, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::F32), 48),
+            descriptor_argument(
+                4,
+                DescriptorArgumentKindV1::GlobalMutPointer(ScalarTypeV1::F32),
+                56,
+            ),
         ];
 
         assert!(!rust_ownership_discharges_runtime_alias_v1(
@@ -3018,8 +3047,13 @@ mod tests {
         assert!(!rust_ownership_discharges_runtime_alias_v1(
             0, 3, &arguments
         ));
+        assert!(rust_ownership_discharges_runtime_alias_v1(0, 4, &arguments));
+        assert!(rust_ownership_discharges_runtime_alias_v1(4, 1, &arguments));
         assert!(!rust_ownership_discharges_runtime_alias_v1(
             2, 2, &arguments
+        ));
+        assert!(!rust_ownership_discharges_runtime_alias_v1(
+            4, 4, &arguments
         ));
         assert!(!rust_ownership_discharges_runtime_alias_v1(
             2, 8, &arguments

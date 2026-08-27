@@ -11,6 +11,8 @@ mod production_application;
 mod published_direct_link;
 mod published_hsaco_inspection;
 mod recovered_worker_v3_admission;
+#[cfg(any(test, feature = "hardware-test-hooks"))]
+mod test_currentness_retry;
 mod tile_interop;
 mod worker_v3_verification_admission;
 

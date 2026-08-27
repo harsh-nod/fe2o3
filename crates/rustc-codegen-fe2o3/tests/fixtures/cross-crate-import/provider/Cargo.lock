@@ -284,6 +284,7 @@ dependencies = [
  "fe2o3-kernel-ir",
  "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -385,6 +386,7 @@ version = "0.1.0"
 name = "fe2o3-amdgcn-model"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
@@ -504,7 +506,7 @@ dependencies = [
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
- "fe2o3-worker-v2-bundle",
+ "fe2o3-runtime-protocol",
  "libc",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -546,7 +548,9 @@ dependencies = [
  "dialect-kernel",
  "dialect-proof",
  "fe2o3-kernel-ir",
+ "fe2o3-pliron-owner-core",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -630,6 +634,16 @@ name = "fe2o3-proof-contracts"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-runtime-protocol"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-ffi",
+ "fe2o3-hsaco-finalize",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-rustc-front"
 version = "0.1.0"
 dependencies = [
@@ -667,20 +681,6 @@ dependencies = [
  "sha2 0.11.0",
  "syn 2.0.119",
  "toml",
-]
-
-[[package]]
-name = "fe2o3-worker-v2-bundle"
-version = "0.1.0"
-dependencies = [
- "fe2o3-artifact-transaction",
- "fe2o3-artifacts",
- "fe2o3-build-authority",
- "fe2o3-compiler-ffi",
- "fe2o3-hsaco-finalize",
- "fe2o3-kernel-descriptor",
- "fe2o3-rustc-invocation",
- "sha2 0.11.0",
 ]
 
 [[package]]
@@ -857,7 +857,7 @@ dependencies = [
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
 dependencies = [
  "awint",
  "combine",
@@ -884,7 +884,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
 dependencies = [
  "combine",
  "convert_case",

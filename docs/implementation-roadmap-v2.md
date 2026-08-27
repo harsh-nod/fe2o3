@@ -99,12 +99,14 @@ measurement, and it remains inert.
 The isolated measured upstream LLVM 22.1.8 target machine and in-process LLD
 remain the sole machine-code and HSACO authority. The bounded #159 and #161
 slices are closed by the six commits above. They required a new dedicated
-`fe2o3-pliron-scalar-add-v1` join and sealed one-shot consumer on top of the
-existing low-level HSA adapters. The COV6 descriptor establishes a 280-byte
-24+256 kernarg segment with alignment 8, while ROCr reports runtime alignment
-16; the consumer enforces the stricter runtime alignment. #160 is closed
-because its explicit-only premise was incorrect, not because the old runtime
-route was sufficient.
+`fe2o3-pliron-scalar-add-v1` source/policy/authority/finalization join and a
+qualification-only sealed one-shot consumer on top of the existing low-level
+HSA adapters. The join remains feature-free; the exact MI300X/HSA consumer and
+runtime-facing dependencies require `qualification-oracles-test-only`. The
+COV6 descriptor establishes a 280-byte 24+256 kernarg segment with alignment 8,
+while ROCr reports runtime alignment 16; the consumer enforces the stricter
+runtime alignment. #160 is closed because its explicit-only premise was
+incorrect, not because the old runtime route was sufficient.
 
 The successful MI300X run records
 `evidence=69238ad704470649b9811b41cf0194bb392be8116a1b0618adb1dcbe7e1bbd4f`

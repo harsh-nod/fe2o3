@@ -17,6 +17,11 @@ pub mod contract;
 pub mod general_plan;
 pub mod general_reference;
 pub mod inputs;
+#[cfg(feature = "host-contract")]
+#[path = "kernel_host_contract.rs"]
+pub mod kernel;
+#[cfg(not(feature = "host-contract"))]
+#[path = "kernel.rs"]
 pub mod kernel;
 pub mod kernel_face;
 pub mod layout;

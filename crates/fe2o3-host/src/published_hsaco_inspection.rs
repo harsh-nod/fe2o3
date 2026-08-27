@@ -472,6 +472,17 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
         let current = self
             .acquire_current_publication_token()
             .map_err(PublishedLoadAdmissionError::Inspection)?;
+        self.into_pending_load_admission_with_current_token(&current)
+    }
+
+    pub(crate) fn into_pending_load_admission_with_current_token(
+        self,
+        current: &ManifestClaimDirectLinkCurrentPublicationTokenV1,
+    ) -> Result<PendingPublishedDirectLinkLoadAdmissionV1, PublishedLoadAdmissionError> {
+        self.admission
+            .validate_current_token(current)
+            .map_err(PublishedPhysicalLayoutInspectionError::current_publication)
+            .map_err(PublishedLoadAdmissionError::Inspection)?;
         validate_payload_occurrence(&self.admission, current.exact_artifact_bytes())
             .map_err(PublishedLoadAdmissionError::Inspection)?;
         validate_pending_load_identity(&self)?;
@@ -485,8 +496,6 @@ impl InspectedPublishedDirectLinkPhysicalLayoutV1 {
         let code_object_version = self.code_object_version();
         let kernel_symbol = self.selected_kernel().export_symbol().into();
         let abi = artifact_identity.abi().clone();
-        drop(current);
-
         Ok(PendingPublishedDirectLinkLoadAdmissionV1 {
             inspection: self,
             published,

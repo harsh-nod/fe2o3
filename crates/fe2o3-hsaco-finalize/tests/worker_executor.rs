@@ -3,8 +3,12 @@
 use std::{
     fs::{self, File},
     io::Write,
-    os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
+    process::Command,
     thread,
     time::{Duration, Instant},
 };
@@ -38,6 +42,44 @@ use reserved_fe2o3_symbols::{
 
 const WORKER_ID: &str = "fixture-worker-v1";
 const LLVM_ID: &str = "fixture-llvm-v1";
+const ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_INTERNAL_TEST_WORKER_EXECUTOR_ARTIFACT_GUARD";
+
+fn rerun_with_artifact_guard(test_name: &str, fixture_label: &str) -> bool {
+    if std::env::var_os(ARTIFACT_GUARD_CHILD_ENV).is_some() {
+        return false;
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "fe2o3-worker-executor-guard-{}-{fixture_label}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root).expect("create worker executor guard root");
+    let guard_directory = root.join("artifact-path-guard");
+    fs::create_dir(&guard_directory).expect("create worker executor artifact path guard");
+    fs::set_permissions(&guard_directory, fs::Permissions::from_mode(0o700))
+        .expect("secure worker executor artifact path guard");
+    let metadata =
+        fs::metadata(&guard_directory).expect("inspect worker executor artifact path guard");
+    let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+    let child = Command::new(
+        std::env::current_exe().expect("resolve worker executor integration test executable"),
+    )
+    .args(["--exact", test_name, "--nocapture"])
+    .env(ARTIFACT_GUARD_CHILD_ENV, "1")
+    .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &guard_directory)
+    .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity)
+    .output()
+    .expect("run worker executor test with configured artifact path guard");
+    fs::remove_dir_all(&root).expect("remove worker executor guard root");
+    assert!(
+        child.status.success(),
+        "configured artifact-path-guard {fixture_label} test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    true
+}
 
 fn fixture_path() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_fe2o3-worker-executor-fixture"))
@@ -161,6 +203,12 @@ fn returns_only_inert_identity_bound_output() {
 
 #[test]
 fn consumed_compiler_handoff_executes_v2_without_gaining_authority() {
+    if rerun_with_artifact_guard(
+        "consumed_compiler_handoff_executes_v2_without_gaining_authority",
+        "ordinary-handoff",
+    ) {
+        return;
+    }
     enable_same_mount_namespace_artifact_path_guard_v1();
     let directory =
         std::env::temp_dir().join(format!("fe2o3-worker-v2-handoff-{}", std::process::id()));
@@ -241,6 +289,12 @@ define i32 @kernel_export(i32 %value) { ret i32 %value }\n";
 
 #[test]
 fn protected_consumed_handoff_executes_without_losing_v2_identity_or_closure() {
+    if rerun_with_artifact_guard(
+        "protected_consumed_handoff_executes_without_losing_v2_identity_or_closure",
+        "protected-handoff",
+    ) {
+        return;
+    }
     enable_same_mount_namespace_artifact_path_guard_v1();
     let directory = std::env::temp_dir().join(format!(
         "fe2o3-protected-worker-v2-handoff-{}",

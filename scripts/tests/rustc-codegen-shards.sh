@@ -30,6 +30,7 @@ expect_policy_failure() {
 write_fixture_manifest() {
   local alpha_name="$1"
   local include_gamma="$2"
+  local beta_required="$3"
   cat >"${FIXTURE_MANIFEST}" <<EOF
 [package]
 name = "rustc-codegen-fe2o3"
@@ -38,6 +39,9 @@ edition = "2024"
 autotests = false
 
 [workspace]
+
+[features]
+qualification-oracles-test-only = []
 
 [lib]
 path = "src/lib.rs"
@@ -50,6 +54,11 @@ path = "tests/alpha.rs"
 name = "beta"
 path = "nonstandard/beta.rs"
 EOF
+  if [[ "${beta_required}" == yes ]]; then
+    printf '%s\n' \
+      'required-features = ["qualification-oracles-test-only"]' \
+      >>"${FIXTURE_MANIFEST}"
+  fi
   if [[ "${include_gamma}" == yes ]]; then
     cat >>"${FIXTURE_MANIFEST}" <<'EOF'
 
@@ -62,10 +71,15 @@ EOF
 
 # Exercise the production defaults against the real locked workspace first.
 python3 "${POLICY}" check >/dev/null
-if [[ "$(python3 "${POLICY}" tests 09-general-gemm-semantic)" != \
-  general_gemm_semantic_frontend ]]; then
+if [[ "$(python3 "${POLICY}" tests 04-memory-math-gemm)" != \
+  general_gemm_mutation_corpus_integrity ]]; then
   printf '%s\n' \
-    'general GEMM semantic frontend must remain in its exact isolated shard' >&2
+    'production GEMM mutation corpus must remain in its exact shard' >&2
+  exit 1
+fi
+if [[ "$(python3 "${POLICY}" tests 07-frontend-types)" != $'cross_crate_imports\ng2_monomorphization\nproduction_extraction_driver_v1\nproduction_general_matrix_driver_v1\nproduction_pipeline\nproduction_ranked_bounds_driver_v1\nreference_binding_v1' ]]; then
+  printf '%s\n' \
+    'frontend/type shard must contain the exact current production driver set' >&2
   exit 1
 fi
 
@@ -83,13 +97,13 @@ touch \
   "${FIXTURE_PACKAGE}/tests/alpha.rs" \
   "${FIXTURE_PACKAGE}/nonstandard/beta.rs" \
   "${FIXTURE_PACKAGE}/extra/gamma.rs"
-write_fixture_manifest alpha no
+write_fixture_manifest alpha no no
 cargo generate-lockfile --quiet --manifest-path "${FIXTURE_MANIFEST}"
 
 VALID="${TEST_ROOT}/valid.json"
 readonly VALID
 cat >"${VALID}" <<'EOF'
-{"schema":1,"shards":[{"id":"01-a","tests":["alpha"]},{"id":"02-b","tests":["beta"]}]}
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha"]},{"id":"02-b","tests":["beta"]}],"retiredQualificationTargets":[]}
 EOF
 python3 "${POLICY}" \
   --manifest "${VALID}" \
@@ -106,12 +120,117 @@ asserted_list="$(
   python3 "${POLICY}" \
     --manifest "${VALID}" \
     --package-manifest "${FIXTURE_MANIFEST}" \
-    tests 01-a
+  tests 01-a
 )" == alpha ]]
+
+RETIRED="${TEST_ROOT}/retired.json"
+cat >"${RETIRED}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha"]}],"retiredQualificationTargets":["beta"]}
+EOF
+write_fixture_manifest alpha no yes
+printf '%s\n' \
+  'const SELECTOR: &str = "FE2O3_QUALIFICATION_ORACLE_V1";' \
+  'fn inject(command: &mut std::process::Command) { command.env(SELECTOR, "retired"); }' \
+  >"${FIXTURE_PACKAGE}/nonstandard/beta.rs"
+python3 "${POLICY}" \
+  --manifest "${RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check >/dev/null
+[[ "$(
+  python3 "${POLICY}" \
+    --manifest "${RETIRED}" \
+    --package-manifest "${FIXTURE_MANIFEST}" \
+    retired
+)" == beta ]]
+write_fixture_manifest alpha no no
+expect_policy_failure retired-not-feature-gated \
+  'retired qualification target is not feature-gated in Cargo metadata: beta' \
+  --manifest "${RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+write_fixture_manifest alpha no yes
+expect_policy_failure active-retired-selector \
+  'active production test target injects the retired qualification selector: beta' \
+  --manifest "${VALID}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+OVERLAP="${TEST_ROOT}/overlap.json"
+cat >"${OVERLAP}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha","beta"]}],"retiredQualificationTargets":["beta"]}
+EOF
+expect_policy_failure overlap \
+  'target is both active and retired qualification coverage: beta' \
+  --manifest "${OVERLAP}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+UNSORTED_RETIRED="${TEST_ROOT}/unsorted-retired.json"
+cat >"${UNSORTED_RETIRED}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha"]}],"retiredQualificationTargets":["beta","alpha"]}
+EOF
+expect_policy_failure unsorted-retired \
+  'retired qualification targets are not sorted' \
+  --manifest "${UNSORTED_RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+DUPLICATE_RETIRED="${TEST_ROOT}/duplicate-retired.json"
+cat >"${DUPLICATE_RETIRED}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha"]}],"retiredQualificationTargets":["beta","beta"]}
+EOF
+expect_policy_failure duplicate-retired \
+  'duplicate retired qualification target' \
+  --manifest "${DUPLICATE_RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+MALFORMED_RETIRED="${TEST_ROOT}/malformed-retired.json"
+cat >"${MALFORMED_RETIRED}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha","beta"]}],"retiredQualificationTargets":["bad-name"]}
+EOF
+expect_policy_failure malformed-retired \
+  'malformed retired qualification target: bad-name' \
+  --manifest "${MALFORMED_RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+UNKNOWN_RETIRED="${TEST_ROOT}/unknown-retired.json"
+cat >"${UNKNOWN_RETIRED}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha","beta"]}],"retiredQualificationTargets":["gamma"]}
+EOF
+expect_policy_failure unknown-retired \
+  'unknown or renamed test targets: gamma' \
+  --manifest "${UNKNOWN_RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+printf '%s' '' >"${FIXTURE_PACKAGE}/nonstandard/beta.rs"
+expect_policy_failure retired-without-selector \
+  'retired qualification target no longer injects the selector and must move to an active shard: beta' \
+  --manifest "${RETIRED}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+expect_policy_failure active-feature-gated \
+  'active production test target requires the offline qualification feature: beta' \
+  --manifest "${VALID}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+write_fixture_manifest alpha no no
+mkdir -p "${FIXTURE_PACKAGE}/tests/support"
+printf '%s\n' \
+  'fn inject(command: &mut std::process::Command) { command.env("FE2O3_QUALIFICATION_ORACLE_V1", "retired"); }' \
+  >"${FIXTURE_PACKAGE}/tests/support/inject.rs"
+expect_policy_failure shared-support-selector \
+  'shared test support injects the retired qualification selector' \
+  --manifest "${VALID}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+rm -f "${FIXTURE_PACKAGE}/tests/support/inject.rs"
 
 DUPLICATE="${TEST_ROOT}/duplicate.json"
 cat >"${DUPLICATE}" <<'EOF'
-{"schema":1,"shards":[{"id":"01-a","tests":["alpha"]},{"id":"02-b","tests":["alpha","beta"]}]}
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha"]},{"id":"02-b","tests":["alpha","beta"]}],"retiredQualificationTargets":[]}
 EOF
 expect_policy_failure duplicate 'duplicate test target: alpha' \
   --manifest "${DUPLICATE}" \
@@ -122,7 +241,7 @@ expect_policy_failure duplicate 'duplicate test target: alpha' \
 [[ ! -e "${FIXTURE_PACKAGE}/tests/beta.rs" ]]
 MISSING="${TEST_ROOT}/missing.json"
 cat >"${MISSING}" <<'EOF'
-{"schema":1,"shards":[{"id":"01-a","tests":["alpha"]}]}
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha"]}],"retiredQualificationTargets":[]}
 EOF
 expect_policy_failure missing-nonstandard-beta \
   'missing or newly unassigned test targets: beta' \
@@ -132,7 +251,7 @@ expect_policy_failure missing-nonstandard-beta \
 
 UNKNOWN="${TEST_ROOT}/unknown.json"
 cat >"${UNKNOWN}" <<'EOF'
-{"schema":1,"shards":[{"id":"01-a","tests":["alpha","gamma"]},{"id":"02-b","tests":["beta"]}]}
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha","gamma"]},{"id":"02-b","tests":["beta"]}],"retiredQualificationTargets":[]}
 EOF
 expect_policy_failure unknown 'unknown or renamed test targets: gamma' \
   --manifest "${UNKNOWN}" \
@@ -146,29 +265,58 @@ expect_policy_failure malformed-shard-manifest 'invalid JSON' \
   --package-manifest "${FIXTURE_MANIFEST}" \
   check
 
+WRONG_SCHEMA="${TEST_ROOT}/wrong-schema.json"
+cat >"${WRONG_SCHEMA}" <<'EOF'
+{"schema":1,"shards":[{"id":"01-a","tests":["alpha","beta"]}],"retiredQualificationTargets":[]}
+EOF
+expect_policy_failure wrong-schema 'manifest schema must be integer 2' \
+  --manifest "${WRONG_SCHEMA}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+EXTRA_KEY="${TEST_ROOT}/extra-key.json"
+cat >"${EXTRA_KEY}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha","beta"]}],"retiredQualificationTargets":[],"extra":true}
+EOF
+expect_policy_failure extra-key \
+  'manifest must contain exactly schema, shards, and retiredQualificationTargets' \
+  --manifest "${EXTRA_KEY}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
+MISSING_KEY="${TEST_ROOT}/missing-key.json"
+cat >"${MISSING_KEY}" <<'EOF'
+{"schema":2,"shards":[{"id":"01-a","tests":["alpha","beta"]}]}
+EOF
+expect_policy_failure missing-key \
+  'manifest must contain exactly schema, shards, and retiredQualificationTargets' \
+  --manifest "${MISSING_KEY}" \
+  --package-manifest "${FIXTURE_MANIFEST}" \
+  check
+
 EMPTY="${TEST_ROOT}/empty.json"
 cat >"${EMPTY}" <<'EOF'
-{"schema":1,"shards":[{"id":"01-a","tests":[]},{"id":"02-b","tests":["alpha","beta"]}]}
+{"schema":2,"shards":[{"id":"01-a","tests":[]},{"id":"02-b","tests":["alpha","beta"]}],"retiredQualificationTargets":[]}
 EOF
 expect_policy_failure empty 'empty shard: 01-a' \
   --manifest "${EMPTY}" \
   --package-manifest "${FIXTURE_MANIFEST}" \
   check
 
-write_fixture_manifest alpha yes
+write_fixture_manifest alpha yes no
 expect_policy_failure new-target \
   'missing or newly unassigned test targets: gamma' \
   --manifest "${VALID}" \
   --package-manifest "${FIXTURE_MANIFEST}" \
   check
 
-write_fixture_manifest alpha_renamed no
+write_fixture_manifest alpha_renamed no no
 expect_policy_failure renamed \
   'unknown or renamed test targets: alpha' \
   --manifest "${VALID}" \
   --package-manifest "${FIXTURE_MANIFEST}" \
   check
-write_fixture_manifest alpha no
+write_fixture_manifest alpha no no
 
 if python3 "${POLICY}" \
   --manifest "${VALID}" \

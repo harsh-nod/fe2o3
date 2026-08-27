@@ -434,14 +434,18 @@ fn certify_natural_induction_loop(
             "the induction header does not forward its exact live tuple to the body",
         );
     }
-    if branch
-        .rhs(context)
+    let bound = branch.rhs(context);
+    let bound_operation_is_internal = bound
         .defining_op()
         .and_then(|definition| operation_blocks.get(&definition))
-        .is_some_and(|block| natural_loop.get(*block).copied().unwrap_or(false))
-    {
+        .is_some_and(|block| natural_loop.get(*block).copied().unwrap_or(false));
+    let bound_block_is_internal = bound
+        .defining_block()
+        .and_then(|block| block_indices.get(&block))
+        .is_some_and(|block| natural_loop.get(*block).copied().unwrap_or(false));
+    if bound_operation_is_internal || bound_block_is_internal {
         return CanonicalLoopResultV1::Incomplete(
-            "the loop bound depends on a value defined inside the natural loop",
+            "the loop bound depends on a value defined inside the cycle",
         );
     }
 
@@ -498,7 +502,15 @@ fn certify_natural_induction_loop(
         );
     }
     for (slot, argument) in arguments.iter().copied().enumerate() {
-        if slot != induction_slot && argument != latch_block.get_argument(slot) {
+        if slot != induction_slot
+            && !is_local_slot_evolution(
+                context,
+                operation_blocks,
+                latch_index,
+                latch_block.get_argument(slot),
+                argument,
+            )
+        {
             return CanonicalLoopResultV1::Incomplete(
                 "the induction backedge mutated a non-induction live tuple slot",
             );
@@ -606,9 +618,23 @@ fn certify_natural_induction_loop(
                 );
             }
             for (slot, argument) in edge_arguments.iter().copied().take(tuple_width).enumerate() {
-                if argument != source_block.get_argument(slot) {
+                let source_argument = source_block.get_argument(slot);
+                if slot == induction_slot && argument != source_argument {
                     return CanonicalLoopResultV1::Incomplete(
-                        "an internal natural-loop edge mutated a live tuple slot",
+                        "a non-latch loop edge mutated the tracked induction value",
+                    );
+                }
+                if slot != induction_slot
+                    && !is_local_slot_evolution(
+                        context,
+                        operation_blocks,
+                        source,
+                        source_argument,
+                        argument,
+                    )
+                {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "an internal natural-loop edge substituted a non-induction live tuple slot without a local recurrence",
                     );
                 }
             }
@@ -623,6 +649,26 @@ fn certify_natural_induction_loop(
         bound: branch.rhs(context).unique_name(context).to_string(),
         step,
     }])
+}
+
+fn is_local_slot_evolution(
+    context: &Context,
+    operation_blocks: &HashMap<Ptr<Operation>, usize>,
+    source_block: usize,
+    source_argument: pliron::value::Value,
+    edge_argument: pliron::value::Value,
+) -> bool {
+    if edge_argument == source_argument {
+        return true;
+    }
+    let Some(definition) = edge_argument.defining_op() else {
+        return false;
+    };
+    operation_blocks.get(&definition).copied() == Some(source_block)
+        && definition
+            .deref(context)
+            .operands()
+            .any(|operand| operand == source_argument)
 }
 
 fn successor_arguments(

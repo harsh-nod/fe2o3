@@ -28,7 +28,7 @@ single-backend but is not yet the owner of the rustc production composition.
   production request and output. `fe2o3-compiler-driver` owns exactly one
   configured backend with no selector or fallback slot.
 - `fe2o3-pliron` pins Pliron v0.17.0 commit
-  `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and implements a bounded D0
+  `5bdf861bf03e7f20242b25717fb653336d02e487` and implements a bounded D0
   context, private identity anchor, registration, verification, and pass-plan
   shell. It does not expose generic pass execution over contextless pointers. Seven target-neutral
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
@@ -98,17 +98,14 @@ single-backend but is not yet the owner of the rustc production composition.
   optimizes, emits relocatable ELF through pinned upstream LLVM target-machine
   APIs, and links HSACO through in-process LLD library APIs. It does not use
   COMGR or a command-line compiler or linker.
-- In a backend built with `qualification-oracles-test-only`,
-  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` selects the first integrated G1 qualification oracle:
-  imported device MIR is translated to canonical kernel IR, verified, strictly
-  legalized for the exact 1D `fill` shape, lowered by `fe2o3-amdgcn-model`
-  through the `dialect-amdgcn` compatibility facade, and published through the
-  existing transactional LLVM/object/HSACO path. Invalid selectors and
-  unsupported selected inputs fail without legacy fallback and remove stale
-  artifacts. With no oracle selected, compilation enters the sole production
-  route. `kernel-ir-v1` and workload-specific oracles require explicit
-  qualification selection and cannot complete a production device transaction.
-  The removed `FE2O3_CODEGEN_PIPELINE` environment is rejected.
+- `qualification-oracles-test-only` compiles retained G1 and workload-specific
+  oracle implementations only into the backend library test binary. Those
+  fixtures translate imported MIR to canonical kernel IR, verify and lower
+  their bounded shapes, and test transactional models without publishing or
+  becoming a backend route. Backend dylibs are feature invariant and reject
+  `FE2O3_QUALIFICATION_ORACLE_V1`; the removed `FE2O3_CODEGEN_PIPELINE`
+  environment is also rejected. Selector-bearing integration targets remain
+  explicit migration inventory outside production shards.
 - `fe2o3-amdgcn-model`, reached through the `dialect-amdgcn` compatibility
   facade, lowers that verified fill subset to deterministic AMDGPU LLVM. Its
   code-object regression checks target/features, ELF and metadata versions,
@@ -149,19 +146,24 @@ single-backend but is not yet the owner of the rustc production composition.
   `saxpy`, `axpy-inplace`, `negate`, `normalize`, `pipeline`, and
   `vecadd-f64` examples load their HSACO files from `FE2O3_HSACO_DIR`, which is
   set by `cargo-fe2o3 build/run`.
-- `cargo-fe2o3 build/run -p <package>` cleans explicit package artifacts before
-  invoking Cargo so device sidecars are regenerated predictably.
-- `cargo-fe2o3 smoke` runs the supported backend examples in sequence.
+- Qualification artifact generation is selected by an explicit closed manifest
+  route. The current `kernel-ir-v1` route covers only `fe2o3-fill`; protected
+  production builds enter through `cargo fe2o3 authority release`.
+- The selector-free manifest-wide `cargo-fe2o3 smoke` command is retired. The
+  checked-in manifest remains source inventory, host-check policy, and bounded
+  artifact-qualification policy rather than a claim that every example has a
+  production code-generation route.
 - Generated HSACO files are validated with `llvm-readobj --notes` when available
   to confirm AMDGPU format, target metadata, and kernel name metadata.
 - `cargo-fe2o3` infers `FE2O3_TARGET` from `rocminfo` when the environment
   variable is not set.
-- End-to-end `vecadd`, `add-inplace`, `copy`, `downsample`, `fill`,
+- At the earlier elementwise-backend checkpoint, end-to-end `vecadd`,
+  `add-inplace`, `copy`, `downsample`, `fill`,
   `gather-odd`, `scale`, `shift`, `previous`, `stencil`, `saxpy`,
   `raw-add-index`, `raw-const-minus`, `raw-parenthesized-sub`,
   `raw-disjoint-inplace-shift`, `raw-disjoint-shift`, `raw-gather`,
   `raw-neighbors`, `raw-output-shift`, `axpy-inplace`, `negate`, `normalize`,
-  `pipeline`, and `vecadd-f64` have run successfully on `gfx1201` using TheRock
+  `pipeline`, and `vecadd-f64` ran successfully on `gfx1201` using TheRock
   ROCm `7.13.0a20260509`.
 
 ## Remaining Compiler Milestones

@@ -27,11 +27,13 @@ API. Pliron operations, arena handles, textual syntax, parser order, and
 printer output are not public source concepts, durable identities, or artifact
 authority.
 
-The Wave 0 dependency baseline is the single Pliron workspace release
-`v0.17.0`, commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. Every
-implementation dependency on `pliron` or `pliron-derive` MUST resolve to that
-same source revision through one centralized workspace configuration. The
-workspace now pins `pliron-llvm` at that revision with
+The Wave 0 dependency baseline is reviewed Pliron workspace fork commit
+`5bdf861bf03e7f20242b25717fb653336d02e487`, a strict descendant of upstream
+release `v0.17.0` commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed` that adds
+the bounded mutation-attempt epoch. Every implementation dependency on
+`pliron` or `pliron-derive` MUST resolve to that same source revision through
+one centralized workspace configuration. The workspace pins `pliron-llvm` at
+that revision with
 `default-features = false`; the optional `llvm-sys` converter is excluded from
 all production components, including the isolated worker. Selective use is
 confined to the reviewed LLVM dialect/lowering layer. Any such dependency may
@@ -90,7 +92,7 @@ The following infrastructure is implemented:
 - `fe2o3-pliron` constructs a real bounded Pliron context with a private,
   process-local identity anchor and validates dialect registration and pass
   plans using v0.17.0 commit
-  `2610651306ea3ba670f68d5d8b1e1159bcd521ed`. It does not expose generic pass
+  `5bdf861bf03e7f20242b25717fb653336d02e487`. It does not expose generic pass
   execution because upstream `Ptr<T>` values carry no owner provenance.
   The workspace policy rejects another Pliron revision, duplicate Pliron
   package identities, unexpected packages from that source, `llvm-sys`, and
@@ -612,7 +614,7 @@ D1-D11 production route is claimed complete by those crates.
 
 Input: this ADR, existing architecture/safety/evidence contracts, the pinned
 Rust/Verus/LLVM environment, and Pliron commit
-`2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+`5bdf861bf03e7f20242b25717fb653336d02e487`.
 
 Output: centralized exact Pliron dependencies; `fe2o3-pliron` context,
 identity, registration, and non-executing pass-plan shell; versioned GPU Rust conformance matrix,

@@ -20,6 +20,8 @@ DEFAULT_PACKAGE_MANIFEST = (
 PACKAGE_NAME = "rustc-codegen-fe2o3"
 SHARD_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 TEST_TARGET = re.compile(r"^[a-z][a-z0-9_]*$")
+RETIRED_QUALIFICATION_SELECTOR = "FE2O3_QUALIFICATION_ORACLE_V1"
+MAX_TEST_SOURCE_BYTES = 8 * 1024 * 1024
 
 
 class PolicyError(Exception):
@@ -37,7 +39,7 @@ def read_json(path: Path, description: str) -> object:
 
 def cargo_test_targets(
     package_manifest: Path, metadata_path: Path | None
-) -> set[str]:
+) -> dict[str, tuple[Path, frozenset[str]]]:
     try:
         expected_manifest = package_manifest.resolve(strict=True)
     except OSError as error:
@@ -125,7 +127,7 @@ def cargo_test_targets(
     targets = package.get("targets")
     if not isinstance(targets, list):
         raise PolicyError("Cargo metadata package targets must be an array")
-    actual: set[str] = set()
+    actual: dict[str, tuple[Path, frozenset[str]]] = {}
     for index, target in enumerate(targets):
         location = f"Cargo metadata targets[{index}]"
         if not isinstance(target, dict):
@@ -133,6 +135,7 @@ def cargo_test_targets(
         name = target.get("name")
         kinds = target.get("kind")
         source_path = target.get("src_path")
+        required_features = target.get("required-features", [])
         if not isinstance(name, str) or not name:
             raise PolicyError(f"{location}.name is malformed")
         if (
@@ -143,13 +146,33 @@ def cargo_test_targets(
             raise PolicyError(f"{location}.kind is malformed")
         if not isinstance(source_path, str) or not source_path:
             raise PolicyError(f"{location}.src_path is malformed")
+        if not isinstance(required_features, list) or any(
+            not isinstance(feature, str) or not feature for feature in required_features
+        ):
+            raise PolicyError(f"{location}.required-features is malformed")
         if "test" not in kinds:
             continue
         if not TEST_TARGET.fullmatch(name):
             raise PolicyError(f"malformed Cargo test target: {name}")
         if name in actual:
             raise PolicyError(f"duplicate Cargo test target: {name}")
-        actual.add(name)
+        source = Path(source_path)
+        if not source.is_absolute():
+            raise PolicyError(f"Cargo test target source path must be absolute: {name}")
+        if source.is_symlink() or not source.is_file():
+            raise PolicyError(f"Cargo test target source is not a regular file: {name}")
+        try:
+            resolved_source = source.resolve(strict=True)
+            resolved_source.relative_to(expected_manifest.parent)
+        except OSError as error:
+            raise PolicyError(
+                f"cannot resolve Cargo test target source for {name}: {error}"
+            ) from error
+        except ValueError as error:
+            raise PolicyError(
+                f"Cargo test target source escapes the package root: {name}"
+            ) from error
+        actual[name] = (resolved_source, frozenset(required_features))
 
     if not actual:
         raise PolicyError(f"no Cargo integration test targets for {PACKAGE_NAME}")
@@ -161,10 +184,17 @@ def load_policy(
 ) -> list[tuple[str, list[str]]]:
     raw = read_json(manifest_path, "shard manifest")
 
-    if not isinstance(raw, dict) or set(raw) != {"schema", "shards"}:
-        raise PolicyError("manifest must contain exactly schema and shards")
-    if type(raw["schema"]) is not int or raw["schema"] != 1:
-        raise PolicyError("manifest schema must be integer 1")
+    if not isinstance(raw, dict) or set(raw) != {
+        "schema",
+        "shards",
+        "retiredQualificationTargets",
+    }:
+        raise PolicyError(
+            "manifest must contain exactly schema, shards, and "
+            "retiredQualificationTargets"
+        )
+    if type(raw["schema"]) is not int or raw["schema"] != 2:
+        raise PolicyError("manifest schema must be integer 2")
     if not isinstance(raw["shards"], list) or not raw["shards"]:
         raise PolicyError("manifest shards must be a non-empty array")
 
@@ -201,14 +231,109 @@ def load_policy(
     shard_ids = [shard_id for shard_id, _ in parsed]
     if shard_ids != sorted(shard_ids):
         raise PolicyError("shard ids are not sorted")
+    retired = raw["retiredQualificationTargets"]
+    if not isinstance(retired, list) or any(
+        not isinstance(target, str) for target in retired
+    ):
+        raise PolicyError("retiredQualificationTargets must contain only strings")
+    if retired != sorted(retired):
+        raise PolicyError("retired qualification targets are not sorted")
+    if len(retired) != len(set(retired)):
+        raise PolicyError("duplicate retired qualification target")
+    for target in retired:
+        if not TEST_TARGET.fullmatch(target):
+            raise PolicyError(f"malformed retired qualification target: {target}")
+        if target in owners:
+            raise PolicyError(
+                f"target is both active and retired qualification coverage: {target}"
+            )
+
     actual = cargo_test_targets(package_manifest, metadata_path)
     assigned = set(owners)
-    unknown = sorted(assigned - actual)
-    missing = sorted(actual - assigned)
+    inventoried = assigned | set(retired)
+    unknown = sorted(inventoried - actual.keys())
+    missing = sorted(actual.keys() - inventoried)
     if unknown:
         raise PolicyError("unknown or renamed test targets: " + ", ".join(unknown))
     if missing:
         raise PolicyError("missing or newly unassigned test targets: " + ", ".join(missing))
+
+    def read_source(target: str) -> str:
+        path = actual[target][0]
+        try:
+            size = path.stat().st_size
+            if size > MAX_TEST_SOURCE_BYTES:
+                raise PolicyError(
+                    f"test target source exceeds {MAX_TEST_SOURCE_BYTES} bytes: {target}"
+                )
+            return path.read_text(encoding="utf-8")
+        except PolicyError:
+            raise
+        except (OSError, UnicodeError) as error:
+            raise PolicyError(f"cannot read test target {target}: {error}") from error
+
+    def injects_retired_selector(source: str) -> bool:
+        if re.search(
+            rf'\.env\s*\(\s*"{RETIRED_QUALIFICATION_SELECTOR}"', source
+        ):
+            return True
+        aliases = re.findall(
+            rf"\bconst\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*"
+            rf'"{RETIRED_QUALIFICATION_SELECTOR}"',
+            source,
+        )
+        return any(
+            re.search(rf"\.env\s*\(\s*{re.escape(alias)}\b", source)
+            for alias in aliases
+        )
+
+    for target in sorted(assigned):
+        source = read_source(target)
+        if injects_retired_selector(source):
+            raise PolicyError(
+                "active production test target injects the retired qualification "
+                f"selector: {target}"
+            )
+        if "qualification-oracles-test-only" in actual[target][1]:
+            raise PolicyError(
+                "active production test target requires the offline qualification "
+                f"feature: {target}"
+            )
+    for target in retired:
+        if not injects_retired_selector(read_source(target)):
+            raise PolicyError(
+                "retired qualification target no longer injects the selector and must "
+                f"move to an active shard: {target}"
+            )
+        if "qualification-oracles-test-only" not in actual[target][1]:
+            raise PolicyError(
+                "retired qualification target is not feature-gated in Cargo metadata: "
+                f"{target}"
+            )
+
+    support_root = package_manifest.parent / "tests" / "support"
+    if support_root.is_dir():
+        for support in sorted(support_root.rglob("*.rs")):
+            if support.is_symlink() or not support.is_file():
+                raise PolicyError(
+                    f"test support source is not a regular file: {support}"
+                )
+            try:
+                size = support.stat().st_size
+                if size > MAX_TEST_SOURCE_BYTES:
+                    raise PolicyError(
+                        "test support source exceeds "
+                        f"{MAX_TEST_SOURCE_BYTES} bytes: {support}"
+                    )
+                source = support.read_text(encoding="utf-8")
+            except PolicyError:
+                raise
+            except (OSError, UnicodeError) as error:
+                raise PolicyError(f"cannot read test support source {support}: {error}") from error
+            if injects_retired_selector(source):
+                raise PolicyError(
+                    f"shared test support injects the retired qualification selector: {support}"
+                )
     return parsed
 
 
@@ -226,6 +351,7 @@ def parse_args() -> argparse.Namespace:
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("check")
     subcommands.add_parser("list")
+    subcommands.add_parser("retired")
     tests = subcommands.add_parser("tests")
     tests.add_argument("shard")
     return parser.parse_args()
@@ -237,10 +363,22 @@ def main() -> int:
         shards = load_policy(args.manifest, args.package_manifest, args.metadata)
         if args.command == "check":
             target_count = sum(len(tests) for _, tests in shards)
-            print(f"rustc-codegen shard policy passed: {len(shards)} shards, {target_count} targets")
+            raw = read_json(args.manifest, "shard manifest")
+            assert isinstance(raw, dict)
+            retired_count = len(raw["retiredQualificationTargets"])
+            print(
+                "rustc-codegen shard policy passed: "
+                f"{len(shards)} shards, {target_count} production targets, "
+                f"{retired_count} retired qualification targets"
+            )
         elif args.command == "list":
             for shard_id, _ in shards:
                 print(shard_id)
+        elif args.command == "retired":
+            raw = read_json(args.manifest, "shard manifest")
+            assert isinstance(raw, dict)
+            for target in raw["retiredQualificationTargets"]:
+                print(target)
         else:
             selected = next((tests for shard_id, tests in shards if shard_id == args.shard), None)
             if selected is None:

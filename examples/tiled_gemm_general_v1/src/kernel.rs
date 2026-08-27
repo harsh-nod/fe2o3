@@ -71,12 +71,14 @@ pub fn tiled_gemm_general_v1(
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
-    let mut phase = 0_usize;
-    while phase < k as usize {
+    let phase_count = (k as usize + 15) / 16;
+    let mut phase_index = 0_usize;
+    while phase_index < phase_count {
+        let phase = phase_index * 16;
         let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, phase);
         let rhs = b_matrix.load_k16n16(&wave_lane, phase, tile_column * 16);
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
-        phase += 16;
+        phase_index += 1;
     }
 
     let values = accumulator.into_values();

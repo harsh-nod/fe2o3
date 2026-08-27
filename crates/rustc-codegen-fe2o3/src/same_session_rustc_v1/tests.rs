@@ -416,10 +416,10 @@ impl Drop for CompilerFixture {
 
 fn compiler_results() -> DriverResults {
     let fixture = CompilerFixture::create();
-    let sysroot = Command::new("rustc")
-        .args(["--print", "sysroot"])
-        .output()
-        .expect("query rustc sysroot");
+    let mut command = Command::new("rustc");
+    command.args(["--print", "sysroot"]);
+    let sysroot =
+        crate::process_execution::capture_output(&mut command).expect("query rustc sysroot");
     assert!(sysroot.status.success(), "rustc --print sysroot failed");
     let sysroot = String::from_utf8(sysroot.stdout).expect("UTF-8 rustc sysroot");
     let args = vec![

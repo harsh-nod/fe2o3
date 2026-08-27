@@ -1,6 +1,7 @@
 # cargo-fe2o3
 
-`cargo-fe2o3` coordinates the current fe2o3 build and smoke-test workflows.
+`cargo-fe2o3` coordinates fe2o3 build, binding-only host
+checks/tests, inspection, and debugging workflows.
 The adjacent `fe2o3-rustc-wrapper` is fail closed for compile invocations while
 its trusted execution boundary is built incrementally.
 
@@ -138,12 +139,31 @@ fingerprint and remove only the opened
 closed without deletion. Successful incremental builds republish their exact
 snapshot. Unrelated host outputs remain available for normal Cargo reuse.
 
-### No simulation compiler route
+### Offline CPU simulation
 
-`cargo fe2o3 simulate` has been deleted. Production never falls back to a CPU
-simulator, and the Cargo dependency graph contains no simulator CLI. Model and
-differential tests run as independent authority-free test tools; they cannot be
-selected by a build or run invocation.
+`cargo-fe2o3` has no `simulate` command in any feature configuration and does
+not depend on `fe2o3-kir-sim-cli`. Hardware commands never fall back to CPU
+execution. Simulation is an offline operation over an existing canonical KIR
+V7 module and a bounded typed request:
+
+```console
+cargo run -p fe2o3-kir-sim-cli --bin fe2o3-kir-sim -- \
+  --kir-v7 kernel.kir --request request.json --output result.json
+```
+
+`fe2o3-kir-sim-trace` emits deterministic logical thread, wave, and workgroup
+observations for the same execution.
+
+This route is independent of source compilation and grants no source-to-KIR,
+compiler, refinement-proof, artifact, runtime, performance-prediction, or GPU
+authority. It does not initialize HIP, HSA, KFD, DRM, or a GPU. Unsupported KIR
+types or operations fail closed.
+
+Deletion guards are structural accident and substitution defenses, not
+authentication. Their random tokens correlate an interrupted creation with
+the directory completed by that operation, but every record is stored inside
+same-UID-writable filesystem state. A malicious process running as the same
+UID can forge or replace them and is outside this cleanup threat model.
 
 ### Trust boundary
 

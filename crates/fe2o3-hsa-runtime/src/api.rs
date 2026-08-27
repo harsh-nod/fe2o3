@@ -960,13 +960,13 @@ mod tests {
         }
 
         use std::os::unix::process::ExitStatusExt;
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
             .arg("--exact")
             .arg("api::tests::retained_malformed_queue_authority_is_terminal")
             .arg("--nocapture")
-            .env(CHILD, "1")
-            .status()
-            .unwrap();
+            .env(CHILD, "1");
+        let status = crate::test_process_execution::status(&mut command).unwrap();
         assert_eq!(status.signal(), Some(6), "terminal queue status: {status}");
     }
 }

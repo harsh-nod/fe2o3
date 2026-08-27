@@ -5,11 +5,14 @@ Status: upstream source audit at Pliron commit
 the commit published as `pliron`/`pliron-llvm` v0.17.0. fe2o3 implementation
 status includes one bounded backend-fixture-to-MI300X scalar closure at
 `fd6520d88`, `70f9c5ad7`, `e016833d3`, `c9e8ca702`, `62efd243e`, and
-`228c88ed9`.
+`228c88ed9`. The active dependency is reviewed fork commit
+[`5bdf861bf03e7f20242b25717fb653336d02e487`](https://github.com/harsh-nod/pliron/tree/5bdf861bf03e7f20242b25717fb653336d02e487),
+a strict descendant that adds mutation-attempt epochs without changing the
+audited `pliron-llvm` surface below.
 
 ## Scope and conclusion
 
-The root manifest pins that exact Pliron workspace revision. fe2o3 now uses
+The root manifest pins that exact reviewed fork revision. fe2o3 now uses
 `pliron-llvm` selectively as a typed dialect dependency with
 `default-features = false`. Its optional `llvm-sys` converter is not used in
 the producer or inside the production worker. LLVM target-machine and

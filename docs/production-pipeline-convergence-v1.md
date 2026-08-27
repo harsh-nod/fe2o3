@@ -107,8 +107,12 @@ differential testing, but no compiler-route enum or release implementation
 choice.
 
 The `cargo fe2o3 simulate` command and its Cargo-side oracle graph are deleted.
-Model and differential tools remain independent authority-free test programs;
-production `build` and `run` cannot select them.
+On Linux, the standalone `fe2o3-kir-sim-cli` consumes exact verified canonical
+KIR V7 without source, compiler, refinement-proof, artifact, load, launch, GPU,
+timing, or performance authority. `fe2o3-kir-sim-trace` independently maps
+ephemeral CPU-simulator events into collector-neutral Semantic Trace V1. These
+model and differential tools remain authority-free test programs; production
+`build` and `run` cannot select either one.
 
 The host-consumer and shared hostile application fixtures accept only V3
 inputs. The old V2 consumer binary, input adapter, Cargo feature, and hostile

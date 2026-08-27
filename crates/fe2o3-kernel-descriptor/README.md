@@ -19,11 +19,14 @@ marker.
 
 ## V1 boundary
 
-V1 supports scalar values, shared scalar slices, and unique scalar
-`DisjointSlice` arguments. It deliberately has no raw pointer, generic address
-space, record, enum, union, or recursive type representation. Physical ABI
-components are restricted to scalar by-value values or a global pointer
-immediately followed by a by-value `u64` slice length.
+V1 supports scalar values, shared scalar slices, unique scalar `DisjointSlice`
+arguments, and the trusted address-space-qualified `DeviceGlobalMutPtr<T>`
+wrapper. Arbitrary Rust raw pointers still carry no ownership contract and are
+not supported. V1 deliberately has no generic address space, record, enum,
+union, or recursive type representation. Physical ABI components are
+restricted to scalar by-value values, one global pointer for
+`DeviceGlobalMutPtr<T>`, or a global pointer immediately followed by a by-value
+`u64` slice length.
 
 `KernelId` is an opaque selector owned by the manifest/macro pipeline. Its 32
 bytes define logical identity directly; V1 specifies no hash preimage or
@@ -212,15 +215,17 @@ It remains an untrusted declaration rather than observed-device evidence.
 Type records, layout records, and kernels follow in that order.
 
 A source-type record is its 32-byte identity followed by `kind:u8`,
-`scalar:u8`, and zero `flags:u16`. Kinds are scalar `1`, shared slice `2`, and
-`DisjointSlice` `3`. Scalar tags are `i8=1`, `u8=2`, `i16=3`, `u16=4`, `i32=5`,
-`u32=6`, `i64=7`, `u64=8`, `f16=9`, `f32=10`, and `f64=11`.
+`scalar:u8`, and zero `flags:u16`. Kinds are scalar `1`, shared slice `2`,
+`DisjointSlice` `3`, and global mutable pointer `4`. Scalar tags are `i8=1`,
+`u8=2`, `i16=3`, `u16=4`, `i32=5`, `u32=6`, `i64=7`, `u64=8`, `f16=9`,
+`f32=10`, and `f64=11`.
 
 A device-layout record is its 32-byte identity followed by kind and scalar
 tags, `size:u16`, `alignment:u16`, `pointer_width:u8`, `length_width:u8`, zero
 `flags:u16`, and zero `reserved:u16`. Scalar size and alignment equal the
-scalar width and both width fields are zero. Slice size/alignment are 16/8 and
-both width fields are 8.
+scalar width and both width fields are zero. The global mutable pointer layout
+has size/alignment 8/8, pointer width 8, and length width 0. Slice
+size/alignment are 16/8 and both width fields are 8.
 
 Each kernel contains, in order:
 

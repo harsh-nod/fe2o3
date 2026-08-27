@@ -7,6 +7,8 @@ use fe2o3_artifacts::DigestAlgorithm;
 use object::{Object, ObjectSection};
 use serde::Deserialize;
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
 #[path = "../src/s09_identity_v2.rs"]
 mod s09_identity_v2;
 use s09_identity_v2::{decode_hsaco_identity_claims_v2, identity_section_v2};
@@ -236,7 +238,17 @@ fn bytes_hex(bytes: &[u8]) -> String {
 }
 
 fn backend(workspace: &Path, command: &str, package: &str, pipeline: Option<&str>) -> Output {
-    backend_with_worker_config(workspace, command, package, pipeline, None)
+    backend_with_options(workspace, command, package, pipeline, None, &[])
+}
+
+fn backend_with_args(
+    workspace: &Path,
+    command: &str,
+    package: &str,
+    pipeline: Option<&str>,
+    package_args: &[&str],
+) -> Output {
+    backend_with_options(workspace, command, package, pipeline, None, package_args)
 }
 
 fn backend_with_worker_config(
@@ -246,20 +258,23 @@ fn backend_with_worker_config(
     pipeline: Option<&str>,
     worker_config: Option<&Path>,
 ) -> Output {
-    let mut process = Command::new(env!("CARGO"));
+    backend_with_options(workspace, command, package, pipeline, worker_config, &[])
+}
+
+fn backend_with_options(
+    workspace: &Path,
+    command: &str,
+    package: &str,
+    pipeline: Option<&str>,
+    worker_config: Option<&Path>,
+    package_args: &[&str],
+) -> Output {
+    let mut process = cargo_fe2o3::non_production_command(workspace);
     process
         .current_dir(workspace)
         .env_remove(PIPELINE_ENV)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            command,
-            "-p",
-            package,
-        ]);
+        .args([command, "-p", package])
+        .args(package_args);
     if let Some(pipeline) = pipeline {
         process.env(PIPELINE_ENV, pipeline);
     }
@@ -281,8 +296,8 @@ impl WorkerV2TestConfig {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let path = workspace.join(format!(
-            "target/worker-v2-missing-envelope-{}.json",
+        let path = cargo_fe2o3::cargo_target_root(workspace).join(format!(
+            "worker-v2-missing-envelope-{}.json",
             std::process::id()
         ));
         let worker = worker.to_str().expect("UTF-8 worker path");
@@ -405,17 +420,9 @@ impl Drop for WorkerV2TestConfig {
 
 struct WorkerV2SourceDirectory(PathBuf);
 
-fn cargo_target_root(workspace: &Path) -> PathBuf {
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(path) if Path::new(&path).is_absolute() => PathBuf::from(path),
-        Some(path) => workspace.join(path),
-        None => workspace.join("target"),
-    }
-}
-
 impl WorkerV2SourceDirectory {
     fn new(workspace: &Path) -> Self {
-        let path = cargo_target_root(workspace)
+        let path = cargo_fe2o3::cargo_target_root(workspace)
             .join(format!("worker-v2-native-source-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create native Worker V2 source directory");
@@ -440,7 +447,7 @@ fn build_codegen_backend(workspace: &Path) -> PathBuf {
         "backend build failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so")
+    cargo_fe2o3::cargo_target_root(workspace).join("debug/librustc_codegen_fe2o3.so")
 }
 
 fn clean_package(workspace: &Path, package: &str) {
@@ -649,7 +656,7 @@ fn assemble_worker_v2_provider(directory: &Path, workspace: &Path) -> PathBuf {
 }
 
 fn artifact_paths(workspace: &Path, kernel: &str) -> [PathBuf; 3] {
-    let directory = workspace.join("target/fe2o3");
+    let directory = cargo_fe2o3::cargo_target_root(workspace).join("fe2o3");
     ["ll", "o", "hsaco"].map(|extension| directory.join(format!("{kernel}.{extension}")))
 }
 
@@ -868,7 +875,13 @@ fn assert_exact_vecadd_llvm(llvm: &str) {
 }
 
 fn assert_vecadd_publication(workspace: &Path, command: &str, expect_execution: bool) {
-    let output = backend(workspace, command, "fe2o3-vecadd", Some("kernel-ir-v1"));
+    let output = backend_with_args(
+        workspace,
+        command,
+        "fe2o3-vecadd",
+        Some("kernel-ir-v1"),
+        &[],
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -896,8 +909,9 @@ fn assert_vecadd_publication(workspace: &Path, command: &str, expect_execution: 
         );
     }
 
-    let llvm = std::fs::read_to_string(workspace.join("target/fe2o3/vecadd.ll"))
-        .expect("published vecadd LLVM IR");
+    let llvm =
+        std::fs::read_to_string(cargo_fe2o3::cargo_target_root(&workspace).join("fe2o3/vecadd.ll"))
+            .expect("published vecadd LLVM IR");
     assert_exact_vecadd_llvm(&llvm);
 }
 
@@ -927,8 +941,9 @@ fn opt_in_fill_publishes_g1_and_executes_on_the_gpu() {
         "fill did not execute successfully:\n{stdout}"
     );
 
-    let llvm = std::fs::read_to_string(workspace.join("target/fe2o3/fill.ll"))
-        .expect("published fill LLVM IR");
+    let llvm =
+        std::fs::read_to_string(cargo_fe2o3::cargo_target_root(&workspace).join("fe2o3/fill.ll"))
+            .expect("published fill LLVM IR");
     assert!(llvm.contains("define amdgpu_kernel void @fill"));
     assert!(llvm.contains("mul i64 %v1.group, 256"));
     assert!(llvm.contains("!reqd_work_group_size !0"));
@@ -982,7 +997,7 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
     // The pipeline selector is consumed by the rustc backend and is not part
     // of Cargo's package fingerprint. The preceding ROCm gate stages may have
     // compiled `copy` through another qualification pipeline, so force this negative case
-    // back through rustc before asserting selected-pipeline rejection.
+    // back through rustc before asserting selected-pipeline preflight rejection.
     clean_package(&workspace, "fe2o3-copy");
     let copy_artifacts = artifact_paths(&workspace, "copy");
     preseed(&copy_artifacts);
@@ -993,15 +1008,17 @@ fn selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_arti
         "unsupported selected kernel unexpectedly compiled"
     );
     assert!(
-        unsupported_stderr.contains("does not support kernel export \"copy\""),
-        "missing exact admission diagnostic:\n{unsupported_stderr}"
+        unsupported_stderr
+            .contains("FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1 MIR translation failed"),
+        "missing selected-pipeline translation diagnostic:\n{unsupported_stderr}"
     );
     assert!(
         unsupported_stderr.contains(
-            "production compilation does not fall back to a qualification-only lowering route"
+            "UnsupportedCall: session-recognized AMDGPU operation `fe2o3_device::diagnostics::trap` requires the General V3 kernel profile"
         ),
-        "diagnostic did not prohibit production fallback:\n{unsupported_stderr}"
+        "missing exact kernel-profile diagnostic:\n{unsupported_stderr}"
     );
+    assert!(!unsupported_stderr.contains("selected kernel-ir-v1:"));
     assert!(!unsupported_stderr.contains("emitted copy"));
     for artifact in copy_artifacts {
         assert!(
@@ -1078,9 +1095,8 @@ fn worker_v2_real_source_publishes_inspected_gfx942_hsaco() {
         &llvm_build_identity,
     );
     let backend = build_codegen_backend(&workspace);
-    let output = Command::new(env!("CARGO"))
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
-        .args(["run", "--locked", "-p", "cargo-fe2o3", "--"])
         .arg("rustc")
         .arg(&source)
         .args([
@@ -1165,9 +1181,9 @@ fn worker_v2_real_source_publishes_two_kernels_with_one_shared_helper() {
     );
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = Command::new(env!("CARGO"))
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
-        .args(["run", "--locked", "-p", "cargo-fe2o3", "--", "build"])
+        .arg("build")
         .arg("--manifest-path")
         .arg(project.join("Cargo.toml"))
         .arg("--target-dir")
@@ -1261,14 +1277,9 @@ fn worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses() 
     assert_eq!(config_json["link_options"][0]["value"], "6");
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = Command::new(env!("CARGO"))
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
             "build",
             "-p",
             "fe2o3-typed-alias-spoof",
@@ -1347,14 +1358,9 @@ fn worker_v2_s09_feature_collects_and_links_only_alpha() {
     );
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = Command::new(env!("CARGO"))
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
             "build",
             "-p",
             "fe2o3-typed-alias-spoof",
@@ -1424,14 +1430,9 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
     }
     let backend = build_codegen_backend(&workspace);
     let target = directory.0.join("cargo-target");
-    let output = Command::new(env!("CARGO"))
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
         .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
             "build",
             "-p",
             "fe2o3-typed-alias-spoof",
@@ -1516,8 +1517,7 @@ fn worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco() {
             .observed_symbol()
             .starts_with("__fe2o3_host_kernel_v1_")
     );
-    let wrapper_bytes =
-        std::fs::read(workspace.join("target/debug/cargo-fe2o3")).expect("read cargo-fe2o3");
+    let wrapper_bytes = std::fs::read(cargo_fe2o3::binary(&workspace)).expect("read cargo-fe2o3");
     assert_eq!(
         observation.cargo_fe2o3_executable_sha256(),
         DigestAlgorithm::Sha256
@@ -1686,9 +1686,8 @@ fn worker_v2_real_source_links_an_external_bitcode_provider() {
     assert!(config_text.contains("\"kind\":\"llvm-bitcode\""));
 
     let backend = build_codegen_backend(&workspace);
-    let output = Command::new(env!("CARGO"))
+    let output = cargo_fe2o3::non_production_command(&workspace)
         .current_dir(&workspace)
-        .args(["run", "--locked", "-p", "cargo-fe2o3", "--"])
         .arg("rustc")
         .arg(&source)
         .args([

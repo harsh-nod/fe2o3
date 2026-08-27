@@ -1,40 +1,10 @@
 {
-  "schema": 1,
+  "schema": 2,
   "shards": [
-    {
-      "id": "01-control-flow",
-      "tests": [
-        "collected_executable_scalar_control_flow_v2"
-      ]
-    },
-    {
-      "id": "02-gfx942-wave-lds",
-      "tests": [
-        "gfx942_wave_lds_compiler"
-      ]
-    },
-    {
-      "id": "03-kernel-ir",
-      "tests": [
-        "kernel_ir_codegen"
-      ]
-    },
     {
       "id": "04-memory-math-gemm",
       "tests": [
-        "general_gemm_mutation_corpus_integrity",
-        "general_gemm_positive_receipt_hardening",
-        "general_gemm_provider_auth",
-        "half_math_compiler",
-        "memory_intrinsics_compiler",
-        "tiled_gemm_frontend"
-      ]
-    },
-    {
-      "id": "05-attention-moe",
-      "tests": [
-        "flash_attention_v1",
-        "moe_top2_v1"
+        "general_gemm_mutation_corpus_integrity"
       ]
     },
     {
@@ -47,32 +17,40 @@
       "id": "07-frontend-types",
       "tests": [
         "cross_crate_imports",
-        "frontend_contract_collector",
         "g2_monomorphization",
         "production_extraction_driver_v1",
         "production_general_matrix_driver_v1",
         "production_pipeline",
         "production_ranked_bounds_driver_v1",
-        "reference_binding_v1",
-        "trusted_device_items"
+        "reference_binding_v1"
       ]
     },
     {
       "id": "08-abi-collectives",
       "tests": [
-        "cross_crate_typed_binding",
         "g2_layout",
-        "g2_semantics",
         "general_two_kernel_import",
-        "wave64_collectives_v1",
-        "workgroup_sync_v1"
-      ]
-    },
-    {
-      "id": "09-general-gemm-semantic",
-      "tests": [
-        "general_gemm_semantic_frontend"
+        "production_workgroup_sync_driver_v1"
       ]
     }
+  ],
+  "retiredQualificationTargets": [
+    "collected_executable_scalar_control_flow_v2",
+    "cross_crate_typed_binding",
+    "flash_attention_v1",
+    "frontend_contract_collector",
+    "g2_semantics",
+    "general_gemm_positive_receipt_hardening",
+    "general_gemm_provider_auth",
+    "general_gemm_semantic_frontend",
+    "gfx942_wave_lds_compiler",
+    "half_math_compiler",
+    "kernel_ir_codegen",
+    "memory_intrinsics_compiler",
+    "moe_top2_v1",
+    "tiled_gemm_frontend",
+    "trusted_device_items",
+    "wave64_collectives_v1",
+    "workgroup_sync_v1"
   ]
 }

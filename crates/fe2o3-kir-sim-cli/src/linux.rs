@@ -74,6 +74,7 @@ enum UnsupportedFeatureCode {
     DynamicWorkgroupMemory,
     Matrix,
     Wave,
+    Gfx950LdsTranspose,
     InlineAssembly,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
@@ -1694,6 +1695,7 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         }
         UnsupportedFeatureV1::Matrix => UnsupportedFeatureCode::Matrix,
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
+        UnsupportedFeatureV1::Gfx950LdsTranspose => UnsupportedFeatureCode::Gfx950LdsTranspose,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
         UnsupportedFeatureV1::UnsupportedScalarOperation => {
             UnsupportedFeatureCode::UnsupportedScalarOperation
@@ -3024,6 +3026,11 @@ mod tests {
         assert_eq!(
             serde_json::to_value(UnsupportedFeatureCode::InlineAssembly).unwrap(),
             "inline_assembly"
+        );
+        assert_eq!(
+            serde_json::to_value(unsupported_code(&UnsupportedFeatureV1::Gfx950LdsTranspose))
+                .unwrap(),
+            "gfx950_lds_transpose"
         );
         assert_eq!(
             serde_json::to_value(unsupported_code(

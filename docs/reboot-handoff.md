@@ -409,7 +409,9 @@ env -u FE2O3_TARGET cargo run -p cargo-fe2o3 -- build -p fe2o3-vecadd-f64
 /opt/rocm/lib/llvm/bin/llvm-readobj --notes target/fe2o3/vecadd.hsaco
 ```
 
-If `rocminfo` succeeds, run the end-to-end paths:
+The following smoke invocation is an archived command from this historical
+checkpoint. The manifest-wide command has since been removed and is not a
+current production or qualification route:
 
 ```bash
 cargo run -p cargo-fe2o3 -- smoke

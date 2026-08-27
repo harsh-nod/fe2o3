@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,9 +29,10 @@ use fe2o3_kernel_descriptor::{
     AccessMode, AliasSemantics, BlockSizeV1, CapabilityV1, OwnershipSemantics,
     PhysicalAbiComponentKind, ScalarTypeV1,
 };
+use fe2o3_rustc_invocation::derive_cargo_metadata_build_observation_v2;
 use reserved_fe2o3_symbols::{
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, derive_crate_binding_id_v1,
-    derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+    CRATE_BINDING_ID_ENV_V1, CrateBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+    derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -43,8 +44,12 @@ const TILED_GEMM_PIPELINE: &str = "collected-tiled-gemm-v1";
 const TILED_GEMM_FIXTURE: &str = include_str!("fixtures/collected-tiled-gemm-v1/src/lib.rs");
 const TILED_GEMM_LDS_SLICE1_FIXTURE: &str =
     include_str!("../../../examples/tiled_gemm_v1/src/kernel.rs");
+const TILED_GEMM_REVIEWED_METADATA: &str = "fe2o3-tiled-gemm-v1-reviewed";
+const TILED_GEMM_LDS_SLICE1_GENERATED_METADATA: &str = "e1f4d566b68639ae";
 const ROW_SOFTMAX_PIPELINE: &str = "collected-row-softmax-v1";
 const ROW_SOFTMAX_FIXTURE: &str = include_str!("../../../examples/row_softmax_v1/src/kernel.rs");
+const ROW_SOFTMAX_EXPLICIT_NAMESPACE_ATTRIBUTE: &str =
+    "    namespace = \"b9c43562d541f2f0489f311058c425d85a7ea6c328a3991bb6da17bdf85f766c\",\n";
 // Reviewed independently from the handoff identity and section payloads. This
 // binds every byte of the canonical LLVM lowering before compiler-owned data.
 const EXPECTED_ROW_LLVM_BODY_SHA256: [u8; 32] = [
@@ -113,11 +118,21 @@ const BUILD_HELPER_SOCKET_ENV: &str = "FE2O3_SCALAR_CF_BUILD_SOCKET_FD";
 const BUILD_HELPER_WORKSPACE_ENV: &str = "FE2O3_SCALAR_CF_BUILD_WORKSPACE";
 const BUILD_HELPER_MOUNT_ENV: &str = "FE2O3_SCALAR_CF_BUILD_MOUNT";
 const CONFIGURED_ARTIFACT_GUARD_CHILD_ENV: &str = "FE2O3_SCALAR_CF_CONFIGURED_ARTIFACT_GUARD_CHILD";
+const CONFIGURED_TEST_OUTPUT_ROOT_ENV: &str = "FE2O3_SCALAR_CF_CONFIGURED_TEST_OUTPUT_ROOT";
+const CONFIGURED_TEST_OUTPUT_ROOT_IDENTITY_ENV: &str =
+    "FE2O3_SCALAR_CF_CONFIGURED_TEST_OUTPUT_ROOT_IDENTITY";
+const CONFIGURED_TEST_OUTPUT_TIMEOUT_HELPER_ENV: &str =
+    "FE2O3_SCALAR_CF_CONFIGURED_TEST_OUTPUT_TIMEOUT_HELPER";
+const CONFIGURED_CHILD_ENVIRONMENT_PROBE_ENV: &str =
+    "FE2O3_SCALAR_CF_CONFIGURED_CHILD_ENVIRONMENT_PROBE";
 const SCALAR_GEMM_HANDOFF_OUTPUT_ENV: &str = "FE2O3_SCALAR_GEMM_V1_HANDOFF_OUTPUT";
 const BACKEND_BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+const CONFIGURED_TEST_SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(1_200);
 const COMPILER_TIMEOUT: Duration = Duration::from_secs(120);
 const TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const TIMEOUT_DIAGNOSTIC_TAIL_BYTES: usize = 16 * 1024;
+const MAX_CAPTURE_BYTES_PER_STREAM: usize = 8 * 1024 * 1024;
 static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
 static COLLECTION_BACKEND: OnceLock<PinnedBackend> = OnceLock::new();
@@ -299,7 +314,7 @@ impl PrivateBuildRoot {
                         .expect("stat private build root")
                         .permissions()
                         .mode()
-                        & 0o777;
+                        & 0o7777;
                     assert_eq!(mode, 0o700, "private build root must be owner-only");
                     return Self(path);
                 }
@@ -309,18 +324,45 @@ impl PrivateBuildRoot {
         }
         panic!("could not allocate a private backend build root")
     }
+
+    fn cleanup(&mut self) -> Result<(), String> {
+        if self.0.as_os_str().is_empty() {
+            return Ok(());
+        }
+        std::fs::remove_dir_all(&self.0)
+            .map_err(|error| format!("remove private build root {}: {error}", self.0.display()))?;
+        self.0.clear();
+        Ok(())
+    }
 }
 
 impl Drop for PrivateBuildRoot {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = self.cleanup();
     }
 }
 
-struct TestOutputDir(PathBuf);
+struct ConfiguredTestOutputRoot {
+    path: PathBuf,
+    descriptor: File,
+}
+
+struct ConfiguredTestOutputLeaf {
+    root: File,
+    _leaf: File,
+    _artifacts: File,
+    name: CString,
+    device: u64,
+    inode: u64,
+}
+
+struct TestOutputDir(PathBuf, PathBuf, Option<ConfiguredTestOutputLeaf>);
 
 impl TestOutputDir {
     fn new(workspace: &Path) -> Self {
+        if let Some(parent) = configured_test_output_parent() {
+            return Self::new_configured(parent);
+        }
         let parent = workspace.join("target/rustc-codegen-fe2o3-test-output");
         let mut parent_builder = std::fs::DirBuilder::new();
         parent_builder.recursive(true).mode(0o700);
@@ -329,29 +371,290 @@ impl TestOutputDir {
             .expect("create owner-only scalar-control-flow output parent");
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
             .expect("secure scalar-control-flow output parent");
-        let path = parent.join(format!(
-            "collected-scalar-cf-{}-{}",
-            std::process::id(),
-            NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)
-        ));
-        if path.exists() {
-            std::fs::remove_dir_all(&path).expect("remove stale scalar-control-flow output");
-        }
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder
-            .create(&path)
-            .expect("create owner-only scalar-control-flow output");
+        let path = (0..64_u64)
+            .find_map(|_| {
+                let path = parent.join(format!(
+                    "collected-scalar-cf-{}-{}",
+                    std::process::id(),
+                    NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)
+                ));
+                let mut builder = std::fs::DirBuilder::new();
+                builder.mode(0o700);
+                match builder.create(&path) {
+                    Ok(()) => Some(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(error) => panic!("create owner-only scalar-control-flow output: {error}"),
+                }
+            })
+            .expect("allocate owner-only scalar-control-flow output");
+        let metadata = std::fs::symlink_metadata(&path)
+            .expect("inspect owner-only scalar-control-flow output");
+        assert!(
+            metadata.is_dir()
+                && !metadata.file_type().is_symlink()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.permissions().mode() & 0o7777 == 0o700,
+            "scalar-control-flow output leaf must remain an owned mode-0700 directory"
+        );
         std::fs::create_dir(path.join("artifacts"))
             .expect("create scalar-control-flow artifact output");
-        Self(path)
+        let artifacts = path.join("artifacts");
+        Self(path, artifacts, None)
     }
+
+    fn new_configured(parent: ConfiguredTestOutputRoot) -> Self {
+        for _ in 0..64_u64 {
+            let name = CString::new(format!(
+                "collected-scalar-cf-{}-{}",
+                std::process::id(),
+                NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)
+            ))
+            .expect("configured output leaf name has no NUL");
+            let created = unsafe {
+                libc::mkdirat(parent.descriptor.as_raw_fd(), name.as_ptr(), libc::S_IRWXU)
+            };
+            if created != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    continue;
+                }
+                panic!("create descriptor-relative scalar-control-flow output: {error}");
+            }
+            let leaf_fd = unsafe {
+                libc::openat(
+                    parent.descriptor.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            assert!(
+                leaf_fd >= 0,
+                "open descriptor-relative scalar-control-flow output: {}",
+                std::io::Error::last_os_error()
+            );
+            let leaf = unsafe { File::from_raw_fd(leaf_fd) };
+            let metadata = leaf
+                .metadata()
+                .expect("inspect descriptor-relative scalar-control-flow output");
+            assert!(
+                metadata.is_dir()
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.permissions().mode() & 0o7777 == 0o700,
+                "descriptor-relative output leaf must remain an owned mode-0700 directory"
+            );
+            let descriptor_flags = unsafe { libc::fcntl(leaf.as_raw_fd(), libc::F_GETFD) };
+            assert!(
+                descriptor_flags >= 0,
+                "inspect configured output descriptor flags"
+            );
+            assert_eq!(
+                unsafe {
+                    libc::fcntl(
+                        leaf.as_raw_fd(),
+                        libc::F_SETFD,
+                        descriptor_flags & !libc::FD_CLOEXEC,
+                    )
+                },
+                0,
+                "make configured output descriptor available to nested Cargo commands"
+            );
+            let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", leaf.as_raw_fd()));
+            std::fs::create_dir(descriptor_path.join("artifacts"))
+                .expect("create descriptor-relative scalar-control-flow artifact output");
+            let artifact_name = c"artifacts";
+            let artifacts_fd = unsafe {
+                libc::openat(
+                    leaf.as_raw_fd(),
+                    artifact_name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            assert!(
+                artifacts_fd >= 0,
+                "open descriptor-relative scalar-control-flow artifact output: {}",
+                std::io::Error::last_os_error()
+            );
+            let artifacts = unsafe { File::from_raw_fd(artifacts_fd) };
+            let artifact_descriptor_flags =
+                unsafe { libc::fcntl(artifacts.as_raw_fd(), libc::F_GETFD) };
+            assert!(
+                artifact_descriptor_flags >= 0,
+                "inspect configured artifact descriptor flags"
+            );
+            assert_eq!(
+                unsafe {
+                    libc::fcntl(
+                        artifacts.as_raw_fd(),
+                        libc::F_SETFD,
+                        artifact_descriptor_flags & !libc::FD_CLOEXEC,
+                    )
+                },
+                0,
+                "make configured artifact descriptor available to nested Cargo commands"
+            );
+            let artifact_path = PathBuf::from(format!("/proc/self/fd/{}", artifacts.as_raw_fd()));
+            let path = parent.path.join(
+                name.to_str()
+                    .expect("configured output leaf name must remain UTF-8"),
+            );
+            return Self(
+                path,
+                artifact_path,
+                Some(ConfiguredTestOutputLeaf {
+                    root: parent.descriptor,
+                    _leaf: leaf,
+                    _artifacts: artifacts,
+                    name,
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                }),
+            );
+        }
+        panic!("could not allocate a descriptor-relative scalar-control-flow output")
+    }
+
+    fn artifacts(&self) -> &Path {
+        &self.1
+    }
+}
+
+fn configured_test_output_parent() -> Option<ConfiguredTestOutputRoot> {
+    let path = std::env::var_os(CONFIGURED_TEST_OUTPUT_ROOT_ENV);
+    let identity = std::env::var_os(CONFIGURED_TEST_OUTPUT_ROOT_IDENTITY_ENV);
+    match (path, identity) {
+        (None, None) => None,
+        (Some(path), Some(identity)) => {
+            assert_eq!(
+                std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).as_deref(),
+                Some(std::ffi::OsStr::new("1")),
+                "configured test output root requires the exact configured-child marker"
+            );
+            let path = PathBuf::from(path);
+            let identity = identity
+                .into_string()
+                .expect("configured test output root identity must be UTF-8");
+            validate_configured_test_output_parent(&path, &identity)
+                .expect("validate configured test output root");
+            let guard = PathBuf::from(
+                std::env::var_os("FE2O3_ARTIFACT_PATH_GUARD_DIR")
+                    .expect("configured test output root requires the artifact guard path"),
+            );
+            let guard_identity = std::env::var("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY")
+                .expect("configured test output root requires the artifact guard identity");
+            validate_configured_test_output_parent(&guard, &guard_identity)
+                .expect("validate configured artifact path guard");
+            assert_eq!(
+                path.parent(),
+                guard.parent(),
+                "configured test output root and artifact guard must be private-root siblings"
+            );
+            let descriptor = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .open(&path)
+                .expect("open pinned configured test output root");
+            let descriptor_metadata = descriptor
+                .metadata()
+                .expect("inspect pinned configured test output root");
+            assert_eq!(
+                format!(
+                    "{:016x}:{:016x}",
+                    descriptor_metadata.dev(),
+                    descriptor_metadata.ino()
+                ),
+                identity,
+                "configured test output root changed while it was opened"
+            );
+            Some(ConfiguredTestOutputRoot { path, descriptor })
+        }
+        _ => panic!("configured test output root path and identity must be supplied together"),
+    }
+}
+
+fn validate_configured_test_output_parent(path: &Path, identity: &str) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("configured test output root must be absolute".to_owned());
+    }
+    let identity_bytes = identity.as_bytes();
+    if identity_bytes.len() != 33
+        || identity_bytes[16] != b':'
+        || identity_bytes.iter().enumerate().any(|(index, byte)| {
+            index != 16 && !byte.is_ascii_digit() && !(b'a'..=b'f').contains(byte)
+        })
+    {
+        return Err(
+            "configured test output root identity must be fixed lowercase hexadecimal".to_owned(),
+        );
+    }
+    let link_metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect configured test output root: {error}"))?;
+    if link_metadata.file_type().is_symlink() || !link_metadata.is_dir() {
+        return Err("configured test output root must be a nonsymlink directory".to_owned());
+    }
+    if link_metadata.uid() != unsafe { libc::geteuid() }
+        || link_metadata.permissions().mode() & 0o7777 != 0o700
+    {
+        return Err("configured test output root must be owned and mode 0700".to_owned());
+    }
+    let actual_identity = format!("{:016x}:{:016x}", link_metadata.dev(), link_metadata.ino());
+    if identity != actual_identity {
+        return Err("configured test output root identity changed".to_owned());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("canonicalize configured test output root: {error}"))?;
+    if canonical != path {
+        return Err("configured test output root must already be canonical".to_owned());
+    }
+    Ok(())
 }
 
 impl Drop for TestOutputDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let Some(configured) = &self.2 else {
+            let _ = std::fs::remove_dir_all(&self.0);
+            return;
+        };
+        let descriptor_path =
+            PathBuf::from(format!("/proc/self/fd/{}", configured._leaf.as_raw_fd()));
+        let _ = remove_directory_contents(&descriptor_path);
+        let mut stat = MaybeUninit::<libc::stat>::zeroed();
+        let inspected = unsafe {
+            libc::fstatat(
+                configured.root.as_raw_fd(),
+                configured.name.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if inspected != 0 {
+            return;
+        }
+        let stat = unsafe { stat.assume_init() };
+        if stat.st_dev != configured.device || stat.st_ino != configured.inode {
+            return;
+        }
+        let _ = unsafe {
+            libc::unlinkat(
+                configured.root.as_raw_fd(),
+                configured.name.as_ptr(),
+                libc::AT_REMOVEDIR,
+            )
+        };
     }
+}
+
+fn remove_directory_contents(path: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.file_type()?;
+        if metadata.is_dir() && !metadata.is_symlink() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn workspace() -> PathBuf {
@@ -363,10 +666,96 @@ fn workspace() -> PathBuf {
 
 struct CapturedChild {
     child: Child,
-    stdout: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
-    stderr: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+    stdout: Option<CapturedStream>,
+    stderr: Option<CapturedStream>,
     process_group: libc::pid_t,
     running: bool,
+}
+
+struct CapturedStream {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    completed: mpsc::Receiver<std::io::Result<()>>,
+    reader: Option<thread::JoinHandle<()>>,
+}
+
+impl CapturedStream {
+    fn spawn<R>(mut source: R) -> Self
+    where
+        R: std::io::Read + Send + 'static,
+    {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let reader_bytes = Arc::clone(&bytes);
+        let (completed_tx, completed) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let result = (|| {
+                let mut buffer = [0_u8; 64 * 1024];
+                loop {
+                    let count = source.read(&mut buffer)?;
+                    if count == 0 {
+                        return Ok(());
+                    }
+                    let mut bytes = reader_bytes
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if bytes.len().saturating_add(count) > MAX_CAPTURE_BYTES_PER_STREAM {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "captured stream exceeded its 8 MiB limit",
+                        ));
+                    }
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+            })();
+            let _ = completed_tx.send(result);
+        });
+        Self {
+            bytes,
+            completed,
+            reader: Some(reader),
+        }
+    }
+
+    fn collect_until(&mut self, deadline: Instant, context: &str) -> Result<Vec<u8>, String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match self.completed.recv_timeout(remaining) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(format!("read {context}: {error}")),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(format!(
+                    "{context} capture did not close within {:.2?}; captured tail:\n{}",
+                    TERMINATION_GRACE,
+                    self.tail()
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(format!("{context} capture completion channel disconnected"));
+            }
+        }
+        self.reader
+            .take()
+            .expect("capture reader is present")
+            .join()
+            .map_err(|_| format!("{context} reader panicked"))?;
+        Ok(mem::take(
+            &mut *self
+                .bytes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ))
+    }
+
+    fn tail(&self) -> String {
+        let bytes = self
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        diagnostic_tail(&bytes)
+    }
+}
+
+struct TerminationOutcome {
+    summary: String,
+    group_gone: bool,
 }
 
 impl CapturedChild {
@@ -392,26 +781,18 @@ impl CapturedChild {
             .map_err(|error| format!("spawn {context}: {error}"))?;
         let process_group = libc::pid_t::try_from(child.id())
             .map_err(|_| format!("{context} PID does not fit pid_t"))?;
-        let mut stdout = child
+        let stdout = child
             .stdout
             .take()
             .ok_or_else(|| format!("capture {context} stdout"))?;
-        let mut stderr = child
+        let stderr = child
             .stderr
             .take()
             .ok_or_else(|| format!("capture {context} stderr"))?;
         Ok(Self {
             child,
-            stdout: Some(thread::spawn(move || {
-                let mut bytes = Vec::new();
-                stdout.read_to_end(&mut bytes)?;
-                Ok(bytes)
-            })),
-            stderr: Some(thread::spawn(move || {
-                let mut bytes = Vec::new();
-                stderr.read_to_end(&mut bytes)?;
-                Ok(bytes)
-            })),
+            stdout: Some(CapturedStream::spawn(stdout)),
+            stderr: Some(CapturedStream::spawn(stderr)),
             process_group,
             running: true,
         })
@@ -428,43 +809,96 @@ impl CapturedChild {
         Ok(status)
     }
 
-    fn terminate(&mut self) {
-        if !self.running {
-            return;
+    fn process_group_exists(&self) -> bool {
+        let result = unsafe { libc::kill(-self.process_group, 0) };
+        if result == 0 {
+            return true;
         }
-        unsafe {
-            libc::kill(-self.process_group, libc::SIGTERM);
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
+    fn terminate(&mut self) -> TerminationOutcome {
+        let mut leader_status = if self.running {
+            self.child.try_wait().ok().flatten()
+        } else {
+            None
+        };
+        if leader_status.is_some() {
+            self.running = false;
         }
+        let term_result = if self.process_group_exists() {
+            unsafe { libc::kill(-self.process_group, libc::SIGTERM) }
+        } else {
+            -1
+        };
         let grace = Instant::now() + TERMINATION_GRACE;
         while Instant::now() < grace {
-            if self.child.try_wait().ok().flatten().is_some() {
+            if leader_status.is_none()
+                && let Some(status) = self.child.try_wait().ok().flatten()
+            {
+                leader_status = Some(status);
                 self.running = false;
-                return;
+            }
+            if !self.process_group_exists() {
+                break;
             }
             thread::sleep(PROCESS_POLL_INTERVAL);
         }
-        unsafe {
-            libc::kill(-self.process_group, libc::SIGKILL);
+        let kill_result = if self.process_group_exists() {
+            unsafe { libc::kill(-self.process_group, libc::SIGKILL) }
+        } else {
+            -1
+        };
+        let kill_grace = Instant::now() + TERMINATION_GRACE;
+        while self.process_group_exists() && Instant::now() < kill_grace {
+            if leader_status.is_none()
+                && let Some(status) = self.child.try_wait().ok().flatten()
+            {
+                leader_status = Some(status);
+                self.running = false;
+            }
+            thread::sleep(PROCESS_POLL_INTERVAL);
         }
-        let _ = self.child.wait();
-        self.running = false;
+        if leader_status.is_none() {
+            leader_status = self.child.try_wait().ok().flatten();
+        }
+        self.running = leader_status.is_none();
+        let group_gone = !self.process_group_exists();
+        TerminationOutcome {
+            summary: format!(
+                "SIGTERM result {term_result}, SIGKILL result {kill_result}, leader status {}, group gone {group_gone}",
+                leader_status.map_or_else(|| "unavailable".to_owned(), |status| status.to_string())
+            ),
+            group_gone,
+        }
     }
 
-    fn finish(mut self, status: ExitStatus, context: &str) -> Result<Output, String> {
+    fn captured_streams(&mut self, context: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let deadline = Instant::now() + TERMINATION_GRACE;
         let stdout = self
             .stdout
             .take()
             .expect("stdout reader is present")
-            .join()
-            .map_err(|_| format!("{context} stdout reader panicked"))?
-            .map_err(|error| format!("read {context} stdout: {error}"))?;
+            .collect_until(deadline, &format!("{context} stdout"))?;
         let stderr = self
             .stderr
             .take()
             .expect("stderr reader is present")
-            .join()
-            .map_err(|_| format!("{context} stderr reader panicked"))?
-            .map_err(|error| format!("read {context} stderr: {error}"))?;
+            .collect_until(deadline, &format!("{context} stderr"))?;
+        Ok((stdout, stderr))
+    }
+
+    fn finish(mut self, status: ExitStatus, context: &str) -> Result<Output, String> {
+        if self.process_group_exists() {
+            let termination = self.terminate();
+            if !termination.group_gone {
+                return Err(format!(
+                    "{context} left a live descendant process group after leader status {status}: {}",
+                    termination.summary
+                ));
+            }
+        }
+        let (stdout, stderr) = self.captured_streams(context)?;
         Ok(Output {
             status,
             stdout,
@@ -473,15 +907,39 @@ impl CapturedChild {
     }
 
     fn wait_until(mut self, deadline: Instant, context: &str) -> Result<Output, String> {
+        let started = Instant::now();
+        let budget = deadline.saturating_duration_since(started);
         loop {
             if let Some(status) = self.try_wait(context)? {
                 return self.finish(status, context);
             }
             if Instant::now() >= deadline {
-                self.terminate();
-                return Err(format!("{context} exceeded its monotonic deadline"));
+                return Err(self.timeout_diagnostic(started, budget, context));
             }
             thread::sleep(PROCESS_POLL_INTERVAL);
+        }
+    }
+
+    fn timeout_diagnostic(mut self, started: Instant, budget: Duration, context: &str) -> String {
+        let termination = self.terminate();
+        let elapsed = started.elapsed();
+        if !termination.group_gone {
+            return format!(
+                "{context} exceeded its monotonic deadline after {elapsed:.2?} (budget {budget:.2?}; {}); captured stream tails unavailable because the process group survived teardown",
+                termination.summary
+            );
+        }
+        match self.captured_streams(context) {
+            Ok((stdout, stderr)) => format!(
+                "{context} exceeded its monotonic deadline after {elapsed:.2?} (budget {budget:.2?}; {})\nstdout tail:\n{}\nstderr tail:\n{}",
+                termination.summary,
+                diagnostic_tail(&stdout),
+                diagnostic_tail(&stderr),
+            ),
+            Err(error) => format!(
+                "{context} exceeded its monotonic deadline after {elapsed:.2?} (budget {budget:.2?}; {}); capture failed: {error}",
+                termination.summary
+            ),
         }
     }
 }
@@ -489,9 +947,14 @@ impl CapturedChild {
 impl Drop for CapturedChild {
     fn drop(&mut self) {
         if self.running {
-            self.terminate();
+            let _ = self.terminate();
         }
     }
+}
+
+fn diagnostic_tail(bytes: &[u8]) -> String {
+    let start = bytes.len().saturating_sub(TIMEOUT_DIAGNOSTIC_TAIL_BYTES);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
 fn run_bounded(command: &mut Command, timeout: Duration, context: &str) -> Result<Output, String> {
@@ -539,10 +1002,35 @@ fn is_known_namespace_policy_denial(stderr: &str) -> bool {
 }
 
 fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
-    if std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV).is_some() {
+    if let Some(marker) = std::env::var_os(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV) {
+        assert_eq!(
+            marker,
+            std::ffi::OsString::from("1"),
+            "configured artifact guard child marker must be exactly 1"
+        );
+        configured_test_output_parent()
+            .expect("configured artifact guard child requires its complete output environment");
         return false;
     }
 
+    let (guard_root, mut command) = configured_artifact_guard_test_command(test_name);
+    let result = run_bounded(
+        &mut command,
+        CONFIGURED_TEST_SUBPROCESS_TIMEOUT,
+        "configured artifact-path-guard test subprocess",
+    );
+    let output = finish_configured_test_subprocess(guard_root, result)
+        .expect("run configured artifact-path-guard test subprocess within deadline");
+    assert!(
+        output.status.success(),
+        "configured artifact-path-guard test subprocess failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
+fn configured_artifact_guard_test_command(test_name: &str) -> (PrivateBuildRoot, Command) {
     let guard_root = PrivateBuildRoot::new(&workspace());
     let guard_directory = guard_root.0.join("artifact-path-guard");
     let mut builder = std::fs::DirBuilder::new();
@@ -553,26 +1041,44 @@ fn rerun_with_configured_artifact_path_guard(test_name: &str) -> bool {
     let metadata = std::fs::metadata(&guard_directory)
         .expect("inspect private configured artifact path guard");
     let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+    let child_output_root = guard_root.0.join("test-output");
+    let mut output_builder = std::fs::DirBuilder::new();
+    output_builder.mode(0o700);
+    output_builder
+        .create(&child_output_root)
+        .expect("create parent-owned configured test output root");
+    let output_metadata = std::fs::metadata(&child_output_root)
+        .expect("inspect parent-owned configured test output root");
+    let output_identity = format!(
+        "{:016x}:{:016x}",
+        output_metadata.dev(),
+        output_metadata.ino()
+    );
 
     let mut command = Command::new(std::env::current_exe().expect("current integration test"));
     command
         .args(["--exact", test_name, "--nocapture"])
         .env(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV, "1")
         .env("FE2O3_ARTIFACT_PATH_GUARD_DIR", &guard_directory)
-        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity);
-    let output = run_bounded(
-        &mut command,
-        BACKEND_BUILD_TIMEOUT,
-        "configured artifact-path-guard test subprocess",
-    )
-    .expect("run configured artifact-path-guard test subprocess within deadline");
-    assert!(
-        output.status.success(),
-        "configured artifact-path-guard test subprocess failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    true
+        .env("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY", identity)
+        .env(CONFIGURED_TEST_OUTPUT_ROOT_ENV, &child_output_root)
+        .env(CONFIGURED_TEST_OUTPUT_ROOT_IDENTITY_ENV, output_identity);
+    (guard_root, command)
+}
+
+fn finish_configured_test_subprocess(
+    mut guard_root: PrivateBuildRoot,
+    result: Result<Output, String>,
+) -> Result<Output, String> {
+    match (result, guard_root.cleanup()) {
+        (result, Ok(())) => result,
+        (Ok(_), Err(cleanup)) => Err(format!(
+            "configured test subprocess cleanup failed: {cleanup}"
+        )),
+        (Err(subprocess), Err(cleanup)) => Err(format!(
+            "{subprocess}\nconfigured test subprocess cleanup also failed: {cleanup}"
+        )),
+    }
 }
 
 fn receive_backend_from_child(
@@ -581,6 +1087,8 @@ fn receive_backend_from_child(
     deadline: Instant,
     context: &str,
 ) -> Result<(File, Output), String> {
+    let started = Instant::now();
+    let budget = deadline.saturating_duration_since(started);
     loop {
         let mut pollfd = libc::pollfd {
             fd: socket,
@@ -608,9 +1116,10 @@ fn receive_backend_from_child(
             ));
         }
         if Instant::now() >= deadline {
-            child.terminate();
-            return Err(format!(
-                "{context} exceeded its monotonic descriptor-transfer deadline"
+            return Err(child.timeout_diagnostic(
+                started,
+                budget,
+                &format!("{context} descriptor transfer"),
             ));
         }
     }
@@ -675,7 +1184,14 @@ fn build_collection_backend(workspace: &Path) -> &'static PinnedBackend {
         let mut command = Command::new(env!("CARGO"));
         command
             .current_dir(workspace)
-            .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+            .args([
+                "build",
+                "--locked",
+                "-p",
+                "rustc-codegen-fe2o3",
+                "--features",
+                "qualification-oracles-test-only",
+            ])
             .arg("--target-dir")
             .arg(&target_dir)
             .env("CARGO_PROFILE_DEV_DEBUG", "1")
@@ -962,7 +1478,7 @@ fn compile_path(
         .env("FE2O3_DUMP_LLVM", "1")
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", pipeline)
-        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+        .env("FE2O3_HSACO_DIR", output.artifacts());
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
@@ -1027,7 +1543,7 @@ fn compile_scalar_gemm(
         ProducerIdentity::from_codegen("fe2o3_scalar_gemm_v1_fixture", Some(&source_path))
             .expect("scalar GEMM fixture producer");
     let attempt = begin_build_attempt(
-        &output.0.join("artifacts"),
+        output.artifacts(),
         &producer,
         BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
         BuildSession::from_bytes([
@@ -1085,7 +1601,7 @@ fn compile_scalar_gemm(
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", SCALAR_GEMM_PIPELINE)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
-        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+        .env("FE2O3_HSACO_DIR", output.artifacts());
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
@@ -1095,11 +1611,8 @@ fn compile_scalar_gemm(
     if result.status.success()
         && let Some(destination) = std::env::var_os(SCALAR_GEMM_HANDOFF_OUTPUT_ENV)
     {
-        let consumed =
-            consume_compiler_module_handoff_v1(&output.0.join("artifacts"), &producer, attempt)
-                .expect(
-                    "consume exact scalar GEMM frontend handoff for configured integration output",
-                );
+        let consumed = consume_compiler_module_handoff_v1(output.artifacts(), &producer, attempt)
+            .expect("consume exact scalar GEMM frontend handoff for configured integration output");
         let decoded = CompilerModuleHandoffV2::decode(consumed.bytes())
             .expect("frontend published one canonical Worker V2 handoff");
         assert_eq!(decoded.canonical_bytes(), consumed.bytes());
@@ -1130,6 +1643,22 @@ fn compile_tiled_gemm(
     target: &str,
     extra_args: &[&str],
 ) -> Output {
+    compile_tiled_gemm_with_lds_binding(
+        workspace, backend, output, source, target, extra_args, None, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_tiled_gemm_with_lds_binding(
+    workspace: &Path,
+    backend: &PinnedBackend,
+    output: &TestOutputDir,
+    source: &str,
+    target: &str,
+    extra_args: &[&str],
+    lds_generated_metadata: Option<&str>,
+    lds_compiler_binding: Option<CrateBindingIdV1>,
+) -> Output {
     let is_lds_slice1 = source.contains("pub fn tiled_gemm_lds_slice1");
     build_frontend_dependencies(workspace).expect("build tiled GEMM frontend dependencies");
     backend
@@ -1154,10 +1683,15 @@ fn compile_tiled_gemm(
     } else {
         "fe2o3_collected_tiled_gemm_v1_fixture"
     };
+    let generated_metadata = if is_lds_slice1 {
+        lds_generated_metadata.unwrap_or(TILED_GEMM_LDS_SLICE1_GENERATED_METADATA)
+    } else {
+        "4ceb166423714bdc"
+    };
     let producer = ProducerIdentity::from_codegen(crate_name, Some(&source_path))
         .expect("tiled GEMM fixture producer");
     let attempt = begin_build_attempt(
-        &output.0.join("artifacts"),
+        output.artifacts(),
         &producer,
         BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
         BuildSession::from_bytes([
@@ -1187,16 +1721,10 @@ fn compile_tiled_gemm(
             cargo_target.join("debug/deps").display()
         ))
         .args(["-C", "overflow-checks=off"]);
-    if is_lds_slice1 {
-        command.arg("-Cmetadata=e1f4d566b68639ae");
-    } else {
-        command.arg("-Cmetadata=4ceb166423714bdc");
-    }
+    command.arg(format!("-Cmetadata={generated_metadata}"));
     command
-        .args([
-            "-Cmetadata=fe2o3-tiled-gemm-v1-reviewed",
-            "-Zmir-enable-passes=-JumpThreading",
-        ])
+        .arg(format!("-Cmetadata={TILED_GEMM_REVIEWED_METADATA}"))
+        .arg("-Zmir-enable-passes=-JumpThreading")
         .args(extra_args)
         .arg(format!(
             "-Zcodegen-backend={}",
@@ -1207,14 +1735,24 @@ fn compile_tiled_gemm(
         .env("FE2O3_VERBOSE", "1")
         .env("FE2O3_DUMP_LLVM", "1")
         .env("CARGO_MANIFEST_DIR", manifest_directory)
-        .env(
-            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
-            "c1ab2dc02fa023687ac7394e15746c39668b5d46ad47c40eae012bc3f42d05c0",
-        )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value())
-        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+        .env("FE2O3_HSACO_DIR", output.artifacts());
+    let ordered_metadata = [generated_metadata, TILED_GEMM_REVIEWED_METADATA];
+    let compiler_binding = if is_lds_slice1 {
+        lds_compiler_binding.unwrap_or_else(|| {
+            derive_crate_binding_id_v1(crate_name, ordered_metadata.iter().copied())
+        })
+    } else {
+        derive_crate_binding_id_v1(crate_name, ordered_metadata.iter().copied())
+    };
+    command
+        .env(CRATE_BINDING_ID_ENV_V1, compiler_binding.to_hex())
+        .env(
+            "FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2",
+            derive_cargo_metadata_build_observation_v2(&ordered_metadata).to_hex(),
+        );
     let backend_descriptor = backend.file.as_raw_fd();
     unsafe {
         command.pre_exec(move || set_close_on_exec(backend_descriptor, false));
@@ -2290,7 +2828,7 @@ fn compile_row_softmax_with_device(
         )
         .expect("row-softmax fixture producer");
         begin_build_attempt(
-            &output.0.join("artifacts"),
+            output.artifacts(),
             &producer,
             BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
             BuildSession::from_bytes([0x52; 16]),
@@ -2359,7 +2897,7 @@ fn compile_row_softmax_with_device(
         )
         .env("FE2O3_TARGET", target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
-        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"));
+        .env("FE2O3_HSACO_DIR", output.artifacts());
     if let Some(attempt) = attempt {
         command.env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
     } else {
@@ -2461,7 +2999,7 @@ fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
     )
     .expect("forged row-softmax producer");
     let attempt = begin_build_attempt(
-        &output.0.join("artifacts"),
+        output.artifacts(),
         &producer,
         invocation,
         BuildSession::from_bytes([0x52; 16]),
@@ -2487,8 +3025,8 @@ fn compile_row_softmax_with_forged_exact_argv_and_fixed_descriptors(
         )
         .env("FE2O3_BUILD_ATTEMPT_V1", attempt.to_env_value());
 
-    let artifact = File::open(output.0.join("artifacts"))
-        .expect("open attacker-controlled artifact directory");
+    let artifact =
+        File::open(output.artifacts()).expect("open attacker-controlled artifact directory");
     let (attacker_child, _attacker_peer) =
         UnixStream::pair().expect("create attacker invocation-authority socket");
     let artifact_source = artifact.as_raw_fd();
@@ -2528,7 +3066,7 @@ fn assert_row_softmax_published_nothing(output: &TestOutputDir) {
         !output.0.join("row-softmax-v1").exists(),
         "row-softmax boundary emitted a linked output"
     );
-    let artifact_directory = output.0.join("artifacts");
+    let artifact_directory = output.artifacts();
     if !artifact_directory.exists() {
         return;
     }
@@ -2858,6 +3396,22 @@ struct ExternalRowSoftmaxSpec<'a> {
     host_root: &'a Path,
 }
 
+fn wrapper_bound_external_row_softmax_source(source: &str) -> String {
+    assert_eq!(
+        source
+            .matches(ROW_SOFTMAX_EXPLICIT_NAMESPACE_ATTRIBUTE)
+            .count(),
+        1,
+        "external row-softmax fixture must carry exactly one reviewed fallback namespace"
+    );
+    let source = source.replacen(ROW_SOFTMAX_EXPLICIT_NAMESPACE_ATTRIBUTE, "", 1);
+    assert!(
+        !source.contains("namespace ="),
+        "external row-softmax fixture retained an explicit namespace"
+    );
+    source
+}
+
 fn compile_external_row_softmax_crate(
     workspace: &Path,
     cargo_target: &Path,
@@ -2879,7 +3433,8 @@ fn compile_external_row_softmax_crate_with_broker(
     let source_directory = crate_root.join("src");
     std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
     let source = source_directory.join("lib.rs");
-    std::fs::write(&source, spec.source).expect("write external row-softmax source");
+    let wrapper_bound_source = wrapper_bound_external_row_softmax_source(spec.source);
+    std::fs::write(&source, wrapper_bound_source).expect("write external row-softmax source");
     let manifest = crate_root.join("Cargo.toml");
     std::fs::write(
         &manifest,
@@ -2913,7 +3468,7 @@ fn compile_external_row_softmax_crate_with_broker(
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", spec.target)
         .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
-        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
+        .env("FE2O3_HSACO_DIR", output.artifacts())
         .env("RUSTFLAGS", rustflags);
     match metadata_mutation {
         Some(mutation) => {
@@ -2962,8 +3517,9 @@ fn build_and_pin_broker(
     command
         .current_dir(workspace)
         .args(["build", "--locked", "-p", "cargo-fe2o3"]);
+    configure_cargo_fe2o3_build(&mut command, None);
     if handoff_observation {
-        command.args(["--features", "compiler-handoff-observation-test-only"]);
+        configure_cargo_fe2o3_build(&mut command, Some("compiler-handoff-observation-test-only"));
     }
     command
         .args(["--bin", "cargo-fe2o3"])
@@ -2994,8 +3550,12 @@ fn build_and_pin_broker(
     backend_command
         .current_dir(workspace)
         .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"]);
+    configure_backend_qualification_build(&mut backend_command, None);
     if handoff_observation {
-        backend_command.args(["--features", "row-softmax-metadata-mutation-test-only"]);
+        configure_backend_qualification_build(
+            &mut backend_command,
+            Some("row-softmax-metadata-mutation-test-only"),
+        );
     }
     backend_command
         .env("CARGO_TARGET_DIR", cargo_target)
@@ -3024,6 +3584,43 @@ fn build_and_pin_broker(
         String::from_utf8_lossy(&backend.stderr),
     );
     broker
+}
+
+fn configure_cargo_fe2o3_build(command: &mut Command, extra_feature: Option<&str>) {
+    if let Some(feature) = extra_feature {
+        command.args(["--features", feature]);
+    }
+}
+
+fn configure_backend_qualification_build(command: &mut Command, extra_feature: Option<&str>) {
+    command.args(["--features", "qualification-oracles-test-only"]);
+    if let Some(feature) = extra_feature {
+        command.args(["--features", feature]);
+    }
+}
+
+#[test]
+fn private_broker_builds_keep_cargo_feature_invariant() {
+    let mut base = Command::new("cargo");
+    configure_cargo_fe2o3_build(&mut base, None);
+    assert!(base.get_args().next().is_none());
+
+    let mut observation = Command::new("cargo");
+    configure_cargo_fe2o3_build(
+        &mut observation,
+        Some("compiler-handoff-observation-test-only"),
+    );
+    assert_eq!(
+        observation.get_args().collect::<Vec<_>>(),
+        ["--features", "compiler-handoff-observation-test-only",]
+    );
+
+    let mut backend = Command::new("cargo");
+    configure_backend_qualification_build(&mut backend, None);
+    assert_eq!(
+        backend.get_args().collect::<Vec<_>>(),
+        ["--features", "qualification-oracles-test-only"]
+    );
 }
 
 fn build_and_pin_handoff_broker(
@@ -3244,7 +3841,8 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
     let source_directory = crate_root.join("src");
     std::fs::create_dir_all(&source_directory).expect("create external row-softmax source root");
     let source = source_directory.join("lib.rs");
-    std::fs::write(&source, ROW_SOFTMAX_FIXTURE).expect("write external row-softmax source");
+    let wrapper_bound_source = wrapper_bound_external_row_softmax_source(ROW_SOFTMAX_FIXTURE);
+    std::fs::write(&source, wrapper_bound_source).expect("write external row-softmax source");
     let manifest = crate_root.join("Cargo.toml");
     std::fs::write(
         &manifest,
@@ -3300,7 +3898,7 @@ fn compile_clean_external_row_softmax_crate_with_handoff(
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("FE2O3_TARGET", "gfx942:xnack-")
         .env("FE2O3_QUALIFICATION_ORACLE_V1", ROW_SOFTMAX_PIPELINE)
-        .env("FE2O3_HSACO_DIR", output.0.join("artifacts"))
+        .env("FE2O3_HSACO_DIR", output.artifacts())
         .env(HANDOFF_OBSERVATION_DIRECTORY_ENV, &observation_directory)
         .env(HANDOFF_OBSERVATION_CRATE_ENV, &expected_crate_name)
         .env("RUSTFLAGS", rustflags);
@@ -3433,7 +4031,7 @@ pub mod __generated {
 }
 
 fn assert_tiled_gemm_published_no_handoff(output: &TestOutputDir) {
-    let artifacts = std::fs::read_dir(output.0.join("artifacts"))
+    let artifacts = std::fs::read_dir(output.artifacts())
         .expect("read tiled GEMM artifact directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("enumerate tiled GEMM artifacts");
@@ -3461,7 +4059,7 @@ fn consume_tiled_gemm_handoff(
     let producer = ProducerIdentity::from_codegen(crate_name, Some(&source_path))
         .expect("tiled GEMM handoff producer");
     let attempt = begin_build_attempt(
-        &output.0.join("artifacts"),
+        output.artifacts(),
         &producer,
         BuildInvocation::from_bytes(Sha256::digest(source.as_bytes()).into()),
         BuildSession::from_bytes([
@@ -3470,9 +4068,8 @@ fn consume_tiled_gemm_handoff(
         ]),
     )
     .expect("resume tiled GEMM handoff attempt");
-    let consumed =
-        consume_compiler_module_handoff_v1(&output.0.join("artifacts"), &producer, attempt)
-            .expect("consume exact tiled GEMM handoff");
+    let consumed = consume_compiler_module_handoff_v1(output.artifacts(), &producer, attempt)
+        .expect("consume exact tiled GEMM handoff");
     let handoff = CompilerModuleHandoffV2::decode(consumed.bytes())
         .expect("decode exact tiled GEMM Worker V2 handoff");
     assert_eq!(handoff.canonical_bytes(), consumed.bytes());
@@ -3484,7 +4081,7 @@ fn assert_scalar_gemm_published_no_handoff(output: &TestOutputDir) {
         !output.0.join("scalar-gemm-v1").exists(),
         "rejected scalar GEMM emitted a linked output"
     );
-    let artifacts = std::fs::read_dir(output.0.join("artifacts"))
+    let artifacts = std::fs::read_dir(output.artifacts())
         .expect("read scalar GEMM artifact directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("enumerate scalar GEMM artifacts");
@@ -3624,10 +4221,17 @@ fn subprocess_timeout_reaps_its_descendant_group() {
     let workspace = workspace();
     let output = TestOutputDir::new(&workspace);
     let pid_file = output.0.join("timed-out-descendant.pid");
+    let cleanup_root = PrivateBuildRoot::new(&workspace);
+    let cleanup_path = cleanup_root.0.clone();
+    let child_output = cleanup_path.join("child-output");
     let mut command = Command::new("/bin/sh");
     command
-        .args(["-c", "sleep 30 & echo $! > \"$PID_FILE\"; wait"])
-        .env("PID_FILE", &pid_file);
+        .args([
+            "-c",
+            "trap '' TERM; mkdir -p \"$CHILD_OUTPUT\"; echo timeout-stdout-marker; echo timeout-stderr-marker >&2; sleep 30 & echo $! > \"$PID_FILE\"; wait",
+        ])
+        .env("PID_FILE", &pid_file)
+        .env("CHILD_OUTPUT", &child_output);
     let error = run_bounded(
         &mut command,
         Duration::from_millis(200),
@@ -3635,8 +4239,21 @@ fn subprocess_timeout_reaps_its_descendant_group() {
     )
     .expect_err("long-running subprocess must hit its deadline");
     assert!(
-        error.contains("exceeded its monotonic deadline"),
+        error.contains("exceeded its monotonic deadline")
+            && error.contains("budget")
+            && error.contains("SIGTERM")
+            && error.contains("timeout-stdout-marker")
+            && error.contains("timeout-stderr-marker"),
         "unexpected timeout diagnostic: {error}"
+    );
+    assert!(
+        child_output.is_dir(),
+        "timeout fixture did not create output"
+    );
+    drop(cleanup_root);
+    assert!(
+        !cleanup_path.exists(),
+        "parent-owned timeout output root survived cleanup"
     );
     let descendant: libc::pid_t = std::fs::read_to_string(&pid_file)
         .expect("read timed-out descendant PID")
@@ -3657,6 +4274,180 @@ fn subprocess_timeout_reaps_its_descendant_group() {
         );
         thread::sleep(PROCESS_POLL_INTERVAL);
     }
+}
+
+#[test]
+fn escaped_descriptor_holder_cannot_block_capture_completion() {
+    let output = TestOutputDir::new(&workspace());
+    let pid_file = output.0.join("escaped-descriptor-holder.pid");
+    let mut command = Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            "setsid /bin/sh -c 'trap \"\" TERM; echo $$ > \"$ESCAPED_PID_FILE\"; echo escaped-descriptor-marker; sleep 30' & exit 0",
+        ])
+        .env("ESCAPED_PID_FILE", &pid_file);
+    let started = Instant::now();
+    let error = run_bounded(
+        &mut command,
+        Duration::from_secs(10),
+        "escaped descriptor holder regression",
+    )
+    .expect_err("escaped descriptor holder must fail bounded capture completion");
+    assert!(
+        started.elapsed() < Duration::from_secs(6)
+            && error.contains("capture did not close")
+            && error.contains("escaped-descriptor-marker"),
+        "escaped descriptor holder was not diagnosed within the capture bound: {error}"
+    );
+    let escaped: libc::pid_t = std::fs::read_to_string(&pid_file)
+        .expect("read escaped descriptor-holder PID")
+        .trim()
+        .parse()
+        .expect("numeric escaped descriptor-holder PID");
+    unsafe {
+        libc::kill(-escaped, libc::SIGKILL);
+    }
+    let cleanup_deadline = Instant::now() + TERMINATION_GRACE;
+    loop {
+        let probe = unsafe { libc::kill(-escaped, 0) };
+        let probe_error = std::io::Error::last_os_error();
+        if probe == -1 && probe_error.raw_os_error() == Some(libc::ESRCH) {
+            break;
+        }
+        assert!(
+            Instant::now() < cleanup_deadline,
+            "escaped descriptor-holder group {escaped} survived explicit regression cleanup"
+        );
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
+}
+
+#[test]
+fn configured_test_output_root_is_identity_and_mode_bound() {
+    let root = PrivateBuildRoot::new(&workspace());
+    let metadata = std::fs::metadata(&root.0).expect("inspect configured output fixture");
+    let identity = format!("{:016x}:{:016x}", metadata.dev(), metadata.ino());
+    validate_configured_test_output_parent(&root.0, &identity)
+        .expect("accept exact configured output fixture");
+    assert!(
+        validate_configured_test_output_parent(&root.0, "0000000000000000:0000000000000000")
+            .unwrap_err()
+            .contains("identity changed")
+    );
+    assert!(
+        validate_configured_test_output_parent(&root.0, "AAAAAAAAAAAAAAAA:0000000000000000",)
+            .unwrap_err()
+            .contains("fixed lowercase hexadecimal")
+    );
+    assert!(
+        validate_configured_test_output_parent(&root.0, "not-an-identity")
+            .unwrap_err()
+            .contains("fixed lowercase hexadecimal")
+    );
+    let link_container = PrivateBuildRoot::new(&workspace());
+    let link = link_container.0.join("configured-output-link");
+    std::os::unix::fs::symlink(&root.0, &link).expect("create configured output symlink");
+    assert!(
+        validate_configured_test_output_parent(&link, &identity)
+            .unwrap_err()
+            .contains("nonsymlink directory")
+    );
+    std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o1700))
+        .expect("mutate configured output fixture special mode bit");
+    assert!(
+        validate_configured_test_output_parent(&root.0, &identity)
+            .unwrap_err()
+            .contains("mode 0700")
+    );
+    std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o755))
+        .expect("mutate configured output fixture mode");
+    assert!(
+        validate_configured_test_output_parent(&root.0, &identity)
+            .unwrap_err()
+            .contains("mode 0700")
+    );
+}
+
+#[test]
+fn configured_test_output_timeout_helper() {
+    let Some(marker) = std::env::var_os(CONFIGURED_TEST_OUTPUT_TIMEOUT_HELPER_ENV) else {
+        return;
+    };
+    assert_eq!(
+        marker,
+        std::ffi::OsString::from("1"),
+        "configured output timeout helper marker must be exactly 1"
+    );
+    let output = TestOutputDir::new(&workspace());
+    std::fs::write(output.0.join("timeout-helper-marker"), b"created")
+        .expect("write configured output timeout marker");
+    println!("configured-output-timeout-stdout");
+    eprintln!("configured-output-timeout-stderr");
+    thread::sleep(Duration::from_secs(30));
+}
+
+#[test]
+fn configured_test_subprocess_timeout_removes_child_output() {
+    let (guard_root, mut command) =
+        configured_artifact_guard_test_command("configured_test_output_timeout_helper");
+    let cleanup_path = guard_root.0.clone();
+    command.env(CONFIGURED_TEST_OUTPUT_TIMEOUT_HELPER_ENV, "1");
+    let result = run_bounded(
+        &mut command,
+        Duration::from_secs(2),
+        "configured output cleanup regression",
+    );
+    let error = finish_configured_test_subprocess(guard_root, result)
+        .expect_err("configured output helper must hit its short deadline");
+    assert!(
+        error.contains("configured-output-timeout-stdout")
+            && error.contains("configured-output-timeout-stderr"),
+        "configured output timeout lost diagnostic markers: {error}"
+    );
+    assert!(
+        !cleanup_path.exists(),
+        "configured output timeout left its parent-owned root"
+    );
+}
+
+#[test]
+fn configured_child_environment_probe() {
+    if std::env::var_os(CONFIGURED_CHILD_ENVIRONMENT_PROBE_ENV).is_none() {
+        return;
+    }
+    let _ = rerun_with_configured_artifact_path_guard("configured_child_environment_probe");
+}
+
+#[test]
+fn configured_child_marker_cannot_bypass_complete_environment() {
+    let mut command = Command::new(std::env::current_exe().expect("current integration test"));
+    command
+        .args([
+            "--exact",
+            "configured_child_environment_probe",
+            "--nocapture",
+        ])
+        .env(CONFIGURED_CHILD_ENVIRONMENT_PROBE_ENV, "1")
+        .env(CONFIGURED_ARTIFACT_GUARD_CHILD_ENV, "1")
+        .env_remove(CONFIGURED_TEST_OUTPUT_ROOT_ENV)
+        .env_remove(CONFIGURED_TEST_OUTPUT_ROOT_IDENTITY_ENV)
+        .env_remove("FE2O3_ARTIFACT_PATH_GUARD_DIR")
+        .env_remove("FE2O3_ARTIFACT_PATH_GUARD_DIR_IDENTITY");
+    let output = run_bounded(
+        &mut command,
+        Duration::from_secs(5),
+        "incomplete configured child environment regression",
+    )
+    .expect("incomplete configured child probe must finish within deadline");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success()
+            && stderr.contains(
+                "configured artifact guard child requires its complete output environment",
+            ),
+        "incomplete configured child environment did not fail closed:\n{stderr}"
+    );
 }
 
 #[test]
@@ -3716,7 +4507,7 @@ fn authenticated_fixture_seals_semantics_then_stops_before_executable_authority(
     );
     assert!(!baseline_stderr.contains("define amdgpu_kernel"));
     assert_eq!(
-        std::fs::read_dir(output.0.join("artifacts"))
+        std::fs::read_dir(output.artifacts())
             .expect("read empty artifact directory")
             .count(),
         0,
@@ -3971,6 +4762,11 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
     if isolated_backend_environment_is_unavailable() {
         return;
     }
+    if rerun_with_configured_artifact_path_guard(
+        "scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let backend = build_backend(&workspace);
     let output = TestOutputDir::new(&workspace);
@@ -3993,15 +4789,13 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
         "reviewed scalar GEMM did not publish its authenticated handoff:\n{admission_stderr}"
     );
     assert!(output.0.join("scalar-gemm-v1").is_file());
-    assert!(
-        std::fs::read_dir(output.0.join("artifacts"))
+    assert!(std::fs::read_dir(output.artifacts()).unwrap().any(|entry| {
+        entry
             .unwrap()
-            .any(|entry| entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .contains("compiler-module"))
-    );
+            .file_name()
+            .to_string_lossy()
+            .contains("compiler-module")
+    }));
 
     let mutated_source = SCALAR_GEMM_FIXTURE.replace(
         "let product = a[a_index] * b[b_index];",
@@ -4073,17 +4867,20 @@ fn scalar_gemm_v1_frontend_receipt_selects_only_the_reviewed_full_portable_mir()
 
 #[test]
 fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
-    if isolated_backend_environment_is_unavailable() {
-        return;
-    }
     if rerun_with_configured_artifact_path_guard(
         "tiled_gemm_v1_source_authentication_and_adversaries_fail_closed",
     ) {
         return;
     }
     let workspace = workspace();
-    let backend = build_backend(&workspace);
+    let backend = build_collection_backend(&workspace);
     assert!(TILED_GEMM_FIXTURE.contains("launch(required = [64, 1, 1], max = [64, 1, 1])"));
+    assert!(TILED_GEMM_FIXTURE.contains("Bf16MfmaAMatrix::row_major"));
+    assert!(TILED_GEMM_FIXTURE.contains("Bf16MfmaBMatrix::row_major"));
+    assert!(TILED_GEMM_FIXTURE.contains("F32AccumulatorMatrix::row_major"));
+    assert!(TILED_GEMM_FIXTURE.contains("WaveLane::<Wave64>::current()"));
+    assert!(TILED_GEMM_FIXTURE.contains("c_matrix.load_m16n16(&lane, 0, 0)"));
+    assert!(!TILED_GEMM_FIXTURE.contains("namespace ="));
     assert!(TILED_GEMM_FIXTURE.contains("Tiled2D<Index1D, 64, 16, 16, 4>"));
     assert!(TILED_GEMM_FIXTURE.contains("checked_tiled_2d::<64, 16, 16, 4>()"));
     assert!(TILED_GEMM_FIXTURE.contains("get_tiled_2d_mut"));
@@ -4106,7 +4903,7 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
         exact.status.success()
             && exact_stderr.contains("consumed its single-use frontend receipt")
             && exact_stderr
-                .contains("8fbc1de394eb46ff9103a1842ae248bc5bfcdbc6820bd60525153ec066bcc18a")
+                .contains("0aaa6ba74b0c54784e94f7ff7551aeaeb7f4730cf6243d876d14369b7f6d40c2")
             && exact_stderr.contains("explicit kernarg 64 bytes, complete COV6 kernarg 320 bytes")
             && exact_stderr.contains("exact one-wave 64x1x1 one-tile launch with no LDS")
             && exact_stderr.contains("selected canonical fe2o3::tiled_gemm_v1")
@@ -4118,8 +4915,8 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     );
 
     let same_name_source = TILED_GEMM_FIXTURE.replace(
-        "let lane_column = lane % 16;",
-        "let lane_column = lane % 8;",
+        "Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 16)",
+        "Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 8)",
     );
     assert_ne!(same_name_source, TILED_GEMM_FIXTURE);
     let same_name_output = TestOutputDir::new(&workspace);
@@ -4167,10 +4964,14 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
     let lookalike_source = TILED_GEMM_FIXTURE
         .replacen(
             "#[kernel(",
-            "fn lookalike_fragment(bits: [u16; 4]) -> Bf16MfmaFragment {\n    Bf16MfmaFragment::from_bits(bits)\n}\n\n#[kernel(",
+            "fn lookalike_extent(value: usize) -> usize {\n    value\n}\n\n#[kernel(",
             1,
         )
-        .replacen("Bf16MfmaFragment::from_bits([", "lookalike_fragment([", 1);
+        .replacen(
+            "Bf16MfmaAMatrix::row_major(a, 0, 16, 16, 16)",
+            "Bf16MfmaAMatrix::row_major(a, 0, lookalike_extent(16), 16, 16)",
+            1,
+        );
     assert_ne!(lookalike_source, TILED_GEMM_FIXTURE);
     let lookalike_output = TestOutputDir::new(&workspace);
     let lookalike = compile_tiled_gemm(
@@ -4258,12 +5059,18 @@ fn tiled_gemm_v1_source_authentication_and_adversaries_fail_closed() {
 
 #[test]
 fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_handoff() {
+    if rerun_with_configured_artifact_path_guard(
+        "tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_handoff",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let backend = build_collection_backend(&workspace);
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("pub fn tiled_gemm_lds_slice1"));
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_lds_bf16_tile_pair_m16x16_v1"));
     assert!(TILED_GEMM_LDS_SLICE1_FIXTURE.contains("gfx942_publish_lds_bf16_tile_pair_m16x16_v1"));
     assert!(!TILED_GEMM_LDS_SLICE1_FIXTURE.contains("\nmacro_rules!"));
+    assert!(!TILED_GEMM_LDS_SLICE1_FIXTURE.contains("namespace ="));
 
     let exact_output = TestOutputDir::new(&workspace);
     let exact = compile_tiled_gemm(
@@ -4275,8 +5082,23 @@ fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_ha
         &[],
     );
     let exact_stderr = stderr(&exact);
+    let exact_crate_binding = derive_crate_binding_id_v1(
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+        [
+            TILED_GEMM_LDS_SLICE1_GENERATED_METADATA,
+            TILED_GEMM_REVIEWED_METADATA,
+        ],
+    );
+    let exact_kernel_binding = derive_kernel_binding_id_v1(
+        exact_crate_binding,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        "tiled_gemm_lds_slice1",
+        "tiled_gemm_lds_slice1",
+    );
+    let exact_root = host_kernel_symbol_v1(exact_kernel_binding);
     assert!(
         exact.status.success()
+            && exact_stderr.contains(&exact_root)
             && exact_stderr
                 .contains("selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity")
             && exact_stderr.contains("constructed compiler descriptor")
@@ -4342,10 +5164,125 @@ fn tiled_gemm_lds_slice1_attributed_source_publishes_only_the_bound_worker_v2_ha
     assert!(!handoff.grants_link_authority());
     assert!(!handoff.grants_load_authority());
     assert!(!handoff.grants_launch_authority());
+
+    let fresh_metadata = "abcdef0123456789";
+    let fresh_crate_binding = derive_crate_binding_id_v1(
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+        [fresh_metadata, TILED_GEMM_REVIEWED_METADATA],
+    );
+    let fresh_kernel_binding = derive_kernel_binding_id_v1(
+        fresh_crate_binding,
+        MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
+        "tiled_gemm_lds_slice1",
+        "tiled_gemm_lds_slice1",
+    );
+    let fresh_root = host_kernel_symbol_v1(fresh_kernel_binding);
+    assert_ne!(fresh_root, exact_root);
+    let fresh_output = TestOutputDir::new(&workspace);
+    let fresh = compile_tiled_gemm_with_lds_binding(
+        &workspace,
+        backend,
+        &fresh_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+        Some(fresh_metadata),
+        None,
+    );
+    let fresh_stderr = stderr(&fresh);
+    assert!(
+        fresh.status.success()
+            && fresh_stderr.contains(&fresh_root)
+            && fresh_stderr
+                .contains("selected canonical Kernel IR `fe2o3::tiled_gemm_lds_v1` identity")
+            && fresh_stderr.contains("completed protected attempt-scoped Worker V2 publication"),
+        "fresh compiler-derived root missed the attributed LDS boundary:\n{fresh_stderr}"
+    );
+    let fresh_handoff = consume_tiled_gemm_handoff(
+        &fresh_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "fe2o3_collected_tiled_gemm_lds_slice1_fixture",
+    );
+    let fresh_module = std::str::from_utf8(fresh_handoff.module_bytes()).unwrap();
+    let fresh_authority =
+        decode_compiler_owned_module_section(fresh_module, ".fe2o3.tiled-lds-slice1-auth.v1")
+            .unwrap();
+    assert_ne!(fresh_authority, authority);
+}
+
+#[test]
+fn tiled_gemm_lds_slice1_explicit_or_substituted_bindings_fail_closed() {
+    if rerun_with_configured_artifact_path_guard(
+        "tiled_gemm_lds_slice1_explicit_or_substituted_bindings_fail_closed",
+    ) {
+        return;
+    }
+    let workspace = workspace();
+    let backend = build_collection_backend(&workspace);
+    let crate_name = "fe2o3_collected_tiled_gemm_lds_slice1_fixture";
+
+    let explicit_binding = derive_crate_binding_id_v1(crate_name, ["explicit-namespace-adversary"]);
+    let explicit_source = TILED_GEMM_LDS_SLICE1_FIXTURE.replacen(
+        "#[kernel(\n    typed,\n",
+        &format!(
+            "#[kernel(\n    typed,\n    namespace = \"{}\",\n",
+            explicit_binding.to_hex()
+        ),
+        1,
+    );
+    assert_ne!(explicit_source, TILED_GEMM_LDS_SLICE1_FIXTURE);
+    let explicit_output = TestOutputDir::new(&workspace);
+    let explicit = compile_tiled_gemm(
+        &workspace,
+        backend,
+        &explicit_output,
+        &explicit_source,
+        "gfx942:xnack-",
+        &[],
+    );
+    let explicit_stderr = stderr(&explicit);
+    assert!(
+        !explicit.status.success()
+            && explicit_stderr.contains("compiler-derived crate binding")
+            && explicit_stderr.contains("disagrees with explicit #[kernel(typed)] namespace")
+            && !explicit_stderr.contains("selected canonical Kernel IR")
+            && !explicit_stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
+        "explicit namespace selected attributed LDS authority:\n{explicit_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&explicit_output);
+
+    let substituted_binding =
+        derive_crate_binding_id_v1(crate_name, ["substituted-compiler-binding-adversary"]);
+    let substituted_output = TestOutputDir::new(&workspace);
+    let substituted = compile_tiled_gemm_with_lds_binding(
+        &workspace,
+        backend,
+        &substituted_output,
+        TILED_GEMM_LDS_SLICE1_FIXTURE,
+        "gfx942:xnack-",
+        &[],
+        None,
+        Some(substituted_binding),
+    );
+    let substituted_stderr = stderr(&substituted);
+    assert!(
+        !substituted.status.success()
+            && substituted_stderr.contains("crate binding")
+            && substituted_stderr.contains("disagrees with rustc session binding")
+            && !substituted_stderr.contains("selected canonical Kernel IR")
+            && !substituted_stderr.contains("published attributed LDS Slice 1 Worker V2 handoff"),
+        "substituted compiler binding selected attributed LDS authority:\n{substituted_stderr}"
+    );
+    assert_tiled_gemm_published_no_handoff(&substituted_output);
 }
 
 #[test]
 fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
+    if rerun_with_configured_artifact_path_guard(
+        "tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let backend = build_collection_backend(&workspace);
     let mutations = [
@@ -4366,8 +5303,8 @@ fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
         (
             "index-drift",
             TILED_GEMM_LDS_SLICE1_FIXTURE.replace(
-                "a[a_row_base + depth_base + 3]",
-                "a[a_row_base + depth_base + 2]",
+                "a_matrix.load_m16k16(&lane, 0, 0)",
+                "a_matrix.load_m16k16(&lane, 0, 1)",
             ),
         ),
     ];
@@ -4392,8 +5329,8 @@ fn tiled_gemm_lds_slice1_source_mutations_cannot_select_canonical_ir() {
         "lookalike_lds_pair_v1()",
     ) + r#"
 fn lookalike_lds_pair_v1<'workgroup>() -> (
-    fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
-    fe2o3_device::LdsTile16x16<'workgroup, fe2o3_device::Bf16>,
+    fe2o3_device::MfmaLdsTile16x16<'workgroup, fe2o3_device::MfmaOperandA>,
+    fe2o3_device::MfmaLdsTile16x16<'workgroup, fe2o3_device::MfmaOperandB>,
 ) {
     gfx942_lds_bf16_tile_pair_m16x16_v1()
 }
@@ -4439,6 +5376,11 @@ fn lookalike_lds_pair_v1<'workgroup>() -> (
 #[test]
 fn row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir() {
     if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    if rerun_with_configured_artifact_path_guard(
+        "row_softmax_v1_source_authentication_and_adversaries_stop_at_canonical_ir",
+    ) {
         return;
     }
     let workspace = workspace();
@@ -4621,6 +5563,11 @@ fn row_softmax_rejects_a_hostile_same_name_device_provider() {
     if isolated_backend_environment_is_unavailable() {
         return;
     }
+    if rerun_with_configured_artifact_path_guard(
+        "row_softmax_rejects_a_hostile_same_name_device_provider",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let provider_output = TestOutputDir::new(&workspace);
     let (hostile_device, hostile_host) =
@@ -4655,6 +5602,11 @@ fn row_softmax_rejects_a_hostile_same_name_device_provider() {
 #[test]
 fn row_softmax_requires_managed_wrapper_argv_and_exact_metadata_transcript() {
     if isolated_backend_environment_is_unavailable() {
+        return;
+    }
+    if rerun_with_configured_artifact_path_guard(
+        "row_softmax_requires_managed_wrapper_argv_and_exact_metadata_transcript",
+    ) {
         return;
     }
     let workspace = workspace();
@@ -4773,6 +5725,11 @@ fn row_softmax_requires_managed_wrapper_argv_and_exact_metadata_transcript() {
 
 #[test]
 fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
+    if rerun_with_configured_artifact_path_guard(
+        "clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
@@ -4836,6 +5793,11 @@ fn clean_external_cargo_fe2o3_produces_row_softmax_worker_v2_handoffs() {
 
 #[test]
 fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
+    if rerun_with_configured_artifact_path_guard(
+        "row_softmax_managed_wrapper_accepts_variable_generated_roots",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let cargo_output = TestOutputDir::new(&workspace);
     let cargo_target = cargo_output.0.join("cargo-target");
@@ -4906,6 +5868,11 @@ fn row_softmax_managed_wrapper_accepts_variable_generated_roots() {
 
 #[test]
 fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
+    if rerun_with_configured_artifact_path_guard(
+        "external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let manifest = workspace
         .join("crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-v1/Cargo.toml");
@@ -4919,7 +5886,8 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
         source.display()
     );
     let cargo_output = TestOutputDir::new(&workspace);
-    let broker = build_and_pin_broker(&workspace, &cargo_output.0.join("cargo-target"), false);
+    let broker_target = cargo_output.0.join("cargo-target");
+    let broker = build_and_pin_broker(&workspace, &broker_target, false);
     let mut command = broker
         .command()
         .expect("verify test-owned cargo-fe2o3 before tiled launch");
@@ -4930,6 +5898,14 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env(
+            "FE2O3_BACKEND",
+            broker_target.join("debug/librustc_codegen_fe2o3.so"),
+        )
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
@@ -4956,6 +5932,11 @@ fn external_cargo_fe2o3_reaches_the_typed_tiled_handoff_boundary() {
 
 #[test]
 fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
+    if rerun_with_configured_artifact_path_guard(
+        "managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source",
+    ) {
+        return;
+    }
     let workspace = workspace();
     let manifest = workspace.join(
         "crates/rustc-codegen-fe2o3/tests/fixtures/collected-tiled-gemm-lds-slice1/Cargo.toml",
@@ -4970,7 +5951,8 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
         source.display()
     );
     let cargo_output = TestOutputDir::new(&workspace);
-    let broker = build_and_pin_broker(&workspace, &cargo_output.0.join("cargo-target"), false);
+    let broker_target = cargo_output.0.join("cargo-target");
+    let broker = build_and_pin_broker(&workspace, &broker_target, false);
     let mut command = broker
         .command()
         .expect("verify test-owned cargo-fe2o3 before LDS launch");
@@ -4981,6 +5963,14 @@ fn managed_cargo_fe2o3_collects_the_exact_attributed_lds_slice1_source() {
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_INCREMENTAL")
         .env("FE2O3_TARGET", "gfx942:xnack-")
+        .env(
+            "FE2O3_BACKEND",
+            broker_target.join("debug/librustc_codegen_fe2o3.so"),
+        )
+        .env(
+            "FE2O3_NON_PRODUCTION_UNPROTECTED_AUTHORITY_VALIDATION_V1",
+            "1",
+        )
         .env("FE2O3_QUALIFICATION_ORACLE_V1", TILED_GEMM_PIPELINE)
         .env("RUSTFLAGS", rustflags)
         .env_remove("CARGO_ENCODED_RUSTFLAGS");

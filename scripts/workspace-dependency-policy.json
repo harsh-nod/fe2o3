@@ -95,6 +95,7 @@
         "fe2o3-kfd",
         "fe2o3-kir-sim",
         "fe2o3-kir-sim-trace",
+        "fe2o3-runtime-protocol",
         "fe2o3-service-host",
         "fe2o3-worker-v2-bundle"
       ]

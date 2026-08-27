@@ -4300,6 +4300,8 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::MfmaAccumulatorRowMajor
                     | TrustedDeviceItem::Bf16MfmaFragment
                     | TrustedDeviceItem::F32AccumulatorFragment
+                    | TrustedDeviceItem::F32AccumulatorMatrixView
+                    | TrustedDeviceItem::F32AccumulatorMatrixViewError
                     | TrustedDeviceItem::Bf16MfmaMatrixView
                     | TrustedDeviceItem::Bf16MfmaMatrixViewError
                     | TrustedDeviceItem::Gfx950Fp4E2M1Format
@@ -4327,8 +4329,10 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                 Some(
                     TrustedDeviceItem::Bf16MfmaMatrixARowMajor
                     | TrustedDeviceItem::Bf16MfmaMatrixBRowMajor
+                    | TrustedDeviceItem::F32AccumulatorMatrixRowMajor
                     | TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
                     | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
+                    | TrustedDeviceItem::F32AccumulatorMatrixLoadZeroFilledV1
                     | TrustedDeviceItem::F32AccumulatorFragmentZero
                     | TrustedDeviceItem::F32AccumulatorFragmentIntoValues
                     | TrustedDeviceItem::WaveLaneCurrent
@@ -4436,8 +4440,12 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::StridedReadView2D
                     | TrustedDeviceItem::StridedReadView2DError
                     | TrustedDeviceItem::StridedReadView2DFromSharedSlice
-                    | TrustedDeviceItem::StridedReadView2DLoadOr
-                    | TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero
+                    | TrustedDeviceItem::StridedReadView2DLoadOr,
+                ) => {
+                    unreachable!("typed device operations are handled by semantic lowering")
+                }
+                Some(
+                    TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero
                     | TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues
                     | TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero
                     | TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues
@@ -4464,7 +4472,14 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::Gfx950LdsTransposeReadB4
                     | TrustedDeviceItem::Gfx950LdsTransposeReadB8,
                 ) => {
-                    unreachable!("typed device operations are handled by semantic lowering")
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "trusted device item `{}` requires authenticated gfx950 semantic MIR import",
+                            callee.identity()
+                        ),
+                    ));
                 }
                 Some(
                     TrustedDeviceItem::AmdGpuInline(_) | TrustedDeviceItem::AmdGpuDiagnostic(_),

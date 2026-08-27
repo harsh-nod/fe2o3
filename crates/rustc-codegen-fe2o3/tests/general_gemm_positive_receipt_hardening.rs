@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "support/cargo_fe2o3.rs"]
+mod cargo_fe2o3;
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -21,18 +24,9 @@ fn cargo_target_directory(workspace: &Path) -> PathBuf {
 }
 
 fn managed_build(workspace: &Path, manifest: &Path, bin: &str, artifacts: &Path) -> Output {
-    Command::new(env!("CARGO"))
+    cargo_fe2o3::non_production_command(workspace)
         .current_dir(workspace)
-        .args([
-            "run",
-            "--locked",
-            "-p",
-            "cargo-fe2o3",
-            "--",
-            "build",
-            "--locked",
-            "--manifest-path",
-        ])
+        .args(["build", "--locked", "--manifest-path"])
         .arg(manifest)
         .args(["--release", "--bin", bin])
         .env(
@@ -69,7 +63,14 @@ fn hostile_positive_sources_cannot_mint_frontend_correspondence() {
         workspace.join("crates/rustc-codegen-fe2o3/tests/fixtures/general-gemm-semantic-frontend");
     let built = Command::new(env!("CARGO"))
         .current_dir(&workspace)
-        .args(["build", "--locked", "-p", "rustc-codegen-fe2o3"])
+        .args([
+            "build",
+            "--locked",
+            "-p",
+            "rustc-codegen-fe2o3",
+            "--features",
+            "qualification-oracles-test-only",
+        ])
         .output()
         .expect("build codegen backend");
     assert!(

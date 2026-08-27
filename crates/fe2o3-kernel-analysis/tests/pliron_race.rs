@@ -2,8 +2,9 @@ use dialect_gpu::{AddressSpaceAttr, ExecutionLayoutOp, FenceOp, MemoryOrderAttr,
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AtomicOrderingAttr, AtomicScopeAttr, BranchOp,
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME, IndexBinaryKindAttr,
-    IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, InvocationIndexOp,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, register_dialect,
+    IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp, IndexType,
+    InvocationIndexOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, RankedRaceFindingV1,
@@ -37,6 +38,24 @@ fn function(context: &mut Context, name: &str) -> FuncOp {
         name.try_into().expect("valid function"),
         function_type,
     )
+}
+
+fn function_with_index_arguments(
+    context: &mut Context,
+    name: &str,
+    arguments: usize,
+) -> (FuncOp, Vec<Value>) {
+    let index: TypeHandle = IndexType::get(context).into();
+    let function = FuncOp::new(
+        context,
+        name.try_into().expect("valid function"),
+        FunctionType::get(context, vec![index; arguments], vec![]),
+    );
+    let entry = function.get_entry_block(context);
+    let arguments = (0..arguments)
+        .map(|ordinal| entry.deref(context).get_argument(ordinal))
+        .collect();
+    (function, arguments)
 }
 
 fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
@@ -846,6 +865,273 @@ fn checked_tiled_equivalent_distinct_layout_constants_are_one_injective_family()
 }
 
 #[test]
+fn checked_tiled_dynamic_layout_requires_one_grid_uniform_identity() {
+    #[derive(Clone, Copy, Debug)]
+    enum LayoutCase {
+        SharedEntryArguments,
+        DifferentEntryArguments,
+        InvocationVarying,
+    }
+
+    for case in [
+        LayoutCase::SharedEntryArguments,
+        LayoutCase::DifferentEntryArguments,
+        LayoutCase::InvocationVarying,
+    ] {
+        let context = &mut setup();
+        let argument_count = match case {
+            LayoutCase::SharedEntryArguments => 3,
+            LayoutCase::DifferentEntryArguments => 4,
+            LayoutCase::InvocationVarying => 0,
+        };
+        let (function, arguments) =
+            function_with_index_arguments(context, "checked_tiled_dynamic_layout", argument_count);
+        let entry = function.get_entry_block(context);
+        let second_access = block(context, &function, "second_access");
+        let third_access = block(context, &function, "third_access");
+        let exit = block(context, &function, "exit");
+        let output = view(context, vec![4096], MemorySpaceAttr::Global);
+        let invocation = InvocationIndexOp::new(context, 0, 0);
+        let component_zero = IndexConstantOp::new(context, 0);
+        let component_one = IndexConstantOp::new(context, 1);
+        let fallback_layout = IndexConstantOp::new(context, 16);
+        let extent = IndexConstantOp::new(context, 4096);
+        let (first_layout, second_layout) = match case {
+            LayoutCase::SharedEntryArguments => (
+                [arguments[0], arguments[1], arguments[2]],
+                [arguments[0], arguments[1], arguments[2]],
+            ),
+            LayoutCase::DifferentEntryArguments => (
+                [arguments[0], arguments[1], arguments[2]],
+                [arguments[0], arguments[1], arguments[3]],
+            ),
+            LayoutCase::InvocationVarying => (
+                [
+                    invocation.result(context),
+                    fallback_layout.result(context),
+                    fallback_layout.result(context),
+                ],
+                [
+                    invocation.result(context),
+                    fallback_layout.result(context),
+                    fallback_layout.result(context),
+                ],
+            ),
+        };
+        let first = CheckedTiledIndex2DOp::new(
+            context,
+            invocation.result(context),
+            component_zero.result(context),
+            first_layout[0],
+            first_layout[1],
+            first_layout[2],
+            [64, 16, 16, 4],
+        );
+        let second = CheckedTiledIndex2DOp::new(
+            context,
+            invocation.result(context),
+            component_one.result(context),
+            second_layout[0],
+            second_layout[1],
+            second_layout[2],
+            [64, 16, 16, 4],
+        );
+        let first_guard = IndexLessThanBranchOp::new(
+            context,
+            first.result(context),
+            extent.result(context),
+            second_access,
+            exit,
+        );
+        let first_write = access(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            first.result(context),
+        );
+        let second_guard = IndexLessThanBranchOp::new(
+            context,
+            second.result(context),
+            extent.result(context),
+            third_access,
+            exit,
+        );
+        let second_write = access(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            second.result(context),
+        );
+        let to_exit = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        for operation in [
+            output.get_operation(),
+            invocation.get_operation(),
+            component_zero.get_operation(),
+            component_one.get_operation(),
+            fallback_layout.get_operation(),
+            extent.get_operation(),
+            first.get_operation(),
+            second.get_operation(),
+            first_guard.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        append(context, second_access, &first_write);
+        append(context, second_access, &second_guard);
+        append(context, third_access, &second_write);
+        append(context, third_access, &to_exit);
+        append(context, exit, &ret);
+
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        match case {
+            LayoutCase::SharedEntryArguments => assert!(
+                report.is_clean(),
+                "shared grid-uniform layout must prove disjoint: {report:?}"
+            ),
+            LayoutCase::DifferentEntryArguments | LayoutCase::InvocationVarying => {
+                assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+                assert!(matches!(
+                    report.findings(),
+                    [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn dynamic_multiaxis_mapping_requires_every_active_axis() {
+    for drop_y in [false, true] {
+        let context = &mut setup();
+        let function = function(context, "dynamic_multiaxis");
+        let entry = function.get_entry_block(context);
+        let y_guard = block(context, &function, "y_guard");
+        let access_block = block(context, &function, "access");
+        let exit = block(context, &function, "exit");
+        let shape = if drop_y { vec![1024] } else { vec![1024, 1024] };
+        let output = view(context, shape, MemorySpaceAttr::Global);
+        let x = InvocationIndexOp::new(context, 0, 0);
+        let y = InvocationIndexOp::new(context, 1, 0);
+        let extent = IndexConstantOp::new(context, 1024);
+        let x_branch = IndexLessThanBranchOp::new(
+            context,
+            x.result(context),
+            extent.result(context),
+            y_guard,
+            exit,
+        );
+        let y_branch = IndexLessThanBranchOp::new(
+            context,
+            y.result(context),
+            extent.result(context),
+            access_block,
+            exit,
+        );
+        let indices = if drop_y {
+            vec![x.result(context)]
+        } else {
+            vec![x.result(context), y.result(context)]
+        };
+        let write = RankedAccessOp::new(
+            context,
+            AccessKindAttr::Write,
+            output.result(context),
+            indices,
+        )
+        .unwrap();
+        let to_exit = BranchOp::new(context, exit);
+        let ret = ReturnOp::new(context);
+        for operation in [
+            output.get_operation(),
+            x.get_operation(),
+            y.get_operation(),
+            extent.get_operation(),
+            x_branch.get_operation(),
+        ] {
+            operation.insert_at_back(entry, context);
+        }
+        append(context, y_guard, &y_branch);
+        append(context, access_block, &write);
+        append(context, access_block, &to_exit);
+        append(context, exit, &ret);
+
+        let report = run_pliron_ranked_race_check_v1(context, &function);
+        assert_eq!(
+            report.status(),
+            if drop_y {
+                KernelCheckStatusV1::Incomplete
+            } else {
+                KernelCheckStatusV1::Clean
+            }
+        );
+    }
+}
+
+#[test]
+fn nonlinear_dynamic_mapping_remains_incomplete_even_with_finite_guards() {
+    let context = &mut setup();
+    let function = function(context, "nonlinear_dynamic_mapping");
+    let entry = function.get_entry_block(context);
+    let index_guard = block(context, &function, "index_guard");
+    let access_block = block(context, &function, "access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![16], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let square = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Multiply,
+        invocation.result(context),
+        invocation.result(context),
+    );
+    let invocation_extent = IndexConstantOp::new(context, 4);
+    let output_extent = IndexConstantOp::new(context, 16);
+    let invocation_guard = IndexLessThanBranchOp::new(
+        context,
+        invocation.result(context),
+        invocation_extent.result(context),
+        index_guard,
+        exit,
+    );
+    let bounds_guard = IndexLessThanBranchOp::new(
+        context,
+        square.result(context),
+        output_extent.result(context),
+        access_block,
+        exit,
+    );
+    let write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        square.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        square.get_operation(),
+        invocation_extent.get_operation(),
+        output_extent.get_operation(),
+        invocation_guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, index_guard, &bounds_guard);
+    append(context, access_block, &write);
+    append(context, access_block, &to_exit);
+    append(context, exit, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::DynamicLaunchExtent { dimension: 0 }]
+    ));
+}
+
+#[test]
 fn checked_row_striped_raw_invocation_is_injective_for_a_dynamic_launch() {
     let context = &mut setup();
     let function = function(context, "checked_row_striped_dynamic_raw_invocation");
@@ -899,6 +1185,87 @@ fn checked_row_striped_raw_invocation_is_injective_for_a_dynamic_launch() {
     append(context, access_block, &write);
     append(context, access_block, &to_exit);
     append(context, exit, &ret);
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn checked_row_striped_shared_dynamic_layout_is_injective() {
+    let context = &mut setup();
+    let (function, layout) =
+        function_with_index_arguments(context, "checked_row_striped_dynamic_layout", 3);
+    let entry = function.get_entry_block(context);
+    let second_access = block(context, &function, "second_access");
+    let third_access = block(context, &function, "third_access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![4096], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let component_zero = IndexConstantOp::new(context, 0);
+    let component_one = IndexConstantOp::new(context, 1);
+    let extent = IndexConstantOp::new(context, 4096);
+    let first = CheckedRowStripedIndex2DOp::new(
+        context,
+        invocation.result(context),
+        component_zero.result(context),
+        layout[0],
+        layout[1],
+        layout[2],
+        [64, 4],
+    );
+    let second = CheckedRowStripedIndex2DOp::new(
+        context,
+        invocation.result(context),
+        component_one.result(context),
+        layout[0],
+        layout[1],
+        layout[2],
+        [64, 4],
+    );
+    let first_guard = IndexLessThanBranchOp::new(
+        context,
+        first.result(context),
+        extent.result(context),
+        second_access,
+        exit,
+    );
+    let first_write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        first.result(context),
+    );
+    let second_guard = IndexLessThanBranchOp::new(
+        context,
+        second.result(context),
+        extent.result(context),
+        third_access,
+        exit,
+    );
+    let second_write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        second.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        component_zero.get_operation(),
+        component_one.get_operation(),
+        extent.get_operation(),
+        first.get_operation(),
+        second.get_operation(),
+        first_guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, second_access, &first_write);
+    append(context, second_access, &second_guard);
+    append(context, third_access, &second_write);
+    append(context, third_access, &to_exit);
+    append(context, exit, &ret);
+
     assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
 }
 
