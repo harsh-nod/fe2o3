@@ -14,6 +14,10 @@ bundle bytes and labeled `compiler_bundle_bound`; callers cannot override it
 with `--source-map`. This label proves exact bundle content association only,
 not compiler execution, source authorship, hardware observation, or authority.
 When a bundle has no map, source features remain typed `unavailable`.
+Compiler-exported bundles normally contain a map derived from the same rustc
+and semantic-KIR transaction. V1 exposes resolved call-site spans only;
+synthetic KIR operations, source variables, and macro expansion stacks remain
+typed unavailable rather than being inferred.
 
 The simulator exposes work-item, logical wave, workgroup, KIR operation, SSA,
 allocation-relative ordinary and integer-atomic memory, fence order points,

@@ -210,19 +210,23 @@ impl AuthenticatedRustcPreflightPlanV3 {
     }
 }
 
+/// Same-session semantic import result transferred into the sole production
+/// transaction. Keeping the custody axes named prevents accidental positional
+/// substitution as the import surface grows.
+pub(crate) struct ConstructedProductionSemanticMirV1 {
+    pub(crate) semantic_mir: AdmittedInertSemanticMirV1,
+    pub(crate) rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3,
+    pub(crate) rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3,
+    pub(crate) rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
+    pub(crate) reference_effect_bindings:
+        crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    pub(crate) debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
+}
+
 pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
-) -> Result<
-    (
-        AdmittedInertSemanticMirV1,
-        AuthenticatedRustcIdentityInventoryV3,
-        AuthenticatedRustcPreflightPlanV3,
-        crate::production_target_v1::AuthenticatedProductionTargetV1,
-        crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
-    ),
-    ProductionSemanticImportErrorV1,
-> {
+) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
         collection,
@@ -331,23 +335,24 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
-    let (rustc_preflight_plan_sha256, rustc_preflight_plan_transcript) =
-        plan.into_identity_and_canonical_transcript();
+    let (rustc_preflight_plan_sha256, rustc_preflight_plan_transcript, debug_source_files) =
+        plan.into_identity_transcript_and_debug_files();
     drop(collection);
-    Ok((
+    Ok(ConstructedProductionSemanticMirV1 {
         semantic_mir,
-        AuthenticatedRustcIdentityInventoryV3 {
+        rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
             sha256: rustc_identity_inventory_sha256,
             canonical_transcript: rustc_identity_inventory_transcript,
         },
-        AuthenticatedRustcPreflightPlanV3 {
+        rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3 {
             sha256: rustc_preflight_plan_sha256,
             rustc_identity_inventory_sha256,
             canonical_transcript: rustc_preflight_plan_transcript,
         },
-        target,
+        rustc_target: target,
         reference_effect_bindings,
-    ))
+        debug_source_files,
+    })
 }
 
 fn require_lineage_transcript_bound_v3(

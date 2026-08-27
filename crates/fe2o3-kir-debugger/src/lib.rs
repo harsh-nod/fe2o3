@@ -1542,14 +1542,14 @@ impl DebugSourceCatalogV1 {
         }
         for site in &sites {
             for span in &site.spans {
-                if !source_span_valid(&files, *span) {
+                if !source_span_valid(&files, *span, false) {
                     return Err(DebuggerErrorV1::InvalidSourceCatalog);
                 }
             }
         }
         if eliminated
             .iter()
-            .any(|span| !source_span_valid(&files, *span))
+            .any(|span| !source_span_valid(&files, *span, true))
         {
             return Err(DebuggerErrorV1::InvalidSourceCatalog);
         }
@@ -1669,12 +1669,17 @@ fn source_span_key(span: &DebugSourceSpanV1) -> ([u8; 32], u64, u64, u32, u32) {
     )
 }
 
-fn source_span_valid(files: &[DebugSourceFileV1], span: DebugSourceSpanV1) -> bool {
+fn source_span_valid(
+    files: &[DebugSourceFileV1],
+    span: DebugSourceSpanV1,
+    allow_empty: bool,
+) -> bool {
     files
         .binary_search_by_key(&span.file, |file| file.identity)
         .ok()
         .is_some_and(|index| {
-            span.byte_start < span.byte_end
+            span.byte_start <= span.byte_end
+                && (allow_empty || span.byte_start < span.byte_end)
                 && span.byte_end <= files[index].byte_len
                 && span.line > 0
                 && span.column > 0

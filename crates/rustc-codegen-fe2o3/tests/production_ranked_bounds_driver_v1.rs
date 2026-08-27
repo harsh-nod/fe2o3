@@ -1,6 +1,9 @@
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::{Value, json};
 
 struct ScratchTarget {
     path: PathBuf,
@@ -36,6 +39,10 @@ fn workspace() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("canonical workspace")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[test]
@@ -232,7 +239,52 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
             > 0
     );
     assert!(bundle.source_lineage().rustc_preflight_plan_receipt_bytes() > 0);
-    assert!(bundle.debug_map().is_none());
+    let map_bytes = bundle
+        .debug_map()
+        .expect("compiler extraction embeds one exact source map");
+    let map = fe2o3_kernel_ir::DebugSourceMapDocumentV1::from_json_bytes(map_bytes)
+        .expect("compiler source map uses the strict shared codec");
+    assert_eq!(
+        map.binding().bundle_subject_identity(),
+        *bundle.subject_identity()
+    );
+    assert_eq!(
+        map.binding().canonical_kir().digest(),
+        *bundle.canonical_kir_v7_identity().digest()
+    );
+    assert_eq!(
+        map.binding().canonical_kir().canonical_bytes(),
+        bundle.canonical_kir_v7_identity().canonical_length()
+    );
+    assert_eq!(
+        bundle.debug_map_identity(),
+        Some(fe2o3_kernel_ir::simulation_debug_map_identity_v1(map_bytes))
+    );
+    let source_file = map
+        .files()
+        .iter()
+        .find(|file| {
+            file.display_path()
+                .ends_with("production-ranked-bounds-device/src/lib.rs")
+        })
+        .expect("map retains the ordinary-source display path");
+    assert_eq!(
+        source_file.byte_len(),
+        std::fs::metadata(workspace().join(
+            "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs",
+        ))
+        .unwrap()
+        .len()
+    );
+    assert!(!map.sites().is_empty());
+    assert!(!map.eliminated().is_empty());
+    assert!(map.sites().windows(2).any(|sites| {
+        sites[0].site().function_ordinal() == sites[1].site().function_ordinal()
+            && sites[0].site().block_ordinal() == sites[1].site().block_ordinal()
+            && sites[0].site().operation_ordinal().checked_add(1)
+                == Some(sites[1].site().operation_ordinal())
+            && sites[0].spans() == sites[1].spans()
+    }));
     assert!(!bundle.canonical_kir_v7().is_empty());
     assert!(!bundle.grants_proof_authority());
     assert!(!bundle.grants_artifact_authority());
@@ -241,6 +293,188 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
     assert!(!bundle.grants_load_authority());
     assert!(!bundle.grants_launch_authority());
     assert!(!bundle.authenticates_compiler_execution());
+
+    let simulation_request_path = target.path().join("request.json");
+    std::fs::write(
+        &simulation_request_path,
+        serde_json::to_vec(&json!({
+            "schema": "fe2o3-simulation-request-v1",
+            "kernel": "copy_static",
+            "grid": [1, 1, 1],
+            "workgroup": [64, 1, 1],
+            "arguments": [
+                {
+                    "kind": "scalar",
+                    "type": "f32",
+                    "bits": "0x3fc00000",
+                },
+                {
+                    "kind": "buffer",
+                    "element": "f32",
+                    "access": "read_write",
+                    "alignment": 4,
+                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                },
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mapped_site = map
+        .sites()
+        .iter()
+        .find(|site| {
+            site.spans()
+                .iter()
+                .any(|span| span.file_identity() == source_file.identity())
+        })
+        .expect("ordinary source has at least one mapped KIR operation");
+    let mapped_span = mapped_site
+        .spans()
+        .iter()
+        .find(|span| span.file_identity() == source_file.identity())
+        .unwrap();
+    let map_identity = bundle.debug_map_identity().unwrap();
+    let site = mapped_site.site();
+    let mut protocol_input = Vec::new();
+    for request in [
+        json!({
+            "operation": "resolve_source",
+            "schema": "fe2o3-debug-request-v1",
+            "request_id": 1,
+            "expected_revision": 0,
+            "site": {
+                "function_ordinal": site.function_ordinal(),
+                "block_ordinal": site.block_ordinal(),
+                "point": {
+                    "kind": "operation",
+                    "operation_ordinal": site.operation_ordinal(),
+                },
+            },
+        }),
+        json!({
+            "operation": "set_breakpoints",
+            "schema": "fe2o3-debug-request-v1",
+            "request_id": 2,
+            "expected_revision": 0,
+            "breakpoints": [{
+                "enabled": true,
+                "kind": {
+                    "kind": "source",
+                    "source": {
+                        "map_identity": hex(&map_identity),
+                        "provenance": "compiler_bundle_bound",
+                        "file_identity": hex(&mapped_span.file_identity()),
+                        "byte_start": mapped_span.byte_start(),
+                        "byte_end": mapped_span.byte_end(),
+                    },
+                },
+            }],
+        }),
+        json!({
+            "operation": "continue",
+            "schema": "fe2o3-debug-request-v1",
+            "request_id": 3,
+            "expected_revision": 1,
+            "max_events": 65536,
+        }),
+        json!({
+            "operation": "inspect_stack",
+            "schema": "fe2o3-debug-request-v1",
+            "request_id": 4,
+            "expected_revision": 2,
+            "scope": { "level": "dispatch" },
+            "page": { "limit": 16 },
+        }),
+        json!({
+            "operation": "step",
+            "schema": "fe2o3-debug-request-v1",
+            "request_id": 5,
+            "expected_revision": 2,
+            "direction": "forward",
+            "granularity": "source",
+            "count": 1,
+        }),
+    ] {
+        serde_json::to_writer(&mut protocol_input, &request).unwrap();
+        protocol_input.push(b'\n');
+    }
+
+    let debug_target = target.path().join("debug-cli-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build standalone debugger for compiler-output integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+    let mut debugger = Command::new(debug_target.join("debug/fe2o3-debug"))
+        .args(["sim", "--bundle"])
+        .arg(&bundle_path)
+        .arg("--request")
+        .arg(&simulation_request_path)
+        .args(["--protocol", "jsonl", "--wave-width", "64"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run debugger on compiler-produced simulation bundle");
+    debugger
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&protocol_input)
+        .unwrap();
+    let debug_output = debugger.wait_with_output().unwrap();
+    assert!(
+        debug_output.status.success(),
+        "debugger rejected compiler output:\n{}",
+        String::from_utf8_lossy(&debug_output.stderr)
+    );
+    assert!(debug_output.stderr.is_empty());
+    let responses = debug_output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 5);
+    assert!(responses.iter().all(|response| response["status"] == "ok"));
+    assert_eq!(responses[0]["result"]["result"], "source");
+    assert_eq!(
+        responses[0]["result"]["site"]["source"]["location"]["provenance"],
+        "compiler_bundle_bound"
+    );
+    assert_eq!(
+        responses[0]["result"]["site"]["source"]["location"]["map_identity"],
+        hex(&map_identity)
+    );
+    assert_eq!(responses[2]["result"]["stop"]["reason"], "breakpoint");
+    assert_eq!(responses[3]["result"]["result"], "stack");
+    assert!(
+        responses[3]["result"]["frames"]
+            .as_array()
+            .is_some_and(|frames| !frames.is_empty())
+    );
+    assert_eq!(responses[4]["operation"], "step");
+    assert!(responses.iter().all(|response| {
+        response["session"]["simulated"] == true
+            && response["session"]["hardware_observed"] == false
+            && response["session"]["performance_prediction"] == false
+    }));
 }
 
 struct ExtractionOutput {

@@ -1,5 +1,6 @@
 //! Neutral rustc-derived identity primitives for canonical semantic MIR.
 
+use fe2o3_kernel_ir::DebugSourceMapFileV1;
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiIdentityV1, SemanticBlockIdentityV1, SemanticConstGenericArgumentsIdentityV1,
     SemanticFunctionIdentityV1, SemanticGenericTypeArgumentsIdentityV1,
@@ -98,6 +99,7 @@ pub(crate) enum CanonicalSourceErrorV1 {
     CrossFileSpan,
     InvalidPosition,
     CoordinateOverflow,
+    InvalidDebugSourceFile,
     ExpansionDepthExceeded { actual: usize, maximum: usize },
 }
 
@@ -109,6 +111,9 @@ impl std::fmt::Display for CanonicalSourceErrorV1 {
             Self::InvalidPosition => formatter.write_str("source span has invalid coordinates"),
             Self::CoordinateOverflow => {
                 formatter.write_str("source coordinate exceeds canonical width")
+            }
+            Self::InvalidDebugSourceFile => {
+                formatter.write_str("source file exceeds debug-map identity or path bounds")
             }
             Self::ExpansionDepthExceeded { actual, maximum } => write!(
                 formatter,
@@ -371,7 +376,36 @@ pub(crate) fn canonical_source_provenance_v1(
 ) -> Result<CanonicalSourceProvenanceV1, CanonicalSourceErrorV1> {
     let expansion = canonical_source_origin_v1(tcx, span)?;
     let call_site = canonical_source_origin_v1(tcx, span.source_callsite())?;
+    canonical_source_provenance_from_origins_v1(
+        tcx,
+        span,
+        maximum_expansion_depth,
+        expansion,
+        call_site,
+    )
+}
 
+/// Captures semantic provenance and exact live-rustc file metadata together.
+///
+/// Display paths are remapped diagnostic labels. Source bytes remain under
+/// rustc `SourceMap` custody and are used only to derive the exact byte length.
+pub(crate) fn canonical_source_provenance_and_debug_files_v1(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    maximum_expansion_depth: usize,
+) -> Result<(CanonicalSourceProvenanceV1, Option<DebugSourceMapFileV1>), CanonicalSourceErrorV1> {
+    let provenance = canonical_source_provenance_v1(tcx, span, maximum_expansion_depth)?;
+    let (_, debug_file) = canonical_source_origin_and_debug_file_v1(tcx, span.source_callsite())?;
+    Ok((provenance, Some(debug_file)))
+}
+
+fn canonical_source_provenance_from_origins_v1(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    maximum_expansion_depth: usize,
+    expansion: SemanticSourceOriginV1,
+    call_site: SemanticSourceOriginV1,
+) -> Result<CanonicalSourceProvenanceV1, CanonicalSourceErrorV1> {
     let mut expansion_chain = SemanticIdentityDigestV1::new(EXPANSION_CHAIN_DOMAIN_V1);
     expansion_chain.field(&stable_fingerprint!(tcx, span));
     expansion_chain.field(&stable_fingerprint!(tcx, span.ctxt()));
@@ -434,6 +468,67 @@ fn canonical_source_origin_v1(
         u32::try_from(start.line).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
     let line_end =
         u32::try_from(end.line).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let column_start = u32::try_from(
+        start
+            .col
+            .0
+            .checked_add(1)
+            .ok_or(CanonicalSourceErrorV1::CoordinateOverflow)?,
+    )
+    .map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let column_end = u32::try_from(
+        end.col
+            .0
+            .checked_add(1)
+            .ok_or(CanonicalSourceErrorV1::CoordinateOverflow)?,
+    )
+    .map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let file = SemanticSourceFileIdentityV1::from_sha256(domain_digest(
+        SOURCE_FILE_DOMAIN_V1,
+        &[&stable_fingerprint!(tcx, start.file.stable_id)],
+    ));
+    SemanticSourceOriginV1::new(
+        file,
+        u64::from(byte_start),
+        u64::from(byte_end),
+        line_start,
+        column_start,
+        line_end,
+        column_end,
+    )
+    .map_err(|_| CanonicalSourceErrorV1::InvalidPosition)
+}
+
+fn canonical_source_origin_and_debug_file_v1(
+    tcx: TyCtxt<'_>,
+    span: Span,
+) -> Result<(SemanticSourceOriginV1, DebugSourceMapFileV1), CanonicalSourceErrorV1> {
+    if span.is_dummy() {
+        return Err(CanonicalSourceErrorV1::DummySpan);
+    }
+    let source_map = tcx.sess.source_map();
+    let start = source_map.lookup_char_pos(span.lo());
+    let end = source_map.lookup_char_pos(span.hi());
+    if start.file.stable_id != end.file.stable_id {
+        return Err(CanonicalSourceErrorV1::CrossFileSpan);
+    }
+    if start.line == 0 || end.line == 0 || (start.line, start.col.0) > (end.line, end.col.0) {
+        return Err(CanonicalSourceErrorV1::InvalidPosition);
+    }
+    let byte_start = span
+        .lo()
+        .0
+        .checked_sub(start.file.start_pos.0)
+        .ok_or(CanonicalSourceErrorV1::InvalidPosition)?;
+    let byte_end = span
+        .hi()
+        .0
+        .checked_sub(start.file.start_pos.0)
+        .ok_or(CanonicalSourceErrorV1::InvalidPosition)?;
+    let line_start =
+        u32::try_from(start.line).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
+    let line_end =
+        u32::try_from(end.line).map_err(|_| CanonicalSourceErrorV1::CoordinateOverflow)?;
     let column_start = start
         .col
         .0
@@ -452,7 +547,7 @@ fn canonical_source_origin_v1(
         SOURCE_FILE_DOMAIN_V1,
         &[&stable_fingerprint!(tcx, start.file.stable_id)],
     ));
-    SemanticSourceOriginV1::new(
+    let origin = SemanticSourceOriginV1::new(
         file,
         u64::from(byte_start),
         u64::from(byte_end),
@@ -461,7 +556,24 @@ fn canonical_source_origin_v1(
         line_end,
         column_end,
     )
-    .map_err(|_| CanonicalSourceErrorV1::InvalidPosition)
+    .map_err(|_| CanonicalSourceErrorV1::InvalidPosition)?;
+    let byte_len = u64::from(
+        start
+            .file
+            .end_position()
+            .0
+            .checked_sub(start.file.start_pos.0)
+            .ok_or(CanonicalSourceErrorV1::InvalidPosition)?,
+    );
+    let display_path = start
+        .file
+        .name
+        .prefer_remapped_unconditionally()
+        .to_string_lossy()
+        .into_owned();
+    let debug_file = DebugSourceMapFileV1::new(*file.as_bytes(), byte_len, display_path)
+        .map_err(|_| CanonicalSourceErrorV1::InvalidDebugSourceFile)?;
+    Ok((origin, debug_file))
 }
 
 /// Returns the exact bounded, domain-framed preimage of the target-layout identity.

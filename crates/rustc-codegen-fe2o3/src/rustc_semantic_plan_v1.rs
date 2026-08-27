@@ -38,11 +38,11 @@ use crate::production_semantic_terminal_v1::{
 };
 use crate::rustc_semantic_adapter_v1::{
     CanonicalFunctionIdentitiesV1, CanonicalSourceProvenanceV1, SemanticIdentityDigestV1,
-    canonical_function_identities_v1, canonical_source_provenance_v1, rustc_block_identity_v1,
-    rustc_fn_abi_sha256_v1, rustc_fn_signature_sha256_v1, rustc_local_identity_v1,
-    rustc_mir_body_sha256_v1, rustc_semantic_fn_abi_identity_v1,
-    rustc_semantic_fn_abi_layout_identity_v1, rustc_semantic_layout_identity_v1,
-    rustc_type_identity_v1, rustc_type_layout_sha256_v1,
+    canonical_function_identities_v1, canonical_source_provenance_and_debug_files_v1,
+    canonical_source_provenance_v1, rustc_block_identity_v1, rustc_fn_abi_sha256_v1,
+    rustc_fn_signature_sha256_v1, rustc_local_identity_v1, rustc_mir_body_sha256_v1,
+    rustc_semantic_fn_abi_identity_v1, rustc_semantic_fn_abi_layout_identity_v1,
+    rustc_semantic_layout_identity_v1, rustc_type_identity_v1, rustc_type_layout_sha256_v1,
 };
 
 const PREFLIGHT_PLAN_DOMAIN_V1: &[u8] = b"fe2o3/semantic-mir/rustc-preflight-plan/v1";
@@ -281,6 +281,7 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     direct_calls: Box<[DirectCallRecipeV1]>,
     terminal_expansions: Box<[TerminalExpansionRecipeV1<'tcx>]>,
     normalized_intrinsics: Box<[NormalizedRustcIntrinsicRecipeV1<'tcx>]>,
+    debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
     sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
 }
@@ -328,8 +329,18 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
         &self.canonical_transcript
     }
 
-    pub(crate) fn into_identity_and_canonical_transcript(self) -> ([u8; 32], Box<[u8]>) {
-        (self.sha256, self.canonical_transcript)
+    pub(crate) fn into_identity_transcript_and_debug_files(
+        self,
+    ) -> (
+        [u8; 32],
+        Box<[u8]>,
+        Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
+    ) {
+        (
+            self.sha256,
+            self.canonical_transcript,
+            self.debug_source_files,
+        )
     }
 }
 
@@ -651,6 +662,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     let mut types = BTreeMap::new();
     let mut source_producers = Vec::with_capacity(functions.len());
     let mut source_cache = HashMap::new();
+    let mut debug_source_files = BTreeMap::new();
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
         let body = tcx.instance_mir(function.instance.def);
@@ -659,6 +671,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
             function_id,
             body,
             &mut source_cache,
+            &mut debug_source_files,
             &mut counts,
             limits,
         )
@@ -795,6 +808,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         direct_calls,
         terminal_expansions,
         normalized_intrinsics,
+        debug_source_files: debug_source_files.into_values().collect(),
         sha256,
         canonical_transcript,
     })
@@ -1315,6 +1329,7 @@ fn capture_body_sources_v1<'tcx>(
     function: SemanticFunctionIdV1,
     body: &Body<'tcx>,
     cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
+    debug_source_files: &mut BTreeMap<[u8; 32], fe2o3_kernel_ir::DebugSourceMapFileV1>,
     counts: &mut RawMirPreflightCountsV1,
     limits: SemanticMirLimitsV1,
 ) -> Result<RetainedRawBodySourceProducerV1, PendingRejectionV1> {
@@ -1325,7 +1340,15 @@ fn capture_body_sources_v1<'tcx>(
         local: None,
         span: body.span,
     };
-    let source = capture_source_v1(tcx, body.span, function_site, cache, counts, limits)?;
+    let source = capture_source_v1(
+        tcx,
+        body.span,
+        function_site,
+        cache,
+        debug_source_files,
+        counts,
+        limits,
+    )?;
 
     let mut locals = Vec::with_capacity(body.local_decls.len());
     for (local, declaration) in body.local_decls.iter_enumerated() {
@@ -1341,6 +1364,7 @@ fn capture_body_sources_v1<'tcx>(
             source_span_or_body_v1(declaration.source_info.span, body.span),
             site,
             cache,
+            debug_source_files,
             counts,
             limits,
         )?);
@@ -1374,6 +1398,7 @@ fn capture_body_sources_v1<'tcx>(
                 source_span_or_body_v1(statement.source_info.span, body.span),
                 site,
                 cache,
+                debug_source_files,
                 counts,
                 limits,
             )?);
@@ -1390,6 +1415,7 @@ fn capture_body_sources_v1<'tcx>(
             source_span_or_body_v1(terminator.source_info.span, body.span),
             terminator_site,
             cache,
+            debug_source_files,
             counts,
             limits,
         )?;
@@ -1419,14 +1445,30 @@ fn capture_source_v1(
     span: Span,
     site: RejectionSiteV1,
     cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
+    debug_source_files: &mut BTreeMap<[u8; 32], fe2o3_kernel_ir::DebugSourceMapFileV1>,
     counts: &mut RawMirPreflightCountsV1,
     limits: SemanticMirLimitsV1,
 ) -> Result<RetainedSemanticSourceProducerV1, PendingRejectionV1> {
     if let Some(source) = cache.get(&span).copied() {
         return Ok(source);
     }
-    let captured = canonical_source_provenance_v1(tcx, span, MAX_MACRO_EXPANSION_DEPTH_V1)
-        .map_err(|error| reject(format!("invalid source provenance: {error}"), site))?;
+    let (captured, file) =
+        canonical_source_provenance_and_debug_files_v1(tcx, span, MAX_MACRO_EXPANSION_DEPTH_V1)
+            .map_err(|error| reject(format!("invalid source provenance: {error}"), site))?;
+    if let Some(file) = file {
+        match debug_source_files.entry(file.identity()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(file);
+            }
+            std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &file => {}
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err(reject(
+                    "stable source-file identity resolved to inconsistent live-rustc metadata",
+                    site,
+                ));
+            }
+        }
+    }
     counts
         .charge(
             SemanticMirResourceV1::ValidationWork,

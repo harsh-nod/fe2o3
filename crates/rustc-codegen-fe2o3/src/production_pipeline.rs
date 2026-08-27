@@ -5,6 +5,7 @@
 //! consuming target-authentication boundary and moves an admitted request into
 //! a typed stage before the mandatory generic kernel-verification pipeline.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -42,6 +43,8 @@ pub(crate) enum ProductionPipelineError {
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
+    SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
+    SimulationDebugMapCorrespondence(&'static str),
     SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
     SimulationProductionKirV9,
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
@@ -89,6 +92,14 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationBundle(error) => {
                 write!(formatter, "production compilation simulation bundle failed: {error}")
             }
+            Self::SimulationDebugMap(error) => write!(
+                formatter,
+                "production compilation simulation debug map failed: {error}"
+            ),
+            Self::SimulationDebugMapCorrespondence(detail) => write!(
+                formatter,
+                "production compilation simulation debug-map correspondence failed: {detail}"
+            ),
             Self::SimulationSourceLineage(error) => write!(
                 formatter,
                 "production compilation simulation source-lineage receipt failed: {error}"
@@ -152,6 +163,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::TargetNeutralLowering(error) => Some(error),
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
+            Self::SimulationDebugMap(error) => Some(error),
             Self::SimulationSourceLineage(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
@@ -167,6 +179,7 @@ impl std::error::Error for ProductionPipelineError {
             | Self::EmptyCollectedDeviceClosure
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
+            | Self::SimulationDebugMapCorrespondence(_)
             | Self::UpstreamLlvmLayoutBinding(_)
             | Self::ExtractionCannotPublish
             | Self::WorkerHandoffExtractionRequiresExtractionCustody => None,
@@ -245,6 +258,7 @@ struct AuthenticatedProductionBindings {
     rustc_preflight_plan: crate::collector::AuthenticatedRustcPreflightPlanV3,
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindings,
 }
@@ -349,7 +363,6 @@ impl TargetNeutralProductionCompilation {
     fn into_simulation_bundle_v1(
         self,
         compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
-        debug_map: Option<fe2o3_kernel_ir::SimulationDebugMapV1>,
     ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
         let Self {
             lowered,
@@ -401,15 +414,19 @@ impl TargetNeutralProductionCompilation {
             preflight_identity.byte_len(),
         )
         .map_err(ProductionPipelineError::SimulationBundle)?;
-        fe2o3_kernel_ir::VerifiedSimulationBundleV1::new(
+        let prepared = fe2o3_kernel_ir::PreparedSimulationBundleV1::new(
             compiler_execution_binding,
             lineage,
             production_identity,
             bindings.rustc_target.profile().device_target(),
             canonical_v7,
-            debug_map,
         )
-        .map_err(ProductionPipelineError::SimulationBundle)
+        .map_err(ProductionPipelineError::SimulationBundle)?;
+        let debug_map =
+            compiler_debug_source_map_v1(&lowered, &bindings.debug_source_files, &prepared)?;
+        prepared
+            .finalize_with_source_map(debug_map)
+            .map_err(ProductionPipelineError::SimulationBundle)
     }
 
     fn admit_formal_memory(
@@ -660,6 +677,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings: _,
+            debug_source_files: _,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -721,6 +739,7 @@ impl TargetLoweredProductionCompilation {
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings,
+            debug_source_files: _,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -806,6 +825,307 @@ impl TargetLoweredProductionCompilation {
         )
         .map_err(ProductionPipelineError::CompilerExecutionSubject)
     }
+}
+
+fn sole_debug_map_body_v1(
+    module: &fe2o3_kernel_ir::Module,
+) -> Result<(usize, &fe2o3_kernel_ir::FunctionBody), ProductionPipelineError> {
+    let mut bodies = module
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, function)| function.body.as_ref().map(|body| (ordinal, body)));
+    let body = bodies
+        .next()
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "lowered KIR has no function body",
+        ))?;
+    if bodies.next().is_some() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "V1 correspondence does not distinguish multiple KIR function bodies",
+        ));
+    }
+    Ok(body)
+}
+
+fn compiler_debug_source_map_v1(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
+    prepared: &fe2o3_kernel_ir::PreparedSimulationBundleV1,
+) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV1, ProductionPipelineError> {
+    let (function_ordinal, body) = sole_debug_map_body_v1(lowered.module())?;
+    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "KIR function ordinal does not fit the source-map wire",
+        )
+    })?;
+    let block_ordinals = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(ordinal, block)| (block.id, ordinal))
+        .collect::<BTreeMap<_, _>>();
+    if block_ordinals.len() != body.blocks.len() {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "KIR body has duplicate block identities",
+        ));
+    }
+
+    let mut mapped = BTreeMap::new();
+    let mut eliminated = BTreeSet::new();
+    for span in lowered.correspondence().statement_operation_spans() {
+        let source = lowered
+            .semantic()
+            .resolve_statement(
+                span.semantic_function(),
+                span.semantic_block(),
+                span.statement_ordinal(),
+            )
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "statement correspondence does not resolve in retained semantic MIR",
+            ))?
+            .source();
+        insert_debug_operation_range_v1(
+            function_ordinal,
+            body,
+            &block_ordinals,
+            span.kernel_ir_block(),
+            span.first_operation_ordinal(),
+            span.operation_count(),
+            source,
+            &mut mapped,
+            &mut eliminated,
+        )?;
+    }
+    for span in lowered.correspondence().terminator_operation_spans() {
+        let source = lowered
+            .semantic()
+            .resolve_terminator(span.semantic_function(), span.semantic_block())
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "terminator correspondence does not resolve in retained semantic MIR",
+            ))?
+            .source();
+        insert_debug_operation_range_v1(
+            function_ordinal,
+            body,
+            &block_ordinals,
+            span.kernel_ir_block(),
+            span.first_operation_ordinal(),
+            span.operation_count(),
+            source,
+            &mut mapped,
+            &mut eliminated,
+        )?;
+    }
+
+    let mut synthetic = BTreeSet::new();
+    for span in lowered.correspondence().synthetic_operation_spans() {
+        let block_ordinal = debug_block_ordinal_v1(
+            body,
+            &block_ordinals,
+            span.kernel_ir_block(),
+            span.first_operation_ordinal(),
+            span.operation_count(),
+        )?;
+        for operation in span.first_operation_ordinal()
+            ..span
+                .first_operation_ordinal()
+                .checked_add(span.operation_count())
+                .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "synthetic KIR operation range overflows",
+                ))?
+        {
+            let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
+                function_ordinal,
+                block_ordinal,
+                u64::from(operation),
+            );
+            if !synthetic.insert(site) || mapped.contains_key(&site) {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "synthetic and semantic operation ranges overlap",
+                ));
+            }
+        }
+    }
+    for (block_ordinal, block) in body.blocks.iter().enumerate() {
+        for operation_ordinal in 0..block.operations.len() {
+            let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
+                function_ordinal,
+                u64::try_from(block_ordinal).map_err(|_| {
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        "KIR block ordinal does not fit the source-map wire",
+                    )
+                })?,
+                u64::try_from(operation_ordinal).map_err(|_| {
+                    ProductionPipelineError::SimulationDebugMapCorrespondence(
+                        "KIR operation ordinal does not fit the source-map wire",
+                    )
+                })?,
+            );
+            if mapped.contains_key(&site) == synthetic.contains(&site) {
+                return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "KIR operation is not covered exactly once by semantic or synthetic correspondence",
+                ));
+            }
+        }
+    }
+
+    let referenced_files = mapped
+        .values()
+        .chain(&eliminated)
+        .map(|span| span.file_identity())
+        .collect::<BTreeSet<_>>();
+    let captured_files = captured_files
+        .iter()
+        .map(|file| (file.identity(), file))
+        .collect::<BTreeMap<_, _>>();
+    let files = referenced_files
+        .into_iter()
+        .map(|identity| {
+            captured_files.get(&identity).cloned().cloned().ok_or(
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "semantic source span has no same-session rustc file observation",
+                ),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let sites = mapped
+        .into_iter()
+        .map(|(site, span)| {
+            fe2o3_kernel_ir::DebugSourceMapSiteV1::new(site, vec![span])
+                .map_err(ProductionPipelineError::SimulationDebugMap)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    fe2o3_kernel_ir::DebugSourceMapDocumentV1::new(
+        prepared.debug_source_map_binding(),
+        files,
+        sites,
+        eliminated.into_iter().collect(),
+    )
+    .map_err(ProductionPipelineError::SimulationDebugMap)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_debug_operation_range_v1(
+    function_ordinal: u64,
+    body: &fe2o3_kernel_ir::FunctionBody,
+    block_ordinals: &BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
+    block: fe2o3_kernel_ir::BlockId,
+    first_operation: u32,
+    operation_count: u32,
+    source: fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1,
+    mapped: &mut BTreeMap<
+        fe2o3_kernel_ir::DebugSourceMapKirSiteV1,
+        fe2o3_kernel_ir::DebugSourceMapSpanV1,
+    >,
+    eliminated: &mut BTreeSet<fe2o3_kernel_ir::DebugSourceMapSpanV1>,
+) -> Result<(), ProductionPipelineError> {
+    // V1 intentionally resolves every macro-originated construct to rustc's
+    // final source call site. Expansion-chain identity remains in semantic MIR
+    // but is not serialized as a source-map span in this version.
+    let origin =
+        source
+            .call_site()
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "semantic operation has no resolved source call site",
+            ))?;
+    let (byte_start, byte_end) = origin.byte_range();
+    let (line, column) = origin.start_coordinate();
+    if operation_count != 0 && byte_start >= byte_end {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "resolved source call-site span is empty",
+        ));
+    }
+    let source_span = if operation_count == 0 {
+        fe2o3_kernel_ir::DebugSourceMapSpanV1::new_eliminated(
+            *origin.file().as_bytes(),
+            byte_start,
+            byte_end,
+            line,
+            column,
+        )
+    } else {
+        fe2o3_kernel_ir::DebugSourceMapSpanV1::new(
+            *origin.file().as_bytes(),
+            byte_start,
+            byte_end,
+            line,
+            column,
+        )
+    }
+    .map_err(ProductionPipelineError::SimulationDebugMap)?;
+    let block_ordinal = debug_block_ordinal_v1(
+        body,
+        block_ordinals,
+        block,
+        first_operation,
+        operation_count,
+    )?;
+    if operation_count == 0 {
+        eliminated.insert(source_span);
+        return Ok(());
+    }
+    let end = first_operation.checked_add(operation_count).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "semantic KIR operation range overflows",
+        ),
+    )?;
+    for operation in first_operation..end {
+        let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
+            function_ordinal,
+            block_ordinal,
+            u64::from(operation),
+        );
+        if mapped.insert(site, source_span).is_some() {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "one KIR operation is attributed to multiple semantic constructs",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn debug_block_ordinal_v1(
+    body: &fe2o3_kernel_ir::FunctionBody,
+    block_ordinals: &BTreeMap<fe2o3_kernel_ir::BlockId, usize>,
+    block: fe2o3_kernel_ir::BlockId,
+    first_operation: u32,
+    operation_count: u32,
+) -> Result<u64, ProductionPipelineError> {
+    let ordinal = *block_ordinals.get(&block).ok_or(
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "correspondence names an unknown KIR block",
+        ),
+    )?;
+    let operation_end = usize::try_from(first_operation)
+        .ok()
+        .and_then(|first| {
+            usize::try_from(operation_count)
+                .ok()
+                .and_then(|count| first.checked_add(count))
+        })
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "KIR operation range does not fit this compiler host",
+        ))?;
+    if operation_end
+        > body
+            .blocks
+            .get(ordinal)
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "correspondence KIR block ordinal is unavailable",
+            ))?
+            .operations
+            .len()
+    {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "correspondence KIR operation range is outside its block",
+        ));
+    }
+    u64::try_from(ordinal).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "KIR block ordinal does not fit the source-map wire",
+        )
+    })
 }
 
 impl RankedVerifiedProductionCompilation {
@@ -930,13 +1250,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             typed_descriptor_roots,
             transaction,
         } = self.stage;
-        let (
+        let crate::collector::ConstructedProductionSemanticMirV1 {
             semantic_mir,
             rustc_identity_inventory,
             rustc_preflight_plan,
             rustc_target,
             reference_effect_bindings,
-        ) = crate::collector::construct_production_semantic_mir_v1(tcx, closure)
+            debug_source_files,
+        } = crate::collector::construct_production_semantic_mir_v1(tcx, closure)
             .map_err(ProductionPipelineError::SemanticImport)?;
         Ok(ProductionCompilation {
             stage: AdmittedSemanticMirStage {
@@ -946,6 +1267,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                     rustc_preflight_plan,
                     rustc_target,
                     reference_effect_bindings,
+                    debug_source_files,
                     typed_descriptor_roots,
                     transaction,
                 },
@@ -992,7 +1314,6 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .lower_target_neutral()?
             .into_simulation_bundle_v1(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
-                None,
             )
     }
 
@@ -1138,6 +1459,38 @@ impl RankedVerifiedProductionCompilation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn debug_map_test_function(name: &str) -> fe2o3_kernel_ir::Function {
+        fe2o3_kernel_ir::Function::kernel_entry(
+            name,
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+            vec![],
+            vec![fe2o3_kernel_ir::BasicBlock::new(fe2o3_kernel_ir::BlockId(
+                0,
+            ))],
+        )
+    }
+
+    #[test]
+    fn debug_map_body_selection_fails_closed_until_correspondence_names_functions() {
+        let empty = fe2o3_kernel_ir::Module::new("empty");
+        assert!(matches!(
+            sole_debug_map_body_v1(&empty),
+            Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "lowered KIR has no function body"
+            ))
+        ));
+
+        let mut multiple = fe2o3_kernel_ir::Module::new("multiple");
+        multiple.functions.push(debug_map_test_function("kernel"));
+        multiple.functions.push(debug_map_test_function("helper"));
+        assert!(matches!(
+            sole_debug_map_body_v1(&multiple),
+            Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "V1 correspondence does not distinguish multiple KIR function bodies"
+            ))
+        ));
+    }
 
     #[test]
     fn host_only_and_device_dispositions_are_exact() {

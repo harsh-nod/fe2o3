@@ -15,9 +15,10 @@ use fe2o3_debug_protocol::{
     decode_response_line_v1,
 };
 use fe2o3_kernel_ir::{
-    SimulationCompilerExecutionBindingV1, SimulationDebugMapV1, SimulationProductionKirIdentityV1,
-    SimulationSourceLineageV1, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
-    VerifiedSimulationBundleV1, decode_module_v7,
+    DebugSourceMapBindingV1, DebugSourceMapDocumentV1, SimulationCompilerExecutionBindingV1,
+    SimulationDebugMapV1, SimulationProductionKirIdentityV1, SimulationSourceLineageV1,
+    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8, VerifiedSimulationBundleV1,
+    decode_module_v7,
 };
 use fe2o3_kir_debugger::DebugWaveWidthV1;
 use serde_json::Value;
@@ -64,10 +65,6 @@ fn workspace_root() -> PathBuf {
         .to_owned()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 fn fill_kir() -> Vec<u8> {
     fs::read(workspace_root().join("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir")).unwrap()
 }
@@ -77,6 +74,13 @@ fn build_bundle(debug_map: Option<Vec<u8>>) -> VerifiedSimulationBundleV1 {
 }
 
 fn build_bundle_for_target(debug_map: Option<Vec<u8>>, target: &str) -> VerifiedSimulationBundleV1 {
+    try_build_bundle_for_target(debug_map, target).unwrap()
+}
+
+fn try_build_bundle_for_target(
+    debug_map: Option<Vec<u8>>,
+    target: &str,
+) -> Result<VerifiedSimulationBundleV1, fe2o3_kernel_ir::SimulationBundleErrorV1> {
     let kir = fill_kir();
     let canonical = VerifiedCanonicalKernelIrV7::from_canonical_bytes(kir.clone()).unwrap();
     let module = decode_module_v7(&kir).unwrap();
@@ -94,12 +98,11 @@ fn build_bundle_for_target(debug_map: Option<Vec<u8>>, target: &str) -> Verified
         debug_map
             .map(|bytes| SimulationDebugMapV1::from_unverified_canonical_bytes(bytes).unwrap()),
     )
-    .unwrap()
 }
 
 fn source_map_for(subject: [u8; 32], stale_kir: bool, stale_subject: bool) -> Vec<u8> {
     let root = workspace_root();
-    let mut document: Value = serde_json::from_slice(
+    let document = DebugSourceMapDocumentV1::from_json_bytes(
         &fs::read(root.join("crates/fe2o3-debug-cli/tutorial/fill-v1/source-map.json")).unwrap(),
     )
     .unwrap();
@@ -112,11 +115,15 @@ fn source_map_for(subject: [u8; 32], stale_kir: bool, stale_subject: bool) -> Ve
     if stale_kir {
         digest[0] ^= 1;
     }
-    document["binding"]["bundle_subject_identity"] = Value::String(hex(&subject));
-    document["binding"]["canonical_kir"]["digest"] = Value::String(hex(&digest));
-    document["binding"]["canonical_kir"]["canonical_bytes"] =
-        Value::from(kir.identity().canonical_length());
-    serde_json::to_vec(&document).unwrap()
+    DebugSourceMapDocumentV1::new(
+        DebugSourceMapBindingV1::new(subject, digest, kir.identity().canonical_length()).unwrap(),
+        document.files().to_vec(),
+        document.sites().to_vec(),
+        document.eliminated().to_vec(),
+    )
+    .unwrap()
+    .to_canonical_json_bytes()
+    .unwrap()
 }
 
 fn bundle_with_map(stale_kir: bool, stale_subject: bool) -> VerifiedSimulationBundleV1 {
@@ -287,20 +294,13 @@ fn absent_map_is_typed_unavailable_and_external_override_is_rejected() {
 fn stale_map_bindings_and_committed_map_substitution_fail_closed() {
     let directory = TestDirectory::new();
     let request = workspace_root().join("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json");
-    for (name, stale_kir, stale_subject) in
-        [("stale-kir", true, false), ("stale-subject", false, true)]
-    {
-        let bundle = directory.0.join(format!("{name}.fe2sim"));
-        fs::write(
-            &bundle,
-            bundle_with_map(stale_kir, stale_subject).canonical_bytes(),
-        )
-        .unwrap();
-        let output = run_debug(&bundle, &request, "64", DISCOVER_AND_RESOLVE);
-        assert!(!output.status.success());
-        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(error["stage"], "source_map");
-        assert_eq!(error["code"], "bundle_source_map_rejected");
+    for (stale_kir, stale_subject) in [(true, false), (false, true)] {
+        let subject = *build_bundle(None).subject_identity();
+        let stale = source_map_for(subject, stale_kir, stale_subject);
+        assert!(matches!(
+            try_build_bundle_for_target(Some(stale), "gfx942:xnack-"),
+            Err(fe2o3_kernel_ir::SimulationBundleErrorV1::DebugMapBindingMismatch)
+        ));
     }
 
     let mut substituted = bundle_with_map(false, false).into_canonical_bytes();

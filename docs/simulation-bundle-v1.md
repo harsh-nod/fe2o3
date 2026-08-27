@@ -61,16 +61,31 @@ bundle, map its exact target, and admit only its embedded verified KIR V7. They
 do not recompile, re-lower, load, launch, or fall back to a different route.
 `--bundle` is mutually exclusive with raw `--kir-v7`.
 
-When a future compiler bundle contains its bounded debug map, `fe2o3-debug`
-passes the exact payload, verified simulation-bundle subject, and committed map
-identity through the compiler-bundle admission API. Source locations are then
+The compiler emits a bounded debug map from rustc spans observed in the same
+extraction transaction. `fe2o3-debug` passes the exact payload, verified
+simulation-bundle subject, and committed map identity through the
+compiler-bundle admission API. Source locations are then
 labeled `compiler_bundle_bound`, which means exact content association, not
 protected compiler-execution authentication. The map wire contains only its
 compile-time bundle subject and KIR identity. Request and logical wave width
 remain runtime inputs; their configuration identity is derived internally and
 rechecked before the map is bound. Bundle session identities also commit the
-verified bundle subject and therefore its exact target. The current exporter
-still emits no map, so source inspection is typed unavailable for its bundles.
+verified bundle subject and therefore its exact target.
+
+Map construction uses the retained semantic MIR owner and
+`SemanticKirCorrespondenceV1`; it does not rerun rustc, lower a second IR, or
+infer locations from paths. Every statement and terminator correspondence
+range is mapped to its KIR operations. A source construct with a zero-operation
+range is retained in `eliminated`, including rustc's valid zero-width spans.
+Operations classified as synthetic by the lowering correspondence have no
+fabricated source location and remain typed unavailable in the debugger.
+
+V1 serializes rustc's resolved call site only. Macro expansion-chain identity
+remains in semantic MIR but is not exposed as an expansion stack. Display paths
+use rustc's remapped spelling and are inert labels: source bytes are never
+reopened, and the map grants no path or filesystem authority. File length,
+span ranges, lines, and columns are captured from the live `SourceMap` before
+rustc custody ends.
 
 ## Exact identities and bounds
 
@@ -112,8 +127,9 @@ compiler execution, source authorship, or provenance and grants no proof,
 artifact, compiler, load, hardware, or launch authority. The canonical subject
 and current signature protocol alone authenticate nothing; a signature-verified
 receipt under that protocol authenticates only the policy-pinned signing key,
-not protected compiler execution. That property remains false until the
-protected issuer and durable Worker V3 consumer join are implemented.
+not protected compiler execution. This extraction path does not consume or
+join protected issuer and durable Worker V3 evidence, so that property remains
+false even when those independent protocols are available.
 
 ## Version and debug-map boundary
 
@@ -125,10 +141,20 @@ never silently downgraded.
 
 The bundle reserves a separately bounded `fe2o3-debug-source-map-v1` payload
 and exposes a non-circular simulation bundle subject identity for that map to
-bind. This command emits `debug map none`: compiler-owned source-span
-projection is not yet wired into the transaction. A caller-supplied map is an
-unverified association and cannot acquire compiler provenance by merely naming
-a KIR digest or bundle identity.
+bind. The compiler prepares the map-independent subject, constructs the map
+against that typed prepared state, and finalizes the bundle once; loose claimed
+hashes are not used to break the cycle. Embedded maps use one compact canonical
+JSON encoding. The low-level caller-bound sidecar decoder accepts other strict
+JSON whitespace/order while committing its exact bytes. Unknown, duplicate,
+null, oversize, stale-subject, stale-KIR, and substituted map inputs fail closed.
+
+Current `SemanticKirCorrespondenceV1` identifies KIR block and operation ranges
+but not a KIR function identity, and its production lowering currently admits
+one body. Map construction therefore fails closed if a module has zero or
+multiple KIR bodies. Helper-body source maps require the correspondence owner
+to add exact KIR function identity; V1 does not claim helper coverage before
+that change. Source-variable reconstruction and macro expansion stacks also
+remain future work.
 
 ## Current UX boundary
 

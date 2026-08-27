@@ -5,7 +5,8 @@ use std::{error::Error, fmt, str};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    AccessMode, AddressSpace, LaunchDomain, LaunchExtent, MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1,
+    AccessMode, AddressSpace, DebugSourceMapBindingV1, DebugSourceMapDocumentV1,
+    DebugSourceMapErrorV1, LaunchDomain, LaunchExtent, MAX_MODULE_BYTES_V1, MAX_TEXT_BYTES_V1,
     Module, ScalarType, Type, VerifiedCanonicalKernelIrErrorV7,
     VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
     decode_module_v7,
@@ -247,7 +248,7 @@ impl SimulationDebugMapV1 {
         if canonical_bytes.is_empty() || canonical_bytes.len() > MAX_SIMULATION_DEBUG_MAP_BYTES_V1 {
             return Err(SimulationBundleErrorV1::InvalidDebugMapLength);
         }
-        let identity = debug_map_identity(&canonical_bytes);
+        let identity = simulation_debug_map_identity_v1(&canonical_bytes);
         require_nonzero("debug map", &identity)?;
         Ok(Self {
             canonical_bytes,
@@ -293,27 +294,112 @@ pub struct VerifiedSimulationBundleV1 {
     debug_map_range: Option<std::ops::Range<usize>>,
 }
 
-impl VerifiedSimulationBundleV1 {
-    /// Builds a canonical bundle from a V7 projection of the already-lowered
-    /// production module. The supplied V8 identity is independently rederived
-    /// from V7 semantics before admission.
+/// Verified map-independent simulation metadata awaiting one finalization.
+///
+/// The subject identity deliberately excludes the optional debug map. This
+/// move-only owner lets the compiler bind a map to that exact subject without
+/// constructing and decoding an intermediate bundle or accepting loose hashes.
+#[must_use = "dropping the prepared owner abandons simulation bundle finalization"]
+pub struct PreparedSimulationBundleV1 {
+    compiler_execution_binding: SimulationCompilerExecutionBindingV1,
+    source_lineage: SimulationSourceLineageV1,
+    production_kir_identity: SimulationProductionKirIdentityV1,
+    target: String,
+    canonical_kir_v7_identity: VerifiedCanonicalKernelIrIdentityV7,
+    canonical_kir_v7: Vec<u8>,
+    kernel_abi_identity: [u8; 32],
+    kernel_count: u32,
+    subject_identity: [u8; 32],
+}
+
+impl PreparedSimulationBundleV1 {
     pub fn new(
         compiler_execution_binding: SimulationCompilerExecutionBindingV1,
         source_lineage: SimulationSourceLineageV1,
         production_kir_identity: SimulationProductionKirIdentityV1,
         target: &str,
         canonical_kir_v7: VerifiedCanonicalKernelIrV7,
-        debug_map: Option<SimulationDebugMapV1>,
     ) -> Result<Self, SimulationBundleErrorV1> {
         validate_target(target)?;
-        let kir_identity = *canonical_kir_v7.identity();
-        let kir_bytes = canonical_kir_v7.into_canonical_bytes();
+        let canonical_kir_v7_identity = *canonical_kir_v7.identity();
+        let canonical_kir_v7 = canonical_kir_v7.into_canonical_bytes();
         let module =
-            decode_module_v7(&kir_bytes).map_err(SimulationBundleErrorV1::KernelIrDecode)?;
+            decode_module_v7(&canonical_kir_v7).map_err(SimulationBundleErrorV1::KernelIrDecode)?;
         validate_production_identity(&module, production_kir_identity)?;
         let kernel_count = u32::try_from(module.kernels.len())
             .map_err(|_| SimulationBundleErrorV1::KernelCountOverflow)?;
         let kernel_abi_identity = kernel_abi_identity(&module)?;
+        let subject_identity = subject_identity(
+            &compiler_execution_binding,
+            source_lineage,
+            production_kir_identity,
+            target,
+            &canonical_kir_v7_identity,
+            &kernel_abi_identity,
+            kernel_count,
+        );
+        Ok(Self {
+            compiler_execution_binding,
+            source_lineage,
+            production_kir_identity,
+            target: target.to_owned(),
+            canonical_kir_v7_identity,
+            canonical_kir_v7,
+            kernel_abi_identity,
+            kernel_count,
+            subject_identity,
+        })
+    }
+
+    pub const fn subject_identity(&self) -> &[u8; 32] {
+        &self.subject_identity
+    }
+
+    pub const fn canonical_kir_v7_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
+        &self.canonical_kir_v7_identity
+    }
+
+    pub fn debug_source_map_binding(&self) -> DebugSourceMapBindingV1 {
+        DebugSourceMapBindingV1::new(
+            self.subject_identity,
+            *self.canonical_kir_v7_identity.digest(),
+            self.canonical_kir_v7_identity.canonical_length(),
+        )
+        .expect("verified bundle identities form a valid source-map binding")
+    }
+
+    pub fn finalize_with_source_map(
+        self,
+        document: DebugSourceMapDocumentV1,
+    ) -> Result<VerifiedSimulationBundleV1, SimulationBundleErrorV1> {
+        if document.binding() != self.debug_source_map_binding() {
+            return Err(SimulationBundleErrorV1::DebugMapBindingMismatch);
+        }
+        let bytes = document
+            .to_canonical_json_bytes()
+            .map_err(SimulationBundleErrorV1::DebugSourceMap)?;
+        let debug_map = SimulationDebugMapV1::from_unverified_canonical_bytes(bytes)?;
+        self.finalize(Some(debug_map))
+    }
+
+    pub fn finalize_without_source_map(
+        self,
+    ) -> Result<VerifiedSimulationBundleV1, SimulationBundleErrorV1> {
+        self.finalize(None)
+    }
+
+    fn finalize(
+        self,
+        debug_map: Option<SimulationDebugMapV1>,
+    ) -> Result<VerifiedSimulationBundleV1, SimulationBundleErrorV1> {
+        if let Some(debug_map) = &debug_map {
+            let document =
+                DebugSourceMapDocumentV1::from_canonical_json_bytes(debug_map.canonical_bytes())
+                    .map_err(SimulationBundleErrorV1::DebugSourceMap)?;
+            if document.binding() != self.debug_source_map_binding() {
+                return Err(SimulationBundleErrorV1::DebugMapBindingMismatch);
+            }
+        }
         let debug_length = debug_map
             .as_ref()
             .map_or(0, |map| map.canonical_bytes.len());
@@ -322,10 +408,10 @@ impl VerifiedSimulationBundleV1 {
             compiler_subject_identity,
             compiler_subject_length,
             compiler_subject_bytes,
-        ) = compiler_execution_binding.wire_fields();
+        ) = self.compiler_execution_binding.wire_fields();
         let exact_length = HEADER_BYTES_V1
-            .checked_add(target.len())
-            .and_then(|length| length.checked_add(kir_bytes.len()))
+            .checked_add(self.target.len())
+            .and_then(|length| length.checked_add(self.canonical_kir_v7.len()))
             .and_then(|length| length.checked_add(compiler_subject_bytes.len()))
             .and_then(|length| length.checked_add(debug_length))
             .ok_or(SimulationBundleErrorV1::BundleTooLarge)?;
@@ -333,20 +419,11 @@ impl VerifiedSimulationBundleV1 {
             return Err(SimulationBundleErrorV1::BundleTooLarge);
         }
         let target_length =
-            u16::try_from(target.len()).map_err(|_| SimulationBundleErrorV1::InvalidTarget)?;
+            u16::try_from(self.target.len()).map_err(|_| SimulationBundleErrorV1::InvalidTarget)?;
         let debug_length_u32 = u32::try_from(debug_length)
             .map_err(|_| SimulationBundleErrorV1::InvalidDebugMapLength)?;
         let flags = u16::from(debug_map.is_some()) * FLAGS_DEBUG_MAP_PRESENT;
         let debug_identity = debug_map.as_ref().map_or([0; 32], |map| *map.identity());
-        let subject_identity = subject_identity(
-            &compiler_execution_binding,
-            source_lineage,
-            production_kir_identity,
-            target,
-            &kir_identity,
-            &kernel_abi_identity,
-            kernel_count,
-        );
 
         let mut bytes = Vec::new();
         bytes
@@ -359,38 +436,68 @@ impl VerifiedSimulationBundleV1 {
         bytes.extend_from_slice(&[0; 7]);
         bytes.extend_from_slice(&compiler_subject_identity);
         bytes.extend_from_slice(&compiler_subject_length.to_le_bytes());
-        bytes.extend_from_slice(&source_lineage.rustc_identity_inventory_receipt_sha256);
+        bytes.extend_from_slice(&self.source_lineage.rustc_identity_inventory_receipt_sha256);
         bytes.extend_from_slice(
-            &source_lineage
+            &self
+                .source_lineage
                 .rustc_identity_inventory_receipt_bytes
                 .to_le_bytes(),
         );
-        bytes.extend_from_slice(&source_lineage.rustc_preflight_plan_receipt_sha256);
+        bytes.extend_from_slice(&self.source_lineage.rustc_preflight_plan_receipt_sha256);
         bytes.extend_from_slice(
-            &source_lineage
+            &self
+                .source_lineage
                 .rustc_preflight_plan_receipt_bytes
                 .to_le_bytes(),
         );
-        bytes.extend_from_slice(&production_kir_identity.version.to_le_bytes());
-        bytes.extend_from_slice(&production_kir_identity.digest);
-        bytes.extend_from_slice(&production_kir_identity.canonical_length.to_le_bytes());
-        bytes.extend_from_slice(kir_identity.digest());
-        bytes.extend_from_slice(&kir_identity.canonical_length().to_le_bytes());
-        bytes.extend_from_slice(&kernel_abi_identity);
-        bytes.extend_from_slice(&kernel_count.to_le_bytes());
+        bytes.extend_from_slice(&self.production_kir_identity.version.to_le_bytes());
+        bytes.extend_from_slice(&self.production_kir_identity.digest);
+        bytes.extend_from_slice(&self.production_kir_identity.canonical_length.to_le_bytes());
+        bytes.extend_from_slice(self.canonical_kir_v7_identity.digest());
+        bytes.extend_from_slice(
+            &self
+                .canonical_kir_v7_identity
+                .canonical_length()
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&self.kernel_abi_identity);
+        bytes.extend_from_slice(&self.kernel_count.to_le_bytes());
         bytes.extend_from_slice(&target_length.to_le_bytes());
         bytes.extend_from_slice(&debug_identity);
         bytes.extend_from_slice(&debug_length_u32.to_le_bytes());
-        bytes.extend_from_slice(&subject_identity);
+        bytes.extend_from_slice(&self.subject_identity);
         debug_assert_eq!(bytes.len(), HEADER_BYTES_V1);
-        bytes.extend_from_slice(target.as_bytes());
-        bytes.extend_from_slice(&kir_bytes);
+        bytes.extend_from_slice(self.target.as_bytes());
+        bytes.extend_from_slice(&self.canonical_kir_v7);
         bytes.extend_from_slice(compiler_subject_bytes);
         if let Some(debug_map) = debug_map {
             bytes.extend_from_slice(&debug_map.canonical_bytes);
         }
         debug_assert_eq!(bytes.len(), exact_length);
-        Self::from_canonical_bytes(bytes)
+        VerifiedSimulationBundleV1::from_canonical_bytes(bytes)
+    }
+}
+
+impl VerifiedSimulationBundleV1 {
+    /// Builds a canonical bundle from a V7 projection of the already-lowered
+    /// production module. The supplied V8 identity is independently rederived
+    /// from V7 semantics before admission.
+    pub fn new(
+        compiler_execution_binding: SimulationCompilerExecutionBindingV1,
+        source_lineage: SimulationSourceLineageV1,
+        production_kir_identity: SimulationProductionKirIdentityV1,
+        target: &str,
+        canonical_kir_v7: VerifiedCanonicalKernelIrV7,
+        debug_map: Option<SimulationDebugMapV1>,
+    ) -> Result<Self, SimulationBundleErrorV1> {
+        PreparedSimulationBundleV1::new(
+            compiler_execution_binding,
+            source_lineage,
+            production_kir_identity,
+            target,
+            canonical_kir_v7,
+        )?
+        .finalize(debug_map)
     }
 
     /// Strictly decodes, rederives, and retains one complete bundle allocation.
@@ -535,7 +642,7 @@ impl VerifiedSimulationBundleV1 {
             let debug_bytes = canonical_bytes
                 .get(compiler_subject_end..debug_end)
                 .ok_or(SimulationBundleErrorV1::Truncated)?;
-            if debug_map_identity(debug_bytes) != claimed_debug_identity {
+            if simulation_debug_map_identity_v1(debug_bytes) != claimed_debug_identity {
                 return Err(SimulationBundleErrorV1::DebugMapIdentityMismatch);
             }
         }
@@ -550,6 +657,22 @@ impl VerifiedSimulationBundleV1 {
         );
         if subject_identity != claimed_subject_identity {
             return Err(SimulationBundleErrorV1::SubjectIdentityMismatch);
+        }
+        if debug_length != 0 {
+            let debug_bytes = canonical_bytes
+                .get(compiler_subject_end..debug_end)
+                .ok_or(SimulationBundleErrorV1::Truncated)?;
+            let document = DebugSourceMapDocumentV1::from_canonical_json_bytes(debug_bytes)
+                .map_err(SimulationBundleErrorV1::DebugSourceMap)?;
+            let expected = DebugSourceMapBindingV1::new(
+                subject_identity,
+                *canonical_kir_v7_identity.digest(),
+                canonical_kir_v7_identity.canonical_length(),
+            )
+            .map_err(SimulationBundleErrorV1::DebugSourceMap)?;
+            if document.binding() != expected {
+                return Err(SimulationBundleErrorV1::DebugMapBindingMismatch);
+            }
         }
         let identity =
             SimulationBundleIdentityV1(domain_hash(BUNDLE_IDENTITY_DOMAIN_V1, &canonical_bytes));
@@ -665,7 +788,7 @@ impl VerifiedSimulationBundleV1 {
     /// header commitment. The identity authenticates bundle content
     /// association only, not compiler execution or source authorship.
     pub fn debug_map_identity(&self) -> Option<[u8; 32]> {
-        self.debug_map().map(debug_map_identity)
+        self.debug_map().map(simulation_debug_map_identity_v1)
     }
 
     pub const fn debug_map_schema(&self) -> Option<&'static str> {
@@ -910,7 +1033,7 @@ const fn access_mode_tag(access: AccessMode) -> u8 {
     }
 }
 
-fn debug_map_identity(bytes: &[u8]) -> [u8; 32] {
+pub fn simulation_debug_map_identity_v1(bytes: &[u8]) -> [u8; 32] {
     domain_hash(DEBUG_MAP_IDENTITY_DOMAIN_V1, bytes)
 }
 
@@ -1014,6 +1137,8 @@ pub enum SimulationBundleErrorV1 {
     KernelIrIdentityMismatch,
     KernelAbiIdentityMismatch,
     DebugMapIdentityMismatch,
+    DebugMapBindingMismatch,
+    DebugSourceMap(DebugSourceMapErrorV1),
     SubjectIdentityMismatch,
     IdentityMismatch,
 }
@@ -1059,6 +1184,10 @@ impl fmt::Display for SimulationBundleErrorV1 {
             Self::InvalidDebugMapLength => {
                 formatter.write_str("simulation debug-map presence or length is invalid")
             }
+            Self::DebugMapBindingMismatch => formatter.write_str(
+                "simulation debug map does not name the exact bundle subject and canonical KIR",
+            ),
+            Self::DebugSourceMap(error) => write!(formatter, "simulation {error}"),
             Self::InvalidTarget => formatter.write_str("simulation bundle target is invalid"),
             Self::KernelCountOverflow => {
                 formatter.write_str("simulation kernel count does not fit the bundle wire")
@@ -1101,6 +1230,7 @@ impl Error for SimulationBundleErrorV1 {
             Self::KernelIr(error) => Some(error),
             Self::KernelIrDecode(error) => Some(error),
             Self::ProductionKernelIr(error) => Some(error),
+            Self::DebugSourceMap(error) => Some(error),
             _ => None,
         }
     }
@@ -1109,9 +1239,10 @@ impl Error for SimulationBundleErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::{
-        BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Signature, Terminator,
-        WorkgroupSize,
+        BasicBlock, BlockId, DebugSourceMapFileV1, DebugSourceMapSpanV1, Function, Kernel,
+        LaunchDomain, LaunchExtent, Signature, Terminator, WorkgroupSize,
     };
 
     fn module() -> Module {
@@ -1136,10 +1267,10 @@ mod tests {
         module
     }
 
-    fn bundle(debug_map: Option<SimulationDebugMapV1>) -> VerifiedSimulationBundleV1 {
+    fn bundle(with_debug_map: bool) -> VerifiedSimulationBundleV1 {
         let module = module();
         let production = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
-        VerifiedSimulationBundleV1::new(
+        let prepared = PreparedSimulationBundleV1::new(
             SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             SimulationSourceLineageV1::new([2; 32], 123, [3; 32], 456).unwrap(),
             SimulationProductionKirIdentityV1::v8(
@@ -1149,18 +1280,32 @@ mod tests {
             .unwrap(),
             "gfx942:xnack-",
             VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
-            debug_map,
         )
-        .unwrap()
+        .unwrap();
+        if with_debug_map {
+            let binding = prepared.debug_source_map_binding();
+            prepared
+                .finalize_with_source_map(
+                    DebugSourceMapDocumentV1::new(
+                        binding,
+                        vec![
+                            DebugSourceMapFileV1::new([4; 32], 16, "/src/kernel.rs".into())
+                                .unwrap(),
+                        ],
+                        Vec::new(),
+                        vec![DebugSourceMapSpanV1::new([4; 32], 1, 2, 1, 2).unwrap()],
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+        } else {
+            prepared.finalize_without_source_map().unwrap()
+        }
     }
 
     #[test]
     fn exact_bundle_round_trips_and_grants_no_authority() {
-        let debug = SimulationDebugMapV1::from_unverified_canonical_bytes(
-            br#"{"schema":"fe2o3-debug-source-map-v1"}"#.to_vec(),
-        )
-        .unwrap();
-        let bundle = bundle(Some(debug));
+        let bundle = bundle(true);
         let decoded =
             VerifiedSimulationBundleV1::from_canonical_bytes(bundle.canonical_bytes().to_vec())
                 .unwrap();
@@ -1250,7 +1395,7 @@ mod tests {
 
     #[test]
     fn hostile_substitution_of_each_identity_domain_fails_closed() {
-        let baseline = bundle(None).into_canonical_bytes();
+        let baseline = bundle(false).into_canonical_bytes();
         for offset in [20, 60, 92, 100, 132, 142, 182, 222, 296] {
             let mut substituted = baseline.clone();
             substituted[offset] ^= 1;
@@ -1294,14 +1439,13 @@ mod tests {
             ])
             .is_err()
         );
-        let debug = SimulationDebugMapV1::from_unverified_canonical_bytes(b"map".to_vec()).unwrap();
-        let mut zero_debug_identity = bundle(Some(debug)).into_canonical_bytes();
+        let mut zero_debug_identity = bundle(true).into_canonical_bytes();
         zero_debug_identity[260..292].fill(0);
         assert!(matches!(
             VerifiedSimulationBundleV1::from_canonical_bytes(zero_debug_identity),
             Err(SimulationBundleErrorV1::ZeroIdentity("debug map"))
         ));
-        let baseline = bundle(None).into_canonical_bytes();
+        let baseline = bundle(false).into_canonical_bytes();
         assert!(
             VerifiedSimulationBundleV1::from_canonical_bytes(
                 baseline[..HEADER_BYTES_V1 - 1].to_vec()

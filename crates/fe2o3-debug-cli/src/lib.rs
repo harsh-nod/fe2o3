@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use fe2o3_debug_protocol::*;
-use fe2o3_kernel_ir::{AddressSpace, ScalarType, ValueId};
+use fe2o3_kernel_ir::{
+    AddressSpace, DebugSourceMapDocumentV1, DebugSourceMapKirSiteV1, DebugSourceMapSpanV1,
+    ScalarType, ValueId, simulation_debug_map_identity_v1,
+};
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
     DebugKirIdentityV1, DebugNavigationV1, DebugPredicateV1, DebugScopeSelectorV1, DebugSessionV1,
@@ -35,14 +38,14 @@ use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
     load_debug_simulation_bundle_v1, load_debug_simulation_input_v1,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
-pub const SOURCE_MAP_SCHEMA_V1: &str = "fe2o3-debug-source-map-v1";
-pub const MAX_SOURCE_MAP_BYTES_V1: usize = 4 * 1024 * 1024;
+pub const SOURCE_MAP_SCHEMA_V1: &str = fe2o3_kernel_ir::DEBUG_SOURCE_MAP_SCHEMA_V1;
+pub const MAX_SOURCE_MAP_BYTES_V1: usize = fe2o3_kernel_ir::MAX_SIMULATION_DEBUG_MAP_BYTES_V1;
 
 #[derive(Debug)]
 struct OptionsV1 {
@@ -57,61 +60,6 @@ struct OptionsV1 {
 enum ProgramInputV1 {
     KirV7(PathBuf),
     Bundle(PathBuf),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceMapDocumentV1 {
-    schema: SourceMapSchemaV1,
-    binding: SourceMapBindingV1,
-    files: Vec<SourceMapFileV1>,
-    sites: Vec<SourceMapSiteV1>,
-    eliminated: Vec<SourceMapSpanV1>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum SourceMapSchemaV1 {
-    #[serde(rename = "fe2o3-debug-source-map-v1")]
-    V1,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceMapBindingV1 {
-    bundle_subject_identity: OpaqueIdentityV1,
-    canonical_kir: SourceMapKirIdentityV1,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceMapKirIdentityV1 {
-    digest: OpaqueIdentityV1,
-    canonical_bytes: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceMapFileV1 {
-    identity: OpaqueIdentityV1,
-    byte_len: u64,
-    display_path: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceMapSiteV1 {
-    site: KirSiteV1,
-    spans: Vec<SourceMapSpanV1>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceMapSpanV1 {
-    file_identity: OpaqueIdentityV1,
-    byte_start: u64,
-    byte_end: u64,
-    line: u32,
-    column: u32,
 }
 
 #[derive(Debug)]
@@ -225,22 +173,17 @@ fn admit_source_map_with_provenance_v1(
     if expected_map_identity.is_some_and(|expected| expected != map_identity) {
         return Err("source map identity does not match the compiler bundle commitment".to_owned());
     }
-    let document: SourceMapDocumentV1 = serde_json::from_slice(bytes).map_err(|error| {
-        format!(
-            "source map JSON is invalid at line {} column {}",
-            error.line(),
-            error.column()
-        )
-    })?;
-    let _schema = document.schema;
-    if document.binding.bundle_subject_identity != expected_bundle_subject {
+    let document =
+        DebugSourceMapDocumentV1::from_json_bytes(bytes).map_err(|error| error.to_string())?;
+    let binding = document.binding();
+    if binding.bundle_subject_identity() != expected_bundle_subject.as_bytes() {
         return Err(
             "source map bundle subject identity does not match the expected subject".to_owned(),
         );
     }
     let canonical_len = input.module.identity().canonical_length();
-    if document.binding.canonical_kir.digest.as_bytes() != input.kir_sha256
-        || document.binding.canonical_kir.canonical_bytes != canonical_len
+    if binding.canonical_kir().digest() != input.kir_sha256
+        || binding.canonical_kir().canonical_bytes() != canonical_len
     {
         return Err(format!(
             "source map canonical KIR identity does not match admitted digest {} length {canonical_len}",
@@ -248,22 +191,22 @@ fn admit_source_map_with_provenance_v1(
         ));
     }
     let files = document
-        .files
-        .into_iter()
+        .files()
+        .iter()
         .map(|file| DebugSourceFileV1 {
-            identity: file.identity.as_bytes(),
-            byte_len: file.byte_len,
-            display_path: file.display_path,
+            identity: file.identity(),
+            byte_len: file.byte_len(),
+            display_path: file.display_path().to_owned(),
         })
         .collect();
     let mut sites = Vec::new();
     sites
-        .try_reserve_exact(document.sites.len())
+        .try_reserve_exact(document.sites().len())
         .map_err(|_| "source map site allocation failed".to_owned())?;
-    for site in document.sites {
+    for site in document.sites() {
         sites.push(DebugSourceSiteV1 {
-            site: source_map_site(&input.module, site.site)?,
-            spans: site.spans.into_iter().map(source_map_span).collect(),
+            site: source_map_wire_site(&input.module, site.site())?,
+            spans: site.spans().iter().copied().map(source_map_span).collect(),
         });
     }
     let catalog = DebugSourceCatalogV1::new_with_eliminated(
@@ -274,15 +217,16 @@ fn admit_source_map_with_provenance_v1(
         files,
         sites,
         document
-            .eliminated
-            .into_iter()
+            .eliminated()
+            .iter()
+            .copied()
             .map(source_map_span)
             .collect(),
     )
     .map_err(|error| format!("source map catalog is invalid: {error}"))?;
     Ok(AdmittedSourceMapV1 {
         identity: map_identity,
-        bundle_subject_identity: document.binding.bundle_subject_identity,
+        bundle_subject_identity: nonzero_identity(binding.bundle_subject_identity()),
         configuration_identity,
         provenance,
         catalog,
@@ -292,26 +236,24 @@ fn admit_source_map_with_provenance_v1(
 /// Computes the exact identity committed by a compiler simulation bundle for
 /// one canonical source-map payload.
 pub fn debug_source_map_identity_v1(bytes: &[u8]) -> Result<OpaqueIdentityV1, String> {
-    const DOMAIN: &[u8] = b"FE2O3/SIMULATION-DEBUG-MAP/V1\0";
     if bytes.is_empty() || bytes.len() > MAX_SOURCE_MAP_BYTES_V1 {
         return Err(format!(
             "source map must contain 1 to {MAX_SOURCE_MAP_BYTES_V1} bytes"
         ));
     }
-    let mut digest = Sha256::new();
-    digest.update(
-        u32::try_from(DOMAIN.len())
-            .expect("source map domain length fits u32")
-            .to_le_bytes(),
-    );
-    digest.update(DOMAIN);
-    digest.update(
-        u64::try_from(bytes.len())
-            .map_err(|_| "source map length does not fit u64".to_owned())?
-            .to_le_bytes(),
-    );
-    digest.update(bytes);
-    Ok(nonzero_identity(digest.finalize().into()))
+    Ok(nonzero_identity(simulation_debug_map_identity_v1(bytes)))
+}
+
+fn source_map_wire_site(
+    module: &AdmittedSimulationModuleV1,
+    site: DebugSourceMapKirSiteV1,
+) -> Result<fe2o3_kir_sim::SimulationDebugSiteV1, String> {
+    source_map_operation_site(
+        module,
+        site.function_ordinal(),
+        site.block_ordinal(),
+        site.operation_ordinal(),
+    )
 }
 
 fn source_map_site(
@@ -321,7 +263,21 @@ fn source_map_site(
     let KirSitePointV1::Operation { operation_ordinal } = site.point else {
         return Err("source map sites must identify KIR operations".to_owned());
     };
-    let function_ordinal = usize::try_from(site.function_ordinal)
+    source_map_operation_site(
+        module,
+        site.function_ordinal,
+        site.block_ordinal,
+        operation_ordinal,
+    )
+}
+
+fn source_map_operation_site(
+    module: &AdmittedSimulationModuleV1,
+    function_ordinal: u64,
+    block_ordinal: u64,
+    operation_ordinal: u64,
+) -> Result<fe2o3_kir_sim::SimulationDebugSiteV1, String> {
+    let function_ordinal = usize::try_from(function_ordinal)
         .map_err(|_| "source map function ordinal does not fit this host".to_owned())?;
     let function = module
         .module()
@@ -332,7 +288,7 @@ fn source_map_site(
         .body
         .as_ref()
         .ok_or_else(|| "source map function has no body".to_owned())?;
-    let block_ordinal = usize::try_from(site.block_ordinal)
+    let block_ordinal = usize::try_from(block_ordinal)
         .map_err(|_| "source map block ordinal does not fit this host".to_owned())?;
     let block = body
         .blocks
@@ -350,13 +306,13 @@ fn source_map_site(
     })
 }
 
-fn source_map_span(span: SourceMapSpanV1) -> DebugSourceSpanV1 {
+fn source_map_span(span: DebugSourceMapSpanV1) -> DebugSourceSpanV1 {
     DebugSourceSpanV1 {
-        file: span.file_identity.as_bytes(),
-        byte_start: span.byte_start,
-        byte_end: span.byte_end,
-        line: span.line,
-        column: span.column,
+        file: span.file_identity(),
+        byte_start: span.byte_start(),
+        byte_end: span.byte_end(),
+        line: span.line(),
+        column: span.column(),
     }
 }
 

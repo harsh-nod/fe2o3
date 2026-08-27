@@ -1724,7 +1724,11 @@ pub(crate) fn supported_cast(
     };
     match kind {
         CastKind::Truncate => from.is_integer() && to.is_integer() && to_bits < from_bits,
-        CastKind::ZeroExtend => from.is_integer() && to.is_integer() && to_bits > from_bits,
+        CastKind::ZeroExtend => {
+            (from.is_integer() || from == ScalarType::Bool)
+                && to.is_integer()
+                && to_bits > from_bits
+        }
         CastKind::SignExtend => from.is_signed_integer() && to.is_integer() && to_bits > from_bits,
         CastKind::Bitcast => {
             from != ScalarType::Bool && to != ScalarType::Bool && from_bits == to_bits
@@ -1992,6 +1996,35 @@ fn validate_buffer_access(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boolean_zero_extension_is_exact_for_fixed_and_target_width_integers() {
+        for target in [
+            SimulationTargetV1::little_endian(IndexWidthV1::Bits32),
+            SimulationTargetV1::little_endian(IndexWidthV1::Bits64),
+        ] {
+            assert!(supported_cast(
+                CastKind::ZeroExtend,
+                ScalarType::Bool,
+                ScalarType::U8,
+                target,
+            ));
+            assert!(supported_cast(
+                CastKind::ZeroExtend,
+                ScalarType::Bool,
+                ScalarType::Index,
+                target,
+            ));
+            for kind in [CastKind::Bitcast, CastKind::Truncate, CastKind::SignExtend] {
+                assert!(!supported_cast(
+                    kind,
+                    ScalarType::Bool,
+                    ScalarType::Index,
+                    target,
+                ));
+            }
+        }
+    }
 
     #[test]
     fn guarded_load_accepts_a_scalar_workgroup_pointer() {

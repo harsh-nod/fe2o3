@@ -5512,6 +5512,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn boolean_zero_extension_preserves_bits_across_index_widths() {
+        for target in [
+            SimulationTargetV1::little_endian(crate::IndexWidthV1::Bits32),
+            SimulationTargetV1::little_endian(crate::IndexWidthV1::Bits64),
+        ] {
+            for value in [false, true] {
+                let fixed = execute_cast(
+                    CastKind::ZeroExtend,
+                    ScalarBitsV1::boolean(value),
+                    ScalarType::I64,
+                    target,
+                )
+                .unwrap();
+                assert_eq!(fixed.ty(), ScalarType::I64);
+                assert_eq!(fixed.bits(), value as u128);
+
+                let index = execute_cast(
+                    CastKind::ZeroExtend,
+                    ScalarBitsV1::boolean(value),
+                    ScalarType::Index,
+                    target,
+                )
+                .unwrap();
+                assert_eq!(index.ty(), ScalarType::Index);
+                assert_eq!(index.bits(), value as u128);
+                assert!(index.matches_target(target));
+            }
+        }
+    }
+
+    #[test]
     fn admitted_binary_results_use_fixed_inline_storage() {
         let target = SimulationTargetV1::amdgpu_64();
         let checked = execute_binary(
