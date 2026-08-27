@@ -11,12 +11,12 @@ use std::{
 
 use dialect_kernel::{
     BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp,
+    IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
 };
 use pliron::{
     basic_block::BasicBlock,
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
+    common_traits::{Named, Verify},
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
@@ -468,7 +468,9 @@ fn canonical_positive_induction_loop(
             None => return CanonicalLoopResultV1::Incomplete("the induction step is malformed"),
         };
         if step > 1 {
-            let Some(bound) = index_constant(context, branch.rhs(context)) else {
+            let upper_bound = index_constant(context, branch.rhs(context))
+                .or_else(|| unsigned_cast_upper_bound(context, branch.rhs(context)));
+            let Some(bound) = upper_bound else {
                 return CanonicalLoopResultV1::Incomplete(
                     "a symbolic bound with a non-unit step needs a no-wrap range proof",
                 );
@@ -569,6 +571,15 @@ fn index_constant(context: &Context, value: pliron::value::Value) -> Option<u64>
     Operation::get_op_dyn(definition, context)
         .downcast_ref::<IndexConstantOp>()?
         .value(context)
+}
+
+fn unsigned_cast_upper_bound(context: &Context, value: pliron::value::Value) -> Option<u64> {
+    let definition = value.defining_op()?;
+    let operation = Operation::get_op_dyn(definition, context);
+    let cast = operation.downcast_ref::<IndexUnsignedCastOp>()?;
+    (cast.result(context) == value && cast.verify(context).is_ok())
+        .then(|| cast.inclusive_upper_bound(context))
+        .flatten()
 }
 
 fn reachable_blocks(edges: &[Vec<usize>]) -> Vec<bool> {

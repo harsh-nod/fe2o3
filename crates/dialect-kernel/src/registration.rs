@@ -9,21 +9,22 @@ use crate::{
     DeterministicJoinOp, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
     GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
     IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
-    IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr,
-    InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr, MemorySpaceAttr, NoAliasClassAttr,
-    OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp,
-    RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
-    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp, SemanticCoverageBindingAttr,
-    SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr,
-    SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp, SemanticIeeeRoundingAttr,
-    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticScalarType,
-    SemanticStepBoundAttr, SemanticSymbolAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
-    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
-    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
-    SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
-    SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr, TensorFragmentAttr,
-    TensorInstructionAttr, TensorLayoutOp, TensorResultComponentOp, TensorValueRootAttr, TrapOp,
+    IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr,
+    InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
+    MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr,
+    OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
+    RequireFiniteFoldOp, RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr, SemanticConstantOp,
+    SemanticCoverageBindingAttr, SemanticDomainBoundAttr, SemanticEvaluationOrderAttr,
+    SemanticExceptionalValueAttr, SemanticExpressionCommitmentAttr, SemanticExpressionCommitmentOp,
+    SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr, SemanticOverflowAttr,
+    SemanticScalarKindAttr, SemanticScalarType, SemanticStepBoundAttr, SemanticSymbolAttr,
+    SemanticSymbolOp, SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp,
+    SemanticTypedCastKindAttr, SemanticTypedCastOp, SemanticTypedCompareKindAttr,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
+    TensorConvergenceAttr, TensorFragmentAttr, TensorInstructionAttr, TensorLayoutOp,
+    TensorResultComponentOp, TensorValueRootAttr, TrapOp,
 };
 
 fn registration_hook(
@@ -78,6 +79,7 @@ fn registration_hook(
     service.register_operation::<IndexConstantOp>()?;
     service.register_operation::<IndexUnknownOp>()?;
     service.register_operation::<InvocationIndexOp>()?;
+    service.register_operation::<IndexUnsignedCastOp>()?;
     service.register_operation::<IndexBinaryOp>()?;
     service.register_operation::<DeterministicJoinOp>()?;
     service.register_operation::<CheckedTiledIndex2DOp>()?;

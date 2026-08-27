@@ -5,7 +5,7 @@
 //! success edge uniquely controls an access to the same slice and index.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt,
 };
 
@@ -268,12 +268,25 @@ struct ProjectedUniformInductionV1 {
     initial: ProductionRankedValueV1,
     bound: ProductionRankedValueV1,
     step: ProductionRankedValueV1,
+    bound_cast: Option<ProjectedUnsignedCastCandidateV1>,
 }
 
 impl ProjectedUniformInductionV1 {
     fn contains_block(&self, block: usize) -> bool {
         self.loop_blocks.binary_search(&block).is_ok()
     }
+}
+
+/// Candidate cast retained only until it is reconciled against the exact
+/// semantic statement, source type, and final ranked argument mapping.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectedUnsignedCastCandidateV1 {
+    header: usize,
+    comparison_statement: usize,
+    source_operand: SemanticOperandV1,
+    source_type: SemanticTypeIdV1,
+    ranked_value: ProductionRankedValueV1,
+    bit_width: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5154,7 +5167,7 @@ fn project_intrinsic_contracts(
             )?;
         }
     }
-    let uniform_inductions = project_uniform_inductions_v1(
+    let mut uniform_inductions = project_uniform_inductions_v1(
         types,
         function,
         constants,
@@ -5162,6 +5175,17 @@ fn project_intrinsic_contracts(
         &local_definitions,
         &mut runtime_index_arguments,
         &mut next_runtime_argument,
+        operations,
+        next_value,
+    )?;
+    reconcile_and_emit_unsigned_casts_v1(
+        types,
+        function,
+        constants,
+        &stable_argument_origins,
+        &local_definitions,
+        &runtime_index_arguments,
+        &mut uniform_inductions,
         operations,
         next_value,
     )?;
@@ -6199,6 +6223,7 @@ fn project_uniform_inductions_v1(
     next_value: &mut u32,
 ) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
     let graph = projected_loop_cfg_graph_v1(function)?;
+    let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
     let mut graph_work = 0_usize;
     let mut inductions = Vec::new();
     for (header, block) in function.blocks().iter().enumerate() {
@@ -6249,6 +6274,9 @@ fn project_uniform_inductions_v1(
         else {
             continue;
         };
+        let bound_bit_width = semantic_ranges
+            .range_at_operand(bound_operand, header, comparison_index)?
+            .and_then(|range| unsigned_bit_width_for_maximum_v1(range.maximum));
         let body_entry = targets.otherwise().target().index() as usize;
         let exit = targets.values()[0].edge().target().index() as usize;
         if body_entry >= function.blocks().len() || exit >= function.blocks().len() {
@@ -6388,6 +6416,14 @@ fn project_uniform_inductions_v1(
                 "a uniform induction with a lane-varying step",
             ));
         };
+        let bound_cast = bound_bit_width.map(|bit_width| ProjectedUnsignedCastCandidateV1 {
+            header,
+            comparison_statement: comparison_index,
+            source_operand: bound_operand.clone(),
+            source_type: bound_operand.ty(),
+            ranked_value: bound,
+            bit_width,
+        });
         inductions.push(ProjectedUniformInductionV1 {
             preheader: topology.preheader,
             header,
@@ -6398,6 +6434,7 @@ fn project_uniform_inductions_v1(
             initial,
             bound,
             step,
+            bound_cast,
         });
     }
     inductions.sort_by(|left, right| {
@@ -6425,6 +6462,138 @@ fn project_uniform_inductions_v1(
         }
     }
     Ok(inductions)
+}
+
+fn unsigned_bit_width_for_maximum_v1(maximum: u128) -> Option<u16> {
+    match maximum {
+        maximum if maximum == u128::from(u8::MAX) => Some(8),
+        maximum if maximum == u128::from(u16::MAX) => Some(16),
+        maximum if maximum == u128::from(u32::MAX) => Some(32),
+        maximum if maximum == u128::from(u64::MAX) => Some(64),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconcile_and_emit_unsigned_casts_v1(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    constants: &[Option<u64>],
+    stable_argument_origins: &[Option<u32>],
+    local_definitions: &[u8],
+    arguments: &[Option<u32>],
+    inductions: &mut [ProjectedUniformInductionV1],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let mut reconciled = BTreeMap::new();
+    let mut semantic_ranges = SemanticAssertProofsV1::new(types, function)?;
+    for induction in inductions.iter() {
+        let Some(range) = &induction.bound_cast else {
+            continue;
+        };
+        let statement = function
+            .blocks()
+            .get(range.header)
+            .and_then(|block| block.statements().get(range.comparison_statement))
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast has a stale semantic statement site",
+            ))?;
+        let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast no longer names an assignment",
+            ));
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            right: source_operand,
+            ..
+        } = assignment.value().kind()
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast no longer names a loop comparison",
+            ));
+        };
+        let reconciled_width = semantic_ranges
+            .range_at_operand(source_operand, range.header, range.comparison_statement)?
+            .and_then(|proof| unsigned_bit_width_for_maximum_v1(proof.maximum));
+        if source_operand != &range.source_operand
+            || source_operand.ty() != range.source_type
+            || reconciled_width != Some(range.bit_width)
+            || range.ranked_value != induction.bound
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
+            ));
+        }
+        if constant_operand_value(source_operand, constants).is_some() {
+            continue;
+        }
+        let local = simple_operand_local(source_operand).ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived dynamic unsigned cast has no exact scalar local",
+            ),
+        )?;
+        let local_index = local.index() as usize;
+        let origin = stable_argument_origins
+            .get(local_index)
+            .copied()
+            .flatten()
+            .or_else(|| {
+                (local_definitions.get(local_index).copied() == Some(0)
+                    && function.locals().get(local_index).is_some_and(|local| {
+                        matches!(local.role(), SemanticLocalRoleV1::Argument(_))
+                    }))
+                .then_some(local.index())
+            })
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast is not backed by one stable semantic argument",
+            ))? as usize;
+        let argument = arguments.get(origin).copied().flatten().ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast has no final ranked argument mapping",
+            ),
+        )?;
+        if range.ranked_value != ProductionRankedValueV1::Argument(argument) {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast was substituted onto a different ranked source",
+            ));
+        }
+        match reconciled.insert(range.ranked_value, range.bit_width) {
+            Some(previous) if previous != range.bit_width => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one ranked source has incompatible compiler-derived unsigned cast widths",
+                ));
+            }
+            _ => {}
+        }
+    }
+    let mut converted = BTreeMap::new();
+    for (source, bit_width) in reconciled {
+        reserve_operation(operations)?;
+        let result = next_value_id(next_value)?;
+        let value = ProductionRankedValueV1::Local(result);
+        operations.push(ProductionRankedOperationV1::IndexUnsignedCast {
+            result,
+            source,
+            bit_width,
+        });
+        converted.insert(source, value);
+    }
+    for induction in inductions {
+        let Some(range) = &induction.bound_cast else {
+            continue;
+        };
+        if constant_operand_value(&range.source_operand, constants).is_some() {
+            continue;
+        }
+        induction.bound = converted.get(&range.ranked_value).copied().ok_or(
+            ProductionRankedProjectionErrorV1::Incomplete(
+                "a reconciled unsigned cast result is missing from the ranked recipe",
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 fn resolve_loop_header_copy_alias_v1(
@@ -6652,13 +6821,13 @@ struct SemanticAssertProofsV1<'a> {
 }
 
 impl<'a> SemanticAssertProofsV1<'a> {
-    fn analyze(
+    fn new(
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
-    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
         let graph = projected_loop_cfg_graph_v1(function)?;
         let inventory = assertion_definition_inventory(function)?;
-        let mut proof = Self {
+        Ok(Self {
             types,
             function,
             graph,
@@ -6669,7 +6838,14 @@ impl<'a> SemanticAssertProofsV1<'a> {
             dominance: HashMap::new(),
             zero_exclusion: HashMap::new(),
             work: 0,
-        };
+        })
+    }
+
+    fn analyze(
+        types: &'a [SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+    ) -> Result<Vec<bool>, ProductionRankedProjectionErrorV1> {
+        let mut proof = Self::new(types, function)?;
         let mut proved = vec![false; function.blocks().len()];
         for (block_index, block) in function.blocks().iter().enumerate() {
             let SemanticTerminatorKindV1::Assert {
@@ -6696,6 +6872,22 @@ impl<'a> SemanticAssertProofsV1<'a> {
                 .is_some_and(|range| range.is_exact(u128::from(*expected)));
         }
         Ok(proved)
+    }
+
+    fn range_at_operand(
+        &mut self,
+        operand: &SemanticOperandV1,
+        block: usize,
+        statement: usize,
+    ) -> Result<Option<UnsignedRangeProofV1>, ProductionRankedProjectionErrorV1> {
+        if block >= self.function.blocks().len()
+            || statement > self.function.blocks()[block].statements().len()
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a compiler-derived unsigned cast has a stale semantic use site",
+            ));
+        }
+        self.range_of_operand(operand, block, statement, &mut HashSet::new())
     }
 
     fn charge(&mut self, amount: usize) -> Result<(), ProductionRankedProjectionErrorV1> {
@@ -9679,6 +9871,16 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             format!("  %{} = kernel.index_constant {}\n", result.get(), value)
         }
+        ProductionRankedOperationV1::IndexUnsignedCast {
+            result,
+            source,
+            bit_width,
+        } => format!(
+            "  %{} = kernel.index_unsigned_cast {} <{}>\n",
+            result.get(),
+            ranked_value_text_v1(*source),
+            bit_width,
+        ),
         ProductionRankedOperationV1::IndexUnknown { result } => {
             format!("  %{} = kernel.index_unknown\n", result.get())
         }
@@ -13042,6 +13244,7 @@ mod tests {
                 | ProductionRankedOperationV1::ExecutionLayout { .. }
                 | ProductionRankedOperationV1::ViewInSpace { .. }
                 | ProductionRankedOperationV1::IndexConstant { .. }
+                | ProductionRankedOperationV1::IndexUnsignedCast { .. }
                 | ProductionRankedOperationV1::IndexUnknown { .. }
                 | ProductionRankedOperationV1::InvocationIndex { .. }
                 | ProductionRankedOperationV1::DeterministicJoin { .. }
@@ -19274,21 +19477,33 @@ mod tests {
         ),
         ProductionRankedProjectionErrorV1,
     > {
+        let types = projection_types();
         let constants = constant_locals(function);
-        let origins = local_stable_argument_origins(&projection_types(), function).unwrap();
+        let origins = local_stable_argument_origins(&types, function).unwrap();
         let definitions = local_definition_counts(function);
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let mut operations = Vec::new();
         let mut next_value = 0;
-        let inductions = project_uniform_inductions_v1(
-            &projection_types(),
+        let mut inductions = project_uniform_inductions_v1(
+            &types,
             function,
             &constants,
             &origins,
             &definitions,
             &mut arguments,
             &mut next_argument,
+            &mut operations,
+            &mut next_value,
+        )?;
+        reconcile_and_emit_unsigned_casts_v1(
+            &types,
+            function,
+            &constants,
+            &origins,
+            &definitions,
+            &arguments,
+            &mut inductions,
             &mut operations,
             &mut next_value,
         )?;
@@ -19368,6 +19583,130 @@ mod tests {
             ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
         ));
         ProductionRankedKernelV1::new("uniform_dynamic_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn unsigned_cast_width_is_closed_to_exact_unsigned_type_maxima() {
+        assert_eq!(unsigned_bit_width_for_maximum_v1(u8::MAX.into()), Some(8));
+        assert_eq!(unsigned_bit_width_for_maximum_v1(u16::MAX.into()), Some(16));
+        assert_eq!(unsigned_bit_width_for_maximum_v1(u32::MAX.into()), Some(32));
+        assert_eq!(unsigned_bit_width_for_maximum_v1(u64::MAX.into()), Some(64));
+        assert_eq!(unsigned_bit_width_for_maximum_v1(0), None);
+        assert_eq!(unsigned_bit_width_for_maximum_v1(100), None);
+        assert_eq!(unsigned_bit_width_for_maximum_v1(u128::MAX), None);
+    }
+
+    #[test]
+    fn unsigned_cast_reconciliation_rejects_stale_type_and_value_substitution() {
+        let types = projection_types();
+        let function = multi_block_induction_function(
+            InductionCfgShape::Chain,
+            SemanticLocalRoleV1::Argument(0),
+            16,
+        );
+        let constants = constant_locals(&function);
+        let origins = local_stable_argument_origins(&types, &function).unwrap();
+        let definitions = local_definition_counts(&function);
+        let mut arguments = vec![None; function.locals().len()];
+        let mut next_argument = 1;
+        let mut operations = Vec::new();
+        let mut next_value = 0;
+        let inductions = project_uniform_inductions_v1(
+            &types,
+            &function,
+            &constants,
+            &origins,
+            &definitions,
+            &mut arguments,
+            &mut next_argument,
+            &mut operations,
+            &mut next_value,
+        )
+        .unwrap();
+        let range = inductions[0].bound_cast.as_ref().unwrap();
+        assert_eq!(range.bit_width, 32);
+        assert_eq!(range.ranked_value, inductions[0].bound);
+
+        let raw_bound = inductions[0].bound;
+        let mut reconciled_inductions = inductions.clone();
+        let mut reconciled_operations = operations.clone();
+        let mut reconciled_next_value = next_value;
+        reconcile_and_emit_unsigned_casts_v1(
+            &types,
+            &function,
+            &constants,
+            &origins,
+            &definitions,
+            &arguments,
+            &mut reconciled_inductions,
+            &mut reconciled_operations,
+            &mut reconciled_next_value,
+        )
+        .unwrap();
+        assert!(matches!(
+            reconciled_operations.last(),
+            Some(ProductionRankedOperationV1::IndexUnsignedCast {
+                result,
+                source,
+                bit_width: 32,
+            }) if *source == raw_bound
+                && reconciled_inductions[0].bound == ProductionRankedValueV1::Local(*result)
+        ));
+
+        for (mutation, expected) in [
+            (
+                0_u8,
+                "a compiler-derived unsigned cast has a stale semantic statement site",
+            ),
+            (
+                1,
+                "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
+            ),
+            (
+                2,
+                "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
+            ),
+            (
+                3,
+                "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
+            ),
+            (
+                4,
+                "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
+            ),
+            (
+                5,
+                "a compiler-derived unsigned cast does not match its exact semantic range and ranked source",
+            ),
+        ] {
+            let mut hostile = inductions.clone();
+            let range = hostile[0].bound_cast.as_mut().unwrap();
+            match mutation {
+                0 => range.comparison_statement = usize::MAX,
+                1 => range.bit_width = 16,
+                2 => range.ranked_value = ProductionRankedValueV1::Argument(0),
+                3 => range.source_operand = constant(7),
+                4 => range.bit_width = 64,
+                5 => range.source_type = SemanticTypeIdV1::from_index(u32::MAX),
+                _ => unreachable!(),
+            }
+            let mut hostile_operations = operations.clone();
+            let mut hostile_next_value = next_value;
+            assert_incomplete(
+                reconcile_and_emit_unsigned_casts_v1(
+                    &types,
+                    &function,
+                    &constants,
+                    &origins,
+                    &definitions,
+                    &arguments,
+                    &mut hostile,
+                    &mut hostile_operations,
+                    &mut hostile_next_value,
+                ),
+                expected,
+            );
+        }
     }
 
     #[test]

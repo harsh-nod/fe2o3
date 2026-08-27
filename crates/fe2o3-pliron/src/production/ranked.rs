@@ -24,19 +24,19 @@ use dialect_kernel::{
     BranchArgsOp, BranchOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT,
     DeterministicJoinOp, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexUnknownOp, InvocationIndexOp, MAX_COLLECTIVE_SEMANTIC_STEPS_V1,
-    MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, OwnershipContractOp,
-    OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
-    RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS, SemanticBinaryKindAttr,
-    SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr, SemanticEvaluationOrderAttr,
-    SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr, SemanticNumericalPolicyAttr,
-    SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp, SemanticTypedBinaryKindAttr,
-    SemanticTypedBinaryOp, SemanticTypedCastKindAttr, SemanticTypedCastOp,
-    SemanticTypedCompareKindAttr, SemanticTypedCompareOp, SemanticTypedConstantOp,
-    SemanticTypedExpressionRootOp, SemanticTypedScalarV1, SemanticTypedSelectOp,
-    SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp, TensorConvergenceAttr,
-    TensorLayoutOp, TensorResultComponentOp, TrapOp,
+    IndexType, IndexUnknownOp, IndexUnsignedCastOp, InvocationIndexOp,
+    MAX_COLLECTIVE_SEMANTIC_STEPS_V1, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
+    MemorySpaceAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
+    RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp,
+    RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp, SUPPORTED_ELEMENT_WIDTHS,
+    SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantOp, SemanticCoverageBindingAttr,
+    SemanticEvaluationOrderAttr, SemanticExceptionalValueAttr, SemanticIeeeRoundingAttr,
+    SemanticNumericalPolicyAttr, SemanticOverflowAttr, SemanticScalarKindAttr, SemanticSymbolOp,
+    SemanticTypedBinaryKindAttr, SemanticTypedBinaryOp, SemanticTypedCastKindAttr,
+    SemanticTypedCastOp, SemanticTypedCompareKindAttr, SemanticTypedCompareOp,
+    SemanticTypedConstantOp, SemanticTypedExpressionRootOp, SemanticTypedScalarV1,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryKindAttr, SemanticTypedUnaryOp,
+    TensorConvergenceAttr, TensorLayoutOp, TensorResultComponentOp, TrapOp,
 };
 use dialect_proof::{
     AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
@@ -1542,6 +1542,17 @@ pub enum ProductionRankedOperationV1 {
         result: ProductionRankedValueIdV1,
         value: u64,
     },
+    /// Explicit unsigned-width conversion for an exact ranked index value.
+    ///
+    /// The maximum is derived from `bit_width`; no caller-selected bound is
+    /// retained. This recipe is authoritative only when independently
+    /// reconciled with the authenticated semantic-MIR subject by the source
+    /// projector.
+    IndexUnsignedCast {
+        result: ProductionRankedValueIdV1,
+        source: ProductionRankedValueV1,
+        bit_width: u16,
+    },
     IndexUnknown {
         result: ProductionRankedValueIdV1,
     },
@@ -2259,6 +2270,69 @@ mod tensor_refinement_resource_tests {
     }
 }
 
+#[cfg(test)]
+mod unsigned_cast_recipe_tests {
+    use super::*;
+
+    fn cast(
+        result: u32,
+        source: ProductionRankedValueV1,
+        bit_width: u16,
+    ) -> ProductionRankedOperationV1 {
+        ProductionRankedOperationV1::IndexUnsignedCast {
+            result: ProductionRankedValueIdV1::new(result),
+            source,
+            bit_width,
+        }
+    }
+
+    #[test]
+    fn unsigned_cast_recipe_is_value_defining_and_width_closed() {
+        let argument = ProductionRankedValueV1::Argument(0);
+        assert!(
+            ProductionRankedKernelV1::new(
+                "valid_unsigned_cast",
+                1,
+                vec![ProductionRankedBlockV1::new(
+                    vec![cast(0, argument, 32)],
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            )
+            .is_ok()
+        );
+
+        assert_eq!(
+            ProductionRankedKernelV1::new(
+                "invalid_unsigned_cast",
+                1,
+                vec![ProductionRankedBlockV1::new(
+                    vec![cast(0, argument, 7)],
+                    ProductionRankedTerminatorV1::Return,
+                )],
+            ),
+            Err(ProductionRankedKernelErrorV1::InvalidUnsignedCast),
+        );
+
+        assert_eq!(
+            ProductionRankedKernelV1::new(
+                "nonentry_unsigned_cast",
+                1,
+                vec![
+                    ProductionRankedBlockV1::new(
+                        vec![],
+                        ProductionRankedTerminatorV1::Branch { target: 1 },
+                    ),
+                    ProductionRankedBlockV1::new(
+                        vec![cast(0, argument, 32)],
+                        ProductionRankedTerminatorV1::Return,
+                    ),
+                ],
+            ),
+            Err(ProductionRankedKernelErrorV1::NonEntryDefinition { block: 1 }),
+        );
+    }
+}
+
 fn validate_live_semantic_loads(
     kernel: &ProductionRankedKernelV1,
     expression: &ProductionSemanticExpressionV2,
@@ -2364,6 +2438,7 @@ pub enum ProductionRankedKernelErrorV1 {
     },
     InvalidShape,
     InvalidExecutionLayout,
+    InvalidUnsignedCast,
     InvalidAllocationContract,
     InvalidReferenceContract,
     InvalidSemanticExpression(ProductionSemanticExpressionErrorV2),
@@ -2624,6 +2699,9 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             Self::InvalidExecutionLayout => formatter.write_str(
                 "ranked execution layout must be the unique first entry operation with nonzero workgroup axes and an integral subgroup width",
             ),
+            Self::InvalidUnsignedCast => formatter.write_str(
+                "ranked unsigned cast requires an index source and a width in {8, 16, 32, 64}",
+            ),
             Self::InvalidAllocationContract => formatter.write_str(
                 "ranked views/effects require supported memory semantics and consistent allocation origins/no-alias classes",
             ),
@@ -2865,6 +2943,17 @@ fn validate_operation(
             )))
         }
         ProductionRankedOperationV1::IndexConstant { result, .. } => {
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
+        ProductionRankedOperationV1::IndexUnsignedCast {
+            result,
+            source,
+            bit_width,
+        } => {
+            require_index(*source, argument_count, locals)?;
+            if !matches!(*bit_width, 8 | 16 | 32 | 64) {
+                return Err(ProductionRankedKernelErrorV1::InvalidUnsignedCast);
+            }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
         ProductionRankedOperationV1::IndexUnknown { result } => {
@@ -3439,6 +3528,7 @@ fn validate_block_argument_values_v1(
         }
         ProductionRankedOperationV1::ExecutionLayout { .. }
         | ProductionRankedOperationV1::IndexConstant { .. }
+        | ProductionRankedOperationV1::IndexUnsignedCast { .. }
         | ProductionRankedOperationV1::IndexUnknown { .. }
         | ProductionRankedOperationV1::InvocationIndex { .. }
         | ProductionRankedOperationV1::Barrier { .. }
@@ -4415,6 +4505,18 @@ fn materialize_operation(
         }
         ProductionRankedOperationV1::IndexConstant { result, value } => {
             let op = IndexConstantOp::new(context, *value);
+            (op.get_operation(), Some((*result, op.result(context))))
+        }
+        ProductionRankedOperationV1::IndexUnsignedCast {
+            result,
+            source,
+            bit_width,
+        } => {
+            let op = IndexUnsignedCastOp::new(
+                context,
+                resolve_value(*source, arguments, locals, block_arguments)?,
+                u64::from(*bit_width),
+            );
             (op.get_operation(), Some((*result, op.result(context))))
         }
         ProductionRankedOperationV1::IndexUnknown { result } => {

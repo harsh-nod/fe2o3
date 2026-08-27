@@ -15,9 +15,9 @@ use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp,
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, InvocationIndexOp,
-    MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp, RankedViewType,
-    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, IndexUnsignedCastOp,
+    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, OwnershipContractOp, RankedAccessOp, RankedViewOp,
+    RankedViewType, RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
     RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
     SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
     SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
@@ -347,6 +347,7 @@ struct PredecessorEdge {
 enum RankedOperationKind {
     RankedView,
     IndexConstant,
+    IndexUnsignedCast,
     IndexUnknown,
     InvocationIndex,
     IndexBinary,
@@ -407,6 +408,8 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
         Some(RankedOperationKind::RankedView)
     } else if operation.downcast_ref::<IndexConstantOp>().is_some() {
         Some(RankedOperationKind::IndexConstant)
+    } else if operation.downcast_ref::<IndexUnsignedCastOp>().is_some() {
+        Some(RankedOperationKind::IndexUnsignedCast)
     } else if operation.downcast_ref::<IndexUnknownOp>().is_some() {
         Some(RankedOperationKind::IndexUnknown)
     } else if operation.downcast_ref::<InvocationIndexOp>().is_some() {

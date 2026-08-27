@@ -9,7 +9,7 @@ use std::{
 use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, DeterministicJoinOp, IndexBinaryKindAttr,
     IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, InvocationIndexOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnsignedCastOp, InvocationIndexOp,
     MAX_DETERMINISTIC_JOIN_INPUTS_V1, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, TrapOp,
 };
 use fe2o3_kernel_ir::{
@@ -1395,6 +1395,8 @@ fn analyze_pliron_subgroup_uniformity(
                             binary.rhs(context),
                         ])
                     }
+                } else if let Some(cast) = dynamic.downcast_ref::<IndexUnsignedCastOp>() {
+                    SubgroupValueDefinitionV1::Merge(vec![cast.source(context)])
                 } else if let Some(join) = dynamic.downcast_ref::<DeterministicJoinOp>() {
                     let dependencies = join.dependencies(context);
                     if dependencies.is_empty() {

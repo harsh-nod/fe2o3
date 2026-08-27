@@ -3,8 +3,8 @@ use dialect_kernel::{
     AnalysisSplitOp, BranchArgsOp, BranchOp, CheckedTiledIndex2DOp, DIALECT_NAME,
     DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexUnknownOp, InvocationIndexOp, ReturnOp, TensorConvergenceAttr,
-    TensorDataflowRootsV1, TensorLayoutOp, register_dialect,
+    IndexType, IndexUnknownOp, IndexUnsignedCastOp, InvocationIndexOp, ReturnOp,
+    TensorConvergenceAttr, TensorDataflowRootsV1, TensorLayoutOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, MAX_PLIRON_TENSOR_UNIFORMITY_VALUES_V1,
@@ -829,6 +829,80 @@ fn entry_arguments_are_independently_proven_subgroup_uniform() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn unsigned_cast_preserves_its_source_uniformity() {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "unsigned_cast_uniformity", 1);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let cast = IndexUnsignedCastOp::new(context, arguments[0], 32);
+    let expected = IndexConstantOp::new(context, 0);
+    let choose = IndexEqualBranchOp::new(
+        context,
+        cast.result(context),
+        expected.result(context),
+        matrix_block,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &cast);
+    append(context, entry, &expected);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &to_exit);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    assert!(run_pliron_tensor_layout_check_v1(context, &function).is_clean());
+}
+
+#[test]
+fn unsigned_cast_does_not_make_a_varying_source_uniform() {
+    let context = &mut setup();
+    let (function, _) = function(context, "unsigned_cast_varying", 0);
+    let entry = function.get_entry_block(context);
+    let matrix_block = block(context, &function, "matrix");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let cast = IndexUnsignedCastOp::new(context, invocation.result(context), 32);
+    let expected = IndexConstantOp::new(context, 0);
+    let choose = IndexEqualBranchOp::new(
+        context,
+        cast.result(context),
+        expected.result(context),
+        matrix_block,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &invocation);
+    append(context, entry, &cast);
+    append(context, entry, &expected);
+    append(context, entry, &choose);
+    append(context, matrix_block, &matrix);
+    append(context, matrix_block, &to_exit);
+    append(context, exit, &ret);
+
+    verify_operation(function.get_operation(), context).unwrap();
+    assert!(
+        run_pliron_tensor_layout_check_v1(context, &function)
+            .findings()
+            .iter()
+            .any(|finding| matches!(
+                finding,
+                PlironTensorLayoutFindingV1::DivergentSubgroupControl { .. }
+            ))
+    );
 }
 
 #[test]

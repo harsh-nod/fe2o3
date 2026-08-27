@@ -694,6 +694,95 @@ impl Verify for InvocationIndexOp {
     }
 }
 
+/// Explicit unsigned-width conversion for one ranked index value.
+///
+/// The result is the low `bit_width` bits of `source`, interpreted as an
+/// unsigned index. Its inclusive upper bound is therefore derived from the
+/// operation semantics rather than from an assumption about `source`.
+#[pliron_op(
+    name = "kernel.index_unsigned_cast",
+    format,
+    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    attributes = (kernel_unsigned_bit_width: IndexValueAttr)
+)]
+pub struct IndexUnsignedCastOp;
+
+impl IndexUnsignedCastOp {
+    pub fn new(context: &mut Context, value: Value, bit_width: u64) -> Self {
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![IndexType::get(context).into()],
+            vec![value],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_unsigned_bit_width(context, IndexValueAttr(bit_width));
+        op
+    }
+
+    pub fn source(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_operand(0)
+    }
+
+    pub fn result(&self, context: &Context) -> Value {
+        self.get_operation().deref(context).get_result(0)
+    }
+
+    pub fn bit_width(&self, context: &Context) -> Option<u64> {
+        self.get_attr_kernel_unsigned_bit_width(context)
+            .map(|width| width.value())
+    }
+
+    pub fn inclusive_upper_bound(&self, context: &Context) -> Option<u64> {
+        match self.bit_width(context)? {
+            8 => Some(u8::MAX.into()),
+            16 => Some(u16::MAX.into()),
+            32 => Some(u32::MAX.into()),
+            64 => Some(u64::MAX),
+            _ => None,
+        }
+    }
+
+    pub const fn grants_compiler_refinement_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+impl Verify for IndexUnsignedCastOp {
+    fn verify(&self, context: &Context) -> PlironResult<()> {
+        verify_no_regions_results_successors(self, context, 1, 0)?;
+        let operation = self.get_operation();
+        let operation = operation.deref(context);
+        if operation.get_num_operands() != 1
+            || payload_attribute_count(&operation) != 1
+            || self.inclusive_upper_bound(context).is_none()
+        {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.index_unsigned_cast requires one index source, one index result, and an unsigned width in {8, 16, 32, 64}",
+                )
+            );
+        }
+        require_index_operand(self, context, 0)?;
+        if !is_index_type(self.result(context), context) {
+            return verify_err!(
+                self.loc(context),
+                RankedMemoryError::MalformedPayload(
+                    "kernel.index_unsigned_cast result must be kernel.index",
+                )
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Target-neutral unsigned index arithmetic retained for sparse analysis.
 ///
 /// Analyses may only use order-preserving affine reasoning when they prove the
@@ -2326,6 +2415,7 @@ fn verify_no_regions_results_successors(
             || matches!(
                 key.as_ref(),
                 "kernel_index_value"
+                    | "kernel_unsigned_bit_width"
                     | "kernel_dimension"
                     | "kernel_access_kind"
                     | "kernel_atomic_ordering"

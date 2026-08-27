@@ -1,6 +1,7 @@
 use dialect_kernel::{
     BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexType, InvocationIndexOp, ReturnOp, register_dialect,
+    IndexLessThanBranchArgsOp, IndexType, IndexUnsignedCastOp, InvocationIndexOp, ReturnOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, PlironProgressFindingV1, run_pliron_progress_check_v1,
@@ -110,11 +111,20 @@ enum MultiBlockCase {
     InvocationLatchUpdate,
 }
 
+#[derive(Clone, Copy)]
+enum RangeCase {
+    None,
+    Bound(&'static [u64]),
+    Mismatched(u64),
+    NonEntry(u64),
+}
+
 fn multi_block_loop(
     context: &mut Context,
     static_bound: Option<u64>,
     step_value: u64,
     case: MultiBlockCase,
+    range_case: RangeCase,
 ) -> FuncOp {
     let (function, arguments) = make_function(
         context,
@@ -132,7 +142,7 @@ fn multi_block_loop(
     let one = IndexConstantOp::new(context, 1);
     let step = IndexConstantOp::new(context, step_value);
     let bound_constant = static_bound.map(|bound| IndexConstantOp::new(context, bound));
-    let bound = bound_constant.as_ref().map_or_else(
+    let mut bound = bound_constant.as_ref().map_or_else(
         || arguments.first().copied().expect("symbolic bound"),
         |bound| bound.result(context),
     );
@@ -152,6 +162,20 @@ fn multi_block_loop(
     }
     if let Some(invocation) = &invocation {
         append(context, entry, invocation);
+    }
+    match range_case {
+        RangeCase::None | RangeCase::NonEntry(_) => {}
+        RangeCase::Bound(widths) => {
+            for width in widths {
+                let cast = IndexUnsignedCastOp::new(context, bound, *width);
+                append(context, entry, &cast);
+                bound = cast.result(context);
+            }
+        }
+        RangeCase::Mismatched(width) => {
+            let cast = IndexUnsignedCastOp::new(context, start.result(context), width);
+            append(context, entry, &cast);
+        }
     }
     if matches!(case, MultiBlockCase::MultipleHeaderEntries) {
         let first_entry = block(context, &function, "first_entry");
@@ -208,6 +232,10 @@ fn multi_block_loop(
         append(context, first, &changed);
         append(context, first, &forward);
     } else {
+        if let RangeCase::NonEntry(width) = range_case {
+            let cast = IndexUnsignedCastOp::new(context, bound, width);
+            append(context, first, &cast);
+        }
         let forward = BranchArgsOp::new(context, vec![first_induction], second);
         append(context, first, &forward);
     }
@@ -263,7 +291,13 @@ fn static_positive_nonunit_step_is_proved_only_when_its_update_cannot_overflow()
 #[test]
 fn canonical_multiblock_recurrence_forwards_one_induction_value() {
     let context = &mut setup();
-    let function = multi_block_loop(context, Some(64), 16, MultiBlockCase::Canonical);
+    let function = multi_block_loop(
+        context,
+        Some(64),
+        16,
+        MultiBlockCase::Canonical,
+        RangeCase::None,
+    );
     let report = run_pliron_progress_check_v1(context, &function);
     assert!(report.is_clean(), "{report:?}");
     assert_eq!(report.certificates().len(), 1);
@@ -273,10 +307,16 @@ fn canonical_multiblock_recurrence_forwards_one_induction_value() {
 #[test]
 fn multiblock_symbolic_bound_is_supported_only_for_a_unit_step() {
     let context = &mut setup();
-    let function = multi_block_loop(context, None, 1, MultiBlockCase::Canonical);
+    let function = multi_block_loop(context, None, 1, MultiBlockCase::Canonical, RangeCase::None);
     assert!(run_pliron_progress_check_v1(context, &function).is_clean());
 
-    let function = multi_block_loop(context, None, 16, MultiBlockCase::Canonical);
+    let function = multi_block_loop(
+        context,
+        None,
+        16,
+        MultiBlockCase::Canonical,
+        RangeCase::None,
+    );
     let report = run_pliron_progress_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
@@ -287,9 +327,81 @@ fn multiblock_symbolic_bound_is_supported_only_for_a_unit_step() {
 }
 
 #[test]
+fn compiler_derived_unsigned_widths_prove_symbolic_nonunit_no_wrap() {
+    for widths in [&[8_u64][..], &[16_u64][..], &[32_u64][..]] {
+        let context = &mut setup();
+        let function = multi_block_loop(
+            context,
+            None,
+            16,
+            MultiBlockCase::Canonical,
+            RangeCase::Bound(widths),
+        );
+        let report = run_pliron_progress_check_v1(context, &function);
+        assert!(report.is_clean(), "widths={widths:?}: {report:?}");
+        assert_eq!(report.certificates()[0].step(), 16);
+    }
+}
+
+#[test]
+fn u64_range_does_not_hide_a_nonunit_update_overflow() {
+    let context = &mut setup();
+    let function = multi_block_loop(
+        context,
+        None,
+        16,
+        MultiBlockCase::Canonical,
+        RangeCase::Bound(&[64]),
+    );
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("overflow")
+    ));
+}
+
+#[test]
+fn unrelated_and_unused_unsigned_casts_do_not_discharge_the_bound() {
+    for (range_case, expected) in [
+        (RangeCase::Mismatched(32), "symbolic bound"),
+        (RangeCase::NonEntry(32), "symbolic bound"),
+    ] {
+        let context = &mut setup();
+        let function = multi_block_loop(context, None, 16, MultiBlockCase::Canonical, range_case);
+        let report = run_pliron_progress_check_v1(context, &function);
+        assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+        assert!(matches!(
+            report.findings(),
+            [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+                if reason.contains(expected)
+        ));
+    }
+}
+
+#[test]
+fn unsigned_cast_width_is_verifier_closed_and_non_authoritative() {
+    let context = &mut setup();
+    let (function, arguments) = make_function(context, "malformed_range", 1);
+    let cast = IndexUnsignedCastOp::new(context, arguments[0], 24);
+    assert!(verify_operation(cast.get_operation(), context).is_err());
+    assert!(!cast.grants_compiler_refinement_authority());
+    assert!(!cast.grants_artifact_or_launch_authority());
+    let ret = ReturnOp::new(context);
+    append(context, function.get_entry_block(context), &ret);
+}
+
+#[test]
 fn multiblock_static_bound_must_cover_the_final_update_without_wrap() {
     let context = &mut setup();
-    let function = multi_block_loop(context, Some(u64::MAX), 16, MultiBlockCase::Canonical);
+    let function = multi_block_loop(
+        context,
+        Some(u64::MAX),
+        16,
+        MultiBlockCase::Canonical,
+        RangeCase::None,
+    );
     let report = run_pliron_progress_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(
@@ -307,7 +419,7 @@ fn multiblock_recurrence_rejects_mutation_and_alternate_entry() {
         MultiBlockCase::InvocationLatchUpdate,
     ] {
         let context = &mut setup();
-        let function = multi_block_loop(context, Some(64), 1, case);
+        let function = multi_block_loop(context, Some(64), 1, case, RangeCase::None);
         let report = run_pliron_progress_check_v1(context, &function);
         assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     }
@@ -316,7 +428,13 @@ fn multiblock_recurrence_rejects_mutation_and_alternate_entry() {
 #[test]
 fn multiblock_two_external_header_entries_are_not_single_entry() {
     let context = &mut setup();
-    let function = multi_block_loop(context, Some(64), 1, MultiBlockCase::MultipleHeaderEntries);
+    let function = multi_block_loop(
+        context,
+        Some(64),
+        1,
+        MultiBlockCase::MultipleHeaderEntries,
+        RangeCase::None,
+    );
     let report = run_pliron_progress_check_v1(context, &function);
     assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
     assert!(matches!(

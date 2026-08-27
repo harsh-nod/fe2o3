@@ -48,11 +48,11 @@ pub use ranked_memory::{
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DYNAMIC_EXTENT, DeterministicJoinOp,
     DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
     IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    IndexType, IndexUnknownOp, IndexValueAttr, InvocationDimensionAttr, InvocationIndexOp,
-    LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr, OwnershipPartitionAttr,
-    RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType, ReturnOp,
-    SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_index_type, ranked_view_type,
+    IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr, InvocationDimensionAttr,
+    InvocationIndexOp, LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
+    MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr,
+    OwnershipPartitionAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType,
+    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_index_type, ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,
@@ -441,6 +441,7 @@ pub fn register_dialect(
     IndexConstantOp::register(context);
     IndexUnknownOp::register(context);
     InvocationIndexOp::register(context);
+    IndexUnsignedCastOp::register(context);
     IndexBinaryOp::register(context);
     DeterministicJoinOp::register(context);
     CheckedTiledIndex2DOp::register(context);

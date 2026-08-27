@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 const RANKED_EXECUTION_LAYOUT_TAG_V4: u8 = 15;
 const RANKED_TENSOR_LAYOUT_TAG_V4: u8 = 19;
 const RANKED_OWNERSHIP_CONTRACT_TAG_V4: u8 = 24;
+const RANKED_INDEX_UNSIGNED_CAST_TAG_V4: u8 = 26;
 
 use super::{
     ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1,
@@ -1211,6 +1212,7 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::View { .. } => 2,
         ProductionRankedOperationV1::ViewInSpace { .. } => 3,
         ProductionRankedOperationV1::IndexConstant { .. } => 4,
+        ProductionRankedOperationV1::IndexUnsignedCast { .. } => 34,
         ProductionRankedOperationV1::IndexUnknown { .. } => 5,
         ProductionRankedOperationV1::InvocationIndex { .. } => 6,
         ProductionRankedOperationV1::IndexBinary { .. } => 7,
@@ -1402,6 +1404,16 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([3]);
             digest.update(result.get().to_le_bytes());
             digest.update(value.to_le_bytes());
+        }
+        ProductionRankedOperationV1::IndexUnsignedCast {
+            result,
+            source,
+            bit_width,
+        } => {
+            digest.update([RANKED_INDEX_UNSIGNED_CAST_TAG_V4]);
+            digest.update(result.get().to_le_bytes());
+            hash_value(digest, *source);
+            digest.update(bit_width.to_le_bytes());
         }
         ProductionRankedOperationV1::IndexUnknown { result } => {
             digest.update([22]);
@@ -2280,6 +2292,43 @@ mod tests {
                 compiler_authority: false,
                 artifact_authority: false,
             })
+    }
+
+    #[test]
+    fn unsigned_cast_identity_binds_exact_result_source_width_and_operation_kind() {
+        let identity = derive_exact_ranked_operation_identity_v1;
+        let base = ProductionRankedOperationV1::IndexUnsignedCast {
+            result: ProductionRankedValueIdV1::new(0),
+            source: ProductionRankedValueV1::Argument(0),
+            bit_width: 32,
+        };
+        let changed_value = ProductionRankedOperationV1::IndexUnsignedCast {
+            result: ProductionRankedValueIdV1::new(0),
+            source: ProductionRankedValueV1::Argument(1),
+            bit_width: 32,
+        };
+        let changed_result = ProductionRankedOperationV1::IndexUnsignedCast {
+            result: ProductionRankedValueIdV1::new(1),
+            source: ProductionRankedValueV1::Argument(0),
+            bit_width: 32,
+        };
+        let changed_width = ProductionRankedOperationV1::IndexUnsignedCast {
+            result: ProductionRankedValueIdV1::new(0),
+            source: ProductionRankedValueV1::Argument(0),
+            bit_width: 16,
+        };
+        let changed_kind = ProductionRankedOperationV1::IndexConstant {
+            result: ProductionRankedValueIdV1::new(0),
+            value: u32::MAX.into(),
+        };
+        assert_ne!(identity(&base), identity(&changed_value));
+        assert_ne!(identity(&base), identity(&changed_result));
+        assert_ne!(identity(&base), identity(&changed_width));
+        assert_ne!(identity(&base), identity(&changed_kind));
+        assert_ne!(
+            functional_refinement_graph_operation_tag(&base),
+            functional_refinement_graph_operation_tag(&changed_kind),
+        );
     }
 
     #[test]
