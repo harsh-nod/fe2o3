@@ -1989,6 +1989,13 @@ PhysicalMachineEffectIdentities physicalMachineEffectIdentities() {
           domainHash(ToolchainIdentityDomain, Toolchain)};
 }
 
+Error initializePhysicalMachineEffectRuntime() {
+  auto Mc = createMcState();
+  if (!Mc)
+    return Mc.takeError();
+  return Error::success();
+}
+
 Expected<std::vector<uint8_t>>
 encodePhysicalMachineEffectIdentityResponse(ArrayRef<uint8_t> Request) {
   Reader Input(Request);

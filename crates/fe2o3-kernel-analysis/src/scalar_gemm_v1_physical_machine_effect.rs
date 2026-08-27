@@ -19,13 +19,28 @@ use std::{error::Error, fmt};
 
 pub const SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL: &str = "scalar_gemm_v1";
 
+/// SHA-256 of the reviewed finalized Scalar GEMM V1 gfx942 COV6 artifact.
+pub const SCALAR_GEMM_V1_PHYSICAL_FINALIZED_HSACO_SHA256: [u8; 32] = [
+    0xf4, 0x15, 0xc0, 0x40, 0x60, 0x6b, 0x56, 0xcd, 0xbc, 0x14, 0x67, 0xab, 0x34, 0xb7, 0xd2, 0xda,
+    0x7d, 0x99, 0xb5, 0x7b, 0x99, 0x97, 0xfe, 0xf9, 0xe4, 0x20, 0x0a, 0xc0, 0x3b, 0x36, 0x5a, 0x75,
+];
+
+/// Exact byte length of the reviewed finalized Scalar GEMM V1 artifact.
+pub const SCALAR_GEMM_V1_PHYSICAL_FINALIZED_HSACO_BYTES: u64 = 10_008;
+
+/// SHA-256 of the exact 64-byte AMDHSA `scalar_gemm_v1.kd` descriptor.
+pub const SCALAR_GEMM_V1_PHYSICAL_DESCRIPTOR_SHA256: [u8; 32] = [
+    0x01, 0xab, 0x64, 0x23, 0x92, 0xfb, 0xc7, 0x35, 0xe5, 0x2e, 0x9b, 0xa0, 0x0b, 0xbc, 0xa5, 0x41,
+    0xd1, 0xb8, 0xa1, 0x19, 0xc1, 0xd1, 0x7d, 0x71, 0xe6, 0xe1, 0x42, 0x59, 0xa9, 0xa1, 0x52, 0xf6,
+];
+
 const KERNARG_READ_SITES: u32 = 6;
 const LOGICAL_GLOBAL_READ_SITES: u32 = 2;
 const LOGICAL_GLOBAL_WRITE_SITES: u32 = 1;
 const RETURN_SITES: u32 = 1;
 
 const SCALAR_GEMM_V1_CODE_OFFSET: u64 = 0x1b00;
-const SCALAR_GEMM_V1_CODE_SIZE: u64 = 0x0ad0;
+const SCALAR_GEMM_V1_CODE_SIZE: u64 = 0x0ab0;
 
 #[derive(Clone, Copy)]
 struct ScalarGemmV1PhysicalEffectSiteV1 {
@@ -49,7 +64,7 @@ impl ScalarGemmV1PhysicalEffectSiteV1 {
 }
 
 /// Canonically ordered static effects emitted by the native LLVM analyzer for
-/// finalized artifact ac1da70c69a5038b887b459dece40802668c41bcf98f621d7d1273d2f61ba2c9.
+/// finalized artifact f415c040606b56cdbc1467ab34b7d2da7d99b57b9997fef9e4200ac03b365a75.
 /// Each memory instruction must contribute an adjacent address/access pair at
 /// one exact instruction offset.
 const SCALAR_GEMM_V1_PHYSICAL_EFFECT_SITES: [ScalarGemmV1PhysicalEffectSiteV1; 19] = [
@@ -65,13 +80,13 @@ const SCALAR_GEMM_V1_PHYSICAL_EFFECT_SITES: [ScalarGemmV1PhysicalEffectSiteV1; 1
     ScalarGemmV1PhysicalEffectSiteV1::new(0x1b2c, PhysicalMachineEffectKindV1::GlobalRead, 4),
     ScalarGemmV1PhysicalEffectSiteV1::new(0x1b34, PhysicalMachineEffectKindV1::GlobalAddress, 8),
     ScalarGemmV1PhysicalEffectSiteV1::new(0x1b34, PhysicalMachineEffectKindV1::GlobalRead, 4),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x2490, PhysicalMachineEffectKindV1::GlobalAddress, 8),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x2490, PhysicalMachineEffectKindV1::GlobalRead, 4),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x24a4, PhysicalMachineEffectKindV1::GlobalAddress, 8),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x24a4, PhysicalMachineEffectKindV1::GlobalRead, 4),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x25c0, PhysicalMachineEffectKindV1::GlobalAddress, 8),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x25c0, PhysicalMachineEffectKindV1::GlobalWrite, 4),
-    ScalarGemmV1PhysicalEffectSiteV1::new(0x25cc, PhysicalMachineEffectKindV1::Return, 0),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x2470, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x2470, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x2484, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x2484, PhysicalMachineEffectKindV1::GlobalRead, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x25a0, PhysicalMachineEffectKindV1::GlobalAddress, 8),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x25a0, PhysicalMachineEffectKindV1::GlobalWrite, 4),
+    ScalarGemmV1PhysicalEffectSiteV1::new(0x25ac, PhysicalMachineEffectKindV1::Return, 0),
 ];
 
 /// Static-site budget for the exact Scalar GEMM V1 gfx942 lowering.
@@ -96,6 +111,22 @@ pub struct ScalarGemmV1PhysicalMachineEffectProfileV1 {
 }
 
 impl ScalarGemmV1PhysicalMachineEffectProfileV1 {
+    /// Constructs the one reviewed production profile from exact finalized bytes.
+    pub fn pinned(
+        exact_finalized_hsaco: Vec<u8>,
+    ) -> Result<Self, ScalarGemmV1PhysicalMachineEffectErrorV1> {
+        Self::new(
+            PhysicalMachinePayloadIdentityV1::from_parts(
+                SCALAR_GEMM_V1_PHYSICAL_FINALIZED_HSACO_SHA256,
+                SCALAR_GEMM_V1_PHYSICAL_FINALIZED_HSACO_BYTES,
+            ),
+            exact_finalized_hsaco,
+            PhysicalMachineDescriptorIdentityV1::from_sha256_bytes(
+                SCALAR_GEMM_V1_PHYSICAL_DESCRIPTOR_SHA256,
+            ),
+        )
+    }
+
     pub fn new(
         finalized_hsaco_identity: PhysicalMachinePayloadIdentityV1,
         exact_finalized_hsaco: Vec<u8>,

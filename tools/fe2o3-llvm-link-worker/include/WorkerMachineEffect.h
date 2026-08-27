@@ -91,6 +91,11 @@ struct PhysicalMachineEffectEvidence {
 
 PhysicalMachineEffectIdentities physicalMachineEffectIdentities();
 
+// Materializes the same LLVM AMDGPU Object/MC runtime used by analysis. The
+// authenticated entrypoint calls this before READY so runtime-map custody
+// observes the complete analyzer closure rather than lazy first-use mappings.
+llvm::Error initializePhysicalMachineEffectRuntime();
+
 llvm::Expected<std::vector<uint8_t>>
 encodePhysicalMachineEffectIdentityResponse(llvm::ArrayRef<uint8_t> Request);
 

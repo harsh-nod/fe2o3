@@ -9,10 +9,12 @@ use fe2o3_kernel_analysis::{
     ScalarGemmV1PhysicalMachineEffectErrorV1, ScalarGemmV1PhysicalMachineEffectProfileV1,
     inspect_physical_machine_effect_worker_candidate_v1,
 };
+#[cfg(target_os = "linux")]
+use std::fs;
 use std::{path::Path, time::Duration};
 
 const SCALAR_CODE_OFFSET: u64 = 0x1b00;
-const SCALAR_CODE_SIZE: u64 = 0x0ad0;
+const SCALAR_CODE_SIZE: u64 = 0x0ab0;
 const HSACO_FIXTURE_BYTES: usize = 0x2640;
 
 #[derive(Clone)]
@@ -83,9 +85,9 @@ fn scalar_effects(extra_write: bool) -> Vec<Effect<'static>> {
         (0x1b24, 4, 2),
         (0x1b2c, 4, 2),
         (0x1b34, 4, 2),
-        (0x2490, 4, 2),
-        (0x24a4, 4, 2),
-        (0x25c0, 4, 3),
+        (0x2470, 4, 2),
+        (0x2484, 4, 2),
+        (0x25a0, 4, 3),
     ] {
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
@@ -106,14 +108,14 @@ fn scalar_effects(extra_write: bool) -> Vec<Effect<'static>> {
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
             function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-            offset: 0x25c4,
+            offset: 0x25a4,
             kind: 1,
             width: 8,
         });
         effects.push(Effect {
             entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
             function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-            offset: 0x25c4,
+            offset: 0x25a4,
             kind: 3,
             width: 4,
         });
@@ -121,7 +123,7 @@ fn scalar_effects(extra_write: bool) -> Vec<Effect<'static>> {
     effects.push(Effect {
         entry: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
         function: SCALAR_GEMM_V1_PHYSICAL_ENTRY_SYMBOL,
-        offset: 0x25cc,
+        offset: 0x25ac,
         kind: 4,
         width: 0,
     });
@@ -563,4 +565,43 @@ fn authenticated_fixture_with_nonproduction_layout_is_rejected() {
         profile(hsaco(), descriptor(0x33)).analyze(&worker, limits),
         Err(ScalarGemmV1PhysicalMachineEffectErrorV1::EntryRange)
     ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the pinned native LLVM worker and finalized scalar GEMM HSACO"]
+fn configured_native_worker_authenticates_the_pinned_scalar_profile() {
+    let worker_path = std::env::var_os("FE2O3_MACHINE_EFFECT_NATIVE_WORKER")
+        .expect("FE2O3_MACHINE_EFFECT_NATIVE_WORKER is not set");
+    let hsaco_path = std::env::var_os("FE2O3_SCALAR_GEMM_V1_HSACO")
+        .expect("FE2O3_SCALAR_GEMM_V1_HSACO is not set");
+    let limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
+        Duration::from_secs(120),
+        1024 * 1024,
+        16 * 1024,
+    )
+    .unwrap();
+    let candidate =
+        inspect_physical_machine_effect_worker_candidate_v1(&worker_path, limits).unwrap();
+    let worker =
+        AuthenticatedPhysicalMachineEffectWorkerV1::open(&worker_path, candidate.policy(), limits)
+            .unwrap();
+    let profile =
+        ScalarGemmV1PhysicalMachineEffectProfileV1::pinned(fs::read(hsaco_path).unwrap()).unwrap();
+
+    let authenticated = profile.analyze(&worker, limits).unwrap();
+
+    assert!(authenticated.authenticates_analyzer_execution());
+    assert_eq!(
+        authenticated.finalized_hsaco_identity(),
+        profile.finalized_hsaco_identity()
+    );
+    assert_eq!(
+        authenticated.descriptor_identity(),
+        profile.descriptor_identity()
+    );
+    assert_eq!(authenticated.evidence().effects().len(), 19);
+    assert!(!authenticated.establishes_compiler_refinement());
+    assert!(!authenticated.establishes_memory_safety());
+    assert!(!authenticated.grants_launch_authority());
 }

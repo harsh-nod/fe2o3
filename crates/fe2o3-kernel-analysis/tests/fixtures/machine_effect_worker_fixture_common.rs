@@ -222,6 +222,7 @@ fn analysis_response(bytes: Vec<u8>, control_challenge: [u8; 32]) {
         14 => remap_self(false),
         15 => remap_self(true),
         17 => write_pid_and_sleep(&request.payload[1..]),
+        18 => map_persistent_anonymous_executable(),
         _ => {}
     }
     let mode = request.payload[0];
@@ -343,6 +344,38 @@ fn remap_self(transient: bool) {
     }
     if transient && unsafe { munmap(mapping, LENGTH) } != 0 {
         exit(89);
+    }
+}
+
+#[allow(unsafe_code)]
+fn map_persistent_anonymous_executable() {
+    unsafe extern "C" {
+        fn mmap(
+            address: *mut std::ffi::c_void,
+            length: usize,
+            protection: std::ffi::c_int,
+            flags: std::ffi::c_int,
+            descriptor: std::ffi::c_int,
+            offset: i64,
+        ) -> *mut std::ffi::c_void;
+    }
+    const PROT_READ: std::ffi::c_int = 1;
+    const PROT_WRITE: std::ffi::c_int = 2;
+    const PROT_EXEC: std::ffi::c_int = 4;
+    const MAP_PRIVATE: std::ffi::c_int = 2;
+    const MAP_ANONYMOUS: std::ffi::c_int = 0x20;
+    let mapping = unsafe {
+        mmap(
+            std::ptr::null_mut(),
+            4096,
+            PROT_READ | PROT_WRITE | PROT_EXEC,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if mapping as isize == -1 {
+        exit(90);
     }
 }
 

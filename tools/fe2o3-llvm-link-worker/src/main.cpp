@@ -321,6 +321,12 @@ int main(int ArgumentCount, char **ArgumentValues) {
   if (AuthenticatedMachineEffect && (!installMachineEffectResourceLimits() ||
                                      !verifyMachineEffectSecurityProfile()))
     return 70;
+  if (AuthenticatedMachineEffect) {
+    if (llvm::Error ErrorValue = initializePhysicalMachineEffectRuntime()) {
+      llvm::consumeError(std::move(ErrorValue));
+      return 70;
+    }
+  }
   if (PhysicalMachineEffectContainment && !processCreationIsDenied())
     return 70;
   std::optional<std::array<uint8_t, 32>> ControlChallenge;

@@ -684,11 +684,11 @@ void exactScalarGemmArtifactIsAccepted() {
     return;
   const std::vector<uint8_t> &Payload = *MaybePayload;
   constexpr std::array<uint8_t, 32> ExpectedDigest = {
-      0xac, 0x1d, 0xa7, 0x0c, 0x69, 0xa5, 0x03, 0x8b, 0x88, 0x7b, 0x45,
-      0x9d, 0xec, 0xe4, 0x08, 0x02, 0x66, 0x8c, 0x41, 0xbc, 0xf9, 0x8f,
-      0x62, 0x1d, 0x7d, 0x12, 0x73, 0xd2, 0xf6, 0x1b, 0xa2, 0xc9,
+      0xf4, 0x15, 0xc0, 0x40, 0x60, 0x6b, 0x56, 0xcd, 0xbc, 0x14, 0x67,
+      0xab, 0x34, 0xb7, 0xd2, 0xda, 0x7d, 0x99, 0xb5, 0x7b, 0x99, 0x97,
+      0xfe, 0xf9, 0xe4, 0x20, 0x0a, 0xc0, 0x3b, 0x36, 0x5a, 0x75,
   };
-  require(Payload.size() == 10128, "scalar GEMM artifact length changed");
+  require(Payload.size() == 10008, "scalar GEMM artifact length changed");
   require(SHA256::hash(Payload) == ExpectedDigest,
           "scalar GEMM artifact digest changed");
 
@@ -779,7 +779,7 @@ void exactScalarGemmArtifactIsAccepted() {
   require(First->Entries.size() == 1 &&
               First->Entries.front().Symbol == "scalar_gemm_v1" &&
               First->Entries.front().CodeOffset == 0x1b00 &&
-              First->Entries.front().CodeSize == 0xad0,
+              First->Entries.front().CodeSize == 0xab0,
           "scalar GEMM entry closure changed");
   require(First->Functions.size() == 1 &&
               First->Functions.front().Symbol == "scalar_gemm_v1" &&

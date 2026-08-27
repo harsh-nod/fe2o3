@@ -109,6 +109,9 @@ if [[ ! -s $output_hsaco || -L $output_hsaco ]]; then
   printf 'error: scalar GEMM integration test did not produce a regular HSACO\n' >&2
   exit 70
 fi
+FE2O3_SCALAR_GEMM_V1_HSACO="$output_hsaco" \
+  ctest --test-dir "$build_dir" --output-on-failure \
+    --tests-regex '^fe2o3-worker-machine-effect-tests$'
 "$llvm_readelf" --file-headers --notes --dyn-symbols "$output_hsaco"
 sha256sum "$worker" "$output_hsaco"
 sha256sum "$frontend_handoff"

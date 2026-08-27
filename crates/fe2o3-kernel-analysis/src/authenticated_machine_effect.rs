@@ -5,12 +5,14 @@
 //! retained image, and accepted only when both its bytes and its observed
 //! file-backed runtime closure match a caller-pinned policy. Fresh OS challenges
 //! bind the ready/done/ack process handshake, identity probe, and every analysis
-//! response. Each receipt binds every mapping instance observed at ready by
-//! address range, permissions, file offset, device/inode, path, digest, and
-//! object length; the exact mapping set is checked again before acknowledgement.
-//! This two-snapshot check detects persistent changes but cannot observe a
-//! mapping created and removed entirely between snapshots. Receipts remain
-//! inert: they cannot publish, load, or launch code.
+//! response. Each receipt binds every file-backed mapping instance and
+//! kernel-provided executable mapping observed at ready by address range,
+//! permissions, file offset, device/inode, path, digest, and object length; the
+//! exact admitted mapping set is checked again before acknowledgement.
+//! Persistent anonymous executable mappings are rejected, while ordinary
+//! anonymous non-executable allocator mappings may move. This two-snapshot
+//! check cannot observe a mapping created and removed entirely between
+//! snapshots. Receipts remain inert: they cannot publish, load, or launch code.
 //!
 //! The authenticated result is still only a list of reachable static
 //! instruction sites and their bounded effect kinds for one exact finalized
@@ -319,9 +321,11 @@ impl Error for AuthenticatedPhysicalMachineEffectErrorV1 {}
 
 /// A policy-authenticated static-site analysis receipt. Deliberately not `Clone`.
 ///
-/// Authentication binds the worker image, observed object and mapping closures,
-/// challenge, and exact evidence bytes. It does not upgrade the static effect list into a
-/// memory-safety, race-freedom, refinement, or runtime-count proof.
+/// Authentication binds the worker image, observed object and executable mapping closures,
+/// challenge, and exact evidence bytes. Every file-backed mapping and kernel-provided
+/// executable mapping is retained exactly. Anonymous non-executable allocator mappings may move
+/// during analysis; persistent anonymous executable mappings are rejected. This does not upgrade
+/// the static effect list into a memory-safety, race-freedom, refinement, or runtime-count proof.
 pub struct AuthenticatedPhysicalMachineEffectExecutionV1 {
     policy: PhysicalMachineEffectWorkerPolicyV1,
     execution_challenge: PhysicalMachineExecutionChallengeV1,
@@ -1479,8 +1483,9 @@ mod platform {
     ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
         ensure_before_deadline(deadline)?;
         if process_start_ticks(pid)? != start_ticks {
-            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                "retained executable process identity changed",
             ));
         }
         let retained_snapshot =
@@ -1495,8 +1500,9 @@ mod platform {
             || retained_identity != retained.identity
             || writable_alias(&retained.file)
         {
-            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                "retained executable changed or became writable",
             ));
         }
         let current = retain_process_executable(pid, retained.identity, deadline)?;
@@ -1504,8 +1510,9 @@ mod platform {
             || current.link != retained.link
             || current.snapshot != retained.snapshot
         {
-            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                "worker executable mapping changed",
             ));
         }
         Ok(())
@@ -1755,6 +1762,15 @@ mod platform {
                 if key != (0, 0, 0) {
                     return Err(observation_error());
                 }
+                if permissions[2] != b'x' {
+                    continue;
+                }
+                if !matches!(path.as_str(), "[vdso]" | "[vsyscall]") {
+                    return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
+                        AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                        "anonymous executable mapping is outside the admitted kernel profile",
+                    ));
+                }
                 ([0; 32], 0)
             } else {
                 if !path.starts_with('/') && !path.starts_with("/memfd:") {
@@ -1916,8 +1932,9 @@ mod platform {
     ) -> Result<(), AuthenticatedPhysicalMachineEffectErrorV1> {
         ensure_before_deadline(deadline)?;
         if process_start_ticks(pid)? != observation.start_ticks {
-            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                "worker process identity changed",
             ));
         }
         validate_retained_executable(
@@ -1932,8 +1949,9 @@ mod platform {
             || mappings != observation.runtime_mappings
             || runtime_file_set(&files) != runtime_file_set(&observation.runtime_files)
         {
-            return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+            return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                 AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                "worker runtime mapping closure changed",
             ));
         }
         validate_runtime_files(&mut files, deadline)?;
@@ -1989,16 +2007,18 @@ mod platform {
             ensure_before_deadline(deadline)?;
             let before = Snapshot::from_metadata(&runtime.file.metadata().map_err(observation_io)?);
             if before != runtime.snapshot || writable_alias(&runtime.file) {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                    "retained runtime file metadata changed or became writable",
                 ));
             }
             let (digest, _, length) =
                 hash_runtime_file(&mut runtime.file, runtime.snapshot.size, deadline)?;
             let after = Snapshot::from_metadata(&runtime.file.metadata().map_err(observation_io)?);
             if after != runtime.snapshot || digest != runtime.digest || length != runtime.length {
-                return Err(AuthenticatedPhysicalMachineEffectErrorV1::plain(
+                return Err(AuthenticatedPhysicalMachineEffectErrorV1::detail(
                     AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged,
+                    "retained runtime file content changed",
                 ));
             }
         }
