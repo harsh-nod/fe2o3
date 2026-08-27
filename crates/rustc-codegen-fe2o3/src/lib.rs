@@ -260,20 +260,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                     "[rustc-codegen-fe2o3] {HSACO_DIR_ENV} must name a managed artifact directory when compiling kernels"
                 )),
             };
-            let local_source = tcx
-                .sess
-                .local_crate_source_file()
-                .and_then(|source| source.local_path().map(Path::to_path_buf));
-            let producer = match artifact_transaction::ProducerIdentity::from_codegen(
-                crate_name.as_str(),
-                local_source.as_deref(),
-            ) {
-                Ok(producer) => producer,
-                Err(error) => tcx.dcx().fatal(format!(
-                    "[rustc-codegen-fe2o3] invalid local artifact producer: {error}"
-                )),
-            };
-
             if self.config.verbose || kernel_count > 0 {
                 eprintln!(
                     "[rustc-codegen-fe2o3] crate `{crate_name}`: {} CGU(s), {kernel_count} kernel candidate(s), target {}",
@@ -317,6 +303,14 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 "[rustc-codegen-fe2o3] production compilation requires protected rustc invocation custody",
                             )
                         });
+                    let producer = match artifact_transaction::ProducerIdentity::from_rustc_invocation_descriptor_v3(
+                        invocation.descriptor(),
+                    ) {
+                        Ok(producer) => producer,
+                        Err(error) => tcx.dcx().fatal(format!(
+                            "[rustc-codegen-fe2o3] protected rustc producer identity failed: {error}"
+                        )),
+                    };
                     let publication =
                         production_pipeline::ProductionCompilation::from_collected_device_closure(
                             tcx,
@@ -453,6 +447,10 @@ mod tests {
             .next()
             .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));
+        assert!(production.contains("from_rustc_invocation_descriptor_v3"));
+        assert!(production.contains("invocation.descriptor()"));
+        assert!(!production.contains("local_crate_source_file"));
+        assert!(!production.contains("ProducerIdentity::from_codegen"));
         assert!(production.contains("production_device_admission"));
         assert!(production.contains(".take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));

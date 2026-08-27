@@ -1565,9 +1565,8 @@ fn prepare_production_managed_attempt(
         current_dir,
     );
     let session = managed_build_session()?;
-    let producer =
-        ProducerIdentity::from_codegen(compile.crate_name(), Some(compile.source_path()))
-            .map_err(BindingWrapperError::Artifact)?;
+    let producer = ProducerIdentity::from_rustc_compile_invocation_v2(compile)
+        .map_err(BindingWrapperError::Artifact)?;
     let invocation = derive_build_attempt_input_with_config_identity(
         compile.argv(),
         Some(build_config.identity()),

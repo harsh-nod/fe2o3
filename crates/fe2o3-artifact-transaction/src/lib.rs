@@ -168,6 +168,10 @@ pub use durable_published_claim::{
     DurablePublishedHsacoClaimV3, MAX_DURABLE_PUBLISHED_HSACO_CLAIM_BYTES_V3,
     reacquire_current_hsaco_publication_lease_v3,
 };
+use fe2o3_rustc_invocation::{
+    RustcArgsErrorV2, RustcCompileInvocationV2, RustcInvocationDescriptorV3, RustcInvocationV2,
+    classify_rustc_invocation_v2,
+};
 pub use link_publication::{
     AtomicPublicationIdentityV1, CanonicalLinkRequestIdentityV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, IdentityKindV1, InvalidationReasonV1, KernelSetIdentityV1,
@@ -198,6 +202,8 @@ use rustix::fs::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::error::Error;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -465,9 +471,79 @@ impl ProducerIdentity {
         })
     }
 
+    /// Builds the producer from the exact crate and source views of a classified rustc compile.
+    ///
+    /// Cargo, the protected issuer, and the backend must use this constructor rather than derive
+    /// the source spelling from a second rustc/session representation.
+    pub fn from_rustc_compile_invocation_v2(
+        compile: RustcCompileInvocationV2<'_>,
+    ) -> Result<Self, EmitError> {
+        Self::from_codegen(compile.crate_name(), Some(compile.source_path()))
+    }
+
+    /// Classifies one canonical V3 descriptor and derives its exact producer identity.
+    ///
+    /// The descriptor argument vector is the sole source of truth. In particular, this preserves
+    /// relative paths, remapped paths, and all other accepted UTF-8 source-path spellings exactly
+    /// as Cargo supplied them to rustc.
+    pub fn from_rustc_invocation_descriptor_v3(
+        descriptor: &RustcInvocationDescriptorV3,
+    ) -> Result<Self, ProducerIdentityFromRustcErrorV1> {
+        let argv = descriptor
+            .rustc()
+            .argv()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+        let compile = match classify_rustc_invocation_v2(&argv)? {
+            RustcInvocationV2::Compile(compile) => compile,
+            _ => return Err(ProducerIdentityFromRustcErrorV1::NotCompileInvocation),
+        };
+        Self::from_rustc_compile_invocation_v2(compile)
+            .map_err(ProducerIdentityFromRustcErrorV1::Producer)
+    }
+
     #[cfg(test)]
     fn for_test(crate_name: &str, source: &str) -> Self {
         Self::from_codegen(crate_name, Some(Path::new(source))).unwrap()
+    }
+}
+
+/// Failure to derive one artifact producer from a canonical rustc descriptor.
+#[derive(Debug)]
+pub enum ProducerIdentityFromRustcErrorV1 {
+    /// The descriptor's exact argument vector is not structurally valid.
+    RustcArguments(RustcArgsErrorV2),
+    /// The descriptor names a terminal or query invocation rather than a compile.
+    NotCompileInvocation,
+    /// The classified crate name or exact source-path spelling is not a valid producer.
+    Producer(EmitError),
+}
+
+impl fmt::Display for ProducerIdentityFromRustcErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RustcArguments(error) => write!(formatter, "invalid rustc arguments: {error}"),
+            Self::NotCompileInvocation => {
+                formatter.write_str("rustc descriptor is not a compile invocation")
+            }
+            Self::Producer(error) => write!(formatter, "invalid artifact producer: {error}"),
+        }
+    }
+}
+
+impl Error for ProducerIdentityFromRustcErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::RustcArguments(error) => Some(error),
+            Self::Producer(error) => Some(error),
+            Self::NotCompileInvocation => None,
+        }
+    }
+}
+
+impl From<RustcArgsErrorV2> for ProducerIdentityFromRustcErrorV1 {
+    fn from(error: RustcArgsErrorV2) -> Self {
+        Self::RustcArguments(error)
     }
 }
 
@@ -1514,6 +1590,36 @@ mod tests {
         let renamed = ProducerIdentity::for_test("renamed_crate", "/workspace/src/lib.rs");
         assert_eq!(producer.stable_source, renamed.stable_source);
         assert_ne!(producer.crate_name, renamed.crate_name);
+    }
+
+    #[test]
+    fn rustc_compile_producer_preserves_the_exact_source_spelling() {
+        let argv = [
+            OsString::from("/toolchain/bin/rustc"),
+            OsString::from("--crate-name"),
+            OsString::from("producer"),
+            OsString::from("crates/demo/../demo/src/lib.rs"),
+        ];
+        let compile = match classify_rustc_invocation_v2(&argv).unwrap() {
+            RustcInvocationV2::Compile(compile) => compile,
+            invocation => panic!("expected compile invocation, got {invocation:?}"),
+        };
+
+        let producer = ProducerIdentity::from_rustc_compile_invocation_v2(compile).unwrap();
+
+        assert_eq!(
+            producer,
+            ProducerIdentity::from_codegen(
+                "producer",
+                Some(Path::new("crates/demo/../demo/src/lib.rs")),
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            producer,
+            ProducerIdentity::from_codegen("producer", Some(Path::new("crates/demo/src/lib.rs")))
+                .unwrap()
+        );
     }
 
     #[test]

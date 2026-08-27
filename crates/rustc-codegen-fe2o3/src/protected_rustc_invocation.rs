@@ -32,6 +32,11 @@ pub(crate) struct AdmittedProtectedRustcInvocationV1 {
 }
 
 impl AdmittedProtectedRustcInvocationV1 {
+    /// Borrows the exact canonical descriptor retained by the sealed invocation image.
+    pub(crate) fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
+        self.capability.descriptor()
+    }
+
     /// Revalidates the retained image and returns its complete canonical closure.
     #[cfg(test)]
     pub(crate) fn compiler_closure(&self) -> Result<CompilerClosureV2, String> {
