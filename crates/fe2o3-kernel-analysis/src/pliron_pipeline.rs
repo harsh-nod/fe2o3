@@ -16,10 +16,11 @@ use std::{error::Error, fmt};
 use pliron::{builtin::ops::FuncOp, context::Context};
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
+use crate::pliron_atomic_legality::require_pliron_atomic_legality_with_analyses_v1;
 use crate::pliron_barrier::require_pliron_barrier_convergence_with_analyses_v1;
 use crate::pliron_hierarchical_ownership::require_pliron_hierarchical_ownership_with_analyses_v1;
 use crate::pliron_ir_identity::LivePlironStructuralIdentityProviderV1;
-use crate::pliron_launch_contract::require_pliron_launch_contract_before_lowering_v1;
+use crate::pliron_launch_contract::require_pliron_launch_contract_with_analyses_v1;
 use crate::pliron_pass_contract::{
     PlironPassContractSessionV1, PlironPassPreservationErrorV1, PlironPassPreservationReportV1,
     begin_production_pliron_pass_contract_session_v1,
@@ -43,8 +44,6 @@ use crate::{
     PlironTensorLayoutCheckErrorV1, PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1,
     PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1,
     RankedBoundsCheckErrorV1, RankedBoundsReportV1, RankedRaceCheckErrorV1, RankedRaceReportV1,
-    require_pliron_atomic_legality_before_lowering_v1,
-    require_pliron_atomic_legality_with_target_before_lowering_v1,
 };
 
 /// Whether a compiler repair can be applied without another semantic choice.
@@ -612,7 +611,14 @@ fn require_production_pliron_checks_v2(
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
     let mut analyses = PlironAnalysisManagerV1::new(function);
     let target_contract = target_contract
-        .map(|target| require_pliron_launch_contract_before_lowering_v1(context, function, target))
+        .map(|target| {
+            require_pliron_launch_contract_with_analyses_v1(
+                context,
+                function,
+                target,
+                &mut analyses,
+            )
+        })
         .transpose()
         .map_err(ProductionPlironPreloweringErrorV2::TargetContract)?;
     let provider = LivePlironStructuralIdentityProviderV1::new(context, function);
@@ -648,11 +654,13 @@ fn require_production_pliron_checks_v2(
         &mut preservation,
         &mut report_validation,
         KernelCheckPassKindV1::AtomicLegality,
-        || match atomic_target {
-            Some(target) => require_pliron_atomic_legality_with_target_before_lowering_v1(
-                context, function, target,
-            ),
-            None => require_pliron_atomic_legality_before_lowering_v1(context, function),
+        || {
+            require_pliron_atomic_legality_with_analyses_v1(
+                context,
+                function,
+                atomic_target,
+                &mut analyses,
+            )
         },
     )?
     .map_err(ProductionPlironPreloweringErrorV2::Atomic)?;

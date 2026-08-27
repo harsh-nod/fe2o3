@@ -3,12 +3,7 @@
 use std::fmt;
 
 use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, RankedViewOp};
-use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
-};
+use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
 
 use crate::pliron_analysis_manager::{PlironAnalysisManagerV1, PlironMemoryOrderAnalysisFailureV1};
 use crate::pliron_barrier::run_pliron_barrier_convergence_check_with_analyses_v1;
@@ -184,21 +179,21 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironWorkgroupMemoryReportV1 {
-    if !function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .any(|block| {
-            block.deref(context).iter(context).any(|operation| {
-                let operation = Operation::get_op_dyn(operation, context);
-                operation
-                    .downcast_ref::<RankedViewOp>()
-                    .is_some_and(|view| {
-                        view.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
-                    })
-            })
-        })
-    {
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => {
+            return one(PlironWorkgroupMemoryFindingV1::AnalysisIncomplete {
+                detail: "the bounded function inventory limit was exceeded".to_owned(),
+            });
+        }
+    };
+    if !inventory.operations().iter().any(|site| {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        operation
+            .downcast_ref::<RankedViewOp>()
+            .is_some_and(|view| view.memory_space(context) == Some(MemorySpaceAttr::Workgroup))
+    }) {
         return PlironWorkgroupMemoryReportV1 { findings: vec![] };
     }
     analyses.prepare_memory_order(context, function);

@@ -21,19 +21,14 @@ use dialect_proof::{
     RequireTensorRefinementOp,
 };
 use fe2o3_kernel_ir::{MatrixElement, TensorOperandRoleV1};
-use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
-};
+use pliron::{builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation};
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_effect_refinement::{
     PlironEffectRefinementReportV1, clean_effect_refinement_report_v1,
     run_pliron_effect_refinement_with_analyses_v1,
 };
+use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::pliron_progress::{PlironProgressReportV1, run_pliron_progress_check_v1};
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
@@ -66,24 +61,24 @@ pub(crate) struct SemanticExpressionTableV1 {
 }
 
 impl SemanticExpressionTableV1 {
-    pub(crate) fn from_function(
+    pub(crate) fn from_inventory(
         context: &Context,
-        function: &FuncOp,
+        inventory: &BoundedPlironFunctionInventoryV1,
     ) -> Result<Self, SemanticExpressionBuildErrorV1> {
-        let definitions = function
-            .get_region(context)
-            .deref(context)
-            .iter(context)
-            .flat_map(|block| block.deref(context).iter(context))
-            .filter(|operation| {
-                let operation = Operation::get_op_dyn(*operation, context);
-                operation.downcast_ref::<SemanticSymbolOp>().is_some()
+        let definitions = inventory
+            .operations()
+            .iter()
+            .filter_map(|site| {
+                let pointer = site.pointer();
+                let operation = Operation::get_op_dyn(pointer, context);
+                (operation.downcast_ref::<SemanticSymbolOp>().is_some()
                     || operation.downcast_ref::<SemanticConstantOp>().is_some()
                     || operation.downcast_ref::<SemanticBinaryOp>().is_some()
                     || operation
                         .downcast_ref::<SemanticExpressionCommitmentOp>()
                         .is_some()
-                    || is_typed_semantic_definition(&*operation)
+                    || is_typed_semantic_definition(&*operation))
+                .then_some(pointer)
             })
             .collect::<Vec<_>>();
         Self::build(context, &definitions)
@@ -849,6 +844,11 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironSemanticRefinementReportV1 {
     let progress = run_pliron_progress_check_v1(context, function);
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => return one(PlironSemanticRefinementFindingV1::ResourceLimitExceeded),
+    };
     let mut definitions = Vec::new();
     let mut requirements = Vec::new();
     let mut reference_requirements = Vec::new();
@@ -860,137 +860,128 @@ pub(crate) fn run_pliron_semantic_refinement_check_after_bounds_v1(
     let mut evidence = Vec::new();
     let mut ownership_contracts = Vec::new();
     let mut collective_contracts = Vec::new();
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
-            let operation = Operation::get_op_dyn(operation, context);
-            if operation.downcast_ref::<SemanticSymbolOp>().is_some()
-                || operation.downcast_ref::<SemanticConstantOp>().is_some()
-                || operation.downcast_ref::<SemanticBinaryOp>().is_some()
-                || operation
-                    .downcast_ref::<SemanticExpressionCommitmentOp>()
-                    .is_some()
-                || is_typed_semantic_definition(&*operation)
-            {
-                definitions.push(operation.get_operation());
-            } else if let Some(component) = operation.downcast_ref::<TensorResultComponentOp>() {
-                tensor_components.insert(
-                    component.result(context),
-                    (
-                        component.result_root(context),
-                        component.component(context),
-                        component.scalar(context),
-                    ),
-                );
-            } else if let Some(requirement) = operation.downcast_ref::<RequireEquivalentOp>() {
-                requirements.push((
-                    block_index,
-                    operation_index,
-                    requirement.actual(context),
-                    requirement.expected(context),
-                ));
-            } else if let Some(requirement) = operation.downcast_ref::<RequireRefinementOp>() {
-                reference_requirements.push((
-                    block_index,
-                    operation_index,
-                    requirement.obligation_id(context),
-                    requirement.actual(context),
-                    requirement.expected(context),
-                ));
-            } else if let Some(requirement) = operation.downcast_ref::<RequireTensorRefinementOp>()
-            {
-                tensor_requirements.push((
-                    block_index,
-                    operation_index,
-                    requirement.obligation_id(context),
-                    requirement.result_root(context),
-                    requirement.view(context),
-                    requirement.actual(context),
-                    requirement.reference(context),
-                    requirement.components(context),
-                ));
-            } else if let Some(requirement) = operation.downcast_ref::<RequireEffectRefinementOp>()
-            {
-                effect_requirement_ids.insert(requirement.obligation_id(context).unwrap_or([0; 4]));
-            } else if let Some(requirement) =
-                operation.downcast_ref::<RequireNumericalRefinementOp>()
-            {
-                numerical_requirements.push((
-                    block_index,
-                    operation_index,
-                    requirement.obligation_id(context),
-                    operation.get_operation().deref(context).get_operand(0),
-                    operation.get_operation().deref(context).get_operand(1),
-                    operation.get_operation().deref(context).get_operand(2),
-                    operation.get_operation().deref(context).get_operand(3),
-                    requirement.absolute_error_f64_bits(context),
-                    requirement.relative_error_f64_bits(context),
-                ));
-            } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
-                obligations.push((
-                    block_index,
-                    operation_index,
-                    obligation.obligation_id(context),
-                    obligation.subject_id(context),
-                    obligation.model_id(context),
-                    obligation.property(context),
-                ));
-            } else if let Some(record) = operation.downcast_ref::<EvidenceRefOp>() {
-                evidence.push((
-                    block_index,
-                    operation_index,
-                    record.evidence_id(context),
-                    record.obligation_id(context),
-                    record.property(context),
-                    record.status(context),
-                    record.covered_boundary(context),
-                ));
-            } else if let Some(ownership) = operation.downcast_ref::<OwnershipContractOp>() {
-                ownership_contracts.push((ownership.view(context), ownership.coverage(context)));
-            } else if let Some(contract) = operation.downcast_ref::<RequireFiniteFoldOp>() {
-                collective_contracts.push(CollectiveContractV1 {
-                    kind: CollectiveContractKindV1::Fold,
-                    block: block_index,
-                    operation: operation_index,
-                    view: contract.view(context),
-                    actual: contract.actual(context),
-                    expected: contract.expected(context),
-                    coverage: contract.coverage(context),
-                    numerical_policy: contract.numerical_policy(context),
-                    witness0: contract.identity(context),
-                    witness1: contract.operator(context),
-                });
-            } else if let Some(contract) = operation.downcast_ref::<RequireFiniteRecurrenceOp>() {
-                collective_contracts.push(CollectiveContractV1 {
-                    kind: CollectiveContractKindV1::Recurrence,
-                    block: block_index,
-                    operation: operation_index,
-                    view: contract.view(context),
-                    actual: contract.actual(context),
-                    expected: contract.expected(context),
-                    coverage: contract.coverage(context),
-                    numerical_policy: contract.numerical_policy(context),
-                    witness0: contract.initial(context),
-                    witness1: contract.transition(context),
-                });
-            } else if let Some(contract) = operation.downcast_ref::<RequirePermutationGatherOp>() {
-                collective_contracts.push(CollectiveContractV1 {
-                    kind: CollectiveContractKindV1::Permutation,
-                    block: block_index,
-                    operation: operation_index,
-                    view: contract.view(context),
-                    actual: contract.actual(context),
-                    expected: contract.expected(context),
-                    coverage: contract.coverage(context),
-                    numerical_policy: contract.numerical_policy(context),
-                    witness0: contract.mapping(context),
-                    witness1: contract.inverse(context),
-                });
-            }
+    for site in inventory.operations() {
+        let block_index = site.block();
+        let operation_index = site.operation();
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        if operation.downcast_ref::<SemanticSymbolOp>().is_some()
+            || operation.downcast_ref::<SemanticConstantOp>().is_some()
+            || operation.downcast_ref::<SemanticBinaryOp>().is_some()
+            || operation
+                .downcast_ref::<SemanticExpressionCommitmentOp>()
+                .is_some()
+            || is_typed_semantic_definition(&*operation)
+        {
+            definitions.push(operation.get_operation());
+        } else if let Some(component) = operation.downcast_ref::<TensorResultComponentOp>() {
+            tensor_components.insert(
+                component.result(context),
+                (
+                    component.result_root(context),
+                    component.component(context),
+                    component.scalar(context),
+                ),
+            );
+        } else if let Some(requirement) = operation.downcast_ref::<RequireEquivalentOp>() {
+            requirements.push((
+                block_index,
+                operation_index,
+                requirement.actual(context),
+                requirement.expected(context),
+            ));
+        } else if let Some(requirement) = operation.downcast_ref::<RequireRefinementOp>() {
+            reference_requirements.push((
+                block_index,
+                operation_index,
+                requirement.obligation_id(context),
+                requirement.actual(context),
+                requirement.expected(context),
+            ));
+        } else if let Some(requirement) = operation.downcast_ref::<RequireTensorRefinementOp>() {
+            tensor_requirements.push((
+                block_index,
+                operation_index,
+                requirement.obligation_id(context),
+                requirement.result_root(context),
+                requirement.view(context),
+                requirement.actual(context),
+                requirement.reference(context),
+                requirement.components(context),
+            ));
+        } else if let Some(requirement) = operation.downcast_ref::<RequireEffectRefinementOp>() {
+            effect_requirement_ids.insert(requirement.obligation_id(context).unwrap_or([0; 4]));
+        } else if let Some(requirement) = operation.downcast_ref::<RequireNumericalRefinementOp>() {
+            numerical_requirements.push((
+                block_index,
+                operation_index,
+                requirement.obligation_id(context),
+                operation.get_operation().deref(context).get_operand(0),
+                operation.get_operation().deref(context).get_operand(1),
+                operation.get_operation().deref(context).get_operand(2),
+                operation.get_operation().deref(context).get_operand(3),
+                requirement.absolute_error_f64_bits(context),
+                requirement.relative_error_f64_bits(context),
+            ));
+        } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
+            obligations.push((
+                block_index,
+                operation_index,
+                obligation.obligation_id(context),
+                obligation.subject_id(context),
+                obligation.model_id(context),
+                obligation.property(context),
+            ));
+        } else if let Some(record) = operation.downcast_ref::<EvidenceRefOp>() {
+            evidence.push((
+                block_index,
+                operation_index,
+                record.evidence_id(context),
+                record.obligation_id(context),
+                record.property(context),
+                record.status(context),
+                record.covered_boundary(context),
+            ));
+        } else if let Some(ownership) = operation.downcast_ref::<OwnershipContractOp>() {
+            ownership_contracts.push((ownership.view(context), ownership.coverage(context)));
+        } else if let Some(contract) = operation.downcast_ref::<RequireFiniteFoldOp>() {
+            collective_contracts.push(CollectiveContractV1 {
+                kind: CollectiveContractKindV1::Fold,
+                block: block_index,
+                operation: operation_index,
+                view: contract.view(context),
+                actual: contract.actual(context),
+                expected: contract.expected(context),
+                coverage: contract.coverage(context),
+                numerical_policy: contract.numerical_policy(context),
+                witness0: contract.identity(context),
+                witness1: contract.operator(context),
+            });
+        } else if let Some(contract) = operation.downcast_ref::<RequireFiniteRecurrenceOp>() {
+            collective_contracts.push(CollectiveContractV1 {
+                kind: CollectiveContractKindV1::Recurrence,
+                block: block_index,
+                operation: operation_index,
+                view: contract.view(context),
+                actual: contract.actual(context),
+                expected: contract.expected(context),
+                coverage: contract.coverage(context),
+                numerical_policy: contract.numerical_policy(context),
+                witness0: contract.initial(context),
+                witness1: contract.transition(context),
+            });
+        } else if let Some(contract) = operation.downcast_ref::<RequirePermutationGatherOp>() {
+            collective_contracts.push(CollectiveContractV1 {
+                kind: CollectiveContractKindV1::Permutation,
+                block: block_index,
+                operation: operation_index,
+                view: contract.view(context),
+                actual: contract.actual(context),
+                expected: contract.expected(context),
+                coverage: contract.coverage(context),
+                numerical_policy: contract.numerical_policy(context),
+                witness0: contract.mapping(context),
+                witness1: contract.inverse(context),
+            });
         }
     }
     if definitions.len() > MAX_PLIRON_SEMANTIC_NODES_V1 {

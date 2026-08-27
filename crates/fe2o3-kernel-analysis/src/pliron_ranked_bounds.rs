@@ -29,10 +29,9 @@ use dialect_proof::{
     RequireRefinementOp, RequireTensorRefinementOp,
 };
 use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::ops::FuncOp,
     common_traits::Named,
     context::Context,
-    linked_list::ContainsLinkedList,
     op::Op,
     operation::{Operation, verify_operation},
     r#type::TypedHandle,
@@ -692,16 +691,21 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     analyses: &mut PlironAnalysisManagerV1,
 ) -> RankedBoundsReportV1 {
     let mut budget = RankedBoundsBudget::default();
-    let region = function.get_region(context);
-    let mut blocks = Vec::new();
-    for block in region.deref(context).iter(context) {
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(failure) => {
+            return resource_failure(failure.resource(), failure.limit(), failure.actual());
+        }
+    };
+    let blocks = inventory.blocks();
+    for _block in blocks {
         if let Err(finding) = budget.reserve(RankedBoundsResource::Blocks, 1) {
             return finding_failure(finding);
         }
         if let Err(finding) = budget.storage(1) {
             return finding_failure(finding);
         }
-        blocks.push(block);
     }
     if blocks.is_empty() {
         return structural_failure();
@@ -712,7 +716,9 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
     // hide an unmetered nested graph from this analysis.
     for (block_index, block) in blocks.iter().enumerate() {
         let terminator = block.deref(context).get_terminator(context);
-        for (operation_index, operation_pointer) in block.deref(context).iter(context).enumerate() {
+        for site in inventory.block_operations(block_index) {
+            let operation_index = site.operation();
+            let operation_pointer = site.pointer();
             if let Err(finding) = budget.reserve(RankedBoundsResource::Operations, 1) {
                 return finding_failure(finding);
             }
@@ -955,15 +961,16 @@ pub(crate) fn run_pliron_ranked_bounds_check_with_analyses_v1(
         }
     }
 
-    for (block_index, block) in blocks.iter().enumerate() {
+    for block_index in 0..blocks.len() {
         if !reachable[block_index] {
             continue;
         }
-        for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
+        for site in inventory.block_operations(block_index) {
+            let operation_index = site.operation();
             if let Err(finding) = budget.work(1) {
                 return finding_failure(finding);
             }
-            let operation = Operation::get_op_dyn(operation, context);
+            let operation = Operation::get_op_dyn(site.pointer(), context);
             if let Some(access) = operation.downcast_ref::<RankedAccessOp>()
                 && let Err(finding) = verify_access(
                     access,

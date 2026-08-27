@@ -24,6 +24,8 @@ mod pliron_barrier;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_effect_refinement;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_function_inventory;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_hierarchical_ownership;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_invocation_trace;

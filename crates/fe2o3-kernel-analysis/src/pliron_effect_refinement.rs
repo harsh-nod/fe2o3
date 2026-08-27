@@ -18,11 +18,7 @@ use dialect_proof::{
     RequireEffectRefinementOp,
 };
 use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
+    builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation,
     value::Value,
 };
 
@@ -504,7 +500,20 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironEffectRefinementReportV1 {
-    let (contracts, writes, ownership_views, obligations, evidence) = collect(context, function);
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(failure) => {
+            return one(
+                0,
+                PlironEffectRefinementFindingV1::ResourceLimitExceeded {
+                    actual: failure.actual(),
+                    limit: failure.limit(),
+                },
+            );
+        }
+    };
+    let (contracts, writes, ownership_views, obligations, evidence) = collect(context, &inventory);
     if contracts.is_empty() {
         return clean_effect_refinement_report_v1();
     }
@@ -635,7 +644,7 @@ pub(crate) fn run_pliron_effect_refinement_with_analyses_v1(
         return report(contracts.len(), 0, findings);
     }
 
-    let expressions = match SemanticExpressionTableV1::from_function(context, function) {
+    let expressions = match SemanticExpressionTableV1::from_inventory(context, &inventory) {
         Ok(expressions) => expressions,
         Err(_) => {
             return one(
@@ -744,82 +753,80 @@ type CollectedV1 = (
     )>,
 );
 
-fn collect(context: &Context, function: &FuncOp) -> CollectedV1 {
+fn collect(
+    context: &Context,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+) -> CollectedV1 {
     let mut contracts = Vec::new();
     let mut writes = Vec::new();
     let mut ownership = HashSet::new();
     let mut obligations = Vec::new();
     let mut evidence = Vec::new();
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation_index, raw) in block.deref(context).iter(context).enumerate() {
-            let operation = Operation::get_op_dyn(raw, context);
-            let location = EffectRefinementLocationV1 {
-                block: block_index,
-                operation: operation_index,
-            };
-            if let Some(contract) = operation.downcast_ref::<RequireEffectRefinementOp>() {
-                let view = contract.view(context);
-                contracts.push(EffectContractV1 {
+    for site in inventory.operations() {
+        let block_index = site.block();
+        let operation_index = site.operation();
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let location = EffectRefinementLocationV1 {
+            block: block_index,
+            operation: operation_index,
+        };
+        if let Some(contract) = operation.downcast_ref::<RequireEffectRefinementOp>() {
+            let view = contract.view(context);
+            contracts.push(EffectContractV1 {
+                location,
+                obligation: contract.obligation_id(context).unwrap_or([0; 4]),
+                view,
+                view_name: view.unique_name(context).to_string(),
+                indices: contract.indices(context),
+                coordinates: contract
+                    .gpu_coordinates(context)
+                    .into_iter()
+                    .zip(contract.reference_coordinates(context))
+                    .collect(),
+                expressions: [
+                    contract.gpu_domain(context),
+                    contract.reference_domain(context),
+                    contract.gpu_precondition(context),
+                    contract.reference_precondition(context),
+                    contract.gpu_value(context),
+                    contract.reference_value(context),
+                ],
+            });
+        } else if let Some(access) = operation.downcast_ref::<RankedAccessOp>() {
+            if access
+                .kind(context)
+                .is_some_and(|kind| kind.writes_memory())
+                && access
+                    .view(context)
+                    .defining_op()
+                    .map(|definition| Operation::get_op_dyn(definition, context))
+                    .and_then(|definition| definition.downcast_ref::<RankedViewOp>().copied())
+                    .and_then(|view| view.memory_space(context))
+                    .is_none_or(|space| space == MemorySpaceAttr::Global)
+            {
+                writes.push(WriteSiteV1 {
                     location,
-                    obligation: contract.obligation_id(context).unwrap_or([0; 4]),
-                    view,
-                    view_name: view.unique_name(context).to_string(),
-                    indices: contract.indices(context),
-                    coordinates: contract
-                        .gpu_coordinates(context)
-                        .into_iter()
-                        .zip(contract.reference_coordinates(context))
-                        .collect(),
-                    expressions: [
-                        contract.gpu_domain(context),
-                        contract.reference_domain(context),
-                        contract.gpu_precondition(context),
-                        contract.reference_precondition(context),
-                        contract.gpu_value(context),
-                        contract.reference_value(context),
-                    ],
+                    view: access.view(context),
+                    indices: access.indices(context),
                 });
-            } else if let Some(access) = operation.downcast_ref::<RankedAccessOp>() {
-                if access
-                    .kind(context)
-                    .is_some_and(|kind| kind.writes_memory())
-                    && access
-                        .view(context)
-                        .defining_op()
-                        .map(|definition| Operation::get_op_dyn(definition, context))
-                        .and_then(|definition| definition.downcast_ref::<RankedViewOp>().copied())
-                        .and_then(|view| view.memory_space(context))
-                        .is_none_or(|space| space == MemorySpaceAttr::Global)
-                {
-                    writes.push(WriteSiteV1 {
-                        location,
-                        view: access.view(context),
-                        indices: access.indices(context),
-                    });
-                }
-            } else if let Some(contract) = operation.downcast_ref::<OwnershipContractOp>() {
-                ownership.insert(contract.view(context));
-            } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
-                obligations.push((
-                    obligation.obligation_id(context).unwrap_or([0; 4]),
-                    obligation.subject_id(context),
-                    obligation.model_id(context),
-                    obligation.property(context),
-                ));
-            } else if let Some(record) = operation.downcast_ref::<EvidenceRefOp>() {
-                evidence.push((
-                    record.evidence_id(context),
-                    record.obligation_id(context),
-                    record.property(context),
-                    record.status(context),
-                    record.covered_boundary(context),
-                ));
             }
+        } else if let Some(contract) = operation.downcast_ref::<OwnershipContractOp>() {
+            ownership.insert(contract.view(context));
+        } else if let Some(obligation) = operation.downcast_ref::<ObligationOp>() {
+            obligations.push((
+                obligation.obligation_id(context).unwrap_or([0; 4]),
+                obligation.subject_id(context),
+                obligation.model_id(context),
+                obligation.property(context),
+            ));
+        } else if let Some(record) = operation.downcast_ref::<EvidenceRefOp>() {
+            evidence.push((
+                record.evidence_id(context),
+                record.obligation_id(context),
+                record.property(context),
+                record.status(context),
+                record.covered_boundary(context),
+            ));
         }
     }
     (contracts, writes, ownership, obligations, evidence)

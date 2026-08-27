@@ -9,14 +9,9 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, MemorySpaceAttr, RankedAccessOp,
     RankedViewOp, SUPPORTED_ELEMENT_WIDTHS,
 };
-use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
-    value::Value,
-};
+use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation, value::Value};
 
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 
 pub const MAX_PLIRON_ATOMIC_OPERATIONS_V1: usize = 65_536;
@@ -371,7 +366,8 @@ pub fn run_pliron_atomic_legality_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> PlironAtomicLegalityReportV1 {
-    run_check(context, function, None)
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    run_check_with_analyses(context, function, None, &mut analyses)
 }
 
 pub fn run_pliron_atomic_legality_check_with_target_v1(
@@ -379,7 +375,8 @@ pub fn run_pliron_atomic_legality_check_with_target_v1(
     function: &FuncOp,
     target: &PlironAtomicTargetContextV1,
 ) -> PlironAtomicLegalityReportV1 {
-    run_check(context, function, Some(target))
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    run_check_with_analyses(context, function, Some(target), &mut analyses)
 }
 
 pub fn require_pliron_atomic_legality_before_lowering_v1(
@@ -409,127 +406,138 @@ fn require_report(
     }
 }
 
-fn run_check(
+pub(crate) fn require_pliron_atomic_legality_with_analyses_v1(
     context: &Context,
     function: &FuncOp,
     target: Option<&PlironAtomicTargetContextV1>,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<PlironAtomicLegalityReportV1, PlironAtomicLegalityCheckErrorV1> {
+    require_report(run_check_with_analyses(context, function, target, analyses))
+}
+
+fn run_check_with_analyses(
+    context: &Context,
+    function: &FuncOp,
+    target: Option<&PlironAtomicTargetContextV1>,
+    analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironAtomicLegalityReportV1 {
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => return report(vec![PlironAtomicLegalityFindingV1::ResourceLimitExceeded]),
+    };
     let mut operation_count = 0_usize;
     let mut views = HashMap::<Value, (MemorySpaceAttr, u32, u64)>::new();
-    for block in function.get_region(context).deref(context).iter(context) {
-        for operation in block.deref(context).iter(context) {
-            operation_count += 1;
-            if operation_count > MAX_PLIRON_ATOMIC_OPERATIONS_V1 {
-                return report(vec![PlironAtomicLegalityFindingV1::ResourceLimitExceeded]);
-            }
-            let operation = Operation::get_op_dyn(operation, context);
-            if let Some(view) = operation.downcast_ref::<RankedViewOp>()
-                && let (Some(memory_space), Some(view_type)) =
-                    (view.memory_space(context), view.view_type(context))
-            {
-                if let Some(allocation_origin) = view.allocation_origin(context) {
-                    views.insert(
-                        view.result(context),
-                        (
-                            memory_space,
-                            view_type.deref(context).element_width(),
-                            allocation_origin,
-                        ),
-                    );
-                }
-            }
+    let mut access_sites = Vec::new();
+    for site in inventory.operations() {
+        operation_count += 1;
+        if operation_count > MAX_PLIRON_ATOMIC_OPERATIONS_V1 {
+            return report(vec![PlironAtomicLegalityFindingV1::ResourceLimitExceeded]);
+        }
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        if let Some(view) = operation.downcast_ref::<RankedViewOp>()
+            && let (Some(memory_space), Some(view_type)) =
+                (view.memory_space(context), view.view_type(context))
+            && let Some(allocation_origin) = view.allocation_origin(context)
+        {
+            views.insert(
+                view.result(context),
+                (
+                    memory_space,
+                    view_type.deref(context).element_width(),
+                    allocation_origin,
+                ),
+            );
+        }
+        if operation.downcast_ref::<RankedAccessOp>().is_some() {
+            access_sites.push(*site);
         }
     }
 
     let mut findings = Vec::new();
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
-            let operation = Operation::get_op_dyn(operation, context);
-            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-                continue;
-            };
-            if findings.len() >= MAX_PLIRON_ATOMIC_FINDINGS_V1 - 1 {
-                findings.push(PlironAtomicLegalityFindingV1::ResourceLimitExceeded);
-                return report(findings);
-            }
-            let Some(kind) = access.kind(context) else {
-                findings.push(PlironAtomicLegalityFindingV1::MissingAccessKind {
-                    block: block_index,
-                    operation: operation_index,
-                });
-                continue;
-            };
-            let ordering = access.atomic_ordering(context);
-            let scope = access.atomic_scope(context);
-            if !kind.is_atomic() {
-                if ordering.is_some() || scope.is_some() {
-                    findings.push(PlironAtomicLegalityFindingV1::UnexpectedContract {
-                        block: block_index,
-                        operation: operation_index,
-                        kind,
-                    });
-                }
-                continue;
-            }
-            let (Some(ordering), Some(scope)) = (ordering, scope) else {
-                findings.push(PlironAtomicLegalityFindingV1::MissingContract {
+    for site in access_sites {
+        let block_index = site.block();
+        let operation_index = site.operation();
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        if findings.len() >= MAX_PLIRON_ATOMIC_FINDINGS_V1 - 1 {
+            findings.push(PlironAtomicLegalityFindingV1::ResourceLimitExceeded);
+            return report(findings);
+        }
+        let Some(kind) = access.kind(context) else {
+            findings.push(PlironAtomicLegalityFindingV1::MissingAccessKind {
+                block: block_index,
+                operation: operation_index,
+            });
+            continue;
+        };
+        let ordering = access.atomic_ordering(context);
+        let scope = access.atomic_scope(context);
+        if !kind.is_atomic() {
+            if ordering.is_some() || scope.is_some() {
+                findings.push(PlironAtomicLegalityFindingV1::UnexpectedContract {
                     block: block_index,
                     operation: operation_index,
                     kind,
-                    ordering_missing: ordering.is_none(),
-                    scope_missing: scope.is_none(),
-                });
-                continue;
-            };
-            if !ordering_is_valid(kind, ordering) {
-                findings.push(PlironAtomicLegalityFindingV1::InvalidOrdering {
-                    block: block_index,
-                    operation: operation_index,
-                    kind,
-                    ordering,
-                });
-                continue;
-            }
-            let Some(&(memory_space, element_width, allocation_origin)) =
-                views.get(&access.view(context))
-            else {
-                findings.push(PlironAtomicLegalityFindingV1::ViewProvenanceUnavailable {
-                    block: block_index,
-                    operation: operation_index,
-                });
-                continue;
-            };
-            if !scope_is_valid(memory_space, scope) {
-                findings.push(PlironAtomicLegalityFindingV1::InvalidScope {
-                    block: block_index,
-                    operation: operation_index,
-                    memory_space,
-                    scope,
-                });
-                continue;
-            }
-            if target.is_none_or(|target| !target.supports(element_width, memory_space, scope)) {
-                findings.push(PlironAtomicLegalityFindingV1::TargetCapabilityUnavailable {
-                    block: block_index,
-                    operation: operation_index,
-                    element_width,
-                    memory_space,
-                    scope,
                 });
             }
-            if scope == AtomicScopeAttr::System
-                && target.is_none_or(|target| !target.supports_system_coherence(allocation_origin))
-            {
-                findings.push(PlironAtomicLegalityFindingV1::SystemCoherenceUnproven {
-                    block: block_index,
-                    operation: operation_index,
-                });
-            }
+            continue;
+        }
+        let (Some(ordering), Some(scope)) = (ordering, scope) else {
+            findings.push(PlironAtomicLegalityFindingV1::MissingContract {
+                block: block_index,
+                operation: operation_index,
+                kind,
+                ordering_missing: ordering.is_none(),
+                scope_missing: scope.is_none(),
+            });
+            continue;
+        };
+        if !ordering_is_valid(kind, ordering) {
+            findings.push(PlironAtomicLegalityFindingV1::InvalidOrdering {
+                block: block_index,
+                operation: operation_index,
+                kind,
+                ordering,
+            });
+            continue;
+        }
+        let Some(&(memory_space, element_width, allocation_origin)) =
+            views.get(&access.view(context))
+        else {
+            findings.push(PlironAtomicLegalityFindingV1::ViewProvenanceUnavailable {
+                block: block_index,
+                operation: operation_index,
+            });
+            continue;
+        };
+        if !scope_is_valid(memory_space, scope) {
+            findings.push(PlironAtomicLegalityFindingV1::InvalidScope {
+                block: block_index,
+                operation: operation_index,
+                memory_space,
+                scope,
+            });
+            continue;
+        }
+        if target.is_none_or(|target| !target.supports(element_width, memory_space, scope)) {
+            findings.push(PlironAtomicLegalityFindingV1::TargetCapabilityUnavailable {
+                block: block_index,
+                operation: operation_index,
+                element_width,
+                memory_space,
+                scope,
+            });
+        }
+        if scope == AtomicScopeAttr::System
+            && target.is_none_or(|target| !target.supports_system_coherence(allocation_origin))
+        {
+            findings.push(PlironAtomicLegalityFindingV1::SystemCoherenceUnproven {
+                block: block_index,
+                operation: operation_index,
+            });
         }
     }
     report(findings)

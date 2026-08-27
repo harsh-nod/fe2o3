@@ -10,13 +10,11 @@ use std::fmt;
 
 use dialect_kernel::{AllocationEffectOp, MemorySpaceAttr, RankedAccessOp, RankedViewOp};
 use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
+    builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation,
     value::Value,
 };
+
+use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 
 pub const MAX_PLIRON_PROVENANCE_SUBJECTS_V1: usize = 65_536;
 
@@ -218,7 +216,14 @@ pub fn analyze_pliron_provenance_alias_v1(
     context: &Context,
     function: &FuncOp,
 ) -> Result<PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1> {
-    let analysis = collect_pliron_provenance_alias_v1(context, function)?;
+    let inventory =
+        BoundedPlironFunctionInventoryV1::collect(context, function).map_err(|failure| {
+            PlironProvenanceFailureV1::ResourceLimit {
+                limit: failure.limit(),
+                actual: failure.actual(),
+            }
+        })?;
+    let analysis = collect_pliron_provenance_alias_with_inventory_v1(context, &inventory)?;
     for memory_space in [
         MemorySpaceAttr::Private,
         MemorySpaceAttr::Workgroup,
@@ -229,95 +234,88 @@ pub fn analyze_pliron_provenance_alias_v1(
     Ok(analysis)
 }
 
-pub(crate) fn collect_pliron_provenance_alias_v1(
+pub(crate) fn collect_pliron_provenance_alias_with_inventory_v1(
     context: &Context,
-    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
 ) -> Result<PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1> {
     let mut subjects = Vec::new();
     let mut views = HashMap::new();
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
-            let operation = Operation::get_op_dyn(operation, context);
-            if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
-                let memory_space = effect.memory_space(context).ok_or_else(|| {
-                    PlironProvenanceFailureV1::MissingMemorySpace {
-                        view: format!(
-                            "allocation effect at block {block_index} op {operation_index}"
-                        ),
-                    }
-                })?;
-                let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
-                push_subject(
-                    &mut subjects,
-                    SubjectV1 {
-                        identity: if allocation_origin == 0 {
-                            SubjectIdentityV1::AllocationSite(block_index, operation_index)
-                        } else {
-                            SubjectIdentityV1::AllocationOrigin(allocation_origin)
-                        },
-                        label: format!(
-                            "allocation effect at block {block_index} op {operation_index}"
-                        ),
-                        allocation_origin,
-                        noalias_class: effect.noalias_class(context).unwrap_or(0),
-                        memory_space,
-                        signature: None,
-                        writes: effect
-                            .kind(context)
-                            .is_some_and(|kind| kind.writes_memory()),
-                    },
-                )?;
-                continue;
-            }
-            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-                continue;
-            };
-            let view = access.view(context);
-            let name = format!("{}", view.unique_name(context));
-            let definition = view.defining_op().ok_or_else(|| {
-                PlironProvenanceFailureV1::MissingViewDefinition { view: name.clone() }
+    for site in inventory.operations() {
+        let block_index = site.block();
+        let operation_index = site.operation();
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
+            let memory_space = effect.memory_space(context).ok_or_else(|| {
+                PlironProvenanceFailureV1::MissingMemorySpace {
+                    view: format!("allocation effect at block {block_index} op {operation_index}"),
+                }
             })?;
-            let definition = Operation::get_op_dyn(definition, context);
-            let view_op = definition.downcast_ref::<RankedViewOp>().ok_or_else(|| {
-                PlironProvenanceFailureV1::ForeignViewDefinition { view: name.clone() }
-            })?;
-            let memory_space = view_op.memory_space(context).ok_or_else(|| {
-                PlironProvenanceFailureV1::MissingMemorySpace { view: name.clone() }
-            })?;
-            let view_type = view_op
-                .view_type(context)
-                .expect("structurally verified ranked view has a ranked view type");
-            let signature = {
-                let view_type = view_type.deref(context);
-                (view_type.element_width(), view_type.shape().to_vec())
-            };
-            let contract = PlironProvenanceContractV1 {
-                allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
-                noalias_class: view_op.noalias_class(context).unwrap_or(0),
-                memory_space,
-                signature: signature.clone(),
-            };
-            views.entry(view).or_insert_with(|| contract.clone());
+            let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
             push_subject(
                 &mut subjects,
                 SubjectV1 {
-                    identity: SubjectIdentityV1::View(view),
-                    label: name,
-                    allocation_origin: contract.allocation_origin,
-                    noalias_class: contract.noalias_class,
+                    identity: if allocation_origin == 0 {
+                        SubjectIdentityV1::AllocationSite(block_index, operation_index)
+                    } else {
+                        SubjectIdentityV1::AllocationOrigin(allocation_origin)
+                    },
+                    label: format!("allocation effect at block {block_index} op {operation_index}"),
+                    allocation_origin,
+                    noalias_class: effect.noalias_class(context).unwrap_or(0),
                     memory_space,
-                    signature: Some(signature),
-                    writes: access
+                    signature: None,
+                    writes: effect
                         .kind(context)
                         .is_some_and(|kind| kind.writes_memory()),
                 },
             )?;
+            continue;
         }
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        let view = access.view(context);
+        let name = format!("{}", view.unique_name(context));
+        let definition =
+            view.defining_op()
+                .ok_or_else(|| PlironProvenanceFailureV1::MissingViewDefinition {
+                    view: name.clone(),
+                })?;
+        let definition = Operation::get_op_dyn(definition, context);
+        let view_op = definition.downcast_ref::<RankedViewOp>().ok_or_else(|| {
+            PlironProvenanceFailureV1::ForeignViewDefinition { view: name.clone() }
+        })?;
+        let memory_space = view_op
+            .memory_space(context)
+            .ok_or_else(|| PlironProvenanceFailureV1::MissingMemorySpace { view: name.clone() })?;
+        let view_type = view_op
+            .view_type(context)
+            .expect("structurally verified ranked view has a ranked view type");
+        let signature = {
+            let view_type = view_type.deref(context);
+            (view_type.element_width(), view_type.shape().to_vec())
+        };
+        let contract = PlironProvenanceContractV1 {
+            allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
+            noalias_class: view_op.noalias_class(context).unwrap_or(0),
+            memory_space,
+            signature: signature.clone(),
+        };
+        views.entry(view).or_insert_with(|| contract.clone());
+        push_subject(
+            &mut subjects,
+            SubjectV1 {
+                identity: SubjectIdentityV1::View(view),
+                label: name,
+                allocation_origin: contract.allocation_origin,
+                noalias_class: contract.noalias_class,
+                memory_space,
+                signature: Some(signature),
+                writes: access
+                    .kind(context)
+                    .is_some_and(|kind| kind.writes_memory()),
+            },
+        )?;
     }
 
     let unknown_spaces = subjects

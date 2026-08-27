@@ -1,31 +1,37 @@
 //! Ephemeral shared analyses for one immutable PLIRON verification run.
 
+use std::sync::Arc;
+
 use pliron::{builtin::ops::FuncOp, context::Context, op::Op, operation::Operation};
 
+use crate::pliron_function_inventory::{
+    BoundedPlironFunctionInventoryFailureV1, BoundedPlironFunctionInventoryV1,
+};
 use crate::pliron_invocation_trace::{
     PlironExecutionLayoutV1, PlironInvocationTraceV1, PlironTraceFailureV1,
-    pliron_execution_layout_v1, trace_pliron_invocations_with_inputs_v1,
+    pliron_execution_layout_with_inventory_v1, trace_pliron_invocations_with_inputs_v1,
 };
 use crate::pliron_memory_order::{
     PlironMemoryOrderAnalysisV1, PlironMemoryOrderFailureV1, analyze_pliron_memory_order_v1,
 };
 use crate::pliron_provenance_alias::{
-    PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1, collect_pliron_provenance_alias_v1,
+    PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1,
+    collect_pliron_provenance_alias_with_inventory_v1,
 };
 use crate::pliron_simt_protocol::{PlironSimtProtocolAnalysisV1, analyze_pliron_simt_protocol_v1};
 use crate::pliron_tensor_layout::{
     PlironTensorLayoutDataflowAnalysisV1, PlironTensorLayoutDataflowFailureV1,
-    analyze_pliron_tensor_layout_dataflow_v1,
+    analyze_pliron_tensor_layout_dataflow_with_inventory_v1,
 };
 use crate::{
     PlironPresburgerAnalysisV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
-    analyze_pliron_sparse_indices_v1,
+    analyze_pliron_sparse_indices_with_inventory_v1,
 };
 
 /// The manager has a fixed number of cache roots. Each cached analysis has its
 /// own independent resource bounds, so a run cannot accumulate unbounded
 /// entries by querying different analysis keys.
-pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 8;
+pub(crate) const MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1: usize = 9;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlironMemoryOrderAnalysisFailureV1 {
@@ -47,6 +53,9 @@ pub(crate) enum PlironSimtProtocolAnalysisFailureV1 {
 /// observes pre-lowering cache state.
 pub(crate) struct PlironAnalysisManagerV1 {
     function: pliron::context::Ptr<Operation>,
+    function_inventory: Option<
+        Result<Arc<BoundedPlironFunctionInventoryV1>, BoundedPlironFunctionInventoryFailureV1>,
+    >,
     sparse_indices: Option<Result<SparseIndexAnalysisV1, SparseIndexFailureV1>>,
     presburger: Option<Result<PlironPresburgerAnalysisV1, SparseIndexFailureV1>>,
     provenance_alias: Option<Result<PlironProvenanceAliasAnalysisV1, PlironProvenanceFailureV1>>,
@@ -63,6 +72,7 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn new(function: &FuncOp) -> Self {
         Self {
             function: function.get_operation(),
+            function_inventory: None,
             sparse_indices: None,
             presburger: None,
             provenance_alias: None,
@@ -72,6 +82,38 @@ impl PlironAnalysisManagerV1 {
             memory_order: None,
             simt_protocol: None,
         }
+    }
+
+    pub(crate) fn prepare_function_inventory(&mut self, context: &Context, function: &FuncOp) {
+        self.assert_function(function);
+        if self.function_inventory.is_none() {
+            self.function_inventory =
+                Some(BoundedPlironFunctionInventoryV1::collect(context, function).map(Arc::new));
+        }
+        debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
+    }
+
+    pub(crate) fn function_inventory(
+        &self,
+    ) -> Result<&BoundedPlironFunctionInventoryV1, BoundedPlironFunctionInventoryFailureV1> {
+        self.function_inventory
+            .as_ref()
+            .expect("function inventory must be prepared before access")
+            .as_ref()
+            .map(Arc::as_ref)
+            .map_err(Clone::clone)
+    }
+
+    pub(crate) fn function_inventory_handle(
+        &self,
+    ) -> Result<Arc<BoundedPlironFunctionInventoryV1>, BoundedPlironFunctionInventoryFailureV1>
+    {
+        self.function_inventory
+            .as_ref()
+            .expect("function inventory must be prepared before access")
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(Clone::clone)
     }
 
     fn assert_function(&self, function: &FuncOp) {
@@ -85,7 +127,17 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn prepare_sparse_indices(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
         if self.sparse_indices.is_none() {
-            self.sparse_indices = Some(analyze_pliron_sparse_indices_v1(context, function));
+            self.prepare_function_inventory(context, function);
+            self.sparse_indices = Some(match self.function_inventory() {
+                Ok(inventory) => {
+                    analyze_pliron_sparse_indices_with_inventory_v1(context, function, inventory)
+                }
+                Err(failure) => Err(SparseIndexFailureV1::ResourceLimit {
+                    resource: failure.resource(),
+                    limit: failure.limit(),
+                    actual: failure.actual(),
+                }),
+            });
         }
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }
@@ -123,7 +175,16 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn prepare_provenance_alias(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
         if self.provenance_alias.is_none() {
-            self.provenance_alias = Some(collect_pliron_provenance_alias_v1(context, function));
+            self.prepare_function_inventory(context, function);
+            self.provenance_alias = Some(match self.function_inventory() {
+                Ok(inventory) => {
+                    collect_pliron_provenance_alias_with_inventory_v1(context, inventory)
+                }
+                Err(failure) => Err(PlironProvenanceFailureV1::ResourceLimit {
+                    limit: failure.limit(),
+                    actual: failure.actual(),
+                }),
+            });
         }
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }
@@ -141,7 +202,11 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn prepare_execution_layout(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
         if self.execution_layout.is_none() {
-            self.execution_layout = Some(pliron_execution_layout_v1(context, function));
+            self.prepare_function_inventory(context, function);
+            self.execution_layout = Some(match self.function_inventory() {
+                Ok(inventory) => pliron_execution_layout_with_inventory_v1(context, inventory),
+                Err(_) => Err(PlironTraceFailureV1::ResourceLimit),
+            });
         }
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }
@@ -166,7 +231,10 @@ impl PlironAnalysisManagerV1 {
         self.prepare_execution_layout(context, function);
         self.exact_trace = Some(match (&self.sparse_indices, &self.execution_layout) {
             (Some(Ok(sparse)), Some(Ok(layout))) => {
-                trace_pliron_invocations_with_inputs_v1(context, function, sparse, *layout)
+                let inventory = self
+                    .function_inventory()
+                    .expect("trace inventory was prepared");
+                trace_pliron_invocations_with_inputs_v1(context, inventory, sparse, *layout)
             }
             (Some(Err(failure)), _) => Err(PlironTraceFailureV1::Sparse(failure.clone())),
             (_, Some(Err(failure))) => Err(failure.clone()),
@@ -187,8 +255,13 @@ impl PlironAnalysisManagerV1 {
     pub(crate) fn prepare_tensor_layout_dataflow(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
         if self.tensor_layout_dataflow.is_none() {
-            self.tensor_layout_dataflow =
-                Some(analyze_pliron_tensor_layout_dataflow_v1(context, function));
+            self.prepare_function_inventory(context, function);
+            self.tensor_layout_dataflow = Some(match self.function_inventory() {
+                Ok(inventory) => {
+                    analyze_pliron_tensor_layout_dataflow_with_inventory_v1(context, inventory)
+                }
+                Err(_) => Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit),
+            });
         }
         debug_assert!(self.cached_entries() <= MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1);
     }
@@ -258,7 +331,8 @@ impl PlironAnalysisManagerV1 {
     }
 
     pub(crate) fn cached_entries(&self) -> usize {
-        usize::from(self.sparse_indices.is_some())
+        usize::from(self.function_inventory.is_some())
+            + usize::from(self.sparse_indices.is_some())
             + usize::from(self.presburger.is_some())
             + usize::from(self.provenance_alias.is_some())
             + usize::from(self.execution_layout.is_some())
@@ -266,5 +340,47 @@ impl PlironAnalysisManagerV1 {
             + usize::from(self.tensor_layout_dataflow.is_some())
             + usize::from(self.memory_order.is_some())
             + usize::from(self.simt_protocol.is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use pliron::{
+        builtin::{ops::FuncOp, types::FunctionType},
+        context::Context,
+    };
+
+    use super::*;
+
+    #[test]
+    fn all_analysis_roots_reuse_one_function_inventory() {
+        let mut context = Context::new();
+        let function_type = FunctionType::get(&context, vec![], vec![]);
+        let function = FuncOp::new(
+            &mut context,
+            "analysis_cache".try_into().unwrap(),
+            function_type,
+        );
+        let mut analyses = PlironAnalysisManagerV1::new(&function);
+        analyses.prepare_function_inventory(&context, &function);
+        let first = analyses.function_inventory_handle().unwrap();
+
+        analyses.prepare_sparse_indices(&context, &function);
+        analyses.prepare_presburger(&context, &function);
+        analyses.prepare_provenance_alias(&context, &function);
+        analyses.prepare_execution_layout(&context, &function);
+        analyses.prepare_exact_trace(&context, &function);
+        analyses.prepare_tensor_layout_dataflow(&context, &function);
+        analyses.prepare_memory_order(&context, &function);
+        analyses.prepare_simt_protocol(&context, &function);
+
+        let second = analyses.function_inventory_handle().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            analyses.cached_entries(),
+            MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1
+        );
     }
 }

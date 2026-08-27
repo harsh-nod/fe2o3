@@ -23,10 +23,9 @@ use dialect_kernel::{
 };
 use fe2o3_pliron_owner_core::{ContextIdentity, require_context_identity};
 use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::ops::FuncOp,
     common_traits::Verify,
     context::{Context, Ptr},
-    linked_list::ContainsLinkedList,
     op::Op,
     operation::Operation,
     r#type::TypedHandle,
@@ -486,11 +485,20 @@ fn build_bounds_presburger_witness(
     SupportedWitnessBuildV1<BoundsPresburgerWitnessV1>,
     ProductionAnalysisWitnessValidationErrorV1,
 > {
-    let blocks = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .collect::<Vec<_>>();
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(failure) => {
+            return Ok(SupportedWitnessBuildV1::Incomplete(format!(
+                "bounds witness function inventory {} count {} exceeds limit {}",
+                failure.resource(),
+                failure.actual(),
+                failure.limit(),
+            )));
+        }
+    };
+    let blocks = inventory.blocks();
     if blocks.len() != 1 {
         return Ok(SupportedWitnessBuildV1::Incomplete(
             "bounds witness V1 cannot yet enumerate exhaustive CFG path domains or dominating guard facts"
@@ -498,8 +506,8 @@ fn build_bounds_presburger_witness(
         ));
     }
 
-    let block = blocks[0];
-    let launch_extents = match raw_launch_extents(context, block) {
+    let block_operations = inventory.block_operations(0);
+    let launch_extents = match raw_launch_extents(context, block_operations) {
         Ok(extents) => extents,
         Err(reason) => return Ok(SupportedWitnessBuildV1::Incomplete(reason)),
     };
@@ -518,7 +526,6 @@ fn build_bounds_presburger_witness(
     // is deliberately not the authority for `Complete`. The separate raw-IR
     // evaluator below interprets the defining operation DAG directly and
     // enumerates every invocation in the finite launch box.
-    let mut analyses = PlironAnalysisManagerV1::new(function);
     analyses.prepare_sparse_indices(context, function);
     analyses.prepare_presburger(context, function);
     let sparse = match analyses.sparse_indices() {
@@ -540,8 +547,9 @@ fn build_bounds_presburger_witness(
 
     let mut obligations = Vec::new();
     let mut evaluation_steps = 0usize;
-    for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
-        let operation = Operation::get_op_dyn(operation, context);
+    for site in block_operations {
+        let operation_index = site.operation();
+        let operation = Operation::get_op_dyn(site.pointer(), context);
         let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
             continue;
         };
@@ -607,12 +615,12 @@ fn build_bounds_presburger_witness(
 
 fn raw_launch_extents(
     context: &Context,
-    block: Ptr<pliron::basic_block::BasicBlock>,
+    operations: &[crate::pliron_function_inventory::PlironOperationSiteV1],
 ) -> Result<Vec<u64>, String> {
     let mut by_dimension = BTreeMap::<usize, u64>::new();
     let mut execution_layout = None;
-    for operation in block.deref(context).iter(context) {
-        let operation = Operation::get_op_dyn(operation, context);
+    for site in operations {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
         if let Some(layout) = operation.downcast_ref::<ExecutionLayoutOp>() {
             if execution_layout.is_some() {
                 return Err("bounds witness V1 found more than one gpu.execution_layout".to_owned());

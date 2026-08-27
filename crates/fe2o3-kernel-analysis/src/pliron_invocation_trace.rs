@@ -19,7 +19,6 @@ use dialect_kernel::{
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
@@ -27,6 +26,7 @@ use pliron::{
     value::Value,
 };
 
+use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::{MAX_PLIRON_RACE_INVOCATIONS_V1, SparseIndexFailureV1};
 
 pub const MAX_PLIRON_TRACE_TOTAL_STEPS_V1: usize = 1_048_576;
@@ -169,92 +169,75 @@ impl PlironExecutionLayoutV1 {
     }
 }
 
-pub(crate) fn pliron_execution_layout_v1(
+pub(crate) fn pliron_execution_layout_with_inventory_v1(
     context: &Context,
-    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
 ) -> Result<Option<PlironExecutionLayoutV1>, PlironTraceFailureV1> {
     let mut layout = None;
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for operation in block.deref(context).iter(context) {
-            let operation = Operation::get_op_dyn(operation, context);
-            let Some(candidate) = operation.downcast_ref::<ExecutionLayoutOp>() else {
-                continue;
-            };
-            if block_index != 0 || layout.is_some() {
-                return Err(PlironTraceFailureV1::InvalidExecutionLayout);
-            }
-            let (
-                Some(grid),
-                Some(global_extents),
-                Some(workgroup_extents),
-                Some(subgroup_size),
-                execution_domain,
-            ) = (
-                candidate.grid_identity(context),
-                candidate.global_extents(context),
-                candidate.workgroup_extents(context),
-                candidate.subgroup_size(context),
-                candidate.execution_domain(context),
-            )
-            else {
-                return Err(PlironTraceFailureV1::InvalidExecutionLayout);
-            };
-            let workgroup_size = workgroup_extents
-                .into_iter()
-                .try_fold(1_u64, u64::checked_mul);
-            if workgroup_extents.contains(&0)
-                || workgroup_size.is_none()
-                || subgroup_size == 0
-                || workgroup_size.is_some_and(|size| subgroup_size > size)
-                || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size))
-                || (execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
-                    && global_extents
-                        .iter()
-                        .zip(workgroup_extents)
-                        .any(|(global, workgroup)| {
-                            *global != 0 && !global.is_multiple_of(workgroup)
-                        }))
-            {
-                return Err(PlironTraceFailureV1::InvalidExecutionLayout);
-            }
-            layout = Some(PlironExecutionLayoutV1 {
-                grid,
-                global_extents,
-                workgroup_extents,
-                subgroup_size,
-                execution_domain,
-            });
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(candidate) = operation.downcast_ref::<ExecutionLayoutOp>() else {
+            continue;
+        };
+        if site.block() != 0 || layout.is_some() {
+            return Err(PlironTraceFailureV1::InvalidExecutionLayout);
         }
+        let (
+            Some(grid),
+            Some(global_extents),
+            Some(workgroup_extents),
+            Some(subgroup_size),
+            execution_domain,
+        ) = (
+            candidate.grid_identity(context),
+            candidate.global_extents(context),
+            candidate.workgroup_extents(context),
+            candidate.subgroup_size(context),
+            candidate.execution_domain(context),
+        )
+        else {
+            return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+        };
+        let workgroup_size = workgroup_extents
+            .into_iter()
+            .try_fold(1_u64, u64::checked_mul);
+        if workgroup_extents.contains(&0)
+            || workgroup_size.is_none()
+            || subgroup_size == 0
+            || workgroup_size.is_some_and(|size| subgroup_size > size)
+            || workgroup_size.is_some_and(|size| !size.is_multiple_of(subgroup_size))
+            || (execution_domain == ExecutionDomainAttr::FullPhysicalWorkgroups
+                && global_extents
+                    .iter()
+                    .zip(workgroup_extents)
+                    .any(|(global, workgroup)| *global != 0 && !global.is_multiple_of(workgroup)))
+        {
+            return Err(PlironTraceFailureV1::InvalidExecutionLayout);
+        }
+        layout = Some(PlironExecutionLayoutV1 {
+            grid,
+            global_extents,
+            workgroup_extents,
+            subgroup_size,
+            execution_domain,
+        });
     }
     Ok(layout)
 }
 
 pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     context: &Context,
-    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
     sparse: &crate::SparseIndexAnalysisV1,
     layout: Option<PlironExecutionLayoutV1>,
 ) -> Result<Vec<PlironInvocationTraceV1>, PlironTraceFailureV1> {
-    let needs_scoped_layout = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .any(|block| {
-            block.deref(context).iter(context).any(|operation| {
-                let operation = Operation::get_op_dyn(operation, context);
-                operation.downcast_ref::<BarrierOp>().is_some()
-                    || operation
-                        .downcast_ref::<RankedViewOp>()
-                        .is_some_and(|view| {
-                            view.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
-                        })
-            })
-        });
+    let needs_scoped_layout = inventory.operations().iter().any(|site| {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        operation.downcast_ref::<BarrierOp>().is_some()
+            || operation
+                .downcast_ref::<RankedViewOp>()
+                .is_some_and(|view| view.memory_space(context) == Some(MemorySpaceAttr::Workgroup))
+    });
     if needs_scoped_layout && layout.is_none() {
         return Err(PlironTraceFailureV1::MissingExecutionLayout);
     }
@@ -289,17 +272,11 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
     }
     if let Some(layout) = layout {
         for scope in [HierarchyAttr::Workgroup, HierarchyAttr::Subgroup] {
-            let has_scope = function
-                .get_region(context)
-                .deref(context)
-                .iter(context)
-                .any(|block| {
-                    block.deref(context).iter(context).any(|operation| {
-                        Operation::get_op_dyn(operation, context)
-                            .downcast_ref::<BarrierOp>()
-                            .is_some_and(|barrier| barrier.execution_scope(context) == Some(scope))
-                    })
-                });
+            let has_scope = inventory.operations().iter().any(|site| {
+                Operation::get_op_dyn(site.pointer(), context)
+                    .downcast_ref::<BarrierOp>()
+                    .is_some_and(|barrier| barrier.execution_scope(context) == Some(scope))
+            });
             if has_scope {
                 for (dimension, (global_extent, workgroup_extent)) in launch_extents
                     .iter()
@@ -319,11 +296,7 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
         }
     }
 
-    let blocks = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .collect::<Vec<_>>();
+    let blocks = inventory.blocks();
     let block_indices = blocks
         .iter()
         .enumerate()
@@ -358,7 +331,9 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 .get_terminator(context)
                 .ok_or(PlironTraceFailureV1::UnsupportedTerminator { block: block_index })?;
             let mut terminator_index = None;
-            for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
+            for site in inventory.block_operations(block_index) {
+                let operation_index = site.operation();
+                let operation = site.pointer();
                 // Charge the scan itself, including pure definitions and the
                 // terminator. Event count is therefore bounded by this same
                 // budget instead of only by the number of visited blocks.

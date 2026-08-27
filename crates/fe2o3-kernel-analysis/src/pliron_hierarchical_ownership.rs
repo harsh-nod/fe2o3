@@ -16,12 +16,7 @@ use dialect_kernel::{
     OwnershipCoverageAttr, OwnershipPartitionAttr, RankedAccessOp, RankedViewOp,
 };
 use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
-    context::Context,
-    linked_list::ContainsLinkedList,
-    op::Op,
-    operation::Operation,
+    builtin::ops::FuncOp, common_traits::Named, context::Context, op::Op, operation::Operation,
     value::Value,
 };
 
@@ -699,7 +694,23 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> HierarchicalOwnershipReportV1 {
-    let contracts = match collect_contracts(context, function) {
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(failure) => {
+            return one(
+                HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
+                    detail: format!(
+                        "bounded function inventory {} count {} exceeds limit {}",
+                        failure.resource(),
+                        failure.actual(),
+                        failure.limit(),
+                    ),
+                },
+            );
+        }
+    };
+    let contracts = match collect_contracts(context, &inventory) {
         Ok(contracts) if contracts.is_empty() => return clean(),
         Ok(contracts) => contracts,
         Err(finding) => return one(*finding),
@@ -787,7 +798,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
         .any(|contract| contract.coverage == OwnershipCoverageAttr::TotalView);
     if needs_total_output
         && let Some(finding) =
-            first_unmodeled_or_aliasing_observable_write(context, function, &contracts)
+            first_unmodeled_or_aliasing_observable_write(context, &inventory, &contracts)
     {
         return one_with_summary(finding, coverage_summary);
     }
@@ -853,7 +864,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
                 (Some(extents), None)
             }
             OwnershipCoverageAttr::ExactEffectDomain => {
-                if let Err(finding) = validate_effect_domain_site(context, function, &contract) {
+                if let Err(finding) = validate_effect_domain_site(context, &inventory, &contract) {
                     findings.push(*finding);
                 }
                 continue;
@@ -894,7 +905,7 @@ pub(crate) fn run_pliron_hierarchical_ownership_check_with_analyses_v1(
 
 fn first_unmodeled_or_aliasing_observable_write(
     context: &Context,
-    function: &FuncOp,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
     contracts: &[ContractV1],
 ) -> Option<HierarchicalOwnershipFindingV1> {
     let modeled = contracts
@@ -905,73 +916,68 @@ fn first_unmodeled_or_aliasing_observable_write(
         .iter()
         .filter(|contract| contract.coverage == OwnershipCoverageAttr::TotalView)
         .collect::<Vec<_>>();
-    for (block, basic_block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation, raw) in basic_block.deref(context).iter(context).enumerate() {
-            let op = Operation::get_op_dyn(raw, context);
-            if let Some(effect) = op.downcast_ref::<AllocationEffectOp>()
-                && effect.memory_space(context) == Some(MemorySpaceAttr::Global)
-                && effect
-                    .kind(context)
-                    .is_some_and(|kind| kind.writes_memory())
-            {
-                return Some(
-                    HierarchicalOwnershipFindingV1::UnmodeledObservableAllocationWrite {
-                        allocation_origin: effect.allocation_origin(context).unwrap_or(0),
-                        noalias_class: effect.noalias_class(context).unwrap_or(0),
-                        location: HierarchicalOwnershipLocationV1 { block, operation },
-                    },
-                );
-            }
-            let Some(access) = op.downcast_ref::<RankedAccessOp>() else {
-                continue;
-            };
-            if !access
+    for site in inventory.operations() {
+        let block = site.block();
+        let operation = site.operation();
+        let op = Operation::get_op_dyn(site.pointer(), context);
+        if let Some(effect) = op.downcast_ref::<AllocationEffectOp>()
+            && effect.memory_space(context) == Some(MemorySpaceAttr::Global)
+            && effect
                 .kind(context)
                 .is_some_and(|kind| kind.writes_memory())
+        {
+            return Some(
+                HierarchicalOwnershipFindingV1::UnmodeledObservableAllocationWrite {
+                    allocation_origin: effect.allocation_origin(context).unwrap_or(0),
+                    noalias_class: effect.noalias_class(context).unwrap_or(0),
+                    location: HierarchicalOwnershipLocationV1 { block, operation },
+                },
+            );
+        }
+        let Some(access) = op.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        if !access
+            .kind(context)
+            .is_some_and(|kind| kind.writes_memory())
+        {
+            continue;
+        }
+        let view = access.view(context);
+        let Some(view_op) = view
+            .defining_op()
+            .map(|definition| Operation::get_op_dyn(definition, context))
+            .and_then(|definition| definition.downcast_ref::<RankedViewOp>().copied())
+        else {
+            continue;
+        };
+        if view_op.memory_space(context) != Some(MemorySpaceAttr::Global) {
+            continue;
+        }
+        let location = HierarchicalOwnershipLocationV1 { block, operation };
+        if !modeled.contains(&view) {
+            return Some(HierarchicalOwnershipFindingV1::UnmodeledObservableWrite {
+                view: view.unique_name(context).to_string(),
+                location,
+            });
+        }
+        let alias_noalias_class = view_op.noalias_class(context).unwrap_or(0);
+        for contract in &total_outputs {
+            if contract.view == view {
+                continue;
+            }
+            let contracted_noalias_class = contract.view_op.noalias_class(context).unwrap_or(0);
+            if contracted_noalias_class == 0
+                || alias_noalias_class == 0
+                || contracted_noalias_class == alias_noalias_class
             {
-                continue;
-            }
-            let view = access.view(context);
-            let Some(view_op) = view
-                .defining_op()
-                .map(|definition| Operation::get_op_dyn(definition, context))
-                .and_then(|definition| definition.downcast_ref::<RankedViewOp>().copied())
-            else {
-                continue;
-            };
-            if view_op.memory_space(context) != Some(MemorySpaceAttr::Global) {
-                continue;
-            }
-            let location = HierarchicalOwnershipLocationV1 { block, operation };
-            if !modeled.contains(&view) {
-                return Some(HierarchicalOwnershipFindingV1::UnmodeledObservableWrite {
-                    view: view.unique_name(context).to_string(),
+                return Some(HierarchicalOwnershipFindingV1::MayAliasObservableWrite {
+                    contracted_view: contract.view_name.clone(),
+                    alias_view: view.unique_name(context).to_string(),
+                    contracted_noalias_class,
+                    alias_noalias_class,
                     location,
                 });
-            }
-            let alias_noalias_class = view_op.noalias_class(context).unwrap_or(0);
-            for contract in &total_outputs {
-                if contract.view == view {
-                    continue;
-                }
-                let contracted_noalias_class = contract.view_op.noalias_class(context).unwrap_or(0);
-                if contracted_noalias_class == 0
-                    || alias_noalias_class == 0
-                    || contracted_noalias_class == alias_noalias_class
-                {
-                    return Some(HierarchicalOwnershipFindingV1::MayAliasObservableWrite {
-                        contracted_view: contract.view_name.clone(),
-                        alias_view: view.unique_name(context).to_string(),
-                        contracted_noalias_class,
-                        alias_noalias_class,
-                        location,
-                    });
-                }
             }
         }
     }
@@ -1006,112 +1012,105 @@ pub fn require_pliron_hierarchical_ownership_before_lowering_v1(
 
 fn collect_contracts(
     context: &Context,
-    function: &FuncOp,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
 ) -> Result<Vec<ContractV1>, Box<HierarchicalOwnershipFindingV1>> {
     let mut contracts = Vec::new();
     let mut by_view = HashMap::new();
-    for (block, basic_block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation, raw) in basic_block.deref(context).iter(context).enumerate() {
-            let op = Operation::get_op_dyn(raw, context);
-            let Some(contract) = op.downcast_ref::<OwnershipContractOp>() else {
-                continue;
-            };
-            if contracts.len() == MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1 {
-                return Err(Box::new(
-                    HierarchicalOwnershipFindingV1::ContractLimitExceeded {
-                        actual: contracts.len() + 1,
-                        limit: MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1,
-                    },
-                ));
-            }
-            let location = HierarchicalOwnershipLocationV1 { block, operation };
-            let raw = contract.get_operation().deref(context);
-            if raw.get_num_operands() != 1
-                || contract.coverage(context).is_none()
-                || contract.partition(context).is_none()
-            {
-                return Err(Box::new(
-                    HierarchicalOwnershipFindingV1::MalformedContract {
-                        location,
-                        detail: "expected one ranked-view operand and closed coverage/partition attributes",
-                    },
-                ));
-            }
-            let view = contract.view(context);
-            let view_name = view.unique_name(context).to_string();
-            if block != 0 {
-                return Err(Box::new(
-                    HierarchicalOwnershipFindingV1::ContractOutsideEntry {
-                        view: view_name,
-                        location,
-                    },
-                ));
-            }
-            if let Some(first) = by_view.insert(view, location) {
-                return Err(Box::new(
-                    HierarchicalOwnershipFindingV1::DuplicateContract {
-                        view: view_name,
-                        first,
-                        second: location,
-                    },
-                ));
-            }
-            let Some(definition) = view.defining_op() else {
-                return Err(Box::new(
-                    HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
-                        detail: format!("contracted view {view_name} has no definition"),
-                    },
-                ));
-            };
-            let definition = Operation::get_op_dyn(definition, context);
-            let Some(view_op) = definition.downcast_ref::<RankedViewOp>() else {
-                return Err(Box::new(
-                    HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
-                        detail: format!("contracted value {view_name} is not a ranked view"),
-                    },
-                ));
-            };
-            contracts.push(ContractV1 {
-                location,
-                view,
-                view_name,
-                view_op: *view_op,
-                coverage: contract
-                    .coverage(context)
-                    .unwrap_or(OwnershipCoverageAttr::ExactView),
-                partition: contract
-                    .partition(context)
-                    .unwrap_or(OwnershipPartitionAttr::ExactSets),
-            });
+    for site in inventory.operations() {
+        let block = site.block();
+        let operation = site.operation();
+        let op = Operation::get_op_dyn(site.pointer(), context);
+        let Some(contract) = op.downcast_ref::<OwnershipContractOp>() else {
+            continue;
+        };
+        if contracts.len() == MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1 {
+            return Err(Box::new(
+                HierarchicalOwnershipFindingV1::ContractLimitExceeded {
+                    actual: contracts.len() + 1,
+                    limit: MAX_HIERARCHICAL_OWNERSHIP_CONTRACTS_V1,
+                },
+            ));
         }
+        let location = HierarchicalOwnershipLocationV1 { block, operation };
+        let raw = contract.get_operation().deref(context);
+        if raw.get_num_operands() != 1
+            || contract.coverage(context).is_none()
+            || contract.partition(context).is_none()
+        {
+            return Err(Box::new(
+                HierarchicalOwnershipFindingV1::MalformedContract {
+                    location,
+                    detail: "expected one ranked-view operand and closed coverage/partition attributes",
+                },
+            ));
+        }
+        let view = contract.view(context);
+        let view_name = view.unique_name(context).to_string();
+        if block != 0 {
+            return Err(Box::new(
+                HierarchicalOwnershipFindingV1::ContractOutsideEntry {
+                    view: view_name,
+                    location,
+                },
+            ));
+        }
+        if let Some(first) = by_view.insert(view, location) {
+            return Err(Box::new(
+                HierarchicalOwnershipFindingV1::DuplicateContract {
+                    view: view_name,
+                    first,
+                    second: location,
+                },
+            ));
+        }
+        let Some(definition) = view.defining_op() else {
+            return Err(Box::new(
+                HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
+                    detail: format!("contracted view {view_name} has no definition"),
+                },
+            ));
+        };
+        let definition = Operation::get_op_dyn(definition, context);
+        let Some(view_op) = definition.downcast_ref::<RankedViewOp>() else {
+            return Err(Box::new(
+                HierarchicalOwnershipFindingV1::SparseIndexAnalysisIncomplete {
+                    detail: format!("contracted value {view_name} is not a ranked view"),
+                },
+            ));
+        };
+        contracts.push(ContractV1 {
+            location,
+            view,
+            view_name,
+            view_op: *view_op,
+            coverage: contract
+                .coverage(context)
+                .unwrap_or(OwnershipCoverageAttr::ExactView),
+            partition: contract
+                .partition(context)
+                .unwrap_or(OwnershipPartitionAttr::ExactSets),
+        });
     }
     Ok(contracts)
 }
 
 fn validate_effect_domain_site(
     context: &Context,
-    function: &FuncOp,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
     contract: &ContractV1,
 ) -> Result<(), Box<HierarchicalOwnershipFindingV1>> {
     let mut writes = 0_usize;
-    for block in function.get_region(context).deref(context).iter(context) {
-        for raw in block.deref(context).iter(context) {
-            let operation = Operation::get_op_dyn(raw, context);
-            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-                continue;
-            };
-            if access.view(context) == contract.view
-                && access
-                    .kind(context)
-                    .is_some_and(|kind| kind.writes_memory())
-            {
-                writes = writes.saturating_add(1);
-            }
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        if access.view(context) == contract.view
+            && access
+                .kind(context)
+                .is_some_and(|kind| kind.writes_memory())
+        {
+            writes = writes.saturating_add(1);
         }
     }
     if writes != 1 {

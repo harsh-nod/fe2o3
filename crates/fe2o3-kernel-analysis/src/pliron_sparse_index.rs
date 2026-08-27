@@ -15,13 +15,16 @@ use dialect_kernel::{
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::ops::FuncOp,
     context::{Context, Ptr},
-    linked_list::ContainsLinkedList,
     op::OpBox,
     operation::Operation,
     r#type::{Typed, TypedHandle},
     value::Value,
+};
+
+use crate::pliron_function_inventory::{
+    BoundedPlironFunctionInventoryFailureV1, BoundedPlironFunctionInventoryV1,
 };
 
 pub const MAX_SPARSE_INDEX_VALUES_V1: usize = 65_536;
@@ -358,20 +361,24 @@ pub fn analyze_pliron_sparse_indices_v1(
     context: &Context,
     function: &FuncOp,
 ) -> Result<SparseIndexAnalysisV1, SparseIndexFailureV1> {
+    let inventory = BoundedPlironFunctionInventoryV1::collect(context, function)
+        .map_err(sparse_inventory_failure)?;
+    analyze_pliron_sparse_indices_with_inventory_v1(context, function, &inventory)
+}
+
+pub(crate) fn analyze_pliron_sparse_indices_with_inventory_v1(
+    context: &Context,
+    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
+) -> Result<SparseIndexAnalysisV1, SparseIndexFailureV1> {
     let entry = function.get_entry_block(context);
-    let mut blocks = Vec::new();
+    let blocks = inventory.blocks().to_vec();
     let mut block_indices = HashMap::new();
     let mut block_arguments = HashMap::new();
-    for block in function.get_region(context).deref(context).iter(context) {
-        if blocks.len() == MAX_SPARSE_INDEX_VALUES_V1 {
-            return Err(limit(
-                "CFG block",
-                MAX_SPARSE_INDEX_VALUES_V1,
-                blocks.len() + 1,
-            ));
+    for (index, block) in blocks.iter().copied().enumerate() {
+        if index == MAX_SPARSE_INDEX_VALUES_V1 {
+            return Err(limit("CFG block", MAX_SPARSE_INDEX_VALUES_V1, index + 1));
         }
-        let index = blocks.len();
-        blocks.push(block);
         block_indices.insert(block, index);
         block_arguments.insert(block, block.deref(context).arguments().collect::<Vec<_>>());
     }
@@ -380,7 +387,7 @@ pub fn analyze_pliron_sparse_indices_v1(
     let mut definition_indices = HashMap::new();
     let mut input_count = 0_usize;
     let mut launch_extents = Vec::new();
-    for block in blocks.iter().copied() {
+    for (block_index, block) in blocks.iter().copied().enumerate() {
         for argument in block_arguments
             .get(&block)
             .expect("collected block has arguments")
@@ -398,7 +405,8 @@ pub fn analyze_pliron_sparse_indices_v1(
                 },
             )?;
         }
-        for operation in block.deref(context).iter(context) {
+        for site in inventory.block_operations(block_index) {
+            let operation = site.pointer();
             let raw = operation.deref(context);
             charge_uses(&mut input_count, raw.get_num_operands())?;
             let dynamic = Operation::get_op_dyn(operation, context);
@@ -579,6 +587,16 @@ pub fn analyze_pliron_sparse_indices_v1(
         launch_extents: resolved_launch_extents,
         declared_launch_extents,
     })
+}
+
+fn sparse_inventory_failure(
+    failure: BoundedPlironFunctionInventoryFailureV1,
+) -> SparseIndexFailureV1 {
+    SparseIndexFailureV1::ResourceLimit {
+        resource: failure.resource(),
+        limit: failure.limit(),
+        actual: failure.actual(),
+    }
 }
 
 fn push_definition(

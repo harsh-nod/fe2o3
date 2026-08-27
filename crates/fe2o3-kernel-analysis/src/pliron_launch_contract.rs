@@ -7,14 +7,9 @@ use std::{collections::BTreeMap, fmt};
 
 use dialect_gpu::ExecutionLayoutOp;
 use dialect_kernel::{DYNAMIC_EXTENT, MemorySpaceAttr, RankedViewOp};
-use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
-};
+use pliron::{builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation};
 
+use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::{KernelCheckStatusV1, derive_pliron_ir_structural_identity_v1};
 
 pub const MAX_PLIRON_TARGET_SUBGROUP_SIZES_V1: usize = 16;
@@ -399,6 +394,16 @@ pub fn run_pliron_launch_contract_check_v1(
     function: &FuncOp,
     contract: &PlironLaunchContractV1,
 ) -> PlironLaunchContractReportV1 {
+    let mut analyses = PlironAnalysisManagerV1::new(function);
+    run_pliron_launch_contract_check_with_analyses_v1(context, function, contract, &mut analyses)
+}
+
+pub(crate) fn run_pliron_launch_contract_check_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    contract: &PlironLaunchContractV1,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> PlironLaunchContractReportV1 {
     // This shared preflight bounds the closed ranked subset before invoking
     // Pliron recursive verification, and contains traversal/verifier panics. A
     // successful identity therefore bounds the streaming scan below without a
@@ -406,33 +411,36 @@ pub fn run_pliron_launch_contract_check_v1(
     if derive_pliron_ir_structural_identity_v1(context, function).is_err() {
         return structural_prerequisite_failure();
     }
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => return structural_prerequisite_failure(),
+    };
 
     let mut layout_count = 0_usize;
     let mut first_layout = None;
     let mut view_findings = Vec::new();
     let mut workgroup_by_origin = BTreeMap::<u64, u64>::new();
     let mut global_origins = BTreeMap::<u64, (String, Option<u64>)>::new();
-    for block in function.get_region(context).deref(context).iter(context) {
-        for operation in block.deref(context).iter(context) {
-            let operation = Operation::get_op_dyn(operation, context);
-            if let Some(layout) = operation.downcast_ref::<ExecutionLayoutOp>() {
-                layout_count += 1;
-                first_layout.get_or_insert_with(|| {
-                    (
-                        layout.global_extents(context),
-                        layout.workgroup_extents(context),
-                        layout.subgroup_size(context),
-                    )
-                });
-            } else if let Some(view) = operation.downcast_ref::<RankedViewOp>() {
-                fold_ranked_view(
-                    context,
-                    view,
-                    &mut workgroup_by_origin,
-                    &mut global_origins,
-                    &mut view_findings,
-                );
-            }
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        if let Some(layout) = operation.downcast_ref::<ExecutionLayoutOp>() {
+            layout_count += 1;
+            first_layout.get_or_insert_with(|| {
+                (
+                    layout.global_extents(context),
+                    layout.workgroup_extents(context),
+                    layout.subgroup_size(context),
+                )
+            });
+        } else if let Some(view) = operation.downcast_ref::<RankedViewOp>() {
+            fold_ranked_view(
+                context,
+                view,
+                &mut workgroup_by_origin,
+                &mut global_origins,
+                &mut view_findings,
+            );
         }
     }
     let mut findings = Vec::new();
@@ -648,6 +656,21 @@ pub fn require_pliron_launch_contract_before_lowering_v1(
     contract: &PlironLaunchContractV1,
 ) -> Result<PlironLaunchContractReportV1, PlironLaunchContractCheckErrorV1> {
     let report = run_pliron_launch_contract_check_v1(context, function, contract);
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(PlironLaunchContractCheckErrorV1 { report })
+    }
+}
+
+pub(crate) fn require_pliron_launch_contract_with_analyses_v1(
+    context: &Context,
+    function: &FuncOp,
+    contract: &PlironLaunchContractV1,
+    analyses: &mut PlironAnalysisManagerV1,
+) -> Result<PlironLaunchContractReportV1, PlironLaunchContractCheckErrorV1> {
+    let report =
+        run_pliron_launch_contract_check_with_analyses_v1(context, function, contract, analyses);
     if report.is_clean() {
         Ok(report)
     } else {

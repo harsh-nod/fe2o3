@@ -9,9 +9,8 @@ use dialect_kernel::{
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::ops::FuncOp,
     context::{Context, Ptr},
-    linked_list::ContainsLinkedList,
     operation::Operation,
 };
 
@@ -177,14 +176,21 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironBarrierReportV1 {
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => {
+            return report(PlironBarrierFindingV1::AnalysisIncomplete {
+                detail: "the bounded function inventory limit was exceeded".to_owned(),
+            });
+        }
+    };
     let mut has_barrier = false;
     let mut has_tensor = false;
-    for block in function.get_region(context).deref(context).iter(context) {
-        for operation in block.deref(context).iter(context) {
-            let operation = Operation::get_op_dyn(operation, context);
-            has_barrier |= operation.downcast_ref::<BarrierOp>().is_some();
-            has_tensor |= operation.downcast_ref::<TensorLayoutOp>().is_some();
-        }
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        has_barrier |= operation.downcast_ref::<BarrierOp>().is_some();
+        has_tensor |= operation.downcast_ref::<TensorLayoutOp>().is_some();
     }
     if !has_barrier && !has_tensor {
         return PlironBarrierReportV1 { findings: vec![] };
@@ -244,7 +250,7 @@ pub(crate) fn run_pliron_barrier_convergence_check_with_analyses_v1(
                 .to_owned(),
         });
     }
-    match summarize_all_barrier_paths(context, function) {
+    match summarize_all_barrier_paths(context, &inventory) {
         BarrierPathSummaryV1::Unique => PlironBarrierReportV1 { findings: vec![] },
         BarrierPathSummaryV1::Divergent {
             first_trace,
@@ -339,12 +345,11 @@ enum BarrierPathSummaryV1 {
     Incomplete(String),
 }
 
-fn summarize_all_barrier_paths(context: &Context, function: &FuncOp) -> BarrierPathSummaryV1 {
-    let blocks = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .collect::<Vec<_>>();
+fn summarize_all_barrier_paths(
+    context: &Context,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
+) -> BarrierPathSummaryV1 {
+    let blocks = inventory.blocks();
     let block_indices = blocks
         .iter()
         .enumerate()
@@ -357,7 +362,8 @@ fn summarize_all_barrier_paths(context: &Context, function: &FuncOp) -> BarrierP
     let mut summaries = vec![None; blocks.len()];
     match summarize_barrier_paths_from(
         context,
-        &blocks,
+        inventory,
+        blocks,
         &block_indices,
         0,
         &mut states,
@@ -448,6 +454,7 @@ fn merge_barrier_path_summary_v1(
 
 fn summarize_barrier_paths_from(
     context: &Context,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
     blocks: &[Ptr<BasicBlock>],
     block_indices: &HashMap<Ptr<BasicBlock>, usize>,
     block_index: usize,
@@ -482,7 +489,9 @@ fn summarize_barrier_paths_from(
             BarrierPathFailureV1::Incomplete(format!("block {block_index} has no terminator"))
         })?;
     let mut local = Vec::new();
-    for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
+    for site in inventory.block_operations(block_index) {
+        let operation_index = site.operation();
+        let operation = site.pointer();
         if operation == terminator {
             continue;
         }
@@ -529,6 +538,7 @@ fn summarize_barrier_paths_from(
     for successor in successors {
         let suffix = summarize_barrier_paths_from(
             context,
+            inventory,
             blocks,
             block_indices,
             successor,

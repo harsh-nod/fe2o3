@@ -18,11 +18,7 @@ use dialect_kernel::{
     InvocationIndexOp, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr, RankedAccessOp, RankedViewOp,
 };
 use pliron::{
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
-    common_traits::Named,
-    context::Context,
-    linked_list::ContainsLinkedList,
-    operation::Operation,
+    builtin::ops::FuncOp, common_traits::Named, context::Context, operation::Operation,
     value::Value,
 };
 
@@ -434,123 +430,122 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             detail: failure.to_string(),
         });
     }
+    let inventory = analyses
+        .function_inventory_handle()
+        .expect("race prerequisites prepare the function inventory");
     let mut effects = Vec::new();
     let mut has_global_fence = false;
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
-            let operation = Operation::get_op_dyn(operation, context);
-            if operation
-                .downcast_ref::<FenceOp>()
-                .is_some_and(|fence| fence.address_space(context) == Some(AddressSpaceAttr::Global))
-            {
-                has_global_fence = true;
-            }
-            if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
-                match effect.memory_space(context) {
-                    Some(MemorySpaceAttr::Global) => {}
-                    Some(MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup) => {
-                        return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                            detail: "a whole-allocation effect uses an unsupported non-global memory space"
-                                .to_owned(),
-                        });
-                    }
-                    None => {
-                        return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                            detail: "a whole-allocation effect has no memory space".to_owned(),
-                        });
-                    }
-                }
-                let Some(kind) = effect.kind(context) else {
-                    return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                        detail: "a whole-allocation effect has no access kind".to_owned(),
-                    });
-                };
-                let location = RankedRaceLocationV1 {
-                    block: block_index,
-                    operation: operation_index,
-                };
-                let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
-                effects.push(EffectV1 {
-                    identity: if allocation_origin == 0 {
-                        EffectIdentityV1::AllocationSite(location)
-                    } else {
-                        EffectIdentityV1::Allocation(allocation_origin)
-                    },
-                    view_name: format!("allocation origin {allocation_origin}"),
-                    kind,
-                    location,
-                    indices: vec![],
-                    atomic_scope: None,
-                    atomic_ordering: None,
-                    noalias_class: effect.noalias_class(context).unwrap_or(0),
-                    conservative: true,
-                });
-                continue;
-            }
-            let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-                continue;
-            };
-            let view = access.view(context);
-            let Some(definition) = view.defining_op() else {
-                return one(RankedRaceFindingV1::UnresolvedIndex {
-                    block: block_index,
-                    operation: operation_index,
-                    dimension: 0,
-                    value: "view-without-definition".to_owned(),
-                });
-            };
-            let definition = Operation::get_op_dyn(definition, context);
-            let Some(view_op) = definition.downcast_ref::<RankedViewOp>() else {
-                return one(RankedRaceFindingV1::UnresolvedIndex {
-                    block: block_index,
-                    operation: operation_index,
-                    dimension: 0,
-                    value: "foreign-view-definition".to_owned(),
-                });
-            };
-            match view_op.memory_space(context) {
-                Some(MemorySpaceAttr::Private) => continue,
-                // Workgroup effects are checked with barrier epochs by the
-                // mandatory workgroup-memory pass that follows this pass.
-                Some(MemorySpaceAttr::Workgroup) => continue,
-                Some(MemorySpaceAttr::Global) => {}
-                None => {
-                    return one(RankedRaceFindingV1::UnresolvedIndex {
-                        block: block_index,
-                        operation: operation_index,
-                        dimension: 0,
-                        value: "view-without-memory-space".to_owned(),
-                    });
-                }
-            }
-            let Some(kind) = access.kind(context) else {
-                return one(RankedRaceFindingV1::UnresolvedIndex {
-                    block: block_index,
-                    operation: operation_index,
-                    dimension: 0,
-                    value: "access-without-kind".to_owned(),
-                });
-            };
-            effects.push(EffectV1 {
-                identity: EffectIdentityV1::View(view),
-                view_name: view.unique_name(context).to_string(),
-                kind,
-                location: RankedRaceLocationV1 {
-                    block: block_index,
-                    operation: operation_index,
-                },
-                indices: access.indices(context),
-                atomic_scope: access.atomic_scope(context),
-                atomic_ordering: access.atomic_ordering(context),
-                noalias_class: view_op.noalias_class(context).unwrap_or(0),
-                conservative: false,
-            });
+    for site in inventory.operations() {
+        let block_index = site.block();
+        let operation_index = site.operation();
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        if operation
+            .downcast_ref::<FenceOp>()
+            .is_some_and(|fence| fence.address_space(context) == Some(AddressSpaceAttr::Global))
+        {
+            has_global_fence = true;
         }
+        if let Some(effect) = operation.downcast_ref::<AllocationEffectOp>() {
+            match effect.memory_space(context) {
+                Some(MemorySpaceAttr::Global) => {}
+                Some(MemorySpaceAttr::Private | MemorySpaceAttr::Workgroup) => {
+                    return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                        detail:
+                            "a whole-allocation effect uses an unsupported non-global memory space"
+                                .to_owned(),
+                    });
+                }
+                None => {
+                    return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                        detail: "a whole-allocation effect has no memory space".to_owned(),
+                    });
+                }
+            }
+            let Some(kind) = effect.kind(context) else {
+                return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                    detail: "a whole-allocation effect has no access kind".to_owned(),
+                });
+            };
+            let location = RankedRaceLocationV1 {
+                block: block_index,
+                operation: operation_index,
+            };
+            let allocation_origin = effect.allocation_origin(context).unwrap_or(0);
+            effects.push(EffectV1 {
+                identity: if allocation_origin == 0 {
+                    EffectIdentityV1::AllocationSite(location)
+                } else {
+                    EffectIdentityV1::Allocation(allocation_origin)
+                },
+                view_name: format!("allocation origin {allocation_origin}"),
+                kind,
+                location,
+                indices: vec![],
+                atomic_scope: None,
+                atomic_ordering: None,
+                noalias_class: effect.noalias_class(context).unwrap_or(0),
+                conservative: true,
+            });
+            continue;
+        }
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        let view = access.view(context);
+        let Some(definition) = view.defining_op() else {
+            return one(RankedRaceFindingV1::UnresolvedIndex {
+                block: block_index,
+                operation: operation_index,
+                dimension: 0,
+                value: "view-without-definition".to_owned(),
+            });
+        };
+        let definition = Operation::get_op_dyn(definition, context);
+        let Some(view_op) = definition.downcast_ref::<RankedViewOp>() else {
+            return one(RankedRaceFindingV1::UnresolvedIndex {
+                block: block_index,
+                operation: operation_index,
+                dimension: 0,
+                value: "foreign-view-definition".to_owned(),
+            });
+        };
+        match view_op.memory_space(context) {
+            Some(MemorySpaceAttr::Private) => continue,
+            // Workgroup effects are checked with barrier epochs by the
+            // mandatory workgroup-memory pass that follows this pass.
+            Some(MemorySpaceAttr::Workgroup) => continue,
+            Some(MemorySpaceAttr::Global) => {}
+            None => {
+                return one(RankedRaceFindingV1::UnresolvedIndex {
+                    block: block_index,
+                    operation: operation_index,
+                    dimension: 0,
+                    value: "view-without-memory-space".to_owned(),
+                });
+            }
+        }
+        let Some(kind) = access.kind(context) else {
+            return one(RankedRaceFindingV1::UnresolvedIndex {
+                block: block_index,
+                operation: operation_index,
+                dimension: 0,
+                value: "access-without-kind".to_owned(),
+            });
+        };
+        effects.push(EffectV1 {
+            identity: EffectIdentityV1::View(view),
+            view_name: view.unique_name(context).to_string(),
+            kind,
+            location: RankedRaceLocationV1 {
+                block: block_index,
+                operation: operation_index,
+            },
+            indices: access.indices(context),
+            atomic_scope: access.atomic_scope(context),
+            atomic_ordering: access.atomic_ordering(context),
+            noalias_class: view_op.noalias_class(context).unwrap_or(0),
+            conservative: false,
+        });
     }
 
     for effect in &mut effects {
@@ -604,10 +599,10 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
         });
     };
 
-    let invocation_bounds = invocation_upper_bounds_by_block(context, function);
+    let invocation_bounds = invocation_upper_bounds_by_block(context, function, &inventory);
     if symbolically_proves_disjoint(
         &effects,
-        &sparse,
+        sparse,
         &launch_extents,
         invocation_bounds.as_deref(),
     ) || presburger_proves_no_conflicts(&effects, sparse, presburger, &launch_extents)
@@ -1212,12 +1207,9 @@ fn effect_affine_map_is_injective(
 fn invocation_upper_bounds_by_block(
     context: &Context,
     function: &FuncOp,
+    inventory: &crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1,
 ) -> Option<Vec<[Option<u64>; MAX_RANKED_MEMORY_RANK]>> {
-    let blocks = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .collect::<Vec<_>>();
+    let blocks = inventory.blocks();
     let indices = blocks
         .iter()
         .enumerate()

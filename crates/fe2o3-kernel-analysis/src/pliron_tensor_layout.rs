@@ -18,15 +18,15 @@ use fe2o3_kernel_ir::{
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::ops::FuncOp,
     context::{Context, Ptr},
-    linked_list::ContainsLinkedList,
     operation::Operation,
     value::Value,
 };
 
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_barrier::trace_failure_detail;
+use crate::pliron_function_inventory::BoundedPlironFunctionInventoryV1;
 use crate::pliron_invocation_trace::{
     PlironExecutionLayoutV1, PlironInvocationTraceV1, PlironTraceEventV1, PlironTraceFailureV1,
     PlironTraceLocationV1,
@@ -117,45 +117,40 @@ struct TensorDataflowSiteV1 {
     contract: fe2o3_kernel_ir::TensorLayoutContractV1,
 }
 
-pub(crate) fn analyze_pliron_tensor_layout_dataflow_v1(
+pub(crate) fn analyze_pliron_tensor_layout_dataflow_with_inventory_v1(
     context: &Context,
-    function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
 ) -> Result<PlironTensorLayoutDataflowAnalysisV1, PlironTensorLayoutDataflowFailureV1> {
     let mut sites = Vec::new();
     let mut operation_count = 0usize;
-    for (block, block_ref) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation, operation_ref) in block_ref.deref(context).iter(context).enumerate() {
-            operation_count = operation_count.saturating_add(1);
-            if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
-                return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
-            }
-            let operation_ref = Operation::get_op_dyn(operation_ref, context);
-            let Some(tensor) = operation_ref.downcast_ref::<TensorLayoutOp>() else {
-                continue;
-            };
-            let roots = tensor.dataflow_roots(context).map_err(|_| {
-                PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation }
-            })?;
-            let Some(roots) = roots else {
-                continue;
-            };
-            let contract = tensor.contract(context).map_err(|_| {
-                PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation }
-            })?;
-            if sites.len() == MAX_PLIRON_TENSOR_DATAFLOW_ROOTS_V1 {
-                return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
-            }
-            sites.push(TensorDataflowSiteV1 {
-                location: PlironTensorLayoutLocationV1 { block, operation },
-                roots,
-                contract,
-            });
+    for site in inventory.operations() {
+        let block = site.block();
+        let operation = site.operation();
+        operation_count = operation_count.saturating_add(1);
+        if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
+            return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
         }
+        let operation_ref = Operation::get_op_dyn(site.pointer(), context);
+        let Some(tensor) = operation_ref.downcast_ref::<TensorLayoutOp>() else {
+            continue;
+        };
+        let roots = tensor
+            .dataflow_roots(context)
+            .map_err(|_| PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation })?;
+        let Some(roots) = roots else {
+            continue;
+        };
+        let contract = tensor
+            .contract(context)
+            .map_err(|_| PlironTensorLayoutDataflowFailureV1::MalformedSite { block, operation })?;
+        if sites.len() == MAX_PLIRON_TENSOR_DATAFLOW_ROOTS_V1 {
+            return Err(PlironTensorLayoutDataflowFailureV1::ResourceLimit);
+        }
+        sites.push(TensorDataflowSiteV1 {
+            location: PlironTensorLayoutLocationV1 { block, operation },
+            roots,
+            contract,
+        });
     }
 
     let mut facts = BTreeMap::new();
@@ -564,64 +559,64 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
 ) -> PlironTensorLayoutReportV1 {
+    analyses.prepare_function_inventory(context, function);
+    let inventory = match analyses.function_inventory_handle() {
+        Ok(inventory) => inventory,
+        Err(_) => return report(vec![PlironTensorLayoutFindingV1::ResourceLimitExceeded]),
+    };
     let mut findings = Vec::new();
     let mut operation_count = 0;
     let mut tensor_sites = Vec::new();
-    for (block_index, block) in function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .enumerate()
-    {
-        for (operation_index, operation) in block.deref(context).iter(context).enumerate() {
-            operation_count += 1;
-            if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1
-                || findings.len() >= MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1
-            {
+    for site in inventory.operations() {
+        let block_index = site.block();
+        let operation_index = site.operation();
+        operation_count += 1;
+        if operation_count > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1
+            || findings.len() >= MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1
+        {
+            findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
+            return report(findings);
+        }
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(layout) = operation.downcast_ref::<TensorLayoutOp>() else {
+            continue;
+        };
+        let contract = layout.contract(context);
+        tensor_sites.push((
+            block_index,
+            operation_index,
+            layout.active_lanes(context),
+            contract
+                .as_ref()
+                .ok()
+                .map(|contract| u64::from(contract.subgroup_width)),
+        ));
+        let Ok(contract) = contract else {
+            findings.push(PlironTensorLayoutFindingV1::MalformedContract {
+                block: block_index,
+                operation: operation_index,
+            });
+            continue;
+        };
+        if layout.convergence(context) != Some(TensorConvergenceAttr::UniformSubgroup) {
+            findings.push(PlironTensorLayoutFindingV1::ConvergenceMismatch {
+                block: block_index,
+                operation: operation_index,
+                actual: layout
+                    .convergence(context)
+                    .unwrap_or(TensorConvergenceAttr::Opaque),
+            });
+        }
+        for finding in verify_tensor_layout_contract_v1(&contract) {
+            if findings.len() >= MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
                 findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
                 return report(findings);
             }
-            let operation = Operation::get_op_dyn(operation, context);
-            let Some(layout) = operation.downcast_ref::<TensorLayoutOp>() else {
-                continue;
-            };
-            let contract = layout.contract(context);
-            tensor_sites.push((
-                block_index,
-                operation_index,
-                layout.active_lanes(context),
-                contract
-                    .as_ref()
-                    .ok()
-                    .map(|contract| u64::from(contract.subgroup_width)),
-            ));
-            let Ok(contract) = contract else {
-                findings.push(PlironTensorLayoutFindingV1::MalformedContract {
-                    block: block_index,
-                    operation: operation_index,
-                });
-                continue;
-            };
-            if layout.convergence(context) != Some(TensorConvergenceAttr::UniformSubgroup) {
-                findings.push(PlironTensorLayoutFindingV1::ConvergenceMismatch {
-                    block: block_index,
-                    operation: operation_index,
-                    actual: layout
-                        .convergence(context)
-                        .unwrap_or(TensorConvergenceAttr::Opaque),
-                });
-            }
-            for finding in verify_tensor_layout_contract_v1(&contract) {
-                if findings.len() >= MAX_PLIRON_TENSOR_LAYOUT_FINDINGS_V1 {
-                    findings.push(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
-                    return report(findings);
-                }
-                findings.push(PlironTensorLayoutFindingV1::Contract {
-                    block: block_index,
-                    operation: operation_index,
-                    finding,
-                });
-            }
+            findings.push(PlironTensorLayoutFindingV1::Contract {
+                block: block_index,
+                operation: operation_index,
+                finding,
+            });
         }
     }
     analyses.prepare_tensor_layout_dataflow(context, function);
@@ -697,7 +692,7 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
         analyses.prepare_exact_trace(context, function);
         match analyses.exact_trace() {
             Ok(traces) => {
-                if let Some(finding) = exact_subgroup_trace_finding(&traces, layout.subgroup_size) {
+                if let Some(finding) = exact_subgroup_trace_finding(traces, layout.subgroup_size) {
                     findings.push(finding);
                 }
             }
@@ -713,6 +708,7 @@ pub(crate) fn run_pliron_tensor_layout_check_with_analyses_v1(
             ) => match symbolic_subgroup_convergence(
                 context,
                 function,
+                &inventory,
                 layout,
                 analyses,
                 &tensor_sites
@@ -857,6 +853,7 @@ impl TensorControlRegionV1 {
 fn symbolic_subgroup_convergence(
     context: &Context,
     function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
     layout: PlironExecutionLayoutV1,
     analyses: &mut PlironAnalysisManagerV1,
     tensor_sites: &[(usize, usize)],
@@ -885,12 +882,8 @@ fn symbolic_subgroup_convergence(
             detail: format!("sparse predicate analysis failed: {failure:?}"),
         },
     })?;
-    let uniformity = analyze_pliron_subgroup_uniformity(context, function, layout)?;
-    let blocks = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .collect::<Vec<_>>();
+    let uniformity = analyze_pliron_subgroup_uniformity(context, function, inventory, layout)?;
+    let blocks = inventory.blocks();
     if blocks.is_empty() || blocks.len() > MAX_PLIRON_TENSOR_LAYOUT_OPERATIONS_V1 {
         return Err(PlironTensorLayoutFindingV1::ResourceLimitExceeded);
     }
@@ -934,7 +927,7 @@ fn symbolic_subgroup_convergence(
                 classify_subgroup_predicate(
                     entry,
                     layout,
-                    &sparse,
+                    sparse,
                     &uniformity,
                     branch.lhs(context),
                     branch.rhs(context),
@@ -963,7 +956,7 @@ fn symbolic_subgroup_convergence(
                 classify_subgroup_predicate(
                     entry,
                     layout,
-                    &sparse,
+                    sparse,
                     &uniformity,
                     branch.lhs(context),
                     branch.rhs(context),
@@ -982,7 +975,7 @@ fn symbolic_subgroup_convergence(
                 classify_subgroup_equality(
                     entry,
                     layout,
-                    &sparse,
+                    sparse,
                     &uniformity,
                     branch.lhs(context),
                     branch.rhs(context),
@@ -1011,7 +1004,7 @@ fn symbolic_subgroup_convergence(
                 classify_subgroup_equality(
                     entry,
                     layout,
-                    &sparse,
+                    sparse,
                     &uniformity,
                     branch.lhs(context),
                     branch.rhs(context),
@@ -1332,6 +1325,7 @@ fn affine_is_total_over_layout(
 fn analyze_pliron_subgroup_uniformity(
     context: &Context,
     function: &FuncOp,
+    inventory: &BoundedPlironFunctionInventoryV1,
     layout: PlironExecutionLayoutV1,
 ) -> Result<PlironSubgroupUniformityV1, PlironTensorLayoutFindingV1> {
     let entry = function.get_entry_block(context);
@@ -1340,7 +1334,7 @@ fn analyze_pliron_subgroup_uniformity(
     let mut dependents = HashMap::<Value, Vec<Value>>::new();
     let mut block_arguments = HashMap::<Ptr<BasicBlock>, Vec<Value>>::new();
     let mut collection_work = 0_usize;
-    for block in function.get_region(context).deref(context).iter(context) {
+    for (block_index, block) in inventory.blocks().iter().copied().enumerate() {
         let argument_count = block.deref(context).get_num_arguments();
         charge_uniformity_collection(&mut collection_work, argument_count)?;
         ensure_uniformity_value_capacity(definitions.len(), argument_count)?;
@@ -1357,7 +1351,8 @@ fn analyze_pliron_subgroup_uniformity(
             );
         }
         block_arguments.insert(block, arguments);
-        for operation in block.deref(context).iter(context) {
+        for site in inventory.block_operations(block_index) {
+            let operation = site.pointer();
             let dynamic = Operation::get_op_dyn(operation, context);
             let raw = operation.deref(context);
             let result_count = raw.get_num_results();
@@ -1416,7 +1411,7 @@ fn analyze_pliron_subgroup_uniformity(
             }
         }
     }
-    for block in function.get_region(context).deref(context).iter(context) {
+    for block in inventory.blocks() {
         let Some(terminator) = block.deref(context).get_terminator(context) else {
             continue;
         };
