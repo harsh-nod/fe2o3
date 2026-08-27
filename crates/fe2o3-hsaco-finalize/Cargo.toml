@@ -33,8 +33,8 @@ test = false
 bench = false
 
 [[bin]]
-name = "fe2o3-worker-v2-hsaco-fixture"
-path = "tests/fixtures/worker_v2_hsaco_fixture.rs"
+name = "fe2o3-worker-v3-hsaco-fixture"
+path = "tests/fixtures/worker_v3_hsaco_fixture.rs"
 test = false
 bench = false
 

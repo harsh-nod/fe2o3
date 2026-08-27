@@ -37,8 +37,10 @@ use crate::{
 const PRODUCTION_GFX942_TARGET: &str = "gfx942:xnack-";
 const PRODUCTION_GFX950_TARGET: &str = "gfx950:xnack-";
 const REQUIRED_WAVEFRONT_SIZE: u32 = 64;
-const POLICY_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-POLICY/V1\0";
-const RESPONSE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0";
+// These private codec domains retain historical V2 bytes so existing identities remain stable.
+// The embedded version is a serialization label and grants no retired V2 admission authority.
+const FROZEN_POLICY_IDENTITY_CODEC_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-POLICY/V1\0";
+const FROZEN_RESPONSE_IDENTITY_CODEC_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0";
 const PROTECTED_V3_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-RAW-HSACO-INSPECTION/V1\0";
 const PROTECTED_DESCRIPTOR_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/AMDHSA-DESCRIPTORS/V1\0";
@@ -47,12 +49,12 @@ const PROTECTED_RESOURCES_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/KERNEL-
 
 /// One exact kernel entry/descriptor pair independently observed in AMDHSA metadata and ELF.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct ObservedWorkerV2KernelSymbolsV1 {
+pub struct ObservedWorkerKernelSymbolsV1 {
     entry: String,
     descriptor: String,
 }
 
-impl ObservedWorkerV2KernelSymbolsV1 {
+impl ObservedWorkerKernelSymbolsV1 {
     pub fn entry(&self) -> &str {
         &self.entry
     }
@@ -64,13 +66,13 @@ impl ObservedWorkerV2KernelSymbolsV1 {
 
 /// Exact fixed launch properties required from every inspected production kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WorkerV2RawLaunchContractV1 {
+pub struct WorkerV3LaunchContractV1 {
     required_workgroup_size: [u32; 3],
     max_flat_workgroup_size: u32,
     wavefront_size: u32,
 }
 
-impl WorkerV2RawLaunchContractV1 {
+impl WorkerV3LaunchContractV1 {
     const PRODUCTION_V1: Self = Self {
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
@@ -92,9 +94,9 @@ impl WorkerV2RawLaunchContractV1 {
 
 /// Stable identity of policy facts derived from retained evidence and raw-HSACO observations.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct WorkerV2RawHsacoPolicyIdentityV1([u8; 32]);
+pub struct WorkerV3HsacoPolicyIdentityV1([u8; 32]);
 
-impl WorkerV2RawHsacoPolicyIdentityV1 {
+impl WorkerV3HsacoPolicyIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -106,19 +108,19 @@ impl WorkerV2RawHsacoPolicyIdentityV1 {
 /// come from independent raw-HSACO inspection. The manifest and cooperative handoff record claims;
 /// neither authenticates compiler authorship.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkerV2RawHsacoPolicyV1 {
-    identity: WorkerV2RawHsacoPolicyIdentityV1,
+pub struct WorkerV3HsacoPolicyV1 {
+    identity: WorkerV3HsacoPolicyIdentityV1,
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
     compiler_envelope: CompilerFfiEnvelopeIdentityV1,
     symbol_manifest: CompilerModuleSymbolManifestV1,
-    observed_kernels: Vec<ObservedWorkerV2KernelSymbolsV1>,
+    observed_kernels: Vec<ObservedWorkerKernelSymbolsV1>,
     expected_defined_symbols: Vec<String>,
-    launch: WorkerV2RawLaunchContractV1,
+    launch: WorkerV3LaunchContractV1,
 }
 
-impl WorkerV2RawHsacoPolicyV1 {
-    pub const fn identity(&self) -> WorkerV2RawHsacoPolicyIdentityV1 {
+impl WorkerV3HsacoPolicyV1 {
+    pub const fn identity(&self) -> WorkerV3HsacoPolicyIdentityV1 {
         self.identity
     }
 
@@ -138,7 +140,7 @@ impl WorkerV2RawHsacoPolicyV1 {
         &self.symbol_manifest
     }
 
-    pub fn observed_kernels(&self) -> &[ObservedWorkerV2KernelSymbolsV1] {
+    pub fn observed_kernels(&self) -> &[ObservedWorkerKernelSymbolsV1] {
         &self.observed_kernels
     }
 
@@ -146,7 +148,7 @@ impl WorkerV2RawHsacoPolicyV1 {
         &self.expected_defined_symbols
     }
 
-    pub const fn launch(&self) -> WorkerV2RawLaunchContractV1 {
+    pub const fn launch(&self) -> WorkerV3LaunchContractV1 {
         self.launch
     }
 
@@ -162,11 +164,11 @@ pub enum CanonicalDescriptorSectionObservationV1 {
     PresentButNotFinalizedByThisInspection,
 }
 
-/// SHA-256 identity of the exact canonical sealed Worker V2 response bytes.
+/// SHA-256 identity of the exact canonical sealed response bytes from the versioned worker codec.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct SealedWorkerV2ResponseIdentityV1([u8; 32]);
+pub struct SealedWorkerResponseIdentityV1([u8; 32]);
 
-impl SealedWorkerV2ResponseIdentityV1 {
+impl SealedWorkerResponseIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -174,13 +176,12 @@ impl SealedWorkerV2ResponseIdentityV1 {
 
 /// Stable identity of one strict-V3 protected raw-HSACO inspection.
 ///
-/// This transcript is separate from both unprotected and protected V2 inspection. It retains the
-/// complete V3 transaction, semantic handoff, compiler closure, worker exchange, and raw-HSACO
-/// observations without converting any of them to V2 evidence.
+/// It retains the complete V3 transaction, semantic handoff, compiler closure, worker exchange,
+/// and HSACO observations without projecting them into a legacy admission route.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct InspectedProtectedRawWorkerV3HsacoIdentityV1([u8; 32]);
+pub struct InspectedProtectedWorkerV3HsacoIdentityV1([u8; 32]);
 
-impl InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+impl InspectedProtectedWorkerV3HsacoIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -192,19 +193,19 @@ impl InspectedProtectedRawWorkerV3HsacoIdentityV1 {
 /// not authenticate the compiler, prove semantic correctness, or grant publication, load, or
 /// launch authority.
 #[derive(Debug, Eq, PartialEq)]
-pub struct InspectedProtectedRawWorkerV3HsacoV1 {
-    identity: InspectedProtectedRawWorkerV3HsacoIdentityV1,
-    response_identity: SealedWorkerV2ResponseIdentityV1,
+pub struct InspectedProtectedWorkerV3HsacoV1 {
+    identity: InspectedProtectedWorkerV3HsacoIdentityV1,
+    response_identity: SealedWorkerResponseIdentityV1,
     descriptor_section: CanonicalDescriptorSectionObservationV1,
     descriptor_observation_preimage: Vec<u8>,
     abi_observation_preimage: Vec<u8>,
     resource_observation_preimage: Vec<u8>,
-    policy: WorkerV2RawHsacoPolicyV1,
+    policy: WorkerV3HsacoPolicyV1,
     source: InertProtectedFirstBuildWorkerV3EvidenceV1,
 }
 
-impl InspectedProtectedRawWorkerV3HsacoV1 {
-    pub const fn identity(&self) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+impl InspectedProtectedWorkerV3HsacoV1 {
+    pub const fn identity(&self) -> InspectedProtectedWorkerV3HsacoIdentityV1 {
         self.identity
     }
 
@@ -275,7 +276,7 @@ impl InspectedProtectedRawWorkerV3HsacoV1 {
         self.source.exact_replay().response().request_identity()
     }
 
-    pub const fn response_identity(&self) -> SealedWorkerV2ResponseIdentityV1 {
+    pub const fn response_identity(&self) -> SealedWorkerResponseIdentityV1 {
         self.response_identity
     }
 
@@ -299,7 +300,7 @@ impl InspectedProtectedRawWorkerV3HsacoV1 {
         self.policy.code_object_version()
     }
 
-    pub const fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
+    pub const fn policy(&self) -> &WorkerV3HsacoPolicyV1 {
         &self.policy
     }
 
@@ -382,7 +383,7 @@ impl InspectedProtectedRawWorkerV3HsacoV1 {
 /// Why sealed production Worker V3 evidence failed independent raw-HSACO inspection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum WorkerV3RawHsacoInspectionError {
+pub enum WorkerV3HsacoInspectionError {
     LineageMismatch(&'static str),
     UnsupportedTarget(String),
     LinkPolicy,
@@ -431,7 +432,7 @@ pub enum WorkerV3RawHsacoInspectionError {
     StrictV3DescriptorLaunchContract(&'static str),
 }
 
-impl fmt::Display for WorkerV3RawHsacoInspectionError {
+impl fmt::Display for WorkerV3HsacoInspectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LineageMismatch(field) => {
@@ -525,7 +526,7 @@ impl fmt::Display for WorkerV3RawHsacoInspectionError {
     }
 }
 
-impl Error for WorkerV3RawHsacoInspectionError {
+impl Error for WorkerV3HsacoInspectionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::HsacoBinding(error) => Some(error),
@@ -537,19 +538,19 @@ impl Error for WorkerV3RawHsacoInspectionError {
 /// Consumes native strict-V3 first-build evidence under its descriptor-bound production contract.
 ///
 /// The complete V3 transaction and outer semantic handoff remain owned by the result. This route
-/// neither constructs protected V2 evidence nor falls back to a V1/V2 admission entry. When the
-/// raw artifact has a canonical descriptor table, its exact physically cross-checked launch facts
-/// define the inspection policy; callers cannot inject or weaken those facts.
-pub fn inspect_protected_production_v1_worker_v3_raw_hsaco_v1(
+/// has no legacy admission fallback. When the artifact has a canonical descriptor table, its exact
+/// physically cross-checked launch facts define the inspection policy; callers cannot inject or
+/// weaken those facts.
+pub fn inspect_protected_worker_v3_hsaco_v1(
     source: InertProtectedFirstBuildWorkerV3EvidenceV1,
-) -> Result<InspectedProtectedRawWorkerV3HsacoV1, WorkerV3RawHsacoInspectionError> {
+) -> Result<InspectedProtectedWorkerV3HsacoV1, WorkerV3HsacoInspectionError> {
     validate_protected_v3_lineage(&source)?;
     let launch = strict_v3_launch_contract(&source)?;
-    let raw = inspect_worker_v3_raw_hsaco_v1(&source, launch)?;
+    let raw = inspect_worker_v3_hsaco_v1(&source, launch)?;
     let response_identity =
         calculate_response_identity(source.exact_replay().response().canonical_bytes());
     let identity = calculate_protected_v3_inspection_identity(&source, &raw, response_identity);
-    Ok(InspectedProtectedRawWorkerV3HsacoV1 {
+    Ok(InspectedProtectedWorkerV3HsacoV1 {
         identity,
         response_identity,
         descriptor_section: raw.descriptor_section,
@@ -563,17 +564,17 @@ pub fn inspect_protected_production_v1_worker_v3_raw_hsaco_v1(
 
 fn strict_v3_launch_contract(
     source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
-) -> Result<WorkerV2RawLaunchContractV1, WorkerV3RawHsacoInspectionError> {
+) -> Result<WorkerV3LaunchContractV1, WorkerV3HsacoInspectionError> {
     let inspection = match crate::inspect_unfinalized(source.output_bytes()) {
         Ok(inspection) => inspection,
         // Preserve the existing descriptive inspection stage for legacy tests that deliberately
         // omit compiler descriptor-source evidence. Finalization still rejects those artifacts.
         Err(FinalizationError::MissingDescriptorSection) => {
-            return Ok(WorkerV2RawLaunchContractV1::PRODUCTION_V1);
+            return Ok(WorkerV3LaunchContractV1::PRODUCTION_V1);
         }
         Err(_) => {
             return Err(
-                WorkerV3RawHsacoInspectionError::StrictV3DescriptorLaunchContract(
+                WorkerV3HsacoInspectionError::StrictV3DescriptorLaunchContract(
                     "embedded descriptor inspection",
                 ),
             );
@@ -582,12 +583,12 @@ fn strict_v3_launch_contract(
     let mut kernels = inspection.descriptor_table().kernels().iter();
     let first = kernels
         .next()
-        .ok_or(WorkerV3RawHsacoInspectionError::StrictV3DescriptorLaunchContract("kernel set"))?;
+        .ok_or(WorkerV3HsacoInspectionError::StrictV3DescriptorLaunchContract("kernel set"))?;
     let expected = strict_v3_kernel_launch_contract(first)?;
     for kernel in kernels {
         if strict_v3_kernel_launch_contract(kernel)? != expected {
             return Err(
-                WorkerV3RawHsacoInspectionError::StrictV3DescriptorLaunchContract(
+                WorkerV3HsacoInspectionError::StrictV3DescriptorLaunchContract(
                     "heterogeneous per-kernel launch policy",
                 ),
             );
@@ -598,27 +599,27 @@ fn strict_v3_launch_contract(
 
 fn strict_v3_kernel_launch_contract(
     kernel: &KernelDescriptorV1,
-) -> Result<WorkerV2RawLaunchContractV1, WorkerV3RawHsacoInspectionError> {
+) -> Result<WorkerV3LaunchContractV1, WorkerV3HsacoInspectionError> {
     let block = match kernel.launch().block_size() {
         BlockSizeV1::Exact(block) => block,
         BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
             return Err(
-                WorkerV3RawHsacoInspectionError::StrictV3DescriptorLaunchContract(
+                WorkerV3HsacoInspectionError::StrictV3DescriptorLaunchContract(
                     "non-exact block size",
                 ),
             );
         }
     };
-    Ok(WorkerV2RawLaunchContractV1 {
+    Ok(WorkerV3LaunchContractV1 {
         required_workgroup_size: [block.x(), block.y(), block.z()],
         max_flat_workgroup_size: kernel.launch().max_flat_workgroup_size(),
         wavefront_size: REQUIRED_WAVEFRONT_SIZE,
     })
 }
 
-pub(crate) struct SharedRawWorkerV2HsacoInspectionV1 {
+pub(crate) struct SharedWorkerV3HsacoInspectionV1 {
     pub(crate) descriptor_section: CanonicalDescriptorSectionObservationV1,
-    pub(crate) policy: WorkerV2RawHsacoPolicyV1,
+    pub(crate) policy: WorkerV3HsacoPolicyV1,
     pub(crate) descriptor_identity: [u8; 32],
     pub(crate) abi_identity: [u8; 32],
     pub(crate) resource_identity: [u8; 32],
@@ -627,19 +628,19 @@ pub(crate) struct SharedRawWorkerV2HsacoInspectionV1 {
     pub(crate) resource_observation_preimage: Vec<u8>,
 }
 
-fn inspect_worker_v3_raw_hsaco_v1(
+fn inspect_worker_v3_hsaco_v1(
     source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
-    launch: WorkerV2RawLaunchContractV1,
-) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV3RawHsacoInspectionError> {
+    launch: WorkerV3LaunchContractV1,
+) -> Result<SharedWorkerV3HsacoInspectionV1, WorkerV3HsacoInspectionError> {
     let target = source.plan().target();
     if !target_is_supported(target) {
-        return Err(WorkerV3RawHsacoInspectionError::UnsupportedTarget(
+        return Err(WorkerV3HsacoInspectionError::UnsupportedTarget(
             target.to_string(),
         ));
     }
     let (code_object_version, _) = decode_link_options(source.plan().options())
-        .map_err(|_| WorkerV3RawHsacoInspectionError::LinkPolicy)?;
-    inspect_worker_v2_raw_hsaco_preimage_v1(
+        .map_err(|_| WorkerV3HsacoInspectionError::LinkPolicy)?;
+    inspect_worker_v3_hsaco_preimage_v1(
         target,
         code_object_version,
         source.handoff().module_handoff().symbol_manifest().clone(),
@@ -651,50 +652,50 @@ fn inspect_worker_v3_raw_hsaco_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
+pub(crate) fn inspect_worker_v3_hsaco_preimage_v1(
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
     symbol_manifest: CompilerModuleSymbolManifestV1,
     compiler_envelope: CompilerFfiEnvelopeIdentityV1,
     output_identity: ContentIdentityV1,
     exact_bytes: &[u8],
-    launch: WorkerV2RawLaunchContractV1,
-) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV3RawHsacoInspectionError> {
+    launch: WorkerV3LaunchContractV1,
+) -> Result<SharedWorkerV3HsacoInspectionV1, WorkerV3HsacoInspectionError> {
     if !target_is_supported(target) {
-        return Err(WorkerV3RawHsacoInspectionError::UnsupportedTarget(
+        return Err(WorkerV3HsacoInspectionError::UnsupportedTarget(
             target.to_string(),
         ));
     }
     if !output_identity.matches(exact_bytes) {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "linked output identity",
         ));
     }
 
     let inspected = inspect_and_bind_kernel_descriptors(exact_bytes)
-        .map_err(WorkerV3RawHsacoInspectionError::HsacoBinding)?;
+        .map_err(WorkerV3HsacoInspectionError::HsacoBinding)?;
     let metadata = inspected.inspection();
     if metadata.target() != target.as_amd_target_id() {
-        return Err(WorkerV3RawHsacoInspectionError::TargetMismatch {
+        return Err(WorkerV3HsacoInspectionError::TargetMismatch {
             expected: target.to_string(),
             actual: metadata.target().to_string(),
         });
     }
     let actual_code_object_version = map_code_object_version(metadata.code_object_version());
     if actual_code_object_version != code_object_version {
-        return Err(WorkerV3RawHsacoInspectionError::CodeObjectVersionMismatch {
+        return Err(WorkerV3HsacoInspectionError::CodeObjectVersionMismatch {
             expected: code_object_version,
             actual: actual_code_object_version,
         });
     }
     if metadata.kernels().is_empty() {
-        return Err(WorkerV3RawHsacoInspectionError::MissingKernel);
+        return Err(WorkerV3HsacoInspectionError::MissingKernel);
     }
 
     let mut observed_kernels: Vec<_> = metadata
         .kernels()
         .iter()
-        .map(|kernel| ObservedWorkerV2KernelSymbolsV1 {
+        .map(|kernel| ObservedWorkerKernelSymbolsV1 {
             entry: kernel.name().to_owned(),
             descriptor: kernel.symbol().to_owned(),
         })
@@ -708,7 +709,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         .symbols(CompilerModuleSymbolRoleV1::KernelEntry)
         .collect();
     if observed_entries != manifest_entries {
-        return Err(WorkerV3RawHsacoInspectionError::KernelEntryRoleMismatch);
+        return Err(WorkerV3HsacoInspectionError::KernelEntryRoleMismatch);
     }
     let mut observed_descriptors: Vec<&str> = observed_kernels
         .iter()
@@ -719,18 +720,16 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         .symbols(CompilerModuleSymbolRoleV1::KernelDescriptor)
         .collect();
     if observed_descriptors != manifest_descriptors {
-        return Err(WorkerV3RawHsacoInspectionError::KernelDescriptorRoleMismatch);
+        return Err(WorkerV3HsacoInspectionError::KernelDescriptorRoleMismatch);
     }
 
     let expected_symbols = expected_defined_symbols(&symbol_manifest);
     let actual_defined_symbols = inspect_defined_global_symbols(exact_bytes)?;
     if actual_defined_symbols != expected_symbols {
-        return Err(
-            WorkerV3RawHsacoInspectionError::DefinedSymbolClosureMismatch {
-                expected: expected_symbols,
-                actual: actual_defined_symbols,
-            },
-        );
+        return Err(WorkerV3HsacoInspectionError::DefinedSymbolClosureMismatch {
+            expected: expected_symbols,
+            actual: actual_defined_symbols,
+        });
     }
     for (kernel, binding) in metadata.kernels().iter().zip(inspected.bindings()) {
         if kernel.required_workgroup_size() != Some(launch.required_workgroup_size()) {
@@ -779,7 +778,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         &resource_observation_preimage,
     );
     let expected_defined_symbols = expected_defined_symbols(&symbol_manifest);
-    let policy = WorkerV2RawHsacoPolicyV1 {
+    let policy = WorkerV3HsacoPolicyV1 {
         identity: calculate_policy_identity(
             target,
             code_object_version,
@@ -797,7 +796,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         expected_defined_symbols,
         launch,
     };
-    Ok(SharedRawWorkerV2HsacoInspectionV1 {
+    Ok(SharedWorkerV3HsacoInspectionV1 {
         descriptor_section,
         policy,
         descriptor_identity,
@@ -818,11 +817,11 @@ fn target_is_supported(target: DeviceTargetV1) -> bool {
 }
 
 fn required_workgroup_size_mismatch(
-    launch: WorkerV2RawLaunchContractV1,
+    launch: WorkerV3LaunchContractV1,
     kernel: &str,
     actual: Option<[u32; 3]>,
-) -> WorkerV3RawHsacoInspectionError {
-    WorkerV3RawHsacoInspectionError::ProductionV1RequiredWorkgroupSizeMismatch {
+) -> WorkerV3HsacoInspectionError {
+    WorkerV3HsacoInspectionError::ProductionV1RequiredWorkgroupSizeMismatch {
         kernel: kernel.to_owned(),
         actual,
         expected: launch.required_workgroup_size(),
@@ -830,11 +829,11 @@ fn required_workgroup_size_mismatch(
 }
 
 fn max_flat_workgroup_size_mismatch(
-    launch: WorkerV2RawLaunchContractV1,
+    launch: WorkerV3LaunchContractV1,
     kernel: &str,
     actual: u32,
-) -> WorkerV3RawHsacoInspectionError {
-    WorkerV3RawHsacoInspectionError::ProductionV1MaxFlatWorkgroupSizeMismatch {
+) -> WorkerV3HsacoInspectionError {
+    WorkerV3HsacoInspectionError::ProductionV1MaxFlatWorkgroupSizeMismatch {
         kernel: kernel.to_owned(),
         actual,
         expected: launch.max_flat_workgroup_size(),
@@ -842,11 +841,11 @@ fn max_flat_workgroup_size_mismatch(
 }
 
 fn metadata_wavefront_size_mismatch(
-    launch: WorkerV2RawLaunchContractV1,
+    launch: WorkerV3LaunchContractV1,
     kernel: &str,
     actual: u32,
-) -> WorkerV3RawHsacoInspectionError {
-    WorkerV3RawHsacoInspectionError::ProductionV1MetadataWavefrontSizeMismatch {
+) -> WorkerV3HsacoInspectionError {
+    WorkerV3HsacoInspectionError::ProductionV1MetadataWavefrontSizeMismatch {
         kernel: kernel.to_owned(),
         actual,
         expected: launch.wavefront_size(),
@@ -854,11 +853,11 @@ fn metadata_wavefront_size_mismatch(
 }
 
 fn descriptor_wavefront_size_mismatch(
-    launch: WorkerV2RawLaunchContractV1,
+    launch: WorkerV3LaunchContractV1,
     kernel: &str,
     actual: u32,
-) -> WorkerV3RawHsacoInspectionError {
-    WorkerV3RawHsacoInspectionError::ProductionV1DescriptorWavefrontSizeMismatch {
+) -> WorkerV3HsacoInspectionError {
+    WorkerV3HsacoInspectionError::ProductionV1DescriptorWavefrontSizeMismatch {
         kernel: kernel.to_owned(),
         actual,
         expected: launch.wavefront_size(),
@@ -867,7 +866,7 @@ fn descriptor_wavefront_size_mismatch(
 
 fn validate_protected_v3_lineage(
     source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
-) -> Result<(), WorkerV3RawHsacoInspectionError> {
+) -> Result<(), WorkerV3HsacoInspectionError> {
     let binding = source.binding();
     let expected = binding.expectation();
     let handoff = source.handoff();
@@ -876,7 +875,7 @@ fn validate_protected_v3_lineage(
     let pair = handoff.pair_binding();
 
     if source.bootstrap().binding() != binding || source.exact_replay().binding() != binding {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 worker binding",
         ));
     }
@@ -885,7 +884,7 @@ fn validate_protected_v3_lineage(
             .outer_handoff_identity()
             .matches_canonical_bytes(handoff.canonical_bytes())
     {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 outer handoff",
         ));
     }
@@ -903,7 +902,7 @@ fn validate_protected_v3_lineage(
         || expected.compiler_closure() != *capsule.compiler_closure()
         || expected.compiler_closure() != *capsule.invocation().compiler_closure()
     {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 semantic handoff association",
         ));
     }
@@ -914,9 +913,7 @@ fn validate_protected_v3_lineage(
         final_receipt.canonical_preimage(),
     )
     .map_err(|_| {
-        WorkerV3RawHsacoInspectionError::LineageMismatch(
-            "strict V3 final compiler-module commitment",
-        )
+        WorkerV3HsacoInspectionError::LineageMismatch("strict V3 final compiler-module commitment")
     })?;
     let final_identity = final_commitment.identity();
     if expected.final_commitment_receipt_sha256() != *final_receipt_identity.sha256()
@@ -925,7 +922,7 @@ fn validate_protected_v3_lineage(
         || expected.final_commitment_byte_len() != final_identity.byte_len()
         || !final_commitment.matches_handoff(nested)
     {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 final compiler-module commitment association",
         ));
     }
@@ -933,10 +930,10 @@ fn validate_protected_v3_lineage(
     if nested.target().to_string() != source.plan().target().to_string()
         || map_compiler_code_object_version(nested.code_object_version())
             != decode_link_options(source.plan().options())
-                .map_err(|_| WorkerV3RawHsacoInspectionError::LinkPolicy)?
+                .map_err(|_| WorkerV3HsacoInspectionError::LinkPolicy)?
                 .0
     {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 compiler envelope target/code-object version",
         ));
     }
@@ -947,14 +944,14 @@ fn validate_protected_v3_lineage(
         .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
         .eq(directional.imports())
     {
-        return Err(WorkerV3RawHsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
+        return Err(WorkerV3HsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
     }
     if !nested
         .symbol_manifest()
         .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
         .eq(directional.exports())
     {
-        return Err(WorkerV3RawHsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
+        return Err(WorkerV3HsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
     }
 
     let expected_envelope = nested.envelope().identity();
@@ -967,25 +964,25 @@ fn validate_protected_v3_lineage(
             || source.worker_measurement().worker_build_identity()
                 != response.worker_build_identity()
         {
-            return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+            return Err(WorkerV3HsacoInspectionError::LineageMismatch(
                 "strict V3 worker measurement",
             ));
         }
         if response.compiler_envelope_identity().as_bytes() != expected_envelope.as_bytes() {
-            return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+            return Err(WorkerV3HsacoInspectionError::LineageMismatch(
                 "strict V3 compiler envelope identity",
             ));
         }
         let output = response
             .output()
-            .ok_or(WorkerV3RawHsacoInspectionError::LineageMismatch(
+            .ok_or(WorkerV3HsacoInspectionError::LineageMismatch(
                 "missing strict V3 linked output",
             ))?;
         if output.identity() != source.output_identity()
             || output.request_identity() != response.request_identity()
             || output.compiler_envelope_identity() != response.compiler_envelope_identity()
         {
-            return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+            return Err(WorkerV3HsacoInspectionError::LineageMismatch(
                 "strict V3 sealed request/response/output identity",
             ));
         }
@@ -1002,7 +999,7 @@ fn validate_protected_v3_lineage(
     if bootstrap_output.bytes() != replay_output.bytes()
         || replay_output.bytes() != source.output_bytes()
     {
-        return Err(WorkerV3RawHsacoInspectionError::LineageMismatch(
+        return Err(WorkerV3HsacoInspectionError::LineageMismatch(
             "strict V3 reproducible output bytes",
         ));
     }
@@ -1011,18 +1008,18 @@ fn validate_protected_v3_lineage(
 
 fn validate_strict_v3_gfx950_device_ffi(
     nested: &CompilerModuleHandoffV2,
-) -> Result<ProductionGfx950CompilerFfiEnvelopeKindV1, WorkerV3RawHsacoInspectionError> {
+) -> Result<ProductionGfx950CompilerFfiEnvelopeKindV1, WorkerV3HsacoInspectionError> {
     if nested.target().to_string() != PRODUCTION_GFX950_TARGET {
         return Ok(ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi);
     }
     let kind = inspect_production_gfx950_compiler_ffi_envelope_v1(nested.envelope())
-        .ok_or(WorkerV3RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)?;
+        .ok_or(WorkerV3HsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)?;
     let llvm = std::str::from_utf8(nested.module_bytes())
-        .map_err(|_| WorkerV3RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)?;
+        .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)?;
     match kind {
         ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
             if llvm.contains("@__ocml_") {
-                return Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy);
+                return Err(WorkerV3HsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy);
             }
             Ok(kind)
         }
@@ -1034,7 +1031,7 @@ fn validate_strict_v3_gfx950_device_ffi(
                     .skip(1)
                     .all(|suffix| suffix.starts_with("exp_f32"));
             if !exact_llvm {
-                return Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy);
+                return Err(WorkerV3HsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy);
             }
             Ok(kind)
         }
@@ -1087,7 +1084,7 @@ fn validate_strict_v3_gfx950_provider_exchanges(
     kind: ProductionGfx950CompilerFfiEnvelopeKindV1,
     bootstrap: &crate::InertProtectedCompilerHandoffExecutionV3,
     replay: &crate::InertProtectedCompilerHandoffExecutionV3,
-) -> Result<(), WorkerV3RawHsacoInspectionError> {
+) -> Result<(), WorkerV3HsacoInspectionError> {
     if source.handoff().module_handoff().target().to_string() != PRODUCTION_GFX950_TARGET {
         return Ok(());
     }
@@ -1095,12 +1092,12 @@ fn validate_strict_v3_gfx950_provider_exchanges(
         source.bootstrap_request_bytes(),
         bootstrap.response().canonical_bytes(),
     )
-    .map_err(|_| WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
+    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
     let replay_exchange = InertDecodedWorkerExchangeV2::decode(
         source.exact_replay_request_bytes(),
         replay.response().canonical_bytes(),
     )
-    .map_err(|_| WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
+    .map_err(|_| WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
 
     match kind {
         ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
@@ -1117,7 +1114,7 @@ fn validate_strict_v3_gfx950_provider_exchanges(
                 != replay_exchange.response().device_library_provider()
             {
                 return Err(
-                    WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                    WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
                 );
             }
             Ok(())
@@ -1128,13 +1125,13 @@ fn validate_strict_v3_gfx950_provider_exchanges(
 fn validate_strict_v3_gfx950_provider_exchange(
     kind: ProductionGfx950CompilerFfiEnvelopeKindV1,
     exchange: &InertDecodedWorkerExchangeV2,
-) -> Result<(), WorkerV3RawHsacoInspectionError> {
+) -> Result<(), WorkerV3HsacoInspectionError> {
     let request = exchange.request();
     if !request.external_providers().is_empty()
         || request.target().to_string() != PRODUCTION_GFX950_TARGET
         || request.code_object_version() != CodeObjectVersion::V6
     {
-        return Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
+        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
     }
     match kind {
         ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
@@ -1142,7 +1139,7 @@ fn validate_strict_v3_gfx950_provider_exchange(
                 || exchange.response().device_library_provider().is_some()
             {
                 return Err(
-                    WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                    WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
                 );
             }
         }
@@ -1155,12 +1152,12 @@ fn validate_strict_v3_gfx950_provider_exchange(
                     .any(|value| value == GFX950_OCML_PROVIDER_DIAGNOSTIC_V1)
             {
                 return Err(
-                    WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                    WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
                 );
             }
             validate_gfx950_ocml_provider_evidence(
                 exchange.response().device_library_provider().ok_or(
-                    WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                    WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
                 )?,
             )?;
         }
@@ -1170,20 +1167,20 @@ fn validate_strict_v3_gfx950_provider_exchange(
 
 fn validate_gfx950_ocml_provider_evidence(
     evidence: &crate::WorkerDeviceLibraryProviderEvidenceV1,
-) -> Result<(), WorkerV3RawHsacoInspectionError> {
+) -> Result<(), WorkerV3HsacoInspectionError> {
     if evidence.provider_identity() != GFX950_OCML_PROVIDER_IDENTITY_V1
         || evidence.target().to_string() != PRODUCTION_GFX950_TARGET
         || evidence.code_object_version() != CodeObjectVersion::V6
         || evidence.import_symbols() != ["__ocml_exp_f32"]
         || evidence.files().len() != GFX950_OCML_PROVIDER_FILES_V1.len()
     {
-        return Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
+        return Err(WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
     }
     for (actual, (basename, sha256)) in evidence.files().iter().zip(GFX950_OCML_PROVIDER_FILES_V1) {
         if actual.basename() != basename
             || decode_sha256_hex(sha256).as_ref() != Some(actual.sha256())
         {
-            return Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
+            return Err(WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
         }
     }
     Ok(())
@@ -1224,9 +1221,9 @@ fn expected_defined_symbols(manifest: &CompilerModuleSymbolManifestV1) -> Vec<St
 
 fn inspect_defined_global_symbols(
     bytes: &[u8],
-) -> Result<Vec<String>, WorkerV3RawHsacoInspectionError> {
+) -> Result<Vec<String>, WorkerV3HsacoInspectionError> {
     let file = object::File::parse(bytes)
-        .map_err(|_| WorkerV3RawHsacoInspectionError::DefinedSymbolInspection)?;
+        .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?;
     let mut symbols = BTreeSet::new();
     for symbol in file.symbols() {
         if !symbol.is_definition() || (!symbol.is_global() && !symbol.is_weak()) {
@@ -1234,26 +1231,26 @@ fn inspect_defined_global_symbols(
         }
         let name = symbol
             .name()
-            .map_err(|_| WorkerV3RawHsacoInspectionError::DefinedSymbolInspection)?;
+            .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?;
         if name.is_empty() || !symbols.insert(name.to_owned()) {
-            return Err(WorkerV3RawHsacoInspectionError::DefinedSymbolInspection);
+            return Err(WorkerV3HsacoInspectionError::DefinedSymbolInspection);
         }
     }
     if symbols.len() > MAX_WORKER_SYMBOLS {
-        return Err(WorkerV3RawHsacoInspectionError::DefinedSymbolInspection);
+        return Err(WorkerV3HsacoInspectionError::DefinedSymbolInspection);
     }
     Ok(symbols.into_iter().collect())
 }
 
 fn inspect_descriptor_section(
     bytes: &[u8],
-) -> Result<CanonicalDescriptorSectionObservationV1, WorkerV3RawHsacoInspectionError> {
+) -> Result<CanonicalDescriptorSectionObservationV1, WorkerV3HsacoInspectionError> {
     let file = object::File::parse(bytes)
-        .map_err(|_| WorkerV3RawHsacoInspectionError::DefinedSymbolInspection)?;
+        .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?;
     for section in file.sections() {
         if section
             .name()
-            .map_err(|_| WorkerV3RawHsacoInspectionError::DefinedSymbolInspection)?
+            .map_err(|_| WorkerV3HsacoInspectionError::DefinedSymbolInspection)?
             == DEVICE_DESCRIPTOR_SECTION_NAME
         {
             return Ok(
@@ -1530,12 +1527,12 @@ fn calculate_policy_identity(
     code_object_version: CodeObjectVersion,
     compiler_envelope: CompilerFfiEnvelopeIdentityV1,
     manifest: &CompilerModuleSymbolManifestV1,
-    observed_kernels: &[ObservedWorkerV2KernelSymbolsV1],
+    observed_kernels: &[ObservedWorkerKernelSymbolsV1],
     expected_defined_symbols: &[String],
-    launch: WorkerV2RawLaunchContractV1,
-) -> WorkerV2RawHsacoPolicyIdentityV1 {
+    launch: WorkerV3LaunchContractV1,
+) -> WorkerV3HsacoPolicyIdentityV1 {
     let mut hasher = Sha256::new();
-    hasher.update(POLICY_IDENTITY_DOMAIN_V1);
+    hasher.update(FROZEN_POLICY_IDENTITY_CODEC_DOMAIN_V1);
     hash_text(&mut hasher, &target.to_string());
     hasher.update([code_object_version_tag(code_object_version)]);
     hasher.update(compiler_envelope.as_bytes());
@@ -1552,16 +1549,16 @@ fn calculate_policy_identity(
     }
     hasher.update(launch.max_flat_workgroup_size().to_le_bytes());
     hasher.update(launch.wavefront_size().to_le_bytes());
-    WorkerV2RawHsacoPolicyIdentityV1(hasher.finalize().into())
+    WorkerV3HsacoPolicyIdentityV1(hasher.finalize().into())
 }
 
-fn calculate_response_identity(bytes: &[u8]) -> SealedWorkerV2ResponseIdentityV1 {
-    SealedWorkerV2ResponseIdentityV1(calculate_response_identity_bytes_v1(bytes))
+fn calculate_response_identity(bytes: &[u8]) -> SealedWorkerResponseIdentityV1 {
+    SealedWorkerResponseIdentityV1(calculate_response_identity_bytes_v1(bytes))
 }
 
 pub(crate) fn calculate_response_identity_bytes_v1(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(RESPONSE_IDENTITY_DOMAIN_V1);
+    hasher.update(FROZEN_RESPONSE_IDENTITY_CODEC_DOMAIN_V1);
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
     hasher.finalize().into()
@@ -1569,9 +1566,9 @@ pub(crate) fn calculate_response_identity_bytes_v1(bytes: &[u8]) -> [u8; 32] {
 
 fn calculate_protected_v3_inspection_identity(
     source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
-    raw: &SharedRawWorkerV2HsacoInspectionV1,
-    response: SealedWorkerV2ResponseIdentityV1,
-) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+    raw: &SharedWorkerV3HsacoInspectionV1,
+    response: SealedWorkerResponseIdentityV1,
+) -> InspectedProtectedWorkerV3HsacoIdentityV1 {
     let binding = source.binding();
     let expected = binding.expectation();
     let worker = source.worker_measurement();
@@ -1620,7 +1617,7 @@ fn calculate_protected_v3_inspection_identity(
     hasher.update(raw.descriptor_identity);
     hasher.update(raw.abi_identity);
     hasher.update(raw.resource_identity);
-    InspectedProtectedRawWorkerV3HsacoIdentityV1(hasher.finalize().into())
+    InspectedProtectedWorkerV3HsacoIdentityV1(hasher.finalize().into())
 }
 
 fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
@@ -1829,7 +1826,7 @@ mod exact_production_target_tests {
                 ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi,
                 &exchange,
             ),
-            Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)
         );
     }
 
@@ -1873,7 +1870,7 @@ mod exact_production_target_tests {
         );
         assert_eq!(
             validate_strict_v3_gfx950_device_ffi(&hidden),
-            Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)
         );
 
         let envelope = construct_production_gfx950_ocml_exp_envelope_v1([0x38; 32]).unwrap();
@@ -1884,7 +1881,7 @@ mod exact_production_target_tests {
         );
         assert_eq!(
             validate_strict_v3_gfx950_device_ffi(&missing_call),
-            Err(WorkerV3RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)
+            Err(WorkerV3HsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)
         );
     }
 }

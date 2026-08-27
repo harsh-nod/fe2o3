@@ -20,16 +20,16 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
-mod first_build_worker_v2;
+mod first_build_worker_engine;
 mod first_build_worker_v3;
 mod link_plan;
 mod request_construction;
 mod worker_executor;
 mod worker_protocol;
 mod worker_protocol_v2;
-mod worker_v2_hsaco_admission;
-mod worker_v2_hsaco_finalization;
 mod worker_v3_compact_finalizer_replay;
+mod worker_v3_hsaco_admission;
+mod worker_v3_hsaco_finalization;
 mod worker_v3_hsaco_publication;
 
 pub use compiler_ffi_bridge::{
@@ -68,12 +68,6 @@ pub use fe2o3_compiler_ffi::{
     MAX_COMPILER_FFI_ENVELOPE_BYTES_V1, MAX_COMPILER_FFI_INSTANCE_SYMBOL_BYTES_V1,
     MAX_COMPILER_FFI_ITEM_PATH_BYTES_V1,
 };
-pub use first_build_worker_v2::{
-    FirstBuildWorkerV2Error, FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
-    InertProtectedFirstBuildWorkerV2EvidenceV1, ProtectedFirstBuildWorkerV2Error,
-    ProtectedFirstBuildWorkerV2IdentityV1, execute_protected_reproducible_first_build_worker_v2,
-    execute_reproducible_first_build_worker_v2,
-};
 pub use first_build_worker_v3::{
     InertProtectedCompilerHandoffExecutionV3, InertProtectedFirstBuildWorkerV3EvidenceV1,
     PreparedProtectedFirstBuildWorkerV3PreflightV1, ProtectedCompilerHandoffBindingErrorV3,
@@ -90,10 +84,8 @@ pub use link_plan::{
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
 pub use request_construction::{
-    CompilerHandoffWorkerRequestV2, LinkInputKindClosureIdentityV1, LinkInputKindClosureV1,
-    LinkSymbolClosureIdentityV1, LinkSymbolClosureV1, ProtectedCompilerHandoffWorkerRequestV2,
-    WorkerRequestConstructionError, construct_protected_worker_request_v2_from_consumed_handoff,
-    construct_worker_request_v1, construct_worker_request_v2_from_consumed_handoff,
+    LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
+    LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
 };
 pub use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -103,11 +95,10 @@ pub use reserved_fe2o3_symbols::{
     derive_device_ffi_contract_id_v1,
 };
 pub use worker_executor::{
-    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertCompilerHandoffExecutionV2,
-    InertProtectedCompilerHandoffExecutionV2, InertWorkerExecutionV1, MAX_WORKER_EXECUTABLE_BYTES,
-    MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1,
-    WorkerExecutionError, WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    WorkerTerminationV1,
+    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
+    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1,
+    WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError, WorkerExecutionErrorKind,
+    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,
@@ -124,18 +115,6 @@ pub use worker_protocol_v2::{
     WorkerDeviceLibraryProviderEvidenceV1, WorkerDeviceLibraryProviderFileEvidenceV1,
     WorkerEvidenceClassV2, WorkerOutputV2, WorkerRequestV2, WorkerResponseV2,
 };
-pub use worker_v2_hsaco_admission::{
-    CanonicalDescriptorSectionObservationV1, InspectedProtectedRawWorkerV3HsacoIdentityV1,
-    InspectedProtectedRawWorkerV3HsacoV1, ObservedWorkerV2KernelSymbolsV1,
-    SealedWorkerV2ResponseIdentityV1, WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
-    WorkerV3RawHsacoInspectionError, inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
-};
-pub use worker_v2_hsaco_finalization::{
-    DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
-    MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
-    PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError,
-    finalize_inspected_protected_worker_v3_hsaco_v1,
-};
 pub use worker_v3_compact_finalizer_replay::{
     MAX_PROTECTED_WORKER_V3_COMPACT_FINALIZER_REPLAY_BYTES_V1,
     PreparedProtectedWorkerV3CompactFinalizerReplayV1,
@@ -147,6 +126,18 @@ pub use worker_v3_compact_finalizer_replay::{
     ProtectedWorkerV3CompactFinalizerReplayV1, ProtectedWorkerV3CompactFinalizerReplayV2,
     prepare_protected_worker_v3_compact_finalizer_replay_v1,
     prepare_protected_worker_v3_compact_finalizer_replay_v2,
+};
+pub use worker_v3_hsaco_admission::{
+    CanonicalDescriptorSectionObservationV1, InspectedProtectedWorkerV3HsacoIdentityV1,
+    InspectedProtectedWorkerV3HsacoV1, ObservedWorkerKernelSymbolsV1,
+    SealedWorkerResponseIdentityV1, WorkerV3HsacoInspectionError, WorkerV3HsacoPolicyIdentityV1,
+    WorkerV3HsacoPolicyV1, inspect_protected_worker_v3_hsaco_v1,
+};
+pub use worker_v3_hsaco_finalization::{
+    DescriptorSourceEvidenceRequirementV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
+    MissingAuthenticatedProtectedDescriptorSourceEvidenceV3,
+    PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError,
+    finalize_protected_worker_v3_hsaco_v1,
 };
 pub use worker_v3_hsaco_publication::{
     PreparedProtectedWorkerV3HsacoPublicationV1, PublishedProtectedWorkerV3HsacoV1,

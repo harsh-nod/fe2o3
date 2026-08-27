@@ -15,8 +15,8 @@ use fe2o3_artifact_transaction::{
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_hsaco_finalize::{
     PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
-    WorkerV3HsacoPublicationErrorV1, finalize_inspected_protected_worker_v3_hsaco_v1,
-    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
+    WorkerV3HsacoPublicationErrorV1, finalize_protected_worker_v3_hsaco_v1,
+    inspect_protected_worker_v3_hsaco_v1,
     persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
@@ -1792,18 +1792,16 @@ fn complete_fresh_production_artifact(
                 "strict V3 reproducible worker execution failed: {error}"
             ))
         })?;
-    let inspected =
-        inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).map_err(|error| {
-            CompletionFailure::Uncommitted(format!(
-                "independent strict V3 raw-HSACO inspection failed: {error}"
-            ))
-        })?;
-    let finalized =
-        finalize_inspected_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
-            CompletionFailure::Uncommitted(format!(
-                "strict V3 canonical HSACO finalization failed: {error}"
-            ))
-        })?;
+    let inspected = inspect_protected_worker_v3_hsaco_v1(evidence).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "independent strict V3 raw-HSACO inspection failed: {error}"
+        ))
+    })?;
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
+        CompletionFailure::Uncommitted(format!(
+            "strict V3 canonical HSACO finalization failed: {error}"
+        ))
+    })?;
     let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
         .map_err(|error| {
         CompletionFailure::Uncommitted(format!(

@@ -25,12 +25,11 @@ use sha2::{Digest, Sha256};
 use crate::{
     CanonicalDescriptorSectionObservationV1, ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME,
     FinalizationError, FinalizedHsaco, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    InspectedProtectedRawWorkerV3HsacoIdentityV1, InspectedProtectedRawWorkerV3HsacoV1,
-    MultiInputLinkPlanV1, ObservedWorkerV2KernelSymbolsV1,
-    ProtectedCompilerHandoffBindingIdentityV3, ProtectedCompilerHandoffExpectationV3,
-    ProtectedFirstBuildWorkerV3IdentityV1, WorkerExecutionLimitsV1, WorkerMeasurementV1,
-    WorkerV2RawHsacoPolicyIdentityV1, WorkerV2RawHsacoPolicyV1,
-    finalize_allocated_read_only_unfinalized, finalize_unfinalized,
+    InspectedProtectedWorkerV3HsacoIdentityV1, InspectedProtectedWorkerV3HsacoV1,
+    MultiInputLinkPlanV1, ObservedWorkerKernelSymbolsV1, ProtectedCompilerHandoffBindingIdentityV3,
+    ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV3IdentityV1,
+    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerV3HsacoPolicyIdentityV1,
+    WorkerV3HsacoPolicyV1, finalize_allocated_read_only_unfinalized, finalize_unfinalized,
     verify_allocated_read_only_finalized, verify_finalized,
 };
 
@@ -63,10 +62,10 @@ pub enum DescriptorSourceEvidenceRequirementV1 {
 ///
 /// The strict transaction, semantic outer handoff, compiler closure, measured worker, and exact
 /// link execution remain retained as native V3 evidence. No descriptor claims are inferred from
-/// executable metadata and no V1/V2 fallback is attempted.
+/// executable metadata and no legacy fallback is attempted.
 #[derive(Debug)]
 pub struct MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
-    raw: InspectedProtectedRawWorkerV3HsacoV1,
+    raw: InspectedProtectedWorkerV3HsacoV1,
 }
 
 impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
@@ -74,7 +73,7 @@ impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
         DescriptorSourceEvidenceRequirementV1::AuthenticatedCanonicalDescriptorTableV1
     }
 
-    pub const fn raw_inspection_identity(&self) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+    pub const fn raw_inspection_identity(&self) -> InspectedProtectedWorkerV3HsacoIdentityV1 {
         self.raw.identity()
     }
 
@@ -94,7 +93,7 @@ impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
         self.raw.linked_output_identity()
     }
 
-    pub const fn policy_identity(&self) -> WorkerV2RawHsacoPolicyIdentityV1 {
+    pub const fn policy_identity(&self) -> WorkerV3HsacoPolicyIdentityV1 {
         self.raw.policy().identity()
     }
 
@@ -146,7 +145,7 @@ impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
         self.raw.code_object_version()
     }
 
-    pub fn observed_kernels(&self) -> &[ObservedWorkerV2KernelSymbolsV1] {
+    pub fn observed_kernels(&self) -> &[ObservedWorkerKernelSymbolsV1] {
         self.raw.policy().observed_kernels()
     }
 
@@ -180,7 +179,7 @@ impl MissingAuthenticatedProtectedDescriptorSourceEvidenceV3 {
 #[derive(Debug)]
 pub struct PreparedFinalizedProtectedWorkerV3HsacoV1 {
     identity: FinalizedProtectedWorkerV3HsacoIdentityV1,
-    raw: InspectedProtectedRawWorkerV3HsacoV1,
+    raw: InspectedProtectedWorkerV3HsacoV1,
     finalized: FinalizedHsaco,
     finalized_output: ContentIdentityV1,
     canonical_descriptor_evidence: ContentIdentityV1,
@@ -197,7 +196,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         self.identity
     }
 
-    pub const fn raw_inspection_identity(&self) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+    pub const fn raw_inspection_identity(&self) -> InspectedProtectedWorkerV3HsacoIdentityV1 {
         self.raw.identity()
     }
 
@@ -266,7 +265,7 @@ impl PreparedFinalizedProtectedWorkerV3HsacoV1 {
         self.canonical_descriptor_evidence
     }
 
-    pub const fn policy_identity(&self) -> WorkerV2RawHsacoPolicyIdentityV1 {
+    pub const fn policy_identity(&self) -> WorkerV3HsacoPolicyIdentityV1 {
         self.raw.policy().identity()
     }
 
@@ -430,10 +429,9 @@ impl Error for WorkerV3HsacoFinalizationError {
 /// Consumes native strict-V3 inspection exactly once and runs canonical descriptor finalization.
 ///
 /// The complete V3 transaction, outer semantic handoff, compiler closure, measured worker, and
-/// link execution remain retained by the result. This route neither fabricates protected V2
-/// evidence nor falls back to a V1/V2 finalization entry.
-pub fn finalize_inspected_protected_worker_v3_hsaco_v1(
-    raw: InspectedProtectedRawWorkerV3HsacoV1,
+/// link execution remain retained by the result. This route has no legacy finalization fallback.
+pub fn finalize_protected_worker_v3_hsaco_v1(
+    raw: InspectedProtectedWorkerV3HsacoV1,
 ) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, WorkerV3HsacoFinalizationError> {
     if raw.canonical_descriptor_section() == CanonicalDescriptorSectionObservationV1::Missing {
         return Err(
@@ -489,7 +487,7 @@ struct SharedCanonicalFinalizationV1 {
 }
 
 fn finalize_worker_v3_hsaco(
-    raw: &InspectedProtectedRawWorkerV3HsacoV1,
+    raw: &InspectedProtectedWorkerV3HsacoV1,
     allocated_read_only: bool,
 ) -> Result<Option<SharedCanonicalFinalizationV1>, WorkerV3HsacoFinalizationError> {
     let raw_bytes = raw.exact_bytes();
@@ -531,7 +529,7 @@ fn finalize_worker_v3_hsaco(
 }
 
 fn validate_metadata_lineage(
-    raw: &InspectedProtectedRawWorkerV3HsacoV1,
+    raw: &InspectedProtectedWorkerV3HsacoV1,
     finalized: &FinalizedHsaco,
 ) -> Result<(), WorkerV3HsacoFinalizationError> {
     validate_metadata_lineage_parts(
@@ -545,7 +543,7 @@ fn validate_metadata_lineage(
 fn validate_metadata_lineage_parts(
     target: DeviceTargetV1,
     code_object_version: CodeObjectVersion,
-    policy: &WorkerV2RawHsacoPolicyV1,
+    policy: &WorkerV3HsacoPolicyV1,
     finalized: &FinalizedHsaco,
 ) -> Result<(), WorkerV3HsacoFinalizationError> {
     let inspection = finalized.inspection();
@@ -641,7 +639,7 @@ struct ProtectedFinalizationIdentityPreimageV3<'a> {
 }
 
 fn calculate_protected_v3_finalized_identity(
-    raw: &InspectedProtectedRawWorkerV3HsacoV1,
+    raw: &InspectedProtectedWorkerV3HsacoV1,
     finalized: &FinalizedHsaco,
     finalized_output: ContentIdentityV1,
     descriptor_bytes: &[u8],
@@ -778,7 +776,7 @@ fn calculate_protected_finalized_identity_v3(
 }
 
 fn calculate_observed_kernel_symbols_identity(
-    kernels: &[ObservedWorkerV2KernelSymbolsV1],
+    kernels: &[ObservedWorkerKernelSymbolsV1],
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"FE2O3/STRICT-V3-FINALIZATION/OBSERVED-KERNEL-SYMBOLS/V1\0");

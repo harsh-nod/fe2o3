@@ -67,9 +67,6 @@ name = "production_extraction_driver_v1"
 name = "production_general_matrix_driver_v1"
 
 [[test]]
-name = "production_workgroup_sync_driver_v1"
-
-[[test]]
 name = "production_ranked_bounds_driver_v1"
 
 [[test]]

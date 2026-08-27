@@ -22,14 +22,12 @@ use crate::{
     WorkerExecutionError, WorkerExecutionLimitsV1, WorkerInputKindV1, WorkerInputV1,
     WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerProtocolError,
     WorkerRequestConstructionError, WorkerResponseV2,
-    first_build_worker_v2::{
-        FirstBuildWorkerV2EngineError, FirstBuildWorkerV2EnginePreflight,
-        execute_preflighted_reproducible_first_build_worker_v2_engine,
-        preflight_reproducible_first_build_worker_v2_engine,
+    first_build_worker_engine::{
+        ReproducibleFirstBuildEngineError, ReproducibleFirstBuildEnginePreflight,
+        execute_preflighted_reproducible_first_build_engine,
+        preflight_reproducible_first_build_engine,
     },
-    request_construction::{
-        CompilerHandoffRequestBindingV2, decode_link_options, decoded_compiler_module_handoff_v2,
-    },
+    request_construction::{decode_link_options, decoded_compiler_module_handoff_v2},
     worker_executor::InertWorkerExecutionV2,
 };
 
@@ -77,7 +75,7 @@ pub struct PreparedProtectedFirstBuildWorkerV3PreflightV1 {
     binding: ProtectedCompilerHandoffBindingV3,
     worker: WorkerMeasurementV1,
     limits: WorkerExecutionLimitsV1,
-    engine: FirstBuildWorkerV2EnginePreflight,
+    engine: ReproducibleFirstBuildEnginePreflight,
 }
 
 impl PreparedProtectedFirstBuildWorkerV3PreflightV1 {
@@ -946,8 +944,8 @@ pub fn preflight_protected_reproducible_first_build_worker_v3(
     enforce_protected_v3_working_set_budget(handoff, &external_providers, &link_options)?;
     let decoded = decoded_compiler_module_handoff_v2(handoff.module_handoff().clone())
         .map_err(ProtectedFirstBuildWorkerV3Error::CompilerModuleHandoff)?;
-    let engine = preflight_reproducible_first_build_worker_v2_engine(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
+    let engine = preflight_reproducible_first_build_engine(
+        &binding,
         decoded,
         worker,
         external_providers,
@@ -1155,13 +1153,9 @@ pub fn execute_preflighted_protected_reproducible_first_build_worker_v3(
         return Err(preflight_mismatch("measured worker"));
     }
     let handoff = consumed.into_handoff();
-    let result = execute_preflighted_reproducible_first_build_worker_v2_engine(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
-        engine,
-        worker,
-        limits,
-    )
-    .map_err(|error| map_engine_error(binding, error))?;
+    let result =
+        execute_preflighted_reproducible_first_build_engine(&binding, engine, worker, limits)
+            .map_err(|error| map_engine_error(binding, error))?;
 
     validate_replay(binding, worker.measurement(), &result)?;
     let identity = calculate_evidence_identity(binding, worker.measurement(), limits, &result)?;
@@ -1230,7 +1224,7 @@ pub fn execute_protected_reproducible_first_build_worker_v3(
 fn validate_replay(
     binding: ProtectedCompilerHandoffBindingV3,
     worker: &WorkerMeasurementV1,
-    result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
+    result: &crate::first_build_worker_engine::ReproducibleFirstBuildEngineResult,
 ) -> Result<ValidatedProtectedFirstBuildReplayV3, ProtectedFirstBuildWorkerV3Error> {
     validate_replay_parts(
         binding,
@@ -2022,7 +2016,7 @@ const fn replay_error(field: &'static str) -> ProtectedFirstBuildWorkerV3Error {
 
 fn map_engine_error(
     binding: ProtectedCompilerHandoffBindingV3,
-    error: FirstBuildWorkerV2EngineError,
+    error: ReproducibleFirstBuildEngineError,
 ) -> ProtectedFirstBuildWorkerV3Error {
     let wrap = |execution| {
         Box::new(InertProtectedCompilerHandoffExecutionV3::from_execution(
@@ -2030,43 +2024,38 @@ fn map_engine_error(
         ))
     };
     match error {
-        FirstBuildWorkerV2EngineError::LinkPlan(error) => {
+        ReproducibleFirstBuildEngineError::LinkPlan(error) => {
             ProtectedFirstBuildWorkerV3Error::LinkPlan(error)
         }
-        FirstBuildWorkerV2EngineError::RequestConstruction(error) => {
+        ReproducibleFirstBuildEngineError::RequestConstruction(error) => {
             ProtectedFirstBuildWorkerV3Error::RequestConstruction(error)
         }
-        FirstBuildWorkerV2EngineError::CandidateRequest(error) => {
+        ReproducibleFirstBuildEngineError::CandidateRequest(error) => {
             ProtectedFirstBuildWorkerV3Error::BootstrapRequest(error)
         }
-        FirstBuildWorkerV2EngineError::CandidateExecution(error) => {
+        ReproducibleFirstBuildEngineError::CandidateExecution(error) => {
             ProtectedFirstBuildWorkerV3Error::BootstrapExecution(error)
         }
-        FirstBuildWorkerV2EngineError::CandidateDidNotProduceOutput(execution) => {
+        ReproducibleFirstBuildEngineError::CandidateDidNotProduceOutput(execution) => {
             ProtectedFirstBuildWorkerV3Error::BootstrapDidNotProduceOutput(wrap(*execution))
         }
-        FirstBuildWorkerV2EngineError::AuthorizedExecution(error) => {
+        ReproducibleFirstBuildEngineError::AuthorizedExecution(error) => {
             ProtectedFirstBuildWorkerV3Error::ReplayExecution(error)
         }
-        FirstBuildWorkerV2EngineError::AuthorizedDidNotProduceOutput {
+        ReproducibleFirstBuildEngineError::AuthorizedDidNotProduceOutput {
             candidate,
             authorized,
         } => ProtectedFirstBuildWorkerV3Error::ReplayDidNotProduceOutput {
             bootstrap: wrap(*candidate),
             replay: wrap(*authorized),
         },
-        FirstBuildWorkerV2EngineError::OutputMismatch {
+        ReproducibleFirstBuildEngineError::OutputMismatch {
             candidate,
             authorized,
         } => ProtectedFirstBuildWorkerV3Error::OutputMismatch {
             bootstrap: wrap(*candidate),
             replay: wrap(*authorized),
         },
-        FirstBuildWorkerV2EngineError::ReplayValidation(error) => {
-            ProtectedFirstBuildWorkerV3Error::ReplayValidation {
-                field: error.field(),
-            }
-        }
     }
 }
 
@@ -2104,7 +2093,7 @@ fn calculate_evidence_identity(
     binding: ProtectedCompilerHandoffBindingV3,
     worker: &WorkerMeasurementV1,
     limits: WorkerExecutionLimitsV1,
-    result: &crate::first_build_worker_v2::FirstBuildWorkerV2EngineResult,
+    result: &crate::first_build_worker_engine::ReproducibleFirstBuildEngineResult,
 ) -> Result<ProtectedFirstBuildWorkerV3IdentityV1, ProtectedFirstBuildWorkerV3Error> {
     calculate_evidence_identity_parts(
         binding,

@@ -5,11 +5,6 @@ use std::fmt;
 use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
 use sha2::{Digest, Sha256};
 
-use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
-    CompilerModuleHandoffSlotV2, ConsumedCompilerModuleHandoffV1, ConsumedCompilerModuleHandoffV2,
-};
-use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CompilerFfiEnvelopeV1, CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2,
     CompilerModuleKindV1, CompilerModuleSymbolManifestIdentityV1, CompilerModuleSymbolManifestV1,
@@ -28,14 +23,6 @@ use crate::{
 const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const SYMBOL_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-SYMBOL-CLOSURE/V1\0";
 const PLAN_REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V1\0";
-#[allow(dead_code)] // V2 stays unconnected until compiler-owned provenance exists.
-const PLAN_REQUEST_DOMAIN_V2: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V2\0";
-const FIRST_BUILD_REQUEST_DOMAIN_V2: &[u8] =
-    b"FE2O3/FIRST-BUILD-COMPILER-HANDOFF-WORKER-REQUEST/V2\0";
-const PROTECTED_PLAN_REQUEST_DOMAIN_V2: &[u8] =
-    b"FE2O3/CLOSURE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V2\0";
-const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V2: &[u8] =
-    b"FE2O3/CLOSURE-PROTECTED-FIRST-BUILD-WORKER-REQUEST/V2\0";
 const PROTECTED_PLAN_REQUEST_DOMAIN_V3: &[u8] =
     b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V3\0";
 const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3: &[u8] =
@@ -45,19 +32,14 @@ const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3: &[u8] =
 ///
 /// This neutral witness exists until G3 provides its own sealed artifact type. It
 /// authenticates only byte/kind consistency, not compiler origin, and can only be
-/// consumed by the sealed Worker V2 constructor.
+/// consumed by the sealed production first-build constructor. The resulting request uses the
+/// frozen V2 wire codec but carries only Worker V3 transaction authority.
 #[derive(Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct ExactCompilerModuleArtifactV1 {
     input: WorkerInputV1,
 }
 
-#[allow(dead_code)]
 impl ExactCompilerModuleArtifactV1 {
-    pub const fn identity(&self) -> ContentIdentityV1 {
-        self.input.identity()
-    }
-
     fn into_input(self) -> WorkerInputV1 {
         self.input
     }
@@ -115,34 +97,6 @@ pub(crate) fn decode_compiler_module_handoff_v2(
     bytes: &[u8],
 ) -> Result<DecodedCompilerModuleHandoffV2, CompilerModuleHandoffErrorV2> {
     decoded_compiler_module_handoff_v2(CompilerModuleHandoffV2::decode(bytes)?)
-}
-
-pub(crate) fn reconstruct_compiler_module_handoff_v2(
-    envelope: &CompilerFfiEnvelopeV1,
-    symbol_manifest: &CompilerModuleSymbolManifestV1,
-    compiler_module: &WorkerInputV1,
-) -> Result<DecodedCompilerModuleHandoffV2, WorkerRequestConstructionError> {
-    let kind = match compiler_module.kind() {
-        WorkerInputKindV1::LlvmTextIr => CompilerModuleKindV1::LlvmTextIr,
-        WorkerInputKindV1::LlvmBitcode => CompilerModuleKindV1::LlvmBitcode,
-        kind @ WorkerInputKindV1::AmdGpuRelocatable => {
-            return Err(WorkerRequestConstructionError::UnsupportedCompilerModuleInputKind(kind));
-        }
-    };
-    // This recomputes the distinct canonical compiler-FFI payload identity and reuses the strict
-    // handoff decoder. It cannot recompute the artifact-transaction identity, whose producer and
-    // derived-slot preimages are not present in the V2 finalizer transcript.
-    let handoff = CompilerModuleHandoffV2::new(
-        kind,
-        envelope.target(),
-        envelope.code_object_version(),
-        envelope.clone(),
-        symbol_manifest.clone(),
-        compiler_module.bytes(),
-    )
-    .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
-    decode_compiler_module_handoff_v2(handoff.canonical_bytes())
-        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)
 }
 
 pub(crate) fn decoded_compiler_module_handoff_v2(
@@ -444,102 +398,8 @@ pub fn construct_worker_request_v1(
     .map_err(WorkerRequestConstructionError::WorkerProtocol)
 }
 
-/// Builds one compiler-FFI-aware V2 request through the sealed path.
-///
-/// The complete staged compiler envelope and exact compiler-module witness are
-/// consumed. The module plus every external provider must exactly cover the
-/// plan inputs. Import and export symbols are derived from the retained
-/// envelope, while the complete final symbol closure is derived from the
-/// compiler manifest. No caller-provided symbol list or V1 handoff participates
-/// in this construction.
-#[allow(dead_code, clippy::too_many_arguments)]
-pub(crate) fn construct_worker_request_v2(
-    plan: &MultiInputLinkPlanV1,
-    measurement: &WorkerMeasurementV1,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    staged_envelope: StagedCompilerFfiEnvelopeV1,
-    symbol_manifest: CompilerModuleSymbolManifestV1,
-    compiler_module: ExactCompilerModuleArtifactV1,
-    external_providers: Vec<WorkerInputV1>,
-    input_kinds: &LinkInputKindClosureV1,
-    output: WorkerOutputConstraintsV1,
-) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
-    construct_worker_request_v2_engine(
-        plan,
-        measurement,
-        target,
-        code_object_version,
-        options,
-        staged_envelope,
-        symbol_manifest,
-        compiler_module,
-        external_providers,
-        input_kinds,
-        output,
-        PlanRequestIdentityBindingV2::Existing,
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProtectedCompilerHandoffBindingV2 {
-    attempt: BuildAttempt,
-    slot: CompilerModuleHandoffSlotV2,
-    handoff_identity: CompilerModuleHandoffIdentityV2,
-    compiler_closure: CompilerClosureV2,
-}
-
-impl ProtectedCompilerHandoffBindingV2 {
-    pub(crate) fn from_consumed(consumed: &ConsumedCompilerModuleHandoffV2) -> Self {
-        Self {
-            attempt: consumed.attempt(),
-            slot: consumed.slot(),
-            handoff_identity: consumed.identity(),
-            compiler_closure: consumed.compiler_closure(),
-        }
-    }
-
-    pub(crate) const fn from_replay_parts(
-        attempt: BuildAttempt,
-        slot: CompilerModuleHandoffSlotV2,
-        handoff_identity: CompilerModuleHandoffIdentityV2,
-        compiler_closure: CompilerClosureV2,
-    ) -> Self {
-        Self {
-            attempt,
-            slot,
-            handoff_identity,
-            compiler_closure,
-        }
-    }
-
-    pub(crate) const fn attempt(self) -> BuildAttempt {
-        self.attempt
-    }
-
-    pub(crate) const fn slot(self) -> CompilerModuleHandoffSlotV2 {
-        self.slot
-    }
-
-    pub(crate) const fn handoff_identity(self) -> CompilerModuleHandoffIdentityV2 {
-        self.handoff_identity
-    }
-
-    pub(crate) const fn compiler_closure(self) -> CompilerClosureV2 {
-        self.compiler_closure
-    }
-}
-
-#[derive(Clone, Copy)]
-enum PlanRequestIdentityBindingV2<'a> {
-    Existing,
-    Protected(&'a ProtectedCompilerHandoffBindingV2),
-    ProtectedV3(&'a ProtectedCompilerHandoffBindingV3),
-}
-
 #[allow(clippy::too_many_arguments)]
-fn construct_worker_request_v2_engine(
+fn construct_worker_request_from_v3_binding(
     plan: &MultiInputLinkPlanV1,
     measurement: &WorkerMeasurementV1,
     target: DeviceTargetV1,
@@ -551,7 +411,7 @@ fn construct_worker_request_v2_engine(
     external_providers: Vec<WorkerInputV1>,
     input_kinds: &LinkInputKindClosureV1,
     output: WorkerOutputConstraintsV1,
-    identity_binding: PlanRequestIdentityBindingV2<'_>,
+    binding: &ProtectedCompilerHandoffBindingV3,
 ) -> Result<WorkerRequestV2, WorkerRequestConstructionError> {
     if target != plan.target() {
         return Err(WorkerRequestConstructionError::TargetMismatch);
@@ -601,63 +461,24 @@ fn construct_worker_request_v2_engine(
     all_inputs.sort_by_key(|input| (input.identity(), input.kind()));
     validate_inputs(plan, input_kinds, &all_inputs)?;
 
-    let request_id = match identity_binding {
-        PlanRequestIdentityBindingV2::Existing => calculate_request_id_v2(
-            plan,
-            measurement,
-            staged_envelope.identity().as_bytes(),
-            envelope.envelope_identity().as_bytes(),
-            manifest_identity,
-            target,
-            code_object_version,
-            options,
-            &compiler_module,
-            &external_providers,
-            input_kinds,
-            symbols.import_symbols(),
-            symbols.export_symbols(),
-            symbols.required_symbols(),
-            &output,
-        ),
-        PlanRequestIdentityBindingV2::Protected(binding) => calculate_protected_plan_request_id_v2(
-            binding,
-            plan,
-            measurement,
-            staged_envelope.identity().as_bytes(),
-            envelope.envelope_identity().as_bytes(),
-            manifest_identity,
-            target,
-            code_object_version,
-            options,
-            &compiler_module,
-            &external_providers,
-            input_kinds,
-            symbols.import_symbols(),
-            symbols.export_symbols(),
-            symbols.required_symbols(),
-            &output,
-        ),
-        PlanRequestIdentityBindingV2::ProtectedV3(binding) => {
-            calculate_protected_plan_request_id_v3(
-                binding,
-                plan,
-                measurement,
-                staged_envelope.identity().as_bytes(),
-                envelope.envelope_identity().as_bytes(),
-                manifest_identity,
-                target,
-                code_object_version,
-                options,
-                &compiler_module,
-                &external_providers,
-                input_kinds,
-                symbols.import_symbols(),
-                symbols.export_symbols(),
-                symbols.required_symbols(),
-                &output,
-            )
-        }
-    };
+    let request_id = calculate_protected_plan_request_id_v3(
+        binding,
+        plan,
+        measurement,
+        staged_envelope.identity().as_bytes(),
+        envelope.envelope_identity().as_bytes(),
+        manifest_identity,
+        target,
+        code_object_version,
+        options,
+        &compiler_module,
+        &external_providers,
+        input_kinds,
+        symbols.import_symbols(),
+        symbols.export_symbols(),
+        symbols.required_symbols(),
+        &output,
+    );
     if request_id == [0; 32] {
         return Err(WorkerRequestConstructionError::ReservedRequestId);
     }
@@ -683,123 +504,11 @@ fn construct_worker_request_v2_engine(
     .map_err(WorkerRequestConstructionError::WorkerProtocol)
 }
 
-/// A Worker V2 request whose compiler module crossed one exact build-attempt handoff.
-///
-/// This value has no public constructor. It retains the attempt and complete handoff identity so
-/// later evidence cannot accidentally bind the sealed request to a different build generation.
-/// It remains inert and grants no publication, loading, or launch authority.
-#[derive(Debug, Eq, PartialEq)]
-pub struct CompilerHandoffWorkerRequestV2 {
-    attempt: BuildAttempt,
-    handoff_identity: CompilerModuleHandoffIdentityV1,
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
+pub(crate) struct ConstructedFirstBuildWorkerRequest {
     request: WorkerRequestV2,
 }
 
-impl CompilerHandoffWorkerRequestV2 {
-    pub const fn attempt(&self) -> BuildAttempt {
-        self.attempt
-    }
-
-    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV1 {
-        self.handoff_identity
-    }
-
-    pub const fn manifest_identity(&self) -> CompilerModuleSymbolManifestIdentityV1 {
-        self.manifest_identity
-    }
-
-    pub const fn sealed_request(&self) -> &WorkerRequestV2 {
-        &self.request
-    }
-
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
-/// A closure-protected Worker V2 request retaining its exact V2 transaction binding.
-///
-/// The handoff identity is never represented as a V1 identity. The complete compiler closure and
-/// exact V2 slot are retained alongside the sealed request, whose request ID binds all of them
-/// under a protected domain. This value remains inert.
-#[derive(Debug, Eq, PartialEq)]
-pub struct ProtectedCompilerHandoffWorkerRequestV2 {
-    binding: ProtectedCompilerHandoffBindingV2,
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    request: WorkerRequestV2,
-}
-
-impl ProtectedCompilerHandoffWorkerRequestV2 {
-    pub const fn attempt(&self) -> BuildAttempt {
-        self.binding.attempt
-    }
-
-    pub const fn slot(&self) -> CompilerModuleHandoffSlotV2 {
-        self.binding.slot
-    }
-
-    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
-        self.binding.handoff_identity
-    }
-
-    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
-        self.binding.compiler_closure
-    }
-
-    pub const fn manifest_identity(&self) -> CompilerModuleSymbolManifestIdentityV1 {
-        self.manifest_identity
-    }
-
-    pub const fn sealed_request(&self) -> &WorkerRequestV2 {
-        &self.request
-    }
-
-    pub const fn grants_compiler_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_link_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum CompilerHandoffRequestBindingV2<'a> {
-    Existing {
-        attempt: BuildAttempt,
-        handoff_identity: CompilerModuleHandoffIdentityV1,
-    },
-    Protected(&'a ProtectedCompilerHandoffBindingV2),
-    ProtectedV3(&'a ProtectedCompilerHandoffBindingV3),
-}
-
-pub(crate) struct ConstructedCompilerHandoffWorkerRequestV2 {
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    request: WorkerRequestV2,
-}
-
-impl ConstructedCompilerHandoffWorkerRequestV2 {
+impl ConstructedFirstBuildWorkerRequest {
     pub(crate) const fn sealed_request(&self) -> &WorkerRequestV2 {
         &self.request
     }
@@ -809,14 +518,14 @@ impl ConstructedCompilerHandoffWorkerRequestV2 {
     }
 }
 
-pub(crate) fn construct_first_build_worker_request_v2_from_decoded(
-    binding: CompilerHandoffRequestBindingV2<'_>,
+pub(crate) fn construct_first_build_worker_request_from_decoded(
+    binding: &ProtectedCompilerHandoffBindingV3,
     measurement: &WorkerMeasurementV1,
     decoded: &DecodedCompilerModuleHandoffV2,
     mut external_providers: Vec<WorkerInputV1>,
     options: WorkerOptionsV1,
     output: WorkerOutputConstraintsV1,
-) -> Result<ConstructedCompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
+) -> Result<ConstructedFirstBuildWorkerRequest, WorkerRequestConstructionError> {
     let manifest_identity = decoded.symbol_manifest.identity();
     let directional_symbols = decoded.envelope.directional_symbols();
     let symbols = derive_manifest_symbol_closure(
@@ -830,61 +539,21 @@ pub(crate) fn construct_first_build_worker_request_v2_from_decoded(
     )
     .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
     external_providers.sort_by_key(|input| (input.identity(), input.kind()));
-    let request_id = match binding {
-        CompilerHandoffRequestBindingV2::Existing {
-            attempt,
-            handoff_identity,
-        } => calculate_first_build_request_id_v2(
-            attempt,
-            handoff_identity,
-            measurement,
-            decoded.envelope.identity().as_bytes(),
-            manifest_identity,
-            decoded.target,
-            decoded.code_object_version,
-            options,
-            &compiler_module,
-            &external_providers,
-            symbols.import_symbols(),
-            symbols.export_symbols(),
-            symbols.required_symbols(),
-            &output,
-        ),
-        CompilerHandoffRequestBindingV2::Protected(binding) => {
-            calculate_protected_first_build_request_id_v2(
-                binding,
-                measurement,
-                decoded.envelope.identity().as_bytes(),
-                manifest_identity,
-                decoded.target,
-                decoded.code_object_version,
-                options,
-                &compiler_module,
-                &external_providers,
-                symbols.import_symbols(),
-                symbols.export_symbols(),
-                symbols.required_symbols(),
-                &output,
-            )
-        }
-        CompilerHandoffRequestBindingV2::ProtectedV3(binding) => {
-            calculate_protected_first_build_request_id_v3(
-                binding,
-                measurement,
-                decoded.envelope.identity().as_bytes(),
-                manifest_identity,
-                decoded.target,
-                decoded.code_object_version,
-                options,
-                &compiler_module,
-                &external_providers,
-                symbols.import_symbols(),
-                symbols.export_symbols(),
-                symbols.required_symbols(),
-                &output,
-            )
-        }
-    };
+    let request_id = calculate_protected_first_build_request_id_v3(
+        binding,
+        measurement,
+        decoded.envelope.identity().as_bytes(),
+        manifest_identity,
+        decoded.target,
+        decoded.code_object_version,
+        options,
+        &compiler_module,
+        &external_providers,
+        symbols.import_symbols(),
+        symbols.export_symbols(),
+        symbols.required_symbols(),
+        &output,
+    );
     if request_id == [0; 32] {
         return Err(WorkerRequestConstructionError::ReservedRequestId);
     }
@@ -907,92 +576,18 @@ pub(crate) fn construct_first_build_worker_request_v2_from_decoded(
         output,
     })
     .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
-    Ok(ConstructedCompilerHandoffWorkerRequestV2 {
-        manifest_identity,
-        request,
-    })
+    Ok(ConstructedFirstBuildWorkerRequest { request })
 }
 
-/// Constructs the only public Worker V2 request from a consumed, attempt-scoped handoff.
-///
-/// The complete canonical handoff is decoded again after one-shot consumption. Target,
-/// code-object version, envelope, symbol manifest, module kind, exact module bytes, plan inputs,
-/// worker measurement, and output bound must all agree. The final symbol closure is derived only
-/// from the manifest. A decode or construction failure consumes no lesser authority: the on-disk
-/// tombstone prevents replay.
-pub fn construct_worker_request_v2_from_consumed_handoff(
-    plan: &MultiInputLinkPlanV1,
-    measurement: &WorkerMeasurementV1,
-    consumed: ConsumedCompilerModuleHandoffV1,
-    external_providers: Vec<WorkerInputV1>,
-    input_kinds: &LinkInputKindClosureV1,
-    output: WorkerOutputConstraintsV1,
-) -> Result<CompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
-    let attempt = consumed.attempt();
-    let handoff_identity = consumed.identity();
-    let decoded = decode_compiler_module_handoff_v2(consumed.bytes())
-        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
-    let constructed = construct_plan_worker_request_v2_from_decoded(
-        CompilerHandoffRequestBindingV2::Existing {
-            attempt,
-            handoff_identity,
-        },
-        plan,
-        measurement,
-        &decoded,
-        external_providers,
-        input_kinds,
-        output,
-    )?;
-    Ok(CompilerHandoffWorkerRequestV2 {
-        attempt,
-        handoff_identity,
-        manifest_identity: constructed.manifest_identity,
-        request: constructed.request,
-    })
-}
-
-/// Constructs a closure-protected Worker V2 request from a consumed V2 transaction handoff.
-///
-/// This path does not inspect a V1 transaction slot and never converts the V2 handoff identity.
-/// Target, code-object version, manifest roles, module bytes, plan inputs, worker measurement, and
-/// output length must all match before the protected request can be returned.
-pub fn construct_protected_worker_request_v2_from_consumed_handoff(
-    plan: &MultiInputLinkPlanV1,
-    measurement: &WorkerMeasurementV1,
-    consumed: ConsumedCompilerModuleHandoffV2,
-    external_providers: Vec<WorkerInputV1>,
-    input_kinds: &LinkInputKindClosureV1,
-    output: WorkerOutputConstraintsV1,
-) -> Result<ProtectedCompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
-    let binding = ProtectedCompilerHandoffBindingV2::from_consumed(&consumed);
-    let decoded = decode_compiler_module_handoff_v2(consumed.bytes())
-        .map_err(WorkerRequestConstructionError::CompilerModuleHandoff)?;
-    let constructed = construct_plan_worker_request_v2_from_decoded(
-        CompilerHandoffRequestBindingV2::Protected(&binding),
-        plan,
-        measurement,
-        &decoded,
-        external_providers,
-        input_kinds,
-        output,
-    )?;
-    Ok(ProtectedCompilerHandoffWorkerRequestV2 {
-        binding,
-        manifest_identity: constructed.manifest_identity,
-        request: constructed.request,
-    })
-}
-
-pub(crate) fn construct_plan_worker_request_v2_from_decoded(
-    binding: CompilerHandoffRequestBindingV2<'_>,
+pub(crate) fn construct_plan_worker_request_from_decoded(
+    binding: &ProtectedCompilerHandoffBindingV3,
     plan: &MultiInputLinkPlanV1,
     measurement: &WorkerMeasurementV1,
     decoded: &DecodedCompilerModuleHandoffV2,
     external_providers: Vec<WorkerInputV1>,
     input_kinds: &LinkInputKindClosureV1,
     output: WorkerOutputConstraintsV1,
-) -> Result<ConstructedCompilerHandoffWorkerRequestV2, WorkerRequestConstructionError> {
+) -> Result<ConstructedFirstBuildWorkerRequest, WorkerRequestConstructionError> {
     let compiler_module = stage_exact_compiler_module_artifact_v1(
         decoded.compiler_module_kind,
         decoded.compiler_module_bytes.clone(),
@@ -1000,16 +595,7 @@ pub(crate) fn construct_plan_worker_request_v2_from_decoded(
     .map_err(WorkerRequestConstructionError::WorkerProtocol)?;
     let staged_envelope = crate::stage_compiler_ffi_envelope_v1(decoded.envelope.clone());
     let (_, options) = decode_plan_options(plan)?;
-    let identity_binding = match binding {
-        CompilerHandoffRequestBindingV2::Existing { .. } => PlanRequestIdentityBindingV2::Existing,
-        CompilerHandoffRequestBindingV2::Protected(binding) => {
-            PlanRequestIdentityBindingV2::Protected(binding)
-        }
-        CompilerHandoffRequestBindingV2::ProtectedV3(binding) => {
-            PlanRequestIdentityBindingV2::ProtectedV3(binding)
-        }
-    };
-    let request = construct_worker_request_v2_engine(
+    let request = construct_worker_request_from_v3_binding(
         plan,
         measurement,
         decoded.target,
@@ -1021,12 +607,9 @@ pub(crate) fn construct_plan_worker_request_v2_from_decoded(
         external_providers,
         input_kinds,
         output,
-        identity_binding,
+        binding,
     )?;
-    Ok(ConstructedCompilerHandoffWorkerRequestV2 {
-        manifest_identity: decoded.symbol_manifest.identity(),
-        request,
-    })
+    Ok(ConstructedFirstBuildWorkerRequest { request })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1441,90 +1024,6 @@ fn calculate_request_id(
     hasher.finalize().into()
 }
 
-#[allow(dead_code, clippy::too_many_arguments)]
-fn calculate_request_id_v2(
-    plan: &MultiInputLinkPlanV1,
-    measurement: &WorkerMeasurementV1,
-    staged_envelope_identity: [u8; 32],
-    compiler_envelope_identity: [u8; 32],
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    compiler_module: &WorkerInputV1,
-    external_providers: &[WorkerInputV1],
-    input_kinds: &LinkInputKindClosureV1,
-    import_symbols: &[String],
-    export_symbols: &[String],
-    final_symbols: &[String],
-    output: &WorkerOutputConstraintsV1,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PLAN_REQUEST_DOMAIN_V2);
-    hash_plan_request_v2(
-        &mut hasher,
-        plan,
-        measurement,
-        staged_envelope_identity,
-        compiler_envelope_identity,
-        manifest_identity,
-        target,
-        code_object_version,
-        options,
-        compiler_module,
-        external_providers,
-        input_kinds,
-        import_symbols,
-        export_symbols,
-        final_symbols,
-        output,
-    );
-    hasher.finalize().into()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn calculate_protected_plan_request_id_v2(
-    binding: &ProtectedCompilerHandoffBindingV2,
-    plan: &MultiInputLinkPlanV1,
-    measurement: &WorkerMeasurementV1,
-    staged_envelope_identity: [u8; 32],
-    compiler_envelope_identity: [u8; 32],
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    compiler_module: &WorkerInputV1,
-    external_providers: &[WorkerInputV1],
-    input_kinds: &LinkInputKindClosureV1,
-    import_symbols: &[String],
-    export_symbols: &[String],
-    final_symbols: &[String],
-    output: &WorkerOutputConstraintsV1,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_PLAN_REQUEST_DOMAIN_V2);
-    hash_protected_handoff_binding(&mut hasher, binding);
-    hash_plan_request_v2(
-        &mut hasher,
-        plan,
-        measurement,
-        staged_envelope_identity,
-        compiler_envelope_identity,
-        manifest_identity,
-        target,
-        code_object_version,
-        options,
-        compiler_module,
-        external_providers,
-        input_kinds,
-        import_symbols,
-        export_symbols,
-        final_symbols,
-        output,
-    );
-    hasher.finalize().into()
-}
-
 #[allow(clippy::too_many_arguments)]
 fn calculate_protected_plan_request_id_v3(
     binding: &ProtectedCompilerHandoffBindingV3,
@@ -1616,82 +1115,6 @@ fn hash_plan_request_v2(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn calculate_first_build_request_id_v2(
-    attempt: BuildAttempt,
-    handoff_identity: CompilerModuleHandoffIdentityV1,
-    measurement: &WorkerMeasurementV1,
-    compiler_envelope_identity: [u8; 32],
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    compiler_module: &WorkerInputV1,
-    external_providers: &[WorkerInputV1],
-    import_symbols: &[String],
-    export_symbols: &[String],
-    final_symbols: &[String],
-    output: &WorkerOutputConstraintsV1,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(FIRST_BUILD_REQUEST_DOMAIN_V2);
-    hash_attempt(&mut hasher, attempt);
-    hasher.update(handoff_identity.as_bytes());
-    hash_first_build_request_v2(
-        &mut hasher,
-        measurement,
-        compiler_envelope_identity,
-        manifest_identity,
-        target,
-        code_object_version,
-        options,
-        compiler_module,
-        external_providers,
-        import_symbols,
-        export_symbols,
-        final_symbols,
-        output,
-    );
-    hasher.finalize().into()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn calculate_protected_first_build_request_id_v2(
-    binding: &ProtectedCompilerHandoffBindingV2,
-    measurement: &WorkerMeasurementV1,
-    compiler_envelope_identity: [u8; 32],
-    manifest_identity: CompilerModuleSymbolManifestIdentityV1,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    compiler_module: &WorkerInputV1,
-    external_providers: &[WorkerInputV1],
-    import_symbols: &[String],
-    export_symbols: &[String],
-    final_symbols: &[String],
-    output: &WorkerOutputConstraintsV1,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V2);
-    hash_protected_handoff_binding(&mut hasher, binding);
-    hash_first_build_request_v2(
-        &mut hasher,
-        measurement,
-        compiler_envelope_identity,
-        manifest_identity,
-        target,
-        code_object_version,
-        options,
-        compiler_module,
-        external_providers,
-        import_symbols,
-        export_symbols,
-        final_symbols,
-        output,
-    );
-    hasher.finalize().into()
-}
-
-#[allow(clippy::too_many_arguments)]
 fn calculate_protected_first_build_request_id_v3(
     binding: &ProtectedCompilerHandoffBindingV3,
     measurement: &WorkerMeasurementV1,
@@ -1769,38 +1192,6 @@ fn hash_first_build_request_v2(
     hasher.update(output.max_bytes().to_le_bytes());
 }
 
-fn hash_protected_handoff_binding(
-    hasher: &mut Sha256,
-    binding: &ProtectedCompilerHandoffBindingV2,
-) {
-    hash_attempt(hasher, binding.attempt);
-    hasher.update([binding.slot as u8]);
-    hasher.update(binding.handoff_identity.as_bytes());
-    hash_compiler_closure_v2(hasher, binding.compiler_closure);
-}
-
-fn hash_compiler_closure_v2(hasher: &mut Sha256, closure: CompilerClosureV2) {
-    hasher.update(closure.cargo_executable_sha256());
-    hasher.update(closure.cargo_binding_trampoline_sha256());
-    hasher.update(closure.cargo_fe2o3_binding_wrapper_sha256());
-    hasher.update(closure.rustc_executable_sha256());
-    hasher.update(closure.rustc_runtime_tree_sha256());
-    hasher.update(closure.codegen_backend_sha256());
-    hasher.update(
-        closure
-            .cargo_binding_transition_protocol_version()
-            .to_le_bytes(),
-    );
-    hasher.update(closure.identity_sha256());
-}
-
-fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
-    hasher.update(attempt.generation().to_le_bytes());
-    hasher.update(attempt.session().as_bytes());
-    hasher.update(attempt.invocation().as_bytes());
-}
-
-#[allow(dead_code)]
 fn hash_input(hasher: &mut Sha256, input: &WorkerInputV1) {
     hasher.update([input.kind() as u8]);
     hasher.update(input.identity().sha256());
@@ -1824,446 +1215,5 @@ const fn code_object_version_byte(version: CodeObjectVersion) -> u8 {
         CodeObjectVersion::V4 => 4,
         CodeObjectVersion::V5 => 5,
         CodeObjectVersion::V6 => 6,
-    }
-}
-
-#[cfg(test)]
-mod v2_tests {
-    use super::*;
-    use crate::{LinkInputV1, LinkOptionV1, LinkOutputV1, ProvenanceNodeV1};
-    use fe2o3_artifact_transaction::{
-        BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
-        consume_compiler_module_handoff_v1, publish_compiler_module_handoff_v1,
-    };
-    use fe2o3_compiler_ffi::{
-        CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiContractV1,
-        CompilerFfiEnvelopeBuilderV1, CompilerFfiEnvelopeV1, CompilerFfiLinkRoleV1,
-        CompilerFfiSourceOwnerV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
-        CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
-        DeviceTargetV1 as CompilerDeviceTargetV1,
-    };
-    use reserved_fe2o3_symbols::{
-        DEVICE_FFI_DIRECTION_EXPORT_V1, DEVICE_FFI_DIRECTION_IMPORT_V1, DeviceFfiContractFieldsV1,
-        DeviceFfiDirectionV1, derive_device_ffi_contract_id_v1,
-    };
-    use std::{
-        fs,
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-    };
-
-    const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
-    const MODULE: &[u8] = b"exact compiler module bitcode";
-    const PROVIDER: &[u8] = b"exact external provider object";
-
-    struct Fixture {
-        plan: MultiInputLinkPlanV1,
-        kinds: LinkInputKindClosureV1,
-        provider: WorkerInputV1,
-        output: WorkerOutputConstraintsV1,
-    }
-
-    fn target() -> DeviceTargetV1 {
-        DeviceTargetV1::parse("gfx942:xnack-").unwrap()
-    }
-
-    fn options() -> WorkerOptionsV1 {
-        WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true)
-    }
-
-    fn fixture() -> Fixture {
-        let module = WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, MODULE.to_vec()).unwrap();
-        let provider =
-            WorkerInputV1::new(WorkerInputKindV1::AmdGpuRelocatable, PROVIDER.to_vec()).unwrap();
-        let mut inputs = [module, provider.clone()];
-        inputs.sort_by_key(|input| (input.identity(), input.kind()));
-        let link_inputs = inputs
-            .iter()
-            .map(|input| LinkInputV1::new(input.identity(), target()))
-            .collect::<Vec<_>>();
-        let output_identity = ContentIdentityV1::calculate(b"expected exact hsaco");
-        let mut provenance = link_inputs
-            .iter()
-            .map(|input| ProvenanceNodeV1::new(input.identity(), vec![]).unwrap())
-            .collect::<Vec<_>>();
-        provenance.push(
-            ProvenanceNodeV1::new(
-                output_identity,
-                link_inputs.iter().map(|input| input.identity()).collect(),
-            )
-            .unwrap(),
-        );
-        let plan = MultiInputLinkPlanV1::canonicalized(
-            target(),
-            link_inputs,
-            vec![
-                LinkOptionV1::new("code-object-version", "6").unwrap(),
-                LinkOptionV1::new("opt-level", "2").unwrap(),
-                LinkOptionV1::new("strip-debug", "true").unwrap(),
-                LinkOptionV1::new("verify-each", "true").unwrap(),
-            ],
-            LinkOutputV1::new(output_identity, target()),
-            provenance,
-        )
-        .unwrap();
-        let kinds =
-            LinkInputKindClosureV1::new(&plan, inputs.iter().map(|input| input.kind()).collect())
-                .unwrap();
-        Fixture {
-            plan,
-            kinds,
-            provider,
-            output: WorkerOutputConstraintsV1::new(output_identity.byte_len()).unwrap(),
-        }
-    }
-
-    fn compiler_envelope(import_symbol: &str) -> CompilerFfiEnvelopeV1 {
-        let compiler_target = CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap();
-        let mut builder =
-            CompilerFfiEnvelopeBuilderV1::new(compiler_target, CompilerCodeObjectVersion::V6, 2)
-                .unwrap();
-        builder
-            .push(contract(
-                import_symbol,
-                DeviceFfiDirectionV1::Import,
-                CompilerFfiLinkRoleV1::RequiresExternalDefinition,
-                0x31,
-            ))
-            .unwrap();
-        builder
-            .push(contract(
-                "rust_helper",
-                DeviceFfiDirectionV1::Export,
-                CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
-                0x42,
-            ))
-            .unwrap();
-        builder.finish().unwrap()
-    }
-
-    fn envelope(import_symbol: &str) -> StagedCompilerFfiEnvelopeV1 {
-        crate::stage_compiler_ffi_envelope_v1(compiler_envelope(import_symbol))
-    }
-
-    fn contract(
-        symbol: &str,
-        direction: DeviceFfiDirectionV1,
-        role: CompilerFfiLinkRoleV1,
-        semantic_byte: u8,
-    ) -> CompilerFfiContractV1 {
-        let semantic_identity = [semantic_byte; 32];
-        let semantic_text = lower_hex(&semantic_identity);
-        let direction_tag = match direction {
-            DeviceFfiDirectionV1::Import => DEVICE_FFI_DIRECTION_IMPORT_V1,
-            DeviceFfiDirectionV1::Export => DEVICE_FFI_DIRECTION_EXPORT_V1,
-        };
-        let fields = DeviceFfiContractFieldsV1 {
-            direction: direction_tag,
-            symbol,
-            calling_convention: "C",
-            code_object_version: 6,
-            target: "gfx942:xnack-",
-            physical_abi: ABI,
-            effects: "none",
-            semantic_identity: &semantic_text,
-        };
-        CompilerFfiContractV1::new(
-            derive_device_ffi_contract_id_v1(fields),
-            direction,
-            role,
-            CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
-            CompilerCodeObjectVersion::V6,
-            CompilerFfiSourceOwnerV1::new(
-                "ffi_crate",
-                &format!("ffi_crate::{symbol}"),
-                [semantic_byte; 16],
-                &format!("_RINvNtCs1234_9ffi_crate{symbol}"),
-            )
-            .unwrap(),
-            symbol,
-            ABI,
-            "none",
-            semantic_identity,
-        )
-        .unwrap()
-    }
-
-    fn measurement() -> WorkerMeasurementV1 {
-        WorkerMeasurementV1::new(
-            ContentIdentityV1::calculate(b"pinned worker executable"),
-            "worker-v1-build",
-            "llvm-v2-build",
-        )
-        .unwrap()
-    }
-
-    fn symbol_manifest(imports: &[&str], internal_helper: &str) -> CompilerModuleSymbolManifestV1 {
-        use CompilerModuleSymbolRoleV1 as Role;
-
-        let mut entries = vec![
-            (Role::KernelEntry, "kernel_main".to_owned()),
-            (Role::KernelDescriptor, "kernel_main.kd".to_owned()),
-            (Role::DeviceFfiExport, "rust_helper".to_owned()),
-            (Role::InternalHelper, internal_helper.to_owned()),
-        ];
-        entries.extend(
-            imports
-                .iter()
-                .map(|symbol| (Role::UnresolvedExternalImport, (*symbol).to_owned())),
-        );
-        entries.sort();
-        CompilerModuleSymbolManifestV1::new(entries).unwrap()
-    }
-
-    fn final_symbols() -> Vec<String> {
-        [
-            "external_add",
-            "kernel_main",
-            "kernel_main.kd",
-            "rust_helper",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect()
-    }
-
-    struct TestDirectory(PathBuf);
-
-    impl TestDirectory {
-        fn new() -> Self {
-            fe2o3_artifact_transaction::enable_same_mount_namespace_artifact_path_guard_v1();
-            static NEXT: AtomicU64 = AtomicU64::new(1);
-            let path = std::env::temp_dir().join(format!(
-                "fe2o3-finalizer-consumed-handoff-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn public_v2_construction_requires_and_retains_consumed_attempt_handoff() {
-        let fixture = fixture();
-        let directory = TestDirectory::new();
-        let producer =
-            ProducerIdentity::from_codegen("ffi_crate", Some(std::path::Path::new("src/lib.rs")))
-                .unwrap();
-        let attempt = begin_build_attempt(
-            &directory.0,
-            &producer,
-            BuildInvocation::from_bytes([0x71; 32]),
-            BuildSession::from_bytes([0x72; 16]),
-        )
-        .unwrap();
-        let manifest = symbol_manifest(&["external_add"], "internal_only");
-        let manifest_identity = manifest.identity();
-        let handoff = CompilerModuleHandoffV2::new(
-            CompilerModuleKindV1::LlvmBitcode,
-            CompilerDeviceTargetV1::parse("gfx942:xnack-").unwrap(),
-            CompilerCodeObjectVersion::V6,
-            compiler_envelope("external_add"),
-            manifest,
-            MODULE,
-        )
-        .unwrap();
-        let receipt = publish_compiler_module_handoff_v1(
-            &directory.0,
-            &producer,
-            attempt,
-            handoff.canonical_bytes(),
-        )
-        .unwrap();
-        let consumed =
-            consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
-        let request = construct_worker_request_v2_from_consumed_handoff(
-            &fixture.plan,
-            &measurement(),
-            consumed,
-            vec![fixture.provider.clone()],
-            &fixture.kinds,
-            fixture.output,
-        )
-        .unwrap();
-
-        assert_eq!(request.attempt(), attempt);
-        assert_eq!(request.handoff_identity(), receipt.identity());
-        assert_eq!(request.manifest_identity(), manifest_identity);
-        assert_eq!(request.sealed_request().compiler_module().bytes(), MODULE);
-        assert_eq!(
-            request.sealed_request().external_providers(),
-            &[fixture.provider]
-        );
-        assert!(!request.grants_publication_authority());
-        assert!(!request.grants_load_authority());
-        assert!(!request.grants_launch_authority());
-    }
-
-    #[test]
-    fn operator_cannot_omit_or_inject_manifest_symbols_and_internal_helpers_do_not_escape() {
-        let fixture = fixture();
-        let staged = envelope("external_add");
-        let compiler_identity = staged.inspection().envelope_identity();
-        let artifact = stage_exact_compiler_module_artifact_v1(
-            WorkerInputKindV1::LlvmBitcode,
-            MODULE.to_vec(),
-        )
-        .unwrap();
-        let artifact_identity = artifact.identity();
-        let request = construct_worker_request_v2(
-            &fixture.plan,
-            &measurement(),
-            target(),
-            CodeObjectVersion::V6,
-            options(),
-            staged,
-            symbol_manifest(&["external_add"], "internal_only"),
-            artifact,
-            vec![fixture.provider.clone()],
-            &fixture.kinds,
-            fixture.output.clone(),
-        )
-        .unwrap();
-
-        assert_eq!(request.compiler_module().identity(), artifact_identity);
-        assert_eq!(
-            request.compiler_envelope_identity().as_bytes(),
-            compiler_identity.as_bytes()
-        );
-        assert_eq!(request.import_symbols(), ["external_add"]);
-        assert_eq!(request.export_symbols(), ["rust_helper"]);
-        assert_eq!(request.final_symbols(), final_symbols());
-        assert!(
-            !request
-                .final_symbols()
-                .iter()
-                .any(|symbol| symbol == "internal_only")
-        );
-        assert_eq!(request.external_providers(), &[fixture.provider]);
-    }
-
-    #[test]
-    fn same_cardinality_envelope_substitution_and_wrong_module_fail_closed() {
-        let fixture = fixture();
-        let artifact = stage_exact_compiler_module_artifact_v1(
-            WorkerInputKindV1::LlvmBitcode,
-            MODULE.to_vec(),
-        )
-        .unwrap();
-        assert_eq!(
-            construct_worker_request_v2(
-                &fixture.plan,
-                &measurement(),
-                target(),
-                CodeObjectVersion::V6,
-                options(),
-                envelope("substituted_add"),
-                symbol_manifest(&["external_add"], "internal_only"),
-                artifact,
-                vec![fixture.provider.clone()],
-                &fixture.kinds,
-                fixture.output.clone(),
-            ),
-            Err(
-                WorkerRequestConstructionError::CompilerEnvelopeImportRoleMismatch(
-                    "external_add".to_owned()
-                )
-            )
-        );
-
-        let wrong_artifact = stage_exact_compiler_module_artifact_v1(
-            WorkerInputKindV1::LlvmBitcode,
-            b"different module".to_vec(),
-        )
-        .unwrap();
-        assert!(
-            construct_worker_request_v2(
-                &fixture.plan,
-                &measurement(),
-                target(),
-                CodeObjectVersion::V6,
-                options(),
-                envelope("external_add"),
-                symbol_manifest(&["external_add"], "internal_only"),
-                wrong_artifact,
-                vec![fixture.provider],
-                &fixture.kinds,
-                fixture.output,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn uncontracted_manifest_import_fails_closed() {
-        let fixture = fixture();
-        let artifact = stage_exact_compiler_module_artifact_v1(
-            WorkerInputKindV1::LlvmBitcode,
-            MODULE.to_vec(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            construct_worker_request_v2(
-                &fixture.plan,
-                &measurement(),
-                target(),
-                CodeObjectVersion::V6,
-                options(),
-                envelope("external_add"),
-                symbol_manifest(&["external_add", "uncontracted_external"], "internal_only",),
-                artifact,
-                vec![fixture.provider],
-                &fixture.kinds,
-                fixture.output,
-            ),
-            Err(
-                WorkerRequestConstructionError::CompilerEnvelopeImportRoleMismatch(
-                    "uncontracted_external".to_owned()
-                )
-            )
-        );
-    }
-
-    #[test]
-    fn manifest_identity_binds_roles_that_do_not_escape_the_final_closure() {
-        let fixture = fixture();
-        let construct = |internal_helper: &str| {
-            construct_worker_request_v2(
-                &fixture.plan,
-                &measurement(),
-                target(),
-                CodeObjectVersion::V6,
-                options(),
-                envelope("external_add"),
-                symbol_manifest(&["external_add"], internal_helper),
-                stage_exact_compiler_module_artifact_v1(
-                    WorkerInputKindV1::LlvmBitcode,
-                    MODULE.to_vec(),
-                )
-                .unwrap(),
-                vec![fixture.provider.clone()],
-                &fixture.kinds,
-                fixture.output.clone(),
-            )
-            .unwrap()
-        };
-
-        let first = construct("internal_alpha");
-        let second = construct("internal_beta");
-        assert_eq!(first.final_symbols(), second.final_symbols());
-        assert_ne!(first.request_id(), second.request_id());
-        assert_ne!(first.identity(), second.identity());
-    }
-
-    fn lower_hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 }

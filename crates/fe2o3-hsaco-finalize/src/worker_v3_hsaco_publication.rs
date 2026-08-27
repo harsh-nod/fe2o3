@@ -23,19 +23,19 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, FinalizedProtectedWorkerV3HsacoIdentityV1,
-    InspectedProtectedRawWorkerV3HsacoIdentityV1, LinkInputKindClosureV1, LinkInputV1,
-    LinkOutputV1, MultiInputLinkPlanV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
+    InspectedProtectedWorkerV3HsacoIdentityV1, LinkInputKindClosureV1, LinkInputV1, LinkOutputV1,
+    MultiInputLinkPlanV1, PreparedFinalizedProtectedWorkerV3HsacoV1,
     PreparedProtectedWorkerV3CompactFinalizerReplayV2, ProtectedCompilerHandoffBindingIdentityV3,
     ProtectedCompilerHandoffBindingV3, ProtectedFirstBuildWorkerV3Error,
     ProtectedFirstBuildWorkerV3IdentityV1, ProtectedWorkerV3CompactFinalizerReplayErrorV1,
     ProtectedWorkerV3CompactFinalizerReplayV2, ProvenanceNodeV1, WorkerInputV1,
     WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestConstructionError,
-    derive_unfinalized_hsaco_from_finalized_v1, finalize_inspected_protected_worker_v3_hsaco_v1,
+    derive_unfinalized_hsaco_from_finalized_v1, finalize_protected_worker_v3_hsaco_v1,
     first_build_worker_v3::recover_inert_protected_first_build_worker_v3_evidence_v1,
-    inspect_protected_production_v1_worker_v3_raw_hsaco_v1,
+    inspect_protected_worker_v3_hsaco_v1,
     request_construction::{
-        CompilerHandoffRequestBindingV2, construct_first_build_worker_request_v2_from_decoded,
-        construct_plan_worker_request_v2_from_decoded, decode_compiler_module_handoff_v2,
+        construct_first_build_worker_request_from_decoded,
+        construct_plan_worker_request_from_decoded, decode_compiler_module_handoff_v2,
         decode_link_options,
     },
     worker_protocol_v2::reconstruct_complete_worker_response_v2,
@@ -70,7 +70,7 @@ pub struct SealedProtectedWorkerV3HsacoPublicationIntentV1 {
     finalization: FinalizedProtectedWorkerV3HsacoIdentityV1,
     source: ProtectedFirstBuildWorkerV3IdentityV1,
     binding: ProtectedCompilerHandoffBindingIdentityV3,
-    raw_inspection: InspectedProtectedRawWorkerV3HsacoIdentityV1,
+    raw_inspection: InspectedProtectedWorkerV3HsacoIdentityV1,
     raw_output: ContentIdentityV1,
     finalized_output: ContentIdentityV1,
 }
@@ -96,7 +96,7 @@ impl SealedProtectedWorkerV3HsacoPublicationIntentV1 {
         self.binding
     }
 
-    pub const fn raw_inspection_identity(self) -> InspectedProtectedRawWorkerV3HsacoIdentityV1 {
+    pub const fn raw_inspection_identity(self) -> InspectedProtectedWorkerV3HsacoIdentityV1 {
         self.raw_inspection
     }
 
@@ -391,7 +391,7 @@ pub enum WorkerV3HsacoPublicationErrorV1 {
     Request(WorkerRequestConstructionError),
     Protocol(WorkerProtocolError),
     FirstBuild(ProtectedFirstBuildWorkerV3Error),
-    Inspection(crate::WorkerV3RawHsacoInspectionError),
+    Inspection(crate::WorkerV3HsacoInspectionError),
     Finalization(crate::WorkerV3HsacoFinalizationError),
     FinalizedHsaco(crate::FinalizationError),
     LinkPlan(crate::LinkPlanError),
@@ -493,7 +493,7 @@ error_conversion!(crate::ProtectedCompilerHandoffBindingErrorV3, Binding);
 error_conversion!(WorkerRequestConstructionError, Request);
 error_conversion!(WorkerProtocolError, Protocol);
 error_conversion!(ProtectedFirstBuildWorkerV3Error, FirstBuild);
-error_conversion!(crate::WorkerV3RawHsacoInspectionError, Inspection);
+error_conversion!(crate::WorkerV3HsacoInspectionError, Inspection);
 error_conversion!(crate::WorkerV3HsacoFinalizationError, Finalization);
 error_conversion!(crate::FinalizationError, FinalizedHsaco);
 error_conversion!(crate::LinkPlanError, LinkPlan);
@@ -643,8 +643,8 @@ fn validate_recovered_publication(
     let input_kinds =
         LinkInputKindClosureV1::new(&plan, plan_inputs_with_kinds(&decoded, &providers)?)?;
     let bootstrap_output = WorkerOutputConstraintsV1::new(replay.bootstrap_output_bound)?;
-    let bootstrap = construct_first_build_worker_request_v2_from_decoded(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
+    let bootstrap = construct_first_build_worker_request_from_decoded(
+        &binding,
         replay.worker,
         &decoded,
         providers,
@@ -662,8 +662,8 @@ fn validate_recovered_publication(
     )?;
     let providers = bootstrap.into_external_providers();
     let replay_output = WorkerOutputConstraintsV1::new(raw_identity.byte_len())?;
-    let replay_request = construct_plan_worker_request_v2_from_decoded(
-        CompilerHandoffRequestBindingV2::ProtectedV3(&binding),
+    let replay_request = construct_plan_worker_request_from_decoded(
+        &binding,
         &plan,
         replay.worker,
         &decoded,
@@ -694,11 +694,11 @@ fn validate_recovered_publication(
     if source.identity().as_bytes() != transcript.source_evidence_identity() {
         return Err(WorkerV3HsacoPublicationErrorV1::TranscriptSourceMismatch);
     }
-    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source)?;
+    let inspected = inspect_protected_worker_v3_hsaco_v1(source)?;
     if inspected.exact_bytes() != raw_hsaco {
         return Err(WorkerV3HsacoPublicationErrorV1::RawOutputMismatch);
     }
-    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected)?;
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected)?;
     if finalized.identity().as_bytes() != transcript.expected_finalization_identity() {
         return Err(WorkerV3HsacoPublicationErrorV1::TranscriptFinalizationMismatch);
     }

@@ -70,10 +70,11 @@ input kind, expected final symbol, bitcode, or Worker V1 claim.
 surface exposes only a domain-separated staged identity and target/version/count/blocker inspection.
 It cannot reveal contract or generic linker closures and cannot create or bind Worker V1 evidence.
 Because the neutral envelope has public constructors, staging does not authenticate rustc origin.
-The live managed Worker V2 path does not upgrade this caller-constructible staging surface. Instead,
-rustc publishes an attempt-scoped `CompilerModuleHandoffV2` containing the exact textual LLVM module,
-the complete envelope, and a compiler-derived symbol-role manifest. `cargo-fe2o3` consumes that
-handoff exactly once for the matching producer and build attempt.
+The live managed Worker V3 transaction does not upgrade this caller-constructible staging surface.
+Instead, rustc publishes a semantic handoff containing the exact textual LLVM module, the complete
+envelope, and a compiler-derived symbol-role manifest. `cargo-fe2o3` consumes that handoff exactly
+once for the matching producer and build attempt. Its nested module payload retains the versioned
+`CompilerModuleHandoffV2` codec; that label describes serialized bytes, not a V2 authority route.
 
 The older `G4FfiClaimEnvelopeV1` path below remains caller-constructible assertion-only plan
 scaffolding. It is not the real rustc observation and cannot upgrade generic Worker V1 evidence.
@@ -99,8 +100,8 @@ evidence source.
 target, code-object version, ordering, cardinality, aggregate bounds, and optional all-input symbol
 evidence. Rust definitions or kernels require exactly one neutral `CompilerModule` input claim. That
 role does not imply LLVM bitcode. This legacy G4 assertion path still does not carry the exact
-managed module; the separate live Worker V2 handoff carries one compiler-derived textual module
-with explicit kernel, helper, export, and import roles.
+managed module; the separate live Worker V3 transaction carries one compiler-derived textual
+module with explicit kernel, helper, export, and import roles.
 
 Successful staging returns only `StagedFfiLinkPlanV1`. Its public surface exposes the complete staged
 identity and a non-authoritative count/blocker summary. Raw plan, input, provider, symbol-evidence,
@@ -117,7 +118,7 @@ FFI provenance. Its API and wire bytes are unchanged, and no V1-to-V2 conversion
 
 Worker Protocol V2 remains the supervised LLVM/LLD engine wire format used by the
 current compiler handoff. It is not a public artifact route. The standalone raw
-Worker V2 inspection, canonical-finalization, and publication APIs have been
+legacy inspection, canonical-finalization, and publication APIs have been
 retired, along with exact tiled-GEMM, row-softmax, and workgroup-sync finalizer
 specializations.
 
@@ -133,12 +134,12 @@ relationships.
 The V3 path reuses the bounded upstream LLVM/LLD engine and its V2-framed worker
 exchange. This retained internal mechanism does not expose a standalone Worker
 V2 admission or publication authority. Raw output enters only through
-`inspect_protected_production_v1_worker_v3_raw_hsaco_v1`, which derives the
+`inspect_protected_worker_v3_hsaco_v1`, which derives the
 target, code-object version, symbol closure, descriptor state, and launch
 contract from the exact retained V3 evidence and independent HSACO inspection.
 Callers cannot supply or weaken those facts.
 
-`finalize_inspected_protected_worker_v3_hsaco_v1` consumes that V3 inspection.
+`finalize_protected_worker_v3_hsaco_v1` consumes that V3 inspection.
 It patches only a valid zero-digest canonical `.fe2o3.kd.v1` table, reparses the
 result, and checks target, kernel closure, ABI, resource, and launch observations
 against the retained inspection. Descriptor-free output fails closed as

@@ -25,13 +25,12 @@ use fe2o3_compiler_ffi::{
 };
 use fe2o3_hsaco_finalize::{
     CompilerClosureV2, ContentIdentityV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    InspectedProtectedRawWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
+    InspectedProtectedWorkerV3HsacoV1, LinkOptionV1, PinnedWorkerV1,
     ProtectedWorkerV3CompactFinalizerReplayV2, WorkerExecutionLimitsV1, WorkerInputKindV1,
     WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1, WorkerV3HsacoFinalizationError,
     WorkerV3HsacoPublicationErrorV1, execute_protected_reproducible_first_build_worker_v3,
-    finalize_inspected_protected_worker_v3_hsaco_v1,
-    inspect_protected_production_v1_worker_v3_raw_hsaco_v1, inspect_unfinalized,
-    persist_prepared_protected_worker_v3_hsaco_publication_v1,
+    finalize_protected_worker_v3_hsaco_v1, inspect_protected_worker_v3_hsaco_v1,
+    inspect_unfinalized, persist_prepared_protected_worker_v3_hsaco_publication_v1,
     prepare_protected_worker_v3_hsaco_publication_v1,
     publish_recovered_protected_worker_v3_hsaco_v1,
     recover_protected_worker_v3_hsaco_publication_v1,
@@ -46,7 +45,7 @@ use fe2o3_kernel_descriptor::{
 };
 use sha2::{Digest, Sha256};
 
-#[path = "fixtures/worker_v2_hsaco_test_support.rs"]
+#[path = "fixtures/worker_v3_hsaco_test_support.rs"]
 mod hsaco_fixture;
 
 use hsaco_fixture::{
@@ -55,7 +54,7 @@ use hsaco_fixture::{
 };
 
 const TARGET: &str = "gfx942:xnack-";
-const WORKER_BUILD_ID: &str = "fixture-worker-v2-hsaco-v1";
+const WORKER_BUILD_ID: &str = "fixture-worker-v3-hsaco-v1";
 const RAW_HSACO_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
 const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
 const PAIR_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
@@ -251,8 +250,8 @@ fn publish_worker_v3_fixture_in_directory_with_config(
         descriptor_symbol,
         vec![provider],
     );
-    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
-    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
     let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&producer, finalized).unwrap();
     let persisted = persist_prepared_protected_worker_v3_hsaco_publication_v1(
         &directory.0,
@@ -288,7 +287,7 @@ fn native_v3_inspection_retains_every_boundary_axis_without_authority() {
     let expected = binding.expectation();
     let plan = evidence.plan().identity();
 
-    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).unwrap();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(evidence).unwrap();
     require_v3_inspection(&inspected);
     assert_eq!(inspected.source_evidence_identity(), source_identity);
     assert_eq!(inspected.binding_identity(), binding.identity());
@@ -355,7 +354,7 @@ fn strict_v3_inspection_derives_wg256_from_the_bound_descriptor() {
         "vecadd.kd",
     );
 
-    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
 
     assert_eq!(
         inspected.policy().launch().required_workgroup_size(),
@@ -375,7 +374,7 @@ fn native_v3_finalization_fails_closed_without_descriptor_source_evidence() {
     let binding = raw.binding_identity();
     let expected = raw.binding_expectation();
     let raw_output = raw.raw_hsaco_identity();
-    let blocker = match finalize_inspected_protected_worker_v3_hsaco_v1(raw) {
+    let blocker = match finalize_protected_worker_v3_hsaco_v1(raw) {
         Err(
             WorkerV3HsacoFinalizationError::MissingAuthenticatedProtectedDescriptorSourceEvidenceV3(
                 blocker,
@@ -420,9 +419,9 @@ fn native_v3_finalization_rejects_a_different_canonical_descriptor_source() {
         "vecadd",
         "vecadd.kd",
     );
-    let raw = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    let raw = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
     assert!(matches!(
-        finalize_inspected_protected_worker_v3_hsaco_v1(raw),
+        finalize_protected_worker_v3_hsaco_v1(raw),
         Err(WorkerV3HsacoFinalizationError::CompilerDescriptorSourceMismatch)
     ));
 }
@@ -441,9 +440,9 @@ fn native_v3_finalization_rejects_a_different_export_manifest_receipt() {
         "vecadd",
         "vecadd.kd",
     );
-    let raw = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
+    let raw = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
     assert!(matches!(
-        finalize_inspected_protected_worker_v3_hsaco_v1(raw),
+        finalize_protected_worker_v3_hsaco_v1(raw),
         Err(WorkerV3HsacoFinalizationError::ExportManifestMismatch)
     ));
 }
@@ -467,8 +466,8 @@ fn native_v3_publication_persists_and_reconstructs_exact_lineage_after_restart()
         "vecadd.kd",
         vec![provider],
     );
-    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
-    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
     let exact_finalized = finalized.exact_finalized_bytes().to_vec();
     let prepared =
         prepare_protected_worker_v3_hsaco_publication_v1(&producer(), finalized).unwrap();
@@ -654,8 +653,8 @@ fn native_v3_publication_rejects_a_different_producer() {
         "vecadd",
         "vecadd.kd",
     );
-    let inspected = inspect_protected_production_v1_worker_v3_raw_hsaco_v1(source).unwrap();
-    let finalized = finalize_inspected_protected_worker_v3_hsaco_v1(inspected).unwrap();
+    let inspected = inspect_protected_worker_v3_hsaco_v1(source).unwrap();
+    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).unwrap();
     let prepared =
         prepare_protected_worker_v3_hsaco_publication_v1(&producer(), finalized).unwrap();
     let other = ProducerIdentity::from_codegen(
@@ -786,15 +785,15 @@ fn raw_bytes_and_every_structural_hsaco_axis_are_checked() {
                 ..EvidenceConfig::BASE
             },
         );
-        assert!(inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence).is_err());
+        assert!(inspect_protected_worker_v3_hsaco_v1(evidence).is_err());
     }
 }
 
-fn inspected(bytes: Vec<u8>, config: EvidenceConfig) -> InspectedProtectedRawWorkerV3HsacoV1 {
-    inspect_protected_production_v1_worker_v3_raw_hsaco_v1(evidence(bytes, config)).unwrap()
+fn inspected(bytes: Vec<u8>, config: EvidenceConfig) -> InspectedProtectedWorkerV3HsacoV1 {
+    inspect_protected_worker_v3_hsaco_v1(evidence(bytes, config)).unwrap()
 }
 
-fn require_v3_inspection(_: &InspectedProtectedRawWorkerV3HsacoV1) {}
+fn require_v3_inspection(_: &InspectedProtectedWorkerV3HsacoV1) {}
 
 fn evidence(hsaco: Vec<u8>, config: EvidenceConfig) -> InertProtectedFirstBuildWorkerV3EvidenceV1 {
     let directory = TestDirectory::new();
@@ -970,7 +969,7 @@ fn slice_descriptor_table_with_workgroup(workgroup_size: u32) -> Vec<u8> {
 }
 
 fn worker_path() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_fe2o3-worker-v2-hsaco-fixture"))
+    Path::new(env!("CARGO_BIN_EXE_fe2o3-worker-v3-hsaco-fixture"))
 }
 
 fn pinned(directory: &TestDirectory, llvm_build_identity: &str) -> PinnedWorkerV1 {

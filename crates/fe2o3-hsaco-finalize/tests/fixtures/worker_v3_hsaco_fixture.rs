@@ -3,9 +3,9 @@ use std::io::{self, Read, Write};
 use sha2::{Digest, Sha256};
 
 #[allow(dead_code)]
-mod worker_v2_hsaco_test_support;
+mod worker_v3_hsaco_test_support;
 
-const WORKER_ID: &str = "fixture-worker-v2-hsaco-v1";
+const WORKER_ID: &str = "fixture-worker-v3-hsaco-v1";
 const PAYLOAD_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
 const SCALAR_LLVM_BUILD_IDENTITY: &str =
     "upstream-llvmorg-22.1.8-ca7933e47d3a3451d81e72ac174dcb5aa28b59d1";
@@ -41,8 +41,8 @@ fn main() {
         .unwrap();
 }
 
-fn scalar_fixture_for_module(module: &[u8]) -> worker_v2_hsaco_test_support::Fixture {
-    use worker_v2_hsaco_test_support::ScalarAddFixtureMutation as Mutation;
+fn scalar_fixture_for_module(module: &[u8]) -> worker_v3_hsaco_test_support::Fixture {
+    use worker_v3_hsaco_test_support::ScalarAddFixtureMutation as Mutation;
 
     let mutation = match embedded_source_selector(module) {
         0x01 => Mutation::RelSection,
@@ -64,7 +64,7 @@ fn scalar_fixture_for_module(module: &[u8]) -> worker_v2_hsaco_test_support::Fix
         0x11 => Mutation::MachineBytes,
         _ => Mutation::None,
     };
-    worker_v2_hsaco_test_support::scalar_add_fixture_with(mutation)
+    worker_v3_hsaco_test_support::scalar_add_fixture_with(mutation)
 }
 
 fn embedded_source_selector(module: &[u8]) -> u8 {
