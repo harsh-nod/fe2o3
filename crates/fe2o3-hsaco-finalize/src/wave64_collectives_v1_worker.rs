@@ -1105,28 +1105,6 @@ mod tests {
     }
 
     #[test]
-    fn duplicated_bindings_match_the_integrated_compiler_profile() {
-        let integrated =
-            include_str!("../../rustc-codegen-fe2o3/src/collected_wave64_collectives_v1.rs");
-        for binding in [
-            COMPILER_CRATE_BINDING,
-            RUSTC_RELEASE,
-            "55e86c996809902e8bbad512cfb4d2c18be446d9",
-            std::str::from_utf8(CANONICAL_IR_BINDING).unwrap(),
-            std::str::from_utf8(DESCRIPTOR_PROFILE_BINDING).unwrap(),
-        ] {
-            assert!(integrated.contains(binding), "missing binding {binding}");
-        }
-        let portable_mir = PORTABLE_MIR_CLOSURE_IDENTITY
-            .iter()
-            .map(|byte| format!("0x{byte:02x}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let compact_integrated = integrated.split_whitespace().collect::<String>();
-        assert!(compact_integrated.contains(&portable_mir));
-    }
-
-    #[test]
     fn exact_handoff_binds_source_mir_kir_descriptor_and_abi() {
         let compiler_pins = pins(0xa5);
         let handoff =

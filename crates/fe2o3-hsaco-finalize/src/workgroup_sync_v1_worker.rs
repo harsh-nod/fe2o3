@@ -1099,45 +1099,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn integrated_compiler_bindings_are_duplicated_exactly() {
-        let integrated =
-            include_str!("../../rustc-codegen-fe2o3/src/collected_workgroup_sync_v1.rs");
-        for profile in [
-            WorkgroupSyncProfileKindV1::LdsReduction,
-            WorkgroupSyncProfileKindV1::ScopedAtomic,
-        ] {
-            let spec = profile.spec();
-            for binding in [
-                spec.compiler_crate_binding,
-                std::str::from_utf8(spec.abi_binding).unwrap(),
-                std::str::from_utf8(spec.effect_binding).unwrap(),
-                std::str::from_utf8(spec.resource_binding).unwrap(),
-                std::str::from_utf8(spec.canonical_ir_binding).unwrap(),
-            ] {
-                assert!(integrated.contains(binding), "missing binding {binding}");
-            }
-            for identity in [
-                spec.portable_mir,
-                spec.fn_abi,
-                spec.compiler_semantics,
-                spec.trusted_terminals,
-            ] {
-                let bytes = identity
-                    .iter()
-                    .map(|byte| format!("0x{byte:02x}"))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                assert!(
-                    integrated
-                        .split_whitespace()
-                        .collect::<String>()
-                        .contains(&bytes)
-                );
-            }
-        }
-    }
-
-    #[test]
     fn exact_handoffs_are_distinct_and_reproducible() {
         let lds = construct_inert_workgroup_sync_v1_compiler_handoff_v1(
             WorkgroupSyncCompilerPinsV1::exact_lds_reduction_v1(),

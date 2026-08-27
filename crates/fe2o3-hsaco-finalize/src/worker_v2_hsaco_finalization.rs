@@ -2224,13 +2224,6 @@ pub fn finalize_inspected_protected_worker_v3_hsaco_v1(
     })
 }
 
-#[cfg(feature = "general-gemm-v1")]
-pub(crate) fn finalize_allocated_general_gemm_worker_v2_hsaco_v1(
-    raw: InspectedRawWorkerV2HsacoV1,
-) -> Result<PreparedFinalizedWorkerV2HsacoV1, WorkerV2HsacoFinalizationError> {
-    finalize_inspected_worker_v2_hsaco_with_placement_v1(raw, true)
-}
-
 fn finalize_inspected_worker_v2_hsaco_with_placement_v1(
     raw: InspectedRawWorkerV2HsacoV1,
     allocated_read_only: bool,
