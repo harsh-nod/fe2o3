@@ -458,7 +458,60 @@ fn final_publication_transition_is_move_only_and_retains_exact_v3() {
         finished.descriptor().compiler_closure(),
         expected.compiler_closure()
     );
-    finished.revalidate().unwrap();
+    finished
+        .revalidate_for_publication_with_observation(observation(&expected))
+        .unwrap();
+}
+
+#[test]
+fn retained_publication_custody_rejects_late_process_substitution() {
+    let expected = baseline_descriptor();
+    let finished = validate(expected.clone(), observation(&expected))
+        .unwrap()
+        .finish_for_publication_with_observation(observation(&expected))
+        .unwrap();
+
+    let mut changed = observation(&expected);
+    changed.argv[0].push_str("-changed");
+    assert!(matches!(
+        finished.revalidate_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::ArgumentsMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.canonical_working_directory = "/changed".into();
+    assert!(matches!(
+        finished.revalidate_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::WorkingDirectoryMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.running_rustc_sha256 = [0xa1; 32];
+    assert!(matches!(
+        finished.revalidate_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::RunningRustcMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    changed.running_codegen_backend_sha256 = [0xa2; 32];
+    assert!(matches!(
+        finished.revalidate_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::RunningCodegenBackendMismatch)
+    ));
+
+    let mut changed = observation(&expected);
+    let mut entries = changed
+        .compile_environment
+        .entries()
+        .iter()
+        .map(|entry| (OsString::from(entry.key()), OsString::from(entry.value())))
+        .collect::<Vec<_>>();
+    entries.push((OsString::from("CHANGED"), OsString::from("1")));
+    changed.compile_environment = CompileEnvironmentV2::from_child_environment(entries).unwrap();
+    assert!(matches!(
+        finished.revalidate_for_publication_with_observation(changed),
+        Err(ProtectedRustcInvocationErrorV1::CompileEnvironmentMismatch)
+    ));
 }
 
 #[test]

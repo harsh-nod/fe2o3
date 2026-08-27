@@ -683,12 +683,6 @@ impl TargetLoweredProductionCompilation {
         let invocation = (*publication.invocation)
             .finish_for_publication()
             .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
-        invocation.revalidate().map_err(|detail| {
-            ProductionPipelineError::ProtectedRustcInvocation(
-                ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged(detail),
-            )
-        })?;
-        let invocation_descriptor = invocation.descriptor().clone();
         let (module_handoff, compiler_descriptor_source) = publication
             .prepared
             .into_validated_parts()
@@ -696,12 +690,15 @@ impl TargetLoweredProductionCompilation {
         let strict_handoff = publication
             .semantic_lineage
             .finish(
-                invocation_descriptor,
+                &invocation,
                 publication.rustc_target.device_target(),
                 &compiler_descriptor_source,
                 module_handoff,
             )
             .map_err(ProductionPipelineError::SemanticLineage)?;
+        invocation
+            .revalidate_for_publication()
+            .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
         fe2o3_artifact_transaction::publish_compiler_module_handoff_v3(
             &publication.output_dir,
             &publication.producer,
@@ -1147,6 +1144,7 @@ mod tests {
     fn production_publication_has_one_protected_custody_path() {
         let pipeline = include_str!("production_pipeline.rs");
         let worker = include_str!("production_worker_handoff.rs");
+        let lineage = include_str!("production_semantic_lineage_v3.rs");
         for removed in [
             concat!("ProductionCompilerModule", "PublicationV1"),
             concat!("PreparedProductionCompiler", "PublicationV1"),
@@ -1163,8 +1161,30 @@ mod tests {
                 "obsolete production publication variant remains: {removed}",
             );
         }
-        assert!(pipeline.contains("ProductionCompilerCustody::protected(invocation)"));
+        assert!(pipeline.contains(concat!(
+            "ProductionCompilerCustody::protected(",
+            "invocation, build_attempt)"
+        )));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
+        assert!(!pipeline.contains(concat!(
+            "let invocation_",
+            "descriptor = invocation.descriptor().clone()"
+        )));
+        assert!(lineage.contains("invocation_custody: &FinishedProtectedRustcInvocationV3"));
+        assert!(!lineage.contains("invocation: RustcInvocationDescriptorV3"));
+
+        let lineage_finish = pipeline
+            .find(".semantic_lineage\n            .finish(\n                &invocation,")
+            .expect("semantic lineage consumes live protected invocation custody");
+        let final_revalidation = pipeline[lineage_finish..]
+            .find("invocation\n            .revalidate_for_publication()")
+            .map(|offset| lineage_finish + offset)
+            .expect("protected invocation is revalidated after lineage construction");
+        let durable_publication = pipeline[lineage_finish..]
+            .find(concat!("publish_compiler_module_handoff", "_v3"))
+            .map(|offset| lineage_finish + offset)
+            .expect("strict V3 handoff publication remains present");
+        assert!(lineage_finish < final_revalidation && final_revalidation < durable_publication);
     }
 
     #[test]

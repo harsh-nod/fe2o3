@@ -25,9 +25,7 @@ use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV3,
     ProductionFormalMemoryOwnerV1, ProductionLineageEvidenceErrorV3,
 };
-use fe2o3_rustc_invocation::{
-    InvocationDigestV3, RustcInvocationDescriptorV3, encode_descriptor_v3,
-};
+use fe2o3_rustc_invocation::{InvocationDigestV3, encode_descriptor_v3};
 use sha2::{Digest, Sha256};
 
 use crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5;
@@ -36,6 +34,9 @@ use crate::production_target_lineage_v3::{
     DataLayoutTranscriptV3, ProductionTargetLineageErrorV3, SemanticToLlvmAssociationInputsV3,
     SemanticToLlvmAssociationTranscriptV3, TargetBindingTranscriptInputsV3,
     TargetBindingTranscriptV3, TargetLineageIdentityV3,
+};
+use crate::protected_rustc_invocation::{
+    FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1,
 };
 
 const CODE_OBJECT_VERSION_V3: u16 = 6;
@@ -171,11 +172,15 @@ impl PreparedProductionSemanticLineageV3 {
 
     pub(crate) fn finish(
         self,
-        invocation: RustcInvocationDescriptorV3,
+        invocation_custody: &FinishedProtectedRustcInvocationV3,
         target: fe2o3_compiler_ffi::DeviceTargetV1,
         descriptor_source: &CompilerDescriptorSourceV1,
         module_handoff: CompilerModuleHandoffV2,
     ) -> Result<InertSemanticCompilerModuleHandoffV3, ProductionSemanticLineageErrorV3> {
+        invocation_custody
+            .revalidate_for_publication()
+            .map_err(ProductionSemanticLineageErrorV3::ProtectedRustcInvocation)?;
+        let invocation = invocation_custody.descriptor().clone();
         if invocation.amd_target() != target.to_string()
             || descriptor_source.table().device_target() != target
             || module_handoff.target() != target
@@ -512,6 +517,7 @@ fn validate_final_exports(
 pub(crate) enum ProductionSemanticLineageErrorV3 {
     AxisMismatch(&'static str),
     Invocation(String),
+    ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     LiveOwner(String),
     CanonicalKir(VerifiedCanonicalKernelIrErrorV5),
     Evidence(ProductionLineageEvidenceErrorV3),
@@ -531,6 +537,10 @@ impl fmt::Display for ProductionSemanticLineageErrorV3 {
             Self::Invocation(detail) => {
                 write!(formatter, "production V3 invocation failed: {detail}")
             }
+            Self::ProtectedRustcInvocation(error) => write!(
+                formatter,
+                "production V3 protected rustc custody failed: {error}"
+            ),
             Self::LiveOwner(detail) => {
                 write!(formatter, "production V3 live owner failed: {detail}")
             }
