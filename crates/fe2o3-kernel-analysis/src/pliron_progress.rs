@@ -7,6 +7,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
 };
 
 use dialect_kernel::{
@@ -20,13 +21,15 @@ use pliron::{
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
-    operation::Operation,
+    operation::{Operation, verify_operation},
 };
 
 use crate::KernelCheckStatusV1;
 
 pub const MAX_PLIRON_PROGRESS_BLOCKS_V1: usize = 4_096;
 pub const MAX_PLIRON_PROGRESS_EDGES_V1: usize = 16_384;
+pub const MAX_PLIRON_PROGRESS_OPERATIONS_V1: usize = 65_536;
+pub const MAX_PLIRON_PROGRESS_WORK_UNITS_V1: usize = 262_144;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlironProgressCertificateV1 {
@@ -61,6 +64,9 @@ impl PlironProgressCertificateV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironProgressFindingV1 {
+    StructuralPrerequisiteRejected {
+        reason: &'static str,
+    },
     ResourceLimitExceeded {
         resource: &'static str,
         actual: usize,
@@ -81,9 +87,9 @@ impl PlironProgressFindingV1 {
     pub const fn status(&self) -> KernelCheckStatusV1 {
         match self {
             Self::NonTerminatingCycle { .. } => KernelCheckStatusV1::Rejected,
-            Self::ResourceLimitExceeded { .. } | Self::ProgressIncomplete { .. } => {
-                KernelCheckStatusV1::Incomplete
-            }
+            Self::StructuralPrerequisiteRejected { .. }
+            | Self::ResourceLimitExceeded { .. }
+            | Self::ProgressIncomplete { .. } => KernelCheckStatusV1::Incomplete,
         }
     }
 }
@@ -91,6 +97,10 @@ impl PlironProgressFindingV1 {
 impl fmt::Display for PlironProgressFindingV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::StructuralPrerequisiteRejected { reason } => write!(
+                formatter,
+                "error[FE2O3-PROGRESS-000]: PLIRON structural verification failed before progress analysis: {reason}; help: repair the malformed operation, type, SSA operand, block argument, or CFG edge"
+            ),
             Self::ResourceLimitExceeded {
                 resource,
                 actual,
@@ -112,6 +122,26 @@ impl fmt::Display for PlironProgressFindingV1 {
                 "error[FE2O3-PROGRESS-002]: termination proof for control-flow cycle {blocks:?} is incomplete: {reason}; help: express the loop as `i < bound` with a positive constant backedge step and a statically proved no-wrap update, or provide a future supported ranking-function contract"
             ),
         }
+    }
+}
+
+#[derive(Default)]
+struct ProgressWorkBudgetV1 {
+    work_units: usize,
+}
+
+impl ProgressWorkBudgetV1 {
+    fn charge(&mut self, units: usize) -> Result<(), PlironProgressFindingV1> {
+        let actual = self.work_units.checked_add(units).unwrap_or(usize::MAX);
+        if actual > MAX_PLIRON_PROGRESS_WORK_UNITS_V1 {
+            return Err(PlironProgressFindingV1::ResourceLimitExceeded {
+                resource: "work units",
+                actual,
+                limit: MAX_PLIRON_PROGRESS_WORK_UNITS_V1,
+            });
+        }
+        self.work_units = actual;
+        Ok(())
     }
 }
 
@@ -157,6 +187,7 @@ pub fn run_pliron_progress_check_v1(
         .get_region(context)
         .deref(context)
         .iter(context)
+        .take(MAX_PLIRON_PROGRESS_BLOCKS_V1.saturating_add(1))
         .collect::<Vec<_>>();
     if blocks.len() > MAX_PLIRON_PROGRESS_BLOCKS_V1 {
         return report(PlironProgressFindingV1::ResourceLimitExceeded {
@@ -173,8 +204,17 @@ pub fn run_pliron_progress_check_v1(
     let mut operation_blocks = HashMap::new();
     let mut edges = vec![Vec::new(); blocks.len()];
     let mut edge_count = 0_usize;
+    let mut operation_count = 0_usize;
     for (block_index, block) in blocks.iter().copied().enumerate() {
         for operation in block.deref(context).iter(context) {
+            operation_count = operation_count.checked_add(1).unwrap_or(usize::MAX);
+            if operation_count > MAX_PLIRON_PROGRESS_OPERATIONS_V1 {
+                return report(PlironProgressFindingV1::ResourceLimitExceeded {
+                    resource: "operations",
+                    actual: operation_count,
+                    limit: MAX_PLIRON_PROGRESS_OPERATIONS_V1,
+                });
+            }
             operation_blocks.insert(operation, block_index);
         }
         let Some(terminator) = block.deref(context).get_terminator(context) else {
@@ -202,6 +242,36 @@ pub fn run_pliron_progress_check_v1(
         }
     }
 
+    let mut work = ProgressWorkBudgetV1::default();
+    let linear_work = operation_count
+        .checked_mul(2)
+        .and_then(|units| {
+            blocks
+                .len()
+                .checked_add(edge_count)
+                .and_then(|graph| graph.checked_mul(8))
+                .and_then(|graph| units.checked_add(graph))
+        })
+        .unwrap_or(usize::MAX);
+    if let Err(finding) = work.charge(linear_work) {
+        return report(finding);
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        verify_operation(function.get_operation(), context)
+    })) {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => {
+            return report(PlironProgressFindingV1::StructuralPrerequisiteRejected {
+                reason: "the PLIRON verifier rejected the function",
+            });
+        }
+        Err(_) => {
+            return report(PlironProgressFindingV1::StructuralPrerequisiteRejected {
+                reason: "the PLIRON verifier panicked",
+            });
+        }
+    }
+
     let reachable = reachable_blocks(&edges);
     let predecessors = predecessor_lists(&edges);
     let definitely_reachable = definitely_reachable_blocks(context, &blocks, &block_indices);
@@ -209,13 +279,21 @@ pub fn run_pliron_progress_check_v1(
     let mut certificates = Vec::new();
     for mut component in strongly_connected_components(&edges) {
         component.sort_unstable();
+        let component_work = component
+            .len()
+            .checked_mul(component.len())
+            .unwrap_or(usize::MAX);
+        if let Err(finding) = work.charge(component_work) {
+            return report(finding);
+        }
         if !component.iter().any(|block| reachable[*block]) || !is_cycle(&component, &edges) {
             continue;
         }
+        let component_members = component.iter().copied().collect::<HashSet<_>>();
         let has_exit = component.iter().any(|block| {
             edges[*block]
                 .iter()
-                .any(|successor| !component.contains(successor))
+                .any(|successor| !component_members.contains(successor))
         });
         if !has_exit {
             if component.iter().any(|block| definitely_reachable[*block]) {
@@ -239,6 +317,7 @@ pub fn run_pliron_progress_check_v1(
             &operation_blocks,
             &predecessors,
             &component,
+            &component_members,
         ) {
             CanonicalLoopResultV1::Proved(certificate) => certificates.push(certificate),
             CanonicalLoopResultV1::Inactive => {}
@@ -283,8 +362,8 @@ fn canonical_positive_induction_loop(
     operation_blocks: &HashMap<Ptr<Operation>, usize>,
     predecessors: &[Vec<usize>],
     component: &[usize],
+    component_members: &HashSet<usize>,
 ) -> CanonicalLoopResultV1 {
-    let component_members = component.iter().copied().collect::<HashSet<_>>();
     for header_index in component {
         let header = blocks[*header_index];
         let header_block = header.deref(context);
@@ -424,7 +503,7 @@ fn canonical_positive_induction_loop(
             return zero_step_result(
                 context,
                 blocks,
-                component,
+                component_members,
                 header,
                 branch.rhs(context),
                 "the induction variable is unchanged on the backedge",
@@ -458,7 +537,7 @@ fn canonical_positive_induction_loop(
                 return zero_step_result(
                     context,
                     blocks,
-                    component,
+                    component_members,
                     header,
                     branch.rhs(context),
                     "the induction step is zero",
@@ -508,7 +587,7 @@ fn predecessor_lists(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
 fn zero_step_result(
     context: &Context,
     blocks: &[Ptr<BasicBlock>],
-    component: &[usize],
+    component_members: &HashSet<usize>,
     header: Ptr<BasicBlock>,
     bound: pliron::value::Value,
     reason: &'static str,
@@ -521,7 +600,7 @@ fn zero_step_result(
     let mut saw_predecessor = false;
     let mut saw_unknown = false;
     for (predecessor_index, predecessor) in blocks.iter().copied().enumerate() {
-        if component.contains(&predecessor_index) {
+        if component_members.contains(&predecessor_index) {
             continue;
         }
         let Some(terminator) = predecessor.deref(context).get_terminator(context) else {
@@ -692,5 +771,24 @@ fn report(finding: PlironProgressFindingV1) -> PlironProgressReportV1 {
     PlironProgressReportV1 {
         findings: vec![finding],
         certificates: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod resource_budget_tests {
+    use super::*;
+
+    #[test]
+    fn work_budget_accepts_the_boundary_and_rejects_one_more_unit() {
+        let mut budget = ProgressWorkBudgetV1::default();
+        budget.charge(MAX_PLIRON_PROGRESS_WORK_UNITS_V1).unwrap();
+        assert_eq!(
+            budget.charge(1),
+            Err(PlironProgressFindingV1::ResourceLimitExceeded {
+                resource: "work units",
+                actual: MAX_PLIRON_PROGRESS_WORK_UNITS_V1 + 1,
+                limit: MAX_PLIRON_PROGRESS_WORK_UNITS_V1,
+            })
+        );
     }
 }

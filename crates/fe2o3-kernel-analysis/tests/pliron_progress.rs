@@ -1,10 +1,11 @@
 use dialect_kernel::{
     BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexType, IndexUnsignedCastOp, InvocationIndexOp, ReturnOp,
-    register_dialect,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexType, IndexUnsignedCastOp,
+    InvocationIndexOp, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckStatusV1, PlironProgressFindingV1, run_pliron_progress_check_v1,
+    KernelCheckStatusV1, MAX_PLIRON_PROGRESS_OPERATIONS_V1, MAX_PLIRON_PROGRESS_WORK_UNITS_V1,
+    PlironProgressFindingV1, run_pliron_progress_check_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -258,6 +259,92 @@ fn multi_block_loop(
     append(context, exit, &ret);
     verify_operation(function.get_operation(), context).unwrap();
     function
+}
+
+#[test]
+fn malformed_branch_arguments_fail_structural_verification_before_progress() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "malformed_progress_subject", 0);
+    let entry = function.get_entry_block(context);
+    let (target, _) = index_block(context, &function, "target");
+    let malformed = BranchArgsOp::new(context, vec![], target);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &malformed);
+    append(context, target, &ret);
+
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::StructuralPrerequisiteRejected { reason }]
+            if reason.contains("verifier rejected")
+    ));
+}
+
+#[test]
+fn operation_count_rejects_exactly_one_over_the_limit_before_verification() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "operation_limit", 0);
+    let entry = function.get_entry_block(context);
+    for value in 0..MAX_PLIRON_PROGRESS_OPERATIONS_V1 {
+        let constant = IndexConstantOp::new(context, value as u64);
+        append(context, entry, &constant);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ResourceLimitExceeded {
+            resource: "operations",
+            actual,
+            limit: MAX_PLIRON_PROGRESS_OPERATIONS_V1,
+        }] if *actual == MAX_PLIRON_PROGRESS_OPERATIONS_V1 + 1
+    ));
+}
+
+#[test]
+fn quadratic_scc_work_is_bounded_before_canonical_path_search() {
+    const CYCLE_BLOCKS: usize = 512;
+
+    let context = &mut setup();
+    let (function, _) = make_function(context, "work_limit", 0);
+    let entry = function.get_entry_block(context);
+    let cycle_tail = (1..CYCLE_BLOCKS)
+        .map(|index| block(context, &function, &format!("cycle_{index}")))
+        .collect::<Vec<_>>();
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let enter = IndexLessThanBranchOp::new(
+        context,
+        zero.result(context),
+        one.result(context),
+        cycle_tail[0],
+        exit,
+    );
+    append(context, entry, &zero);
+    append(context, entry, &one);
+    append(context, entry, &enter);
+    for (index, current) in cycle_tail.iter().copied().enumerate() {
+        let successor = cycle_tail.get(index + 1).copied().unwrap_or(entry);
+        let repeat = BranchOp::new(context, successor);
+        append(context, current, &repeat);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, exit, &ret);
+    verify_operation(function.get_operation(), context).unwrap();
+
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ResourceLimitExceeded {
+            resource: "work units",
+            actual,
+            limit: MAX_PLIRON_PROGRESS_WORK_UNITS_V1,
+        }] if *actual > MAX_PLIRON_PROGRESS_WORK_UNITS_V1
+    ));
 }
 
 #[test]
