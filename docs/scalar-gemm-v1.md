@@ -1,8 +1,7 @@
 # Scalar GEMM V1
-
-The exact Worker V2 request/response validation boundary and the subsequently
-completed frontend-owned source-to-IR transfer are documented in
-[`scalar-gemm-v1-worker-handoff.md`](scalar-gemm-v1-worker-handoff.md).
+This document specifies the retained scalar reference model and host-admission
+contract. The retired scalar-specific Worker V2/V3 artifact authority route is
+not part of the production pipeline.
 
 Status: implementation contract. Bounded implementation and evidence paths now
 exist, but this contract does not by itself grant runnable, verified, or

@@ -94,6 +94,7 @@
         "fe2o3-kfd",
         "fe2o3-kir-sim",
         "fe2o3-kir-sim-trace",
+        "fe2o3-runtime-protocol",
         "fe2o3-service-host"
 
       ]
@@ -112,7 +113,6 @@
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
         "fe2o3-pliron-worker-v2",
-        "fe2o3-worker-v3-authority",
         "rustc-codegen-fe2o3"
       ]
     },

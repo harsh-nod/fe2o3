@@ -279,22 +279,12 @@ assert_equals \
   "$(step_command rustc-codegen-lib-tests)" \
   'generic backend library test command changed'
 assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib qualification_selection::tests" \
-  "$(step_command rustc-codegen-qualification-route-tests)" \
-  'generic backend qualification route test command changed'
-assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test g2_layout" \
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'generic backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
-assert_equals 4200 "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
-  'general GEMM semantic frontend timeout policy changed without review'
-assert_equals \
-  "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
-  "${STEP_TIMEOUT_OVERRIDES[rustc-codegen-test-general_gemm_semantic_frontend]:-}" \
-  'general GEMM semantic frontend did not receive its reviewed timeout override'
-assert_equals 1 "${#STEP_TIMEOUT_OVERRIDES[@]}" \
-  'an unexpected codegen target received a timeout override'
+assert_equals 0 "${#STEP_TIMEOUT_OVERRIDES[@]}" \
+  'retired backend targets left a timeout override'
 for backend_command in "${STEP_COMMANDS[@]}"; do
   if [[ "${backend_command}" == *"-p ${RUSTC_CODEGEN_TEST_PACKAGE}"* ]] &&
     [[ "${backend_command}" == *"--all-targets"* ]]; then
@@ -302,7 +292,7 @@ for backend_command in "${STEP_COMMANDS[@]}"; do
     exit 1
   fi
 done
-codegen_integration_prefix="env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test "
+codegen_integration_prefix="env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test "
 for index in "${!STEP_NAMES[@]}"; do
   if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
     [[ "${STEP_COMMANDS[index]}" != "${codegen_integration_prefix}"* ]]; then
@@ -325,32 +315,28 @@ assert_equals \
   "$(step_command rustc-codegen-lib-tests)" \
   'full workspace backend library test command changed'
 assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib qualification_selection::tests" \
-  "$(step_command rustc-codegen-qualification-route-tests)" \
-  'full workspace backend qualification route test command changed'
-assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test g2_layout" \
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'full workspace backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
 
 STEP_NAMES=()
 STEP_COMMANDS=()
-run_rustc_codegen_shard 01-control-flow
+run_rustc_codegen_shard 01-production-pipeline
 assert_codegen_test_driver_once
 assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'codegen shard did not validate the checked-in assignment'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test collected_executable_scalar_control_flow_v2" \
-  "$(step_command rustc-codegen-test-collected_executable_scalar_control_flow_v2)" \
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --test production_pipeline" \
+  "$(step_command rustc-codegen-test-production_pipeline)" \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
-    [[ "${shard_step}" != rustc-codegen-test-collected_executable_scalar_control_flow_v2 ]]; then
+    [[ "${shard_step}" != rustc-codegen-test-production_pipeline ]]; then
     printf 'codegen shard ran an unassigned target: %s\n' "${shard_step}" >&2
     exit 1
   fi

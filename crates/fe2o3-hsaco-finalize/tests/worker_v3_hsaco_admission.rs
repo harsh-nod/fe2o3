@@ -37,7 +37,7 @@ use fe2o3_hsaco_finalize::{
     recover_protected_worker_v3_hsaco_publication_v1,
 };
 use fe2o3_kernel_descriptor::{
-    AccessMode, BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CapabilityV1,
+    BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest,
     CodeObjectVersion as DescriptorCodeObjectVersion, CompilerIdentityV1, DeviceDescriptorTableV1,
     DeviceLayoutDescriptorV1, DeviceLayoutRecordV1, DeviceTargetV1, DimensionsV1, EvidenceDigest,
     EvidenceIdentity, KernelAbiLayoutV1, KernelDescriptorV1, KernelId, LaunchConstraintsV1,
@@ -50,16 +50,12 @@ use sha2::{Digest, Sha256};
 mod hsaco_fixture;
 
 use hsaco_fixture::{
-    ScalarAddFixtureMutation, scalar_add_fixture_with, scalar_gemm_fixture_with_descriptor_table,
-    slice_fixture_with_descriptor_table, slice_fixture_with_descriptor_table_and_workgroup,
+    ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
+    slice_fixture_with_descriptor_table_and_workgroup,
 };
 
 const TARGET: &str = "gfx942:xnack-";
 const WORKER_BUILD_ID: &str = "fixture-worker-v2-hsaco-v1";
-const SCALAR_GEMM_KERNEL_BINDING: [u8; 32] = [
-    0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46, 0x0c, 0x3e,
-    0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
-];
 const RAW_HSACO_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
 const CAPSULE_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-PRODUCTION-SEMANTIC-CAPSULE/V3\0";
 const PAIR_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/INERT-COMPILER-MODULE-PAIR-BINDING/V3\0";
@@ -145,7 +141,6 @@ enum DescriptorLineageMutation {
     Exact,
     DifferentCanonicalSource,
     DifferentExportManifest,
-    DifferentScalarKernelIr,
 }
 
 impl EvidenceConfig {
@@ -193,35 +188,6 @@ pub(crate) fn published_worker_v3_fixture_from_raw_hsaco(
         descriptor_symbol,
         EvidenceConfig::BASE,
     )
-}
-
-#[allow(dead_code)]
-pub(crate) fn published_scalar_gemm_worker_v3_fixture() -> PublishedWorkerV3Fixture {
-    let fixture = scalar_gemm_fixture_with_descriptor_table(&scalar_gemm_descriptor_table());
-    published_worker_v3_fixture_from_raw_hsaco(fixture.bytes, "scalar_gemm_v1", "scalar_gemm_v1.kd")
-}
-
-#[allow(dead_code)]
-pub(crate) fn published_scalar_gemm_worker_v3_fixture_with_substituted_kir()
--> PublishedWorkerV3Fixture {
-    let fixture = scalar_gemm_fixture_with_descriptor_table(&scalar_gemm_descriptor_table());
-    published_worker_v3_fixture_from_raw_hsaco_with_config(
-        fixture.bytes,
-        "scalar_gemm_v1",
-        "scalar_gemm_v1.kd",
-        EvidenceConfig {
-            lineage_mutation: DescriptorLineageMutation::DifferentScalarKernelIr,
-            ..EvidenceConfig::BASE
-        },
-    )
-}
-
-#[allow(dead_code)]
-pub(crate) fn published_scalar_gemm_worker_v3_fixture_with_substituted_descriptor_binding()
--> PublishedWorkerV3Fixture {
-    let descriptor = scalar_gemm_descriptor_table_with_kernel_binding([0xc1; 32]);
-    let fixture = scalar_gemm_fixture_with_descriptor_table(&descriptor);
-    published_worker_v3_fixture_from_raw_hsaco(fixture.bytes, "scalar_gemm_v1", "scalar_gemm_v1.kd")
 }
 
 fn published_worker_v3_fixture_from_raw_hsaco_with_config(
@@ -310,49 +276,6 @@ fn publish_worker_v3_fixture_in_directory_with_config(
         attempt,
         published,
     }
-}
-
-#[test]
-fn scalar_fixture_retains_exact_reviewed_kir_for_request_bound_proofs() {
-    let fixture = slice_fixture_with_descriptor_table(&slice_descriptor_table());
-    let outer = outer_for_kernel(
-        EvidenceConfig::BASE.invocation_seed,
-        EvidenceConfig::BASE.module_seed,
-        &fixture.bytes,
-        "scalar_gemm_v1",
-        "scalar_gemm_v1.kd",
-        DescriptorLineageMutation::Exact,
-    );
-    let receipts = outer.capsule().receipts();
-    let association = fe2o3_verifier::validate_compiler_proof_binding_association_v3(
-        receipts.proof_binding(),
-        receipts.semantic_mir(),
-        receipts.middle_end(),
-        receipts.kernel_ir(),
-        receipts.mir_to_kir_correspondence(),
-        receipts.formal_memory(),
-    )
-    .expect("scalar fixture proof association must name its exact compiler receipts");
-    let scalar_kir =
-        fe2o3_verifier::validate_scalar_gemm_compiler_kir_v3(&association, receipts.kernel_ir())
-            .expect("scalar fixture must retain the exact reviewed canonical KIR");
-    let proof_input = fe2o3_verifier::build_scalar_gemm_worker_v3_proof_input_v3(
-        [0x5a; 32],
-        &association,
-        &scalar_kir,
-    )
-    .expect("scalar fixture must generate request-bound proof input");
-
-    assert_eq!(proof_input.challenge(), [0x5a; 32]);
-    assert!(scalar_kir.establishes_exact_scalar_gemm_kir_profile());
-    assert!(proof_input.binds_worker_v3_challenge());
-    assert!(proof_input.includes_reviewed_kir_integer_profile_equations());
-    assert!(proof_input.binds_exhaustive_decoded_kir_projection());
-    assert!(proof_input.includes_reviewed_kir_operational_semantics());
-    assert!(proof_input.binds_exact_projection_tlv_framing());
-    assert!(!proof_input.authenticates_verus_execution());
-    assert!(!proof_input.establishes_source_to_kir_refinement());
-    assert!(!proof_input.grants_artifact_or_runtime_authority());
 }
 
 #[test]
@@ -1060,121 +983,6 @@ fn slice_descriptor_table_with_workgroup(workgroup_size: u32) -> Vec<u8> {
     encode_device_descriptor_table_v1(&table).unwrap()
 }
 
-fn scalar_gemm_descriptor_table() -> Vec<u8> {
-    scalar_gemm_descriptor_table_with_kernel_binding(SCALAR_GEMM_KERNEL_BINDING)
-}
-
-fn scalar_gemm_descriptor_table_with_kernel_binding(kernel_binding: [u8; 32]) -> Vec<u8> {
-    let shared_source =
-        SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
-    let disjoint_source =
-        SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
-    let scalar_source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::scalar(ScalarTypeV1::U32));
-    let shared_layout =
-        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
-    let disjoint_layout =
-        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(ScalarTypeV1::F32));
-    let scalar_layout =
-        DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::scalar(ScalarTypeV1::U32));
-    let arguments = vec![
-        LogicalArgumentV1::shared_slice(
-            0,
-            ValidName::new("a").unwrap(),
-            &shared_source,
-            &shared_layout,
-            0,
-        )
-        .unwrap(),
-        LogicalArgumentV1::shared_slice(
-            1,
-            ValidName::new("b").unwrap(),
-            &shared_source,
-            &shared_layout,
-            16,
-        )
-        .unwrap(),
-        LogicalArgumentV1::disjoint_slice(
-            2,
-            ValidName::new("c").unwrap(),
-            &disjoint_source,
-            &disjoint_layout,
-            AccessMode::ReadWrite,
-            32,
-        )
-        .unwrap(),
-        LogicalArgumentV1::scalar(
-            3,
-            ValidName::new("m").unwrap(),
-            &scalar_source,
-            &scalar_layout,
-            48,
-        )
-        .unwrap(),
-        LogicalArgumentV1::scalar(
-            4,
-            ValidName::new("n").unwrap(),
-            &scalar_source,
-            &scalar_layout,
-            52,
-        )
-        .unwrap(),
-        LogicalArgumentV1::scalar(
-            5,
-            ValidName::new("k").unwrap(),
-            &scalar_source,
-            &scalar_layout,
-            56,
-        )
-        .unwrap(),
-    ];
-    let kernel = KernelDescriptorV1::new(
-        KernelId::from_bytes(kernel_binding),
-        ValidName::new("scalar_gemm_v1").unwrap(),
-        ValidName::new("scalar_gemm_v1").unwrap(),
-        ValidName::new("scalar_gemm_v1.kd").unwrap(),
-        BuildEvidenceV1::new(
-            EvidenceIdentity::from_opaque_bytes([0xb2; 32]),
-            EvidenceDigest::from_sha256_bytes([0xb3; 32]),
-        ),
-        BuildEvidenceV1::new(
-            EvidenceIdentity::from_opaque_bytes([0xb4; 32]),
-            EvidenceDigest::from_sha256_bytes([0xb5; 32]),
-        ),
-        vec![CapabilityV1::AmdWave],
-        KernelAbiLayoutV1::new(64, 320, 8).unwrap(),
-        LaunchConstraintsV1::new(
-            1,
-            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
-            DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
-            256,
-            0,
-            0,
-        )
-        .unwrap(),
-        arguments,
-    )
-    .unwrap();
-    let table = DeviceDescriptorTableV1::new(
-        CanonicalCodeObjectDigest::from_bytes([0; 32]),
-        DescriptorCodeObjectVersion::V6,
-        CompilerIdentityV1::new(
-            Text::new("rustc-codegen-fe2o3").unwrap(),
-            Text::new("test").unwrap(),
-            [0xb6; 20],
-        ),
-        ProducerIdentityV1::new(
-            Text::new("rustc-codegen-fe2o3-worker-v3").unwrap(),
-            Text::new("test").unwrap(),
-        ),
-        target(),
-        vec![shared_source, disjoint_source, scalar_source],
-        vec![shared_layout, disjoint_layout, scalar_layout],
-        vec![kernel],
-    )
-    .unwrap();
-    encode_device_descriptor_table_v1(&table).unwrap()
-}
-
 fn worker_path() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_fe2o3-worker-v2-hsaco-fixture"))
 }
@@ -1245,7 +1053,7 @@ fn outer_for_kernel(
 ) -> InertSemanticCompilerModuleHandoffV3 {
     let handoff = module_handoff_for_kernel(module_seed, hsaco, entry_symbol, descriptor_symbol);
     InertSemanticCompilerModuleHandoffV3::decode(&raw_outer(
-        &capsule_bytes(invocation_seed, &handoff, entry_symbol, lineage_mutation),
+        &capsule_bytes(invocation_seed, &handoff, lineage_mutation),
         handoff.canonical_bytes(),
     ))
     .unwrap()
@@ -1254,7 +1062,6 @@ fn outer_for_kernel(
 fn capsule_bytes(
     seed: u8,
     handoff: &CompilerModuleHandoffV2,
-    entry_symbol: &str,
     lineage_mutation: DescriptorLineageMutation,
 ) -> Vec<u8> {
     let invocation = invocation_bytes(seed);
@@ -1281,18 +1088,6 @@ fn capsule_bytes(
     {
         receipts[10].0 = descriptor_source;
     }
-    if entry_symbol == "scalar_gemm_v1" {
-        let mut scalar_kir = fe2o3_kernel_ir::scalar_gemm_v1_module();
-        if matches!(
-            lineage_mutation,
-            DescriptorLineageMutation::DifferentScalarKernelIr
-        ) {
-            scalar_kir.kernels[0].id = fe2o3_kernel_ir::KernelId::new("scalar_gemm_v1_substituted");
-        }
-        receipts[4].0 = fe2o3_kernel_ir::VerifiedCanonicalKernelIrV5::from_module(scalar_kir)
-            .expect("reviewed scalar GEMM KIR must remain valid")
-            .into_canonical_bytes();
-    }
     receipts[7].0 = proof_binding_association_payload(&receipts);
     receipts[11].0 = handoff.symbol_manifest().canonical_bytes().to_vec();
     match lineage_mutation {
@@ -1310,7 +1105,6 @@ fn capsule_bytes(
         DescriptorLineageMutation::DifferentExportManifest => {
             receipts[11].0 = b"different canonical export manifest receipt".to_vec();
         }
-        DescriptorLineageMutation::DifferentScalarKernelIr => {}
     }
     receipts.push((
         final_commitment.canonical_bytes().to_vec(),

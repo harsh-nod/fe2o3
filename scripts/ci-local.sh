@@ -10,8 +10,6 @@ readonly REPO_ROOT
 readonly LOG_DIR="${CI_LOG_DIR:-${REPO_ROOT}/target/ci-logs}"
 readonly RUSTC_CODEGEN_TEST_PACKAGE="rustc-codegen-fe2o3"
 readonly RUSTC_CODEGEN_TEST_DRIVER_PACKAGE="cargo-fe2o3"
-readonly RUSTC_CODEGEN_QUALIFICATION_FEATURE="qualification-oracles-test-only"
-readonly CARGO_FE2O3_QUALIFICATION_FEATURE="qualification-oracles-test-only"
 readonly CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE="worker-v3-envelope-integration-test-only"
 readonly RUSTC_CODEGEN_SHARD_POLICY="${REPO_ROOT}/scripts/rustc-codegen-shards.py"
 readonly WORKSPACE_DEPENDENCY_POLICY_CHECKER="${REPO_ROOT}/scripts/workspace_dependency_policy.py"
@@ -27,7 +25,6 @@ readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_ident
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
 readonly RUNTIME_PURE_RUST_TARGET_DIR="${REPO_ROOT}/target/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
-readonly GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS=4200
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 
 readonly CPU_TEST_PACKAGES=(
@@ -250,8 +247,7 @@ run_cpu_tests() {
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
   run_step cargo-fe2o3-tests env FE2O3_HIP_SYS_DISABLE=1 \
-    cargo test --locked -p cargo-fe2o3 \
-      --features "${CARGO_FE2O3_QUALIFICATION_FEATURE}"
+    cargo test --locked -p cargo-fe2o3
   run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3 \
       --features "${CARGO_FE2O3_WORKER_V3_INTEGRATION_FEATURE}" \
@@ -385,10 +381,6 @@ run_rustc_codegen_lib_tests() {
   # and an unversioned backend dylib with different Rust symbol hashes.
   run_step rustc-codegen-lib-tests \
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
-  run_step rustc-codegen-qualification-route-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --lib qualification_selection::tests
 }
 
 run_rustc_codegen_test_driver() {
@@ -406,7 +398,6 @@ run_rustc_codegen_target() {
   local -a command=(
     env CARGO_PROFILE_DEV_DEBUG=1
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}"
-    --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"
     --test "${test_target}"
   )
 
@@ -415,12 +406,6 @@ run_rustc_codegen_target() {
   # invocation produces the exact backend dylib before running its linked test.
   # Match the limited-debug profile used by the production automatic backend
   # builder so clean and cache-restored shards exercise the same bounded image.
-  if [[ "${test_target}" == general_gemm_semantic_frontend ]]; then
-    run_step_with_timeout "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
-      "rustc-codegen-test-${test_target}" \
-      "${command[@]}"
-    return
-  fi
   run_step "rustc-codegen-test-${test_target}" \
     "${command[@]}"
 }
@@ -554,38 +539,23 @@ run_rocm_compile() {
   run_step rocm-doctor cargo run --locked -p cargo-fe2o3 -- doctor
   run_step rocm-trusted-device-items \
     cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test trusted_device_items \
       genuine_markers_emit_and_local_external_spoofs_fail_closed -- \
       --ignored --exact
   run_step rocm-trusted-device-item-stale-cleanup \
     cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test trusted_device_items \
       rejected_lookalikes_remove_preseeded_artifacts_atomically -- \
       --ignored --exact
   run_step rocm-cross-crate-typed-binding \
     env FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
       --test cross_crate_typed_binding \
       same_logical_name_in_two_rlibs_resolves_distinct_artifacts -- \
       --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \
-      --ignored --exact
-  run_step rocm-kernel-ir-codegen-rejection \
-    cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- \
-      --ignored --exact
-  run_step rocm-kernel-ir-vecadd \
-    cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      opt_in_vecadd_publishes_exact_g1_without_gpu -- \
       --ignored --exact
 
   local package
@@ -677,18 +647,6 @@ run_hardware_smoke() {
   run_step hardware-device-copy-transfer \
     cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
       --ignored --exact derived_struct_bytes_round_trip_through_device_memory
-  run_step hardware-kernel-ir-fill \
-    cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      opt_in_fill_publishes_g1_and_executes_on_the_gpu -- \
-      --ignored --exact
-  run_step hardware-kernel-ir-vecadd \
-    cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- \
-      --ignored --exact
   run_step hardware-smoke cargo run --locked -p cargo-fe2o3 -- smoke
   local test_wavefront
   test_wavefront="$(wavefront_for_target "${FE2O3_TARGET}")"

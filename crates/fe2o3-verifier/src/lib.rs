@@ -46,11 +46,9 @@ mod proof_capsule;
 mod result;
 mod row_softmax_certificate;
 mod scalar_gemm_hardware_evidence;
-mod scalar_gemm_kir_binding_v3;
 mod scalar_gemm_proof;
 mod scalar_gemm_v1;
 mod scalar_gemm_verus_execution_v2;
-mod scalar_gemm_worker_v3_proof_v3;
 mod static_view_proof;
 
 pub use alpha_zeta_manifest::{
@@ -244,10 +242,6 @@ pub use scalar_gemm_hardware_evidence::{
     ScalarGemmProtectedHardwareEvidenceV1, ScalarGemmUnloadObservationV1,
     ScalarGemmWorkerExchangeObservationV1,
 };
-pub use scalar_gemm_kir_binding_v3::{
-    ScalarGemmCompilerKirValidationErrorV3, ValidatedScalarGemmCompilerKirV3,
-    validate_scalar_gemm_compiler_kir_v3,
-};
 pub use scalar_gemm_proof::{
     MAX_SCALAR_GEMM_PROOF_REVIEWS_V1, MAX_SCALAR_GEMM_PROOF_SOURCE_BYTES_V1,
     ReviewedScalarGemmProofV1, SCALAR_GEMM_PROOF_DOMAIN_V1, SCALAR_GEMM_PROOF_MODEL_VERSION_V1,
@@ -274,12 +268,6 @@ pub use scalar_gemm_verus_execution_v2::{
     MAX_SCALAR_GEMM_VERUS_TIMEOUT_SECONDS_V2, SCALAR_GEMM_VERUS_THEOREMS_V2,
     ScalarGemmVerifiedTheoremV2, ScalarGemmVerusExecutionErrorKindV2,
     ScalarGemmVerusExecutionErrorV2, execute_scalar_gemm_verus_proof_v2,
-};
-pub use scalar_gemm_worker_v3_proof_v3::{
-    AuthenticatedScalarGemmWorkerV3ProofV3, ScalarGemmWorkerV3ProofErrorKindV3,
-    ScalarGemmWorkerV3ProofErrorV3, ScalarGemmWorkerV3ProofInputErrorV3,
-    ScalarGemmWorkerV3ProofInputV3, build_scalar_gemm_worker_v3_proof_input_v3,
-    execute_scalar_gemm_worker_v3_proof_v3,
 };
 pub use static_view_proof::{
     STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,

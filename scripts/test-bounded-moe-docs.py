@@ -82,6 +82,7 @@ def validate_ci_dispatch(ci_local: str) -> None:
     )
     core = function_body(ci_local, "run_generic_core", "run_generic")
     generic = function_body(ci_local, "run_generic", "run_rocm_compile")
+    require(generic.count("  run_generic_core\n") == 1, "generic CI must delegate once through generic-core")
     require(ci_local.count(docs_command) == 1, "CI must own one MoE docs check")
     require(docs_command in core, "generic-core CI must run the MoE docs check")
     require(docs_command not in generic, "generic CI must delegate through generic-core")

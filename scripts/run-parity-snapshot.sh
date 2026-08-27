@@ -222,7 +222,6 @@ build_shard_command() {
       ;;
     Q6)
       append_command command "${cargo_bin}" test -p cargo-fe2o3 \
-        --features qualification-oracles-test-only --locked
       append_command command "${cargo_bin}" test -p fe2o3-differential --locked
       append_command command "${bash_bin}" scripts/tests/differential-conformance.sh
       ;;

@@ -26,11 +26,8 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestAlgorithm,
     DigestBytes, Mutability, Name, PayloadDigest, PointerWidth,
 };
-use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_device::KernelMarkerV1;
-use fe2o3_host::__generated::{
-    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, load_admitted_worker_v3_application_v1,
-};
+use fe2o3_host::__generated::load_admitted_worker_v3_application_v1;
 use fe2o3_host::{
     __hardware_test::{
         application_handoff_observed_context_fixture_v1,
@@ -44,75 +41,26 @@ use fe2o3_host::{
     HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
     HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
     HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
-    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
-    ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
-    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
-    WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
-    WorkerV3VerificationAuditErrorV1, WorkerV3VerificationAuthenticationErrorV1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ProductionWorkerV3ApplicationLoadErrorV1,
+    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
+    ReviewedHsaImplicitKernargAdapterV1, WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1,
+    WorkerV3SafetyPropertiesV1, WorkerV3VerificationAuthenticationErrorV1,
     WorkerV3VerificationDecisionErrorV1, WorkerV3VerificationDecisionV1,
     WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
     audit_recovered_worker_v3_verification_v1,
 };
-use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
     recover_worker_v3_load_envelope_v1,
 };
-use fe2o3_verifier::{
-    build_scalar_gemm_worker_v3_proof_input_v3, validate_compiler_proof_binding_association_v3,
-    validate_scalar_gemm_compiler_kir_v3,
-};
-use fe2o3_worker_v3_authority::{
-    PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1,
-    PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
-    ProductionScalarGemmWorkerV3RequestAuditorV1, ProductionScalarGemmWorkerV3VerifierErrorV1,
-    ProductionScalarGemmWorkerV3VerifierV1,
-};
 use sha2::{Digest as _, Sha256};
-
-mod scalar_gemm_marker_fixture {
-    use fe2o3_device::{DisjointSlice, kernel};
-
-    // This test owns only the generated host ABI fixture. The reviewed example
-    // kernel remains a fixture-layer package and is never a cargo-fe2o3 dependency.
-    #[kernel(
-        typed,
-        namespace = "53bf3c83481a081d4ab0e2b32039f9c89be5de3937a84aca0c40800c8d6b0413",
-        control_flow(loop_bounds(4294967295))
-    )]
-    pub fn scalar_gemm_v1(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, m: u32, n: u32, k: u32) {
-        let p = fe2o3_device::thread::index_1d().get();
-        let output_extent = (m as usize) * (n as usize);
-        if p < output_extent {
-            let row = p / (n as usize);
-            let column = p % (n as usize);
-            let mut accumulator = 0.0_f32;
-            let mut inner = 0_u32;
-            while inner < k {
-                let a_index = row * (k as usize) + (inner as usize);
-                let b_index = (inner as usize) * (n as usize) + column;
-                accumulator += a[a_index] * b[b_index];
-                inner += 1;
-            }
-            if let Some(output) = c.get_mut(fe2o3_device::thread::index_1d()) {
-                *output = accumulator;
-            }
-        }
-    }
-}
-
-use scalar_gemm_marker_fixture::scalar_gemm_v1_gpu;
 
 #[path = "../../fe2o3-hsaco-finalize/tests/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
-const SCALAR_GEMM_MARKER_BINDING: [u8; 32] = [
-    0x78, 0x9a, 0xde, 0xdf, 0xdc, 0x3b, 0xe1, 0xfb, 0x60, 0x51, 0x8d, 0xd2, 0xc7, 0x46, 0x0c, 0x3e,
-    0xf8, 0xe6, 0xb9, 0x00, 0x52, 0x7d, 0x1b, 0xcb, 0x22, 0x89, 0xba, 0xa1, 0xe0, 0x14, 0x69, 0x3e,
-];
 
 struct StaticV3ApplicationFixtures {
     host_consumer: PathBuf,
@@ -219,24 +167,6 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
 }
 
-struct WorkerV3SubstitutedScalarMarker;
-
-unsafe impl KernelMarkerV1 for WorkerV3SubstitutedScalarMarker {
-    type Function = fn();
-    type Registration = ();
-
-    const LOGICAL_NAME: &'static str = "scalar_gemm_v1";
-    const EXPORT_NAME: &'static str = "scalar_gemm_v1";
-    const FUNCTION: Self::Function = worker_v3_marker_function;
-    const REGISTRATION: &'static Self::Registration = &();
-}
-
-unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3SubstitutedScalarMarker {
-    const PROFILE: CompilerGeneratedKernelProfileV1 =
-        CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
-    const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
-}
-
 struct WorkerV3VecAddArguments<'allocation> {
     owner: &'allocation (),
     address: usize,
@@ -309,10 +239,6 @@ struct ReviewedTestWorkerV3Verifier {
 
 struct ReviewedTestWorkerV3Auditor;
 
-struct MutatingCurrentPublicationAuditor {
-    output: PathBuf,
-}
-
 impl<K> WorkerV3AuditorV1<K> for ReviewedTestWorkerV3Auditor
 where
     K: CompilerGeneratedKernelExpectationV1,
@@ -331,29 +257,6 @@ where
             request.finalized_hsaco_length()
         );
         Ok((finalized_sha256, request.finalized_hsaco_length()))
-    }
-}
-
-impl WorkerV3AuditorV1<scalar_gemm_v1_gpu::Marker> for MutatingCurrentPublicationAuditor {
-    type Error = Infallible;
-    type Evidence = ();
-
-    fn audit(
-        &mut self,
-        request: &WorkerV3VerificationRequestV1<'_, scalar_gemm_v1_gpu::Marker>,
-    ) -> Result<Self::Evidence, Self::Error> {
-        let artifact = self.output.join(format!(
-            ".fe2o3-link-artifact-v1-{}.bin",
-            lower_hex(&request.finalized_hsaco_sha256())
-        ));
-        let mut bytes = fs::read(&artifact).unwrap();
-        assert_eq!(bytes, request.finalized_hsaco_bytes());
-        bytes[0] ^= 0xff;
-        let mut permissions = fs::metadata(&artifact).unwrap().permissions();
-        permissions.set_mode(0o600);
-        fs::set_permissions(&artifact, permissions).unwrap();
-        fs::write(artifact, bytes).unwrap();
-        Ok(())
     }
 }
 
@@ -394,44 +297,6 @@ where
             capsule.receipts().proof_binding().canonical_preimage(),
             request.proof_binding_receipt_bytes()
         );
-        let receipts = capsule.receipts();
-        let proof_binding = validate_compiler_proof_binding_association_v3(
-            receipts.proof_binding(),
-            receipts.semantic_mir(),
-            receipts.middle_end(),
-            receipts.kernel_ir(),
-            receipts.mir_to_kir_correspondence(),
-            receipts.formal_memory(),
-        )
-        .expect("production compiler proof association must match exact retained receipts");
-        assert_eq!(
-            proof_binding.receipt_identity(),
-            receipts.proof_binding().identity()
-        );
-        if request.marker_logical_name() == "scalar_gemm_v1" {
-            let scalar_kir =
-                validate_scalar_gemm_compiler_kir_v3(&proof_binding, receipts.kernel_ir()).expect(
-                    "scalar Worker V3 request must retain the exact reviewed canonical KIR",
-                );
-            let proof_input = build_scalar_gemm_worker_v3_proof_input_v3(
-                *request.challenge_identity().as_bytes(),
-                &proof_binding,
-                &scalar_kir,
-            )
-            .expect("scalar Worker V3 request must generate exact challenge-bound proof input");
-            assert_eq!(
-                proof_input.challenge(),
-                *request.challenge_identity().as_bytes()
-            );
-            assert!(proof_input.binds_worker_v3_challenge());
-            assert!(proof_input.includes_reviewed_kir_integer_profile_equations());
-            assert!(proof_input.binds_exhaustive_decoded_kir_projection());
-            assert!(proof_input.includes_reviewed_kir_operational_semantics());
-            assert!(proof_input.binds_exact_projection_tlv_framing());
-            assert!(!proof_input.authenticates_verus_execution());
-            assert!(!proof_input.establishes_source_to_kir_refinement());
-            assert!(!proof_input.grants_artifact_or_runtime_authority());
-        }
         let mut finalized = request.finalized_hsaco_sha256();
         if self.substitute_finalized {
             finalized[0] ^= 0xff;
@@ -1444,375 +1309,6 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!unloaded.grants_load_authority());
     assert!(!unloaded.grants_launch_authority());
     assert_eq!(adapter_state.unloads.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-#[ignore = "requires FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO and a gfx942:xnack- GPU"]
-fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
-    const M: u32 = 3;
-    const N: u32 = 5;
-    const K: u32 = 7;
-    const CANARY: f32 = f32::from_bits(0x7fc0_5a5a);
-
-    let path = std::env::var_os("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO")
-        .expect("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO is not set");
-    let raw_hsaco = fs::read(path).unwrap();
-    let inspection = fe2o3_hsaco_finalize::inspect_unfinalized(&raw_hsaco).unwrap();
-    assert_eq!(
-        inspection
-            .descriptor_table()
-            .device_target()
-            .as_amd_target_id()
-            .processor(),
-        "gfx942"
-    );
-    let descriptor = inspection
-        .descriptor_table()
-        .kernels()
-        .iter()
-        .find(|descriptor| descriptor.entry_name().as_str() == "scalar_gemm_v1")
-        .expect("raw HSACO contains scalar_gemm_v1");
-    let kernel_id = descriptor.kernel_id();
-    drop(inspection);
-
-    let fixture = worker_v3_fixture::published_worker_v3_fixture_from_raw_hsaco(
-        raw_hsaco,
-        "scalar_gemm_v1",
-        "scalar_gemm_v1.kd",
-    );
-    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-
-    let context = GpuContext::new(0).unwrap();
-    let observed = ObservedContext::observe(&context).unwrap();
-    let admitted =
-        admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
-    let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone()).unwrap();
-    let mut loaded = load_admitted_worker_v3_application_v1::<scalar_gemm_v1_gpu::Marker, _, _>(
-        admitted,
-        &mut ReviewedTestWorkerV3Verifier {
-            substitute_finalized: false,
-        },
-        adapter,
-    )
-    .unwrap();
-
-    let stream = context.default_stream();
-    let a_host = (0..usize::try_from(M * K).unwrap())
-        .map(|index| (index % 11) as f32 - 5.0)
-        .collect::<Vec<_>>();
-    let b_host = (0..usize::try_from(K * N).unwrap())
-        .map(|index| (index % 7) as f32 - 3.0)
-        .collect::<Vec<_>>();
-    let expected = scalar_gemm_reference(&a_host, &b_host, M, N, K);
-    let a = DeviceBuffer::from_host(&stream, &a_host).unwrap();
-    let b = DeviceBuffer::from_host(&stream, &b_host).unwrap();
-    let mut guarded = DeviceBuffer::from_host(
-        &stream,
-        &std::iter::once(CANARY)
-            .chain(std::iter::repeat_n(CANARY, expected.len()))
-            .chain(std::iter::once(CANARY))
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-
-    {
-        let (_left, output, _right) = guarded.split_range_mut(1..1 + expected.len()).unwrap();
-        let arguments = scalar_gemm_v1_gpu::Arguments::new(
-            GeneratedReadDeviceSlice::new(&observed, &a).unwrap(),
-            GeneratedReadDeviceSlice::new(&observed, &b).unwrap(),
-            GeneratedReadWriteDeviceSlice::from_view_mut(&observed, output).unwrap(),
-            M,
-            N,
-            K,
-        );
-        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0);
-        let completed = arguments
-            .prepare_worker_v3(&mut loaded, &observed, geometry)
-            .unwrap()
-            .dispatch()
-            .unwrap();
-        assert_eq!(completed.kernel_id(), kernel_id);
-        assert_eq!(completed.completed_dispatch().geometry(), geometry);
-        assert!(completed.completed_dispatch().dispatch().completed());
-    }
-
-    let guarded_after = guarded.to_host_vec(&stream).unwrap();
-    assert_eq!(guarded_after[0].to_bits(), CANARY.to_bits());
-    assert_eq!(guarded_after.last().unwrap().to_bits(), CANARY.to_bits());
-    for (actual, expected) in guarded_after[1..1 + expected.len()].iter().zip(&expected) {
-        assert_eq!(actual.to_bits(), expected.to_bits());
-    }
-    assert_eq!(a.to_host_vec(&stream).unwrap(), a_host);
-    assert_eq!(b.to_host_vec(&stream).unwrap(), b_host);
-    assert!(loaded.unload().unwrap().unload_observation().released());
-}
-
-#[test]
-fn production_scalar_request_auditor_validates_exact_deterministic_hsaco_and_kir() {
-    let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
-    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
-    )
-    .unwrap();
-    let lineage = admitted.lineage_identity();
-    let mut auditor =
-        ProductionScalarGemmWorkerV3RequestAuditorV1::<scalar_gemm_v1_gpu::Marker>::new();
-
-    let prepared = audit_recovered_worker_v3_verification_v1::<scalar_gemm_v1_gpu::Marker, _>(
-        &admitted,
-        &mut auditor,
-    )
-    .unwrap();
-
-    assert_ne!(prepared.finalized_hsaco_sha256(), [0; 32]);
-    assert_ne!(prepared.finalized_hsaco_length(), 0);
-    assert_ne!(prepared.proof_input().challenge(), [0; 32]);
-    assert!(prepared.proof_input().binds_worker_v3_challenge());
-    assert!(
-        prepared
-            .proof_input()
-            .binds_exhaustive_decoded_kir_projection()
-    );
-    assert!(
-        prepared
-            .proof_input()
-            .includes_reviewed_kir_operational_semantics()
-    );
-    assert!(!prepared.authenticates_verus_execution());
-    assert!(!prepared.can_enter_worker_v3_gate());
-    assert!(!prepared.grants_artifact_or_runtime_authority());
-    assert_eq!(admitted.lineage_identity(), lineage);
-    admitted.revalidate_currentness().unwrap();
-    assert!(!admitted.authenticates_verification_authority());
-    assert!(!admitted.grants_load_authority());
-    assert!(!admitted.grants_launch_authority());
-}
-
-#[test]
-fn production_scalar_request_auditor_rejects_substituted_canonical_kir() {
-    let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture_with_substituted_kir();
-    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
-    )
-    .unwrap();
-    let lineage = admitted.lineage_identity();
-    let mut auditor =
-        ProductionScalarGemmWorkerV3RequestAuditorV1::<scalar_gemm_v1_gpu::Marker>::new();
-
-    assert!(matches!(
-        audit_recovered_worker_v3_verification_v1::<scalar_gemm_v1_gpu::Marker, _>(
-            &admitted,
-            &mut auditor,
-        ),
-        Err(WorkerV3VerificationAuditErrorV1::Auditor(
-            ProductionScalarGemmWorkerV3VerifierErrorV1::ScalarKernelIr(_)
-        ))
-    ));
-    assert_eq!(admitted.lineage_identity(), lineage);
-    admitted.revalidate_currentness().unwrap();
-    assert!(!admitted.authenticates_verification_authority());
-    assert!(!admitted.grants_load_authority());
-    assert!(!admitted.grants_launch_authority());
-}
-
-#[test]
-fn production_scalar_request_auditor_rejects_a_different_generated_kernel_profile() {
-    let (_directory, recovered) = recovered_host_fixture();
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
-    let lineage = admitted.lineage_identity();
-    let mut auditor = ProductionScalarGemmWorkerV3RequestAuditorV1::<WorkerV3VecAddMarker>::new();
-
-    assert!(matches!(
-        audit_recovered_worker_v3_verification_v1::<WorkerV3VecAddMarker, _>(
-            &admitted,
-            &mut auditor,
-        ),
-        Err(WorkerV3VerificationAuditErrorV1::Auditor(
-            ProductionScalarGemmWorkerV3VerifierErrorV1::UnsupportedKernel
-        ))
-    ));
-    assert_eq!(admitted.lineage_identity(), lineage);
-    admitted.revalidate_currentness().unwrap();
-}
-
-#[test]
-fn worker_v3_gate_rejects_substituted_descriptor_identity_before_audit() {
-    let fixture =
-        worker_v3_fixture::published_scalar_gemm_worker_v3_fixture_with_substituted_descriptor_binding();
-    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xc1; 32]),
-        &observed,
-    )
-    .unwrap();
-    let mut auditor =
-        ProductionScalarGemmWorkerV3RequestAuditorV1::<scalar_gemm_v1_gpu::Marker>::new();
-
-    assert!(matches!(
-        audit_recovered_worker_v3_verification_v1::<scalar_gemm_v1_gpu::Marker, _>(
-            &admitted,
-            &mut auditor,
-        ),
-        Err(WorkerV3VerificationAuditErrorV1::Marker("binding identity"))
-    ));
-    admitted.revalidate_currentness().unwrap();
-}
-
-#[test]
-fn worker_v3_gate_rejects_substituted_marker_binding_before_audit() {
-    let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
-    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
-    )
-    .unwrap();
-    let mut auditor =
-        ProductionScalarGemmWorkerV3RequestAuditorV1::<WorkerV3SubstitutedScalarMarker>::new();
-
-    assert!(matches!(
-        audit_recovered_worker_v3_verification_v1::<WorkerV3SubstitutedScalarMarker, _>(
-            &admitted,
-            &mut auditor,
-        ),
-        Err(WorkerV3VerificationAuditErrorV1::Marker("binding identity"))
-    ));
-    admitted.revalidate_currentness().unwrap();
-}
-
-#[test]
-fn borrowed_scalar_request_audit_rejects_publication_mutation_during_validation() {
-    let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
-    let (directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
-    )
-    .unwrap();
-    let mut auditor = MutatingCurrentPublicationAuditor {
-        output: directory.0.clone(),
-    };
-
-    assert!(matches!(
-        audit_recovered_worker_v3_verification_v1::<scalar_gemm_v1_gpu::Marker, _>(
-            &admitted,
-            &mut auditor,
-        ),
-        Err(WorkerV3VerificationAuditErrorV1::CurrentPublication(_))
-    ));
-    assert!(!admitted.authenticates_verification_authority());
-    assert!(!admitted.grants_load_authority());
-    assert!(!admitted.grants_launch_authority());
-}
-
-#[test]
-#[ignore = "requires exact scalar HSACO and a protected general-GEMM Verus runtime closure"]
-fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
-    let hsaco_path = std::env::var_os("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO")
-        .expect("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO is not set");
-    let runtime_root = std::env::var_os("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT")
-        .expect("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT is not set");
-    let raw_hsaco = fs::read(hsaco_path).unwrap();
-    let inspection = fe2o3_hsaco_finalize::inspect_unfinalized(&raw_hsaco).unwrap();
-    let kernel_id = inspection
-        .descriptor_table()
-        .kernels()
-        .iter()
-        .find(|descriptor| descriptor.entry_name().as_str() == "scalar_gemm_v1")
-        .expect("raw HSACO contains scalar_gemm_v1")
-        .kernel_id();
-    drop(inspection);
-
-    let fixture = worker_v3_fixture::published_worker_v3_fixture_from_raw_hsaco(
-        raw_hsaco,
-        "scalar_gemm_v1",
-        "scalar_gemm_v1.kd",
-    );
-    let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted =
-        admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
-    let mut verifier = ProductionScalarGemmWorkerV3VerifierV1::<scalar_gemm_v1_gpu::Marker>::open(
-        runtime_root,
-        120,
-    )
-    .unwrap();
-
-    let audit = audit_recovered_worker_v3_verification_v1::<scalar_gemm_v1_gpu::Marker, _>(
-        &admitted,
-        &mut verifier,
-    )
-    .unwrap();
-    admitted.revalidate_currentness().unwrap();
-    assert!(!admitted.authenticates_verification_authority());
-    assert!(!admitted.grants_load_authority());
-    assert!(!admitted.grants_launch_authority());
-    assert_eq!(
-        audit.open_authority_obligations(),
-        PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1
-    );
-    assert_ne!(audit.finalized_hsaco_sha256(), [0; 32]);
-    assert_ne!(audit.finalized_hsaco_length(), 0);
-    assert!(!audit.establishes_proof_executable_binding());
-    assert!(!audit.can_enter_worker_v3_gate());
-    assert!(!audit.grants_artifact_or_runtime_authority());
-    let closure = audit.authority_closure();
-    assert_eq!(
-        closure.obligation_statuses(),
-        &PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1
-    );
-    assert!(
-        closure
-            .obligation_statuses()
-            .iter()
-            .all(|status| !status.is_closed())
-    );
-    assert!(!closure.is_complete());
-    assert!(!closure.can_enter_worker_v3_gate());
-    assert!(!closure.grants_artifact_or_runtime_authority());
-    let proof = audit.proof();
-    assert!(proof.authenticates_retained_verus_execution());
-    assert!(proof.binds_worker_v3_challenge());
-    assert!(proof.establishes_exact_scalar_gemm_kir_profile());
-    assert!(proof.establishes_kir_to_integer_model_refinement());
-    assert!(!proof.establishes_source_to_kir_refinement());
-    assert!(!proof.establishes_rust_or_f32_semantics());
-    assert!(!proof.establishes_emitted_machine_refinement());
-    assert!(!proof.can_enter_worker_v3_gate());
-    assert!(!proof.grants_artifact_or_runtime_authority());
-}
-
-fn scalar_gemm_reference(a: &[f32], b: &[f32], m: u32, n: u32, k: u32) -> Vec<f32> {
-    let mut output = vec![0.0; usize::try_from(m * n).unwrap()];
-    for row in 0..usize::try_from(m).unwrap() {
-        for column in 0..usize::try_from(n).unwrap() {
-            for inner in 0..usize::try_from(k).unwrap() {
-                output[row * n as usize + column] +=
-                    a[row * k as usize + inner] * b[inner * n as usize + column];
-            }
-        }
-    }
-    output
 }
 
 #[test]

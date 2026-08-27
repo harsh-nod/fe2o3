@@ -110,7 +110,6 @@ FE2O3_LLVM_BUILD_ID="${LLVM_BUILD_ID}" \
 FE2O3_LLVM_DWARFDUMP="${DWARFDUMP}" \
 FE2O3_S09_DEBUG_HSACO_OUTPUT="${HSACO}" \
   cargo test --locked -p rustc-codegen-fe2o3 \
-    --features qualification-oracles-test-only \
     --test kernel_ir_codegen \
     worker_v2_s09_alpha_o0_preserves_source_dwarf_in_hsaco -- \
     --ignored --exact --nocapture

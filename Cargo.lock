@@ -313,13 +313,9 @@ dependencies = [
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
  "fe2o3-kernel-descriptor",
- "fe2o3-kernel-ir",
  "fe2o3-process-identity",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
- "fe2o3-scalar-gemm-v1",
- "fe2o3-verifier",
- "fe2o3-worker-v3-authority",
  "libc",
  "reserved-fe2o3-symbols",
  "rustix",
@@ -1599,16 +1595,6 @@ dependencies = [
  "sha2 0.11.0",
  "syn 2.0.117",
  "toml",
-]
-
-[[package]]
-name = "fe2o3-worker-v3-authority"
-version = "0.1.0"
-dependencies = [
- "fe2o3-host",
- "fe2o3-hsaco-finalize",
- "fe2o3-verifier",
- "sha2 0.11.0",
 ]
 
 [[package]]
