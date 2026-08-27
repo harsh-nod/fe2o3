@@ -1049,6 +1049,9 @@ fn presburger_proves_no_conflicts(
     if invocations <= u128::from(MAX_PLIRON_RACE_INVOCATIONS_V1) {
         return false;
     }
+    if !presburger_pair_inventory_fits_budget(effects.len()) {
+        return false;
+    }
     let relevant_pairs = (0..effects.len())
         .flat_map(|first| (first..effects.len()).map(move |second| (first, second)))
         .filter(|(first, second)| {
@@ -1107,6 +1110,15 @@ fn presburger_proves_no_conflicts(
         }
     }
     true
+}
+
+fn presburger_pair_inventory_fits_budget(effect_count: usize) -> bool {
+    let effect_count = effect_count as u128;
+    effect_count
+        .checked_add(1)
+        .and_then(|next| effect_count.checked_mul(next))
+        .map(|ordered| ordered / 2)
+        .is_some_and(|pairs| pairs <= MAX_PRESBURGER_WORK_UNITS_V1 as u128)
 }
 
 fn access_kinds_need_disjoint_coordinates(first: AccessKindAttr, second: AccessKindAttr) -> bool {
@@ -1562,5 +1574,12 @@ mod status_tests {
         assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
         assert!(!report.is_clean());
         assert_eq!(clean().status(), KernelCheckStatusV1::Clean);
+    }
+
+    #[test]
+    fn presburger_pair_inventory_is_charged_before_enumeration() {
+        assert!(presburger_pair_inventory_fits_budget(1_447));
+        assert!(!presburger_pair_inventory_fits_budget(1_448));
+        assert!(!presburger_pair_inventory_fits_budget(usize::MAX));
     }
 }

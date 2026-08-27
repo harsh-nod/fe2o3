@@ -1923,6 +1923,40 @@ fn presburger_relations_prove_disjoint_effects_beyond_the_trace_limit() {
 }
 
 #[test]
+fn oversized_presburger_pair_inventory_fails_closed_before_pair_enumeration() {
+    let context = &mut setup();
+    let function = function(context, "presburger_pair_budget");
+    let entry = function.get_entry_block(context);
+    let invocation = InvocationIndexOp::new(context, 0, 65_537);
+    let memory = view(context, vec![1], MemorySpaceAttr::Global);
+    let zero = IndexConstantOp::new(context, 0);
+    append(context, entry, &invocation);
+    append(context, entry, &memory);
+    append(context, entry, &zero);
+    for _ in 0..1_448 {
+        let write = RankedAccessOp::new(
+            context,
+            AccessKindAttr::Write,
+            memory.result(context),
+            vec![zero.result(context)],
+        )
+        .unwrap();
+        append(context, entry, &write);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let report = run_pliron_ranked_race_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [RankedRaceFindingV1::LaunchDomainTooLarge {
+            invocations: 65_537,
+            ..
+        }]
+    ));
+}
+
+#[test]
 fn declared_layout_checks_constant_effect_without_invocation_index() {
     let context = &mut setup();
     let function = function(context, "constant_without_index");
