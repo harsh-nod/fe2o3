@@ -551,6 +551,7 @@ dependencies = [
  "dialect-proof",
  "fe2o3-kernel-ir",
  "pliron",
+ "sha2 0.11.0",
 ]
 
 [[package]]
