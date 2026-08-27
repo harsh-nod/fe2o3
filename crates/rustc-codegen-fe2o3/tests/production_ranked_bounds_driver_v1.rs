@@ -161,11 +161,9 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
     let helper = run_feature_extraction(&ScratchTarget::new(), "barrier_helper");
     assert!(
         !helper.status.success()
-            && helper
-                .stderr
-                .contains(
-                    "semantic closure that is neither one kernel root nor one transparent Result wrapper"
-                ),
+            && helper.stderr.contains(
+                "a call terminator before exact callable memory-effect summaries are available"
+            ),
         "helper-mediated barrier bypassed the semantic boundary:\n{}",
         helper.stderr,
     );
