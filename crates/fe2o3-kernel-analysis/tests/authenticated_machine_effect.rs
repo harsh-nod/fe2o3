@@ -290,6 +290,17 @@ fn persistent_same_object_remap_is_rejected_before_acknowledgement() {
 }
 
 #[test]
+fn persistent_anonymous_executable_mapping_is_rejected_before_acknowledgement() {
+    let error = worker()
+        .analyze(vec![18], vec![entry()], limits())
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &AuthenticatedPhysicalMachineEffectErrorKindV1::RuntimeClosureChanged
+    );
+}
+
+#[test]
 fn transient_remap_between_ready_and_done_is_outside_two_snapshot_guarantee() {
     let execution = worker().analyze(vec![15], vec![entry()], limits()).unwrap();
     assert!(execution.authenticates_analyzer_execution());
