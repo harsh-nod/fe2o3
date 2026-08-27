@@ -1,8 +1,8 @@
 use dialect_kernel::{
     AccessKindAttr, AlgorithmOp, BranchOp, DIALECT_NAME, DeterministicJoinOp, DimensionOp,
-    GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp,
-    IndexLessThanBranchOp, IndexType, InvocationIndexOp, RankedAccessOp, RankedViewOp,
-    RankedViewType, ReturnOp, TrapOp, register_dialect,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchOp, IndexLessThanBranchOp,
+    IndexType, InvocationIndexOp, RankedAccessOp, RankedViewOp, RankedViewType, ReturnOp, TrapOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES,
@@ -142,13 +142,13 @@ fn block_resource_limit_fails_closed_before_dataflow() {
 }
 
 #[test]
-fn effecting_general_gemm_operation_is_rejected_by_the_closed_allowlist() {
+fn effecting_algorithm_operation_is_rejected_by_the_closed_allowlist() {
     let context = &mut setup();
     let (function, _) = function(context, "foreign_effect", 0);
     let entry = function.get_entry_block(context);
-    let gemm = GeneralGemmOp::canonical(context);
+    let algorithm = AlgorithmOp::new(context, 1).unwrap();
     let ret = ReturnOp::new(context);
-    append(context, entry, &gemm);
+    append(context, entry, &algorithm);
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
@@ -158,7 +158,7 @@ fn effecting_general_gemm_operation_is_rejected_by_the_closed_allowlist() {
         &[RankedBoundsFindingV1::UnsupportedOperation {
             block: 0,
             operation: 0,
-            kind: "kernel.general_gemm".to_owned(),
+            kind: "kernel.algorithm_root".to_owned(),
         }]
     );
     assert!(require_pliron_ranked_bounds_before_lowering_v1(context, &function).is_err());

@@ -143,8 +143,10 @@ fn v5_exports_domain_and_round_trips_every_matrix_variant_deterministically() {
 }
 
 #[test]
-fn exact_tiled_gemm_lds_v1_requires_v7_for_its_layout_contract() {
-    let module = tiled_gemm_lds_v1_module();
+fn tensor_layout_contract_requires_v7() {
+    let mut module = matrix_fixture();
+    matrix_mut(&mut module, 2).tensor_layout =
+        Some(TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64());
     assert_eq!(
         encode_module_v5(&module),
         Err(KernelIrEncodeError::UnsupportedInVersion {

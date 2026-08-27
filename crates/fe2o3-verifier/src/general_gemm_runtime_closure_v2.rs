@@ -142,15 +142,9 @@ pub(crate) enum GeneralGemmProofSourceV2 {
     ScalarGemm,
     Reference,
     Vectorized,
-    NumericalContract,
     VectorTailWrong,
     EpilogueWrong,
     MachineClaimWrong,
-    NumericalKirRefinementClaimWrong,
-    NumericalMfmaClaimWrong,
-    NumericalMfmaDescriptorClaimWrong,
-    NumericalOrderClaimWrong,
-    NumericalWideningWrong,
 }
 
 impl GeneralGemmProofSourceV2 {
@@ -159,21 +153,9 @@ impl GeneralGemmProofSourceV2 {
             Self::ScalarGemm => "scalar_gemm_v1.rs",
             Self::Reference => "general_gemm_reference_schedule_v1.rs",
             Self::Vectorized => "general_gemm_vectorized_schedule_v1.rs",
-            Self::NumericalContract => "general_gemm_numerical_contract_v1.rs",
             Self::VectorTailWrong => "negative/general_gemm_vector_tail_wrong.rs",
             Self::EpilogueWrong => "negative/general_gemm_epilogue_wrong.rs",
             Self::MachineClaimWrong => "negative/general_gemm_machine_claim_wrong.rs",
-            Self::NumericalKirRefinementClaimWrong => {
-                "negative/general_gemm_numerical_kir_refinement_claim_wrong.rs"
-            }
-            Self::NumericalMfmaClaimWrong => "negative/general_gemm_numerical_mfma_claim_wrong.rs",
-            Self::NumericalMfmaDescriptorClaimWrong => {
-                "negative/general_gemm_numerical_mfma_descriptor_claim_wrong.rs"
-            }
-            Self::NumericalOrderClaimWrong => {
-                "negative/general_gemm_numerical_order_claim_wrong.rs"
-            }
-            Self::NumericalWideningWrong => "negative/general_gemm_numerical_widening_wrong.rs",
         }
     }
 
@@ -182,19 +164,9 @@ impl GeneralGemmProofSourceV2 {
             Self::ScalarGemm => SCALAR_GEMM_SOURCE,
             Self::Reference => GENERAL_GEMM_REFERENCE_SOURCE,
             Self::Vectorized => GENERAL_GEMM_VECTORIZED_SOURCE,
-            Self::NumericalContract => GENERAL_GEMM_NUMERICAL_CONTRACT_SOURCE,
             Self::VectorTailWrong => GENERAL_GEMM_VECTOR_TAIL_WRONG_SOURCE,
             Self::EpilogueWrong => GENERAL_GEMM_EPILOGUE_WRONG_SOURCE,
             Self::MachineClaimWrong => GENERAL_GEMM_MACHINE_CLAIM_WRONG_SOURCE,
-            Self::NumericalKirRefinementClaimWrong => {
-                GENERAL_GEMM_NUMERICAL_KIR_REFINEMENT_CLAIM_WRONG_SOURCE
-            }
-            Self::NumericalMfmaClaimWrong => GENERAL_GEMM_NUMERICAL_MFMA_CLAIM_WRONG_SOURCE,
-            Self::NumericalMfmaDescriptorClaimWrong => {
-                GENERAL_GEMM_NUMERICAL_MFMA_DESCRIPTOR_CLAIM_WRONG_SOURCE
-            }
-            Self::NumericalOrderClaimWrong => GENERAL_GEMM_NUMERICAL_ORDER_CLAIM_WRONG_SOURCE,
-            Self::NumericalWideningWrong => GENERAL_GEMM_NUMERICAL_WIDENING_WRONG_SOURCE,
         }
     }
 }

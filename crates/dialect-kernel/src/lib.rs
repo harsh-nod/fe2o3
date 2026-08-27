@@ -26,7 +26,6 @@ mod registration;
 pub use registration::dialect_registration;
 
 mod collective_semantics;
-mod general_gemm;
 
 pub use collective_semantics::{
     CollectiveSemanticContractError, MAX_COLLECTIVE_SEMANTIC_STEPS_V1, RequireFiniteFoldOp,
@@ -34,8 +33,6 @@ pub use collective_semantics::{
     SemanticDomainBoundAttr, SemanticEvaluationOrderAttr, SemanticNumericalPolicyAttr,
     SemanticStepBoundAttr,
 };
-pub use general_gemm::{GeneralGemmAbiSchemaAttr, GeneralGemmEpilogueSchemaAttr, GeneralGemmOp};
-
 mod ranked_memory;
 mod semantic_contract;
 mod semantic_typed_contract;
@@ -393,10 +390,6 @@ pub fn register_dialect(
     Dialect::register(context, requested);
     AlgorithmType::register(context);
     <IterationDomainAttr as Attribute>::register::<IterationDomainAttr>(context);
-    <GeneralGemmAbiSchemaAttr as Attribute>::register::<GeneralGemmAbiSchemaAttr>(context);
-    <GeneralGemmEpilogueSchemaAttr as Attribute>::register::<GeneralGemmEpilogueSchemaAttr>(
-        context,
-    );
     RankedViewType::register(context);
     IndexType::register(context);
     SemanticScalarType::register(context);
@@ -436,7 +429,6 @@ pub fn register_dialect(
     <SemanticEvaluationOrderAttr as Attribute>::register::<SemanticEvaluationOrderAttr>(context);
     <SemanticCoverageBindingAttr as Attribute>::register::<SemanticCoverageBindingAttr>(context);
     AlgorithmOp::register(context);
-    GeneralGemmOp::register(context);
     RankedViewOp::register(context);
     IndexConstantOp::register(context);
     IndexUnknownOp::register(context);

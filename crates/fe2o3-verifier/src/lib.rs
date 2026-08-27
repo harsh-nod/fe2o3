@@ -24,10 +24,6 @@ mod executor;
 mod flash_attention_memory_v1;
 mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
-mod general_gemm_kir_model_correspondence_v1;
-mod general_gemm_numerical_correspondence_v1;
-mod general_gemm_numerical_late_machine_v1;
-mod general_gemm_numerical_property_manifest_v1;
 mod general_gemm_numerical_v1;
 mod general_gemm_proof_numerical_evidence_v1;
 mod general_gemm_proof_v1;
@@ -145,10 +141,6 @@ pub use functional_refinement_runtime_v1::{
     FunctionalRefinementRuntimeErrorV1, FunctionalRefinementVerusRuntimeIdentityV1,
     FunctionalRefinementVerusRuntimeLeaseV1,
 };
-pub use general_gemm_kir_model_correspondence_v1::*;
-pub use general_gemm_numerical_correspondence_v1::*;
-pub use general_gemm_numerical_late_machine_v1::*;
-pub use general_gemm_numerical_property_manifest_v1::*;
 pub use general_gemm_numerical_v1::*;
 pub use general_gemm_proof_numerical_evidence_v1::*;
 pub use general_gemm_proof_v1::*;

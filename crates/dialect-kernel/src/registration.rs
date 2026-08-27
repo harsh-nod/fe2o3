@@ -6,8 +6,7 @@ use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AllocationOriginAttr,
     AnalysisSplitControlCountAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
     BranchArgsOp, BranchOp, CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DIALECT_NAME,
-    DeterministicJoinOp, DimensionAttr, DimensionOp, GeneralGemmAbiSchemaAttr,
-    GeneralGemmEpilogueSchemaAttr, GeneralGemmOp, IndexBinaryKindAttr, IndexBinaryOp,
+    DeterministicJoinOp, DimensionAttr, DimensionOp, IndexBinaryKindAttr, IndexBinaryOp,
     IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp,
     IndexLessThanBranchOp, IndexType, IndexUnknownOp, IndexUnsignedCastOp, IndexValueAttr,
     InvocationDimensionAttr, InvocationIndexOp, IterationDomainAttr, LaunchExtentAttr,
@@ -33,8 +32,6 @@ fn registration_hook(
     service.require_dialect(DIALECT_NAME)?;
     service.register_type::<AlgorithmType>()?;
     service.register_attribute::<IterationDomainAttr>()?;
-    service.register_attribute::<GeneralGemmAbiSchemaAttr>()?;
-    service.register_attribute::<GeneralGemmEpilogueSchemaAttr>()?;
     service.register_type::<RankedViewType>()?;
     service.register_type::<IndexType>()?;
     service.register_type::<SemanticScalarType>()?;
@@ -74,7 +71,6 @@ fn registration_hook(
     service.register_attribute::<TensorFragmentAttr>()?;
     service.register_attribute::<TensorValueRootAttr>()?;
     service.register_operation::<AlgorithmOp>()?;
-    service.register_operation::<GeneralGemmOp>()?;
     service.register_operation::<RankedViewOp>()?;
     service.register_operation::<IndexConstantOp>()?;
     service.register_operation::<IndexUnknownOp>()?;

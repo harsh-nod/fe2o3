@@ -60,6 +60,7 @@ pub enum UnsupportedFeatureV1 {
     DynamicWorkgroupMemory,
     Matrix,
     Wave,
+    Gfx950LdsTranspose,
     InlineAssembly,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
@@ -1579,6 +1580,9 @@ fn scan_operation(
         }
         OperationKind::Matrix(_) => reject!(UnsupportedFeatureV1::Matrix),
         OperationKind::Wave(_) => reject!(UnsupportedFeatureV1::Wave),
+        OperationKind::Gfx950LdsTranspose(_) => {
+            reject!(UnsupportedFeatureV1::Gfx950LdsTranspose)
+        }
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
     }
     Ok(())

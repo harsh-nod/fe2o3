@@ -264,6 +264,7 @@ fn add_operation(resident: &mut ResidentLedger, operation: &Operation) -> Option
         | OperationKind::GuardedLoad { .. }
         | OperationKind::Store { .. }
         | OperationKind::Atomic(_)
+        | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::Wave(_) => Some(()),
     }
 }

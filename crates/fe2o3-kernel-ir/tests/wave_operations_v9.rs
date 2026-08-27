@@ -8,7 +8,7 @@ fn storage_type() -> Type {
     )
 }
 
-fn attention_module() -> Module {
+fn wave_operation_module() -> Module {
     let parameters = vec![
         Type::slice(
             Type::Scalar(ScalarType::U8),
@@ -95,7 +95,7 @@ fn attention_module() -> Module {
         ),
     ];
     let mut function = Function::kernel_entry(
-        "gfx950_attention_impl",
+        "wave_operations_impl",
         Signature::new(parameters, vec![]),
         parameter_ids,
         vec![BasicBlock {
@@ -107,22 +107,22 @@ fn attention_module() -> Module {
     );
     function.required_capabilities = function.derived_capabilities();
     let mut kernel = Kernel::new(
-        "gfx950_attention",
-        "gfx950_attention_impl",
+        "wave_operations",
+        "wave_operations_impl",
         LaunchDomain::D1 {
             x: LaunchExtent::Dynamic,
         },
     );
     kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
-    let mut module = Module::new("tests::gfx950_attention_v9");
+    let mut module = Module::new("tests::wave_operations_v9");
     module.functions.push(function);
     module.kernels.push(kernel);
     module
 }
 
 #[test]
-fn exact_attention_surface_round_trips_only_as_v9() {
-    let module = attention_module();
+fn generic_wave_operation_surface_round_trips_only_as_v9() {
+    let module = wave_operation_module();
     verify_module(&module).unwrap();
     let bytes = encode_module_v9(&module).unwrap();
     assert_eq!(&bytes[8..10], &KERNEL_IR_VERSION_V9.to_le_bytes());
@@ -133,8 +133,8 @@ fn exact_attention_surface_round_trips_only_as_v9() {
 }
 
 #[test]
-fn wrong_workgroup_and_bypassed_publish_are_rejected() {
-    let mut wrong_workgroup = attention_module();
+fn transpose_rejects_wrong_workgroup_and_bypassed_publish() {
+    let mut wrong_workgroup = wave_operation_module();
     wrong_workgroup.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 2, 1));
     assert!(
         verify_module(&wrong_workgroup)
@@ -142,7 +142,7 @@ fn wrong_workgroup_and_bypassed_publish_are_rejected() {
             .contains(DiagnosticCode::InvalidGfx950LdsTranspose)
     );
 
-    let mut bypassed = attention_module();
+    let mut bypassed = wave_operation_module();
     let OperationKind::Gfx950LdsTranspose(read) =
         &mut bypassed.functions[0].body.as_mut().unwrap().blocks[0].operations[3].kind
     else {
@@ -161,7 +161,7 @@ fn wrong_workgroup_and_bypassed_publish_are_rejected() {
 
 #[test]
 fn broadcast_rejects_an_out_of_tile_or_dynamic_source_lane() {
-    let mut out_of_tile = attention_module();
+    let mut out_of_tile = wave_operation_module();
     out_of_tile.functions[0].body.as_mut().unwrap().blocks[0].operations[5].kind =
         OperationKind::Constant(Constant::U32(16));
     assert!(
@@ -170,7 +170,7 @@ fn broadcast_rejects_an_out_of_tile_or_dynamic_source_lane() {
             .contains(DiagnosticCode::InvalidWaveOperation)
     );
 
-    let mut dynamic = attention_module();
+    let mut dynamic = wave_operation_module();
     let OperationKind::Wave(wave) =
         &mut dynamic.functions[0].body.as_mut().unwrap().blocks[0].operations[6].kind
     else {

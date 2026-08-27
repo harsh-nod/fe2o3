@@ -1,6 +1,6 @@
 // Profile-level equations transcribed from the reviewed scalar GEMM KIR V5 graph.
 //
-// The host admits this source only after byte-exact validation against `scalar_gemm_v1_module`.
+// The host admits this source only after byte-exact validation against the reviewed KIR V5 graph.
 // These theorems model that graph's entry guard, coordinate block, loop-carried accumulator,
 // address arithmetic, and final store. This is not a decoder or whole-KIR operational semantics,
 // and it does not model Rust MIR or IEEE-754 `f32` operations.

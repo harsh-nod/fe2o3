@@ -1,12 +1,11 @@
 //! Bounded executable integer semantics for a closed Kernel IR V5 subset.
 //!
-//! The supported subset is intentionally the one exercised by the canonical
-//! scalar GEMM V1 graph. Numeric values carried by every supported scalar
-//! type, including `f32`-typed KIR values, are interpreted as mathematical
-//! integers represented by `i128`. This module does not model IEEE-754
-//! arithmetic and its results are not evidence about floating-point behavior.
-//! Invocations execute in increasing X order as a deterministic differential
-//! oracle; that order is not a GPU scheduling model or a data-race proof.
+//! Numeric values carried by every supported scalar type, including
+//! `f32`-typed KIR values, are interpreted as mathematical integers represented
+//! by `i128`. This module does not model IEEE-754 arithmetic and its results
+//! are not evidence about floating-point behavior. Invocations execute in
+//! increasing X order as a deterministic differential oracle; that order is
+//! not a GPU scheduling model or a data-race proof.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -15,11 +14,9 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, Axis, BasicBlock, BinaryOp, BlockId, CastKind, ComparePredicate,
     Constant, Function, FunctionBody, FunctionRole, IndexKind, IntrinsicKind, KernelId,
-    KernelIrDecodeError, LaunchDomain, LaunchExtent, Module, Operation, OperationKind,
-    SCALAR_GEMM_V1_KERNEL_ID, ScalarGemmTargetRequirementsV1, ScalarGemmV1Error, ScalarType,
+    KernelIrDecodeError, LaunchDomain, LaunchExtent, Module, Operation, OperationKind, ScalarType,
     TargetCapability, Terminator, Type, ValueDef, ValueId, VerifiedCanonicalKernelIrErrorV5,
     VerifiedCanonicalKernelIrV5, WaveWidth, decode_module_v5, gfx942_xnack_minus_target_capability,
-    verify_scalar_gemm_v1_module,
 };
 
 pub const DEFAULT_INTEGER_ORACLE_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
@@ -132,60 +129,6 @@ impl IntegerSemanticOracleExecutionV1 {
     }
 }
 
-/// Owned inputs for the exact scalar GEMM V1 convenience entry point.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScalarGemmIntegerOracleInputV1 {
-    pub a: Vec<i128>,
-    pub b: Vec<i128>,
-    pub c: Vec<i128>,
-    pub m: u32,
-    pub n: u32,
-    pub k: u32,
-    /// The number of global X invocations. Values beyond `m * n` exercise the
-    /// graph's inactive-invocation guard.
-    pub global_invocations: u64,
-}
-
-impl ScalarGemmIntegerOracleInputV1 {
-    pub fn new(a: Vec<i128>, b: Vec<i128>, c: Vec<i128>, m: u32, n: u32, k: u32) -> Self {
-        Self {
-            a,
-            b,
-            c,
-            m,
-            n,
-            k,
-            global_invocations: u64::from(m) * u64::from(n),
-        }
-    }
-}
-
-/// Integer-model output from the exact scalar GEMM V1 graph.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ScalarGemmIntegerOracleExecutionV1 {
-    pub c: Vec<i128>,
-    pub invocations_executed: u64,
-    pub steps_executed: u64,
-}
-
-impl ScalarGemmIntegerOracleExecutionV1 {
-    pub const fn is_verus_proof(&self) -> bool {
-        false
-    }
-
-    pub const fn models_ieee_f32(&self) -> bool {
-        false
-    }
-
-    pub const fn proves_race_freedom(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_compiler_artifact_or_runtime_authority(&self) -> bool {
-        false
-    }
-}
-
 /// Executes the supported subset of one semantically valid canonical V5
 /// module using default limits.
 pub fn execute_kernel_ir_v5_integer_semantic_oracle_v1(
@@ -208,60 +151,6 @@ pub fn execute_kernel_ir_v5_integer_semantic_oracle_with_limits_v1(
 ) -> Result<IntegerSemanticOracleExecutionV1, IntegerSemanticOracleErrorV1> {
     let module = load_canonical_module(canonical_v5, limits)?;
     execute_module(module, request, limits)
-}
-
-/// Executes only the exact canonical scalar GEMM V1 graph using default
-/// limits. Any semantically valid graph mutation is rejected before execution.
-pub fn execute_scalar_gemm_v1_integer_semantic_oracle_v1(
-    canonical_v5: &[u8],
-    input: ScalarGemmIntegerOracleInputV1,
-) -> Result<ScalarGemmIntegerOracleExecutionV1, IntegerSemanticOracleErrorV1> {
-    execute_scalar_gemm_v1_integer_semantic_oracle_with_limits_v1(
-        canonical_v5,
-        input,
-        &IntegerSemanticOracleLimitsV1::default(),
-    )
-}
-
-/// Executes only the exact canonical scalar GEMM V1 graph using caller-selected
-/// limits.
-pub fn execute_scalar_gemm_v1_integer_semantic_oracle_with_limits_v1(
-    canonical_v5: &[u8],
-    input: ScalarGemmIntegerOracleInputV1,
-    limits: &IntegerSemanticOracleLimitsV1,
-) -> Result<ScalarGemmIntegerOracleExecutionV1, IntegerSemanticOracleErrorV1> {
-    let module = load_canonical_module(canonical_v5, limits)?;
-    verify_scalar_gemm_v1_module(
-        &module,
-        ScalarGemmTargetRequirementsV1::gfx942_xnack_minus_cov6(),
-    )
-    .map_err(IntegerSemanticOracleErrorV1::ScalarGemmProfile)?;
-
-    let request = IntegerSemanticOracleRequestV1::new(
-        SCALAR_GEMM_V1_KERNEL_ID,
-        vec![
-            IntegerSemanticOracleArgumentV1::Buffer(input.a),
-            IntegerSemanticOracleArgumentV1::Buffer(input.b),
-            IntegerSemanticOracleArgumentV1::Buffer(input.c),
-            IntegerSemanticOracleArgumentV1::Integer(i128::from(input.m)),
-            IntegerSemanticOracleArgumentV1::Integer(i128::from(input.n)),
-            IntegerSemanticOracleArgumentV1::Integer(i128::from(input.k)),
-        ],
-        [input.global_invocations, 1, 1],
-    );
-    let execution = execute_module(module, request, limits)?;
-    let invocations_executed = execution.invocations_executed;
-    let steps_executed = execution.steps_executed;
-    let mut arguments = execution.into_arguments();
-    let c = match arguments.get_mut(2) {
-        Some(IntegerSemanticOracleArgumentV1::Buffer(elements)) => std::mem::take(elements),
-        _ => return Err(IntegerSemanticOracleErrorV1::InternalResultShape),
-    };
-    Ok(ScalarGemmIntegerOracleExecutionV1 {
-        c,
-        invocations_executed,
-        steps_executed,
-    })
 }
 
 fn load_canonical_module(
@@ -1200,7 +1089,6 @@ impl Fuel {
 pub enum IntegerSemanticOracleErrorV1 {
     CanonicalKernelIr(VerifiedCanonicalKernelIrErrorV5),
     CanonicalDecode(KernelIrDecodeError),
-    ScalarGemmProfile(ScalarGemmV1Error),
     ResourceLimitExceeded {
         resource: &'static str,
         actual: usize,
@@ -1302,9 +1190,6 @@ impl fmt::Display for IntegerSemanticOracleErrorV1 {
             }
             Self::CanonicalDecode(error) => {
                 write!(formatter, "revalidated KIR V5 failed to decode: {error}")
-            }
-            Self::ScalarGemmProfile(error) => {
-                write!(formatter, "not exact scalar GEMM V1: {error}")
             }
             Self::ResourceLimitExceeded {
                 resource,
@@ -1429,7 +1314,6 @@ impl Error for IntegerSemanticOracleErrorV1 {
         match self {
             Self::CanonicalKernelIr(error) => Some(error),
             Self::CanonicalDecode(error) => Some(error),
-            Self::ScalarGemmProfile(error) => Some(error),
             _ => None,
         }
     }

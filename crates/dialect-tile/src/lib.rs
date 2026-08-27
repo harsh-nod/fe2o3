@@ -21,10 +21,8 @@ use pliron::{
     verify_err, verify_err_noloc, verify_error,
 };
 
-mod general_gemm;
 mod registration;
 
-pub use general_gemm::{GeneralGemmXor4MappingAttr, GeneralGemmXor4Op};
 pub use registration::dialect_registration;
 
 /// The Pliron namespace owned by this crate.
@@ -479,9 +477,7 @@ pub fn register_dialect(
     Dialect::register(context, requested);
     DistributedTileType::register(context);
     <DistributionAttr as Attribute>::register::<DistributionAttr>(context);
-    <GeneralGemmXor4MappingAttr as Attribute>::register::<GeneralGemmXor4MappingAttr>(context);
     MaterializeOp::register(context);
-    GeneralGemmXor4Op::register(context);
 
     let marker = context.aux_data.insert(Box::new(RegistrationMarker));
     context.aux_data_map.insert(marker_key, marker);

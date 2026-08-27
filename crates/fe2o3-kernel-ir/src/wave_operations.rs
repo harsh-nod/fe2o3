@@ -5,7 +5,7 @@ use crate::{
     WaveWidth, gfx950_xnack_minus_target_capability,
 };
 
-/// Exact low-precision format staged through one gfx950 LDS transpose tile.
+/// Low-precision format staged through a gfx950 LDS transpose tile.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Gfx950LdsTransposeFormatV1 {
     Fp4E2M1,
@@ -13,7 +13,6 @@ pub enum Gfx950LdsTransposeFormatV1 {
 }
 
 impl Gfx950LdsTransposeFormatV1 {
-    /// Static byte extent of one 16x128 tile in its packed LDS representation.
     pub const fn lds_bytes(self) -> u32 {
         match self {
             Self::Fp4E2M1 => 1024,
@@ -21,7 +20,6 @@ impl Gfx950LdsTransposeFormatV1 {
         }
     }
 
-    /// Number of 64-bit transpose reads needed to produce eight operand dwords.
     pub const fn transpose_read_parts(self) -> u32 {
         match self {
             Self::Fp4E2M1 => 2,
@@ -29,7 +27,6 @@ impl Gfx950LdsTransposeFormatV1 {
         }
     }
 
-    /// Per-lane packed byte stride used by the gfx950 transpose-read contract.
     pub const fn lane_byte_stride(self) -> u32 {
         match self {
             Self::Fp4E2M1 => 16,
@@ -38,12 +35,12 @@ impl Gfx950LdsTransposeFormatV1 {
     }
 }
 
-/// One state transition in the exact gfx950 low-precision LDS transpose path.
+/// One state transition in the workload-neutral gfx950 LDS transpose protocol.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Gfx950LdsTransposeOperationKindV1 {
-    /// Declares one private static LDS tile for the current kernel entry.
-    Current { format: Gfx950LdsTransposeFormatV1 },
-    /// Stages a checked row-major token tile using the inverse transpose mapping.
+    Current {
+        format: Gfx950LdsTransposeFormatV1,
+    },
     Stage {
         format: Gfx950LdsTransposeFormatV1,
         storage: ValueId,
@@ -55,12 +52,10 @@ pub enum Gfx950LdsTransposeOperationKindV1 {
         token_base: ValueId,
         reduction_base: ValueId,
     },
-    /// Publishes every staged byte through one uniform workgroup barrier.
     Publish {
         format: Gfx950LdsTransposeFormatV1,
         storage: ValueId,
     },
-    /// Reads one published B fragment with gfx950 transpose instructions.
     Read {
         format: Gfx950LdsTransposeFormatV1,
         storage: ValueId,
@@ -105,7 +100,7 @@ impl Gfx950LdsTransposeOperationKindV1 {
     }
 }
 
-/// A typed, executable gfx950 LDS transpose operation.
+/// A typed gfx950 LDS transpose operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Gfx950LdsTransposeOperationV1 {
     pub kind: Gfx950LdsTransposeOperationKindV1,
@@ -161,11 +156,9 @@ impl Gfx950LdsTransposeOperationV1 {
     }
 }
 
-/// Exact floating-point reduction retained by a V9 wave operation.
+/// Floating-point reduction retained by a V9 wave operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum WaveF32ReductionKindV1 {
-    /// Fixed XOR-tree addition order.
     Sum,
-    /// Ordered `less-than` plus select; this is not `fmax` or `maxnum`.
     Maximum,
 }

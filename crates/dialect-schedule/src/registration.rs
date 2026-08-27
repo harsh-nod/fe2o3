@@ -2,10 +2,7 @@ use fe2o3_pliron_owner_core::{
     DialectRegistration, DialectRegistrationService, NameError, RegistrationHookError,
 };
 
-use crate::{
-    DIALECT_NAME, GeneralGemmPhasePlanAttr, GeneralGemmPlanOp, GeneralGemmScheduleAttr,
-    GeneralGemmTransferPlanAttr, ParametersAttr, PlanOp, PlanType,
-};
+use crate::{DIALECT_NAME, ParametersAttr, PlanOp, PlanType};
 
 fn registration_hook(
     service: &mut DialectRegistrationService<'_>,
@@ -13,11 +10,7 @@ fn registration_hook(
     service.require_dialect(DIALECT_NAME)?;
     service.register_type::<PlanType>()?;
     service.register_attribute::<ParametersAttr>()?;
-    service.register_attribute::<GeneralGemmScheduleAttr>()?;
-    service.register_attribute::<GeneralGemmPhasePlanAttr>()?;
-    service.register_attribute::<GeneralGemmTransferPlanAttr>()?;
     service.register_operation::<PlanOp>()?;
-    service.register_operation::<GeneralGemmPlanOp>()?;
     Ok(())
 }
 

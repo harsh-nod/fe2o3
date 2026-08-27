@@ -74,6 +74,7 @@ enum UnsupportedFeatureCode {
     DynamicWorkgroupMemory,
     Matrix,
     Wave,
+    Gfx950LdsTranspose,
     InlineAssembly,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
@@ -1694,6 +1695,7 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         }
         UnsupportedFeatureV1::Matrix => UnsupportedFeatureCode::Matrix,
         UnsupportedFeatureV1::Wave => UnsupportedFeatureCode::Wave,
+        UnsupportedFeatureV1::Gfx950LdsTranspose => UnsupportedFeatureCode::Gfx950LdsTranspose,
         UnsupportedFeatureV1::InlineAssembly => UnsupportedFeatureCode::InlineAssembly,
         UnsupportedFeatureV1::UnsupportedScalarOperation => {
             UnsupportedFeatureCode::UnsupportedScalarOperation

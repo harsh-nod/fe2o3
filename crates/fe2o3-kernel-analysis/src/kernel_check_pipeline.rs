@@ -1189,27 +1189,95 @@ fn transfer_workgroup_memory(
 mod tests {
     use super::*;
     use fe2o3_kernel_ir::{
-        Axis, Barrier, BarrierSemantics, BasicBlock, BinaryOp, BlockId, CheckedBinaryOperator,
-        Constant, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
-        MemoryOrdering, Operation, Signature, SynchronizationScope, TILED_GEMM_LDS_V1_KERNEL_ID,
-        TILED_GEMM_LDS_V1_LANES, Terminator, Type, ValueDef, WorkgroupSize,
-        tiled_gemm_lds_v1_module,
+        AccessMode, Axis, Barrier, BarrierSemantics, BasicBlock, BinaryOp, BlockId,
+        CheckedBinaryOperator, Constant, Convergence, IndexKind, IntrinsicKind, IntrinsicOperation,
+        Kernel, LaunchDomain, LaunchExtent, MatrixElement, MatrixOperation, MemoryOrdering,
+        Operation, Signature, SynchronizationScope, Terminator, Type, ValueDef, WorkgroupBarrier,
+        WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
     };
+
+    const TEST_LANES: u64 = 64;
+
+    fn workgroup_memory_module() -> Module {
+        let parameters = vec![Type::F32; 4];
+        let parameter_ids = (0..4).map(ValueId).collect::<Vec<_>>();
+        let allocation = Operation::new(
+            vec![ValueDef::new(
+                ValueId(4),
+                Type::pointer(Type::F32, AddressSpace::Workgroup, AccessMode::ReadWrite),
+            )],
+            OperationKind::WorkgroupMemory(WorkgroupMemory {
+                element: Type::F32,
+                extent: WorkgroupMemoryExtent::Static(256),
+                alignment: 16,
+            }),
+        );
+        let store = Operation::new(
+            vec![],
+            OperationKind::Matrix(MatrixOperation::lds_store(
+                ValueId(4),
+                [ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+                MatrixElement::F32,
+            )),
+        );
+        let barrier = Operation::new(
+            vec![],
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Workgroup],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        );
+        let load = MatrixOperation::lds_load(ValueId(4), MatrixElement::F32);
+        let load = Operation::new(
+            load.result_types()
+                .into_iter()
+                .enumerate()
+                .map(|(index, ty)| ValueDef::new(ValueId(5 + index as u32), ty))
+                .collect(),
+            OperationKind::Matrix(load),
+        );
+        let mut block = BasicBlock::new(BlockId(0));
+        block.operations = vec![allocation, store, barrier, load];
+        block.terminator = Some(Terminator::Return { values: vec![] });
+        let mut function = Function::kernel_entry(
+            "workgroup_memory_impl",
+            Signature::new(parameters, vec![]),
+            parameter_ids,
+            vec![block],
+        );
+        function.required_capabilities = function.derived_capabilities();
+        let mut kernel = Kernel::new(
+            "workgroup_memory",
+            function.id.clone(),
+            LaunchDomain::D1 {
+                x: LaunchExtent::Dynamic,
+            },
+        );
+        kernel.workgroup_size = Some(WorkgroupSize::new(TEST_LANES as u32, 1, 1));
+        let mut module = Module::new("workgroup_memory_analysis");
+        module.functions.push(function);
+        module.kernels.push(kernel);
+        module
+    }
 
     fn request(module: &Module) -> KernelCheckRequestV1<'_> {
         KernelCheckRequestV1 {
             module,
             kernel: &module.kernels[0].id,
-            launch_extent: ExplicitLaunchExtent1d::Exact(u64::from(TILED_GEMM_LDS_V1_LANES)),
+            launch_extent: ExplicitLaunchExtent1d::Exact(TEST_LANES),
             index_width: FormalIndexWidth::Bits64,
         }
     }
 
     #[test]
     fn pipeline_order_is_fixed_and_reports_no_authority() {
-        let module = tiled_gemm_lds_v1_module();
+        let module = workgroup_memory_module();
         let report = run_general_kernel_checks_v1(request(&module)).unwrap();
-        assert_eq!(report.kernel().as_str(), TILED_GEMM_LDS_V1_KERNEL_ID);
+        assert_eq!(report.kernel().as_str(), "workgroup_memory");
         assert_eq!(
             report
                 .passes()
@@ -1385,7 +1453,7 @@ mod tests {
 
     #[test]
     fn structural_failure_stops_before_semantic_passes() {
-        let mut module = tiled_gemm_lds_v1_module();
+        let mut module = workgroup_memory_module();
         module.functions[0].body.as_mut().unwrap().blocks[0].terminator = None;
         let report = run_general_kernel_checks_v1(request(&module)).unwrap();
         assert_eq!(report.passes().len(), 1);
@@ -1395,7 +1463,7 @@ mod tests {
 
     #[test]
     fn workgroup_memory_is_a_must_analysis_and_tracks_epochs() {
-        let module = tiled_gemm_lds_v1_module();
+        let module = workgroup_memory_module();
         let clean = run_general_kernel_checks_v1(request(&module)).unwrap();
         assert_eq!(
             clean
@@ -1405,7 +1473,7 @@ mod tests {
             KernelCheckStatusV1::Clean,
         );
 
-        let mut missing_publish = tiled_gemm_lds_v1_module();
+        let mut missing_publish = workgroup_memory_module();
         missing_publish.functions[0].body.as_mut().unwrap().blocks[0]
             .operations
             .retain(|operation| !matches!(operation.kind, OperationKind::WorkgroupBarrier(_)));
@@ -1419,7 +1487,7 @@ mod tests {
             KernelCheckFindingV1::WorkgroupReadBeforePublish { .. }
         )));
 
-        let mut missing_reuse_publish = tiled_gemm_lds_v1_module();
+        let mut missing_reuse_publish = workgroup_memory_module();
         let block = &mut missing_reuse_publish.functions[0]
             .body
             .as_mut()

@@ -33,10 +33,7 @@ mod canonical_kir_v8;
 mod canonical_kir_v9;
 mod control_flow;
 mod effect_extraction;
-mod flash_attention_v1;
 mod formal_memory_obligations;
-mod general_gemm_kir_v1;
-mod gfx950_attention_v1;
 mod integer_semantic_oracle_v1;
 mod interprocedural_effects;
 mod ir;
@@ -44,23 +41,14 @@ mod ir;
 #[path = "launch_kernel_v2.rs"]
 mod launch_kernel_contract_v2;
 mod matrix;
-mod moe_top2_v1;
 mod region_effects;
-mod scalar_gemm_semantic_projection_v1;
-mod scalar_gemm_v1;
 pub mod scalar_ops_v2;
 mod semantic_operations;
 mod standard_atomics;
-mod tiled_gemm_lds_edges_v1;
-mod tiled_gemm_lds_grid_v1;
-mod tiled_gemm_lds_k32_v2;
-mod tiled_gemm_lds_v1;
-mod tiled_gemm_v1;
 mod types;
 mod verify;
-mod wave64_collectives_v1;
+mod wave_operations;
 mod wire;
-mod workgroup_sync_v1;
 
 pub use canonical_kir_v5::*;
 pub use canonical_kir_v6::*;
@@ -69,10 +57,7 @@ pub use canonical_kir_v8::*;
 pub use canonical_kir_v9::*;
 pub use control_flow::*;
 pub use effect_extraction::*;
-pub use flash_attention_v1::*;
 pub use formal_memory_obligations::*;
-pub use general_gemm_kir_v1::*;
-pub use gfx950_attention_v1::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
     InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,
@@ -95,19 +80,10 @@ pub use launch_kernel_contract_v2::{
     canonical_occupancy_subject_identity_v2, canonical_variant_tuple_identity_v2,
 };
 pub use matrix::*;
-pub use moe_top2_v1::*;
 pub use region_effects::*;
-pub use scalar_gemm_semantic_projection_v1::*;
-pub use scalar_gemm_v1::*;
 pub use semantic_operations::*;
 pub use standard_atomics::*;
-pub use tiled_gemm_lds_edges_v1::*;
-pub use tiled_gemm_lds_grid_v1::*;
-pub use tiled_gemm_lds_k32_v2::*;
-pub use tiled_gemm_lds_v1::*;
-pub use tiled_gemm_v1::*;
 pub use types::*;
 pub use verify::*;
-pub use wave64_collectives_v1::*;
+pub use wave_operations::*;
 pub use wire::*;
-pub use workgroup_sync_v1::*;
