@@ -19,9 +19,6 @@ mod inert_rustc_invocation_capture;
 mod inspect;
 mod non_production_reproduction;
 #[allow(dead_code)]
-#[path = "../../../examples/row_softmax_v1/src/numerical_contract.rs"]
-mod numerical_contract;
-#[allow(dead_code)]
 #[path = "rustc_wrapper/pinned_codegen_backend.rs"]
 mod pinned_codegen_backend;
 #[path = "rustc_wrapper/pinned_executable.rs"]
@@ -35,9 +32,6 @@ mod protected_compiler_handoff_v3;
 #[path = "rustc_runtime.rs"]
 mod rustc_lib_tree;
 mod tool_commands;
-#[allow(dead_code)]
-#[path = "../../../examples/row_softmax_v1/src/verification_certificate.rs"]
-mod verification_certificate;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
