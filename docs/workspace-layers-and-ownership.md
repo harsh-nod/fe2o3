@@ -245,6 +245,13 @@ authority-free. It consumes only canonical `fe2o3-service-model` and
 allocation, load, launch, queue publication, execution, runtime wait,
 authentication, proof, or storage release.
 
+`fe2o3-runtime` is the sole pure-Rust gfx942 composition boundary over the
+canonical AMDHSA loader and `fe2o3-kfd`. Its safe API currently prepares a
+complete address-free request but grants no launch authority; the exact-artifact
+hardware diagnostic reaches the private mechanics only through an explicit
+unsafe transition. Production execution must consume verifier authority in this
+crate rather than adding another host-runtime route.
+
 ### Integration
 
 Integration owns CLI composition, rustc codegen integration, qualification

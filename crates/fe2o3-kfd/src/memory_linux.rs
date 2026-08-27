@@ -2,8 +2,9 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::sync::Arc;
 
 use fe2o3_aql::{
     AQL_INVALID_PACKET_HEADER_V1, AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
@@ -44,7 +45,7 @@ pub(super) struct LinuxMemoryBackend {
 pub(super) struct LinuxVaReservation {
     address: NonNull<c_void>,
     bytes: usize,
-    replaced: bool,
+    phase: Arc<AtomicU8>,
 }
 
 pub(super) struct LinuxCpuMapping {
@@ -52,7 +53,13 @@ pub(super) struct LinuxCpuMapping {
     bytes: usize,
     active: bool,
     accessible: bool,
+    reservation_phase: Arc<AtomicU8>,
 }
+
+const VA_GUARDED: u8 = 0;
+const VA_IDENTITY_MAPPED: u8 = 1;
+const VA_IDENTITY_UNMAPPED: u8 = 2;
+const VA_RELEASED: u8 = 3;
 
 impl LinuxMemoryBackend {
     pub(super) fn new(device: CheckedGfx942XnackMinusDevice) -> Self {
@@ -92,6 +99,9 @@ impl LinuxMemoryBackend {
         }
         mapping.active = false;
         mapping.accessible = false;
+        mapping
+            .reservation_phase
+            .store(VA_IDENTITY_UNMAPPED, Ordering::Release);
     }
 
     #[cfg(feature = "live-validation")]
@@ -292,7 +302,7 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(LinuxVaReservation {
             address,
             bytes,
-            replaced: false,
+            phase: Arc::new(AtomicU8::new(VA_GUARDED)),
         })
     }
 
@@ -325,52 +335,49 @@ impl MemoryBackend for LinuxMemoryBackend {
         reservation: &mut Self::Reservation,
         mmap_offset: u64,
         bytes: usize,
-        retain_gpu_va_guard: bool,
     ) -> Result<Self::Mapping, MemorySessionError> {
-        if reservation.replaced || bytes == 0 || bytes > reservation.bytes {
+        if reservation.phase.load(Ordering::Acquire) != VA_GUARDED
+            || bytes == 0
+            || bytes != reservation.bytes
+        {
             return Err(MemorySessionError::KernelResultMalformed(
                 "VA reservation replacement",
             ));
         }
-        if !retain_gpu_va_guard {
-            // SAFETY: this exact anonymous reservation is owned and has no
-            // Rust references. The single-allocation compatibility path does
-            // not require a persistent userspace VA guard.
-            unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
-                .map_err(|source| Self::syscall("release anonymous GPU VA reservation", source))?;
-            reservation.replaced = true;
-        }
-        // SAFETY: null requests a kernel-selected CPU VMA. It is deliberately
-        // PROT_NONE until DONTFORK succeeds, so the setup gap cannot expose BO
-        // bytes even if an external raw fork violates the named contract.
+        let expected = reservation.address.as_ptr();
+        // SAFETY: the exact address and size name the exclusively owned
+        // PROT_NONE reservation. MAP_FIXED atomically replaces that guard with
+        // the AMDGPU BO while retaining PROT_NONE until DONTFORK succeeds.
         let mapped = unsafe {
             rustix::mm::mmap(
-                core::ptr::null_mut(),
+                expected,
                 bytes,
                 ProtFlags::empty(),
-                MapFlags::SHARED,
+                MapFlags::SHARED | MapFlags::FIXED,
                 &self.device.render_fd,
                 mmap_offset,
             )
         }
         .map_err(|source| Self::syscall("mmap AMDGPU BO", source))?;
-        let Some(address) = NonNull::new(mapped) else {
-            // A mapping at address zero is outside the admitted profile. It is
-            // still a live VMA and must not be returned ambiguously.
-            // SAFETY: `mapped` and `bytes` are the exact successful mmap range.
-            if unsafe { rustix::mm::munmap(mapped, bytes) }.is_err() {
-                std::process::abort();
-            }
-            return Err(MemorySessionError::KernelResultMalformed(
-                "AMDGPU BO mmap address",
-            ));
-        };
+        if mapped != expected {
+            // Linux MAP_FIXED is required to return exactly the requested
+            // address. Any other success result invalidates the memory model.
+            std::process::abort();
+        }
+        reservation
+            .phase
+            .store(VA_IDENTITY_MAPPED, Ordering::Release);
         Ok(LinuxCpuMapping {
-            address,
+            address: reservation.address,
             bytes,
             active: true,
             accessible: false,
+            reservation_phase: Arc::clone(&reservation.phase),
         })
+    }
+
+    fn mapping_address(mapping: &Self::Mapping) -> u64 {
+        mapping.address.as_ptr() as usize as u64
     }
 
     fn prepare_cpu_mapping(
@@ -577,8 +584,19 @@ impl MemoryBackend for LinuxMemoryBackend {
         Ok(())
     }
 
+    fn observe_i64_acquire(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        offset: usize,
+    ) -> Result<i64, MemorySessionError> {
+        Ok(checked_atomic_i64(mapping, requested_bytes, offset)?.load(Ordering::Acquire))
+    }
+
     fn unmap_cpu(&mut self, mapping: &mut Self::Mapping) -> Result<(), MemorySessionError> {
-        if !mapping.active || !mapping.accessible {
+        if !mapping.active
+            || !mapping.accessible
+            || mapping.reservation_phase.load(Ordering::Acquire) != VA_IDENTITY_MAPPED
+        {
             return Err(MemorySessionError::KernelResultMalformed(
                 "CPU mapping state",
             ));
@@ -589,6 +607,9 @@ impl MemoryBackend for LinuxMemoryBackend {
             .map_err(|source| Self::syscall("munmap AMDGPU BO", source))?;
         mapping.active = false;
         mapping.accessible = false;
+        mapping
+            .reservation_phase
+            .store(VA_IDENTITY_UNMAPPED, Ordering::Release);
         Ok(())
     }
 
@@ -596,17 +617,27 @@ impl MemoryBackend for LinuxMemoryBackend {
         &mut self,
         reservation: &mut Self::Reservation,
     ) -> Result<(), MemorySessionError> {
-        if reservation.replaced {
-            return Err(MemorySessionError::KernelResultMalformed(
+        match reservation.phase.load(Ordering::Acquire) {
+            VA_GUARDED => {
+                // SAFETY: this is the exact still-owned PROT_NONE reservation.
+                unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
+                    .map_err(|source| {
+                        Self::syscall("release retained GPU VA reservation", source)
+                    })?;
+                reservation.phase.store(VA_RELEASED, Ordering::Release);
+                Ok(())
+            }
+            VA_IDENTITY_UNMAPPED => {
+                // The fixed BO mapping already consumed the guard and explicit
+                // CPU unmap removed that VMA before FREE. Retire only the
+                // linear reservation authority; there is no second VMA.
+                reservation.phase.store(VA_RELEASED, Ordering::Release);
+                Ok(())
+            }
+            _ => Err(MemorySessionError::KernelResultMalformed(
                 "GPU VA reservation release state",
-            ));
+            )),
         }
-        // SAFETY: the PROT_NONE guard is owned by the session, no references
-        // can exist to it, and the associated KFD allocation has been freed.
-        unsafe { rustix::mm::munmap(reservation.address.as_ptr(), reservation.bytes) }
-            .map_err(|source| Self::syscall("release retained GPU VA reservation", source))?;
-        reservation.replaced = true;
-        Ok(())
     }
 
     fn free(&mut self, handle: u64) -> Result<(), MemorySessionError> {
@@ -668,6 +699,23 @@ fn checked_atomic_u64(
     // SAFETY: both control AtomicU64 objects were explicitly initialized
     // before GPU mapping and the exact object remains live until teardown.
     Ok(unsafe { &*pointer.cast::<AtomicU64>() })
+}
+
+fn checked_atomic_i64(
+    mapping: &mut LinuxCpuMapping,
+    requested_bytes: usize,
+    offset: usize,
+) -> Result<&AtomicI64, MemorySessionError> {
+    let pointer = checked_mapping_pointer(
+        mapping,
+        requested_bytes,
+        offset,
+        core::mem::size_of::<AtomicI64>(),
+        core::mem::align_of::<AtomicI64>(),
+    )?;
+    // SAFETY: the exact AtomicI64 object is initialized before GPU mapping,
+    // and this private reference cannot outlive the retained mapping.
+    Ok(unsafe { &*pointer.cast::<AtomicI64>() })
 }
 
 impl Drop for LinuxVaReservation {

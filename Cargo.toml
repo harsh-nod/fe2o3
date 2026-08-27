@@ -116,6 +116,7 @@ fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-runtime-model = { path = "crates/fe2o3-runtime-model" }
 fe2o3-runtime-protocol = { path = "crates/fe2o3-runtime-protocol" }
+fe2o3-runtime = { path = "crates/fe2o3-runtime" }
 fe2o3-service-host = { path = "crates/fe2o3-service-host" }
 fe2o3-service-model = { path = "crates/fe2o3-service-model" }
 fe2o3-verifier = { path = "crates/fe2o3-verifier" }

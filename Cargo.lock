@@ -1465,6 +1465,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-runtime"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amdhsa-loader",
+ "fe2o3-aql",
+ "fe2o3-hsaco",
+ "fe2o3-kfd",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-runtime-model"
 version = "0.1.0"
 

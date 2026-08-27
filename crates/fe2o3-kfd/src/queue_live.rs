@@ -40,14 +40,26 @@ use fe2o3_aql::{
     AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV1, AqlPreparedKernelDispatchV1,
 };
 
+#[allow(unsafe_code)]
+#[path = "queue_dispatch_live.rs"]
+mod dispatch;
+
+pub use dispatch::{
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
+    GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDispatchBufferV1,
+    Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
+    Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
+    execute_gfx942_kfd_dispatch_unchecked_v1,
+};
+
 const CONTROL_BYTES: usize = 4_096;
 static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and private batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r7-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r9-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
-    "memory_profile_sha256=1054b1c31ad143c7218eee24bcc529b17851338a152ed0cf028c46898c6a17a4\n",
+    "memory_profile_sha256=2b668c19249341cad9814a2974242ca5ca76754c6bc5a36ab973e4a369ffc986\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
     "aql_dispatch_schema_sha256=b691e0df36e2c1f0695f49a19d49d3fbbe4380e8e9999b01368df02783952edf\n",
     "aql_batch_reservation_schema_sha256=0734191a1975f1bfc66bbcdbfd47f907656963b35c97a6d3f4cd2e04d2f59a83\n",
@@ -60,7 +72,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_chardev.c=f9a8805c5d479faee25e457051aa428e4bb523ecf1c7b1618a6a5f79ca5d7bba\n",
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-authorities,exact-one-vm,transferred-model-ownership\n",
-    "gtt_policy=ring:aql-queue,control:host-visible-coherent,eop-and-cwsr:executable;fe2o3-policy-not-rocr-equivalence\n",
+    "gtt_policy=identity-mapped-cpu-gpu-va,ring:gfx942-host-visible-executable-single-span-without-gfx7-gfx8-double-map-workaround,control:host-visible-coherent,eop-and-cwsr:executable\n",
     "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,batch-count-1-through-256-and-ring-capacity-bounded,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
@@ -77,7 +89,7 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "ab7327bd54f0af7940550d0610b1c75d1fd097f9780653a34e24fa559205ac5b";
+    "8a0d79f5eaadacdad0dce68c44203af4fa49f35b82b6f6da172b043b9d9a1789";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -409,12 +421,22 @@ impl CheckedGfx942XnackMinusDevice {
         self,
         ring_bytes: u32,
     ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with(ring_bytes, |_| Ok(()))
+            .map(|(session, ())| session)
+    }
+
+    pub(crate) fn create_compute_aql_queue_with<T>(
+        self,
+        ring_bytes: u32,
+        prepare: impl FnOnce(&mut SharedGttMemorySessionV1) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
         let geometry = plan_gfx942_aql_queue_resources(
             self.topology_snapshot(),
             self.observation().unique_id(),
             ring_bytes,
         )?;
         let mut memory = self.acquire_shared_gtt_memory_session()?;
+        let prepared = prepare(&mut memory)?;
 
         let mut ring =
             memory
@@ -560,7 +582,7 @@ impl CheckedGfx942XnackMinusDevice {
         session.observation.doorbell_byte_offset = doorbell.queue_byte_offset();
         session.doorbell = Some(doorbell);
         session.check_currentness()?;
-        Ok(session)
+        Ok((session, prepared))
     }
 }
 
@@ -724,7 +746,24 @@ impl ComputeAqlQueueSessionV1 {
         Ok(observation)
     }
 
-    pub fn destroy(mut self) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+    pub fn destroy(self) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+        self.destroy_with(|_| Ok(()))
+            .map(|(destroyed, ())| destroyed)
+    }
+
+    /// Destroys the queue before allowing one private owner to consume and
+    /// release allocations retained in the same VM.
+    ///
+    /// The callback is deliberately crate-private. It runs only after queue,
+    /// event, runtime, doorbell, and queue-resource teardown have all been
+    /// confirmed. An error from it is terminal for the remaining allocation
+    /// authorities; Drop performs no native cleanup or retry.
+    pub(crate) fn destroy_with<T>(
+        mut self,
+        after_queue_destroyed: impl FnOnce(
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(ComputeAqlQueueDestroyedV1, T), ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
@@ -778,10 +817,21 @@ impl ComputeAqlQueueSessionV1 {
             authority,
             shadow_release,
         )?;
-        Ok(ComputeAqlQueueDestroyedV1 {
-            queue_id: self.observation.queue_id,
-            released_resources: 4,
-        })
+        let callback_result = after_queue_destroyed(
+            &mut self
+                .engine
+                .as_mut()
+                .expect("session engine")
+                .backend
+                .session,
+        )?;
+        Ok((
+            ComputeAqlQueueDestroyedV1 {
+                queue_id: self.observation.queue_id,
+                released_resources: 4,
+            },
+            callback_result,
+        ))
     }
 
     fn check_currentness(&mut self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
@@ -850,10 +900,10 @@ fn build_resource_authority(
         ));
     }
     let ring_base = rf
-        .checked_gpu_subrange(0, u64::from(geometry.ring().mapping_bytes()) * 2, 4096)
+        .checked_gpu_subrange(0, u64::from(geometry.ring().mapping_bytes()), 4096)
         .ok_or(ComputeAqlQueueSessionErrorV1::Contract("ring geometry"))?;
     if rf.logical_bytes() != geometry.ring().mapping_bytes() as usize
-        || rf.gpu_va_bytes() != u64::from(geometry.ring().mapping_bytes()) * 2
+        || rf.gpu_va_bytes() != u64::from(geometry.ring().mapping_bytes())
     {
         return Err(ComputeAqlQueueSessionErrorV1::Contract("ring size/profile"));
     }
