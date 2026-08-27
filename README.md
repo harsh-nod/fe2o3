@@ -11,7 +11,6 @@ artifact, runtime, and proof boundaries described below. See the
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
 [compiler execution subject V1](docs/compiler-execution-subject-v1.md),
 [compiler execution attestation protocol V1](docs/compiler-execution-attestation-v1.md),
-[gfx942 scalar Worker V3 proof/executable binding](docs/gfx942-scalar-worker-v3-proof-executable-binding-v1.md),
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
