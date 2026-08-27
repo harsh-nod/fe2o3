@@ -21,8 +21,7 @@ use std::{io, path::PathBuf, process::ExitStatus};
 
 use crate::{
     ContentIdentityV1, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
-    WorkerEvidenceClassV1, WorkerProtocolError, WorkerRequestV1, WorkerRequestV2, WorkerResponseV1,
-    WorkerResponseV2,
+    WorkerProtocolError, WorkerRequestV2, WorkerResponseV2,
 };
 
 /// Maximum bytes accepted for a selected native worker executable.
@@ -285,40 +284,6 @@ struct Capture {
     overflow: bool,
 }
 
-/// A verified response and worker measurement with no artifact authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InertWorkerExecutionV1 {
-    worker_executable: ContentIdentityV1,
-    response: WorkerResponseV1,
-}
-
-impl InertWorkerExecutionV1 {
-    pub const fn worker_executable(&self) -> ContentIdentityV1 {
-        self.worker_executable
-    }
-
-    pub const fn response(&self) -> &WorkerResponseV1 {
-        &self.response
-    }
-
-    /// Classifies the retained response as generic link evidence.
-    pub const fn evidence_class(&self) -> WorkerEvidenceClassV1 {
-        WorkerEvidenceClassV1::GenericLink
-    }
-
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
 /// A sealed V2 response bound to the measured worker with no artifact authority.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct InertWorkerExecutionV2 {
@@ -533,91 +498,7 @@ mod platform {
             &self.measurement
         }
 
-        /// Runs one canonical request under fixed environment and process resource bounds.
-        ///
-        /// A successful return verifies the exact request identity, declared LLVM build,
-        /// executable measurement, worker response identity, output digest and output bound. It
-        /// remains inert and cannot publish or load the output. Ordinary descendants are killed
-        /// through an isolated process group plus bounded `/proc` discovery; hostile descendants
-        /// that escape both before observation are outside this API's containment claim.
-        pub fn execute(
-            &self,
-            request: &WorkerRequestV1,
-            limits: WorkerExecutionLimitsV1,
-        ) -> Result<InertWorkerExecutionV1, WorkerExecutionError> {
-            if request.llvm_build_identity() != self.measurement.llvm_build_identity {
-                return Err(WorkerExecutionError::plain(
-                    WorkerExecutionErrorKind::LlvmBuildIdentityMismatch,
-                ));
-            }
-            validate_image(&self.image, &self.descriptor_path, self.snapshot)?;
-
-            let mut command = Command::new(&self.descriptor_path);
-            command
-                .arg0("fe2o3-llvm-link-worker")
-                .env_clear()
-                .envs(WORKER_ENVIRONMENT_ALLOWLIST_V1.iter().copied())
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .process_group(0);
-            let mut child = spawn_worker(&mut command).map_err(|error| {
-                WorkerExecutionError::io(WorkerExecutionErrorKind::Spawn, error)
-            })?;
-            let capture = supervise(&mut child, request.canonical_bytes(), limits)?;
-
-            if !capture.status.success() {
-                return Err(WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::ExitFailure(termination(capture.status)),
-                    &capture,
-                ));
-            }
-            if capture.request_written != request.canonical_bytes().len() {
-                return Err(WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::RequestWriteIncomplete,
-                    &capture,
-                ));
-            }
-            if !capture.stderr.bytes.is_empty() {
-                return Err(WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::UnexpectedStderr,
-                    &capture,
-                ));
-            }
-            let response = WorkerResponseV1::decode(&capture.stdout.bytes).map_err(|error| {
-                WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::DecodeResponse(error),
-                    &capture,
-                )
-            })?;
-            if !response.binds_request(request) {
-                return Err(WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::RequestIdentityMismatch,
-                    &capture,
-                ));
-            }
-            if response.worker_build_identity() != self.measurement.worker_build_identity {
-                return Err(WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::WorkerBuildIdentityMismatch,
-                    &capture,
-                ));
-            }
-            if response.output().is_some_and(|output| {
-                output.bytes().len() as u64 > request.output_constraints().max_bytes()
-                    || !output.identity().matches(output.bytes())
-            }) {
-                return Err(WorkerExecutionError::process(
-                    WorkerExecutionErrorKind::OutputLimitExceeded,
-                    &capture,
-                ));
-            }
-            Ok(InertWorkerExecutionV1 {
-                worker_executable: self.measurement.executable,
-                response,
-            })
-        }
-
-        /// Runs one sealed compiler-FFI V2 request under the V1 supervisor limits.
+        /// Runs one sealed compiler-FFI V2 request under bounded supervisor limits.
         ///
         /// The request must bind this exact executable, worker build, and LLVM
         /// build. The response must use the V2 domain and echo the exact request
@@ -1086,16 +967,6 @@ impl PinnedWorkerV1 {
         _path: impl AsRef<Path>,
         _measurement: WorkerMeasurementV1,
     ) -> Result<Self, WorkerExecutionError> {
-        Err(WorkerExecutionError::plain(
-            WorkerExecutionErrorKind::UnsupportedPlatform,
-        ))
-    }
-
-    pub fn execute(
-        &self,
-        _request: &WorkerRequestV1,
-        _limits: WorkerExecutionLimitsV1,
-    ) -> Result<InertWorkerExecutionV1, WorkerExecutionError> {
         Err(WorkerExecutionError::plain(
             WorkerExecutionErrorKind::UnsupportedPlatform,
         ))

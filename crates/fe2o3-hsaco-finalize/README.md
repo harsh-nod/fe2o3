@@ -64,11 +64,11 @@ inspection and finalization functions are unchanged.
 `fe2o3-compiler-ffi`. It commits to the canonical target and code-object version plus every import
 and export's shared contract ID, direction, explicit required-definition role, source owner, symbol,
 physical ABI, effects/effect-ABI identity, and semantic identity. It contains no artifact provider,
-input kind, expected final symbol, bitcode, or Worker V1 claim.
+input kind, expected final symbol, bitcode, or standalone worker-evidence claim.
 
 `stage_compiler_ffi_envelope_v1` consumes and privately retains the complete envelope. Its public
 surface exposes only a domain-separated staged identity and target/version/count/blocker inspection.
-It cannot reveal contract or generic linker closures and cannot create or bind Worker V1 evidence.
+It cannot reveal contract or generic linker closures and cannot create or bind standalone worker evidence.
 Because the neutral envelope has public constructors, staging does not authenticate rustc origin.
 The live managed Worker V3 transaction does not upgrade this caller-constructible staging surface.
 Instead, rustc publishes a semantic handoff containing the exact textual LLVM module, the complete
@@ -77,7 +77,7 @@ once for the matching producer and build attempt. Its nested module payload reta
 `CompilerModuleHandoffV2` codec; that label describes serialized bytes, not a V2 authority route.
 
 The older `G4FfiClaimEnvelopeV1` path below remains caller-constructible assertion-only plan
-scaffolding. It is not the real rustc observation and cannot upgrade generic Worker V1 evidence.
+scaffolding. It is not the real rustc observation and cannot upgrade caller-authored generic worker evidence.
 
 `G4FfiClaimEnvelopeV1` is the exact public contract for a future adapter from private
 `rustc-codegen-fe2o3::CollectionResult` and `DeviceFfiClosure` state. That legacy trait remains
@@ -105,14 +105,12 @@ module with explicit kernel, helper, export, and import roles.
 
 Successful staging returns only `StagedFfiLinkPlanV1`. Its public surface exposes the complete staged
 identity and a non-authoritative count/blocker summary. Raw plan, input, provider, symbol-evidence,
-canonical-byte, and reduced-closure fields are inaccessible. It cannot call
-`construct_worker_request_v1` or consume a Worker V1 output.
+canonical-byte, and reduced-closure fields are inaccessible. It cannot construct a worker request or consume a worker output.
 
-Every `WorkerRequestV1`, `WorkerResponseV1`, and `WorkerOutputV1` is permanently classified as
-`WorkerEvidenceClassV1::GenericLink`. Worker V1 has no field for the complete staged FFI identity, so
-generic evidence can never satisfy an FFI-bound evidence API. A caller can independently construct a
-generic request with similar inputs and symbol strings, but that request and its output carry zero
-FFI provenance. Its API and wire bytes are unchanged, and no V1-to-V2 conversion exists.
+The standalone Worker V1 request, response, output, constructor, and execution APIs are retired.
+Worker Protocol V2 remains an internal supervised LLVM/LLD wire format, and its decoder rejects
+retired V1 bytes. It can only be constructed through the protected Worker V3 transaction; successful
+protocol validation grants no publication, loading, or launch authority.
 
 ## Worker V3 HSACO admission and publication
 

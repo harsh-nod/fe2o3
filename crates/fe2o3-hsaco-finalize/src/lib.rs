@@ -85,7 +85,7 @@ pub use link_plan::{
 };
 pub use request_construction::{
     LinkInputKindClosureIdentityV1, LinkInputKindClosureV1, LinkSymbolClosureIdentityV1,
-    LinkSymbolClosureV1, WorkerRequestConstructionError, construct_worker_request_v1,
+    LinkSymbolClosureV1, WorkerRequestConstructionError,
 };
 pub use reserved_fe2o3_symbols::{
     DEVICE_FFI_DIRECTION_EXPORT_V1, DeviceFfiContractFieldsV1, DeviceFfiDirectionV1,
@@ -95,19 +95,18 @@ pub use reserved_fe2o3_symbols::{
     derive_device_ffi_contract_id_v1,
 };
 pub use worker_executor::{
-    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, InertWorkerExecutionV1,
-    MAX_WORKER_EXECUTABLE_BYTES, MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1,
-    WORKER_ENVIRONMENT_ALLOWLIST_V1, WorkerExecutionError, WorkerExecutionErrorKind,
-    WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerTerminationV1,
+    DEFAULT_WORKER_STDERR_BYTES, DEFAULT_WORKER_TIMEOUT, MAX_WORKER_EXECUTABLE_BYTES,
+    MAX_WORKER_STDERR_BYTES, MAX_WORKER_TIMEOUT, PinnedWorkerV1, WORKER_ENVIRONMENT_ALLOWLIST_V1,
+    WorkerExecutionError, WorkerExecutionErrorKind, WorkerExecutionLimitsV1, WorkerMeasurementV1,
+    WorkerTerminationV1,
 };
 pub use worker_protocol::{
     MAX_WORKER_DIAGNOSTIC_BYTES, MAX_WORKER_DIAGNOSTICS, MAX_WORKER_OUTPUT_BYTES,
     MAX_WORKER_REQUEST_BYTES, MAX_WORKER_RESPONSE_BYTES, MAX_WORKER_SYMBOL_BYTES,
     MAX_WORKER_SYMBOLS, MAX_WORKER_TARGET_BYTES, MAX_WORKER_TOOLCHAIN_ID_BYTES,
-    MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES, MAX_WORKER_TOTAL_INPUT_BYTES, WORKER_REQUEST_MAGIC_V1,
-    WORKER_RESPONSE_MAGIC_V1, WorkerEvidenceClassV1, WorkerInputKindV1, WorkerInputV1,
-    WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1, WorkerOutputV1,
-    WorkerProtocolError, WorkerRequestV1, WorkerResponseV1, WorkerStageV1,
+    MAX_WORKER_TOTAL_DIAGNOSTIC_BYTES, MAX_WORKER_TOTAL_INPUT_BYTES, WorkerInputKindV1,
+    WorkerInputV1, WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1,
+    WorkerProtocolError, WorkerStageV1,
 };
 pub use worker_protocol_v2::{
     InertDecodedWorkerExchangeV2, WORKER_REQUEST_MAGIC_V2, WORKER_RESPONSE_MAGIC_V2,

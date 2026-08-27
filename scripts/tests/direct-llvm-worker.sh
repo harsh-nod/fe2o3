@@ -3,7 +3,6 @@ set -euo pipefail
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 driver="$repo_root/scripts/test-direct-llvm-worker.sh"
-verifier="$repo_root/scripts/verify-cargo-test-json.py"
 temporary=$(mktemp -d)
 trap 'rm -rf -- "$temporary"' EXIT
 
@@ -54,26 +53,5 @@ if ((probe_status != 73)) ||
   exit 1
 fi
 
-valid_json="$temporary/valid.jsonl"
-printf '%s\n' \
-  '{"reason":"compiler-artifact","target":{"name":"direct_llvm_worker_integration","kind":["test"]},"executable":"/tmp/test"}' \
-  '{"reason":"build-finished","success":true}' \
-  '{"type":"suite","event":"started","test_count":1}' \
-  '{"type":"test","event":"started","name":"real_worker_links_mixed_inputs_through_pinned_supervision"}' \
-  '{"type":"test","name":"real_worker_links_mixed_inputs_through_pinned_supervision","event":"ok"}' \
-  '{"type":"suite","event":"ok","passed":1,"failed":0,"ignored":0,"measured":0,"filtered_out":0}' \
-  >"$valid_json"
-python3 "$verifier" "$valid_json" \
-  --test-target direct_llvm_worker_integration \
-  --test-name real_worker_links_mixed_inputs_through_pinned_supervision
-
-empty_json="$temporary/empty.jsonl"
-: >"$empty_json"
-if python3 "$verifier" "$empty_json" \
-  --test-target direct_llvm_worker_integration \
-  --test-name real_worker_links_mixed_inputs_through_pinned_supervision; then
-  printf 'empty Cargo evidence was accepted\n' >&2
-  exit 1
-fi
 
 printf 'direct LLVM worker orchestration regression probes passed\n'

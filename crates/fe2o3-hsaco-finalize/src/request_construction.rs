@@ -15,14 +15,13 @@ use crate::{
     ContentIdentityV1, LinkOptionV1, LinkPlanIdentityV1, MultiInputLinkPlanV1,
     ProtectedCompilerHandoffBindingV3, StagedCompilerFfiEnvelopeV1, WorkerInputKindV1,
     WorkerInputV1, WorkerMeasurementV1, WorkerOptimizationLevelV1, WorkerOptionsV1,
-    WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestV1, WorkerRequestV2,
+    WorkerOutputConstraintsV1, WorkerProtocolError, WorkerRequestV2,
     worker_protocol::validate_symbols,
     worker_protocol_v2::{SealedWorkerRequestV2Parts, WorkerCompilerFfiEnvelopeIdentityV2},
 };
 
 const INPUT_KIND_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-INPUT-KIND-CLOSURE/V1\0";
 const SYMBOL_CLOSURE_DOMAIN_V1: &[u8] = b"FE2O3/DEVICE-LINK-SYMBOL-CLOSURE/V1\0";
-const PLAN_REQUEST_DOMAIN_V1: &[u8] = b"FE2O3/PLAN-BOUND-WORKER-REQUEST/V1\0";
 const PROTECTED_PLAN_REQUEST_DOMAIN_V3: &[u8] =
     b"FE2O3/SEMANTIC-CAPSULE-PROTECTED-PLAN-BOUND-WORKER-REQUEST/V3\0";
 const PROTECTED_FIRST_BUILD_REQUEST_DOMAIN_V3: &[u8] =
@@ -322,80 +321,6 @@ fn first_directional_mismatch(manifest: &[&str], envelope: &[String]) -> Option<
         .get(envelope.len())
         .map(|symbol| (*symbol).to_owned())
         .or_else(|| envelope.get(manifest.len()).cloned())
-}
-
-/// Builds one deterministic worker request from a fully validated link plan.
-///
-/// The caller must supply inputs in the plan's canonical identity order. The
-/// request target, code-object version, structured worker options, exact input
-/// bytes, symbol closure, and output bound are checked before a request can be
-/// returned for execution.
-#[allow(clippy::too_many_arguments)]
-pub fn construct_worker_request_v1(
-    plan: &MultiInputLinkPlanV1,
-    llvm_build_identity: impl Into<String>,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    inputs: Vec<WorkerInputV1>,
-    input_kinds: &LinkInputKindClosureV1,
-    symbols: &LinkSymbolClosureV1,
-    output: WorkerOutputConstraintsV1,
-) -> Result<WorkerRequestV1, WorkerRequestConstructionError> {
-    if target != plan.target() {
-        return Err(WorkerRequestConstructionError::TargetMismatch);
-    }
-    let (planned_code_object_version, planned_options) = decode_plan_options(plan)?;
-    if code_object_version != planned_code_object_version {
-        return Err(WorkerRequestConstructionError::CodeObjectVersionMismatch {
-            planned: planned_code_object_version,
-            requested: code_object_version,
-        });
-    }
-    if options != planned_options {
-        return Err(WorkerRequestConstructionError::OptionsMismatch {
-            planned: planned_options,
-            requested: options,
-        });
-    }
-    validate_inputs(plan, input_kinds, &inputs)?;
-
-    let expected_output_bytes = plan.output().identity().byte_len();
-    if output.max_bytes() != expected_output_bytes {
-        return Err(WorkerRequestConstructionError::OutputBoundMismatch {
-            planned: expected_output_bytes,
-            requested: output.max_bytes(),
-        });
-    }
-
-    let llvm_build_identity = llvm_build_identity.into();
-    let request_id = calculate_request_id(
-        plan,
-        &llvm_build_identity,
-        target,
-        code_object_version,
-        options,
-        &inputs,
-        input_kinds,
-        symbols,
-        &output,
-    );
-    if request_id == [0; 32] {
-        return Err(WorkerRequestConstructionError::ReservedRequestId);
-    }
-
-    WorkerRequestV1::new(
-        request_id,
-        llvm_build_identity,
-        target,
-        code_object_version,
-        options,
-        inputs,
-        symbols.required_symbols.clone(),
-        symbols.required_symbols.clone(),
-        output,
-    )
-    .map_err(WorkerRequestConstructionError::WorkerProtocol)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -987,41 +912,6 @@ fn calculate_input_kind_closure_identity(
         hasher.update([*kind as u8]);
     }
     LinkInputKindClosureIdentityV1(hasher.finalize().into())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn calculate_request_id(
-    plan: &MultiInputLinkPlanV1,
-    llvm_build_identity: &str,
-    target: DeviceTargetV1,
-    code_object_version: CodeObjectVersion,
-    options: WorkerOptionsV1,
-    inputs: &[WorkerInputV1],
-    input_kinds: &LinkInputKindClosureV1,
-    symbols: &LinkSymbolClosureV1,
-    output: &WorkerOutputConstraintsV1,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PLAN_REQUEST_DOMAIN_V1);
-    hasher.update(plan.identity().as_bytes());
-    hasher.update(input_kinds.identity.as_bytes());
-    hasher.update(symbols.identity.as_bytes());
-    hash_text(&mut hasher, llvm_build_identity);
-    hash_text(&mut hasher, &target.to_string());
-    hasher.update([code_object_version_byte(code_object_version)]);
-    hasher.update([
-        options.optimization() as u8,
-        u8::from(options.strip_debug()),
-        u8::from(options.verify_each()),
-    ]);
-    hasher.update((inputs.len() as u64).to_le_bytes());
-    for input in inputs {
-        hasher.update([input.kind() as u8]);
-        hasher.update(input.identity().sha256());
-        hasher.update(input.identity().byte_len().to_le_bytes());
-    }
-    hasher.update(output.max_bytes().to_le_bytes());
-    hasher.finalize().into()
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -34,7 +34,7 @@ use fe2o3_kernel_descriptor::DeviceTargetV1;
 use sha2::{Digest, Sha256};
 
 const TARGET: &str = "gfx942:xnack-";
-const WORKER_ID: &str = "fixture-worker-v1";
+const WORKER_ID: &str = "fixture-worker-v3";
 const LLVM_ID: &str = "fixture-llvm-v1";
 const OUTPUT: &[u8] = b"fixture-output";
 const PROVIDER: &[u8] = b"exact V3 external provider";

@@ -238,18 +238,18 @@ production proof-authenticated dispatch or CUDA-Oxide parity. Complete remains
 
 ## G1: Canonical Link Closure
 
-Build a closed `WorkerRequestV1` from a validated multi-input link plan and
-device FFI closure. Reject missing, duplicate, conflicting, noncanonical, or
+Build a sealed `WorkerRequestV2` from a validated multi-input link plan and the
+protected Worker V3 compiler handoff. Reject missing, duplicate, conflicting, noncanonical, or
 unreferenced inputs and symbols before process execution.
 
 Exit gate:
 
-- request construction is deterministic and round-trips through the wire codec;
+- the internal request is deterministic and round-trips through the V2 wire codec;
 - input bytes match all declared identities and bounds;
-- target, code-object version, options, imports, and exports agree;
+- target, code-object version, options, imports, exports, and compiler handoff agree;
 - mutation, truncation, permutation, and symbol-conflict tests fail closed.
 
-Primary ownership: `fe2o3-hsaco-finalize` request construction and tests.
+Primary ownership: `fe2o3-hsaco-finalize` protected request construction and Worker V3 tests.
 
 ## G2: Supervised Worker Execution
 

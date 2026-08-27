@@ -1,7 +1,0 @@
-error[E0277]: the trait bound `WorkerRequestV2: From<WorkerRequestV1>` is not satisfied
- --> tests/ui/compiler_ffi/worker_v1_has_no_v2_upgrade.rs:5:17
-  |
-5 |         request.into()
-  |                 ^^^^ the trait `From<WorkerRequestV1>` is not implemented for `WorkerRequestV2`
-  |
-  = note: required for `WorkerRequestV1` to implement `Into<WorkerRequestV2>`

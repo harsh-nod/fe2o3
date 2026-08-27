@@ -1,7 +1,7 @@
 //! Assertion-only staging for a future G4-to-G1 device FFI request path.
 //!
-//! The current worker V1 wire schema cannot bind the complete staged FFI
-//! identity. This module therefore stops before request construction. It does
+//! This caller-constructible staging surface cannot bind the protected compiler handoff.
+//! The module therefore stops before request construction. It does
 //! not project its data into the generic `LinkSymbolClosureV1` or
 //! `LinkInputKindClosureV1`, because doing so would erase ABI, declaration
 //! owner, provider, effects, semantics, and producer claims.
@@ -833,11 +833,11 @@ impl StagedFfiLinkPlanIdentityV1 {
     }
 }
 
-/// Why a staged FFI plan cannot become a worker V1 request.
+/// Why a staged FFI plan cannot become a protected worker request.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum StagedFfiExecutionBlockerV1 {
     MissingExpectedFinalDefinedSymbolsClaim,
-    WorkerProtocolV1CannotBindCompleteFfiIdentity,
+    AssertionOnlyClaimCannotBindProtectedHandoff,
 }
 
 /// Non-authoritative summary that contains no generic request-construction inputs.
@@ -931,7 +931,7 @@ pub fn stage_g4_ffi_link_plan_v1(
             provider_binding_claim_count: provider_binding_claims.len(),
             has_expected_final_defined_symbols_claim,
             execution_blocker: if has_expected_final_defined_symbols_claim {
-                StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
+                StagedFfiExecutionBlockerV1::AssertionOnlyClaimCannotBindProtectedHandoff
             } else {
                 StagedFfiExecutionBlockerV1::MissingExpectedFinalDefinedSymbolsClaim
             },

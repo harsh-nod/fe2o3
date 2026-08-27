@@ -296,7 +296,7 @@ fn adapter_contract_accepts_real_g4_compatible_contract_fields_without_attesting
 }
 
 #[test]
-fn complete_ffi_identity_is_staged_but_never_decomposed_into_worker_v1() {
+fn assertion_only_ffi_identity_cannot_bind_the_protected_handoff() {
     let fixture = fixture();
     let staged = stage(&fixture);
     let inspection = staged.inspection();
@@ -310,7 +310,7 @@ fn complete_ffi_identity_is_staged_but_never_decomposed_into_worker_v1() {
     assert!(inspection.has_expected_final_defined_symbols_claim());
     assert_eq!(
         inspection.execution_blocker(),
-        StagedFfiExecutionBlockerV1::WorkerProtocolV1CannotBindCompleteFfiIdentity
+        StagedFfiExecutionBlockerV1::AssertionOnlyClaimCannotBindProtectedHandoff
     );
 }
 

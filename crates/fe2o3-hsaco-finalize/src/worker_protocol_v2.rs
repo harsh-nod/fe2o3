@@ -1,6 +1,6 @@
 //! Sealed Worker V2 protocol for compiler-FFI-aware direct links.
 //!
-//! Unlike Worker V1, a V2 request can only be created by the finalizer's
+//! A V2 request can only be created by the finalizer's
 //! sealed construction path. The wire format is still inert: it grants no
 //! publication, loading, or launch authority.
 
@@ -2124,7 +2124,8 @@ mod tests {
             .is_err()
         );
         let mut mixed = request.canonical_bytes().to_vec();
-        mixed[..8].copy_from_slice(crate::WORKER_REQUEST_MAGIC_V1);
+        const RETIRED_WORKER_REQUEST_MAGIC_V1: &[u8; 8] = b"F3LREQ01";
+        mixed[..8].copy_from_slice(RETIRED_WORKER_REQUEST_MAGIC_V1);
         assert_eq!(
             WorkerRequestV2::decode_for_test(&mixed),
             Err(WorkerProtocolError::BadMagic)
