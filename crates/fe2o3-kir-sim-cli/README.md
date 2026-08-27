@@ -79,10 +79,12 @@ fields:
       ]
     }
 
-Scalar types are bool, signed and unsigned 8/16/32/64/128-bit integers, and
-64-bit index. Bits use 0x plus exactly the type width in lowercase hexadecimal;
-bool uses one digit. Floats are rejected. Buffer bytes use 0x followed by
-lowercase even-length hexadecimal. initialized is optional; when present it is
+Scalar types are bool, signed and unsigned 8/16/32/64/128-bit integers,
+F16/BF16/F32/F64, and 64-bit index. Bits use 0x plus exactly the type width in
+lowercase hexadecimal; bool uses one digit. Floating-point scalars and buffer
+elements are encoded as their exact IEEE-format bits, never decimal host
+values. Buffer bytes use 0x followed by lowercase even-length hexadecimal.
+initialized is optional; when present it is
 an exact 0x-prefixed byte bitset, least-significant bit first, with bit N
 describing buffer byte N and unused high bits zero. Omission means all bytes are
 initialized. Shared buffers use the same exact codec and byte budgets. A

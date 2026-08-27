@@ -24,6 +24,7 @@ use crate::resident::{
     reserved_hash_map_bytes, reserved_vec_bytes,
 };
 use crate::schedule::{PreparedScheduleV1, SchedulePrepareErrorV1};
+use crate::soft_float::{SoftFloatErrorV1, SoftFloatOperationV1};
 use crate::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1,
     NoopSimulationDebugSinkV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
@@ -1147,7 +1148,7 @@ struct Engine<'a, S> {
     function_module_indices: Vec<usize>,
     block_indices: Vec<HashMap<BlockId, usize>>,
     function_ssa_values: Vec<usize>,
-    call_targets: Vec<Vec<Vec<Option<usize>>>>,
+    call_targets: Vec<Vec<Vec<CallTarget>>>,
     switch_targets: Vec<Vec<SwitchLookup>>,
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
@@ -1191,6 +1192,13 @@ enum SwitchLookup {
     None,
     Index(HashMap<u128, usize>),
     Integer(HashMap<(ScalarType, u128), usize>),
+}
+
+#[derive(Clone, Copy)]
+enum CallTarget {
+    NotCall,
+    Internal(usize),
+    Float(SoftFloatOperationV1),
 }
 
 fn debug_value(value: &RuntimeValue) -> SimulationDebugValueV1 {
@@ -2187,7 +2195,7 @@ type ExecutionIndices<'a> = (
     Vec<usize>,
     Vec<HashMap<BlockId, usize>>,
     Vec<usize>,
-    Vec<Vec<Vec<Option<usize>>>>,
+    Vec<Vec<Vec<CallTarget>>>,
     Vec<Vec<SwitchLookup>>,
 );
 
@@ -2205,11 +2213,11 @@ fn execution_indices_resident_bytes(indices: &ExecutionIndices<'_>) -> Option<us
         )?)?;
     }
     resident.add_vec::<usize>(ssa_values.capacity())?;
-    resident.add_vec::<Vec<Vec<Option<usize>>>>(call_targets.capacity())?;
+    resident.add_vec::<Vec<Vec<CallTarget>>>(call_targets.capacity())?;
     for function_calls in call_targets {
-        resident.add_vec::<Vec<Option<usize>>>(function_calls.capacity())?;
+        resident.add_vec::<Vec<CallTarget>>(function_calls.capacity())?;
         for block_calls in function_calls {
-            resident.add_vec::<Option<usize>>(block_calls.capacity())?;
+            resident.add_vec::<CallTarget>(block_calls.capacity())?;
         }
     }
     resident.add_vec::<Vec<SwitchLookup>>(switch_targets.capacity())?;
@@ -2304,14 +2312,22 @@ fn build_execution_indices<'a>(
                     })?;
                 for operation in &block.operations {
                     let target = match &operation.kind {
-                        OperationKind::Call { callee, .. } => {
-                            Some(*functions.get(callee).ok_or_else(|| {
-                                top_level_error(SimulationExecutionErrorKindV1::MissingFunction(
-                                    callee.clone(),
-                                ))
-                            })?)
+                        OperationKind::Call { callee, arguments } => {
+                            if let Some(operation) =
+                                crate::soft_float::operation_for_call_v1(callee, arguments)
+                            {
+                                CallTarget::Float(operation)
+                            } else {
+                                CallTarget::Internal(*functions.get(callee).ok_or_else(|| {
+                                    top_level_error(
+                                        SimulationExecutionErrorKindV1::MissingFunction(
+                                            callee.clone(),
+                                        ),
+                                    )
+                                })?)
+                            }
                         }
-                        _ => None,
+                        _ => CallTarget::NotCall,
                     };
                     block_calls.push(target);
                 }
@@ -3747,36 +3763,40 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
         engine.step(&site)?;
         engine.begin_lifecycle(&site, SimulationEventKindV1::OperationBegin)?;
         frame.active_operation = Some(site);
-        if let OperationKind::Call {
-            callee: _,
-            arguments,
-        } = &operation.kind
-        {
-            let callee_index = engine.call_targets[frame.function_index][frame.current_index]
-                [frame.operation]
-                .ok_or_else(|| {
-                    engine.at(
+        if let OperationKind::Call { arguments, .. } = &operation.kind {
+            let target =
+                engine.call_targets[frame.function_index][frame.current_index][frame.operation];
+            let callee_index = match target {
+                CallTarget::Float(_) => None,
+                CallTarget::Internal(callee_index) => Some(callee_index),
+                CallTarget::NotCall => {
+                    return Err(engine.at(
                         site,
                         SimulationExecutionErrorKindV1::InternalInvariant(
-                            "preflighted call target index",
+                            "preflighted operation call index",
                         ),
-                    )
-                })?;
-            let callee_function =
-                &engine.module.functions[engine.function_module_indices[callee_index]];
-            if callee_function.role != FunctionRole::InternalHelper {
-                return Err(engine.at(
+                    ));
+                }
+            };
+            if let Some(callee_index) = callee_index {
+                let callee_function =
+                    &engine.module.functions[engine.function_module_indices[callee_index]];
+                if callee_function.role != FunctionRole::InternalHelper {
+                    return Err(engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "preflighted internal call",
+                        ),
+                    ));
+                }
+                resolve_values_into(engine, &frame.values, arguments, &site, &mut frame.incoming)?;
+                engine.call_event(&site, callee_index)?;
+                return Ok(FrameAction::Call {
+                    function_index: callee_index,
+                    function: callee_function,
                     site,
-                    SimulationExecutionErrorKindV1::InternalInvariant("preflighted internal call"),
-                ));
+                });
             }
-            resolve_values_into(engine, &frame.values, arguments, &site, &mut frame.incoming)?;
-            engine.call_event(&site, callee_index)?;
-            return Ok(FrameAction::Call {
-                function_index: callee_index,
-                function: callee_function,
-                site,
-            });
         }
         if let OperationKind::WorkgroupBarrier(barrier) = &operation.kind {
             engine.event(
@@ -4213,12 +4233,33 @@ fn execute_operation(
             )?
             .clone())
         }
-        OperationKind::Call { .. } => Err(engine.at(
-            site,
-            SimulationExecutionErrorKindV1::InternalInvariant(
-                "call reached non-recursive operation evaluator",
-            ),
-        )),
+        OperationKind::Call {
+            callee: _,
+            arguments,
+        } => {
+            let block_index = engine.block_indices[function_index]
+                .get(&block.id)
+                .copied()
+                .ok_or_else(|| {
+                    engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "preflighted operation block index",
+                        ),
+                    )
+                })?;
+            let CallTarget::Float(operation) =
+                engine.call_targets[function_index][block_index][ordinal]
+            else {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "non-float call reached non-recursive operation evaluator",
+                    ),
+                ));
+            };
+            execute_float_call(engine, values, operation, arguments, site)
+        }
         OperationKind::Alloca {
             element,
             count,
@@ -4485,6 +4526,35 @@ fn execute_operation(
             ),
         )),
     }
+}
+
+#[inline(never)]
+fn execute_float_call(
+    engine: &mut Engine<'_, impl SimulationEventSinkV1>,
+    values: &HashMap<ValueId, RuntimeValue>,
+    operation: SoftFloatOperationV1,
+    arguments: &[ValueId],
+    site: CompactSite,
+) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
+    if arguments.len() > 3 {
+        return Err(engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant("bounded float operation arity"),
+        ));
+    }
+    let mut operands = [ScalarBitsV1::boolean(false); 3];
+    for (destination, value) in operands.iter_mut().zip(arguments) {
+        *destination = scalar_value(engine, values, *value, &site)?;
+    }
+    Ok(SmallResults::One(RuntimeValue::Scalar(
+        crate::soft_float::execute_compact_operation_v1(
+            operation,
+            &operands[..arguments.len()],
+            engine.target,
+        )
+        .map_err(map_soft_float_error)
+        .map_err(|kind| engine.at(site, kind))?,
+    )))
 }
 
 fn execute_atomic(
@@ -5012,14 +5082,10 @@ fn constant_scalar(
         Constant::U32(value) => (ScalarType::U32, value as u128),
         Constant::U64(value) => (ScalarType::U64, value as u128),
         Constant::Index(value) => (ScalarType::Index, value as u128),
-        Constant::F16Bits(_)
-        | Constant::Bf16Bits(_)
-        | Constant::F32Bits(_)
-        | Constant::F64Bits(_) => {
-            return Err(SimulationExecutionErrorKindV1::InternalInvariant(
-                "float constant passed preflight",
-            ));
-        }
+        Constant::F16Bits(value) => (ScalarType::F16, value as u128),
+        Constant::Bf16Bits(value) => (ScalarType::Bf16, value as u128),
+        Constant::F32Bits(value) => (ScalarType::F32, value as u128),
+        Constant::F64Bits(value) => (ScalarType::F64, value as u128),
     };
     ScalarBitsV1::new(ty, bits, target)
         .map_err(|_| SimulationExecutionErrorKindV1::IntegerOutOfRange)
@@ -5034,6 +5100,10 @@ fn execute_unary(
         return Err(SimulationExecutionErrorKindV1::InternalInvariant(
             "unsupported unary passed preflight",
         ));
+    }
+    if value.ty().is_float() {
+        return crate::soft_float::execute_unary_v1(op, value, target)
+            .map_err(map_soft_float_error);
     }
     if value.ty() == ScalarType::Bool {
         return match op {
@@ -5079,6 +5149,12 @@ fn execute_binary(
     if !supports_binary(op, lhs.ty(), rhs.ty()) {
         return Err(SimulationExecutionErrorKindV1::InternalInvariant(
             "unsupported binary passed preflight",
+        ));
+    }
+    if lhs.ty().is_float() {
+        return Ok(SmallResults::One(
+            crate::soft_float::execute_binary_v1(op, lhs, rhs, target)
+                .map_err(map_soft_float_error)?,
         ));
     }
     if lhs.ty() == ScalarType::Bool {
@@ -5291,6 +5367,8 @@ fn execute_compare(
         )
     } else if lhs.ty().is_integer() {
         compare_ordered(predicate, lhs.bits(), rhs.bits())
+    } else if lhs.ty().is_float() {
+        crate::soft_float::execute_compare_v1(predicate, lhs, rhs).map_err(map_soft_float_error)
     } else {
         Err(SimulationExecutionErrorKindV1::InternalInvariant(
             "unsupported compare type passed preflight",
@@ -5324,6 +5402,16 @@ fn execute_cast(
             "unsupported cast passed preflight",
         ));
     }
+    if matches!(
+        kind,
+        CastKind::FloatExtend
+            | CastKind::FloatTruncate
+            | CastKind::IntegerToFloat
+            | CastKind::FloatToInteger
+    ) {
+        return crate::soft_float::execute_cast_v1(kind, value, to, target)
+            .map_err(map_soft_float_error);
+    }
     let from_width = scalar_width(value, target)?;
     let to_width =
         target
@@ -5338,11 +5426,7 @@ fn execute_cast(
         CastKind::FloatExtend
         | CastKind::FloatTruncate
         | CastKind::IntegerToFloat
-        | CastKind::FloatToInteger => {
-            return Err(SimulationExecutionErrorKindV1::InternalInvariant(
-                "float cast passed preflight",
-            ));
-        }
+        | CastKind::FloatToInteger => unreachable!("handled software-float cast"),
     };
     let structurally_valid = match kind {
         CastKind::Truncate => to_width < from_width,
@@ -5357,6 +5441,17 @@ fn execute_cast(
     }
     ScalarBitsV1::new(to, bits, target)
         .map_err(|_| SimulationExecutionErrorKindV1::IntegerOutOfRange)
+}
+
+const fn map_soft_float_error(error: SoftFloatErrorV1) -> SimulationExecutionErrorKindV1 {
+    match error {
+        SoftFloatErrorV1::InvalidIntegerConversion => {
+            SimulationExecutionErrorKindV1::IntegerOutOfRange
+        }
+        SoftFloatErrorV1::InternalInvariant(message) => {
+            SimulationExecutionErrorKindV1::InternalInvariant(message)
+        }
+    }
 }
 
 fn scalar_width(

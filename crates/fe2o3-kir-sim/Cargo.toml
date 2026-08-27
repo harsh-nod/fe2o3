@@ -9,6 +9,7 @@ description = "Bounded deterministic CPU execution for verified canonical fe2o3 
 
 [dependencies]
 fe2o3-kernel-ir.workspace = true
+rustc_apfloat.workspace = true
 sha2.workspace = true
 
 [lib]

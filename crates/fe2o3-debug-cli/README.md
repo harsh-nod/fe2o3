@@ -23,6 +23,9 @@ the corresponding effect. Reverse navigation is deterministic transcript
 replay; forward stepping includes
 frame-aware over/out. It is not GPU reverse execution;
 logical waves are visualization partitions, not hardware wave observations.
+Captured F16/BF16/F32/F64 scalar values retain their exact software-IEEE bits;
+the debugger does not render or recompute them with host floating-point
+arithmetic.
 
 Barrier residency is replayed from semantic records. A lane is
 `barrier_blocked` from its arrival through the record before the matching

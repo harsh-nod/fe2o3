@@ -4,9 +4,9 @@ use std::fmt;
 use std::mem::size_of;
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, ComparePredicate, Constant, Function,
-    FunctionId, FunctionRole, Kernel, LaunchExtent, Module, Operation, OperationKind, ScalarType,
-    Terminator, Type, UnaryOp, ValueId,
+    AccessMode, AddressSpace, BinaryOp, BlockId, CastKind, ComparePredicate, Constant,
+    F32MathFunction, Function, FunctionId, FunctionRole, Kernel, LaunchExtent, Module, Operation,
+    OperationKind, ScalarType, Terminator, Type, UnaryOp, ValueId,
 };
 
 use crate::resident::{
@@ -14,6 +14,7 @@ use crate::resident::{
     partitioned_geometric_vec_bytes, reserved_bool_vec_bytes, reserved_vec_bytes,
     type_retained_heap_bytes,
 };
+use crate::soft_float::SoftFloatOperationV1;
 use crate::{
     AdmittedSimulationModuleV1, IndexWidthV1, SimulationArgumentV1, SimulationLimitsErrorV1,
     SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
@@ -39,6 +40,7 @@ pub enum UnsupportedFeatureV1 {
     MemoryIntrinsic,
     FloatConstant,
     FloatOperation,
+    FloatFunction(F32MathFunction),
     InvalidIntegerCast {
         from: ScalarType,
         to: ScalarType,
@@ -1276,7 +1278,11 @@ fn function_callees(function: &Function) -> impl Iterator<Item = &FunctionId> {
         .flat_map(|body| &body.blocks)
         .flat_map(|block| &block.operations)
         .filter_map(|operation| match &operation.kind {
-            OperationKind::Call { callee, .. } => Some(callee),
+            OperationKind::Call { callee, arguments }
+                if crate::soft_float::operation_for_call_v1(callee, arguments).is_none() =>
+            {
+                Some(callee)
+            }
             _ => None,
         })
 }
@@ -1422,15 +1428,6 @@ fn scan_operation(
     }
     match &operation.kind {
         OperationKind::Constant(constant) => {
-            if matches!(
-                constant,
-                Constant::F16Bits(_)
-                    | Constant::Bf16Bits(_)
-                    | Constant::F32Bits(_)
-                    | Constant::F64Bits(_)
-            ) {
-                reject!(UnsupportedFeatureV1::FloatConstant);
-            }
             if matches!(constant, Constant::Index(value) if target.index_width() == IndexWidthV1::Bits32 && *value > u64::from(u32::MAX))
             {
                 reject!(UnsupportedFeatureV1::TargetConstantOutOfRange);
@@ -1445,11 +1442,6 @@ fn scan_operation(
             }
         }
         OperationKind::Cast { value: operand, .. } => {
-            if let Some(Type::Scalar(scalar)) = value_types.get(operand)
-                && scalar.is_float()
-            {
-                reject!(UnsupportedFeatureV1::FloatOperation);
-            }
             if let OperationKind::Cast { kind, to, .. } = &operation.kind
                 && let (Some(Type::Scalar(from)), Type::Scalar(to)) = (value_types.get(operand), to)
                 && !supported_cast(*kind, *from, *to, target)
@@ -1484,6 +1476,17 @@ fn scan_operation(
             }
         }
         OperationKind::Select { .. } => {}
+        OperationKind::Call { callee, arguments }
+            if crate::soft_float::operation_for_call_v1(callee, arguments).is_some() =>
+        {
+            let float = crate::soft_float::operation_for_call_v1(callee, arguments)
+                .expect("guarded canonical float operation");
+            if let SoftFloatOperationV1::F32Math(function) = float
+                && !supports_float_function(function)
+            {
+                reject!(UnsupportedFeatureV1::FloatFunction(function));
+            }
+        }
         OperationKind::Call { callee, .. } => match functions.get(callee).copied() {
             Some(callee_index)
                 if module.functions[callee_index].role == FunctionRole::InternalHelper =>
@@ -1568,6 +1571,11 @@ fn scan_operation(
         OperationKind::Barrier(_) => reject!(UnsupportedFeatureV1::Barrier),
         OperationKind::Atomic(atomic) => {
             if let Some(Type::Pointer(pointer)) = value_types.get(&atomic.pointer) {
+                if let Type::Scalar(scalar) = pointer.pointee.as_ref()
+                    && scalar.is_float()
+                {
+                    reject!(UnsupportedFeatureV1::FloatType(*scalar));
+                }
                 scan_memory_type(
                     &pointer.pointee,
                     pointer.address_space,
@@ -1666,7 +1674,6 @@ fn scan_terminator(
 fn unsupported_type(ty: &Type, target: SimulationTargetV1) -> Option<UnsupportedFeatureV1> {
     match ty {
         Type::Unit => Some(UnsupportedFeatureV1::UnsupportedType),
-        Type::Scalar(scalar) if scalar.is_float() => Some(UnsupportedFeatureV1::FloatType(*scalar)),
         Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some() => None,
         Type::Pointer(pointer) => {
             if !matches!(
@@ -1722,17 +1729,17 @@ pub(crate) fn supported_cast(
         CastKind::Bitcast => {
             from != ScalarType::Bool && to != ScalarType::Bool && from_bits == to_bits
         }
-        CastKind::FloatExtend
-        | CastKind::FloatTruncate
-        | CastKind::IntegerToFloat
-        | CastKind::FloatToInteger => false,
+        CastKind::FloatExtend => from.is_float() && to.is_float() && from_bits < to_bits,
+        CastKind::FloatTruncate => from.is_float() && to.is_float() && from_bits > to_bits,
+        CastKind::IntegerToFloat => from.is_integer() && from != ScalarType::Index && to.is_float(),
+        CastKind::FloatToInteger => from.is_float() && to.is_integer() && to != ScalarType::Index,
     }
 }
 
 pub(crate) fn supports_unary(op: UnaryOp, ty: ScalarType) -> bool {
     match op {
         UnaryOp::Not => ty == ScalarType::Bool || ty.is_integer(),
-        UnaryOp::Negate => ty.is_signed_integer(),
+        UnaryOp::Negate => ty.is_signed_integer() || ty.is_float(),
     }
 }
 
@@ -1748,11 +1755,10 @@ pub(crate) fn supports_binary(op: BinaryOp, lhs: ScalarType, rhs: ScalarType) ->
         | BinaryOp::Subtract
         | BinaryOp::Multiply
         | BinaryOp::Divide
-        | BinaryOp::Remainder
-        | BinaryOp::BitAnd
-        | BinaryOp::BitOr
-        | BinaryOp::BitXor
-        | BinaryOp::Checked(_) => lhs == rhs && lhs.is_integer(),
+        | BinaryOp::Remainder => lhs == rhs && (lhs.is_integer() || lhs.is_float()),
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Checked(_) => {
+            lhs == rhs && lhs.is_integer()
+        }
     }
 }
 
@@ -1770,8 +1776,19 @@ pub(crate) fn supports_compare(
             ComparePredicate::Equal | ComparePredicate::NotEqual
         )
     } else {
-        lhs.is_integer()
+        lhs.is_integer() || lhs.is_float()
     }
+}
+
+const fn supports_float_function(function: F32MathFunction) -> bool {
+    matches!(
+        function,
+        F32MathFunction::FusedMultiplyAdd
+            | F32MathFunction::Floor
+            | F32MathFunction::Ceil
+            | F32MathFunction::Truncate
+            | F32MathFunction::RoundTiesEven
+    )
 }
 
 fn validate_arguments(

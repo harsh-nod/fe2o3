@@ -19,9 +19,9 @@ re-encodes the consumed bytes, and then accounts the resulting decode-phase
 peak. `max_resident_bytes` is a successful-admission acceptance limit evaluated
 after that decode; it is not a pre-decode allocator cap.
 
-The first execution profile supports integer and boolean scalar operations,
-structured control flow, internal helper calls, private allocations, global
-buffer arguments, ordinary and guarded scalar loads, static scalar
+The execution profile supports integer, boolean, and F16/BF16/F32/F64 scalar
+operations, structured control flow, internal helper calls, private
+allocations, global buffer arguments, ordinary and guarded scalar loads, static scalar
 workgroup-memory declarations, convergent workgroup barriers, and one-, two-,
 or three-dimensional launch hierarchy intrinsics. A false guarded load
 evaluates only its predicate and fallback; it does not validate the pointer,
@@ -98,12 +98,28 @@ not synchronize which invocation executes next. Atomic and fence events retain
 their KIR semantics and allocation-relative provenance, and atomic debug
 records distinguish read, committed-write, and read-modify-write observations.
 
-Floating-point operations and atomics, generic-address-space atomics, external
-calls, generic barriers, dynamic or non-scalar workgroup memory, wave
+Scalar floating-point constants, loads/stores, negation, add/subtract/multiply/
+divide/remainder, comparison/select, float widening/narrowing, and fixed-width
+integer conversions use pinned `rustc_apfloat` software IEEE semantics. Binary
+arithmetic and format conversion use round-to-nearest, ties-to-even; float to
+integer conversion uses round-toward-zero and fails with a typed range error for
+NaN, infinity, or an unrepresentable result. Values retain exact bits, including
+NaN payloads and signed zero. The canonical FloatOperation conversions, widened
+F16/BF16 arithmetic, F32 fused multiply-add and integral-rounding functions,
+and packed BF16x2 fused multiply-add use the same software evaluator. Operations
+are never implemented with host `f32`/`f64` arithmetic and are never implicitly
+contracted.
+
+Float atomics, generic-address-space atomics, external calls, generic barriers,
+dynamic or non-scalar workgroup memory, wave
 operations, matrix operations, gfx950 LDS transpose operations, memory
-intrinsics, and inline assembly remain typed unsupported states. The sequential
+intrinsics, and inline assembly remain typed unsupported states. F32 square root
+and the canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a
+distinct typed unsupported state because the pinned software evaluator does not
+provide their declared exact semantics. The sequential
 CPU mutation and fence order model does not simulate physical waves, caches,
-GPU timing, GPU performance, or prove memory-model race freedom.
+GPU floating-point modes, GPU timing, GPU performance, or prove memory-model
+race freedom.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or

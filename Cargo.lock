@@ -1088,6 +1088,7 @@ name = "fe2o3-kir-sim"
 version = "0.1.0"
 dependencies = [
  "fe2o3-kernel-ir",
+ "rustc_apfloat",
  "sha2 0.11.0",
 ]
 

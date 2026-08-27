@@ -201,8 +201,11 @@ impl SimulationTargetV1 {
             | ScalarType::U16
             | ScalarType::U32
             | ScalarType::U64
-            | ScalarType::U128 => ty.bit_width(),
-            ScalarType::F16 | ScalarType::Bf16 | ScalarType::F32 | ScalarType::F64 => None,
+            | ScalarType::U128
+            | ScalarType::F16
+            | ScalarType::Bf16
+            | ScalarType::F32
+            | ScalarType::F64 => ty.bit_width(),
         }
     }
 
@@ -215,7 +218,7 @@ impl SimulationTargetV1 {
     }
 }
 
-/// Exact boolean or integer scalar bits tagged with their KIR type.
+/// Exact boolean, integer, or IEEE-format scalar bits tagged with their KIR type.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ScalarBitsV1 {
     ty: ScalarType,
@@ -224,7 +227,7 @@ pub struct ScalarBitsV1 {
 }
 
 impl ScalarBitsV1 {
-    /// Constructs a scalar and rejects floats or high bits outside its target width.
+    /// Constructs a scalar and rejects high bits outside its target width.
     pub fn new(
         ty: ScalarType,
         bits: u128,

@@ -7,6 +7,7 @@ mod model;
 mod preflight;
 mod resident;
 mod schedule;
+mod soft_float;
 
 pub use debug::{
     MAX_DEBUG_ALLOCATIONS_PER_CHECKPOINT_V1, MAX_DEBUG_FRAMES_PER_CHECKPOINT_V1,

@@ -124,6 +124,7 @@ proc-macro-crate = "3"
 pliron = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861bf03e7f20242b25717fb653336d02e487" }
 pliron-llvm = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861bf03e7f20242b25717fb653336d02e487", default-features = false, features = ["std"] }
 quote = "1"
+rustc_apfloat = "=0.2.3"
 sha2 = { version = "0.11.0", default-features = false }
 syn = { version = "2", features = ["full"] }
 

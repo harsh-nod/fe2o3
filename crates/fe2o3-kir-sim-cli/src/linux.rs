@@ -61,6 +61,14 @@ enum UnsupportedFeatureCode {
     MemoryIntrinsic,
     FloatConstant,
     FloatOperation,
+    FloatSqrt,
+    FloatSin,
+    FloatCos,
+    FloatExp,
+    FloatExp2,
+    FloatLn,
+    FloatLog2,
+    FloatLog10,
     InvalidIntegerCast,
     ExternalCall,
     NonInternalCall,
@@ -1586,6 +1594,10 @@ fn scalar_type(value: &str) -> Option<ScalarType> {
         "u64" => Some(ScalarType::U64),
         "u128" => Some(ScalarType::U128),
         "index" => Some(ScalarType::Index),
+        "f16" => Some(ScalarType::F16),
+        "bf16" => Some(ScalarType::Bf16),
+        "f32" => Some(ScalarType::F32),
+        "f64" => Some(ScalarType::F64),
         _ => None,
     }
 }
@@ -1594,13 +1606,10 @@ fn scalar_width(ty: ScalarType) -> u16 {
     match ty {
         ScalarType::Bool => 1,
         ScalarType::I8 | ScalarType::U8 => 8,
-        ScalarType::I16 | ScalarType::U16 => 16,
-        ScalarType::I32 | ScalarType::U32 => 32,
-        ScalarType::I64 | ScalarType::U64 | ScalarType::Index => 64,
+        ScalarType::I16 | ScalarType::U16 | ScalarType::F16 | ScalarType::Bf16 => 16,
+        ScalarType::I32 | ScalarType::U32 | ScalarType::F32 => 32,
+        ScalarType::I64 | ScalarType::U64 | ScalarType::Index | ScalarType::F64 => 64,
         ScalarType::I128 | ScalarType::U128 => 128,
-        ScalarType::F16 | ScalarType::Bf16 | ScalarType::F32 | ScalarType::F64 => {
-            unreachable!("floating-point types are rejected by scalar_type")
-        }
     }
 }
 
@@ -1618,9 +1627,10 @@ fn scalar_type_name(ty: ScalarType) -> &'static str {
         ScalarType::U64 => "u64",
         ScalarType::U128 => "u128",
         ScalarType::Index => "index",
-        ScalarType::F16 | ScalarType::Bf16 | ScalarType::F32 | ScalarType::F64 => {
-            unreachable!("simulator output cannot contain floating-point scalars")
-        }
+        ScalarType::F16 => "f16",
+        ScalarType::Bf16 => "bf16",
+        ScalarType::F32 => "f32",
+        ScalarType::F64 => "f64",
     }
 }
 
@@ -1883,6 +1893,23 @@ fn unsupported_code(feature: &UnsupportedFeatureV1) -> UnsupportedFeatureCode {
         UnsupportedFeatureV1::MemoryIntrinsic => UnsupportedFeatureCode::MemoryIntrinsic,
         UnsupportedFeatureV1::FloatConstant => UnsupportedFeatureCode::FloatConstant,
         UnsupportedFeatureV1::FloatOperation => UnsupportedFeatureCode::FloatOperation,
+        UnsupportedFeatureV1::FloatFunction(function) => match function {
+            fe2o3_kernel_ir::F32MathFunction::Sqrt => UnsupportedFeatureCode::FloatSqrt,
+            fe2o3_kernel_ir::F32MathFunction::Sin => UnsupportedFeatureCode::FloatSin,
+            fe2o3_kernel_ir::F32MathFunction::Cos => UnsupportedFeatureCode::FloatCos,
+            fe2o3_kernel_ir::F32MathFunction::Exp => UnsupportedFeatureCode::FloatExp,
+            fe2o3_kernel_ir::F32MathFunction::Exp2 => UnsupportedFeatureCode::FloatExp2,
+            fe2o3_kernel_ir::F32MathFunction::Ln => UnsupportedFeatureCode::FloatLn,
+            fe2o3_kernel_ir::F32MathFunction::Log2 => UnsupportedFeatureCode::FloatLog2,
+            fe2o3_kernel_ir::F32MathFunction::Log10 => UnsupportedFeatureCode::FloatLog10,
+            fe2o3_kernel_ir::F32MathFunction::FusedMultiplyAdd
+            | fe2o3_kernel_ir::F32MathFunction::Floor
+            | fe2o3_kernel_ir::F32MathFunction::Ceil
+            | fe2o3_kernel_ir::F32MathFunction::Truncate
+            | fe2o3_kernel_ir::F32MathFunction::RoundTiesEven => {
+                UnsupportedFeatureCode::FloatOperation
+            }
+        },
         UnsupportedFeatureV1::InvalidIntegerCast { .. } => {
             UnsupportedFeatureCode::InvalidIntegerCast
         }
@@ -2898,6 +2925,34 @@ mod tests {
     }
 
     #[test]
+    fn floating_scalars_and_buffers_are_exact_raw_bits() {
+        let json = base_request(
+            "{\"kind\":\"scalar\",\"type\":\"f16\",\"bits\":\"0x7e42\"},\
+             {\"kind\":\"scalar\",\"type\":\"bf16\",\"bits\":\"0x7fc2\"},\
+             {\"kind\":\"scalar\",\"type\":\"f32\",\"bits\":\"0x80000000\"},\
+             {\"kind\":\"scalar\",\"type\":\"f64\",\"bits\":\"0x0000000000000001\"},\
+             {\"kind\":\"buffer\",\"element\":\"f32\",\"access\":\"read_write\",\"alignment\":4,\"bytes\":\"0x0000803f00000080\"}",
+        );
+        let prepared = prepare_request(request(&json).unwrap()).unwrap();
+        for (argument, ty, bits) in [
+            (&prepared.arguments[0], ScalarType::F16, 0x7e42),
+            (&prepared.arguments[1], ScalarType::Bf16, 0x7fc2),
+            (&prepared.arguments[2], ScalarType::F32, 0x8000_0000),
+            (&prepared.arguments[3], ScalarType::F64, 1),
+        ] {
+            let SimulationArgumentV1::Scalar(value) = argument else {
+                panic!("expected scalar")
+            };
+            assert_eq!((value.ty(), value.bits()), (ty, bits));
+        }
+        let SimulationArgumentV1::Buffer(buffer) = &prepared.arguments[4] else {
+            panic!("expected float buffer")
+        };
+        assert_eq!(buffer.element(), ScalarType::F32);
+        assert_eq!(buffer.bytes(), &[0, 0, 128, 63, 0, 0, 0, 128]);
+    }
+
+    #[test]
     fn shared_backings_and_overlapping_views_are_preserved() {
         let json = format!(
             "{{\"schema\":\"{REQUEST_SCHEMA}\",\"kernel\":\"kernel\",\"grid\":[1,1,1],\"workgroup\":[1,1,1],\"arguments\":[{{\"kind\":\"buffer_view\",\"backing\":7,\"element\":\"u8\",\"access\":\"read_write\",\"alignment\":1,\"byte_offset\":0,\"elements\":3}},{{\"kind\":\"buffer_view\",\"backing\":7,\"element\":\"u8\",\"access\":\"read_write\",\"alignment\":1,\"byte_offset\":1,\"elements\":3}}],\"shared_buffers\":[{{\"id\":7,\"element\":\"u8\",\"access\":\"read_write\",\"alignment\":1,\"bytes\":\"0x00010203\"}}]}}"
@@ -3005,12 +3060,12 @@ mod tests {
     }
 
     #[test]
-    fn noncanonical_hex_floats_and_bounds_fail_closed() {
+    fn noncanonical_hex_and_bounds_fail_closed() {
         for argument in [
             "{\"kind\":\"scalar\",\"type\":\"bool\",\"bits\":\"0x2\"}",
             "{\"kind\":\"scalar\",\"type\":\"u8\",\"bits\":\"0xFf\"}",
             "{\"kind\":\"scalar\",\"type\":\"u8\",\"bits\":\"0x0\"}",
-            "{\"kind\":\"scalar\",\"type\":\"f32\",\"bits\":\"0x00000000\"}",
+            "{\"kind\":\"scalar\",\"type\":\"f128\",\"bits\":\"0x00000000\"}",
             "{\"kind\":\"buffer\",\"element\":\"u8\",\"access\":\"read_only\",\"alignment\":1,\"bytes\":\"0x0\"}",
             "{\"kind\":\"buffer\",\"element\":\"u8\",\"access\":\"read_only\",\"alignment\":1,\"bytes\":\"0x00\",\"initialized\":\"0x80\"}",
         ] {

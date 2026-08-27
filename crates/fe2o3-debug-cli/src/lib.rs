@@ -1132,6 +1132,10 @@ fn protocol_scalar_type(value: ScalarBitsV1) -> (DebugValueTypeV1, u16) {
     match value.ty() {
         ScalarType::Bool => (DebugValueTypeV1::Bool, 1),
         ScalarType::Index => (DebugValueTypeV1::Index { bits: 64 }, 64),
+        ty if ty.is_float() => {
+            let width = ty.bit_width().unwrap_or(64);
+            (DebugValueTypeV1::Float { bits: width }, width)
+        }
         ty => {
             let width = ty.bit_width().unwrap_or(128);
             (
@@ -3837,6 +3841,31 @@ fn bounded_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simulator_float_values_project_as_exact_protocol_float_bits() {
+        for (ty, bits, width) in [
+            (ScalarType::F16, 0x7e42, 16),
+            (ScalarType::Bf16, 0x7fc2, 16),
+            (ScalarType::F32, 0x8000_0000, 32),
+            (ScalarType::F64, 1, 64),
+        ] {
+            let value = ScalarBitsV1::new(ty, bits, SimulationTargetV1::amdgpu_64()).unwrap();
+            assert_eq!(
+                protocol_scalar_type(value),
+                (DebugValueTypeV1::Float { bits: width }, width)
+            );
+            let availability = availability_for_observed(&SimulationDebugValueV1::Scalar(value));
+            assert!(matches!(
+                availability,
+                ValueAvailabilityV1::Captured {
+                    value_type: DebugValueTypeV1::Float { bits: actual },
+                    value: CapturedValueV1::Bits { ref bits },
+                    ..
+                } if actual == width && bits == &fixed_width_bits(value.bits(), width)
+            ));
+        }
+    }
 
     fn fixture_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
