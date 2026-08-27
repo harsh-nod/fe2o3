@@ -871,15 +871,116 @@ fn sparse_affine_overflow_does_not_wrap_into_a_false_bounds_proof() {
     append(context, entry, &ret);
 
     let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
         report.findings(),
-        [RankedBoundsFindingV1::UnprovedBound { dimension: 0, .. }]
+        [RankedBoundsFindingV1::MachineIntegerOverflow {
+            access: AccessKindAttr::Read,
+            dimension: 0,
+            source_operation: IndexBinaryKindAttr::Add,
+            lhs: u64::MAX,
+            rhs: 1,
+            path_complete: true,
+            ..
+        }]
     ));
     assert!(
         report.findings()[0]
             .to_string()
-            .contains("FE2O3-BOUNDS-002")
+            .contains("FE2O3-BOUNDS-005")
     );
+}
+
+#[test]
+fn constant_overflow_is_rejected_with_a_dynamic_launch_extent() {
+    let context = &mut setup();
+    let (function, _) = function(context, "dynamic_constant_overflow", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![16]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let one = IndexConstantOp::new(context, 1);
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        maximum.result(context),
+        one.result(context),
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    for operation in [
+        view.get_operation(),
+        invocation.get_operation(),
+        maximum.get_operation(),
+        one.get_operation(),
+        index.get_operation(),
+        access.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [RankedBoundsFindingV1::MachineIntegerOverflow {
+            invocation,
+            lhs: u64::MAX,
+            rhs: 1,
+            path_complete: true,
+            ..
+        }] if invocation == &[0]
+    ));
+}
+
+#[test]
+fn dynamic_dependent_overflow_remains_incomplete_without_a_runtime_bound() {
+    let context = &mut setup();
+    let (function, _) = function(context, "dynamic_dependent_overflow", 0);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, false, vec![16]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![]).unwrap();
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let maximum = IndexConstantOp::new(context, u64::MAX);
+    let index = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        maximum.result(context),
+        invocation.result(context),
+    );
+    let access = RankedAccessOp::new(
+        context,
+        AccessKindAttr::Read,
+        view.result(context),
+        vec![index.result(context)],
+    )
+    .unwrap();
+    let ret = ReturnOp::new(context);
+    for operation in [
+        view.get_operation(),
+        invocation.get_operation(),
+        maximum.get_operation(),
+        index.get_operation(),
+        access.get_operation(),
+        ret.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+
+    let report = run_pliron_ranked_bounds_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [RankedBoundsFindingV1::UnprovedBound { dimension: 0, .. }]
+    ));
 }
 
 #[test]

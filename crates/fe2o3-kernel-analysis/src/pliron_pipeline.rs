@@ -7,6 +7,12 @@ use pliron::{builtin::ops::FuncOp, context::Context};
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_barrier::require_pliron_barrier_convergence_with_analyses_v1;
 use crate::pliron_hierarchical_ownership::require_pliron_hierarchical_ownership_with_analyses_v1;
+use crate::pliron_ir_identity::LivePlironStructuralIdentityProviderV1;
+use crate::pliron_launch_contract::require_pliron_launch_contract_before_lowering_v1;
+use crate::pliron_pass_contract::{
+    PlironPassPreservationErrorV1, PlironPassPreservationReportV1,
+    begin_production_pliron_pass_contract_session_v1,
+};
 use crate::pliron_race::require_pliron_ranked_race_freedom_with_analyses_v1;
 use crate::pliron_ranked_bounds::require_pliron_ranked_bounds_with_analyses_v1;
 use crate::pliron_semantic_refinement::require_pliron_semantic_refinement_with_analyses_v1;
@@ -16,6 +22,7 @@ use crate::{
     HierarchicalOwnershipCheckErrorV1, HierarchicalOwnershipReportV1, KernelCheckPassKindV1,
     KernelCheckStatusV1, PlironAtomicLegalityCheckErrorV1, PlironAtomicLegalityReportV1,
     PlironAtomicTargetContextV1, PlironBarrierCheckErrorV1, PlironBarrierReportV1,
+    PlironLaunchContractCheckErrorV1, PlironLaunchContractReportV1, PlironLaunchContractV1,
     PlironSemanticRefinementCheckErrorV1, PlironSemanticRefinementReportV1,
     PlironTensorLayoutCheckErrorV1, PlironTensorLayoutDataflowIssueV1, PlironTensorLayoutFindingV1,
     PlironTensorLayoutReportV1, PlironWorkgroupMemoryCheckErrorV1, PlironWorkgroupMemoryReportV1,
@@ -45,6 +52,8 @@ pub enum KernelCheckRepairActionV1 {
     MakeBarrierControlUniform,
     InitializeAndPublishWorkgroupMemory,
     MatchReferenceSemantics,
+    SatisfyTargetContract,
+    PreservePassSemantics,
 }
 
 impl KernelCheckRepairActionV1 {
@@ -60,6 +69,8 @@ impl KernelCheckRepairActionV1 {
             Self::MakeBarrierControlUniform => "FE2O3-FIX-BARRIER",
             Self::InitializeAndPublishWorkgroupMemory => "FE2O3-FIX-WORKGROUP",
             Self::MatchReferenceSemantics => "FE2O3-FIX-SEMANTIC",
+            Self::SatisfyTargetContract => "FE2O3-FIX-TARGET",
+            Self::PreservePassSemantics => "FE2O3-FIX-PASS-PRESERVATION",
         }
     }
 }
@@ -164,6 +175,62 @@ pub fn kernel_check_repair_for_pass_v1(pass: KernelCheckPassKindV1) -> KernelChe
         pass,
         action,
         KernelCheckRepairApplicabilityV1::HasPlaceholders,
+        message,
+    )
+}
+
+fn launch_contract_repair_v1() -> KernelCheckRepairV1 {
+    KernelCheckRepairV1::new(
+        KernelCheckPassKindV1::Structural,
+        KernelCheckRepairActionV1::SatisfyTargetContract,
+        KernelCheckRepairApplicabilityV1::HasPlaceholders,
+        "use a target-supported grid, workgroup, subgroup, and LDS footprint; bind each global allocation origin to a sufficiently large aligned host descriptor, and guard dynamic launch facts at runtime",
+    )
+}
+
+pub fn pass_preservation_repair_for_error_v1(
+    error: &PlironPassPreservationErrorV1,
+) -> KernelCheckRepairV1 {
+    let (pass, action, message) = match error {
+        PlironPassPreservationErrorV1::StructuralIdentityChanged { pass, .. }
+        | PlironPassPreservationErrorV1::StaleInputIdentity { pass, .. } => (
+            *pass,
+            KernelCheckRepairActionV1::PreservePassSemantics,
+            "compiler maintainer: remove the persistent structural mutation from the named analysis pass; a transforming pass must instead re-enter correctness verification under a separately validated semantic-refinement contract",
+        ),
+        PlironPassPreservationErrorV1::IdentityUnavailable { source_code, .. }
+            if *source_code == "FE2O3-PRESERVE-001" =>
+        {
+            (
+                KernelCheckPassKindV1::Structural,
+                KernelCheckRepairActionV1::RepairStructure,
+                "lower every operation, attribute, and type into the closed production ranked PLIRON subset before running preservation checks",
+            )
+        }
+        PlironPassPreservationErrorV1::IdentityUnavailable { source_code, .. }
+            if *source_code == "FE2O3-PRESERVE-002" =>
+        {
+            (
+                KernelCheckPassKindV1::Structural,
+                KernelCheckRepairActionV1::RepairStructure,
+                "split or simplify the function so structural identity construction remains within its audited resource bounds",
+            )
+        }
+        PlironPassPreservationErrorV1::IdentityUnavailable { .. } => (
+            KernelCheckPassKindV1::Structural,
+            KernelCheckRepairActionV1::RepairStructure,
+            "repair malformed PLIRON structure or its registered deterministic printer before constructing a structural identity",
+        ),
+        _ => (
+            KernelCheckPassKindV1::Structural,
+            KernelCheckRepairActionV1::PreservePassSemantics,
+            "compiler maintainer: restore the fixed pass manifest, order, and sealed checkpoint state before accepting this pipeline",
+        ),
+    };
+    KernelCheckRepairV1::new(
+        pass,
+        action,
+        KernelCheckRepairApplicabilityV1::Manual,
         message,
     )
 }
@@ -440,19 +507,20 @@ fn require_production_pliron_checks_with_analyses(
 /// middle-end evidence schema. V2 adds ownership as an explicit stage instead
 /// of changing the meaning of those historical bytes.
 pub const PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2: [KernelCheckPassKindV1; 8] = [
-    KernelCheckPassKindV1::TensorLayout,
-    KernelCheckPassKindV1::MemoryBounds,
-    KernelCheckPassKindV1::AtomicLegality,
-    KernelCheckPassKindV1::RaceFreedom,
-    KernelCheckPassKindV1::HierarchicalOwnership,
-    KernelCheckPassKindV1::BarrierConvergence,
-    KernelCheckPassKindV1::WorkgroupMemory,
-    KernelCheckPassKindV1::SemanticRefinement,
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[0].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[1].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[2].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[3].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[4].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[5].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[6].pass(),
+    crate::PRODUCTION_PLIRON_PASS_CONTRACTS_V1[7].pass(),
 ];
 
 /// Exact reports from one uninterrupted V2 production validation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProductionPlironPreloweringReportV2 {
+    target_contract: Option<PlironLaunchContractReportV1>,
     tensor_layout: PlironTensorLayoutReportV1,
     bounds: RankedBoundsReportV1,
     atomics: PlironAtomicLegalityReportV1,
@@ -461,6 +529,7 @@ pub struct ProductionPlironPreloweringReportV2 {
     barriers: PlironBarrierReportV1,
     workgroup: PlironWorkgroupMemoryReportV1,
     semantics: PlironSemanticRefinementReportV1,
+    preservation: PlironPassPreservationReportV1,
 }
 
 impl ProductionPlironPreloweringReportV2 {
@@ -470,6 +539,13 @@ impl ProductionPlironPreloweringReportV2 {
 
     pub const fn tensor_layout(&self) -> &PlironTensorLayoutReportV1 {
         &self.tensor_layout
+    }
+
+    /// Target and host feasibility when the caller supplied compiler target
+    /// inputs. The target-agnostic entry point leaves this absent and still
+    /// grants no launch authority.
+    pub const fn target_contract(&self) -> Option<&PlironLaunchContractReportV1> {
+        self.target_contract.as_ref()
     }
 
     pub const fn bounds(&self) -> &RankedBoundsReportV1 {
@@ -500,16 +576,29 @@ impl ProductionPlironPreloweringReportV2 {
         &self.semantics
     }
 
+    /// Exact structural lineage around every analysis-only production pass.
+    pub const fn preservation(&self) -> &PlironPassPreservationReportV1 {
+        &self.preservation
+    }
+
     pub fn status(&self) -> KernelCheckStatusV1 {
-        self.tensor_layout
-            .status()
-            .join(self.bounds.status())
-            .join(self.atomics.status())
-            .join(self.race.status())
-            .join(self.ownership.status())
-            .join(self.barriers.status())
-            .join(self.workgroup.status())
-            .join(self.semantics.status())
+        self.target_contract
+            .as_ref()
+            .map_or(
+                KernelCheckStatusV1::Clean,
+                PlironLaunchContractReportV1::status,
+            )
+            .join(
+                self.tensor_layout
+                    .status()
+                    .join(self.bounds.status())
+                    .join(self.atomics.status())
+                    .join(self.race.status())
+                    .join(self.ownership.status())
+                    .join(self.barriers.status())
+                    .join(self.workgroup.status())
+                    .join(self.semantics.status()),
+            )
     }
 
     pub fn is_clean(&self) -> bool {
@@ -527,6 +616,7 @@ impl ProductionPlironPreloweringReportV2 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionPlironPreloweringErrorV2 {
+    TargetContract(PlironLaunchContractCheckErrorV1),
     TensorLayout(PlironTensorLayoutCheckErrorV1),
     Bounds(RankedBoundsCheckErrorV1),
     Atomic(PlironAtomicLegalityCheckErrorV1),
@@ -535,6 +625,7 @@ pub enum ProductionPlironPreloweringErrorV2 {
     Barrier(PlironBarrierCheckErrorV1),
     Workgroup(PlironWorkgroupMemoryCheckErrorV1),
     Semantic(PlironSemanticRefinementCheckErrorV1),
+    Preservation(PlironPassPreservationErrorV1),
 }
 
 impl ProductionPlironPreloweringErrorV2 {
@@ -543,6 +634,7 @@ impl ProductionPlironPreloweringErrorV2 {
     /// applied silently.
     pub fn repair_hints(&self) -> Vec<KernelCheckRepairV1> {
         let repair = match self {
+            Self::TargetContract(_) => return vec![launch_contract_repair_v1()],
             Self::TensorLayout(error) => return vec![tensor_layout_repair_for_error_v1(error)],
             Self::Bounds(_) => KernelCheckPassKindV1::MemoryBounds,
             Self::Atomic(_) => KernelCheckPassKindV1::AtomicLegality,
@@ -551,6 +643,9 @@ impl ProductionPlironPreloweringErrorV2 {
             Self::Barrier(_) => KernelCheckPassKindV1::BarrierConvergence,
             Self::Workgroup(_) => KernelCheckPassKindV1::WorkgroupMemory,
             Self::Semantic(_) => KernelCheckPassKindV1::SemanticRefinement,
+            Self::Preservation(error) => {
+                return vec![pass_preservation_repair_for_error_v1(error)];
+            }
         };
         vec![kernel_check_repair_for_pass_v1(repair)]
     }
@@ -559,6 +654,7 @@ impl ProductionPlironPreloweringErrorV2 {
 impl fmt::Display for ProductionPlironPreloweringErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TargetContract(error) => error.fmt(formatter),
             Self::TensorLayout(error) => error.fmt(formatter),
             Self::Bounds(error) => error.fmt(formatter),
             Self::Atomic(error) => error.fmt(formatter),
@@ -567,6 +663,7 @@ impl fmt::Display for ProductionPlironPreloweringErrorV2 {
             Self::Barrier(error) => error.fmt(formatter),
             Self::Workgroup(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
+            Self::Preservation(error) => error.fmt(formatter),
         }?;
         write_repairs(formatter, &self.repair_hints())
     }
@@ -575,6 +672,7 @@ impl fmt::Display for ProductionPlironPreloweringErrorV2 {
 impl Error for ProductionPlironPreloweringErrorV2 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::TargetContract(error) => Some(error),
             Self::TensorLayout(error) => Some(error),
             Self::Bounds(error) => Some(error),
             Self::Atomic(error) => Some(error),
@@ -583,6 +681,7 @@ impl Error for ProductionPlironPreloweringErrorV2 {
             Self::Barrier(error) => Some(error),
             Self::Workgroup(error) => Some(error),
             Self::Semantic(error) => Some(error),
+            Self::Preservation(error) => Some(error),
         }
     }
 }
@@ -591,7 +690,7 @@ pub fn require_production_pliron_checks_before_lowering_v2(
     context: &Context,
     function: &FuncOp,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, None)
+    require_production_pliron_checks_v2(context, function, None, None)
 }
 
 pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
@@ -599,43 +698,107 @@ pub fn require_production_pliron_checks_with_atomic_target_before_lowering_v2(
     function: &FuncOp,
     atomic_target: &PlironAtomicTargetContextV1,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
-    require_production_pliron_checks_v2(context, function, Some(atomic_target))
+    require_production_pliron_checks_v2(context, function, Some(atomic_target), None)
+}
+
+/// Runs the same fixed eight-stage policy pipeline with compiler-supplied
+/// target and host-allocation preconditions checked before those stages.
+pub fn require_production_pliron_checks_with_target_before_lowering_v2(
+    context: &Context,
+    function: &FuncOp,
+    target_contract: &PlironLaunchContractV1,
+) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_v2(context, function, None, Some(target_contract))
+}
+
+pub fn require_production_pliron_checks_with_atomic_and_target_before_lowering_v2(
+    context: &Context,
+    function: &FuncOp,
+    atomic_target: &PlironAtomicTargetContextV1,
+    target_contract: &PlironLaunchContractV1,
+) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
+    require_production_pliron_checks_v2(
+        context,
+        function,
+        Some(atomic_target),
+        Some(target_contract),
+    )
 }
 
 fn require_production_pliron_checks_v2(
     context: &Context,
     function: &FuncOp,
     atomic_target: Option<&PlironAtomicTargetContextV1>,
+    target_contract: Option<&PlironLaunchContractV1>,
 ) -> Result<ProductionPlironPreloweringReportV2, ProductionPlironPreloweringErrorV2> {
     let mut analyses = PlironAnalysisManagerV1::new(function);
-    let tensor_layout =
-        require_pliron_tensor_layout_with_analyses_v1(context, function, &mut analyses)
-            .map_err(ProductionPlironPreloweringErrorV2::TensorLayout)?;
-    let bounds = require_pliron_ranked_bounds_with_analyses_v1(context, function, &mut analyses)
+    let target_contract = target_contract
+        .map(|target| require_pliron_launch_contract_before_lowering_v1(context, function, target))
+        .transpose()
+        .map_err(ProductionPlironPreloweringErrorV2::TargetContract)?;
+    let provider = LivePlironStructuralIdentityProviderV1::new(context, function);
+    let mut preservation = begin_production_pliron_pass_contract_session_v1(provider)
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?;
+    let tensor_layout = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+            require_pliron_tensor_layout_with_analyses_v1(context, function, &mut analyses)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(ProductionPlironPreloweringErrorV2::TensorLayout)?;
+    let bounds = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::MemoryBounds, || {
+            require_pliron_ranked_bounds_with_analyses_v1(context, function, &mut analyses)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
         .map_err(ProductionPlironPreloweringErrorV2::Bounds)?;
-    let atomics = match atomic_target {
-        Some(target) => {
-            require_pliron_atomic_legality_with_target_before_lowering_v1(context, function, target)
-        }
-        None => require_pliron_atomic_legality_before_lowering_v1(context, function),
-    }
-    .map_err(ProductionPlironPreloweringErrorV2::Atomic)?;
-    let race =
-        require_pliron_ranked_race_freedom_with_analyses_v1(context, function, &mut analyses)
-            .map_err(ProductionPlironPreloweringErrorV2::Race)?;
-    let ownership =
-        require_pliron_hierarchical_ownership_with_analyses_v1(context, function, &mut analyses)
-            .map_err(ProductionPlironPreloweringErrorV2::Ownership)?;
-    let barriers =
-        require_pliron_barrier_convergence_with_analyses_v1(context, function, &mut analyses)
-            .map_err(ProductionPlironPreloweringErrorV2::Barrier)?;
-    let workgroup =
-        require_pliron_workgroup_memory_with_analyses_v1(context, function, &mut analyses)
-            .map_err(ProductionPlironPreloweringErrorV2::Workgroup)?;
-    let semantics =
-        require_pliron_semantic_refinement_with_analyses_v1(context, function, &mut analyses)
-            .map_err(ProductionPlironPreloweringErrorV2::Semantic)?;
+    let atomics = preservation
+        .run_contiguous_pass(
+            KernelCheckPassKindV1::AtomicLegality,
+            || match atomic_target {
+                Some(target) => require_pliron_atomic_legality_with_target_before_lowering_v1(
+                    context, function, target,
+                ),
+                None => require_pliron_atomic_legality_before_lowering_v1(context, function),
+            },
+        )
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(ProductionPlironPreloweringErrorV2::Atomic)?;
+    let race = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::RaceFreedom, || {
+            require_pliron_ranked_race_freedom_with_analyses_v1(context, function, &mut analyses)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(ProductionPlironPreloweringErrorV2::Race)?;
+    let ownership = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::HierarchicalOwnership, || {
+            require_pliron_hierarchical_ownership_with_analyses_v1(context, function, &mut analyses)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(ProductionPlironPreloweringErrorV2::Ownership)?;
+    let barriers = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::BarrierConvergence, || {
+            require_pliron_barrier_convergence_with_analyses_v1(context, function, &mut analyses)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(ProductionPlironPreloweringErrorV2::Barrier)?;
+    let workgroup = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::WorkgroupMemory, || {
+            require_pliron_workgroup_memory_with_analyses_v1(context, function, &mut analyses)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(ProductionPlironPreloweringErrorV2::Workgroup)?;
+    let semantics = preservation
+        .run_contiguous_pass(KernelCheckPassKindV1::SemanticRefinement, || {
+            require_pliron_semantic_refinement_with_analyses_v1(context, function, &mut analyses)
+                .map_err(Box::new)
+        })
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
+        .map_err(|error| ProductionPlironPreloweringErrorV2::Semantic(*error))?;
+    let preservation = preservation
+        .finish()
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?;
     Ok(ProductionPlironPreloweringReportV2 {
+        target_contract,
         tensor_layout,
         bounds,
         atomics,
@@ -644,6 +807,7 @@ fn require_production_pliron_checks_v2(
         barriers,
         workgroup,
         semantics,
+        preservation,
     })
 }
 
@@ -651,7 +815,8 @@ fn require_production_pliron_checks_v2(
 mod tests {
     use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
     use dialect_kernel::{
-        DIALECT_NAME, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+        DIALECT_NAME, IndexConstantOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp,
+        register_dialect,
     };
     use fe2o3_kernel_ir::TensorLayoutContractV1;
     use pliron::{
@@ -724,14 +889,116 @@ mod tests {
             PlironAnalysisComputationCountsV1 {
                 sparse_indices: 1,
                 presburger: 1,
+                provenance_alias: 1,
                 execution_layout: 1,
                 exact_trace: 1,
                 tensor_layout_dataflow: 1,
+                memory_order: 0,
+                simt_protocol: 1,
             }
         );
         assert_eq!(
             analyses.cached_entries(),
-            super::super::pliron_analysis_manager::MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1
+            super::super::pliron_analysis_manager::MAX_PLIRON_ANALYSIS_CACHE_SLOTS_V1 - 1
+        );
+    }
+
+    #[test]
+    fn production_v2_brackets_every_pass_with_live_exact_identity() {
+        let context = &mut setup();
+        let (function, _) = valid_tensor_function(context, "preserved_pipeline");
+
+        let report = require_production_pliron_checks_before_lowering_v2(context, &function)
+            .expect("valid tensor function passes the preserved production pipeline");
+
+        assert!(report.is_clean());
+        assert!(report.preservation().is_exact_identity());
+        assert_eq!(report.preservation().certificates().len(), 8);
+        assert_eq!(
+            report
+                .preservation()
+                .certificates()
+                .iter()
+                .map(|certificate| certificate.pass())
+                .collect::<Vec<_>>(),
+            PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
+        );
+    }
+
+    #[test]
+    fn mutation_is_blamed_on_the_active_pass_and_has_a_compiler_repair() {
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "mutating_analysis");
+        let inserted = IndexConstantOp::new(context, 1);
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                inserted
+                    .get_operation()
+                    .insert_before(context, ret.get_operation());
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::StructuralIdentityChanged {
+                pass: KernelCheckPassKindV1::TensorLayout,
+                source_code: "FE2O3-PRESERVE-010",
+                ..
+            }
+        ));
+        let wrapped = ProductionPlironPreloweringErrorV2::Preservation(error);
+        let rendered = wrapped.to_string();
+        assert!(rendered.contains("analysis-only pass TensorLayout"));
+        assert!(rendered.contains("FE2O3-PRESERVE-010"));
+        assert!(rendered.contains("FE2O3-FIX-PASS-PRESERVATION"));
+    }
+
+    #[test]
+    fn rejected_analysis_is_compared_before_its_error_is_returned() {
+        let context = &mut setup();
+        let (function, _) = valid_tensor_function(context, "rejected_analysis");
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+
+        let rejected = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                Err::<(), _>("analysis rejected")
+            })
+            .expect("unchanged IR is certified even when the analysis rejects");
+        assert_eq!(rejected, Err("analysis rejected"));
+
+        for pass in PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
+            .iter()
+            .copied()
+            .skip(1)
+        {
+            preservation
+                .run_contiguous_pass(pass, || Ok::<_, ()>(()))
+                .unwrap()
+                .unwrap();
+        }
+        assert!(preservation.finish().unwrap().is_exact_identity());
+    }
+
+    #[test]
+    fn identity_prerequisite_failure_proposes_a_source_structure_repair() {
+        let error = ProductionPlironPreloweringErrorV2::Preservation(
+            PlironPassPreservationErrorV1::IdentityUnavailable {
+                source_code: "FE2O3-PRESERVE-001",
+                detail: "unsupported production type".to_owned(),
+            },
+        );
+        let repair = error.repair_hints().remove(0);
+        assert_eq!(repair.pass(), KernelCheckPassKindV1::Structural);
+        assert_eq!(repair.action(), KernelCheckRepairActionV1::RepairStructure);
+        assert!(
+            repair
+                .message()
+                .contains("closed production ranked PLIRON subset")
         );
     }
 

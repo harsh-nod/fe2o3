@@ -2,8 +2,9 @@ use fe2o3_kernel_analysis::{
     MAX_PRESBURGER_WORK_UNITS_V1, PlironPresburgerAnalysisV1, PresburgerAffineExprV1,
     PresburgerBoxV1, PresburgerCollisionDecisionV1, PresburgerConstraintV1,
     PresburgerCoverageDecisionV1, PresburgerEquivalenceDecisionV1, PresburgerFailureV1,
-    PresburgerFiniteImageV1, PresburgerMapExprV1, PresburgerMapV1, PresburgerRangeDecisionV1,
-    PresburgerSetDecisionV1, PresburgerSetV1,
+    PresburgerFiniteImageV1, PresburgerMachineIntSemanticsV1, PresburgerMachineRangeDecisionV1,
+    PresburgerMapExprV1, PresburgerMapV1, PresburgerRangeDecisionV1, PresburgerSetDecisionV1,
+    PresburgerSetV1,
 };
 
 fn affine(constant: i128, coefficients: &[i128]) -> PresburgerAffineExprV1 {
@@ -270,6 +271,65 @@ fn arithmetic_overflow_is_never_treated_as_a_proof() {
     assert_eq!(
         expression.evaluate(&[1]),
         Err(PresburgerFailureV1::ArithmeticOverflow)
+    );
+}
+
+#[test]
+fn unsigned_machine_range_reports_an_exact_overflow_witness() {
+    let access = map(
+        &[3],
+        vec![PresburgerMapExprV1::Affine(affine(
+            0,
+            &[i128::from(u64::MAX)],
+        ))],
+    );
+    assert_eq!(
+        access.find_machine_overflow(PresburgerMachineIntSemanticsV1::unsigned_64()),
+        PresburgerMachineRangeDecisionV1::Counterexample {
+            domain: vec![2],
+            range: vec![i128::from(u64::MAX) * 2],
+            output: 0,
+            value: i128::from(u64::MAX) * 2,
+            minimum: 0,
+            maximum: i128::from(u64::MAX),
+            semantics: PresburgerMachineIntSemanticsV1::unsigned_64(),
+        }
+    );
+}
+
+#[test]
+fn signed_machine_range_distinguishes_negative_values_from_overflow() {
+    let signed = PresburgerMachineIntSemanticsV1::new(8, true).unwrap();
+    let representable = PresburgerMapV1::new(
+        PresburgerSetV1::box_only(PresburgerBoxV1::new(vec![-2], vec![3]).unwrap()),
+        vec![PresburgerMapExprV1::Affine(affine(0, &[16]))],
+    )
+    .unwrap();
+    assert_eq!(
+        representable.find_machine_overflow(signed),
+        PresburgerMachineRangeDecisionV1::Proved
+    );
+
+    let unsigned = PresburgerMachineIntSemanticsV1::new(8, false).unwrap();
+    assert!(matches!(
+        representable.find_machine_overflow(unsigned),
+        PresburgerMachineRangeDecisionV1::Counterexample {
+            domain,
+            value: -32,
+            minimum: 0,
+            maximum: 255,
+            ..
+        } if domain == vec![-2]
+    ));
+}
+
+#[test]
+fn invalid_machine_width_is_an_explicit_incomplete_model() {
+    assert_eq!(
+        PresburgerMachineIntSemanticsV1::new(128, false),
+        Err(PresburgerFailureV1::InvalidModel {
+            detail: "machine-integer width must be between 1 and 127 bits",
+        })
     );
 }
 

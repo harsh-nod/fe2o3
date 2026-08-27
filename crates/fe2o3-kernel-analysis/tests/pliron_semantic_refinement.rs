@@ -7,8 +7,9 @@ use dialect_kernel::{
     SemanticTypedExpressionV1, SemanticTypedScalarV1, SemanticTypedSymbolOp, register_dialect,
 };
 use dialect_proof::{
-    CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp, ProofIdAttr,
-    PropertyAttr, RequireRefinementOp,
+    AbsoluteErrorF64BitsAttr, CoveredBoundaryAttr, EvidenceRefOp, EvidenceStatusAttr, ObligationOp,
+    ProofIdAttr, PropertyAttr, RelativeErrorF64BitsAttr, RequireNumericalRefinementOp,
+    RequireRefinementOp,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, PlironSemanticRefinementFindingV1,
@@ -133,6 +134,142 @@ fn append_typed_binary_root(
         operation.insert_at_back(entry, context);
     }
     root.result(context)
+}
+
+fn append_typed_symbol_root(
+    context: &mut Context,
+    function: &FuncOp,
+    symbol_id: u32,
+    scalar: SemanticTypedScalarV1,
+    contract: SemanticNumericalContractV1,
+) -> pliron::value::Value {
+    let expression = SemanticTypedExpressionV1::Symbol {
+        symbol: symbol_id,
+        scalar,
+    };
+    let commitment = digest_words(expression.canonical_transcript_sha256(contract));
+    let symbol = SemanticTypedSymbolOp::new(context, symbol_id, scalar);
+    let root = SemanticTypedExpressionRootOp::new(
+        context,
+        symbol.result(context),
+        contract.policy,
+        contract.rounding,
+        contract.exceptional_values,
+        commitment,
+    );
+    let entry = function.get_entry_block(context);
+    append(context, entry, &symbol);
+    append(context, entry, &root);
+    root.result(context)
+}
+
+fn append_numerical_contract(
+    context: &mut Context,
+    function: &FuncOp,
+    actual: pliron::value::Value,
+    reference: pliron::value::Value,
+    domain: pliron::value::Value,
+    precondition: pliron::value::Value,
+) {
+    let entry = function.get_entry_block(context);
+    let obligation = ObligationOp::new(
+        context,
+        proof_id(1),
+        proof_id(10),
+        proof_id(20),
+        PropertyAttr::FunctionalRefinement,
+    );
+    let evidence = EvidenceRefOp::new(
+        context,
+        proof_id(30),
+        proof_id(1),
+        PropertyAttr::FunctionalRefinement,
+        EvidenceStatusAttr::Checked,
+        CoveredBoundaryAttr::Mir,
+    );
+    let requirement = RequireNumericalRefinementOp::new(
+        context,
+        proof_id(1),
+        AbsoluteErrorF64BitsAttr(0.001_f64.to_bits()),
+        RelativeErrorF64BitsAttr(0.01_f64.to_bits()),
+        actual,
+        reference,
+        domain,
+        precondition,
+    );
+    append(context, entry, &obligation);
+    append(context, entry, &evidence);
+    append(context, entry, &requirement);
+}
+
+#[test]
+fn numerical_bound_is_derived_from_identical_live_operator_trees() {
+    let context = &mut setup();
+    let function = function(context, "derived_zero_error", 0);
+    let float = SemanticTypedScalarV1::new(SemanticScalarKindAttr::Float, 32).unwrap();
+    let boolean = SemanticTypedScalarV1::new(SemanticScalarKindAttr::Bool, 1).unwrap();
+    let ieee = SemanticNumericalContractV1 {
+        policy: SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits,
+        rounding: SemanticIeeeRoundingAttr::NearestTiesToEven,
+        exceptional_values: SemanticExceptionalValueAttr::PreserveExactBits,
+    };
+    let bitvector = exact_bitvector_contract();
+    let actual = append_typed_symbol_root(context, &function, 7, float, ieee);
+    let reference = append_typed_symbol_root(context, &function, 7, float, ieee);
+    let domain = append_typed_symbol_root(context, &function, 8, boolean, bitvector);
+    let precondition = append_typed_symbol_root(context, &function, 9, boolean, bitvector);
+    append_numerical_contract(context, &function, actual, reference, domain, precondition);
+    let entry = function.get_entry_block(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let report = run_pliron_semantic_refinement_check_v1(context, &function);
+    assert!(report.is_clean(), "{:?}", report.findings());
+    assert_eq!(report.numerical_certificates().len(), 1);
+    let certificate = &report.numerical_certificates()[0];
+    assert_eq!(
+        f64::from_bits(certificate.derived_absolute_error_f64_bits()),
+        0.0
+    );
+    assert_eq!(
+        f64::from_bits(certificate.derived_relative_error_f64_bits()),
+        0.0
+    );
+}
+
+#[test]
+fn checked_evidence_cannot_make_different_float_trees_equivalent() {
+    let context = &mut setup();
+    let function = function(context, "evidence_is_not_arithmetic_proof", 0);
+    let float = SemanticTypedScalarV1::new(SemanticScalarKindAttr::Float, 32).unwrap();
+    let boolean = SemanticTypedScalarV1::new(SemanticScalarKindAttr::Bool, 1).unwrap();
+    let ieee = SemanticNumericalContractV1 {
+        policy: SemanticNumericalPolicyAttr::ExactIeeeNearestTiesToEvenPreserveBits,
+        rounding: SemanticIeeeRoundingAttr::NearestTiesToEven,
+        exceptional_values: SemanticExceptionalValueAttr::PreserveExactBits,
+    };
+    let actual = append_typed_symbol_root(context, &function, 7, float, ieee);
+    let reference = append_typed_symbol_root(context, &function, 8, float, ieee);
+    let domain =
+        append_typed_symbol_root(context, &function, 9, boolean, exact_bitvector_contract());
+    let precondition =
+        append_typed_symbol_root(context, &function, 10, boolean, exact_bitvector_contract());
+    append_numerical_contract(context, &function, actual, reference, domain, precondition);
+    let entry = function.get_entry_block(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let report = run_pliron_semantic_refinement_check_v1(context, &function);
+    assert_eq!(
+        report.status(),
+        fe2o3_kernel_analysis::KernelCheckStatusV1::Incomplete
+    );
+    assert!(matches!(
+        report.findings(),
+        [PlironSemanticRefinementFindingV1::NumericalProofIncomplete { actual, reference, .. }]
+            if actual != reference
+    ));
+    assert!(report.numerical_certificates().is_empty());
 }
 
 #[test]

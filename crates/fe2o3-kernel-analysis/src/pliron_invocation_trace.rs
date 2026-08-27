@@ -12,9 +12,10 @@ use dialect_gpu::{
     MemoryOrderAttr, MemoryScopeAttr,
 };
 use dialect_kernel::{
-    AccessKindAttr, BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp,
-    IndexEqualBranchArgsOp, IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp,
-    MemorySpaceAttr, RankedAccessOp, RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
+    AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, BranchArgsOp, BranchOp,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
+    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, MemorySpaceAttr, RankedAccessOp,
+    RankedViewOp, ReturnOp, TensorLayoutOp, TrapOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -51,7 +52,9 @@ pub(crate) enum PlironTraceEventV1 {
     Barrier {
         location: PlironTraceLocationV1,
         execution_scope: HierarchyAttr,
+        memory_scope: MemoryScopeAttr,
         address_space: AddressSpaceAttr,
+        order: MemoryOrderAttr,
     },
     Fence {
         location: PlironTraceLocationV1,
@@ -61,6 +64,8 @@ pub(crate) enum PlironTraceEventV1 {
     },
     TensorInstruction {
         location: PlironTraceLocationV1,
+        subgroup_width: u16,
+        claimed_active_lanes: u32,
     },
     Trap {
         location: PlironTraceLocationV1,
@@ -70,6 +75,8 @@ pub(crate) enum PlironTraceEventV1 {
         view: Value,
         memory_space: MemorySpaceAttr,
         access: AccessKindAttr,
+        atomic_ordering: Option<AtomicOrderingAttr>,
+        atomic_scope: Option<AtomicScopeAttr>,
         indices: Vec<Option<u64>>,
         allocation_origin: u64,
         noalias_class: u64,
@@ -362,25 +369,37 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                 }
                 let operation = Operation::get_op_dyn(operation, context);
                 if let Some(barrier) = operation.downcast_ref::<BarrierOp>() {
-                    let execution_scope = barrier.execution_scope(context).ok_or(
-                        PlironTraceFailureV1::UnsupportedTerminator { block: block_index },
-                    )?;
+                    let (
+                        Some(execution_scope),
+                        Some(memory_scope),
+                        Some(address_space),
+                        Some(order),
+                    ) = (
+                        barrier.execution_scope(context),
+                        barrier.memory_scope(context),
+                        barrier.address_space(context),
+                        barrier.order(context),
+                    )
+                    else {
+                        return Err(PlironTraceFailureV1::UnsupportedTerminator {
+                            block: block_index,
+                        });
+                    };
                     if execution_scope == HierarchyAttr::Grid {
                         return Err(PlironTraceFailureV1::UnsupportedGridSynchronization {
                             block: block_index,
                             operation: operation_index,
                         });
                     }
-                    let address_space = barrier.address_space(context).ok_or(
-                        PlironTraceFailureV1::UnsupportedTerminator { block: block_index },
-                    )?;
                     events.push(PlironTraceEventV1::Barrier {
                         location: PlironTraceLocationV1 {
                             block: block_index,
                             operation: operation_index,
                         },
                         execution_scope,
+                        memory_scope,
                         address_space,
+                        order,
                     });
                 } else if let Some(fence) = operation.downcast_ref::<FenceOp>() {
                     let (Some(memory_scope), Some(address_space), Some(order)) = (
@@ -401,12 +420,20 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                         address_space,
                         order,
                     });
-                } else if operation.downcast_ref::<TensorLayoutOp>().is_some() {
+                } else if let Some(tensor) = operation.downcast_ref::<TensorLayoutOp>() {
+                    let contract = tensor.contract(context).map_err(|_| {
+                        PlironTraceFailureV1::UnsupportedTerminator { block: block_index }
+                    })?;
+                    let claimed_active_lanes = tensor.active_lanes(context).ok_or(
+                        PlironTraceFailureV1::UnsupportedTerminator { block: block_index },
+                    )?;
                     events.push(PlironTraceEventV1::TensorInstruction {
                         location: PlironTraceLocationV1 {
                             block: block_index,
                             operation: operation_index,
                         },
+                        subgroup_width: contract.subgroup_width,
+                        claimed_active_lanes,
                     });
                 } else if let Some(access) = operation.downcast_ref::<RankedAccessOp>() {
                     let view = access.view(context);
@@ -459,6 +486,8 @@ pub(crate) fn trace_pliron_invocations_with_inputs_v1(
                         view,
                         memory_space,
                         access: access_kind,
+                        atomic_ordering: access.atomic_ordering(context),
+                        atomic_scope: access.atomic_scope(context),
                         indices,
                         allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
                         noalias_class: view_op.noalias_class(context).unwrap_or(0),

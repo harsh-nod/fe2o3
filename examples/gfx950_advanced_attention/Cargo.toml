@@ -1,0 +1,23 @@
+[package]
+name = "fe2o3-gfx950-advanced-attention"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/fe2o3-gpu/fe2o3"
+rust-version = "1.94"
+publish = false
+
+# This source-first teaching crate is intentionally standalone. Its ordinary
+# attributed Rust and CPU references do not claim compiler or GPU execution.
+[workspace]
+
+[dependencies]
+fe2o3-device = { path = "../../crates/fe2o3-device" }
+fe2o3-host = { path = "../../crates/fe2o3-host" }
+
+[dev-dependencies]
+syn = { version = "2", features = ["full"] }
+
+[lib]
+name = "fe2o3_gfx950_advanced_attention"
+path = "src/lib.rs"

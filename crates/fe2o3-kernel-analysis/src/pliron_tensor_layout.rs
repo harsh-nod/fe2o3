@@ -1650,6 +1650,7 @@ fn sparse_fact_is_subgroup_uniform(
                     })
         }
         SparseIndexFactV1::Unknown
+        | SparseIndexFactV1::MachineOverflow(_)
         | SparseIndexFactV1::CheckedTiled2D(_)
         | SparseIndexFactV1::CheckedRowStriped2D(_) => false,
     }
@@ -2303,7 +2304,7 @@ fn tensor_trace(trace: &PlironInvocationTraceV1) -> Vec<PlironTraceLocationV1> {
         .events
         .iter()
         .filter_map(|event| match event {
-            PlironTraceEventV1::TensorInstruction { location } => Some(*location),
+            PlironTraceEventV1::TensorInstruction { location, .. } => Some(*location),
             PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
             | PlironTraceEventV1::Trap { .. }

@@ -27,19 +27,29 @@ impl Gfx950MfmaFormat {
     }
 
     /// Number of i32 VGPR values required by the LLVM overload for one input.
+    ///
+    /// The gfx950 intrinsic ABI uses `<8 x i32>` for every supported format,
+    /// including FP4.
     pub const fn register_dwords(self) -> u32 {
+        8
+    }
+
+    /// Number of low dwords containing meaningful packed source values.
+    pub const fn meaningful_register_dwords(self) -> u32 {
         match self {
             Self::Fp8E4M3Ocp | Self::Fp8E5M2Ocp => 8,
             Self::Fp4E2M1Ocp => 4,
         }
     }
 
+    /// Number of high ABI dwords that must be zero before issuing the MFMA.
+    pub const fn required_zero_upper_dwords(self) -> u32 {
+        self.register_dwords() - self.meaningful_register_dwords()
+    }
+
     fn llvm_vector_type(self) -> &'static str {
-        match self.register_dwords() {
-            4 => "<4 x i32>",
-            8 => "<8 x i32>",
-            _ => unreachable!("closed gfx950 MFMA format set"),
-        }
+        let _ = self;
+        "<8 x i32>"
     }
 
     const fn mfma_family(self) -> MfmaFamily {
@@ -178,9 +188,11 @@ impl std::error::Error for Gfx950LoweringError {}
 ///
 /// Numeric SSA IDs keep the textual boundary injection-free. The caller owns
 /// the surrounding function and must bind each input to the format-dependent
-/// vector type (`<4 x i32>` for FP4 or `<8 x i32>` for FP8/BF8), followed by
-/// one `<4 x float>` accumulator. Scale operands are fixed to the reviewed
-/// identity value; the format immediates select FP8/BF8/FP4.
+/// `<8 x i32>` vector type, followed by one `<4 x float>` accumulator. For FP4,
+/// only dwords zero through three carry packed values and the caller must prove
+/// that dwords four through seven are zero. Scale operands are fixed to the
+/// reviewed identity value; the format immediates select FP8/BF8/FP4. This
+/// detached textual emitter does not establish the required SSA provenance.
 pub fn lower_gfx950_scaled_mfma_to_llvm_ir(
     target: AmdTargetId,
     operation: Gfx950ScaledMfma,

@@ -3,9 +3,12 @@ use std::{fs, path::Path};
 use dialect_kernel::{AtomicScopeAttr, DIALECT_NAME, MemorySpaceAttr, register_dialect};
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
-    PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1,
+    PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1, PlironHostAllocationV1,
+    PlironLaunchContractV1, PlironLaunchTargetLimitsV1,
     require_production_pliron_checks_before_lowering_v2,
+    require_production_pliron_checks_with_atomic_and_target_before_lowering_v2,
     require_production_pliron_checks_with_atomic_target_before_lowering_v2,
+    require_production_pliron_checks_with_target_before_lowering_v2,
 };
 use pliron::{
     builtin::ops::FuncOp,
@@ -147,11 +150,22 @@ fn run_fixture(path: &Path) {
     let atomic_target = (!capabilities.is_empty()).then(|| {
         PlironAtomicTargetContextV1::new(capabilities).expect("valid bounded atomic target context")
     });
-    let result = match atomic_target.as_ref() {
-        Some(target) => require_production_pliron_checks_with_atomic_target_before_lowering_v2(
+    let target_contract = parse_target_contract(&source);
+    let result = match (atomic_target.as_ref(), target_contract.as_ref()) {
+        (Some(atomic), Some(target)) => {
+            require_production_pliron_checks_with_atomic_and_target_before_lowering_v2(
+                &context, &function, atomic, target,
+            )
+        }
+        (Some(target), None) => {
+            require_production_pliron_checks_with_atomic_target_before_lowering_v2(
+                &context, &function, target,
+            )
+        }
+        (None, Some(target)) => require_production_pliron_checks_with_target_before_lowering_v2(
             &context, &function, target,
         ),
-        None => require_production_pliron_checks_before_lowering_v2(&context, &function),
+        (None, None) => require_production_pliron_checks_before_lowering_v2(&context, &function),
     };
     let output = match result {
         Ok(report) => {
@@ -188,6 +202,55 @@ fn run_fixture(path: &Path) {
             path.display()
         );
     }
+}
+
+fn parse_target_contract(source: &str) -> Option<PlironLaunchContractV1> {
+    let target = source
+        .lines()
+        .find_map(|line| line.strip_prefix("// TARGET: "))?;
+    let fields = target.split_ascii_whitespace().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 7, "malformed TARGET directive");
+    let triple = |field: &str, name: &str| {
+        let values = field
+            .strip_prefix(name)
+            .unwrap()
+            .split(',')
+            .map(|value| value.parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 3);
+        [values[0], values[1], values[2]]
+    };
+    let scalar =
+        |field: &str, name: &str| field.strip_prefix(name).unwrap().parse::<u64>().unwrap();
+    let subgroups = fields[3]
+        .strip_prefix("subgroups=")
+        .unwrap()
+        .split(',')
+        .map(|value| value.parse::<u64>().unwrap())
+        .collect();
+    let limits = PlironLaunchTargetLimitsV1::new(
+        triple(fields[0], "grid="),
+        triple(fields[1], "workgroup="),
+        scalar(fields[2], "invocations="),
+        subgroups,
+        scalar(fields[4], "lds="),
+        scalar(fields[5], "alignment="),
+        scalar(fields[6], "allocations=") as usize,
+    )
+    .unwrap();
+    let allocations = source
+        .lines()
+        .filter_map(|line| line.strip_prefix("// HOST-ALLOCATION: "))
+        .map(|line| {
+            let values = line
+                .split_ascii_whitespace()
+                .map(|value| value.parse::<u64>().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(values.len(), 3);
+            PlironHostAllocationV1::new(values[0], values[1], values[2]).unwrap()
+        })
+        .collect();
+    Some(PlironLaunchContractV1::new(limits, allocations).unwrap())
 }
 
 #[test]

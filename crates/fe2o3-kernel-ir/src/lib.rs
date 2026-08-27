@@ -34,6 +34,7 @@ mod flash_attention_v1;
 mod formal_memory_obligations;
 mod general_gemm_kir_v1;
 mod integer_semantic_oracle_v1;
+mod interprocedural_effects;
 mod ir;
 #[allow(dead_code)]
 #[path = "launch_kernel_v2.rs"]
@@ -66,6 +67,12 @@ pub use flash_attention_v1::*;
 pub use formal_memory_obligations::*;
 pub use general_gemm_kir_v1::*;
 pub use integer_semantic_oracle_v1::*;
+pub use interprocedural_effects::{
+    InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,
+    InterproceduralEffectIncompleteReasonV1, MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1,
+    MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, analyze_interprocedural_effects_from_verified_v1,
+    analyze_interprocedural_effects_v1,
+};
 pub use ir::*;
 #[doc(hidden)]
 pub use launch_kernel_contract_v2::{
