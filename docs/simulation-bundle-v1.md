@@ -17,7 +17,9 @@ The command requires the repository's pinned nightly toolchain, its `rust-src`
 component, and the AMDGPU Rust target. `--crate` is rustc's crate name, which
 normally replaces package-name hyphens with underscores. Arguments after `--`
 are Cargo package, feature, or target-kind selection; `--target` and
-`--target-dir` are owned by the exporter and rejected there.
+`--target-dir` are owned by the exporter and rejected there. Cargo `--config`,
+`--release`, and `--profile` overrides are also rejected so they cannot replace
+the fixed semantic extraction profile.
 
 The command invokes Cargo `check` with `fe2o3-rustc-extract` as the workspace
 wrapper. Dependencies pass through. The selected primary crate enters
@@ -31,6 +33,13 @@ admitted rustc collection
   -> exact verified KIR V7 projection
   -> simulation bundle
 ```
+
+The exporter owns a semantic extraction Rust flag profile. It preserves the
+selected crate's pre-inlining MIR owner and disables jump threading; forced MIR
+inlining is explicitly disabled because it can replace the source-level proof
+structure before the semantic importer runs. Optimization level zero, target
+CPU, and wave width remain fixed independently of the caller's Cargo profile,
+configuration, Rust flags, or wrapper environment.
 
 There is no second MIR importer or KIR lowerer. Extraction consumes the
 transaction immediately after target-neutral KIR verification, before formal

@@ -862,7 +862,9 @@ for production_step in \
   rocm-production-general-matrix \
   rocm-production-transaction \
   rocm-production-ranked-bounds \
-  rocm-production-barrier-cfg; do
+  rocm-production-barrier-cfg \
+  rocm-production-simulation-bundle-gfx942 \
+  rocm-production-simulation-bundle-gfx950; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
   if [[ " $(step_command "${production_step}") " == *" --features "* ]]; then

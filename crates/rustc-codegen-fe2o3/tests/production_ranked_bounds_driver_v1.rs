@@ -181,19 +181,10 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
 fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle() {
     let target = ScratchTarget::new();
     let bundle_path = target.path().join("copy-static.fe2sim");
-    let mut command = base_command("check", target.path());
-    command
-        .env(
-            "RUSTC_WORKSPACE_WRAPPER",
-            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
-        )
-        .env(
-            "FE2O3_EXTRACT_CRATE_V1",
-            "fe2o3_production_ranked_bounds_fixture",
-        )
-        .env("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1", &bundle_path)
-        .args(["--features", "barrier_before_access"]);
-    let result = output(command, "run production simulation-bundle extraction");
+    let result = output(
+        simulation_export_command("gfx942", &bundle_path, target.path()),
+        "run production simulation-bundle extraction",
+    );
 
     assert!(
         result.status.success(),
@@ -485,6 +476,33 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
     }));
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_kernel_source_exports_the_exact_gfx950_simulation_target() {
+    let target = ScratchTarget::new();
+    let bundle_path = target.path().join("gfx950.fe2sim");
+    let result = output(
+        simulation_export_command("gfx950", &bundle_path, target.path()),
+        "run gfx950 production simulation-bundle extraction",
+    );
+
+    assert!(
+        result.status.success() && result.stderr.contains("target gfx950:xnack-"),
+        "gfx950 ordinary source simulation-bundle extraction failed:\n{}",
+        result.stderr,
+    );
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(
+        std::fs::read(&bundle_path).expect("read gfx950 simulation bundle"),
+    )
+    .expect("decode compiler-produced gfx950 simulation bundle");
+    assert_eq!(bundle.target(), "gfx950:xnack-");
+    assert_eq!(bundle.kernel_count(), 1);
+    assert!(bundle.debug_map().is_some());
+    assert!(!bundle.authenticates_compiler_execution());
+    assert!(!bundle.grants_hardware_authority());
+    assert!(!bundle.grants_launch_authority());
+}
+
 struct ExtractionOutput {
     status: std::process::ExitStatus,
     stderr: String,
@@ -522,6 +540,45 @@ fn run_feature_extraction(target: &ScratchTarget, feature: &str) -> ExtractionOu
         )
         .args(["--features", feature]);
     output(command, "run safe mapped AMD extraction fixture")
+}
+
+fn simulation_export_command(target: &str, output: &Path, target_dir: &Path) -> Command {
+    const POISONED_WRAPPER: &str = "/fe2o3-poisoned-caller-wrapper-must-not-run";
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fe2o3-export-sim"));
+    command
+        .current_dir(workspace())
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS")
+        .env("RUSTC_WRAPPER", POISONED_WRAPPER)
+        .env("CARGO_BUILD_RUSTC_WRAPPER", POISONED_WRAPPER)
+        .env("RUSTC_WORKSPACE_WRAPPER", POISONED_WRAPPER)
+        .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", POISONED_WRAPPER)
+        .env_remove("FE2O3_EXTRACT_CRATE_V1")
+        .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1")
+        .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
+        .env_remove("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1")
+        .env_remove("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1")
+        .env_remove("FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1")
+        .env_remove("FE2O3_EXTRACT_CRATE_BINDING_PATH_V1")
+        .arg("--crate")
+        .arg("fe2o3_production_ranked_bounds_fixture")
+        .arg("--output")
+        .arg(output)
+        .arg("--target")
+        .arg(target)
+        .arg("--target-dir")
+        .arg(target_dir)
+        .args([
+            "--",
+            "--package",
+            "fe2o3-production-ranked-bounds-fixture",
+            "--features",
+            "barrier_before_access",
+            "--lib",
+        ]);
+    command
 }
 
 fn base_command(action: &str, target_dir: &Path) -> Command {

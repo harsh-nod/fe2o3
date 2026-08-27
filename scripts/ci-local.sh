@@ -1017,6 +1017,18 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         production_barrier_cfg_preserves_order_and_fails_closed -- \
         --ignored --exact
+  run_step rocm-production-simulation-bundle-gfx942 \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-gfx950 \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_kernel_source_exports_the_exact_gfx950_simulation_target -- \
+        --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \

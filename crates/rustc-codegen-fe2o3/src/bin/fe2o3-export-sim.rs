@@ -4,11 +4,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-const TARGET_TRIPLE: &str = "amdgcn-amd-amdhsa";
+use fe2o3_amd_target::ProductionAmdTargetProfileV1;
+
 const OUTPUT_ENV: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
 const CRATE_ENV: &str = "FE2O3_EXTRACT_CRATE_V1";
-const TARGET_RUSTFLAGS_ENV: &str = "CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS";
-const FIXED_GENERATION: &str = "0123456789abcdef0123456789abcdef";
 const MAX_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 
 fn main() -> ExitCode {
@@ -31,7 +30,7 @@ struct Options {
     crate_name: String,
     output: PathBuf,
     target_dir: PathBuf,
-    target_cpu: &'static str,
+    target_profile: ProductionAmdTargetProfileV1,
     cargo_args: Vec<OsString>,
 }
 
@@ -39,7 +38,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
     let mut crate_name = None;
     let mut output = None;
     let mut target_dir = None;
-    let mut target_cpu = "gfx942";
+    let mut target_profile = ProductionAmdTargetProfileV1::Gfx942;
     let mut cargo_args = Vec::new();
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -75,11 +74,8 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
                 let value = value
                     .to_str()
                     .ok_or_else(|| "--target must be valid UTF-8".to_owned())?;
-                target_cpu = match value {
-                    "gfx942" => "gfx942",
-                    "gfx950" => "gfx950",
-                    _ => return Err("--target must be exactly gfx942 or gfx950".to_owned()),
-                };
+                target_profile = ProductionAmdTargetProfileV1::from_cpu(value)
+                    .ok_or_else(|| "--target must be exactly gfx942 or gfx950".to_owned())?;
             }
             "--target-dir" => {
                 if target_dir.replace(PathBuf::from(value)).is_some() {
@@ -122,7 +118,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         crate_name,
         output,
         target_dir,
-        target_cpu,
+        target_profile,
         cargo_args,
     })
 }
@@ -151,9 +147,16 @@ fn reject_cargo_override_args(args: &[OsString]) -> Result<(), String> {
             || argument.starts_with("--target=")
             || argument == "--target-dir"
             || argument.starts_with("--target-dir=")
+            || argument == "--config"
+            || argument.starts_with("--config=")
+            || argument == "--release"
+            || argument.starts_with("--release=")
+            || argument == "-r"
+            || argument == "--profile"
+            || argument.starts_with("--profile=")
         {
             return Err(format!(
-                "Cargo argument {argument:?} conflicts with the fixed extraction target"
+                "Cargo argument {argument:?} conflicts with the fixed extraction target or semantic profile"
             ));
         }
     }
@@ -193,19 +196,22 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .arg("--locked")
         .arg("-Zbuild-std=core")
         .arg("--target")
-        .arg(TARGET_TRIPLE)
+        .arg(options.target_profile.rustc_target())
         .arg("--target-dir")
         .arg(&options.target_dir)
         .args(&options.cargo_args)
+        .env("RUSTC_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .env("RUSTC_WORKSPACE_WRAPPER", &wrapper)
+        .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &wrapper)
         .env("LD_LIBRARY_PATH", loader_path)
         .env(CRATE_ENV, &options.crate_name)
         .env(OUTPUT_ENV, &options.output)
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env(
-            TARGET_RUSTFLAGS_ENV,
-            fixed_target_rustflags(options.target_cpu),
+            options.target_profile.cargo_rustflags_env(),
+            fixed_target_rustflags(options.target_profile),
         );
     for name in conflicting_extraction_environment() {
         command.env_remove(name);
@@ -291,9 +297,11 @@ const fn conflicting_extraction_environment() -> [&'static str; 5] {
     ]
 }
 
-fn fixed_target_rustflags(cpu: &str) -> String {
+fn fixed_target_rustflags(target: ProductionAmdTargetProfileV1) -> String {
     format!(
-        "-Zalways-encode-mir -Zinline-mir=yes -Zinline-mir-hint-threshold=1000 -Zmir-enable-passes=-JumpThreading --cfg fe2o3_codegen_generation=\"{FIXED_GENERATION}\" -Copt-level=2 -Ctarget-cpu={cpu} -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32"
+        "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu={} -Ctarget-feature={}",
+        target.cpu(),
+        target.rustc_features(),
     )
 }
 
@@ -339,7 +347,7 @@ mod tests {
         .unwrap();
         assert_eq!(options.output, root.join(output_name));
         assert_eq!(options.target_dir, root.join("scratch"));
-        assert_eq!(options.target_cpu, "gfx950");
+        assert_eq!(options.target_profile, ProductionAmdTargetProfileV1::Gfx950);
         assert_eq!(options.cargo_args.len(), 4);
     }
 
@@ -349,6 +357,27 @@ mod tests {
         assert!(validate_crate_name("kernel_crate").is_ok());
         assert!(reject_cargo_override_args(&[OsString::from("--target=gfx942")]).is_err());
         assert!(reject_cargo_override_args(&[OsString::from("--features=x")]).is_ok());
-        assert!(fixed_target_rustflags("gfx942").contains("-Ctarget-cpu=gfx942"));
+        for arguments in [
+            vec![
+                OsString::from("--config"),
+                OsString::from("net.offline=true"),
+            ],
+            vec![OsString::from("--config=net.offline=true")],
+            vec![OsString::from("--release")],
+            vec![OsString::from("--release=true")],
+            vec![OsString::from("-r")],
+            vec![OsString::from("--profile"), OsString::from("bench")],
+            vec![OsString::from("--profile=bench")],
+        ] {
+            assert!(reject_cargo_override_args(&arguments).is_err());
+        }
+        assert_eq!(
+            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx942),
+            "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack"
+        );
+        assert_eq!(
+            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx950),
+            "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx950 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack"
+        );
     }
 }
