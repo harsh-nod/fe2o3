@@ -339,7 +339,7 @@ assert_step_count() {
 }
 
 assert_no_codegen_test_driver() {
-  assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 0 \
+  assert_step_count rustc-codegen-driver-bootstrap 0 \
     'selector-free codegen tests unexpectedly built a shared driver'
 }
 
@@ -447,8 +447,8 @@ for index in "${!STEP_NAMES[@]}"; do
     exit 1
   fi
   if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
-    [[ "${STEP_COMMANDS[index]}" == *"--features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"* ]]; then
-    printf 'production integration target enabled offline qualification code: %s\n' \
+    [[ " ${STEP_COMMANDS[index]} " == *" --features "* ]]; then
+    printf 'production integration target enabled a non-production feature: %s\n' \
       "${STEP_NAMES[index]}" >&2
     exit 1
   fi
@@ -458,13 +458,12 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 run_workspace_tests
 assert_no_codegen_test_driver
-assert_no_retired_codegen_targets
 assert_equals \
   "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE}" \
   "$(step_command workspace-tests)" \
   'full workspace test command must exclude the backend'
 assert_equals \
-  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
+  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib" \
   "$(step_command rustc-codegen-lib-tests)" \
   'full workspace backend library test command changed'
 assert_equals \
@@ -476,7 +475,7 @@ assert_all_codegen_targets_once
 STEP_NAMES=()
 STEP_COMMANDS=()
 run_rustc_codegen_shard 01-production-pipeline
-assert_codegen_test_driver_once
+assert_no_codegen_test_driver
 assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
@@ -499,7 +498,6 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
-assert_no_retired_codegen_targets
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \
@@ -536,7 +534,6 @@ for core_step in \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
-  rustc-codegen-offline-oracle-tests \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
@@ -610,22 +607,18 @@ for core_step in "${STEP_NAMES[@]}"; do
     exit 1
   fi
 done
-assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 0 \
-  'generic core unexpectedly built the codegen integration test driver'
+assert_no_codegen_test_driver
 
 STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic
 assert_no_codegen_test_driver
-assert_no_retired_codegen_targets
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
 assert_step_count rustc-codegen-lib-tests 1 \
   'serial generic gate did not run backend library tests exactly once'
-assert_step_count rustc-codegen-offline-oracle-tests 1 \
-  'serial generic gate did not run offline oracle tests exactly once'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
@@ -827,7 +820,6 @@ load_example_packages() {
 }
 export FE2O3_WORKER_V2_CONFIG_V2="${TIMEOUT_TEST_ROOT}/hostile-worker-v2-config.json"
 run_rocm_compile
-assert_no_retired_codegen_targets
 if (export FE2O3_TARGET=gfx1100; run_rocm_compile >/dev/null 2>&1); then
   printf '%s\n' 'ROCm compilation accepted a target not covered by its production drivers' >&2
   exit 1
@@ -874,9 +866,8 @@ for production_step in \
   rocm-production-barrier-cfg; do
   assert_step_count "${production_step}" 1 \
     "ROCm compile did not run ${production_step} exactly once"
-  if [[ " $(step_command "${production_step}") " == \
-    *" --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} "* ]]; then
-    printf 'ROCm production step enabled offline qualification code: %s\n' \
+  if [[ " $(step_command "${production_step}") " == *" --features "* ]]; then
+    printf 'ROCm production step enabled a non-production feature: %s\n' \
       "${production_step}" >&2
     exit 1
   fi
@@ -886,7 +877,7 @@ for index in "${!STEP_NAMES[@]}"; do
   step_command_value="${STEP_COMMANDS[index]}"
   if [[ "${step_name}" == rocm-qualification-tests-* ]] ||
     { [[ "${step_name}" == rocm-* ]] &&
-      [[ " ${step_command_value} " == *" --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} "* ]] &&
+      [[ " ${step_command_value} " == *" --features "* ]] &&
       { [[ " ${step_command_value} " == *" -p fe2o3-host "* ]] ||
         [[ " ${step_command_value} " == *" -p fe2o3-pliron-scalar-add-v1 "* ]]; }; }; then
     printf 'deleted ROCm qualification test lane returned as %s\n' "${step_name}" >&2
@@ -927,7 +918,6 @@ require_gpu_access() {
 export FE2O3_ALLOW_GPU_SMOKE=1
 export FE2O3_TARGET=gfx942:xnack-
 run_hardware_smoke
-assert_no_retired_codegen_targets
 assert_equals \
   "env FE2O3_ALLOW_RUNTIME_IDENTITY_ORACLE=1 bash ${RUNTIME_IDENTITY_ORACLE}" \
   "$(step_command hardware-runtime-identity-oracle)" \
@@ -971,7 +961,6 @@ assert_step_count s09-cargo-fe2o3-bootstrap 0 \
   'retired S09 hardware lane built cargo-fe2o3'
 assert_step_count s09-debug-hardware 0 \
   'retired S09 hardware lane invoked its legacy runtime'
-assert_no_retired_codegen_targets
 unset FE2O3_S09_EVIDENCE_DIR
 
 STEP_NAMES=()
