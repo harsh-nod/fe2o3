@@ -25,8 +25,9 @@ use fe2o3_kernel_ir::{
     SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY, SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY,
     SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, TargetCapability, WaveWidth, WorkgroupSize,
 };
+use fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdentityV1;
 use reserved_fe2o3_symbols::{KernelBindingIdV1, MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{TyCtxt, TyKind, TypingEnv};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -74,6 +75,7 @@ struct TypedDescriptorArgumentV1 {
     access: AccessMode,
     offset: u32,
     layout: RustLayoutEvidenceV1,
+    semantic_type_identity: SemanticTypeIdentityV1,
 }
 
 /// Re-derives the complete generic typed evidence directly from rustc and the
@@ -117,6 +119,29 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                     })?;
                     let contract = extract_general_typed_kernel_v3(tcx, function.instance, &launch)
                         .map_err(CompilerDescriptorError::GeneralRustLayout)?;
+                    let instance_ty = function.instance.ty(tcx, TypingEnv::fully_monomorphized());
+                    let (signature_def_id, signature_args) = match *instance_ty.kind() {
+                        TyKind::FnDef(def_id, args) if def_id == function.instance.def_id() => {
+                            (def_id, args)
+                        }
+                        _ => {
+                            return Err(CompilerDescriptorError::InvalidArgumentCollection {
+                                kernel: function.export_name.clone(),
+                                reason: "typed descriptor lost its exact rustc function signature"
+                                    .to_owned(),
+                            });
+                        }
+                    };
+                    let signature = tcx.instantiate_bound_regions_with_erased(
+                        tcx.fn_sig(signature_def_id)
+                            .instantiate(tcx, signature_args),
+                    );
+                    if signature.inputs().len() != contract.arguments().len() {
+                        return Err(CompilerDescriptorError::InvalidArgumentCollection {
+                            kernel: function.export_name.clone(),
+                            reason: "typed descriptor argument/signature arity changed".to_owned(),
+                        });
+                    }
                     let derived = derive_generated_host_contract_identity_v1(
                         MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
                         kernel_binding.as_bytes(),
@@ -134,8 +159,9 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                         .arguments()
                         .iter()
                         .zip(contract.abi().fields())
+                        .zip(signature.inputs().iter().copied())
                         .enumerate()
-                        .map(|(index, (argument, field))| {
+                        .map(|(index, ((argument, field), source_ty))| {
                             Ok(TypedDescriptorArgumentV1 {
                                 name: field.name().as_str().to_owned(),
                                 kind: descriptor_argument_kind(argument.kind()),
@@ -156,6 +182,10 @@ pub(crate) fn typed_descriptor_roots_from_production_collection<'tcx>(
                                     }
                                 })?,
                                 layout: argument.layout().clone(),
+                                semantic_type_identity:
+                                    crate::rustc_semantic_adapter_v1::rustc_type_identity_v1(
+                                        tcx, source_ty,
+                                    ),
                             })
                         })
                         .collect::<Result<Vec<_>, CompilerDescriptorError>>()?;
@@ -602,6 +632,18 @@ fn production_descriptor_argument_matches_kernel_type_v1(
     }
 }
 
+fn require_production_descriptor_argument_semantic_type_v1(
+    descriptor: &TypedDescriptorArgumentV1,
+    semantic_identity: SemanticTypeIdentityV1,
+) -> Result<(), CompilerDescriptorError> {
+    if descriptor.semantic_type_identity != semantic_identity {
+        return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+            "rustc semantic argument type identity",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_production_v1_semantic_ownership_evidence(
     typed_roots: &[TypedDescriptorRootV1],
     semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
@@ -669,6 +711,10 @@ pub(crate) fn validate_production_v1_semantic_ownership_evidence(
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner
             }
         };
+        require_production_descriptor_argument_semantic_type_v1(
+            argument,
+            semantic_type.identity(),
+        )?;
         let exact_abi_mode = matches!(
             (argument.layout.abi_class(), semantic_abi.mode()),
             (RustcAbiClassV1::Scalar, SemanticAbiPassModeV1::Direct(_))
@@ -1407,6 +1453,9 @@ mod tests {
                     },
                     offset: u32::try_from(index * 16).unwrap(),
                     layout,
+                    semantic_type_identity: SemanticTypeIdentityV1::from_sha256(
+                        [u8::try_from(index).unwrap(); 32],
+                    ),
                 }
             })
             .collect::<Vec<_>>();
@@ -1492,6 +1541,9 @@ mod tests {
             access,
             offset,
             layout,
+            semantic_type_identity: SemanticTypeIdentityV1::from_sha256(
+                [u8::try_from(index).unwrap(); 32],
+            ),
         }
     }
 
@@ -2155,6 +2207,52 @@ mod tests {
         assert_ne!(
             first.table().kernels()[0].executable_ir_evidence(),
             second.table().kernels()[0].executable_ir_evidence()
+        );
+    }
+
+    #[test]
+    fn semantic_type_identity_substitution_fails_with_identical_abi_evidence() {
+        let exact = descriptor_argument(
+            0,
+            DescriptorArgumentKindV1::DisjointSlice(ScalarTypeV1::F32),
+            0,
+        );
+        let expected = exact.semantic_type_identity;
+        require_production_descriptor_argument_semantic_type_v1(&exact, expected).unwrap();
+
+        let mut substituted = exact.clone();
+        substituted.semantic_type_identity = SemanticTypeIdentityV1::from_sha256([0xfe; 32]);
+        assert_eq!(substituted.name, exact.name);
+        assert_eq!(substituted.kind, exact.kind);
+        assert_eq!(substituted.access, exact.access);
+        assert_eq!(substituted.offset, exact.offset);
+        assert_eq!(substituted.layout, exact.layout);
+        assert!(matches!(
+            require_production_descriptor_argument_semantic_type_v1(&substituted, expected),
+            Err(CompilerDescriptorError::ProductionDescriptorMismatch(
+                "rustc semantic argument type identity"
+            ))
+        ));
+    }
+
+    #[test]
+    fn semantic_type_identity_is_bound_to_argument_order() {
+        let first = descriptor_argument(0, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::U32), 0);
+        let second = descriptor_argument(1, DescriptorArgumentKindV1::Scalar(ScalarTypeV1::U32), 4);
+
+        assert!(
+            require_production_descriptor_argument_semantic_type_v1(
+                &first,
+                second.semantic_type_identity,
+            )
+            .is_err()
+        );
+        assert!(
+            require_production_descriptor_argument_semantic_type_v1(
+                &second,
+                first.semantic_type_identity,
+            )
+            .is_err()
         );
     }
 }
