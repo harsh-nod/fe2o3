@@ -67,6 +67,7 @@ const MAX_PROJECTED_CAPABILITY_DATAFLOW_WORK_V1: usize = MAX_RANKED_BOUNDS_OPERA
 const MAX_PROJECTED_CAPABILITY_ENUM_DEPTH_V1: usize = 8;
 const MAX_PROJECTED_LOOP_GRAPH_WORK_V1: usize =
     MAX_RANKED_BOUNDS_BLOCKS * (MAX_RANKED_BOUNDS_BLOCKS + MAX_RANKED_BOUNDS_EDGES);
+const MAX_PURE_UNIFORM_INDEX_NODES_V1: usize = 64;
 const PRIVATE_ALLOCATION_ORIGIN_TAG_V1: u64 = 1_u64 << 63;
 const TENSOR_CAPABILITY_ROOT_DOMAIN_V1: &[u8] = b"FE2O3/TENSOR-CAPABILITY-ROOT/V1\0";
 
@@ -5727,6 +5728,7 @@ fn project_uniform_inductions_v1(
     next_value: &mut u32,
 ) -> Result<Vec<ProjectedUniformInductionV1>, ProductionRankedProjectionErrorV1> {
     let graph = projected_loop_cfg_graph_v1(function)?;
+    let address_escaped = assertion_definition_inventory(function)?.address_escaped;
     let mut graph_work = 0_usize;
     let mut inductions = Vec::new();
     for (header, block) in function.blocks().iter().enumerate() {
@@ -5884,12 +5886,16 @@ fn project_uniform_inductions_v1(
                 "a uniform induction with a lane-varying initial value",
             ));
         };
-        let Some(bound) = project_uniform_switch_operand_v1(
-            bound_operand,
-            constants,
-            stable_argument_origins,
-            local_definitions,
+        let Some(bound) = project_pure_uniform_index_operand_v1(
+            types,
             function,
+            constants,
+            local_definitions,
+            &address_escaped,
+            &graph,
+            header,
+            comparison_index,
+            bound_operand,
             arguments,
             next_argument,
             operations,
@@ -5897,7 +5903,7 @@ fn project_uniform_inductions_v1(
         )?
         else {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a uniform induction with a lane-varying bound",
+                "a uniform induction bound is not an exact total unsigned index expression",
             ));
         };
         let Some(step) = project_uniform_switch_operand_v1(
@@ -7148,6 +7154,464 @@ fn project_natural_loop_topology_v1(
         latch,
         loop_blocks,
     }))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PureUniformIndexValueV1 {
+    ranked: ProductionRankedValueV1,
+    maximum: u64,
+    exact: Option<u64>,
+}
+
+// Reconstruct only exact unsigned expressions rooted in constants or kernel arguments.
+// Keeping this separate from the general scalar projector prevents lane-derived values,
+// opaque joins, calls, and operations without a checked total range from proving progress.
+struct PureUniformIndexProjectorV1<'a> {
+    types: &'a [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &'a SemanticFunctionDeclV1,
+    constants: &'a [Option<u64>],
+    local_definitions: &'a [u8],
+    address_escaped: &'a [bool],
+    graph: &'a ProjectedLoopCfgV1,
+    argument_slots: &'a mut [Option<u32>],
+    next_argument: &'a mut usize,
+    operations: &'a mut Vec<ProductionRankedOperationV1>,
+    next_value: &'a mut u32,
+    definitions: Vec<Option<(usize, usize)>>,
+    states: Vec<u8>,
+    summaries: Vec<Option<PureUniformIndexValueV1>>,
+    node_work: usize,
+    graph_work: usize,
+}
+
+impl<'a> PureUniformIndexProjectorV1<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        types: &'a [fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+        function: &'a SemanticFunctionDeclV1,
+        constants: &'a [Option<u64>],
+        local_definitions: &'a [u8],
+        address_escaped: &'a [bool],
+        graph: &'a ProjectedLoopCfgV1,
+        argument_slots: &'a mut [Option<u32>],
+        next_argument: &'a mut usize,
+        operations: &'a mut Vec<ProductionRankedOperationV1>,
+        next_value: &'a mut u32,
+    ) -> Result<Self, ProductionRankedProjectionErrorV1> {
+        let local_count = function.locals().len();
+        if constants.len() != local_count
+            || local_definitions.len() != local_count
+            || address_escaped.len() != local_count
+            || argument_slots.len() != local_count
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "pure uniform index tables do not match the semantic local table",
+            ));
+        }
+        let mut definitions = vec![None; local_count];
+        for (block, semantic_block) in function.blocks().iter().enumerate() {
+            for (statement, semantic_statement) in semantic_block.statements().iter().enumerate() {
+                let SemanticStatementKindV1::Assign(assignment) = semantic_statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty() {
+                    continue;
+                }
+                let local = assignment.destination().local().index() as usize;
+                let Some(slot) = definitions.get_mut(local) else {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a pure uniform index definition is outside the semantic local table",
+                    ));
+                };
+                if slot.is_none() {
+                    *slot = Some((block, statement));
+                }
+            }
+        }
+        Ok(Self {
+            types,
+            function,
+            constants,
+            local_definitions,
+            address_escaped,
+            graph,
+            argument_slots,
+            next_argument,
+            operations,
+            next_value,
+            definitions,
+            states: vec![0; local_count],
+            summaries: vec![None; local_count],
+            node_work: 0,
+            graph_work: 0,
+        })
+    }
+
+    fn charge_node(&mut self) -> Result<(), ProductionRankedProjectionErrorV1> {
+        self.node_work =
+            self.node_work
+                .checked_add(1)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "pure uniform index work accounting overflowed",
+                ))?;
+        if self.node_work > MAX_PURE_UNIFORM_INDEX_NODES_V1 {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "pure uniform index expression exceeds its node limit",
+            ));
+        }
+        Ok(())
+    }
+
+    fn unsigned_maximum(&self, ty: SemanticTypeIdV1) -> Option<u64> {
+        let SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits,
+        }) = self.types.get(ty.index() as usize)?.shape()
+        else {
+            return None;
+        };
+        match *bits {
+            1..=63 => Some((1_u64 << *bits) - 1),
+            64 => Some(u64::MAX),
+            _ => None,
+        }
+    }
+
+    fn unsigned_bits(&self, ty: SemanticTypeIdV1) -> Option<u16> {
+        let SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            signed: false,
+            bits,
+        }) = self.types.get(ty.index() as usize)?.shape()
+        else {
+            return None;
+        };
+        (*bits <= 64).then_some(*bits)
+    }
+
+    fn constant(
+        &mut self,
+        value: u64,
+        maximum: u64,
+    ) -> Result<PureUniformIndexValueV1, ProductionRankedProjectionErrorV1> {
+        if value > maximum {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a pure uniform index constant exceeds its unsigned type",
+            ));
+        }
+        reserve_operation(self.operations)?;
+        let result = next_value_id(self.next_value)?;
+        self.operations
+            .push(ProductionRankedOperationV1::IndexConstant { result, value });
+        Ok(PureUniformIndexValueV1 {
+            ranked: ProductionRankedValueV1::Local(result),
+            maximum: value,
+            exact: Some(value),
+        })
+    }
+
+    fn argument(
+        &mut self,
+        origin: usize,
+        maximum: u64,
+    ) -> Result<PureUniformIndexValueV1, ProductionRankedProjectionErrorV1> {
+        let slot = self.argument_slots.get_mut(origin).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a pure uniform index argument is outside the semantic local table",
+            ),
+        )?;
+        let argument = match *slot {
+            Some(argument) => argument,
+            None => {
+                let argument = u32::try_from(*self.next_argument).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "too many pure uniform index arguments",
+                    )
+                })?;
+                *self.next_argument = self.next_argument.checked_add(1).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "pure uniform index argument count overflow",
+                    ),
+                )?;
+                *slot = Some(argument);
+                argument
+            }
+        };
+        Ok(PureUniformIndexValueV1 {
+            ranked: ProductionRankedValueV1::Argument(argument),
+            maximum,
+            exact: None,
+        })
+    }
+
+    fn resolve_operand(
+        &mut self,
+        operand: &SemanticOperandV1,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<Option<PureUniformIndexValueV1>, ProductionRankedProjectionErrorV1> {
+        self.charge_node()?;
+        match operand {
+            SemanticOperandV1::Constant(constant) => {
+                let Some(maximum) = self.unsigned_maximum(constant.ty()) else {
+                    return Ok(None);
+                };
+                let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+                    return Ok(None);
+                };
+                let Ok(value) = u64::try_from(value.bits()) else {
+                    return Ok(None);
+                };
+                self.constant(value, maximum).map(Some)
+            }
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => {
+                if !place.projections().is_empty() {
+                    return Ok(None);
+                }
+                self.resolve_local(place.local().index() as usize, use_block, use_statement)
+            }
+        }
+    }
+
+    fn resolve_local(
+        &mut self,
+        local: usize,
+        use_block: usize,
+        use_statement: usize,
+    ) -> Result<Option<PureUniformIndexValueV1>, ProductionRankedProjectionErrorV1> {
+        let Some(declaration) = self.function.locals().get(local) else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a pure uniform index local is outside the semantic local table",
+            ));
+        };
+        let Some(maximum) = self.unsigned_maximum(declaration.ty()) else {
+            return Ok(None);
+        };
+        if self.address_escaped.get(local).copied() != Some(false) {
+            return Ok(None);
+        }
+        if self.local_definitions.get(local).copied() == Some(0) {
+            return match declaration.role() {
+                SemanticLocalRoleV1::Argument(origin) => {
+                    self.argument(origin as usize, maximum).map(Some)
+                }
+                SemanticLocalRoleV1::Return | SemanticLocalRoleV1::Temporary => Ok(None),
+            };
+        }
+        if self.local_definitions.get(local).copied() != Some(1) {
+            return Ok(None);
+        }
+        let Some((definition_block, definition_statement)) = self.definitions[local] else {
+            return Ok(None);
+        };
+        if (definition_block == use_block && definition_statement >= use_statement)
+            || (definition_block != use_block
+                && !self.block_dominates(definition_block, use_block)?)
+        {
+            return Ok(None);
+        }
+        if let Some(value) = self.constants.get(local).copied().flatten() {
+            return self.constant(value, maximum).map(Some);
+        }
+        match self.states[local] {
+            2 => return Ok(self.summaries[local]),
+            1 => return Ok(None),
+            _ => {}
+        }
+        self.states[local] = 1;
+        let statement = self.function.blocks()[definition_block].statements()[definition_statement]
+            .kind()
+            .clone();
+        let SemanticStatementKindV1::Assign(assignment) = statement else {
+            unreachable!("indexed pure uniform assignment changed kind")
+        };
+        let result_type = assignment.value().result_type();
+        let value = assignment.value().kind().clone();
+        let summary =
+            self.resolve_rvalue(result_type, value, definition_block, definition_statement)?;
+        self.states[local] = 2;
+        self.summaries[local] = summary;
+        Ok(summary)
+    }
+
+    fn resolve_rvalue(
+        &mut self,
+        result_type: SemanticTypeIdV1,
+        value: SemanticRvalueKindV1,
+        block: usize,
+        statement: usize,
+    ) -> Result<Option<PureUniformIndexValueV1>, ProductionRankedProjectionErrorV1> {
+        let Some(result_maximum) = self.unsigned_maximum(result_type) else {
+            return Ok(None);
+        };
+        match value {
+            SemanticRvalueKindV1::Use(operand) => {
+                let value = self.resolve_operand(&operand, block, statement)?;
+                Ok(value.filter(|value| value.maximum <= result_maximum))
+            }
+            SemanticRvalueKindV1::Cast {
+                kind: SemanticCastKindV1::Integer,
+                operand,
+            } => {
+                let Some(source_bits) = self.unsigned_bits(operand.ty()) else {
+                    return Ok(None);
+                };
+                let Some(result_bits) = self.unsigned_bits(result_type) else {
+                    return Ok(None);
+                };
+                if source_bits > result_bits {
+                    return Ok(None);
+                }
+                let value = self.resolve_operand(&operand, block, statement)?;
+                Ok(value.filter(|value| value.maximum <= result_maximum))
+            }
+            SemanticRvalueKindV1::Binary {
+                operation,
+                left,
+                right,
+            } => {
+                let Some(kind) = deterministic_index_binary_kind_v1(operation) else {
+                    return Ok(None);
+                };
+                let Some(left) = self.resolve_operand(&left, block, statement)? else {
+                    return Ok(None);
+                };
+                let Some(right) = self.resolve_operand(&right, block, statement)? else {
+                    return Ok(None);
+                };
+                let (maximum, exact) = match kind {
+                    IndexBinaryKindAttr::Add => (
+                        left.maximum.checked_add(right.maximum),
+                        left.exact
+                            .zip(right.exact)
+                            .and_then(|(left, right)| left.checked_add(right)),
+                    ),
+                    IndexBinaryKindAttr::Multiply => (
+                        left.maximum.checked_mul(right.maximum),
+                        left.exact
+                            .zip(right.exact)
+                            .and_then(|(left, right)| left.checked_mul(right)),
+                    ),
+                    IndexBinaryKindAttr::Divide => {
+                        let Some(divisor) = right.exact.filter(|value| *value != 0) else {
+                            return Ok(None);
+                        };
+                        (
+                            Some(left.maximum / divisor),
+                            left.exact.map(|left| left / divisor),
+                        )
+                    }
+                    IndexBinaryKindAttr::Remainder => {
+                        let Some(divisor) = right.exact.filter(|value| *value != 0) else {
+                            return Ok(None);
+                        };
+                        (
+                            Some(left.maximum.min(divisor - 1)),
+                            left.exact.map(|left| left % divisor),
+                        )
+                    }
+                };
+                let Some(maximum) = maximum.filter(|maximum| *maximum <= result_maximum) else {
+                    return Ok(None);
+                };
+                reserve_operation(self.operations)?;
+                let result = next_value_id(self.next_value)?;
+                self.operations
+                    .push(ProductionRankedOperationV1::IndexBinary {
+                        result,
+                        kind,
+                        lhs: left.ranked,
+                        rhs: right.ranked,
+                    });
+                Ok(Some(PureUniformIndexValueV1 {
+                    ranked: ProductionRankedValueV1::Local(result),
+                    maximum,
+                    exact,
+                }))
+            }
+            SemanticRvalueKindV1::Cast { .. }
+            | SemanticRvalueKindV1::Unary { .. }
+            | SemanticRvalueKindV1::CheckedBinary(_)
+            | SemanticRvalueKindV1::UncheckedBinary(_)
+            | SemanticRvalueKindV1::Aggregate(_)
+            | SemanticRvalueKindV1::Borrow { .. }
+            | SemanticRvalueKindV1::AddressOf { .. }
+            | SemanticRvalueKindV1::Length(_)
+            | SemanticRvalueKindV1::Discriminant(_)
+            | SemanticRvalueKindV1::Load(_) => Ok(None),
+        }
+    }
+
+    fn block_dominates(
+        &mut self,
+        dominator: usize,
+        target: usize,
+    ) -> Result<bool, ProductionRankedProjectionErrorV1> {
+        if dominator >= self.graph.successors.len() || target >= self.graph.successors.len() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a pure uniform index dominance query is outside the semantic CFG",
+            ));
+        }
+        if dominator == self.graph.entry {
+            return Ok(true);
+        }
+        let mut visited = vec![false; self.graph.successors.len()];
+        let mut pending = vec![self.graph.entry];
+        visited[self.graph.entry] = true;
+        while let Some(block) = pending.pop() {
+            self.graph_work = self.graph_work.checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported(
+                    "pure uniform index dominance work overflowed",
+                ),
+            )?;
+            if self.graph_work > MAX_PROJECTED_LOOP_GRAPH_WORK_V1 {
+                return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                    "pure uniform index dominance exceeds its work limit",
+                ));
+            }
+            if block == target {
+                return Ok(false);
+            }
+            for successor in &self.graph.successors[block] {
+                if *successor != dominator && !visited[*successor] {
+                    visited[*successor] = true;
+                    pending.push(*successor);
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_pure_uniform_index_operand_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    constants: &[Option<u64>],
+    local_definitions: &[u8],
+    address_escaped: &[bool],
+    graph: &ProjectedLoopCfgV1,
+    use_block: usize,
+    use_statement: usize,
+    operand: &SemanticOperandV1,
+    arguments: &mut [Option<u32>],
+    next_argument: &mut usize,
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Option<ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    PureUniformIndexProjectorV1::new(
+        types,
+        function,
+        constants,
+        local_definitions,
+        address_escaped,
+        graph,
+        arguments,
+        next_argument,
+        operations,
+        next_value,
+    )?
+    .resolve_operand(operand, use_block, use_statement)
+    .map(|value| value.map(|value| value.ranked))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -17812,6 +18276,156 @@ mod tests {
         )
     }
 
+    fn derived_uniform_induction_bound_function(
+        widen_before_add: bool,
+        escape_argument: bool,
+    ) -> (SemanticFunctionDeclV1, Vec<SemanticTypeDeclV1>) {
+        let wide_type = if widen_before_add {
+            SemanticTypeIdV1::from_index(3)
+        } else {
+            SCALAR_TYPE
+        };
+        let wide_bytes = if widen_before_add { 8 } else { 4 };
+        let induction = SemanticLocalIdV1::from_index(1);
+        let predicate = SemanticLocalIdV1::from_index(2);
+        let bound = SemanticLocalIdV1::from_index(3);
+        let widened = SemanticLocalIdV1::from_index(4);
+        let numerator = SemanticLocalIdV1::from_index(5);
+        let argument = SemanticLocalIdV1::from_index(6);
+        let escaped_pointer = SemanticLocalIdV1::from_index(7);
+        let place = |local, ty| SemanticPlaceV1::new(local, vec![], ty).unwrap();
+        let operand = |local, ty| SemanticOperandV1::Copy(place(local, ty));
+        let wide_constant = |value| {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                wide_type,
+                SemanticConstantValueV1::Scalar(
+                    SemanticScalarValueV1::new(value, wide_bytes).unwrap(),
+                ),
+            ))
+        };
+        let assign = |destination, ty, value| {
+            statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                place(destination, ty),
+                SemanticRvalueV1::new(ty, value),
+            )))
+        };
+        let mut entry_statements = Vec::new();
+        if escape_argument {
+            entry_statements.push(assign(
+                escaped_pointer,
+                POINTER_TYPE,
+                SemanticRvalueKindV1::Borrow {
+                    kind: SemanticBorrowKindV1::Mutable,
+                    place: place(argument, SCALAR_TYPE),
+                },
+            ));
+        }
+        entry_statements.extend([
+            assign(
+                widened,
+                wide_type,
+                if widen_before_add {
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::Integer,
+                        operand: operand(argument, SCALAR_TYPE),
+                    }
+                } else {
+                    SemanticRvalueKindV1::Use(operand(argument, SCALAR_TYPE))
+                },
+            ),
+            assign(
+                numerator,
+                wide_type,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Add,
+                    left: operand(widened, wide_type),
+                    right: wide_constant(15),
+                },
+            ),
+            assign(
+                bound,
+                wide_type,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::Divide,
+                    left: operand(numerator, wide_type),
+                    right: wide_constant(16),
+                },
+            ),
+            assign(
+                induction,
+                wide_type,
+                SemanticRvalueKindV1::Use(wide_constant(0)),
+            ),
+        ]);
+        let function = projection_function_with_locals(
+            vec![
+                block(
+                    104,
+                    entry_statements,
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(
+                    105,
+                    vec![assign(
+                        predicate,
+                        SCALAR_TYPE,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::LessThan,
+                            left: operand(induction, wide_type),
+                            right: operand(bound, wide_type),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: operand(predicate, SCALAR_TYPE),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                cfg_edge(SemanticEdgeRoleV1::SwitchValue, 3),
+                            )],
+                            cfg_edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    106,
+                    vec![assign(
+                        induction,
+                        wide_type,
+                        SemanticRvalueKindV1::Binary {
+                            operation: SemanticBinaryOpV1::Add,
+                            left: operand(induction, wide_type),
+                            right: wide_constant(1),
+                        },
+                    )],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(107, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            vec![
+                local(104, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                local(105, wide_type, SemanticLocalRoleV1::Temporary),
+                local(106, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                local(107, wide_type, SemanticLocalRoleV1::Temporary),
+                local(108, wide_type, SemanticLocalRoleV1::Temporary),
+                local(109, wide_type, SemanticLocalRoleV1::Temporary),
+                local(110, SCALAR_TYPE, SemanticLocalRoleV1::Argument(0)),
+                local(111, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+            ],
+        );
+        let mut types = projection_types();
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(bytes(9)),
+            SemanticLayoutIdentityV1::from_sha256(bytes(9)),
+            SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 64,
+            }),
+        ));
+        (function, types)
+    }
+
     #[derive(Clone, Copy, Debug)]
     enum InductionCfgShape {
         Chain,
@@ -18152,6 +18766,20 @@ mod tests {
         ),
         ProductionRankedProjectionErrorV1,
     > {
+        project_test_inductions_with_types(function, &projection_types())
+    }
+
+    fn project_test_inductions_with_types(
+        function: &SemanticFunctionDeclV1,
+        types: &[SemanticTypeDeclV1],
+    ) -> Result<
+        (
+            Vec<ProjectedUniformInductionV1>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
         let constants = constant_locals(function);
         let origins = local_stable_argument_origins(function).unwrap();
         let definitions = local_definition_counts(function);
@@ -18160,7 +18788,7 @@ mod tests {
         let mut operations = Vec::new();
         let mut next_value = 0;
         let inductions = project_uniform_inductions_v1(
-            &projection_types(),
+            types,
             function,
             &constants,
             &origins,
@@ -18246,6 +18874,57 @@ mod tests {
             ProductionRankedTerminatorV1::BranchArgsAddAt { .. }
         ));
         ProductionRankedKernelV1::new("uniform_dynamic_loop", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn pure_argument_derived_induction_bound_remains_uniform() {
+        let (function, types) = derived_uniform_induction_bound_function(true, false);
+        let (inductions, operations, _) =
+            project_test_inductions_with_types(&function, &types).unwrap();
+        assert_eq!(inductions.len(), 1);
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::IndexBinary {
+                kind: IndexBinaryKindAttr::Add,
+                ..
+            }
+        )));
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::IndexBinary {
+                kind: IndexBinaryKindAttr::Divide,
+                ..
+            }
+        )));
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::DeterministicJoin { .. }
+                | ProductionRankedOperationV1::InvocationIndex { .. }
+                | ProductionRankedOperationV1::IndexUnknown { .. }
+        )));
+    }
+
+    #[test]
+    fn derived_induction_bound_that_can_wrap_its_source_type_fails_closed() {
+        let (function, types) = derived_uniform_induction_bound_function(false, false);
+        assert_incomplete(
+            project_test_inductions_with_types(&function, &types),
+            "a uniform induction bound is not an exact total unsigned index expression",
+        );
+    }
+
+    #[test]
+    fn address_escaped_induction_bound_dependency_fails_closed() {
+        let (function, types) = derived_uniform_induction_bound_function(true, true);
+        assert!(
+            assertion_definition_inventory(&function)
+                .unwrap()
+                .address_escaped[6]
+        );
+        assert_incomplete(
+            project_test_inductions_with_types(&function, &types),
+            "a uniform induction bound is not an exact total unsigned index expression",
+        );
     }
 
     #[test]
@@ -18677,7 +19356,7 @@ mod tests {
                 &mut operations,
                 &mut next_value,
             ),
-            "a uniform induction with a lane-varying bound",
+            "a uniform induction bound is not an exact total unsigned index expression",
         );
     }
 

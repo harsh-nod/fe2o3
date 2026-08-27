@@ -199,6 +199,16 @@ pub fn run_pliron_progress_check_v1(
         }
     }
 
+    let mut predecessors = vec![Vec::new(); blocks.len()];
+    for (source, successors) in edges.iter().enumerate() {
+        for successor in successors {
+            predecessors[*successor].push(source);
+        }
+    }
+    for incoming in &mut predecessors {
+        incoming.sort_unstable();
+        incoming.dedup();
+    }
     let reachable = reachable_blocks(&edges);
     let definitely_reachable = definitely_reachable_blocks(context, &blocks, &block_indices);
     let mut findings = Vec::new();
@@ -233,6 +243,7 @@ pub fn run_pliron_progress_check_v1(
             &blocks,
             &block_indices,
             &operation_blocks,
+            &predecessors,
             &component,
         ) {
             CanonicalLoopResultV1::Proved(certificate) => certificates.push(certificate),
@@ -276,11 +287,12 @@ fn canonical_positive_induction_loop(
     blocks: &[Ptr<BasicBlock>],
     block_indices: &HashMap<Ptr<BasicBlock>, usize>,
     operation_blocks: &HashMap<Ptr<Operation>, usize>,
+    predecessors: &[Vec<usize>],
     component: &[usize],
 ) -> CanonicalLoopResultV1 {
-    if component.len() != 2 {
+    if component.len() < 2 {
         return CanonicalLoopResultV1::Incomplete(
-            "only a two-block canonical induction loop is currently modeled",
+            "a canonical induction loop needs a distinct guarded header and body",
         );
     }
     for header_index in component {
@@ -293,12 +305,11 @@ fn canonical_positive_induction_loop(
         let Some(branch) = terminator.downcast_ref::<IndexLessThanBranchArgsOp>() else {
             continue;
         };
-        if header_block.get_num_arguments() != 1
-            || branch.lhs(context) != header_block.get_argument(0)
-            || branch.true_arguments(context).as_slice() != [branch.lhs(context)]
-        {
+        let Some(header_induction_slot) = (0..header_block.get_num_arguments())
+            .find(|slot| header_block.get_argument(*slot) == branch.lhs(context))
+        else {
             continue;
-        }
+        };
         let raw = branch.get_operation().deref(context);
         let Some(body) = raw.successors().next() else {
             continue;
@@ -315,57 +326,144 @@ fn canonical_positive_induction_loop(
         if !component.contains(&body_index) || component.contains(&exit_index) {
             continue;
         }
-        let body_predecessors = predecessor_indices(context, blocks, block_indices, body);
-        if body_predecessors.as_slice() != [*header_index] {
+        let body_induction_slots = branch
+            .true_arguments(context)
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, value)| (*value == branch.lhs(context)).then_some(slot))
+            .collect::<Vec<_>>();
+        if body_induction_slots.len() != 1 {
+            return CanonicalLoopResultV1::Incomplete(
+                "the guarded edge does not carry one unambiguous induction value",
+            );
+        }
+        if predecessors[body_index].as_slice() != [*header_index] {
             return CanonicalLoopResultV1::Incomplete(
                 "the loop body has a predecessor other than its guarded header",
             );
         }
-        let header_predecessors = predecessor_indices(context, blocks, block_indices, header);
-        if !header_predecessors.contains(&body_index)
-            || !header_predecessors
+        let internal_header_predecessors = predecessors[*header_index]
+            .iter()
+            .copied()
+            .filter(|block| component.contains(block))
+            .collect::<Vec<_>>();
+        if internal_header_predecessors.len() != 1
+            || !predecessors[*header_index]
                 .iter()
                 .any(|block| !component.contains(block))
         {
             return CanonicalLoopResultV1::Incomplete(
-                "the loop header does not have exactly the canonical external entry and body recurrence",
+                "the loop header does not have exactly one recurrence and a canonical external entry",
             );
         }
-        if branch
-            .rhs(context)
+        let bound = branch.rhs(context);
+        let bound_operation_is_internal = bound
             .defining_op()
             .and_then(|definition| operation_blocks.get(&definition))
-            .is_some_and(|block| component.contains(block))
-        {
+            .is_some_and(|block| component.contains(block));
+        let bound_block_is_internal = bound
+            .defining_block()
+            .and_then(|block| block_indices.get(&block))
+            .is_some_and(|block| component.contains(block));
+        if bound_operation_is_internal || bound_block_is_internal {
             return CanonicalLoopResultV1::Incomplete(
                 "the loop bound depends on a value defined inside the cycle",
             );
         }
-        let body_block = body.deref(context);
-        if body_block.get_num_arguments() != 1 {
-            continue;
-        }
-        let Some(backedge) = body_block.get_terminator(context) else {
-            continue;
+        let mut visited = vec![false; blocks.len()];
+        let mut visited_count = 0_usize;
+        let mut previous_index = *header_index;
+        let mut current_index = body_index;
+        let mut current_induction_slot = body_induction_slots[0];
+        let (latch_index, latch_argument, next) = loop {
+            if current_index == *header_index || visited[current_index] {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the guarded loop body contains a cycle that bypasses its header",
+                );
+            }
+            if !component.contains(&current_index) {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the guarded loop body leaves the cycle before its recurrence",
+                );
+            }
+            visited[current_index] = true;
+            visited_count += 1;
+            let current = blocks[current_index];
+            let current_block = current.deref(context);
+            if current_induction_slot >= current_block.get_num_arguments() {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a canonical loop edge does not target its tracked induction slot",
+                );
+            }
+            if predecessors[current_index].as_slice() != [previous_index] {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the canonical loop body has a side entry, join, or alternate recurrence",
+                );
+            }
+            let Some(terminator) = current_block.get_terminator(context) else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a canonical loop body block has no terminator",
+                );
+            };
+            let terminator = Operation::get_op_dyn(terminator, context);
+            let Some(forward) = terminator.downcast_ref::<BranchArgsOp>() else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a canonical loop body must be a single-recurrence ring",
+                );
+            };
+            let raw_forward = forward.get_operation().deref(context);
+            if raw_forward.successors().count() != 1 {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a canonical loop body branch must have exactly one successor",
+                );
+            }
+            let successor = raw_forward
+                .successors()
+                .next()
+                .expect("one successor checked");
+            let Some(successor_index) = block_indices.get(&successor).copied() else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a canonical loop body successor is outside the kernel function",
+                );
+            };
+            let arguments = forward.arguments(context);
+            let current_argument = current_block.get_argument(current_induction_slot);
+            if successor_index == *header_index {
+                if current_index != internal_header_predecessors[0]
+                    || visited_count != component.len() - 1
+                {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "the canonical recurrence does not cover every block in the cycle exactly once",
+                    );
+                }
+                let Some(next) = arguments.get(header_induction_slot).copied() else {
+                    return CanonicalLoopResultV1::Incomplete(
+                        "the recurrence does not carry the guarded header induction slot",
+                    );
+                };
+                break (current_index, current_argument, next);
+            }
+            let induction_slots = arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, value)| (*value == current_argument).then_some(slot))
+                .collect::<Vec<_>>();
+            if induction_slots.len() != 1 {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a non-latch loop edge does not forward one unambiguous induction value unchanged",
+                );
+            }
+            previous_index = current_index;
+            current_index = successor_index;
+            current_induction_slot = induction_slots[0];
         };
-        let backedge = Operation::get_op_dyn(backedge, context);
-        let Some(backedge) = backedge.downcast_ref::<BranchArgsOp>() else {
-            continue;
-        };
-        if backedge.get_operation().deref(context).successors().next() != Some(header) {
-            continue;
-        }
-        let arguments = backedge.arguments(context);
-        if arguments.len() != 1 {
-            continue;
-        }
-        let next = arguments[0];
-        if next == body_block.get_argument(0) {
+        if next == latch_argument {
             return zero_step_result(
                 context,
                 blocks,
                 component,
                 header,
+                header_induction_slot,
                 branch.rhs(context),
                 "the induction variable is unchanged on the backedge",
             );
@@ -375,6 +473,11 @@ fn canonical_positive_induction_loop(
                 "the backedge value is not a locally reconstructed induction update",
             );
         };
+        if operation_blocks.get(&increment_definition) != Some(&latch_index) {
+            return CanonicalLoopResultV1::Incomplete(
+                "the induction update is not defined in the unique loop latch",
+            );
+        }
         let increment = Operation::get_op_dyn(increment_definition, context);
         let Some(increment) = increment.downcast_ref::<IndexBinaryOp>() else {
             return CanonicalLoopResultV1::Incomplete(
@@ -382,7 +485,7 @@ fn canonical_positive_induction_loop(
             );
         };
         if increment.kind(context) != Some(IndexBinaryKindAttr::Add)
-            || increment.lhs(context) != body_block.get_argument(0)
+            || increment.lhs(context) != latch_argument
         {
             return CanonicalLoopResultV1::Incomplete("the induction update is not `i + constant`");
         }
@@ -400,6 +503,7 @@ fn canonical_positive_induction_loop(
                     blocks,
                     component,
                     header,
+                    header_induction_slot,
                     branch.rhs(context),
                     "the induction step is zero",
                 );
@@ -433,33 +537,12 @@ fn canonical_positive_induction_loop(
     )
 }
 
-fn predecessor_indices(
-    context: &Context,
-    blocks: &[Ptr<BasicBlock>],
-    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
-    target: Ptr<BasicBlock>,
-) -> Vec<usize> {
-    let mut predecessors = blocks
-        .iter()
-        .copied()
-        .filter_map(|block| {
-            let terminator = block.deref(context).get_terminator(context)?;
-            terminator
-                .deref(context)
-                .successors()
-                .any(|successor| successor == target)
-                .then(|| block_indices[&block])
-        })
-        .collect::<Vec<_>>();
-    predecessors.sort_unstable();
-    predecessors
-}
-
 fn zero_step_result(
     context: &Context,
     blocks: &[Ptr<BasicBlock>],
     component: &[usize],
     header: Ptr<BasicBlock>,
+    induction_slot: usize,
     bound: pliron::value::Value,
     reason: &'static str,
 ) -> CanonicalLoopResultV1 {
@@ -492,7 +575,7 @@ fn zero_step_result(
         };
         let arguments = branch.arguments(context);
         let Some(initial) = arguments
-            .first()
+            .get(induction_slot)
             .and_then(|value| index_constant(context, *value))
         else {
             saw_unknown = true;
