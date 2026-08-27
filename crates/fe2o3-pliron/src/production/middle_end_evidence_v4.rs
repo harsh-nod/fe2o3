@@ -1,10 +1,7 @@
-//! Strict canonical evidence for the production semantic middle end.
+//! Strict archival decoder for the retired V4 semantic middle-end wire.
 //!
-//! The live-produced value binds an exact semantic-MIR owner, the checked
-//! ranked kernel, deterministic ranked IR, and the seven fixed clean analysis
-//! reports represented by this historical schema. Live construction also
-//! requires the hierarchy-ownership pass in the V2 pipeline, but V4 bytes do
-//! not encode that eighth report. The decoded form is deliberately named `Inert`: byte integrity is
+//! V4 predates hierarchical ownership and is never produced by the live
+//! compiler. Its decoded form is deliberately named `Inert`: byte integrity is
 //! not producer authentication, a refinement proof, or execution authority.
 
 use std::{error::Error, fmt, ops::Range};
@@ -14,7 +11,6 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
     SemanticBinaryKindAttr,
 };
-use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2};
 use fe2o3_kernel_ir::{
     MatrixElement, TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
     TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
@@ -31,9 +27,9 @@ const RANKED_OWNERSHIP_CONTRACT_TAG_V4: u8 = 24;
 const RANKED_INDEX_UNSIGNED_CAST_TAG_V4: u8 = 26;
 
 use super::{
-    ProductionRankedKernelErrorV1, ProductionRankedKernelLoweringInputV1,
-    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueV1,
-    ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
+    ProductionRankedKernelLoweringInputV1, ProductionRankedOperationV1,
+    ProductionRankedTerminatorV1, ProductionRankedValueV1, ProductionSemanticMirErrorV1,
+    ProductionSemanticMirOwnerV1,
 };
 
 const MAGIC_V4: [u8; 8] = *b"F2MEV4\0\0";
@@ -118,36 +114,6 @@ impl ProductionMiddleEndEvidencePassV4 {
             Self::SemanticRefinement => 7,
         }
     }
-
-    const fn from_analysis(pass: KernelCheckPassKindV1) -> Option<Self> {
-        match pass {
-            KernelCheckPassKindV1::TensorLayout => Some(Self::TensorLayout),
-            KernelCheckPassKindV1::MemoryBounds => Some(Self::MemoryBounds),
-            KernelCheckPassKindV1::AtomicLegality => Some(Self::AtomicLegality),
-            KernelCheckPassKindV1::RaceFreedom => Some(Self::RaceFreedom),
-            KernelCheckPassKindV1::BarrierConvergence => Some(Self::BarrierConvergence),
-            KernelCheckPassKindV1::WorkgroupMemory => Some(Self::WorkgroupMemory),
-            KernelCheckPassKindV1::SemanticRefinement => Some(Self::SemanticRefinement),
-            KernelCheckPassKindV1::Structural
-            | KernelCheckPassKindV1::ControlFlow
-            | KernelCheckPassKindV1::HierarchicalOwnership => None,
-        }
-    }
-}
-
-// V4 predates the ownership report. This is a projection of the sole live V2
-// pipeline into the frozen wire schema, not an executable analysis manifest.
-fn legacy_wire_analysis_projection_v4() -> Option<[KernelCheckPassKindV1; PASS_COUNT_V4]> {
-    let mut projection = [KernelCheckPassKindV1::Structural; PASS_COUNT_V4];
-    let mut length = 0;
-    for pass in PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2 {
-        if ProductionMiddleEndEvidencePassV4::from_analysis(pass).is_some() {
-            let slot = projection.get_mut(length)?;
-            *slot = pass;
-            length += 1;
-        }
-    }
-    (length == PASS_COUNT_V4).then_some(projection)
 }
 
 /// Fixed pass order encoded by every V4 record.
@@ -500,159 +466,11 @@ impl fmt::Debug for InertProductionMiddleEndEvidenceV4 {
     }
 }
 
-/// Move-only V4 middle-end evidence constructed from the two live owners.
-///
-/// The value carries no authority. Its distinct type records that construction
-/// revalidated the live semantic owner, ranked structure, and all seven reports.
-/// Strict decoding returns [`InertProductionMiddleEndEvidenceV4`] instead.
-///
-/// ```compile_fail
-/// use fe2o3_pliron::ProductionMiddleEndEvidenceV4;
-/// fn requires_clone<T: Clone>() {}
-/// requires_clone::<ProductionMiddleEndEvidenceV4>();
-/// ```
-#[must_use = "dropping middle-end evidence abandons the live-produced stage record"]
-pub struct ProductionMiddleEndEvidenceV4 {
-    inert: InertProductionMiddleEndEvidenceV4,
-}
-
-impl ProductionMiddleEndEvidenceV4 {
-    /// Revalidates both live owners and constructs their exact canonical record.
-    pub fn try_new(
-        semantic: &ProductionSemanticMirOwnerV1,
-        ranked: &ProductionRankedKernelLoweringInputV1,
-        deterministic_ranked_ir: &str,
-    ) -> Result<Self, ProductionMiddleEndEvidenceCodecErrorV4> {
-        validate_ranked_ir(deterministic_ranked_ir.as_bytes())?;
-        let source_semantic_identity = revalidated_source_semantic_identity(semantic)?;
-
-        ranked
-            .revalidate_structure()
-            .map_err(ProductionMiddleEndEvidenceCodecErrorV4::RankedKernel)?;
-        validate_live_reports(ranked)?;
-        if ranked.kernel().blocks().iter().any(|block| {
-            block.operations().iter().any(|operation| {
-                matches!(
-                    operation,
-                    ProductionRankedOperationV1::CollectiveSemantics { .. }
-                )
-            })
-        }) {
-            return Err(
-                ProductionMiddleEndEvidenceCodecErrorV4::CollectiveSemanticsRequireNewEvidenceVersion,
-            );
-        }
-
-        let ranked_kernel_identity = derive_ranked_kernel_identity(ranked);
-        if ranked_kernel_identity == [0; SHA256_BYTES] {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ZeroRankedKernelIdentity);
-        }
-        let encoded = encode_record(
-            source_semantic_identity,
-            ranked_kernel_identity,
-            deterministic_ranked_ir,
-        )?;
-        Ok(Self {
-            inert: InertProductionMiddleEndEvidenceV4 {
-                source_semantic_identity,
-                ranked_kernel_identity,
-                ranked_ir_range: encoded.ranked_ir_range,
-                identity: encoded.identity,
-                canonical_bytes: encoded.canonical_bytes,
-            },
-        })
-    }
-
-    pub const fn as_inert(&self) -> &InertProductionMiddleEndEvidenceV4 {
-        &self.inert
-    }
-
-    pub fn into_inert(self) -> InertProductionMiddleEndEvidenceV4 {
-        self.inert
-    }
-
-    pub const fn assurance(&self) -> ProductionMiddleEndAssuranceV4 {
-        self.inert.assurance()
-    }
-
-    pub const fn source_semantic_identity(&self) -> &[u8; SHA256_BYTES] {
-        self.inert.source_semantic_identity()
-    }
-
-    pub const fn ranked_kernel_identity(&self) -> &[u8; SHA256_BYTES] {
-        self.inert.ranked_kernel_identity()
-    }
-
-    pub fn ranked_ir(&self) -> &str {
-        self.inert.ranked_ir()
-    }
-
-    pub const fn pass_successes(
-        &self,
-    ) -> &'static [ProductionMiddleEndPassSuccessV4; PASS_COUNT_V4] {
-        self.inert.pass_successes()
-    }
-
-    pub const fn identity(&self) -> ProductionMiddleEndEvidenceIdentityV4 {
-        self.inert.identity()
-    }
-
-    pub fn canonical_bytes(&self) -> &[u8] {
-        self.inert.canonical_bytes()
-    }
-
-    pub const fn authenticates_producer(&self) -> bool {
-        false
-    }
-
-    pub const fn claims_verus_verification(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_compiler_refinement_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_artifact_or_launch_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Debug for ProductionMiddleEndEvidenceV4 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ProductionMiddleEndEvidenceV4")
-            .field("identity", &self.identity())
-            .field("assurance", &self.assurance())
-            .finish_non_exhaustive()
-    }
-}
-
-/// Fail-closed construction and decoding errors for the V4 codec.
+/// Fail-closed decoding errors for the archival V4 codec.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionMiddleEndEvidenceCodecErrorV4 {
     SemanticOwner(ProductionSemanticMirErrorV1),
-    RankedKernel(ProductionRankedKernelErrorV1),
     SemanticSourceIdentityMismatch,
-    CollectiveSemanticsRequireNewEvidenceVersion,
-    ReportPassOrderMismatch {
-        index: usize,
-        expected: ProductionMiddleEndEvidencePassV4,
-    },
-    ReportNotClean {
-        pass: ProductionMiddleEndEvidencePassV4,
-    },
-    ReportAuthorityClaim {
-        pass: ProductionMiddleEndEvidencePassV4,
-    },
     EmptyRankedIr,
     RankedIrTooLarge {
         actual: usize,
@@ -709,25 +527,9 @@ impl fmt::Display for ProductionMiddleEndEvidenceCodecErrorV4 {
             Self::SemanticOwner(error) => {
                 write!(formatter, "semantic owner revalidation failed: {error}")
             }
-            Self::RankedKernel(error) => {
-                write!(formatter, "ranked kernel revalidation failed: {error}")
-            }
             Self::SemanticSourceIdentityMismatch => formatter.write_str(
                 "semantic source identity does not match the exact retained MIR and locator graph",
             ),
-            Self::CollectiveSemanticsRequireNewEvidenceVersion => formatter.write_str(
-                "V4 cannot serialize collective semantics or hierarchical coverage; a new evidence version is required",
-            ),
-            Self::ReportPassOrderMismatch { index, .. } => write!(
-                formatter,
-                "live middle-end report at position {index} has the wrong pass identity"
-            ),
-            Self::ReportNotClean { .. } => {
-                formatter.write_str("a mandatory live middle-end report is not exactly clean")
-            }
-            Self::ReportAuthorityClaim { .. } => {
-                formatter.write_str("a live middle-end report unexpectedly claims authority")
-            }
             Self::EmptyRankedIr => formatter.write_str("deterministic ranked IR is empty"),
             Self::RankedIrTooLarge { actual, limit } => {
                 write!(formatter, "ranked IR byte length {actual} exceeds {limit}")
@@ -801,148 +603,9 @@ impl Error for ProductionMiddleEndEvidenceCodecErrorV4 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SemanticOwner(error) => Some(error),
-            Self::RankedKernel(error) => Some(error),
             _ => None,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct ObservedPassFactV4 {
-    pass: KernelCheckPassKindV1,
-    clean: bool,
-    findings: usize,
-    compiler_authority: bool,
-    artifact_authority: bool,
-}
-
-fn validate_live_reports(
-    ranked: &ProductionRankedKernelLoweringInputV1,
-) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
-    if ranked.production_pipeline_report().pass_order()
-        != &PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
-    {
-        return Err(
-            ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
-                index: 0,
-                expected: ProductionMiddleEndEvidencePassV4::TensorLayout,
-            },
-        );
-    }
-    let facts = [
-        ObservedPassFactV4 {
-            pass: ranked.tensor_layout_report().pass(),
-            clean: ranked.tensor_layout_report().is_clean(),
-            findings: ranked.tensor_layout_report().findings().len(),
-            compiler_authority: ranked
-                .tensor_layout_report()
-                .grants_compiler_refinement_authority(),
-            artifact_authority: ranked
-                .tensor_layout_report()
-                .grants_artifact_or_launch_authority(),
-        },
-        ObservedPassFactV4 {
-            pass: ranked.bounds_report().pass(),
-            clean: ranked.bounds_report().is_clean(),
-            findings: ranked.bounds_report().findings().len(),
-            compiler_authority: ranked
-                .bounds_report()
-                .grants_compiler_refinement_authority(),
-            artifact_authority: ranked.bounds_report().grants_artifact_or_launch_authority(),
-        },
-        ObservedPassFactV4 {
-            pass: ranked.atomic_report().pass(),
-            clean: ranked.atomic_report().is_clean(),
-            findings: ranked.atomic_report().findings().len(),
-            compiler_authority: ranked
-                .atomic_report()
-                .grants_compiler_refinement_authority(),
-            artifact_authority: ranked.atomic_report().grants_artifact_or_launch_authority(),
-        },
-        ObservedPassFactV4 {
-            pass: ranked.race_report().pass(),
-            clean: ranked.race_report().is_clean(),
-            findings: ranked.race_report().findings().len(),
-            compiler_authority: ranked.race_report().grants_compiler_refinement_authority(),
-            artifact_authority: ranked.race_report().grants_artifact_or_launch_authority(),
-        },
-        ObservedPassFactV4 {
-            pass: ranked.barrier_report().pass(),
-            clean: ranked.barrier_report().is_clean(),
-            findings: ranked.barrier_report().findings().len(),
-            compiler_authority: ranked
-                .barrier_report()
-                .grants_compiler_refinement_authority(),
-            artifact_authority: ranked
-                .barrier_report()
-                .grants_artifact_or_launch_authority(),
-        },
-        ObservedPassFactV4 {
-            pass: ranked.workgroup_report().pass(),
-            clean: ranked.workgroup_report().is_clean(),
-            findings: ranked.workgroup_report().findings().len(),
-            compiler_authority: ranked
-                .workgroup_report()
-                .grants_compiler_refinement_authority(),
-            artifact_authority: ranked
-                .workgroup_report()
-                .grants_artifact_or_launch_authority(),
-        },
-        ObservedPassFactV4 {
-            pass: ranked.semantic_report().pass(),
-            clean: ranked.semantic_report().is_clean(),
-            findings: ranked.semantic_report().findings().len(),
-            compiler_authority: ranked
-                .semantic_report()
-                .grants_compiler_refinement_authority(),
-            artifact_authority: ranked
-                .semantic_report()
-                .grants_artifact_or_launch_authority(),
-        },
-    ];
-    validate_observed_pass_facts(&facts)
-}
-
-fn validate_observed_pass_facts(
-    facts: &[ObservedPassFactV4; PASS_COUNT_V4],
-) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
-    let analysis_projection = legacy_wire_analysis_projection_v4().ok_or(
-        ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
-            index: 0,
-            expected: PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4[0],
-        },
-    )?;
-    for (index, ((fact, analysis_expected), evidence_expected)) in facts
-        .iter()
-        .zip(analysis_projection.iter())
-        .zip(PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4.iter())
-        .enumerate()
-    {
-        if fact.pass != *analysis_expected
-            || ProductionMiddleEndEvidencePassV4::from_analysis(fact.pass)
-                != Some(*evidence_expected)
-        {
-            return Err(
-                ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
-                    index,
-                    expected: *evidence_expected,
-                },
-            );
-        }
-        if !fact.clean || fact.findings != 0 {
-            return Err(ProductionMiddleEndEvidenceCodecErrorV4::ReportNotClean {
-                pass: *evidence_expected,
-            });
-        }
-        if fact.compiler_authority || fact.artifact_authority {
-            return Err(
-                ProductionMiddleEndEvidenceCodecErrorV4::ReportAuthorityClaim {
-                    pass: *evidence_expected,
-                },
-            );
-        }
-    }
-    Ok(())
 }
 
 fn validate_ranked_ir(bytes: &[u8]) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
@@ -2338,18 +2001,6 @@ mod tests {
     use super::*;
     use crate::ProductionRankedValueIdV1;
 
-    fn clean_facts() -> [ObservedPassFactV4; PASS_COUNT_V4] {
-        legacy_wire_analysis_projection_v4()
-            .expect("V2 has every report represented by the frozen V4 wire projection")
-            .map(|pass| ObservedPassFactV4 {
-                pass,
-                clean: true,
-                findings: 0,
-                compiler_authority: false,
-                artifact_authority: false,
-            })
-    }
-
     #[test]
     fn unsigned_cast_identity_binds_exact_result_source_width_and_operation_kind() {
         let identity = derive_exact_ranked_operation_identity_v1;
@@ -2427,81 +2078,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_wire_projection_is_derived_from_the_only_production_manifest() {
-        let projection = legacy_wire_analysis_projection_v4().unwrap();
-        let expected = PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
-            .into_iter()
-            .filter(|pass| ProductionMiddleEndEvidencePassV4::from_analysis(*pass).is_some())
-            .collect::<Vec<_>>();
-
-        assert_eq!(projection.as_slice(), expected);
-        assert_eq!(projection.len(), PASS_COUNT_V4);
-        assert!(!projection.contains(&KernelCheckPassKindV1::HierarchicalOwnership));
-        assert!(
-            PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
-                .contains(&KernelCheckPassKindV1::HierarchicalOwnership)
-        );
-    }
-
-    #[test]
-    fn every_live_report_fact_is_fail_closed() {
-        for index in 0..PASS_COUNT_V4 {
-            let expected = PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4[index];
-
-            let mut facts = clean_facts();
-            facts[index].clean = false;
-            assert_eq!(
-                validate_observed_pass_facts(&facts),
-                Err(ProductionMiddleEndEvidenceCodecErrorV4::ReportNotClean { pass: expected })
-            );
-
-            let mut facts = clean_facts();
-            facts[index].findings = 1;
-            assert_eq!(
-                validate_observed_pass_facts(&facts),
-                Err(ProductionMiddleEndEvidenceCodecErrorV4::ReportNotClean { pass: expected })
-            );
-
-            let mut facts = clean_facts();
-            facts[index].compiler_authority = true;
-            assert_eq!(
-                validate_observed_pass_facts(&facts),
-                Err(
-                    ProductionMiddleEndEvidenceCodecErrorV4::ReportAuthorityClaim {
-                        pass: expected,
-                    }
-                )
-            );
-
-            let mut facts = clean_facts();
-            facts[index].artifact_authority = true;
-            assert_eq!(
-                validate_observed_pass_facts(&facts),
-                Err(
-                    ProductionMiddleEndEvidenceCodecErrorV4::ReportAuthorityClaim {
-                        pass: expected,
-                    }
-                )
-            );
-        }
-    }
-
-    #[test]
-    fn live_report_order_is_exact() {
-        let mut facts = clean_facts();
-        facts.swap(0, 1);
-        assert_eq!(
-            validate_observed_pass_facts(&facts),
-            Err(
-                ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
-                    index: 0,
-                    expected: ProductionMiddleEndEvidencePassV4::TensorLayout,
-                }
-            )
-        );
-    }
-
-    #[test]
     fn ranked_ir_lexical_form_is_canonical() {
         assert!(validate_ranked_ir(b"func @kernel {\n}\n").is_ok());
         assert_eq!(
@@ -2519,6 +2095,45 @@ mod tests {
         assert_eq!(
             validate_ranked_ir(b"func\0\n"),
             Err(ProductionMiddleEndEvidenceCodecErrorV4::NonCanonicalRankedIrByte { offset: 4 })
+        );
+    }
+
+    #[test]
+    fn archival_decoder_round_trips_canonical_v4_and_rejects_corruption() {
+        let encoded = encode_record([1; SHA256_BYTES], [2; SHA256_BYTES], "func @kernel {\n}\n")
+            .expect("bounded canonical archival record");
+        let canonical = encoded.canonical_bytes;
+        let decoded = InertProductionMiddleEndEvidenceV4::decode(&canonical)
+            .expect("canonical archival record decodes");
+        assert_eq!(decoded.source_semantic_identity(), &[1; SHA256_BYTES]);
+        assert_eq!(decoded.ranked_kernel_identity(), &[2; SHA256_BYTES]);
+        assert_eq!(decoded.ranked_ir(), "func @kernel {\n}\n");
+        assert_eq!(decoded.canonical_bytes(), canonical.as_ref());
+
+        let mut wrong_magic = canonical.to_vec();
+        wrong_magic[0] ^= 1;
+        assert_eq!(
+            InertProductionMiddleEndEvidenceV4::decode(&wrong_magic),
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::InvalidMagic)
+        );
+
+        let mut trailing = canonical.to_vec();
+        trailing.push(0);
+        assert_eq!(
+            InertProductionMiddleEndEvidenceV4::decode(&trailing),
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::TrailingBytes)
+        );
+        for length in 0..canonical.len() {
+            assert!(InertProductionMiddleEndEvidenceV4::decode(&canonical[..length]).is_err());
+        }
+
+        let oversized = vec![0; MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 + 1];
+        assert_eq!(
+            InertProductionMiddleEndEvidenceV4::decode(&oversized),
+            Err(ProductionMiddleEndEvidenceCodecErrorV4::TooLarge {
+                actual: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4 + 1,
+                limit: MAX_PRODUCTION_MIDDLE_END_EVIDENCE_BYTES_V4,
+            })
         );
     }
 
