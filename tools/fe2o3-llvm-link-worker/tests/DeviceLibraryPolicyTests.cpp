@@ -8,6 +8,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <array>
 #include <cstdlib>
@@ -67,7 +68,7 @@ struct TemporaryDirectory {
 std::vector<uint8_t> bitcode(StringRef Name) {
   LLVMContext Context;
   Module ModuleValue(Name, Context);
-  ModuleValue.setTargetTriple("amdgcn-amd-amdhsa");
+  ModuleValue.setTargetTriple(Triple("amdgcn-amd-amdhsa"));
   SmallVector<char, 0> Buffer;
   raw_svector_ostream Stream(Buffer);
   WriteBitcodeToFile(ModuleValue, Stream);

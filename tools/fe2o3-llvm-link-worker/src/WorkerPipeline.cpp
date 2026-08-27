@@ -2975,9 +2975,13 @@ Error setAndCheckModuleContract(Module &ModuleValue,
                                 bool MeasuredBuiltinProvider = false) {
   TargetParts Parts = parseTarget(RequestValue.Target);
   const Triple &ExistingTriple = ModuleValue.getTargetTriple();
+  const bool CompatibleMeasuredProviderTriple =
+      MeasuredBuiltinProvider && ExistingTriple.isAMDGCN() &&
+      ExistingTriple.getVendor() == Triple::AMD &&
+      ExistingTriple.getOS() == Triple::AMDHSA;
   if (!ExistingTriple.getTriple().empty() &&
       Triple::normalize(ExistingTriple.getTriple()) != AmdGpuTriple &&
-      !MeasuredBuiltinProvider)
+      !CompatibleMeasuredProviderTriple)
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
       (isExactPlironScalarAddV1RequestCandidate(RequestValue) ||
@@ -3171,7 +3175,7 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!Parsed)
     return pipelineError(Twine(InputName) + ": " +
                          errorToDiagnostic(Parsed.takeError()));
-  if (!AcceptedLayout && !MeasuredBuiltinProvider)
+  if (!AcceptedLayout)
     return pipelineError(
         "LLVM module data layout does not match target machine");
   if (!MeasuredBuiltinProvider &&

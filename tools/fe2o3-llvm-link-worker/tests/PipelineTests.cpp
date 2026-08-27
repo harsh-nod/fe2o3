@@ -1215,8 +1215,18 @@ Response requireFailureWithPolicy(const Request &RequestValue,
   Response Result =
       executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
           RequestValue, Policy);
-  require(!Result.LinkedOutput,
-          "rejected synthetic OCML request returned output bytes");
+  if (Result.LinkedOutput) {
+    errs() << "unexpected synthetic OCML success: target="
+           << RequestValue.Target << " cov="
+           << static_cast<unsigned>(RequestValue.CodeObjectVersion)
+           << " imports=";
+    for (const std::string &Symbol : RequestValue.ImportSymbols)
+      errs() << Symbol << ',';
+    errs() << '\n';
+    for (const std::string &Diagnostic : Result.Diagnostics)
+      errs() << Diagnostic << '\n';
+    fail("rejected synthetic OCML request returned output bytes");
+  }
   if (Result.FailureStage != ExpectedStage) {
     for (const std::string &Diagnostic : Result.Diagnostics)
       errs() << Diagnostic << '\n';
