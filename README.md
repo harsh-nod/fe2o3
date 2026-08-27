@@ -9,6 +9,7 @@ incomplete, while bounded `gfx942` vertical slices exercise the compiler,
 artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
+[compiler execution subject V1](docs/compiler-execution-subject-v1.md),
 [gfx942 scalar Worker V3 proof/executable binding](docs/gfx942-scalar-worker-v3-proof-executable-binding-v1.md),
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
@@ -81,6 +82,19 @@ substitutions. This closes only the bounded `ProofExecutableBinding`
 obligation. Six compiler provenance, semantic refinement, floating-point,
 machine refinement, ABI, and end-to-end effect obligations remain open, so the
 auditor still cannot authorize publication, loading, or launch.
+
+The production compiler now retains move-only protected-rustc custody through
+semantic-lineage construction and repeats complete live process admission
+immediately before strict V3 publication. After that publication, the sole
+backend derives a fixed 690-byte
+`InertCompilerExecutionSubjectV1` from the durable build attempt, exact V3
+transaction, complete compiler closure, rustc invocation, inventory and
+preflight, semantic capsule, final module commitment, and exact outer handoff.
+Strict consumption independently reconstructs identical bytes. This removes
+the descriptor-only producer seam and establishes the one subject required by
+a future protected issuer, but the subject is intentionally inert: no issuer,
+fresh challenge, authenticated receipt, restart carriage, or runtime trust
+join exists yet, so `CompilerExecutionProvenance` remains open.
 
 ## CUDA-Oxide status
 
