@@ -152,10 +152,11 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          - 04-memory-math-gemm
-          - 06-device-ffi
-          - 07-frontend-types
-          - 08-abi-collectives
+          - 01-production-pipeline
+          - 02-production-drivers
+          - 03-device-ffi
+          - 04-frontend-types
+          - 05-abi-semantics
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/rustc-codegen-${{ matrix.shard }}
       CI_LOG_DIR: ${{ github.workspace }}/target/ci-logs/rustc-codegen-${{ matrix.shard }}
