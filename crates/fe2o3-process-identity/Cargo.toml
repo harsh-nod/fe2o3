@@ -8,6 +8,11 @@ rust-version.workspace = true
 description = "Canonical identities for prepared and running fe2o3 compiler processes."
 
 [dependencies]
+fe2o3-amd-target.workspace = true
+fe2o3-rustc-invocation.workspace = true
 libc.workspace = true
 rustix.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+fe2o3-build-authority.workspace = true

@@ -122,6 +122,32 @@ rollback anchor, verify the receipt against that anchor, durably advance it,
 and only then acknowledge the issuer receipt. This independent join is required
 before `CompilerExecutionProvenance` can close.
 
+## Shared Process Validation
+
+`fe2o3-process-identity` owns the one semantic comparison used for a protected
+rustc occurrence. It checks the canonical V3 descriptor against independently
+supplied observations of:
+
+- the exact ordered argument vector;
+- the canonical working directory;
+- the complete compile environment;
+- the supported AMD target and required backend path;
+- the descriptor-to-closure rustc and backend pins;
+- the measured running rustc and backend bytes; and
+- the closed compiler-closure and backend environment observations.
+
+The in-process backend now calls this shared validator instead of maintaining a
+second implementation. The validator accepts only inert observations and
+returns only success or a typed mismatch; it cannot construct the opaque
+supervised-occurrence token and therefore cannot reach the signing API.
+
+The protected service must independently gather the same observations from the
+admitted live rustc process, revalidate process continuity before and after the
+observation, reconstruct the exact compiler-execution subject, and only then
+construct the crate-private occurrence token. Reusing the validator prevents
+the backend and issuer from assigning different meaning to the same V3
+descriptor without treating backend self-observation as protected evidence.
+
 ## Qualification
 
 The package suite checks all three stage encodings, truncation and extension,
