@@ -9,6 +9,7 @@ incomplete, while bounded `gfx942` vertical slices exercise the compiler,
 artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
+[gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
 [cuda-oxide parity matrix](docs/cuda-oxide-parity-matrix.md),
@@ -43,6 +44,17 @@ MIR, ranked PLIRON, verified Kernel IR, composed memory checks, and
 deterministic LLVM extraction. It cannot publish, finalize HSACO, load, or
 launch, so this checkpoint changes no parity status.
 
+The production workgroup slice now goes farther through that same transaction.
+The ordinary attributed `lds_publish_read_reduce_i32_v1` Rust kernel retains
+its exact `64x1x1` launch and 256-byte static-LDS contract through semantic MIR,
+ranked PLIRON, verified Kernel IR, composed memory admission, upstream-LLVM
+AMDGPU lowering, a compiler-bound handoff, the measured target-machine and
+in-process LLD worker, and COV6 descriptor inspection. Deterministic replay
+produces identical HSACO bytes with an exact 256-byte static-LDS contract. This
+route selects no workload profile and uses neither COMGR nor a shell linker. It
+does not grant load or launch authority; current executable evidence must enter
+through the Worker V3 application, production verifier, and KFD runtime.
+
 ## CUDA-Oxide status
 
 Against the pinned cuda-oxide baseline, the evidence ledger currently records
@@ -63,8 +75,10 @@ BF16 XOR4 tile/stream contract. The bounded
 masked `u32` wave64 reduction and one 256-thread static-LDS reduction through
 exact compiler/LLVM checks, Verus proofs, and direct LLVM/LLD MI300X execution.
 V2 admits only the full canonical `gfx942:xnack-` target, persists that binding
-in Kernel IR, and checks it against the Worker V2 envelope. Its genuine Rust
-source path still stops before an authenticated HSACO. The
+in Kernel IR, and checks it against the Worker V2 envelope. The older V2
+compiler-created fixture remains separate, but the production `i32` WG64 LDS
+reduction now joins genuine Rust source to reproducible inspected HSACO through
+the one compiler transaction. Worker V3/KFD execution remains open. The
 dashboard records the exact commits, tests, target lanes, evidence strengths,
 and limitations for each Partial row.
 

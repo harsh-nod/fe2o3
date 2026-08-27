@@ -23,6 +23,29 @@ This roadmap turns [architecture-v2.md](architecture-v2.md),
 owned work with staged integration gates. Gates are evidence-based; calendar
 dates depend on staffing and hardware availability.
 
+## Current production LDS checkpoint
+
+The 2026-08-27 checkpoint completes the first genuine Rust workgroup kernel
+through the one production transaction. The WG64 `i32` LDS reduction reaches
+semantic MIR, ranked PLIRON, verified Kernel IR, composed memory admission,
+upstream-LLVM AMDGPU lowering, compiler-bound handoff, measured target-machine
+and in-process LLD execution, and reproducible inspected COV6 HSACO. The
+existing scoped atomic kernel is requalified through the same code-object
+harness. Neither path has current load or launch authority. See
+[gfx942 production LDS reduction V1](gfx942-production-lds-reduction-v1.md).
+
+The next major gates are:
+
+1. join this exact artifact to the Worker V3 application and production
+   verifier, then implement pure-Rust KFD packet submission and a public
+   build/publish/run command;
+2. general race, alias, address-space, bounds, and barrier-convergence proof
+   obligations with Verus-consumable evidence;
+3. source-authentic tiled LDS GEMM through the same transaction;
+4. fused softmax/attention and MoE primitives built from qualified operations;
+5. reproducible caching, stable diagnostics/API, CI hardware qualification,
+   tutorials, and performance baselines for widespread use.
+
 ## Issue #134/#135 Infrastructure and Scalar Checkpoint
 
 The 2026-08-18 ownership refactor makes issues

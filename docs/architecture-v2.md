@@ -94,6 +94,14 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   extraction, but cannot publish a compiler-module handoff. Real AMDGPU tests
   cover safe and unsafe collection, dynamic ranked bounds, reference binding,
   and a loop-carried BF16/F32 MFMA GEMM.
+- A protected continuation of that transaction now carries the WG64 `i32` LDS
+  reduction through a compiler-bound inert handoff, measured upstream LLVM
+  target APIs, in-process LLD, and COV6 inspection. The source, semantic MIR,
+  Kernel IR, LLVM LDS allocation, and AMDHSA descriptor all agree on 256 static
+  group bytes. The sibling scoped-atomic kernel uses the same continuation.
+  This is the first bounded source-authentic workgroup code-object slice, not a
+  second compiler pipeline. It grants no load or launch authority; current
+  execution must be added through Worker V3 and the KFD runtime.
 - Production orchestration has one fixed Cargo plan. The first phase always
   builds the selected crate graph for `amdgcn-amd-amdhsa` through the fe2o3
   backend and commits its generated-artifact generation. The second phase

@@ -44,7 +44,7 @@ Counts are row claims carrying each explicit evidence kind; a row can appear mor
 | Evidence kind | Rows | What it establishes |
 |:--|--:|:--|
 | Source/unit proof | 97 | Source contracts and CPU/unit behavior only |
-| Compile to code object | 12 | Target-specific compilation only |
+| Compile to code object | 17 | Target-specific compilation only |
 | Local hardware execution | 0 | Execution on the named local lane only |
 | Remote hardware execution | 0 | Execution on the named remote lane only |
 | Negative/adversarial testing | 97 | Rejection or robustness behavior only |

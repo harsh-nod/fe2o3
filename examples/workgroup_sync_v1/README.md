@@ -1,7 +1,7 @@
 # Workgroup synchronization V1
 
-This standalone package defines two separate fixed `64x1x1` gfx942 source,
-oracle, and formal profiles.
+This standalone package defines two fixed `64x1x1` gfx942 kernels with CPU
+oracles and formal contracts.
 
 ## LDS publish/read reduction
 
@@ -14,10 +14,11 @@ so the device's wrapping tree computes the exact mathematical sum.
 
 The source now requests `DynamicLds::<i32>::exact_current::<64>` and
 consumes that linear capability directly into collective scratch. It cannot
-substitute a host/global raw pointer or expose the LDS pointer. The exact
-collected compiler profile authenticates this source and its complete reachable
-portable-MIR closure, then selects the closed semantic profile containing one
-aligned, epoch-branded workgroup allocation shared by all lanes.
+substitute a host/global raw pointer or expose the LDS pointer. The production
+importer authenticates this source, its launch-resource sidecar, and its
+complete reachable portable-MIR closure. The generic semantic lowerer creates
+one aligned, epoch-branded workgroup allocation shared by all lanes; no
+workload profile or prebuilt Kernel IR is selected.
 
 ## Scoped atomic add
 
@@ -43,31 +44,31 @@ address space, ordering, scope, target, eligibility, overflow, and substituted
 outputs. Verus models initialization, convergence, epoch reuse, ownership,
 exact integer sums, and atomic eligibility, with expected-negative mutations.
 
-Both kernels are ordinary attributed Rust modules with source-level typed ABI
-and LDS capabilities. Their two exact collected compiler profiles authenticate
-the source, kernel root and `FnAbi`, frozen provider-terminal manifest, and
-complete reachable portable-MIR closure, then select the corresponding closed
-semantic Kernel IR profile. That is reviewed source-to-profile and
-source-to-terminal correspondence, not generic lowering or a compiler-
-refinement proof; the collected compiler paths stop before LLVM and Worker V2.
-Exact compiler profile authentication therefore exists, but it does not prove
-source-to-IR semantics or IR-to-machine correspondence. The artifact admission
-and MI300X execution evidence remain separate bounded lanes.
+Both kernels are ordinary attributed Rust modules with source-level typed ABIs.
+They enter the same feature-independent production transaction: authenticated
+rustc collection, semantic MIR, ranked PLIRON, verified Kernel IR, composed
+formal/ranked memory checks, gfx942 LLVM, compiler-bound handoff, measured
+upstream LLVM target APIs plus in-process LLD, and COV6 inspection. There is no
+workload-profile selector on this route, and the compiler handoff grants no
+load or launch authority.
 
-A separate configured finalizer test is ignored with the exact prerequisite
-`requires the measured direct LLVM/LLD worker built for gfx942`. It constructs
-the bounded inert handoffs and uses the pinned upstream LLVM target-machine and
-in-process LLD worker to produce both reproducible opaque COV6 admissions. The
-two protected hardware tests are ignored with `requires measured direct
-LLVM/LLD worker pins and gfx942:xnack-`. These independently bounded test lanes
-do not prove source-to-machine correspondence, generalized memory or race
-safety, or general GPU support. The production-directed finalizer uses no COMGR
-and no shell linker; specifically, it does not shell out to `clang`, `llc`, or
-`ld.lld`.
+The ignored production driver tests require the pinned nightly plus measured
+worker and LLVM build identities. The LDS test checks the exact 256-byte static
+group segment, 288-byte complete kernarg ABI, required `64x1x1` workgroup, and
+deterministic two-run HSACO. The scoped-atomic test exercises the same compiler,
+worker, and descriptor-inspection boundaries.
+
+This is bounded source-to-code-object evidence, not a compiler-refinement proof
+or a claim of generalized memory safety, race freedom, reduction coverage, GPU
+execution, or GPU-family support. Current execution must enter through Worker
+V3 and the pure-Rust KFD runtime. The finalizer uses no COMGR and no shell
+linker; it does not shell out to `clang`, `llc`, or `ld.lld`.
 
 ## Validation
 
 ```sh
+export FE2O3_CRATE_BINDING_ID_V1=\
+0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 cargo test --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml
 cargo test --release --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml
 cargo clippy --locked --manifest-path examples/workgroup_sync_v1/Cargo.toml \
