@@ -593,7 +593,11 @@ The concrete type names may evolve, but these ownership rules do not:
    `GeneratedArgumentPackingPlanV1`. The plan writes explicit fields by checked
    descriptor offsets, zeroes padding, preserves scalar bit patterns, and
    retains every buffer borrow, provenance witness, mutability/effect class,
-   and alias admission.
+   and alias admission. The implemented KFD specialization encodes host values
+   explicitly little-endian, leaves pointer fields zero until KFD allocation,
+   derives fixup offsets from the admitted physical components, and retains
+   exclusive output borrows through validated completion. It cannot be
+   substituted for the HSA specialization and grants no execution authority.
 4. The runtime initializes only the loader-inspected implicit COV6 region and
    verifies the complete kernarg size/alignment, selected descriptor, and
    static-plus-dynamic resources. It knows no Rust signature; the generated

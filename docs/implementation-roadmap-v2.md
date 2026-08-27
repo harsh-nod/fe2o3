@@ -686,7 +686,7 @@ Parallel ownership is split at frozen records:
 |:--|:--|:--|
 | G3.1-A: compiler ABI | rustc layout extraction, physical parameter expansion, effect/alias declarations | Canonical per-entry ABI descriptor fixtures |
 | G3.1-B: artifact/module | multi-entry bundle validation, descriptor-to-payload binding, generated module declarations | One module descriptor with two independently typed kernel entries |
-| G3.1-C: host packing | generated argument views, checked offset/alignment writes, prepared geometry, retained borrows | Kernel-specific packed arguments that cannot be exchanged |
+| G3.1-C: host packing | generated HSA and address-free KFD argument capabilities, checked offset/alignment writes, descriptor-derived fixups, retained borrows and KFD completion writeback | Kernel-specific packed arguments whose HSA/KFD storage routes cannot be exchanged |
 | G3.1-D: HSA dispatch | multi-symbol resolution, reviewed COV6 hidden arguments, queue submission, completion, unload ordering | Generic synchronous dispatch for an admitted kernel descriptor |
 | G3.1-E: adversarial tests | UI tests, mutation tests, CPU oracles, MI300X execution evidence | Reproducible positive and fail-closed evidence |
 
@@ -713,8 +713,10 @@ publication of the canonical load envelope, V3-only production descriptor
 handoff, and safe split mutable views already exist. The recovered Worker V2
 host route is deleted. Still missing is a production `WorkerV3VerifierV1` that
 can promote the carried evidence into invocation-specific pure-KFD launch
-custody. The runtime authority gate exists, but generated host-memory argument
-preparation and the application handoff do not yet construct its authority.
+custody. The runtime authority gate and compiler-generated host-memory KFD
+argument preparation now exist, but the prepared invocation does not yet bind
+those arguments to the exact current HSACO, geometry, effects, checked device,
+and application handoff or construct runtime authority.
 Bounded machine-effect and Verus proof records are not production-bound to
 compiler origin and the exact artifact. These are the ordered critical
 milestones above; feature and architecture breadth follows them.

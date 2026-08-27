@@ -280,8 +280,14 @@ cargo test --locked -p fe2o3-host --test generated_spi_ui
 cargo test --locked -p fe2o3-host --test hsa_executable_lifecycle_ui
 cargo test --locked -p fe2o3-host --test worker_v3_verification_admission_ui
 cargo test --locked -p fe2o3-host --test production_application_handoff_ui
+cargo test --locked -p fe2o3-macros --test typed_kernel_fixtures
 cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-hooks --no-run
 ```
+
+The macro fixture suite also checks the generated pure-KFD argument boundary:
+safe code cannot implement its unsafe generated trait, mutable host outputs
+remain exclusively borrowed, and HSA-backed and KFD-backed `Arguments`
+specializations cannot satisfy each other's generated trait.
 
 The next hardware evidence must enter through the production Worker V3
 application and verifier, generated dispatch, completion, and a KFD runtime
