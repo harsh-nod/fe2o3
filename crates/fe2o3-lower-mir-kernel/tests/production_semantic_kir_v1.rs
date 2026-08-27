@@ -1,3 +1,4 @@
+use dialect_kernel::IndexBinaryKindAttr;
 use fe2o3_kernel_ir::{
     AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain,
     OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth, WorkgroupSize,
@@ -12,7 +13,8 @@ use fe2o3_lower_mir_kernel::{
 use fe2o3_mir_model::semantic_mir_v1::*;
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
-    ProductionRankedTerminatorV1, ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
+    ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
+    ProductionRankedValueV1, ProductionSemanticMirLimitsV1, ProductionSemanticMirOwnerV1,
     ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
 };
 
@@ -1492,6 +1494,81 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
         assert_eq!(evidence.witness_extent(), 1_u64 << rank);
         evidence.revalidate().unwrap();
     }
+}
+
+#[test]
+fn normalized_ranked_recipe_remains_in_custody_through_kir_lowering() {
+    let local = |identity| ProductionRankedValueV1::Local(ProductionRankedValueIdV1::new(identity));
+    let kernel = ProductionRankedKernelV1::new(
+        "semantic_kir_test",
+        0,
+        vec![ProductionRankedBlockV1::new(
+            vec![
+                ProductionRankedOperationV1::IndexConstant {
+                    result: ProductionRankedValueIdV1::new(0),
+                    value: 6,
+                },
+                ProductionRankedOperationV1::IndexConstant {
+                    result: ProductionRankedValueIdV1::new(1),
+                    value: 7,
+                },
+                ProductionRankedOperationV1::IndexBinary {
+                    result: ProductionRankedValueIdV1::new(2),
+                    kind: IndexBinaryKindAttr::Multiply,
+                    lhs: local(0),
+                    rhs: local(1),
+                },
+            ],
+            ProductionRankedTerminatorV1::Return,
+        )],
+    )
+    .expect("ranked recipe");
+    assert!(matches!(
+        kernel.blocks()[0].operations()[2],
+        ProductionRankedOperationV1::IndexConstant {
+            result,
+            value: 42,
+        } if result == ProductionRankedValueIdV1::new(2)
+    ));
+
+    let construction = ProductionConstructionV1::ranked_kernel("semantic_kir_test_module", kernel)
+        .expect("construction");
+    let ranked =
+        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
+            .expect("ranked checks");
+    assert!(matches!(
+        ranked.kernel().blocks()[0].operations()[2],
+        ProductionRankedOperationV1::IndexConstant { value: 42, .. }
+    ));
+
+    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
+        semantic_owner(false, false),
+        ranked,
+        concat!(
+            "func @semantic_kir_test {\n",
+            "  %0 = kernel.index_constant 6\n",
+            "  %1 = kernel.index_constant 7\n",
+            "  %2 = kernel.index_constant 42\n",
+            "  kernel.return\n",
+            "}\n",
+        )
+        .to_owned(),
+        vec![],
+    )
+    .expect("projection receipt");
+    assert!(matches!(
+        receipt.lowering().kernel().blocks()[0].operations()[2],
+        ProductionRankedOperationV1::IndexConstant { value: 42, .. }
+    ));
+
+    let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
+        receipt,
+        ProductionSemanticKirLimitsV1::default(),
+        1,
+    )
+    .expect("KIR lowering");
+    assert!(lowered.retains_mandatory_generic_checks());
+    lowered.verify_equivalence().expect("KIR equivalence");
 }
 
 #[test]

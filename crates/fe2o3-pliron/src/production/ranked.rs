@@ -167,6 +167,10 @@ use crate::{
     OperationHandleError, ProductionSessionLimitsV1, validate_name,
 };
 
+mod ranked_index_constant_fold_v1;
+
+pub use ranked_index_constant_fold_v1::ProductionRankedTranslationErrorV1;
+
 pub const HARD_MAX_PRODUCTION_RANKED_ARGUMENTS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1887,6 +1891,14 @@ impl ProductionRankedKernelV1 {
             tree_work: 0,
         };
         kernel.tree_work = kernel.validate()?;
+        kernel = ranked_index_constant_fold_v1::fold_and_validate_index_constants_v1(kernel)
+            .map_err(ProductionRankedKernelErrorV1::InvalidTransformation)?;
+        let transformed_tree_work = kernel.validate()?;
+        if transformed_tree_work != kernel.tree_work {
+            return Err(ProductionRankedKernelErrorV1::InvalidTransformation(
+                ProductionRankedTranslationErrorV1::TreeWorkChanged,
+            ));
+        }
         Ok(kernel)
     }
 
@@ -2356,6 +2368,7 @@ pub enum ProductionRankedKernelErrorV1 {
     InvalidReferenceContract,
     InvalidSemanticExpression(ProductionSemanticExpressionErrorV2),
     InvalidCollectiveSemanticContract,
+    InvalidTransformation(ProductionRankedTranslationErrorV1),
     UnsupportedElementWidth(u32),
     DynamicExtentCountMismatch {
         expected: usize,
@@ -2624,6 +2637,7 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
             Self::InvalidCollectiveSemanticContract => formatter.write_str(
                 "finite collective semantic contract is malformed, unsupported, or unbounded",
             ),
+            Self::InvalidTransformation(error) => write!(formatter, "{error}"),
             Self::UnsupportedElementWidth(width) => write!(
                 formatter,
                 "ranked view element width {width} is not one of {SUPPORTED_ELEMENT_WIDTHS:?}"
@@ -2688,7 +2702,10 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
 
 impl Error for ProductionRankedKernelErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        None
+        match self {
+            Self::InvalidTransformation(error) => Some(error),
+            _ => None,
+        }
     }
 }
 
