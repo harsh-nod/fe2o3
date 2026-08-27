@@ -1,8 +1,8 @@
 use dialect_gpu::{HierarchyAttr, HierarchyIdOp, HierarchyIndexType};
 use dialect_kernel::{
     BranchOp, DIALECT_NAME, DimensionAttr, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexType, IndexUnknownOp, InvocationDimensionAttr, IterationDomainAttr, ReturnOp,
-    register_dialect,
+    IndexType, IndexUnknownOp, InvocationDimensionAttr, IterationDomainAttr, MemorySpaceAttr,
+    RankedViewOp, RankedViewType, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     MAX_PLIRON_IDENTITY_BLOCKS_V1, MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1,
@@ -543,4 +543,37 @@ fn unadmitted_type_nested_in_function_type_fails_closed() {
         PlironIrIdentityErrorV1::UnsupportedType { .. }
     ));
     assert!(error.to_string().contains("gpu.hierarchy_index"));
+}
+
+#[test]
+fn ranked_identity_and_repeated_type_lookup_preserve_mutation_epoch() {
+    let context = &mut setup();
+    let function = empty_function(context, "ranked_identity_kernel", vec![]);
+    let entry = function.get_entry_block(context);
+    let view_type = RankedViewType::new(context, 32, true, vec![16]).unwrap();
+    let view =
+        RankedViewOp::new_in_space(context, view_type, vec![], MemorySpaceAttr::Global).unwrap();
+    let ret = ReturnOp::new(context);
+    append(context, entry, &view);
+    append(context, entry, &ret);
+
+    let index_before = context.ir_mutation_attempt_epoch().unwrap().value();
+    let _first_index = IndexType::get(context);
+    let index_inserted = context.ir_mutation_attempt_epoch().unwrap().value();
+    assert!(index_inserted >= index_before);
+    let _same_index = IndexType::get(context);
+    assert_eq!(
+        context.ir_mutation_attempt_epoch().unwrap().value(),
+        index_inserted
+    );
+
+    let before_identity = context.ir_mutation_attempt_epoch().unwrap().value();
+    let first = derive_pliron_ir_structural_identity_v1(context, &function).unwrap();
+    let second = derive_pliron_ir_structural_identity_v1(context, &function).unwrap();
+    assert!(first.exactly_matches(&second));
+    assert_eq!(
+        context.ir_mutation_attempt_epoch().unwrap().value(),
+        before_identity,
+        "canonical ranked-memory identity construction must be read-only"
+    );
 }

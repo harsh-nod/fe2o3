@@ -4303,7 +4303,19 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::F32AccumulatorMatrixView
                     | TrustedDeviceItem::F32AccumulatorMatrixViewError
                     | TrustedDeviceItem::Bf16MfmaMatrixView
-                    | TrustedDeviceItem::Bf16MfmaMatrixViewError,
+                    | TrustedDeviceItem::Bf16MfmaMatrixViewError
+                    | TrustedDeviceItem::Gfx950Fp4E2M1Format
+                    | TrustedDeviceItem::Gfx950Fp8E4M3Format
+                    | TrustedDeviceItem::Gfx950MfmaOperandA
+                    | TrustedDeviceItem::Gfx950MfmaOperandB
+                    | TrustedDeviceItem::Gfx950MfmaFragment
+                    | TrustedDeviceItem::Gfx950F32AccumulatorFragment
+                    | TrustedDeviceItem::Gfx950MfmaMatrixViewError
+                    | TrustedDeviceItem::Gfx950MfmaMatrixAView
+                    | TrustedDeviceItem::Gfx950MfmaMatrixBView
+                    | TrustedDeviceItem::Gfx950Matrix
+                    | TrustedDeviceItem::Gfx950SubgroupContext
+                    | TrustedDeviceItem::Gfx950LdsTransposeTile,
                 ) => {
                     return Err(diagnostic(
                         TranslationDiagnosticCode::UnsupportedCall,
@@ -4431,6 +4443,42 @@ impl<'function, 'declarations> FunctionLowerer<'function, 'declarations> {
                     | TrustedDeviceItem::StridedReadView2DLoadOr,
                 ) => {
                     unreachable!("typed device operations are handled by semantic lowering")
+                }
+                Some(
+                    TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero
+                    | TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues
+                    | TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero
+                    | TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues
+                    | TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor
+                    | TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor
+                    | TrustedDeviceItem::Gfx950MfmaMatrixARowMajor
+                    | TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor
+                    | TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128
+                    | TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16
+                    | TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128
+                    | TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16
+                    | TrustedDeviceItem::Gfx950MatrixCurrent
+                    | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+                    | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8
+                    | TrustedDeviceItem::Gfx950SubgroupCurrent
+                    | TrustedDeviceItem::Gfx950SubgroupReduceMaxF32
+                    | TrustedDeviceItem::Gfx950SubgroupReduceSumF32
+                    | TrustedDeviceItem::Gfx950SubgroupBroadcastF32
+                    | TrustedDeviceItem::Gfx950LdsTransposeTileCurrent
+                    | TrustedDeviceItem::Gfx950LdsTransposeStageB4
+                    | TrustedDeviceItem::Gfx950LdsTransposeStageB8
+                    | TrustedDeviceItem::Gfx950LdsTransposePublish
+                    | TrustedDeviceItem::Gfx950LdsTransposeReadB4
+                    | TrustedDeviceItem::Gfx950LdsTransposeReadB8,
+                ) => {
+                    return Err(diagnostic(
+                        TranslationDiagnosticCode::UnsupportedCall,
+                        location,
+                        format!(
+                            "trusted device item `{}` requires authenticated gfx950 semantic MIR import",
+                            callee.identity()
+                        ),
+                    ));
                 }
                 Some(
                     TrustedDeviceItem::AmdGpuInline(_) | TrustedDeviceItem::AmdGpuDiagnostic(_),

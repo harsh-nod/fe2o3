@@ -11,14 +11,15 @@ use rustc_middle::ty::TyCtxt;
 #[derive(Default)]
 struct ProductionExtractionCallbacksV1 {
     ranked_memory: bool,
-    gfx942_llvm_output: Option<PathBuf>,
+    amdgpu_llvm_output: Option<PathBuf>,
+    expected_llvm_target: Option<&'static str>,
     result: Option<Result<(), String>>,
 }
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
-        self.result = Some(if let Some(output) = self.gfx942_llvm_output.as_deref() {
-            extract_gfx942_llvm_in_active_session_v1(tcx, output)
+        self.result = Some(if let Some(output) = self.amdgpu_llvm_output.as_deref() {
+            extract_amdgpu_llvm_in_active_session_v1(tcx, output, self.expected_llvm_target)
         } else if self.ranked_memory {
             extract_ranked_memory_in_active_session_v1(tcx)
         } else {
@@ -37,13 +38,10 @@ fn transaction_in_active_session_v1<'tcx>(
     >,
     String,
 > {
-    let target = crate::production_target_v1::RetainedProductionTargetV1::authenticate_before_collection(
-        tcx,
-        &crate::AmdGpuTarget::new(dialect_mir::GFX942_TARGET_CPU),
-    )
-    .map_err(|error| {
-        format!("production extraction target authentication failed before monomorphization: {error}")
-    })?;
+    let target = crate::production_target_v1::RetainedProductionTargetV1::authenticate_live_before_collection(tcx)
+        .map_err(|error| {
+            format!("production extraction target authentication failed before monomorphization: {error}")
+        })?;
     let partitions = tcx.collect_and_partition_mono_items(());
     let kernel_count = crate::collector::count_kernels_in_cgus(tcx, partitions.codegen_units);
     if kernel_count == 0 {
@@ -105,18 +103,32 @@ fn extract_ranked_memory_in_active_session_v1(tcx: TyCtxt<'_>) -> Result<(), Str
     Ok(())
 }
 
-fn extract_gfx942_llvm_in_active_session_v1(tcx: TyCtxt<'_>, output: &Path) -> Result<(), String> {
+fn extract_amdgpu_llvm_in_active_session_v1(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+    expected_target: Option<&str>,
+) -> Result<(), String> {
     let lowered = transaction_in_active_session_v1(tcx)?
-        .lower_gfx942()
+        .lower_production_target()
         .map_err(|error| error.to_string())?;
+    if let Some(expected_target) = expected_target
+        && lowered.target_name() != expected_target
+    {
+        return Err(format!(
+            "production LLVM extraction expected live target {expected_target:?}; found {:?}",
+            lowered.target_name()
+        ));
+    }
     std::fs::write(output, lowered.llvm_ir()).map_err(|error| {
         format!(
-            "failed to write production gfx942 LLVM extraction `{}`: {error}",
+            "failed to write production {} LLVM extraction `{}`: {error}",
+            lowered.target_name(),
             output.display()
         )
     })?;
     eprintln!(
-        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942 LLVM; {} semantic function(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> {} LLVM; {} semantic function(s), {} correspondence block(s), {} formal access(es), {} ranked dynamic-index discharge(s), workgroup {:?}, {} LLVM byte(s), artifact/launch authority {}",
+        lowered.target_name(),
         lowered.semantic_function_count(),
         lowered.correspondence_block_count(),
         lowered.formal_access_count(),
@@ -146,7 +158,8 @@ pub fn run_production_extraction_driver_v1(args: &[String]) -> Result<(), String
 pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(), String> {
     let mut callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: true,
-        gfx942_llvm_output: None,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -155,15 +168,33 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
     })
 }
 
-/// Runs the complete production analysis and lowering transaction, emitting
-/// only deterministic gfx942 LLVM text to the explicitly selected path.
+/// Runs the complete production analysis and exact live-target lowering
+/// transaction, emitting deterministic AMDGPU LLVM text to the selected path.
+pub fn run_production_amdgpu_llvm_extraction_driver_v1(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let mut callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: Some(output.to_path_buf()),
+        expected_llvm_target: None,
+        result: None,
+    };
+    rustc_driver::run_compiler(args, &mut callbacks);
+    callbacks.result.unwrap_or_else(|| {
+        Err("production AMDGPU extraction callback did not reach rustc analysis".to_owned())
+    })
+}
+
+/// Compatibility entry point for the original exact gfx942 extraction API.
 pub fn run_production_gfx942_llvm_extraction_driver_v1(
     args: &[String],
     output: &Path,
 ) -> Result<(), String> {
     let mut callbacks = ProductionExtractionCallbacksV1 {
         ranked_memory: false,
-        gfx942_llvm_output: Some(output.to_path_buf()),
+        amdgpu_llvm_output: Some(output.to_path_buf()),
+        expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);

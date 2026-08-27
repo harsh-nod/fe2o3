@@ -129,8 +129,8 @@ serde = { version = "1", features = ["derive"] }
 
 proc-macro2 = "1"
 proc-macro-crate = "3"
-pliron = { git = "https://github.com/pliron-org/pliron.git", rev = "2610651306ea3ba670f68d5d8b1e1159bcd521ed" }
-pliron-llvm = { git = "https://github.com/pliron-org/pliron.git", rev = "2610651306ea3ba670f68d5d8b1e1159bcd521ed", default-features = false, features = ["std"] }
+pliron = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861bf03e7f20242b25717fb653336d02e487" }
+pliron-llvm = { git = "https://github.com/harsh-nod/pliron.git", rev = "5bdf861bf03e7f20242b25717fb653336d02e487", default-features = false, features = ["std"] }
 quote = "1"
 sha2 = { version = "0.11.0", default-features = false }
 syn = { version = "2", features = ["full"] }

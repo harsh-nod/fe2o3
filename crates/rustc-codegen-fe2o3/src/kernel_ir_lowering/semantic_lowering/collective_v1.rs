@@ -383,7 +383,7 @@ fn lower_context_constructor(
 }
 
 fn lower_arrive(
-    lowerer: &FunctionLowerer<'_, '_>,
+    lowerer: &mut FunctionLowerer<'_, '_>,
     call: SessionRecognizedSemanticCall<'_>,
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
@@ -398,11 +398,14 @@ fn lower_arrive(
             ),
         }),
     ));
+    lowerer
+        .required_capabilities
+        .insert(gfx942_xnack_minus_target_capability());
     branch_to_target(lowerer, call)
 }
 
 fn lower_wait(
-    lowerer: &FunctionLowerer<'_, '_>,
+    lowerer: &mut FunctionLowerer<'_, '_>,
     call: SessionRecognizedSemanticCall<'_>,
     block: &mut BasicBlock,
 ) -> Result<Terminator, TranslationDiagnostic> {
@@ -418,6 +421,9 @@ fn lower_wait(
             convergence: Convergence::uniform(SynchronizationScope::Workgroup),
         }),
     ));
+    lowerer
+        .required_capabilities
+        .insert(gfx942_xnack_minus_target_capability());
     branch_to_target(lowerer, call)
 }
 

@@ -1860,6 +1860,12 @@ fn hash_functional_refinement_subjects(
 pub(super) fn hash_tensor_layout_contract(digest: &mut Sha256, contract: &TensorLayoutContractV1) {
     match contract.profile {
         TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => digest.update([1]),
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {
+            digest.update([4])
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
+            digest.update([5])
+        }
         TensorInstructionProfileV1::IncompatibleWave32 => digest.update([2]),
         TensorInstructionProfileV1::Opaque(identity) => {
             digest.update([3]);
@@ -1891,6 +1897,8 @@ fn hash_tensor_fragment(digest: &mut Sha256, fragment: &TensorFragmentLayoutV1) 
     digest.update([match fragment.element {
         MatrixElement::Bf16 => 1,
         MatrixElement::F32 => 2,
+        MatrixElement::Fp8E4M3 => 3,
+        MatrixElement::Fp4E2M1 => 4,
     }]);
     digest.update([fragment.fragment_elements]);
     match fragment.mapping {
@@ -1914,6 +1922,7 @@ fn hash_tensor_fragment(digest: &mut Sha256, fragment: &TensorFragmentLayoutV1) 
             digest.update([2]);
             digest.update(identity.to_le_bytes());
         }
+        TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => digest.update([3]),
     }
     match fragment.multiplicity {
         TensorMultiplicityV1::Unique => digest.update([1]),
@@ -1922,6 +1931,8 @@ fn hash_tensor_fragment(digest: &mut Sha256, fragment: &TensorFragmentLayoutV1) 
     match fragment.packing {
         TensorElementPackingV1::Bf16PairInI32 => digest.update([1]),
         TensorElementPackingV1::F32Scalar => digest.update([2]),
+        TensorElementPackingV1::Fp8FourInI32 => digest.update([4]),
+        TensorElementPackingV1::Fp4EightInI32 => digest.update([5]),
         TensorElementPackingV1::Unsupported(code) => digest.update([3, code]),
     }
     match fragment.lds_swizzle {

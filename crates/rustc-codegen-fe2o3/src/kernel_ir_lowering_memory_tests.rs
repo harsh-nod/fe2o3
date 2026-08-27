@@ -129,8 +129,8 @@ fn recognized_memory_calls_reach_verified_ir_and_gfx942_llvm() {
     );
     assert_ne!(general_count, copy_one_count);
 
-    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
-        .expect("gfx942 memory LLVM");
+    let llvm =
+        dialect_amdgcn::lower_device_module_to_gfx942_llvm_ir(&module).expect("gfx942 memory LLVM");
     assert!(llvm.contains("sdiv exact i64"));
     assert!(llvm.contains("load volatile float, ptr addrspace(1)"));
     assert!(llvm.contains("store volatile float"));

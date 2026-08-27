@@ -423,6 +423,9 @@ fn canonical_graph_has_predicated_memory_two_barriers_and_exact_epilogue() {
                     ]
                 );
             }
+            MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                unreachable!("the gfx942 BF16 fixture cannot contain a scaled gfx950 MFMA")
+            }
         }
     }
     for operation in phase

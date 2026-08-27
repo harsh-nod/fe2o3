@@ -27,6 +27,18 @@ constexpr std::array<StringLiteral, 4> Basenames = {
     "oclc_finite_only_off.bc",
 };
 
+constexpr std::array<StringLiteral, 9> Gfx950Basenames = {
+    "ocml.bc",
+    "ockl.bc",
+    "oclc_daz_opt_off.bc",
+    "oclc_unsafe_math_off.bc",
+    "oclc_finite_only_off.bc",
+    "oclc_correctly_rounded_sqrt_on.bc",
+    "oclc_wavefrontsize64_on.bc",
+    "oclc_isa_version_950.bc",
+    "oclc_abi_version_600.bc",
+};
+
 [[noreturn]] void fail(StringRef Message) {
   errs() << "device-library policy test failed: " << Message << '\n';
   std::abort();
@@ -55,7 +67,7 @@ struct TemporaryDirectory {
 std::vector<uint8_t> bitcode(StringRef Name) {
   LLVMContext Context;
   Module ModuleValue(Name, Context);
-  ModuleValue.setTargetTriple(Triple("amdgcn-amd-amdhsa"));
+  ModuleValue.setTargetTriple("amdgcn-amd-amdhsa");
   SmallVector<char, 0> Buffer;
   raw_svector_ostream Stream(Buffer);
   WriteBitcodeToFile(ModuleValue, Stream);
@@ -104,6 +116,27 @@ void requireFailure(Expected<std::vector<Input>> Result, StringRef Message) {
   }
 }
 
+void checkConfiguredGfx950Provider() {
+  auto Policy = measuredGfx950DeviceLibraryPolicy();
+  if (!Policy) {
+    std::string Error = toString(Policy.takeError());
+    require(StringRef(Error).contains("built without the reviewed gfx950"),
+            "disabled gfx950 provider returned an unrelated error");
+    return;
+  }
+  auto Loaded = loadGfx950DeviceLibraries({"__ocml_exp_f32"}, *Policy);
+  require(static_cast<bool>(Loaded),
+          "configured reviewed gfx950 provider failed to load");
+  require(Loaded->size() == Gfx950Basenames.size(),
+          "configured gfx950 provider loaded the wrong file count");
+  for (size_t I = 0; I < Loaded->size(); ++I) {
+    require(Policy->Files[I].Basename == Gfx950Basenames[I],
+            "configured gfx950 provider changed canonical file order");
+    require((*Loaded)[I].Digest == Policy->Files[I].Digest,
+            "configured gfx950 provider changed a reviewed digest");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -132,6 +165,27 @@ int main() {
           "gfx942 OCML accepted code-object V4");
   require(!isSupportedGfx942OcmlCodeObjectVersion(7),
           "gfx942 OCML accepted an unknown code-object version");
+  require(isSupportedGfx950OcmlImport("__ocml_exp_f32"),
+          "gfx950 OCML exp import is absent from the closed map");
+  require(!isSupportedGfx950OcmlImport("__ocml_sin_f32"),
+          "gfx950 accepted an OCML import outside the production envelope");
+  require(isSupportedGfx950OcmlCodeObjectVersion(6),
+          "gfx950 OCML rejected code-object V6");
+  require(!isSupportedGfx950OcmlCodeObjectVersion(5),
+          "gfx950 OCML accepted code-object V5");
+
+  Gfx950DeviceLibraryPolicy SubstitutedGfx950;
+  SubstitutedGfx950.Directory = "/nonexistent";
+  for (StringRef Basename : Gfx950Basenames)
+    SubstitutedGfx950.Files.push_back(
+        {Basename.str(), {}, MaxDeviceLibraryFileBytes});
+  requireFailure(
+      loadGfx950DeviceLibraries({"__ocml_exp_f32"}, SubstitutedGfx950),
+      "digest is not reviewed");
+  requireFailure(
+      loadGfx950DeviceLibraries({"__ocml_sin_f32"}, SubstitutedGfx950),
+      "unsupported gfx950 OCML import");
+  checkConfiguredGfx950Provider();
 
   Fixture Valid;
   auto Loaded = loadGfx942DeviceLibraries({"__ocml_sin_f32"}, Valid.Policy);

@@ -401,7 +401,7 @@ future MLIR lower half without changing the source API, artifact manifest, or
 verification model.
 
 The current implementation pins Pliron v0.17.0 commit
-`2610651306ea3ba670f68d5d8b1e1159bcd521ed` and provides a bounded context,
+`5bdf861bf03e7f20242b25717fb653336d02e487` and provides a bounded context,
 private context-identity, registration, and pass-plan shell. Generic pass
 execution is intentionally absent because upstream `Ptr<T>` values do not
 carry owner provenance; [#140](https://github.com/harsh-nod/fe2o3/issues/140)

@@ -754,6 +754,98 @@ fn checked_tiled_raw_invocation_is_injective_for_a_dynamic_launch() {
 }
 
 #[test]
+fn checked_tiled_equivalent_distinct_layout_constants_are_one_injective_family() {
+    let context = &mut setup();
+    let function = function(context, "checked_tiled_distinct_layout_constants");
+    let entry = function.get_entry_block(context);
+    let second_access = block(context, &function, "second_access");
+    let third_access = block(context, &function, "third_access");
+    let exit = block(context, &function, "exit");
+    let output = view(context, vec![256], MemorySpaceAttr::Global);
+    let invocation = InvocationIndexOp::new(context, 0, 0);
+    let component_zero = IndexConstantOp::new(context, 0);
+    let component_one = IndexConstantOp::new(context, 1);
+    let first_rows = IndexConstantOp::new(context, 16);
+    let first_columns = IndexConstantOp::new(context, 16);
+    let first_stride = IndexConstantOp::new(context, 16);
+    let second_rows = IndexConstantOp::new(context, 16);
+    let second_columns = IndexConstantOp::new(context, 16);
+    let second_stride = IndexConstantOp::new(context, 16);
+    let first = CheckedTiledIndex2DOp::new(
+        context,
+        invocation.result(context),
+        component_zero.result(context),
+        first_rows.result(context),
+        first_columns.result(context),
+        first_stride.result(context),
+        [64, 16, 16, 4],
+    );
+    let second = CheckedTiledIndex2DOp::new(
+        context,
+        invocation.result(context),
+        component_one.result(context),
+        second_rows.result(context),
+        second_columns.result(context),
+        second_stride.result(context),
+        [64, 16, 16, 4],
+    );
+    let extent = IndexConstantOp::new(context, 256);
+    let first_guard = IndexLessThanBranchOp::new(
+        context,
+        first.result(context),
+        extent.result(context),
+        second_access,
+        exit,
+    );
+    let first_write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        first.result(context),
+    );
+    let second_guard = IndexLessThanBranchOp::new(
+        context,
+        second.result(context),
+        extent.result(context),
+        third_access,
+        exit,
+    );
+    let second_write = access(
+        context,
+        AccessKindAttr::Write,
+        output.result(context),
+        second.result(context),
+    );
+    let to_exit = BranchOp::new(context, exit);
+    let ret = ReturnOp::new(context);
+    for operation in [
+        output.get_operation(),
+        invocation.get_operation(),
+        component_zero.get_operation(),
+        component_one.get_operation(),
+        first_rows.get_operation(),
+        first_columns.get_operation(),
+        first_stride.get_operation(),
+        second_rows.get_operation(),
+        second_columns.get_operation(),
+        second_stride.get_operation(),
+        first.get_operation(),
+        second.get_operation(),
+        extent.get_operation(),
+        first_guard.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append(context, second_access, &first_write);
+    append(context, second_access, &second_guard);
+    append(context, third_access, &second_write);
+    append(context, third_access, &to_exit);
+    append(context, exit, &ret);
+
+    assert!(run_pliron_ranked_race_check_v1(context, &function).is_clean());
+}
+
+#[test]
 fn checked_row_striped_raw_invocation_is_injective_for_a_dynamic_launch() {
     let context = &mut setup();
     let function = function(context, "checked_row_striped_dynamic_raw_invocation");

@@ -42,8 +42,10 @@ const AMDGPU_LOWERING_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-AMDGPU-LOWERING-TRAN
 const SEMANTIC_TO_LLVM_DOMAIN_V3: &[u8] = b"FE2O3/PRODUCTION-SEMANTIC-TO-LLVM-ASSOCIATION/V3\0";
 
 const EXACT_GFX942_TARGET_V3: &str = "gfx942:xnack-";
+const EXACT_GFX950_TARGET_V3: &str = "gfx950:xnack-";
 const EXACT_RUSTC_LLVM_TARGET_V3: &str = "amdgcn-amd-amdhsa";
 const EXACT_GFX942_CPU_V3: &str = "gfx942";
+const EXACT_GFX950_CPU_V3: &str = "gfx950";
 const EXACT_GFX942_FEATURES_V3: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 const EXACT_CODE_OBJECT_VERSION_V3: u16 = 6;
 const EXACT_WAVE_WIDTH_BITS_V3: u16 = 64;
@@ -766,21 +768,23 @@ impl TargetBindingTranscriptV3 {
 fn validate_target_binding_inputs_v3(
     inputs: &TargetBindingTranscriptInputsV3<'_>,
 ) -> Result<(), ProductionTargetLineageErrorV3> {
-    require_exact_text(
-        "configured target",
-        validate_ascii_token("configured target", inputs.configured_target.as_bytes())?,
-        EXACT_GFX942_TARGET_V3,
-    )?;
+    let configured_target =
+        validate_ascii_token("configured target", inputs.configured_target.as_bytes())?;
     require_exact_text(
         "rustc LLVM target",
         validate_ascii_token("rustc LLVM target", inputs.rustc_llvm_target.as_bytes())?,
         EXACT_RUSTC_LLVM_TARGET_V3,
     )?;
-    require_exact_text(
-        "target CPU",
-        validate_ascii_token("target CPU", inputs.target_cpu.as_bytes())?,
-        EXACT_GFX942_CPU_V3,
-    )?;
+    let target_cpu = validate_ascii_token("target CPU", inputs.target_cpu.as_bytes())?;
+    if !matches!(
+        (configured_target, target_cpu),
+        (EXACT_GFX942_TARGET_V3, EXACT_GFX942_CPU_V3)
+            | (EXACT_GFX950_TARGET_V3, EXACT_GFX950_CPU_V3)
+    ) {
+        return Err(ProductionTargetLineageErrorV3::ExactValueMismatch {
+            field: "configured target and target CPU",
+        });
+    }
     require_exact_text(
         "target features",
         validate_ascii_token("target features", inputs.target_features.as_bytes())?,
@@ -1034,11 +1038,16 @@ impl AmdgpuLoweringTranscriptV3 {
 fn validate_amdgpu_lowering_inputs_v3(
     inputs: &AmdgpuLoweringTranscriptInputsV3<'_>,
 ) -> Result<(), ProductionTargetLineageErrorV3> {
-    require_exact_text(
-        "configured target",
-        validate_ascii_token("configured target", inputs.configured_target.as_bytes())?,
-        EXACT_GFX942_TARGET_V3,
-    )?;
+    let configured_target =
+        validate_ascii_token("configured target", inputs.configured_target.as_bytes())?;
+    if !matches!(
+        configured_target,
+        EXACT_GFX942_TARGET_V3 | EXACT_GFX950_TARGET_V3
+    ) {
+        return Err(ProductionTargetLineageErrorV3::ExactValueMismatch {
+            field: "configured target",
+        });
+    }
     validate_llvm_text(inputs.pre_descriptor_llvm)?;
     Ok(())
 }

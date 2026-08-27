@@ -7,6 +7,10 @@ use crate::{
 
 pub const MATRIX_CAPABILITY_NAMESPACE: &str = "fe2o3.matrix";
 pub const BF16_F32_M16N16K16_CAPABILITY: &str = "mma-bf16-f32-m16n16k16-wave64.v1";
+pub const SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY: &str =
+    "scaled-mma-fp8-e4m3-f32-m16n16k128-wave64.v1";
+pub const SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY: &str =
+    "scaled-mma-fp4-e2m1-f32-m16n16k128-wave64.v1";
 pub const LDS_TILE_16X16_XOR4_CAPABILITY: &str = "lds-tile-16x16-xor4-wave64.v1";
 
 pub const MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2: &str =
@@ -222,6 +226,8 @@ impl MatrixProjectedKernargPolicyV1 {
                 match parameter.element {
                     MatrixElement::Bf16 => 1,
                     MatrixElement::F32 => 2,
+                    MatrixElement::Fp8E4M3 => 3,
+                    MatrixElement::Fp4E2M1 => 4,
                 },
             ]);
             bytes.extend_from_slice(&parameter.offset.to_le_bytes());
@@ -286,6 +292,8 @@ fn lower_hex(bytes: &[u8]) -> String {
 pub enum MatrixElement {
     Bf16,
     F32,
+    Fp4E2M1,
+    Fp8E4M3,
 }
 
 impl MatrixElement {
@@ -293,6 +301,8 @@ impl MatrixElement {
         match self {
             Self::Bf16 => Type::Scalar(ScalarType::Bf16),
             Self::F32 => Type::F32,
+            Self::Fp4E2M1 => Type::Scalar(ScalarType::U8),
+            Self::Fp8E4M3 => Type::Scalar(ScalarType::U8),
         }
     }
 }
@@ -315,6 +325,8 @@ pub enum TensorOperandRoleV1 {
 pub enum TensorElementPackingV1 {
     Bf16PairInI32,
     F32Scalar,
+    Fp4EightInI32,
+    Fp8FourInI32,
     Unsupported(u8),
 }
 
@@ -352,6 +364,8 @@ pub enum TensorTailMaskV1 {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum TensorInstructionProfileV1 {
     Gfx942MfmaBf16F32M16N16K16Wave64,
+    Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64,
+    Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64,
     IncompatibleWave32,
     Opaque(u32),
 }
@@ -377,6 +391,22 @@ impl TensorInstructionProfileV1 {
                 contribution_shape: [16, 16, 16],
                 output_shape: [16, 16],
             }),
+            Self::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {
+                Some(TensorInstructionSemanticDescriptorV1 {
+                    call_argument_count: 4,
+                    subgroup_width: 64,
+                    contribution_shape: [16, 16, 128],
+                    output_shape: [16, 16],
+                })
+            }
+            Self::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
+                Some(TensorInstructionSemanticDescriptorV1 {
+                    call_argument_count: 4,
+                    subgroup_width: 64,
+                    contribution_shape: [16, 16, 128],
+                    output_shape: [16, 16],
+                })
+            }
             Self::IncompatibleWave32 | Self::Opaque(_) => None,
         }
     }
@@ -413,6 +443,8 @@ pub enum TensorSymbolicMapV1 {
         lane_divisor: u16,
         axes: [TensorCoordinateExprV1; 2],
     },
+    /// gfx950 FP8 operands split each lane's K contribution across K0..63/K64..127.
+    Gfx950Fp8M16N16K128SplitK,
     /// Preserved for future extensions, but never accepted as a proof.
     Opaque(u32),
 }
@@ -459,6 +491,28 @@ impl TensorLayoutContractV1 {
         contract.a.lds_swizzle = TensorLdsSwizzleV1::Xor4;
         contract.b.lds_swizzle = TensorLdsSwizzleV1::Xor4;
         contract
+    }
+
+    pub const fn gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64() -> Self {
+        Self {
+            profile: TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64,
+            subgroup_width: 64,
+            a: canonical_gfx950_fp8_fragment(TensorOperandRoleV1::A),
+            b: canonical_gfx950_fp8_fragment(TensorOperandRoleV1::B),
+            accumulator: canonical_gfx950_fp8_fragment(TensorOperandRoleV1::Accumulator),
+            tail_mask: TensorTailMaskV1::ZeroFilledPredicateInputs,
+        }
+    }
+
+    pub const fn gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64() -> Self {
+        Self {
+            profile: TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64,
+            subgroup_width: 64,
+            a: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::A),
+            b: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::B),
+            accumulator: canonical_gfx950_fp4_fragment(TensorOperandRoleV1::Accumulator),
+            tail_mask: TensorTailMaskV1::ZeroFilledPredicateInputs,
+        }
     }
 
     /// Declares an XOR4 LDS storage transform for operand A only.
@@ -516,30 +570,97 @@ const fn canonical_fragment(role: TensorOperandRoleV1) -> TensorFragmentLayoutV1
     }
 }
 
+const fn canonical_gfx950_fp8_fragment(role: TensorOperandRoleV1) -> TensorFragmentLayoutV1 {
+    if matches!(role, TensorOperandRoleV1::Accumulator) {
+        return canonical_fragment(role);
+    }
+    TensorFragmentLayoutV1 {
+        role,
+        shape: match role {
+            TensorOperandRoleV1::A => [16, 128],
+            TensorOperandRoleV1::B => [128, 16],
+            TensorOperandRoleV1::Accumulator => [16, 16],
+        },
+        element: MatrixElement::Fp8E4M3,
+        fragment_elements: 32,
+        mapping: TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK,
+        multiplicity: TensorMultiplicityV1::Unique,
+        packing: TensorElementPackingV1::Fp8FourInI32,
+        lds_swizzle: TensorLdsSwizzleV1::None,
+    }
+}
+
+const fn canonical_gfx950_fp4_fragment(role: TensorOperandRoleV1) -> TensorFragmentLayoutV1 {
+    if matches!(role, TensorOperandRoleV1::Accumulator) {
+        return canonical_fragment(role);
+    }
+    let (first, second) = match role {
+        TensorOperandRoleV1::A => (
+            TensorCoordinateExprV1::new(1, 0, 0),
+            TensorCoordinateExprV1::new(0, 32, 1),
+        ),
+        TensorOperandRoleV1::B => (
+            TensorCoordinateExprV1::new(0, 32, 1),
+            TensorCoordinateExprV1::new(1, 0, 0),
+        ),
+        TensorOperandRoleV1::Accumulator => unreachable!(),
+    };
+    TensorFragmentLayoutV1 {
+        role,
+        shape: match role {
+            TensorOperandRoleV1::A => [16, 128],
+            TensorOperandRoleV1::B => [128, 16],
+            TensorOperandRoleV1::Accumulator => [16, 16],
+        },
+        element: MatrixElement::Fp4E2M1,
+        fragment_elements: 32,
+        mapping: TensorSymbolicMapV1::LaneComponentAffine {
+            lane_modulus: 16,
+            lane_divisor: 16,
+            axes: [first, second],
+        },
+        multiplicity: TensorMultiplicityV1::Unique,
+        packing: TensorElementPackingV1::Fp4EightInI32,
+        lds_swizzle: TensorLdsSwizzleV1::None,
+    }
+}
+
 impl TensorFragmentLayoutV1 {
     /// Evaluates the reviewed affine form relative to the symbolic tile origin.
     pub fn logical_coordinate(self, lane: u16, component: u8) -> Option<[u64; 2]> {
         if lane >= 64 || component >= self.fragment_elements {
             return None;
         }
-        let TensorSymbolicMapV1::LaneComponentAffine {
-            lane_modulus,
-            lane_divisor,
-            axes,
-        } = self.mapping
-        else {
-            return None;
-        };
-        if lane_modulus == 0 || lane_divisor == 0 {
-            return None;
+        match self.mapping {
+            TensorSymbolicMapV1::LaneComponentAffine {
+                lane_modulus,
+                lane_divisor,
+                axes,
+            } => {
+                if lane_modulus == 0 || lane_divisor == 0 {
+                    return None;
+                }
+                evaluate_tensor_coordinate_v1(
+                    u64::from(lane),
+                    u64::from(component),
+                    lane_modulus,
+                    lane_divisor,
+                    axes,
+                )
+            }
+            TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => {
+                let lane_axis = u64::from(lane % 16);
+                let k = u64::from(lane / 16) * 16
+                    + u64::from(component % 16)
+                    + u64::from(component / 16) * 64;
+                match self.role {
+                    TensorOperandRoleV1::A => Some([lane_axis, k]),
+                    TensorOperandRoleV1::B => Some([k, lane_axis]),
+                    TensorOperandRoleV1::Accumulator => None,
+                }
+            }
+            TensorSymbolicMapV1::Opaque(_) => None,
         }
-        evaluate_tensor_coordinate_v1(
-            u64::from(lane),
-            u64::from(component),
-            lane_modulus,
-            lane_divisor,
-            axes,
-        )
     }
 }
 
@@ -676,7 +797,9 @@ pub fn verify_tensor_layout_contract_v1(
 ) -> Vec<TensorLayoutFindingV1> {
     let mut findings = Vec::new();
     match contract.profile {
-        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => {}
+        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64
+        | TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
+        | TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {}
         TensorInstructionProfileV1::IncompatibleWave32 => {
             findings.push(TensorLayoutFindingV1::ProfileMismatch {
                 field: "wave32 target profile",
@@ -698,7 +821,13 @@ pub fn verify_tensor_layout_contract_v1(
         (TensorOperandRoleV1::B, &contract.b),
         (TensorOperandRoleV1::Accumulator, &contract.accumulator),
     ] {
-        verify_tensor_fragment_v1(position, fragment, contract.subgroup_width, &mut findings);
+        verify_tensor_fragment_v1(
+            contract.profile,
+            position,
+            fragment,
+            contract.subgroup_width,
+            &mut findings,
+        );
     }
     if !matches!(
         contract.tail_mask,
@@ -726,6 +855,7 @@ pub fn verify_tensor_layout_contract_v1(
 }
 
 fn verify_tensor_fragment_v1(
+    profile: TensorInstructionProfileV1,
     position: TensorOperandRoleV1,
     fragment: &TensorFragmentLayoutV1,
     subgroup_width: u16,
@@ -737,11 +867,24 @@ fn verify_tensor_fragment_v1(
             actual: fragment.role,
         });
     }
-    let expected = canonical_fragment(position);
+    let expected = match profile {
+        TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => {
+            canonical_fragment(position)
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {
+            canonical_gfx950_fp8_fragment(position)
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
+            canonical_gfx950_fp4_fragment(position)
+        }
+        TensorInstructionProfileV1::IncompatibleWave32 | TensorInstructionProfileV1::Opaque(_) => {
+            return;
+        }
+    };
     if fragment.shape != expected.shape || fragment.element != expected.element {
         findings.push(TensorLayoutFindingV1::ShapeOrElementMismatch { role: position });
     }
-    if fragment.fragment_elements != 4 {
+    if fragment.fragment_elements != expected.fragment_elements {
         findings.push(TensorLayoutFindingV1::FragmentWidthMismatch {
             role: position,
             actual: fragment.fragment_elements,
@@ -751,18 +894,21 @@ fn verify_tensor_fragment_v1(
     if fragment.packing != expected.packing {
         findings.push(TensorLayoutFindingV1::PackingMismatch { role: position });
     }
-    let TensorSymbolicMapV1::LaneComponentAffine {
-        lane_modulus,
-        lane_divisor,
-        axes,
-    } = fragment.mapping
-    else {
-        findings.push(TensorLayoutFindingV1::UnsupportedSymbolicMap { role: position });
-        return;
-    };
-    if lane_modulus == 0 || lane_divisor == 0 {
-        findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
-        return;
+    match fragment.mapping {
+        TensorSymbolicMapV1::LaneComponentAffine {
+            lane_modulus,
+            lane_divisor,
+            ..
+        } if lane_modulus == 0 || lane_divisor == 0 => {
+            findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
+            return;
+        }
+        TensorSymbolicMapV1::Opaque(_) => {
+            findings.push(TensorLayoutFindingV1::UnsupportedSymbolicMap { role: position });
+            return;
+        }
+        TensorSymbolicMapV1::LaneComponentAffine { .. }
+        | TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => {}
     }
     if fragment.mapping != expected.mapping {
         findings.push(TensorLayoutFindingV1::SymbolicMapMismatch { role: position });
@@ -771,9 +917,7 @@ fn verify_tensor_fragment_v1(
     let mut coordinates = std::collections::BTreeMap::<[u64; 2], u16>::new();
     for lane in 0..u64::from(subgroup_width.min(64)) {
         for component in 0..u64::from(fragment.fragment_elements) {
-            let Some(coordinate) =
-                evaluate_tensor_coordinate_v1(lane, component, lane_modulus, lane_divisor, axes)
-            else {
+            let Some(coordinate) = fragment.logical_coordinate(lane as u16, component as u8) else {
                 findings.push(TensorLayoutFindingV1::MalformedSymbolicMap { role: position });
                 return;
             };
@@ -858,11 +1002,37 @@ impl MatrixMultiplyProfile {
         }
     }
 
+    pub const fn fp8_e4m3_f32_m16n16k128_wave64() -> Self {
+        Self {
+            m: 16,
+            n: 16,
+            k: 128,
+            input: MatrixElement::Fp8E4M3,
+            accumulator: MatrixElement::F32,
+            wave_width: WaveWidth::Wave64,
+        }
+    }
+
+    pub const fn fp4_e2m1_f32_m16n16k128_wave64() -> Self {
+        Self {
+            m: 16,
+            n: 16,
+            k: 128,
+            input: MatrixElement::Fp4E2M1,
+            accumulator: MatrixElement::F32,
+            wave_width: WaveWidth::Wave64,
+        }
+    }
+
     pub const fn is_supported_v1(self) -> bool {
         self.m == 16
             && self.n == 16
-            && self.k == 16
-            && matches!(self.input, MatrixElement::Bf16)
+            && matches!(
+                (self.input, self.k),
+                (MatrixElement::Bf16, 16)
+                    | (MatrixElement::Fp4E2M1, 128)
+                    | (MatrixElement::Fp8E4M3, 128)
+            )
             && matches!(self.accumulator, MatrixElement::F32)
             && matches!(self.wave_width, WaveWidth::Wave64)
     }
@@ -906,6 +1076,8 @@ impl MatrixLdsProfile {
         match self.element {
             MatrixElement::Bf16 => 2,
             MatrixElement::F32 => 4,
+            MatrixElement::Fp4E2M1 => 1,
+            MatrixElement::Fp8E4M3 => 1,
         }
     }
 }
@@ -915,6 +1087,12 @@ pub enum MatrixOperationKind {
     MultiplyAccumulate {
         lhs: [ValueId; 4],
         rhs: [ValueId; 4],
+        accumulator: [ValueId; 4],
+        profile: MatrixMultiplyProfile,
+    },
+    ScaledMultiplyAccumulate {
+        lhs: [ValueId; 8],
+        rhs: [ValueId; 8],
         accumulator: [ValueId; 4],
         profile: MatrixMultiplyProfile,
     },
@@ -949,6 +1127,32 @@ impl MatrixOperation {
             rhs,
             accumulator,
             profile: MatrixMultiplyProfile::bf16_f32_m16n16k16_wave64(),
+        })
+    }
+
+    pub fn scaled_multiply_accumulate_fp8_e4m3(
+        lhs: [ValueId; 8],
+        rhs: [ValueId; 8],
+        accumulator: [ValueId; 4],
+    ) -> Self {
+        Self::full(MatrixOperationKind::ScaledMultiplyAccumulate {
+            lhs,
+            rhs,
+            accumulator,
+            profile: MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64(),
+        })
+    }
+
+    pub fn scaled_multiply_accumulate_fp4_e2m1(
+        lhs: [ValueId; 8],
+        rhs: [ValueId; 8],
+        accumulator: [ValueId; 4],
+    ) -> Self {
+        Self::full(MatrixOperationKind::ScaledMultiplyAccumulate {
+            lhs,
+            rhs,
+            accumulator,
+            profile: MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64(),
         })
     }
 
@@ -1000,6 +1204,12 @@ impl MatrixOperation {
                 accumulator,
                 ..
             } => lhs.into_iter().chain(rhs).chain(accumulator).collect(),
+            MatrixOperationKind::ScaledMultiplyAccumulate {
+                lhs,
+                rhs,
+                accumulator,
+                ..
+            } => lhs.into_iter().chain(rhs).chain(accumulator).collect(),
             MatrixOperationKind::LdsLoad { base, .. } => vec![base],
             MatrixOperationKind::LdsStore { base, values, .. } => {
                 std::iter::once(base).chain(values).collect()
@@ -1009,7 +1219,8 @@ impl MatrixOperation {
 
     pub fn result_types(&self) -> Vec<Type> {
         match self.kind {
-            MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
+            MatrixOperationKind::MultiplyAccumulate { profile, .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
                 vec![profile.accumulator.ty(); 4]
             }
             MatrixOperationKind::LdsLoad { profile, .. } => vec![profile.element.ty(); 4],
@@ -1019,7 +1230,8 @@ impl MatrixOperation {
 
     pub fn memory_effects(&self) -> Vec<MemoryEffect> {
         match self.kind {
-            MatrixOperationKind::MultiplyAccumulate { .. } => Vec::new(),
+            MatrixOperationKind::MultiplyAccumulate { .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => Vec::new(),
             MatrixOperationKind::LdsLoad { .. } => {
                 vec![MemoryEffect::Read(AddressSpace::Workgroup)]
             }
@@ -1033,6 +1245,15 @@ impl MatrixOperation {
         let (wave, extension) = match self.kind {
             MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
                 (profile.wave_width, BF16_F32_M16N16K16_CAPABILITY)
+            }
+            MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
+                let extension =
+                    if profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
+                        SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
+                    } else {
+                        SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                    };
+                (profile.wave_width, extension)
             }
             MatrixOperationKind::LdsLoad { profile, .. }
             | MatrixOperationKind::LdsStore { profile, .. } => {
@@ -1052,6 +1273,7 @@ impl MatrixOperation {
             MatrixOperationKind::MultiplyAccumulate { .. } => {
                 capabilities.insert(TargetCapability::BFloat16);
             }
+            MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {}
             MatrixOperationKind::LdsLoad { profile, .. }
             | MatrixOperationKind::LdsStore { profile, .. } => {
                 capabilities.insert(TargetCapability::WorkgroupMemory);
@@ -1090,7 +1312,7 @@ impl MatrixOperation {
         }
         match self.kind {
             MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
-                if !profile.is_supported_v1() {
+                if profile != MatrixMultiplyProfile::bf16_f32_m16n16k16_wave64() {
                     issues.push(MatrixVerificationIssue::structure(format!(
                         "unsupported matrix multiply profile {profile:?}"
                     )));
@@ -1109,6 +1331,40 @@ impl MatrixOperation {
                     }
                     None => issues.push(MatrixVerificationIssue::structure(
                         "matrix multiply requires an explicit tensor layout contract",
+                    )),
+                }
+            }
+            MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
+                let expected_layout_profile =
+                    if profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
+                        Some(TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64)
+                    } else if profile == MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64() {
+                        Some(TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64)
+                    } else {
+                        None
+                    };
+                if expected_layout_profile.is_none() {
+                    issues.push(MatrixVerificationIssue::structure(format!(
+                        "unsupported scaled matrix multiply profile {profile:?}"
+                    )));
+                }
+                for actual in operand_types.iter().take(16) {
+                    expect_type(actual, Type::Scalar(ScalarType::U32), &mut issues);
+                }
+                for actual in operand_types.iter().skip(16) {
+                    expect_type(actual, Type::F32, &mut issues);
+                }
+                match &self.tensor_layout {
+                    Some(contract) if Some(contract.profile) == expected_layout_profile => {
+                        for finding in verify_tensor_layout_contract_v1(contract) {
+                            issues.push(MatrixVerificationIssue::structure(finding.to_string()));
+                        }
+                    }
+                    Some(_) => issues.push(MatrixVerificationIssue::structure(
+                        "scaled matrix multiply profile and gfx950 tensor layout disagree",
+                    )),
+                    None => issues.push(MatrixVerificationIssue::structure(
+                        "scaled matrix multiply requires an explicit tensor layout contract",
                     )),
                 }
             }

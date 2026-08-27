@@ -39,8 +39,8 @@ use dialect_kernel::{IndexType, RankedViewType, SemanticScalarType};
 use dialect_proof::{EvidenceRefType, ObligationRefType};
 
 use crate::pliron_pass_contract::{
-    IdentityCaptureFailureV1, IdentityComparisonFailureV1, PlironStructuralIdentityLabelV1,
-    PlironStructuralIdentityProviderV1,
+    IdentityCaptureFailureV1, IdentityComparisonFailureV1, MutationEpochCaptureFailureV1,
+    PlironStructuralIdentityLabelV1, PlironStructuralIdentityProviderV1,
 };
 use crate::pliron_ranked_bounds::is_production_ranked_operation_v1;
 
@@ -377,6 +377,13 @@ impl<'a> LivePlironStructuralIdentityProviderV1<'a> {
 
 impl PlironStructuralIdentityProviderV1 for LivePlironStructuralIdentityProviderV1<'_> {
     type Snapshot = BuiltIdentityV1;
+
+    fn mutation_epoch(&self) -> Result<u64, MutationEpochCaptureFailureV1> {
+        self.context
+            .ir_mutation_attempt_epoch()
+            .map(|epoch| epoch.value())
+            .map_err(|error| MutationEpochCaptureFailureV1::new(error.to_string()))
+    }
 
     fn capture(&mut self) -> Result<Self::Snapshot, IdentityCaptureFailureV1> {
         build_identity_caught(self.context, self.function).map_err(|error| {

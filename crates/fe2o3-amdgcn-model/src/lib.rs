@@ -48,6 +48,7 @@ pub enum AmdgcnIntrinsic {
     Ballot64,
     DsBpermute,
     MfmaF32M16N16K16Bf16,
+    MfmaScaleF32M16N16K128F8F6F4V8I32,
     DsReadTr4B64,
     DsReadTr8B64,
     DsReadTr16B64,
@@ -73,6 +74,9 @@ impl AmdgcnIntrinsic {
             Self::Ballot64 => "llvm.amdgcn.ballot.i64",
             Self::DsBpermute => "llvm.amdgcn.ds.bpermute",
             Self::MfmaF32M16N16K16Bf16 => "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
+            Self::MfmaScaleF32M16N16K128F8F6F4V8I32 => {
+                "llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32"
+            }
             Self::DsReadTr4B64 => "llvm.amdgcn.ds.read.tr4.b64.v2i32",
             Self::DsReadTr8B64 => "llvm.amdgcn.ds.read.tr8.b64.v2i32",
             Self::DsReadTr16B64 => "llvm.amdgcn.ds.read.tr16.b64.v4i16",

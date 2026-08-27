@@ -1,5 +1,6 @@
 use std::{error::Error, fmt};
 
+use fe2o3_amd_target::{AmdTargetId, ProductionAmdTargetProfileV1};
 use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_artifact_transaction::{DurableLinkPublicationError, PublishedLinkArtifactV1};
 use fe2o3_compiler_ffi::{
@@ -75,8 +76,9 @@ impl WorkerV3HostLineageEvidenceV1 {
 ///
 /// Construction independently binds the exact durable artifact to the linked precursor,
 /// compiler descriptor source, export manifest, physical metadata and ELF symbols, requested
-/// logical kernel, and observed gfx942 device. The value owns the move-only recovered envelope
-/// and its current publication lease, but exposes no HSACO bytes or load/launch transition.
+/// logical kernel, and observed exact production device. The value owns the move-only recovered
+/// envelope and its current publication lease, but exposes no HSACO bytes or load/launch
+/// transition.
 pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     envelope: RecoveredWorkerV3LoadEnvelopeV1,
     outer_handoff: InertSemanticCompilerModuleHandoffV3,
@@ -485,7 +487,7 @@ fn validate_target_and_code_object(
 ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
     let table = inspection.descriptor_table();
     let target = inspection.hsaco().target();
-    if target.processor() != "gfx942" {
+    if production_profile_for_artifact_target(target).is_none() {
         return Err(RecoveredWorkerV3AdmissionErrorV1::UnsupportedTarget);
     }
     if outer.capsule().target().as_amd_target_id() != target
@@ -504,6 +506,12 @@ fn validate_target_and_code_object(
         return Err(RecoveredWorkerV3AdmissionErrorV1::CodeObjectVersionMismatch);
     }
     Ok(())
+}
+
+fn production_profile_for_artifact_target(
+    target: AmdTargetId,
+) -> Option<ProductionAmdTargetProfileV1> {
+    ProductionAmdTargetProfileV1::from_device_target(&target.to_string())
 }
 
 fn select_exact_kernel(
@@ -641,7 +649,9 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
             Self::ExportManifestMismatch => formatter
                 .write_str("Worker V3 export receipt differs from its compiler module manifest"),
             Self::UnsupportedTarget => {
-                formatter.write_str("Worker V3 host admission currently accepts only gfx942")
+                formatter.write_str(
+                    "Worker V3 host admission requires an exact production gfx942:xnack- or gfx950:xnack- target",
+                )
             }
             Self::TargetMismatch => {
                 formatter.write_str("Worker V3 compiler, descriptor, and HSACO targets differ")
@@ -691,6 +701,32 @@ impl Error for RecoveredWorkerV3AdmissionErrorV1 {
             Self::DescriptorSource(error) => Some(error),
             Self::FinalizedDescriptorEncoding(error) => Some(error),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_artifact_target_profile_is_exact_and_never_relabels() {
+        for (target, expected) in [
+            ("gfx942:xnack-", ProductionAmdTargetProfileV1::Gfx942),
+            ("gfx950:xnack-", ProductionAmdTargetProfileV1::Gfx950),
+        ] {
+            assert_eq!(
+                production_profile_for_artifact_target(AmdTargetId::parse(target).unwrap()),
+                Some(expected)
+            );
+            assert_eq!(expected.device_target(), target);
+        }
+
+        for target in ["gfx942", "gfx942:xnack+", "gfx950", "gfx950:xnack+"] {
+            assert_eq!(
+                production_profile_for_artifact_target(AmdTargetId::parse(target).unwrap()),
+                None
+            );
         }
     }
 }

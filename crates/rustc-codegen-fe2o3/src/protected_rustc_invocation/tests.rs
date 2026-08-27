@@ -97,7 +97,7 @@ fn baseline_descriptor() -> RustcInvocationDescriptorV3 {
     let closure = baseline_closure();
     descriptor_with(
         closure,
-        EXACT_PROTECTED_TARGET_V1,
+        BASELINE_PROTECTED_TARGET_V1,
         closure.identity_sha256(),
         closure.codegen_backend_sha256(),
     )
@@ -557,6 +557,45 @@ fn argv_cwd_environment_and_target_mismatches_fail_closed() {
 }
 
 #[test]
+fn protected_target_admission_accepts_only_exact_typed_production_profiles() {
+    for target in [
+        fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
+        fe2o3_amd_target::PRODUCTION_GFX950_DEVICE_TARGET_V1,
+    ] {
+        let closure = baseline_closure();
+        let descriptor = descriptor_with(
+            closure,
+            target,
+            closure.identity_sha256(),
+            closure.codegen_backend_sha256(),
+        );
+        validate(descriptor.clone(), observation(&descriptor)).unwrap();
+    }
+
+    for target in [
+        "gfx942",
+        "gfx942:xnack+",
+        "gfx942:sramecc+:xnack-",
+        "gfx950",
+        "gfx950:xnack+",
+        "gfx950:sramecc+:xnack-",
+    ] {
+        let closure = baseline_closure();
+        let descriptor = descriptor_with(
+            closure,
+            target,
+            closure.identity_sha256(),
+            closure.codegen_backend_sha256(),
+        );
+        assert!(matches!(
+            validate(descriptor.clone(), observation(&descriptor)),
+            Err(ProtectedRustcInvocationErrorV1::TargetMismatch { .. })
+        ));
+    }
+    assert!(AmdTargetIdTextV1::new("GFX950:xnack-").is_err());
+}
+
+#[test]
 fn measured_rustc_and_backend_pins_are_authoritative() {
     let descriptor = baseline_descriptor();
     let mut changed = observation(&descriptor);
@@ -577,8 +616,12 @@ fn measured_rustc_and_backend_pins_are_authoritative() {
 #[test]
 fn aggregate_and_backend_environment_values_are_closed_observations_only() {
     let closure = baseline_closure();
-    let aggregate_mismatch =
-        descriptor_with(closure, EXACT_PROTECTED_TARGET_V1, [0xa3; 32], BACKEND_PIN);
+    let aggregate_mismatch = descriptor_with(
+        closure,
+        BASELINE_PROTECTED_TARGET_V1,
+        [0xa3; 32],
+        BACKEND_PIN,
+    );
     assert!(matches!(
         validate(aggregate_mismatch.clone(), observation(&aggregate_mismatch)),
         Err(ProtectedRustcInvocationErrorV1::CompilerClosureObservationMismatch)
@@ -586,7 +629,7 @@ fn aggregate_and_backend_environment_values_are_closed_observations_only() {
 
     let backend_mismatch = descriptor_with(
         closure,
-        EXACT_PROTECTED_TARGET_V1,
+        BASELINE_PROTECTED_TARGET_V1,
         closure.identity_sha256(),
         [0xa4; 32],
     );
@@ -612,7 +655,7 @@ fn every_full_compiler_closure_role_is_checked() {
         let changed = compiler_closure(pins);
         let descriptor = descriptor_with(
             changed,
-            EXACT_PROTECTED_TARGET_V1,
+            BASELINE_PROTECTED_TARGET_V1,
             baseline_closure().identity_sha256(),
             BACKEND_PIN,
         );
@@ -726,11 +769,11 @@ fn v1_descriptor() -> RustcInvocationDescriptorV1 {
         rustc,
         tools,
         DeviceConfigurationV1::new(
-            AmdTargetIdTextV1::new(EXACT_PROTECTED_TARGET_V1).unwrap(),
+            AmdTargetIdTextV1::new(BASELINE_PROTECTED_TARGET_V1).unwrap(),
             VerificationModeV1::Required,
         ),
         OutputDomainV1::new("/workspace", "/output").unwrap(),
-        vec![CompileEnvironmentEntryV1::new("FE2O3_TARGET", EXACT_PROTECTED_TARGET_V1).unwrap()],
+        vec![CompileEnvironmentEntryV1::new("FE2O3_TARGET", BASELINE_PROTECTED_TARGET_V1).unwrap()],
     )
     .unwrap()
 }

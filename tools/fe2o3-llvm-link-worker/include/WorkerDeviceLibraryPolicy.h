@@ -27,15 +27,27 @@ struct Gfx942DeviceLibraryPolicy {
   std::vector<PinnedDeviceLibraryFile> Files;
 };
 
+struct Gfx950DeviceLibraryPolicy {
+  std::string Directory;
+  std::vector<PinnedDeviceLibraryFile> Files;
+};
+
 bool isSupportedGfx942OcmlImport(llvm::StringRef Symbol);
 bool isOcmlImportNamespace(llvm::StringRef Symbol);
 bool isSupportedGfx942OcmlCodeObjectVersion(uint8_t Version);
+bool isSupportedGfx950OcmlImport(llvm::StringRef Symbol);
+bool isSupportedGfx950OcmlCodeObjectVersion(uint8_t Version);
 
 llvm::Expected<Gfx942DeviceLibraryPolicy> measuredGfx942DeviceLibraryPolicy();
+llvm::Expected<Gfx950DeviceLibraryPolicy> measuredGfx950DeviceLibraryPolicy();
 
 llvm::Expected<std::vector<Input>>
 loadGfx942DeviceLibraries(llvm::ArrayRef<std::string> Imports,
                           const Gfx942DeviceLibraryPolicy &Policy);
+
+llvm::Expected<std::vector<Input>>
+loadGfx950DeviceLibraries(llvm::ArrayRef<std::string> Imports,
+                          const Gfx950DeviceLibraryPolicy &Policy);
 
 } // namespace fe2o3::worker
 

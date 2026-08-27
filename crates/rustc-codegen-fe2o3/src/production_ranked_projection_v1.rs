@@ -15,6 +15,7 @@ use dialect_kernel::{
     MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
     SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
+use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_kernel_analysis::{
     MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_EDGES, MAX_RANKED_BOUNDS_OPERATIONS,
 };
@@ -29,8 +30,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1,
-    SemanticFunctionRoleV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
+    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
     SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1,
@@ -276,6 +277,7 @@ impl ProjectedUniformInductionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProjectedMfmaViewV1 {
     role: SemanticMfmaOperandRoleV1,
+    profile: SemanticMfmaProfileV1,
     storage_layout: SemanticMfmaStorageLayoutV1,
     allocation: AllocationContractV1,
 }
@@ -286,6 +288,22 @@ struct ProjectedMfmaOperandV1 {
     storage_layout: SemanticMfmaStorageLayoutV1,
     lane_root: u64,
     allocation: AllocationContractV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedGfx950TransposeStateV1 {
+    Current,
+    Staged,
+    Published,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectedGfx950TransposeTileV1 {
+    state: ProjectedGfx950TransposeStateV1,
+    format: SemanticGfx950LdsTransposeFormatV1,
+    lane_root: u64,
+    token_root: u64,
+    source_allocation: Option<AllocationContractV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -353,6 +371,7 @@ enum ProjectedCapabilityOriginV1 {
     ViewResult(ProjectedMfmaViewV1),
     View(ProjectedMfmaViewV1),
     Operand(ProjectedMfmaOperandV1),
+    Gfx950TransposeTile(ProjectedGfx950TransposeTileV1),
     Accumulator(ProjectedMfmaAccumulatorV1),
     ReadViewResult(ProjectedReadViewV1),
     ReadView(ProjectedReadViewV1),
@@ -769,7 +788,7 @@ impl std::error::Error for ProductionRankedProjectionErrorV1 {
 
 pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     semantic_owner: ProductionSemanticMirOwnerV1,
-    source_rank: u8,
+    source_launch: &LaunchContract,
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     semantic_owner
@@ -803,7 +822,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let mut entry_operations = vec![source_execution_layout_v1(
         semantic.target().architecture(),
         root_function,
-        source_rank,
+        source_launch,
     )?];
     let mut next_value = 0_u32;
     let reserved_reference_values = if reference_bindings.as_slice().is_empty() {
@@ -2768,6 +2787,216 @@ fn authenticate_strided_read_v1(
     })
 }
 
+fn gfx950_transpose_profile_v1(
+    format: SemanticGfx950LdsTransposeFormatV1,
+) -> SemanticMfmaProfileV1 {
+    match format {
+        SemanticGfx950LdsTransposeFormatV1::Fp4E2M1 => SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        SemanticGfx950LdsTransposeFormatV1::Fp8E4M3 => SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+    }
+}
+
+fn resolve_gfx950_transpose_tile_v1(
+    operand: &SemanticOperandV1,
+    state: &ProjectedCapabilityStateV1,
+    expected_type: SemanticTypeIdV1,
+    expected_state: ProjectedGfx950TransposeStateV1,
+    expected_format: SemanticGfx950LdsTransposeFormatV1,
+) -> Option<ProjectedGfx950TransposeTileV1> {
+    if operand.ty() != expected_type {
+        return None;
+    }
+    if let Some(ProjectedCapabilityOriginV1::Gfx950TransposeTile(tile)) =
+        capability_known_origin_v1(state, operand)
+    {
+        return (tile.state == expected_state && tile.format == expected_format).then_some(tile);
+    }
+    if !matches!(
+        operand,
+        SemanticOperandV1::Constant(constant)
+            if matches!(constant.value(), SemanticConstantValueV1::ZeroSized)
+    ) {
+        return None;
+    }
+
+    let mut candidates = state.values().filter_map(|value| match value {
+        ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+            tile,
+        )) if tile.state == expected_state && tile.format == expected_format => Some(*tile),
+        _ => None,
+    });
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate)
+}
+
+fn project_gfx950_transpose_current_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedCapabilityStateV1,
+    destination_type: SemanticTypeIdV1,
+    tile_type: SemanticTypeIdV1,
+    format: SemanticGfx950LdsTransposeFormatV1,
+    token_root: u64,
+) -> ProjectedCapabilityValueV1 {
+    let lane = call
+        .arguments()
+        .first()
+        .and_then(|operand| capability_known_origin_v1(state, operand));
+    match lane {
+        Some(ProjectedCapabilityOriginV1::Lane {
+            root: lane_root,
+            wave_width: 64,
+        }) if call.arguments().len() == 1 && destination_type == tile_type => {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                ProjectedGfx950TransposeTileV1 {
+                    state: ProjectedGfx950TransposeStateV1::Current,
+                    format,
+                    lane_root,
+                    token_root,
+                    source_allocation: None,
+                },
+            ))
+        }
+        _ => ProjectedCapabilityValueV1::Invalid,
+    }
+}
+
+fn project_gfx950_transpose_stage_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedCapabilityStateV1,
+    destination_type: SemanticTypeIdV1,
+    input_tile_type: SemanticTypeIdV1,
+    output_tile_type: SemanticTypeIdV1,
+    format: SemanticGfx950LdsTransposeFormatV1,
+    token_root: u64,
+) -> ProjectedCapabilityValueV1 {
+    let tile = call.arguments().first().and_then(|operand| {
+        resolve_gfx950_transpose_tile_v1(
+            operand,
+            state,
+            input_tile_type,
+            ProjectedGfx950TransposeStateV1::Current,
+            format,
+        )
+    });
+    let view = call
+        .arguments()
+        .get(1)
+        .and_then(|operand| capability_known_origin_v1(state, operand));
+    match (tile, view) {
+        (
+            Some(ProjectedGfx950TransposeTileV1 {
+                lane_root,
+                source_allocation: None,
+                ..
+            }),
+            // Stage consumes the row-major A-shaped K view; the verified
+            // transpose mapping is what produces the role-B register fragment.
+            Some(ProjectedCapabilityOriginV1::View(ProjectedMfmaViewV1 {
+                role: SemanticMfmaOperandRoleV1::A,
+                profile,
+                storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                allocation,
+            })),
+        ) if call.arguments().len() == 4
+            && destination_type == output_tile_type
+            && profile == gfx950_transpose_profile_v1(format) =>
+        {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                ProjectedGfx950TransposeTileV1 {
+                    state: ProjectedGfx950TransposeStateV1::Staged,
+                    format,
+                    lane_root,
+                    token_root,
+                    source_allocation: Some(allocation),
+                },
+            ))
+        }
+        _ => ProjectedCapabilityValueV1::Invalid,
+    }
+}
+
+fn project_gfx950_transpose_publish_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedCapabilityStateV1,
+    destination_type: SemanticTypeIdV1,
+    input_tile_type: SemanticTypeIdV1,
+    output_tile_type: SemanticTypeIdV1,
+    format: SemanticGfx950LdsTransposeFormatV1,
+    token_root: u64,
+) -> ProjectedCapabilityValueV1 {
+    let tile = call.arguments().first().and_then(|operand| {
+        resolve_gfx950_transpose_tile_v1(
+            operand,
+            state,
+            input_tile_type,
+            ProjectedGfx950TransposeStateV1::Staged,
+            format,
+        )
+    });
+    match tile {
+        Some(ProjectedGfx950TransposeTileV1 {
+            lane_root,
+            source_allocation: Some(source_allocation),
+            ..
+        }) if call.arguments().len() == 1 && destination_type == output_tile_type => {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                ProjectedGfx950TransposeTileV1 {
+                    state: ProjectedGfx950TransposeStateV1::Published,
+                    format,
+                    lane_root,
+                    token_root,
+                    source_allocation: Some(source_allocation),
+                },
+            ))
+        }
+        _ => ProjectedCapabilityValueV1::Invalid,
+    }
+}
+
+fn project_gfx950_transpose_read_v1(
+    call: &SemanticDirectCallV1,
+    state: &ProjectedCapabilityStateV1,
+    destination_type: SemanticTypeIdV1,
+    tile_type: SemanticTypeIdV1,
+    fragment_type: SemanticTypeIdV1,
+    contract: SemanticMfmaOperandContractV1,
+    format: SemanticGfx950LdsTransposeFormatV1,
+) -> ProjectedCapabilityValueV1 {
+    let tile = call.arguments().first().and_then(|operand| {
+        resolve_gfx950_transpose_tile_v1(
+            operand,
+            state,
+            tile_type,
+            ProjectedGfx950TransposeStateV1::Published,
+            format,
+        )
+    });
+    match tile {
+        Some(ProjectedGfx950TransposeTileV1 {
+            lane_root,
+            source_allocation: Some(allocation),
+            ..
+        }) if call.arguments().len() == 1
+            && destination_type == fragment_type
+            && contract.role == SemanticMfmaOperandRoleV1::B
+            && contract.profile == gfx950_transpose_profile_v1(format)
+            && contract.register_distribution
+                == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+            && contract.wave_width == 64 =>
+        {
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                ProjectedMfmaOperandV1 {
+                    contract,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                    lane_root,
+                    allocation,
+                },
+            ))
+        }
+        _ => ProjectedCapabilityValueV1::Invalid,
+    }
+}
+
 fn transfer_capability_terminator_v1(
     callables: &[SemanticCallableDeclV1],
     function: &SemanticFunctionDeclV1,
@@ -2817,7 +3046,24 @@ fn transfer_capability_terminator_v1(
     }
     let is_global_fragment_load = matches!(
         intrinsic_operation,
-        Some(SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. })
+        Some(
+            SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 { .. }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 { .. }
+        )
+    );
+    let is_gfx950_transpose = matches!(
+        intrinsic_operation,
+        Some(
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { .. }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish { .. }
+                | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { .. }
+        )
+    );
+    let is_gfx950_transpose_stage = matches!(
+        intrinsic_operation,
+        Some(SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. })
     );
     if let Some(SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { element, .. }) =
         intrinsic_operation
@@ -2842,6 +3088,11 @@ fn transfer_capability_terminator_v1(
     }
     let Some(destination) = call.destination() else {
         consume_capability_operands_v1(state, call.arguments());
+        if is_gfx950_transpose {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a gfx950 LDS transpose operation without one direct state result",
+            ));
+        }
         if is_global_fragment_load {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load without one direct local result",
@@ -2852,6 +3103,11 @@ fn transfer_capability_terminator_v1(
     if !destination.place().projections().is_empty() {
         consume_capability_operands_v1(state, call.arguments());
         invalidate_capability_place_v1(state, destination.place());
+        if is_gfx950_transpose {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a gfx950 LDS transpose operation into a projected destination",
+            ));
+        }
         if is_global_fragment_load {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load into a projected destination",
@@ -2937,6 +3193,71 @@ fn transfer_capability_terminator_v1(
                 )
             }
         }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
+            tile, format, ..
+        } => (
+            project_gfx950_transpose_current_v1(
+                call,
+                state,
+                destination.place().ty(),
+                *tile,
+                *format,
+                root,
+            ),
+            None,
+        ),
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+            input_tile,
+            output_tile,
+            format,
+            ..
+        } => (
+            project_gfx950_transpose_stage_v1(
+                call,
+                state,
+                destination.place().ty(),
+                *input_tile,
+                *output_tile,
+                *format,
+                root,
+            ),
+            None,
+        ),
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+            input_tile,
+            output_tile,
+            format,
+            ..
+        } => (
+            project_gfx950_transpose_publish_v1(
+                call,
+                state,
+                destination.place().ty(),
+                *input_tile,
+                *output_tile,
+                *format,
+                root,
+            ),
+            None,
+        ),
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+            tile,
+            fragment,
+            contract,
+            format,
+            ..
+        } => (
+            project_gfx950_transpose_read_v1(
+                call,
+                state,
+                destination.place().ty(),
+                *tile,
+                *fragment,
+                *contract,
+                *format,
+            ),
+            None,
+        ),
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
             result,
             role,
@@ -2957,6 +3278,67 @@ fn transfer_capability_terminator_v1(
                     ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
                         ProjectedMfmaViewV1 {
                             role: *role,
+                            profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
+                            storage_layout: *storage_layout,
+                            allocation,
+                        },
+                    ))
+                }
+                _ => ProjectedCapabilityValueV1::Invalid,
+            };
+            (origin, None)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+            result,
+            role,
+            storage_layout,
+            ..
+        } => {
+            let allocation = call
+                .arguments()
+                .first()
+                .and_then(transparent_operand_place)
+                .and_then(|place| local_allocations.get(place.local().index() as usize))
+                .copied()
+                .flatten();
+            let origin = match allocation {
+                Some(allocation)
+                    if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                {
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                        ProjectedMfmaViewV1 {
+                            role: *role,
+                            profile: SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+                            storage_layout: *storage_layout,
+                            allocation,
+                        },
+                    ))
+                }
+                _ => ProjectedCapabilityValueV1::Invalid,
+            };
+            (origin, None)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+            result,
+            role,
+            storage_layout,
+            ..
+        } => {
+            let allocation = call
+                .arguments()
+                .first()
+                .and_then(transparent_operand_place)
+                .and_then(|place| local_allocations.get(place.local().index() as usize))
+                .copied()
+                .flatten();
+            let origin = match allocation {
+                Some(allocation)
+                    if call.arguments().len() == 5 && destination.place().ty() == *result =>
+                {
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
+                        ProjectedMfmaViewV1 {
+                            role: *role,
+                            profile: SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
                             storage_layout: *storage_layout,
                             allocation,
                         },
@@ -2967,6 +3349,18 @@ fn transfer_capability_terminator_v1(
             (origin, None)
         }
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 {
+            fragment,
+            contract,
+            storage_layout,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+            fragment,
+            contract,
+            storage_layout,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
             fragment,
             contract,
             storage_layout,
@@ -3062,6 +3456,14 @@ fn transfer_capability_terminator_v1(
     consume_capability_operands_v1(state, call.arguments());
     state.insert(destination_local, origin);
     if require_authenticated_site
+        && is_gfx950_transpose
+        && origin == ProjectedCapabilityValueV1::Invalid
+    {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a gfx950 LDS transpose operation without its exact dominating Current-Stage-Publish state, format, view, and Wave64 lane",
+        ));
+    }
+    if require_authenticated_site
         && matches!(
             operation,
             SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate { .. }
@@ -3072,17 +3474,35 @@ fn transfer_capability_terminator_v1(
             "an MFMA call whose result type does not match its authenticated accumulator contract",
         ));
     }
-    let global_read = match (is_global_fragment_load, origin) {
+    let global_read = match (is_global_fragment_load, is_gfx950_transpose_stage, origin) {
         (
             true,
+            false,
             ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(fragment)),
         ) => Some(fragment.allocation),
-        (true, _) => {
+        (
+            false,
+            true,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                ProjectedGfx950TransposeTileV1 {
+                    state: ProjectedGfx950TransposeStateV1::Staged,
+                    source_allocation: Some(allocation),
+                    ..
+                },
+            )),
+        ) => Some(allocation),
+        (true, false, _) => {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a typed global fragment load without exact authenticated view, lane, allocation, and result provenance",
             ));
         }
-        (false, _) => None,
+        (false, true, _) => {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a gfx950 LDS transpose stage without exact authenticated view, state token, lane, allocation, and result provenance",
+            ));
+        }
+        (false, false, _) => None,
+        (true, true, _) => unreachable!("transpose stage is not a direct fragment load"),
     };
     Ok(ProjectedCapabilityTerminatorEffectsV1 {
         layout,
@@ -3113,6 +3533,7 @@ fn authenticate_tensor_load_v1(
         return None;
     };
     (view.role == contract.role
+        && view.profile == contract.profile
         && view.storage_layout == storage_layout
         && wave_width == contract.wave_width)
         .then_some(ProjectedMfmaOperandV1 {
@@ -3182,16 +3603,12 @@ fn authenticate_tensor_instruction_v1(
     {
         return Err("an MFMA call with swapped or incompatible operand roles");
     }
-    if lhs_contract.profile != SemanticMfmaProfileV1::Bf16F32M16N16K16
-        || rhs_contract.profile != lhs_contract.profile
+    if rhs_contract.profile != lhs_contract.profile
         || accumulator_contract.profile != lhs_contract.profile
     {
         return Err("an MFMA call with incompatible instruction profiles");
     }
-    if lhs_contract.register_distribution != SemanticMfmaRegisterDistributionV1::Tile16x16
-        || rhs_contract.register_distribution != SemanticMfmaRegisterDistributionV1::Tile16x16
-        || accumulator_contract.distribution != SemanticMfmaAccumulatorDistributionV1::RowMajor
-    {
+    if accumulator_contract.distribution != SemanticMfmaAccumulatorDistributionV1::RowMajor {
         return Err("an MFMA call with incompatible register distributions");
     }
     if lhs_contract.wave_width != 64
@@ -3202,14 +3619,45 @@ fn authenticate_tensor_instruction_v1(
     {
         return Err("an MFMA call whose operands do not share one authenticated wave64 lane");
     }
-    let mut contract =
-        fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
-            .with_zero_filled_predicate_inputs();
-    if lhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
-        contract = contract.with_a_lds_xor4();
-    }
-    if rhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
-        contract = contract.with_b_lds_xor4();
+    let mut contract = match lhs_contract.profile {
+        SemanticMfmaProfileV1::Bf16F32M16N16K16
+            if lhs_contract.register_distribution
+                == SemanticMfmaRegisterDistributionV1::Tile16x16
+                && rhs_contract.register_distribution
+                    == SemanticMfmaRegisterDistributionV1::Tile16x16 =>
+        {
+            fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
+                .with_zero_filled_predicate_inputs()
+        }
+        SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+            if lhs_contract.register_distribution
+                == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+                && rhs_contract.register_distribution
+                    == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+                && lhs.storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+                && rhs.storage_layout == SemanticMfmaStorageLayoutV1::RowMajor =>
+        {
+            fe2o3_kernel_ir::TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64()
+        }
+        SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+            if lhs_contract.register_distribution
+                == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+                && rhs_contract.register_distribution
+                    == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+                && lhs.storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+                && rhs.storage_layout == SemanticMfmaStorageLayoutV1::RowMajor =>
+        {
+            fe2o3_kernel_ir::TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64()
+        }
+        _ => return Err("an MFMA call with incompatible register distributions"),
+    };
+    if lhs_contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16 {
+        if lhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
+            contract = contract.with_a_lds_xor4();
+        }
+        if rhs.storage_layout == SemanticMfmaStorageLayoutV1::LdsXor4 {
+            contract = contract.with_b_lds_xor4();
+        }
     }
     Ok(AuthenticatedTensorInstructionV1 {
         context_root,
@@ -5589,6 +6037,8 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
         SemanticCompilerIntrinsicOperationV1::FabsF32
             | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
+            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor { .. }
+            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexIntoDisjoint { .. }
             | SemanticCompilerIntrinsicOperationV1::ThreadIndexCheckedShift { .. }
@@ -7811,7 +8261,7 @@ fn assign_index_capability(
 fn source_execution_layout_v1(
     architecture: SemanticTargetArchitectureV1,
     function: &SemanticFunctionDeclV1,
-    source_rank: u8,
+    source_launch: &LaunchContract,
 ) -> Result<ProductionRankedOperationV1, ProductionRankedProjectionErrorV1> {
     let entry = function
         .kernel_entry()
@@ -7826,17 +8276,36 @@ fn source_execution_layout_v1(
             "concurrency verification requires exact source workgroup dimensions",
         ))?
         .as_array();
-    let workgroup_extents = required.map(u64::from);
-    let global_extents = match source_rank {
-        1 if required[1] == 1 && required[2] == 1 => [0, 1, 1],
-        2 if required[2] == 1 => [0, 0, 1],
-        3 => [0, 0, 0],
+    let BlockSize::Exact(source_block) = source_launch.block_size() else {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "concurrency verification requires an exact authenticated LaunchContract workgroup",
+        ));
+    };
+    let source_workgroup = [source_block.x(), source_block.y(), source_block.z()];
+    if source_workgroup != required {
+        return Err(ProductionRankedProjectionErrorV1::Unsupported(
+            "authenticated LaunchContract workgroup disagrees with semantic source workgroup",
+        ));
+    }
+    let source_rank = source_launch.rank();
+    match source_rank {
+        1 if required[1] == 1 && required[2] == 1 => {}
+        2 if required[2] == 1 => {}
+        3 => {}
         _ => {
             return Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "authenticated launch rank disagrees with source workgroup axes",
             ));
         }
-    };
+    }
+    let workgroup_extents = required.map(u64::from);
+    let max_grid = source_launch.max_grid();
+    let max_grid = [max_grid.x(), max_grid.y(), max_grid.z()].map(u64::from);
+    let mut global_extents = [1_u64; 3];
+    for axis in 0..usize::from(source_rank) {
+        global_extents[axis] =
+            checked_finite_global_extent_v1(max_grid[axis], workgroup_extents[axis])?;
+    }
     let subgroup_size = match architecture {
         SemanticTargetArchitectureV1::AmdGpuGfx942 => 64,
     };
@@ -7855,6 +8324,20 @@ fn source_execution_layout_v1(
         subgroup_size,
         full_physical_workgroups: true,
     })
+}
+
+fn checked_finite_global_extent_v1(
+    max_grid: u64,
+    required_workgroup: u64,
+) -> Result<u64, ProductionRankedProjectionErrorV1> {
+    if max_grid == u64::from(u32::MAX) {
+        return Ok(DYNAMIC_EXTENT);
+    }
+    max_grid
+        .checked_mul(required_workgroup)
+        .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+            "authenticated finite grid extent overflows u64",
+        ))
 }
 
 fn local_provenance_v1(
@@ -14160,12 +14643,12 @@ mod tests {
 
     #[test]
     fn source_execution_layout_derives_active_grid_axes_from_xyz_workgroup() {
-        for (rank, workgroup, global_extents) in [
-            (1, [128, 1, 1], [0, 1, 1]),
-            (2, [64, 1, 1], [0, 0, 1]),
-            (2, [8, 8, 1], [0, 0, 1]),
-            (3, [64, 1, 1], [0, 0, 0]),
-            (3, [4, 4, 4], [0, 0, 0]),
+        for (rank, workgroup, max_grid, global_extents) in [
+            (1, [128, 1, 1], [u32::MAX, 1, 1], [0, 1, 1]),
+            (2, [64, 1, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
+            (2, [8, 8, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
+            (3, [64, 1, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
+            (3, [4, 4, 4], [u32::MAX, u32::MAX, 1], [0, 0, 4]),
         ] {
             let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
             let launch =
@@ -14180,12 +14663,23 @@ mod tests {
                         SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
                         source_contract,
                     ));
+            let source_launch = LaunchContract::new(
+                rank,
+                BlockSize::Exact(
+                    fe2o3_artifacts::Dimensions::new(workgroup[0], workgroup[1], workgroup[2])
+                        .unwrap(),
+                ),
+                fe2o3_artifacts::Dimensions::new(max_grid[0], max_grid[1], max_grid[2]).unwrap(),
+                0,
+                0,
+            )
+            .unwrap();
 
             assert_eq!(
                 source_execution_layout_v1(
                     SemanticTargetArchitectureV1::AmdGpuGfx942,
                     &function,
-                    rank,
+                    &source_launch,
                 )
                 .unwrap(),
                 ProductionRankedOperationV1::ExecutionLayout {
@@ -14197,6 +14691,78 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn source_execution_layout_authenticates_finite_grid_and_rejects_hostility() {
+        let dimensions = SemanticWorkgroupDimensionsV1::new([64, 1, 1]).unwrap();
+        let launch =
+            SemanticKernelLaunchBoundsV1::new(Some(dimensions), Some(dimensions), None).unwrap();
+        let source_contract =
+            SemanticKernelSourceContractV1::new(Some(launch), None, None).unwrap();
+        let function =
+            projection_function(vec![block(30, vec![], SemanticTerminatorKindV1::Return)])
+                .with_kernel_entry(SemanticKernelEntryV1::new(
+                    SemanticLinkSymbolV1::new(b"typed_kernel".to_vec()).unwrap(),
+                    SemanticKernelBindingIdentityV1::from_sha256(bytes(42)),
+                    source_contract,
+                ));
+        let finite = LaunchContract::new(
+            1,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(matches!(
+            source_execution_layout_v1(
+                SemanticTargetArchitectureV1::AmdGpuGfx942,
+                &function,
+                &finite,
+            )
+            .unwrap(),
+            ProductionRankedOperationV1::ExecutionLayout {
+                global_extents: [64, 1, 1],
+                workgroup_extents: [64, 1, 1],
+                ..
+            }
+        ));
+
+        let substituted_workgroup = LaunchContract::new(
+            1,
+            BlockSize::Exact(fe2o3_artifacts::Dimensions::new(256, 1, 1).unwrap()),
+            fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(matches!(
+            source_execution_layout_v1(
+                SemanticTargetArchitectureV1::AmdGpuGfx942,
+                &function,
+                &substituted_workgroup,
+            ),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "authenticated LaunchContract workgroup disagrees with semantic source workgroup"
+            ))
+        ));
+        assert!(matches!(
+            checked_finite_global_extent_v1(u64::MAX, 2),
+            Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "authenticated finite grid extent overflows u64"
+            ))
+        ));
+        assert!(
+            LaunchContract::new(
+                1,
+                BlockSize::Exact(fe2o3_artifacts::Dimensions::new(64, 1, 1).unwrap()),
+                fe2o3_artifacts::Dimensions::new(1, 2, 1).unwrap(),
+                0,
+                0,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -14761,6 +15327,28 @@ mod tests {
         }
     }
 
+    fn gfx950_mfma_operand_contract(
+        profile: SemanticMfmaProfileV1,
+        role: SemanticMfmaOperandRoleV1,
+    ) -> SemanticMfmaOperandContractV1 {
+        SemanticMfmaOperandContractV1 {
+            role,
+            profile,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+            wave_width: 64,
+        }
+    }
+
+    fn gfx950_mfma_accumulator_contract(
+        profile: SemanticMfmaProfileV1,
+    ) -> SemanticMfmaAccumulatorContractV1 {
+        SemanticMfmaAccumulatorContractV1 {
+            profile,
+            distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+            wave_width: 64,
+        }
+    }
+
     fn tensor_test_allocation() -> AllocationContractV1 {
         AllocationContractV1 {
             allocation_origin: 1,
@@ -14827,6 +15415,7 @@ mod tests {
                 ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(
                     ProjectedMfmaViewV1 {
                         role: SemanticMfmaOperandRoleV1::A,
+                        profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
                         storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                         allocation: tensor_test_allocation(),
                     },
@@ -15140,6 +15729,7 @@ mod tests {
                 ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::View(
                     ProjectedMfmaViewV1 {
                         role: SemanticMfmaOperandRoleV1::A,
+                        profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
                         storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                         allocation: tensor_test_allocation(),
                     },
@@ -15337,6 +15927,223 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_gfx950_fp4_mfma_derives_the_exact_ranked_tensor_layout() {
+        let profile = SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128;
+        let lhs_contract = gfx950_mfma_operand_contract(profile, SemanticMfmaOperandRoleV1::A);
+        let rhs_contract = gfx950_mfma_operand_contract(profile, SemanticMfmaOperandRoleV1::B);
+        let accumulator_contract = gfx950_mfma_accumulator_contract(profile);
+        let state = HashMap::from([
+            (
+                0,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                    root: 10,
+                }),
+            ),
+            (
+                1,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: lhs_contract,
+                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                        lane_root: 20,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
+            ),
+            (
+                2,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: rhs_contract,
+                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                        lane_root: 20,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
+            ),
+            (
+                3,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                    ProjectedMfmaAccumulatorV1 {
+                        contract: accumulator_contract,
+                        lane_root: 20,
+                        value_root: 30,
+                        flow_root: 30,
+                    },
+                )),
+            ),
+        ]);
+
+        let authenticated = authenticate_tensor_instruction_v1(
+            &tensor_test_call(),
+            &state,
+            lhs_contract,
+            rhs_contract,
+            accumulator_contract,
+        )
+        .unwrap();
+        let expected = fe2o3_kernel_ir::TensorLayoutContractV1::
+            gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64();
+        assert_eq!(authenticated.contract, expected);
+        assert_eq!(
+            authenticated.contract.profile,
+            fe2o3_kernel_ir::TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64,
+        );
+        assert_eq!(
+            authenticated.contract.a.packing,
+            fe2o3_kernel_ir::TensorElementPackingV1::Fp4EightInI32,
+        );
+        assert_eq!(
+            authenticated.contract.b.packing,
+            fe2o3_kernel_ir::TensorElementPackingV1::Fp4EightInI32,
+        );
+    }
+
+    #[test]
+    fn gfx950_ranked_tensor_authentication_rejects_cross_profile_substitution() {
+        let fp4 = SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128;
+        let fp8 = SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128;
+        let lhs_contract = gfx950_mfma_operand_contract(fp4, SemanticMfmaOperandRoleV1::A);
+        let rhs_contract = gfx950_mfma_operand_contract(fp8, SemanticMfmaOperandRoleV1::B);
+        let accumulator_contract = gfx950_mfma_accumulator_contract(fp4);
+        let state = HashMap::from([
+            (
+                0,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                    root: 10,
+                }),
+            ),
+            (
+                1,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: lhs_contract,
+                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                        lane_root: 20,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
+            ),
+            (
+                2,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                    ProjectedMfmaOperandV1 {
+                        contract: rhs_contract,
+                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                        lane_root: 20,
+                        allocation: tensor_test_allocation(),
+                    },
+                )),
+            ),
+            (
+                3,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                    ProjectedMfmaAccumulatorV1 {
+                        contract: accumulator_contract,
+                        lane_root: 20,
+                        value_root: 30,
+                        flow_root: 30,
+                    },
+                )),
+            ),
+        ]);
+
+        assert_eq!(
+            authenticate_tensor_instruction_v1(
+                &tensor_test_call(),
+                &state,
+                lhs_contract,
+                rhs_contract,
+                accumulator_contract,
+            ),
+            Err("an MFMA call with incompatible instruction profiles"),
+        );
+    }
+
+    #[test]
+    fn gfx950_transpose_zst_recovery_rejects_substitution_and_ambiguity() {
+        let exact = ProjectedGfx950TransposeTileV1 {
+            state: ProjectedGfx950TransposeStateV1::Published,
+            format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            lane_root: 11,
+            token_root: 12,
+            source_allocation: Some(tensor_test_allocation()),
+        };
+        let zst = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            SCALAR_TYPE,
+            SemanticConstantValueV1::ZeroSized,
+        ));
+        let mut state = HashMap::from([(
+            0,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                exact,
+            )),
+        )]);
+
+        assert_eq!(
+            resolve_gfx950_transpose_tile_v1(
+                &zst,
+                &state,
+                SCALAR_TYPE,
+                ProjectedGfx950TransposeStateV1::Published,
+                SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            ),
+            Some(exact),
+        );
+        assert!(
+            resolve_gfx950_transpose_tile_v1(
+                &zst,
+                &state,
+                SCALAR_TYPE,
+                ProjectedGfx950TransposeStateV1::Staged,
+                SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            )
+            .is_none()
+        );
+        assert!(
+            resolve_gfx950_transpose_tile_v1(
+                &zst,
+                &state,
+                SCALAR_TYPE,
+                ProjectedGfx950TransposeStateV1::Published,
+                SemanticGfx950LdsTransposeFormatV1::Fp4E2M1,
+            )
+            .is_none()
+        );
+        assert!(
+            resolve_gfx950_transpose_tile_v1(
+                &zst,
+                &state,
+                ENUM_TYPE,
+                ProjectedGfx950TransposeStateV1::Published,
+                SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            )
+            .is_none()
+        );
+
+        state.insert(
+            1,
+            ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Gfx950TransposeTile(
+                ProjectedGfx950TransposeTileV1 {
+                    token_root: 13,
+                    ..exact
+                },
+            )),
+        );
+        assert!(
+            resolve_gfx950_transpose_tile_v1(
+                &zst,
+                &state,
+                SCALAR_TYPE,
+                ProjectedGfx950TransposeStateV1::Published,
+                SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            )
+            .is_none(),
+            "a removed-ZST receiver must recover exactly one live state token",
+        );
+    }
+
+    #[test]
     fn accumulator_join_preserves_one_authenticated_loop_carried_producer() {
         let accumulator = |value_root, flow_root| {
             ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
@@ -15477,6 +16284,7 @@ mod tests {
             ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ViewResult(
                 ProjectedMfmaViewV1 {
                     role: SemanticMfmaOperandRoleV1::A,
+                    profile: SemanticMfmaProfileV1::Bf16F32M16N16K16,
                     storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                     allocation: tensor_test_allocation(),
                 },

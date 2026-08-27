@@ -319,7 +319,9 @@ target lowering, and host execution into explicit ownership boundaries:
   [V1 pipeline contract](docs/general-kernel-check-pipeline-v1.md).
 - Pliron framework: `fe2o3-pliron` is a bounded D0 context, registration,
   context-identity, pass-planning, and owner-held textual bridge over Pliron
-  v0.17.0 at commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
+  v0.17.0 at reviewed fork commit
+  `5bdf861bf03e7f20242b25717fb653336d02e487`, a strict descendant of the
+  upstream v0.17.0 commit `2610651306ea3ba670f68d5d8b1e1159bcd521ed`.
   The bridge recursively verifies imported operations and enforces bounded
   owner/session accounting, but arbitrary registered `Parsable` implementations
   remain trusted parser code and the bridge grants no compiler authority. Seven

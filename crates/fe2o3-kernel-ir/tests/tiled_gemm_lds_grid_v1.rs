@@ -354,6 +354,9 @@ fn canonical_graph_has_exact_grid_abi_resources_barrier_mfma_and_stores() {
             MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
                 assert_eq!(profile, MatrixMultiplyProfile::bf16_f32_m16n16k16_wave64());
             }
+            MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                unreachable!("the gfx942 BF16 fixture cannot contain a scaled gfx950 MFMA")
+            }
         }
     }
     assert_eq!(
@@ -752,7 +755,8 @@ fn barrier_layout_allocation_and_output_owner_mutations_fail_closed() {
         match &mut matrix.kind {
             MatrixOperationKind::LdsLoad { profile, .. }
             | MatrixOperationKind::LdsStore { profile, .. } => profile.fragment_elements = 8,
-            MatrixOperationKind::MultiplyAccumulate { .. } => unreachable!(),
+            MatrixOperationKind::MultiplyAccumulate { .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => unreachable!(),
         }
         assert_rejected(layout);
 
@@ -763,7 +767,8 @@ fn barrier_layout_allocation_and_output_owner_mutations_fail_closed() {
         match &mut matrix.kind {
             MatrixOperationKind::LdsLoad { base, .. }
             | MatrixOperationKind::LdsStore { base, .. } => *base = a_lds,
-            MatrixOperationKind::MultiplyAccumulate { .. } => unreachable!(),
+            MatrixOperationKind::MultiplyAccumulate { .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => unreachable!(),
         }
         if operations(&alias) != operations(&canonical) {
             assert_valid_but_noncanonical(alias);

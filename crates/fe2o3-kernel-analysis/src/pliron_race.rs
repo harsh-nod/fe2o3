@@ -29,7 +29,7 @@ use pliron::{
 use crate::pliron_analysis_manager::PlironAnalysisManagerV1;
 use crate::pliron_invocation_trace::PlironTraceFailureV1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
-use crate::pliron_sparse_index::SparseAffineIndexV1;
+use crate::pliron_sparse_index::{SparseAffineIndexV1, SparseIndexFactV1};
 use crate::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_PRESBURGER_WORK_UNITS_V1,
     PlironPresburgerAnalysisV1, PresburgerCollisionDecisionV1, PresburgerMachineIntSemanticsV1,
@@ -1154,7 +1154,7 @@ fn row_striped_2d_effect_family_is_injective(
             return false;
         };
         if index.invocation() != first.invocation()
-            || index.runtime_layout() != first.runtime_layout()
+            || !same_known_index_formula(&index.runtime_layout(), &first.runtime_layout(), sparse)
             || index.geometry() != first.geometry()
         {
             return false;
@@ -1184,7 +1184,7 @@ fn tiled_2d_effect_family_is_injective(
             return false;
         };
         if index.invocation() != first.invocation()
-            || index.runtime_layout() != first.runtime_layout()
+            || !same_known_index_formula(&index.runtime_layout(), &first.runtime_layout(), sparse)
             || index.geometry() != first.geometry()
         {
             return false;
@@ -1227,6 +1227,19 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
             .iter()
             .zip(second)
             .all(|(first, second)| sparse.fact(*first) == sparse.fact(*second))
+}
+
+fn same_known_index_formula(
+    first: &[Value],
+    second: &[Value],
+    sparse: &SparseIndexAnalysisV1,
+) -> bool {
+    first.len() == second.len()
+        && first.iter().zip(second).all(|(first, second)| {
+            let first = sparse.fact(*first);
+            let second = sparse.fact(*second);
+            !matches!(first, SparseIndexFactV1::Unknown) && first == second
+        })
 }
 
 fn affine_map_is_injective(

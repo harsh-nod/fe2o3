@@ -39,7 +39,7 @@ use std::{
     fmt,
 };
 
-const GFX942_PROCESSOR: &str = "gfx942";
+const ADMITTED_PRODUCTION_PROCESSORS: [&str; 2] = ["gfx942", "gfx950"];
 const EXPLICIT_ARGUMENT_BYTES: u32 = 48;
 const KERNARG_ALIGNMENT_BYTES: u32 = 8;
 #[cfg(test)]
@@ -411,7 +411,14 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
     formal
         .verify_equivalence()
         .map_err(CompilerDescriptorError::ProductionFormalMemory)?;
-    let geometry = validate_production_v1_descriptor_evidence(module, typed_roots, formal)?;
+    let target = envelope.target().to_string();
+    let geometry =
+        validate_production_v1_descriptor_evidence(module, typed_roots, formal, &target)?;
+    let producer_version = match envelope.target().as_amd_target_id().processor() {
+        "gfx942" => "production-v1-gfx942-cov6-v1",
+        "gfx950" => "production-v1-gfx950-cov6-v1",
+        _ => "production-v1-unsupported-target-v1",
+    };
     construct_compiler_descriptor_source_with_profile_v1(
         envelope,
         module,
@@ -425,7 +432,7 @@ pub(crate) fn construct_production_v1_compiler_descriptor_source_v1(
             static_shared_memory_bytes: geometry.static_shared_memory_bytes(),
             allow_exact_tiled_matrix: geometry.allow_exact_tiled_matrix(),
             allow_workgroup_memory: geometry.allow_workgroup_memory(),
-            producer_version: "production-v1-gfx942-cov6-v1",
+            producer_version,
         },
     )?
     .ok_or(CompilerDescriptorError::ProductionDescriptorMismatch(
@@ -437,6 +444,7 @@ fn validate_production_v1_descriptor_evidence(
     module: &Module,
     typed_roots: &[TypedDescriptorRootV1],
     formal: &fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    device_target: &str,
 ) -> Result<crate::production_geometry_v1::ProductionGeometryV1, CompilerDescriptorError> {
     use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
@@ -501,6 +509,7 @@ fn validate_production_v1_descriptor_evidence(
         module,
         semantic_function,
         source_launch,
+        device_target,
     )
     .map_err(CompilerDescriptorError::ProductionGeometry)?;
 
@@ -1234,7 +1243,7 @@ fn construct_compiler_descriptor_source_with_profile_v1(
             total: module.kernels.len(),
         });
     }
-    if envelope.target().as_amd_target_id().processor() != GFX942_PROCESSOR {
+    if !ADMITTED_PRODUCTION_PROCESSORS.contains(&envelope.target().as_amd_target_id().processor()) {
         return Err(CompilerDescriptorError::UnsupportedTarget(
             envelope.target().to_string(),
         ));
@@ -2055,7 +2064,7 @@ impl fmt::Display for CompilerDescriptorError {
             Self::UnsupportedTarget(target) => {
                 write!(
                     formatter,
-                    "typed descriptor source currently requires gfx942, found {target}"
+                    "typed descriptor source currently requires gfx942 or gfx950, found {target}"
                 )
             }
             Self::UnsupportedCodeObjectVersion(version) => write!(

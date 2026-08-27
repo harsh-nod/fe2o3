@@ -25,6 +25,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V2: u16 = 2;
 pub const INERT_SEMANTIC_MIR_VERSION_V3: u16 = 3;
 pub const INERT_SEMANTIC_MIR_VERSION_V4: u16 = 4;
 pub const INERT_SEMANTIC_MIR_VERSION_V5: u16 = 5;
+pub const INERT_SEMANTIC_MIR_VERSION_V6: u16 = 6;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -37,6 +38,7 @@ pub enum SemanticMirWireVersionV1 {
     V3,
     V4,
     V5,
+    V6,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -46,6 +48,7 @@ impl SemanticMirWireVersionV1 {
             Self::V3 => INERT_SEMANTIC_MIR_VERSION_V3,
             Self::V4 => INERT_SEMANTIC_MIR_VERSION_V4,
             Self::V5 => INERT_SEMANTIC_MIR_VERSION_V5,
+            Self::V6 => INERT_SEMANTIC_MIR_VERSION_V6,
         }
     }
 
@@ -55,6 +58,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V3 => Some(Self::V3),
             INERT_SEMANTIC_MIR_VERSION_V4 => Some(Self::V4),
             INERT_SEMANTIC_MIR_VERSION_V5 => Some(Self::V5),
+            INERT_SEMANTIC_MIR_VERSION_V6 => Some(Self::V6),
             _ => None,
         }
     }
@@ -4963,6 +4967,13 @@ pub enum SemanticSubgroupReductionKindV1 {
     Maximum,
 }
 
+/// Exact low-precision format of one gfx950 LDS transpose tile.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticGfx950LdsTransposeFormatV1 {
+    Fp4E2M1,
+    Fp8E4M3,
+}
+
 /// Operand-side meaning retained by a typed MFMA fragment.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticMfmaOperandRoleV1 {
@@ -4974,6 +4985,8 @@ pub enum SemanticMfmaOperandRoleV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticMfmaProfileV1 {
     Bf16F32M16N16K16,
+    Fp4E2M1F32M16N16K128,
+    Fp8E4M3F32M16N16K128,
 }
 
 impl SemanticMfmaProfileV1 {
@@ -4981,6 +4994,8 @@ impl SemanticMfmaProfileV1 {
     pub const fn operand_components_per_lane(self) -> usize {
         match self {
             Self::Bf16F32M16N16K16 => 4,
+            Self::Fp4E2M1F32M16N16K128 => 8,
+            Self::Fp8E4M3F32M16N16K128 => 8,
         }
     }
 }
@@ -4989,6 +5004,7 @@ impl SemanticMfmaProfileV1 {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticMfmaRegisterDistributionV1 {
     Tile16x16,
+    Gfx950M16N16K128,
 }
 
 /// Physical source layout from which an operand fragment was populated.
@@ -5049,6 +5065,21 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         width: u32,
         kind: SemanticSubgroupReductionKindV1,
     },
+    /// Creates compiler-issued authority for exact gfx950 Wave64 collectives.
+    Gfx950SubgroupContextCurrent {
+        context: SemanticTypeIdV1,
+    },
+    /// Reduces one scalar across a gfx950 Wave64 tile with executable V9 semantics.
+    Gfx950SubgroupReduceF32 {
+        context: SemanticTypeIdV1,
+        width: u32,
+        kind: SemanticSubgroupReductionKindV1,
+    },
+    /// Broadcasts one scalar from a tile-local lane within each Wave64 partition.
+    SubgroupBroadcastF32 {
+        context: SemanticTypeIdV1,
+        width: u32,
+    },
     /// Creates the compiler-issued capability for one supported matrix profile.
     MatrixContextCurrent {
         context: SemanticTypeIdV1,
@@ -5085,6 +5116,64 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         lane: SemanticTypeIdV1,
         contract: SemanticMfmaOperandContractV1,
         storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Checks and creates one role-specific row-major gfx950 FP4 matrix view.
+    Gfx950Fp4MatrixViewRowMajor {
+        result: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        error: SemanticTypeIdV1,
+        role: SemanticMfmaOperandRoleV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Loads eight dwords containing packed gfx950 FP4 operands.
+    Gfx950Fp4MatrixLoadM16K128 {
+        fragment: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        lane: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Checks and creates one role-specific row-major gfx950 FP8 matrix view.
+    Gfx950Fp8MatrixViewRowMajor {
+        result: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        error: SemanticTypeIdV1,
+        role: SemanticMfmaOperandRoleV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Loads eight packed dwords for one gfx950 FP8 M16xN16xK128 operand.
+    Gfx950Fp8MatrixLoadM16K128 {
+        fragment: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        lane: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    },
+    /// Declares one exact static gfx950 LDS transpose tile.
+    Gfx950LdsTransposeCurrent {
+        tile: SemanticTypeIdV1,
+        lane: SemanticTypeIdV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    },
+    /// Stages a checked row-major key tile through the inverse transpose mapping.
+    Gfx950LdsTransposeStage {
+        input_tile: SemanticTypeIdV1,
+        output_tile: SemanticTypeIdV1,
+        view: SemanticTypeIdV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    },
+    /// Publishes one staged tile through a uniform workgroup barrier.
+    Gfx950LdsTransposePublish {
+        input_tile: SemanticTypeIdV1,
+        output_tile: SemanticTypeIdV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    },
+    /// Reads one published tile into the exact gfx950 B-fragment transport.
+    Gfx950LdsTransposeRead {
+        tile: SemanticTypeIdV1,
+        fragment: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
     },
     /// Checks and creates a generic read-only row-major strided 2-D view.
     StridedReadView2DFromSharedSlice {
@@ -5649,6 +5738,24 @@ impl InertSemanticMirRequestV1 {
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V5, limits)
+    }
+
+    /// Admits under the exact closed V6 schema that adds typed gfx950 attention terminals.
+    pub fn admit_exact_v6(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V6, limits)
+    }
+
+    /// Selects V5 for the existing production surface and V6 only when a typed
+    /// gfx950 attention intrinsic requires it.
+    pub fn admit_current_production(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        let version = minimum_wire_version(&self).max(SemanticMirWireVersionV1::V5);
+        self.admit_for_wire_version(version, limits)
     }
 
     fn admit_for_wire_version(
@@ -7156,11 +7263,22 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { .. }
+        | SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { .. }
         | SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoad { .. }
         | SemanticCompilerIntrinsicOperationV1::Bf16MatrixLoadZeroFilledV2 { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish { .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { .. }
         | SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice { .. }
         | SemanticCompilerIntrinsicOperationV1::StridedReadView2DLoadOr { .. }
         | SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero { .. }
@@ -7329,11 +7447,86 @@ fn compiler_intrinsic_signature_matches(
                 && width.is_power_of_two()
                 && width <= 64
         }
+        SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { context } => {
+            inputs.is_empty() && output == context
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+            context, width, ..
+        } => {
+            inputs.len() == 2
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1] == output
+                && matches!(
+                    scalar_type(request, output),
+                    Some(SemanticScalarTypeV1::Float { bits: 32 })
+                )
+                && width != 0
+                && width.is_power_of_two()
+                && width <= 64
+        }
+        SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { context, width } => {
+            inputs.len() == 3
+                && shared_reference_to(request, inputs[0], context)
+                && inputs[1] == output
+                && matches!(
+                    scalar_type(request, output),
+                    Some(SemanticScalarTypeV1::Float { bits: 32 })
+                )
+                && is_unsigned_integer_with_bits(request, inputs[2], 32)
+                && width != 0
+                && width.is_power_of_two()
+                && width <= 64
+        }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
             inputs.is_empty() && output == context
         }
         SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
             inputs.is_empty() && output == lane && wave_width == 64
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { tile, lane, .. } => {
+            inputs.len() == 1 && shared_reference_to(request, inputs[0], lane) && output == tile
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+            input_tile,
+            output_tile,
+            view,
+            ..
+        } => {
+            inputs.len() == 4
+                && inputs[0] == input_tile
+                && shared_reference_to(request, inputs[1], view)
+                && inputs[2..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && output == output_tile
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+            input_tile,
+            output_tile,
+            ..
+        } => inputs.as_ref() == [input_tile] && output == output_tile,
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+            tile,
+            fragment,
+            contract,
+            format,
+        } => {
+            inputs.as_ref() == [tile]
+                && output == fragment
+                && contract.role == SemanticMfmaOperandRoleV1::B
+                && contract.register_distribution
+                    == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+                && contract.wave_width == 64
+                && matches!(
+                    (format, contract.profile),
+                    (
+                        SemanticGfx950LdsTransposeFormatV1::Fp4E2M1,
+                        SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                    ) | (
+                        SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+                        SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+                    )
+                )
         }
         SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
             result,
@@ -7387,6 +7580,68 @@ fn compiler_intrinsic_signature_matches(
                 && inputs[2..]
                     .iter()
                     .all(|input| is_integer_type(request, *input))
+                && mfma_operand_contract_valid(contract)
+                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            role,
+            storage_layout,
+        }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            role,
+            storage_layout,
+        } => {
+            inputs.len() == 5
+                && output == result
+                && inputs[1..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && result_value_error_matches(request, result, view, error)
+                && matches!(
+                    role,
+                    SemanticMfmaOperandRoleV1::A | SemanticMfmaOperandRoleV1::B
+                )
+                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+            fragment,
+            view,
+            lane,
+            contract,
+            storage_layout,
+        } => {
+            inputs.len() == 4
+                && output == fragment
+                && shared_reference_to(request, inputs[0], view)
+                && shared_reference_to(request, inputs[1], lane)
+                && inputs[2..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && contract.profile == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                && mfma_operand_contract_valid(contract)
+                && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+            fragment,
+            view,
+            lane,
+            contract,
+            storage_layout,
+        } => {
+            inputs.len() == 4
+                && output == fragment
+                && shared_reference_to(request, inputs[0], view)
+                && shared_reference_to(request, inputs[1], lane)
+                && inputs[2..]
+                    .iter()
+                    .all(|input| is_integer_type(request, *input))
+                && contract.profile == SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
                 && mfma_operand_contract_valid(contract)
                 && storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
         }
@@ -7771,9 +8026,19 @@ fn compiler_intrinsic_signature_matches(
 }
 
 fn mfma_operand_contract_valid(contract: SemanticMfmaOperandContractV1) -> bool {
-    contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16
-        && contract.register_distribution == SemanticMfmaRegisterDistributionV1::Tile16x16
-        && contract.wave_width == 64
+    matches!(
+        (contract.profile, contract.register_distribution),
+        (
+            SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            SemanticMfmaRegisterDistributionV1::Tile16x16,
+        ) | (
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+        ) | (
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+        )
+    ) && contract.wave_width == 64
 }
 
 fn shared_slice_reference_with_element(
@@ -7843,8 +8108,12 @@ fn strided_read_view_type_matches(
 }
 
 fn mfma_accumulator_contract_valid(contract: SemanticMfmaAccumulatorContractV1) -> bool {
-    contract.profile == SemanticMfmaProfileV1::Bf16F32M16N16K16
-        && contract.distribution == SemanticMfmaAccumulatorDistributionV1::RowMajor
+    matches!(
+        contract.profile,
+        SemanticMfmaProfileV1::Bf16F32M16N16K16
+            | SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+            | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+    ) && contract.distribution == SemanticMfmaAccumulatorDistributionV1::RowMajor
         && contract.wave_width == 64
 }
 
@@ -13661,7 +13930,10 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(context);
         }
         SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context }
-        | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, .. } => {
+        | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, .. }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { context }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { context, .. }
+        | SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { context, .. } => {
             pending.push_back(context);
         }
         SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context } => {
@@ -13701,6 +13973,64 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(fragment);
             pending.push_back(view);
             pending.push_back(lane);
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            ..
+        } => {
+            pending.push_back(result);
+            pending.push_back(view);
+            pending.push_back(error);
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+            fragment,
+            view,
+            lane,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+            fragment,
+            view,
+            lane,
+            ..
+        } => {
+            pending.push_back(fragment);
+            pending.push_back(view);
+            pending.push_back(lane);
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { tile, lane, .. } => {
+            pending.push_back(tile);
+            pending.push_back(lane);
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+            input_tile,
+            output_tile,
+            view,
+            ..
+        } => {
+            pending.push_back(input_tile);
+            pending.push_back(output_tile);
+            pending.push_back(view);
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+            input_tile,
+            output_tile,
+            ..
+        } => {
+            pending.push_back(input_tile);
+            pending.push_back(output_tile);
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { tile, fragment, .. } => {
+            pending.push_back(tile);
+            pending.push_back(fragment);
         }
         SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
             result,
@@ -14317,6 +14647,24 @@ fn encode_request(
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    let uses_gfx950_attention = request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish { .. }
+                    | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead { .. },
+                ..
+            }
+        )
+    });
+    if uses_gfx950_attention {
+        return SemanticMirWireVersionV1::V6;
+    }
     let uses_checked_read_view = request.callables.iter().any(|callable| {
         matches!(
             callable,
@@ -15279,6 +15627,124 @@ fn encode_compiler_intrinsic_operation(
             writer.u64(tile_columns)?;
             writer.u64(elements_per_lane)
         }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            role,
+            storage_layout,
+        } => {
+            writer.u8(43)?;
+            writer.u32(result.0)?;
+            writer.u32(view.0)?;
+            writer.u32(error.0)?;
+            encode_mfma_role(writer, role)?;
+            encode_mfma_storage_layout(writer, storage_layout)
+        }
+        SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { context, width } => {
+            writer.u8(45)?;
+            writer.u32(context.0)?;
+            writer.u32(width)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { tile, lane, format } => {
+            writer.u8(46)?;
+            writer.u32(tile.0)?;
+            writer.u32(lane.0)?;
+            encode_gfx950_lds_transpose_format(writer, format)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+            input_tile,
+            output_tile,
+            view,
+            format,
+        } => {
+            writer.u8(47)?;
+            writer.u32(input_tile.0)?;
+            writer.u32(output_tile.0)?;
+            writer.u32(view.0)?;
+            encode_gfx950_lds_transpose_format(writer, format)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+            input_tile,
+            output_tile,
+            format,
+        } => {
+            writer.u8(48)?;
+            writer.u32(input_tile.0)?;
+            writer.u32(output_tile.0)?;
+            encode_gfx950_lds_transpose_format(writer, format)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+            tile,
+            fragment,
+            contract,
+            format,
+        } => {
+            writer.u8(49)?;
+            writer.u32(tile.0)?;
+            writer.u32(fragment.0)?;
+            encode_mfma_operand_contract(writer, contract)?;
+            encode_gfx950_lds_transpose_format(writer, format)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { context } => {
+            writer.u8(50)?;
+            writer.u32(context.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+            context,
+            width,
+            kind,
+        } => {
+            writer.u8(51)?;
+            writer.u32(context.0)?;
+            writer.u32(width)?;
+            writer.u8(match kind {
+                SemanticSubgroupReductionKindV1::Sum => 0,
+                SemanticSubgroupReductionKindV1::Maximum => 1,
+            })
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+            fragment,
+            view,
+            lane,
+            contract,
+            storage_layout,
+        } => {
+            writer.u8(44)?;
+            writer.u32(fragment.0)?;
+            writer.u32(view.0)?;
+            writer.u32(lane.0)?;
+            encode_mfma_operand_contract(writer, contract)?;
+            encode_mfma_storage_layout(writer, storage_layout)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+            result,
+            view,
+            error,
+            role,
+            storage_layout,
+        } => {
+            writer.u8(41)?;
+            writer.u32(result.0)?;
+            writer.u32(view.0)?;
+            writer.u32(error.0)?;
+            encode_mfma_role(writer, role)?;
+            encode_mfma_storage_layout(writer, storage_layout)
+        }
+        SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+            fragment,
+            view,
+            lane,
+            contract,
+            storage_layout,
+        } => {
+            writer.u8(42)?;
+            writer.u32(fragment.0)?;
+            writer.u32(view.0)?;
+            writer.u32(lane.0)?;
+            encode_mfma_operand_contract(writer, contract)?;
+            encode_mfma_storage_layout(writer, storage_layout)
+        }
         SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
             disjoint_slice,
             tile_witness,
@@ -15607,6 +16073,16 @@ fn encode_compiler_intrinsic_operation(
     }
 }
 
+fn encode_gfx950_lds_transpose_format(
+    writer: &mut CanonicalWriterV1,
+    format: SemanticGfx950LdsTransposeFormatV1,
+) -> Result<(), SemanticMirErrorV1> {
+    writer.u8(match format {
+        SemanticGfx950LdsTransposeFormatV1::Fp4E2M1 => 0,
+        SemanticGfx950LdsTransposeFormatV1::Fp8E4M3 => 1,
+    })
+}
+
 fn encode_mfma_role(
     writer: &mut CanonicalWriterV1,
     role: SemanticMfmaOperandRoleV1,
@@ -15634,9 +16110,12 @@ fn encode_mfma_operand_contract(
     encode_mfma_role(writer, contract.role)?;
     writer.u8(match contract.profile {
         SemanticMfmaProfileV1::Bf16F32M16N16K16 => 0,
+        SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128 => 1,
+        SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128 => 2,
     })?;
     writer.u8(match contract.register_distribution {
         SemanticMfmaRegisterDistributionV1::Tile16x16 => 0,
+        SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128 => 1,
     })?;
     writer.u32(contract.wave_width)
 }
@@ -15647,6 +16126,8 @@ fn encode_mfma_accumulator_contract(
 ) -> Result<(), SemanticMirErrorV1> {
     writer.u8(match contract.profile {
         SemanticMfmaProfileV1::Bf16F32M16N16K16 => 0,
+        SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128 => 1,
+        SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128 => 2,
     })?;
     writer.u8(match contract.distribution {
         SemanticMfmaAccumulatorDistributionV1::RowMajor => 0,

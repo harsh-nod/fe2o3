@@ -37,8 +37,8 @@ validateExactRowSoftmaxV1MetadataForTesting(llvm::StringRef MetadataBlob);
 llvm::Error validateProductionGeneralGemmV1CompilerInputForTesting(
     llvm::ArrayRef<uint8_t> Bytes);
 
-llvm::Error validateProductionGeneralGemmV1MetadataForTesting(
-    llvm::StringRef MetadataBlob);
+llvm::Error
+validateProductionGeneralGemmV1MetadataForTesting(llvm::StringRef MetadataBlob);
 
 llvm::Expected<std::vector<uint8_t>>
 makeExactWorkgroupSyncCompilerInputForTesting(
@@ -80,6 +80,9 @@ Response execute(const Request &RequestValue);
 
 Response executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
     const Request &RequestValue, const Gfx942DeviceLibraryPolicy &Policy);
+
+Response executeWithUnauthenticatedGfx950DeviceLibraryPolicyForTesting(
+    const Request &RequestValue, const Gfx950DeviceLibraryPolicy &Policy);
 
 } // namespace fe2o3::worker
 

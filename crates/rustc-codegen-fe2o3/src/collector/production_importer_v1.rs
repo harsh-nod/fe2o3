@@ -9,15 +9,15 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
     SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionAbiV1,
     SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
-    SemanticKernelBindingIdentityV1, SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1,
-    SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1,
-    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
-    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
-    SemanticMfmaStorageLayoutV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
-    SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticSubgroupReductionKindV1,
-    SemanticTargetDataLayoutV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1,
-    SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
-    SemanticWorkgroupDimensionsV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
+    SemanticKernelLaunchBoundsV1, SemanticKernelSourceContractV1, SemanticLinkSymbolV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
+    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMirErrorV1,
+    SemanticMirLimitsV1, SemanticMirResourceV1, SemanticNonBodyCallableBindingV1,
+    SemanticReachableAssemblyV1, SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1,
+    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
+    SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
 };
 use rustc_middle::ty::{FloatTy, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::sym;
@@ -573,7 +573,7 @@ fn construct_complete_request_v1<'tcx>(
         callables,
         plan.roots().to_vec(),
     )
-    .and_then(|request| request.admit_exact_v5(SemanticMirLimitsV1::default()))
+    .and_then(|request| request.admit_current_production(SemanticMirLimitsV1::default()))
     .map_err(ProductionSemanticImportErrorV1::SemanticSchema)
 }
 
@@ -910,10 +910,80 @@ fn terminal_operation_v1<'tcx>(
                 kind,
             })
         }
+        ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_output,
+                    TrustedDeviceItem::Gfx950SubgroupContext,
+                ) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent {
+                    context: output,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32)
+            if inputs.len() == 2
+                && rust_inputs.len() == 2
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950SubgroupContext)
+                })
+                && matches!(rust_inputs[1].kind(), TyKind::Float(FloatTy::F32))
+                && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
+        {
+            let width = single_const_u32_v1(instance)
+                .filter(|width| *width != 0 && width.is_power_of_two() && *width <= 64)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 subgroup reduction width"))?;
+            let kind = match expansion {
+                ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32 => {
+                    SemanticSubgroupReductionKindV1::Sum
+                }
+                ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32 => {
+                    SemanticSubgroupReductionKindV1::Maximum
+                }
+                _ => unreachable!("matched gfx950 subgroup reduction expansion"),
+            };
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    width,
+                    kind,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
+            if inputs.len() == 3
+                && rust_inputs.len() == 3
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950SubgroupContext)
+                })
+                && matches!(rust_inputs[1].kind(), TyKind::Float(FloatTy::F32))
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::U32))
+                && matches!(rust_output.kind(), TyKind::Float(FloatTy::F32)) =>
+        {
+            let width = single_const_u32_v1(instance)
+                .filter(|width| *width != 0 && width.is_power_of_two() && *width <= 64)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 subgroup broadcast width"))?;
+            Ok(SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 {
+                context: pointer_pointee_v1(types, inputs[0])?,
+                width,
+            })
+        }
         ProductionTerminalExpansionV1::MatrixContextCurrent
             if inputs.is_empty()
                 && rust_inputs.is_empty()
                 && rust_is_trusted_adt_v1(tcx, rust_output, TrustedDeviceItem::DeviceMatrix) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context: output })
+        }
+        ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && rust_is_trusted_adt_v1(tcx, rust_output, TrustedDeviceItem::Gfx950Matrix) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { context: output })
         }
@@ -959,6 +1029,94 @@ fn terminal_operation_v1<'tcx>(
             let (view, error) = semantic_result_payloads_v1(types, output)?;
             Ok(
                 SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor {
+                    result: output,
+                    view,
+                    error,
+                    role,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor)
+            if inputs.len() == 5
+                && rust_inputs.len() == 5
+                && rust_shared_u8_slice_v1(rust_inputs[0])
+                && rust_inputs[1..]
+                    .iter()
+                    .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::Usize))) =>
+        {
+            let (rust_view, rust_error) = rust_result_payloads_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 row-major result"))?;
+            let role = rust_gfx950_fp4_matrix_role_v1(tcx, rust_view)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 row-major view"))?;
+            let expected_role = match expansion {
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor => {
+                    SemanticMfmaOperandRoleV1::A
+                }
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor => {
+                    SemanticMfmaOperandRoleV1::B
+                }
+                _ => unreachable!("matched gfx950 FP4 row-major expansion"),
+            };
+            if role != expected_role
+                || !rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_error,
+                    TrustedDeviceItem::Gfx950MfmaMatrixViewError,
+                )
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 FP4 row-major role or error",
+                ));
+            }
+            let (view, error) = semantic_result_payloads_v1(types, output)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+                    result: output,
+                    view,
+                    error,
+                    role,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor)
+            if inputs.len() == 5
+                && rust_inputs.len() == 5
+                && rust_shared_u8_slice_v1(rust_inputs[0])
+                && rust_inputs[1..]
+                    .iter()
+                    .all(|ty| matches!(ty.kind(), TyKind::Uint(UintTy::Usize))) =>
+        {
+            let (rust_view, rust_error) = rust_result_payloads_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 row-major result"))?;
+            let role = rust_gfx950_fp8_matrix_role_v1(tcx, rust_view)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 row-major view"))?;
+            let expected_role = match expansion {
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor => {
+                    SemanticMfmaOperandRoleV1::A
+                }
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor => {
+                    SemanticMfmaOperandRoleV1::B
+                }
+                _ => unreachable!("matched gfx950 row-major expansion"),
+            };
+            if role != expected_role
+                || !rust_is_trusted_adt_v1(
+                    tcx,
+                    rust_error,
+                    TrustedDeviceItem::Gfx950MfmaMatrixViewError,
+                )
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 FP8 row-major role or error",
+                ));
+            }
+            let (view, error) = semantic_result_payloads_v1(types, output)?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
                     result: output,
                     view,
                     error,
@@ -1086,6 +1244,195 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16)
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[3].kind(), TyKind::Uint(UintTy::Usize)) =>
+        {
+            let rust_view = rust_reference_pointee_v1(rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 load view borrow"))?;
+            let role = rust_gfx950_fp4_matrix_role_v1(tcx, rust_view)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 load view"))?;
+            let rust_lane = rust_reference_pointee_v1(rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 load lane borrow"))?;
+            let contract = rust_gfx950_fp4_fragment_contract_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 load fragment"))?;
+            let expected_role = match expansion {
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128 => {
+                    SemanticMfmaOperandRoleV1::A
+                }
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16 => {
+                    SemanticMfmaOperandRoleV1::B
+                }
+                _ => unreachable!("matched gfx950 FP4 load expansion"),
+            };
+            if role != expected_role
+                || contract.role != expected_role
+                || !rust_wave_lane64_v1(tcx, rust_lane)
+            {
+                return Err(body_owner_table_mismatch_v1("gfx950 FP4 load contract"));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+                    fragment: output,
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    lane: pointer_pointee_v1(types, inputs[1])?,
+                    contract,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16)
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[3].kind(), TyKind::Uint(UintTy::Usize)) =>
+        {
+            let rust_view = rust_reference_pointee_v1(rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 load view borrow"))?;
+            let role = rust_gfx950_fp8_matrix_role_v1(tcx, rust_view)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 load view"))?;
+            let rust_lane = rust_reference_pointee_v1(rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 load lane borrow"))?;
+            let contract = rust_gfx950_fp8_fragment_contract_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 load fragment"))?;
+            let expected_role = match expansion {
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128 => {
+                    SemanticMfmaOperandRoleV1::A
+                }
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16 => {
+                    SemanticMfmaOperandRoleV1::B
+                }
+                _ => unreachable!("matched gfx950 FP8 load expansion"),
+            };
+            if role != expected_role
+                || contract.role != expected_role
+                || !rust_wave_lane64_v1(tcx, rust_lane)
+            {
+                return Err(body_owner_table_mismatch_v1("gfx950 FP8 load contract"));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+                    fragment: output,
+                    view: pointer_pointee_v1(types, inputs[0])?,
+                    lane: pointer_pointee_v1(types, inputs[1])?,
+                    contract,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .is_some_and(|ty| rust_wave_lane64_v1(tcx, ty)) =>
+        {
+            let format = rust_gfx950_lds_transpose_format_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose current tile"))?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
+                    tile: output,
+                    lane: pointer_pointee_v1(types, inputs[0])?,
+                    format,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8)
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[3].kind(), TyKind::Uint(UintTy::Usize)) =>
+        {
+            let input_format = rust_gfx950_lds_transpose_format_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose stage input"))?;
+            let output_format = rust_gfx950_lds_transpose_format_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose stage output"))?;
+            let rust_view = rust_reference_pointee_v1(rust_inputs[1])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose stage view"))?;
+            let expected_format = match expansion {
+                ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4 => {
+                    (rust_gfx950_fp4_matrix_role_v1(tcx, rust_view)
+                        == Some(SemanticMfmaOperandRoleV1::A))
+                    .then_some(SemanticGfx950LdsTransposeFormatV1::Fp4E2M1)
+                }
+                ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => {
+                    (rust_gfx950_fp8_matrix_role_v1(tcx, rust_view)
+                        == Some(SemanticMfmaOperandRoleV1::A))
+                    .then_some(SemanticGfx950LdsTransposeFormatV1::Fp8E4M3)
+                }
+                _ => unreachable!("matched gfx950 transpose stage expansion"),
+            }
+            .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose stage A view"))?;
+            if input_format != expected_format || output_format != expected_format {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 transpose stage format transition",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                    input_tile: inputs[0],
+                    output_tile: output,
+                    view: pointer_pointee_v1(types, inputs[1])?,
+                    format: expected_format,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950LdsTransposePublish
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let input_format = rust_gfx950_lds_transpose_format_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose publish input"))?;
+            let output_format = rust_gfx950_lds_transpose_format_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose publish output"))?;
+            if input_format != output_format {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 transpose publish format transition",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                    input_tile: inputs[0],
+                    output_tile: output,
+                    format: input_format,
+                },
+            )
+        }
+        expansion @ (ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8)
+            if inputs.len() == 1 && rust_inputs.len() == 1 =>
+        {
+            let input_format = rust_gfx950_lds_transpose_format_v1(tcx, rust_inputs[0])
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose read tile"))?;
+            let (expected_format, contract) = match expansion {
+                ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => (
+                    SemanticGfx950LdsTransposeFormatV1::Fp4E2M1,
+                    rust_gfx950_fp4_fragment_contract_v1(tcx, rust_output),
+                ),
+                ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => (
+                    SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+                    rust_gfx950_fp8_fragment_contract_v1(tcx, rust_output),
+                ),
+                _ => unreachable!("matched gfx950 transpose read expansion"),
+            };
+            let contract = contract
+                .filter(|contract| contract.role == SemanticMfmaOperandRoleV1::B)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 transpose B fragment"))?;
+            if input_format != expected_format {
+                return Err(body_owner_table_mismatch_v1("gfx950 transpose read format"));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                    tile: inputs[0],
+                    fragment: output,
+                    contract,
+                    format: expected_format,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
             if inputs.len() == 1
                 && rust_inputs.len() == 1
@@ -1102,10 +1449,68 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .is_some_and(|ty| rust_wave_lane64_v1(tcx, ty)) =>
+        {
+            let contract = rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP4 zero accumulator"))?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                    lane: pointer_pointee_v1(types, inputs[0])?,
+                    fragment: output,
+                    contract,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .is_some_and(|ty| rust_wave_lane64_v1(tcx, ty)) =>
+        {
+            let contract = rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_output)
+                .ok_or_else(|| body_owner_table_mismatch_v1("gfx950 FP8 zero accumulator"))?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
+                    lane: pointer_pointee_v1(types, inputs[0])?,
+                    fragment: output,
+                    contract,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
             if inputs.len() == 1
                 && rust_inputs.len() == 1
                 && rust_mfma_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
+                && rust_f32_array_v1(tcx, rust_output, 4) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+                    fragment: inputs[0],
+                    values: output,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
+                && rust_f32_array_v1(tcx, rust_output, 4) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorIntoValues {
+                    fragment: inputs[0],
+                    values: output,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_inputs[0]).is_some()
                 && rust_f32_array_v1(tcx, rust_output, 4) =>
         {
             Ok(
@@ -1138,6 +1543,78 @@ fn terminal_operation_v1<'tcx>(
                 || Some(accumulator) != rust_mfma_accumulator_contract_v1(tcx, rust_output)
             {
                 return Err(body_owner_table_mismatch_v1("typed MFMA argument contract"));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    lhs_fragment: inputs[1],
+                    rhs_fragment: inputs[2],
+                    accumulator_fragment: inputs[3],
+                    lhs,
+                    rhs,
+                    accumulator,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
+                })
+                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
+                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output).is_some() =>
+        {
+            let (Some(lhs), Some(rhs), Some(accumulator)) = (
+                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]),
+                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[2]),
+                rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]),
+            ) else {
+                return Err(body_owner_table_mismatch_v1("gfx950 FP4 MFMA contract"));
+            };
+            if lhs.role != SemanticMfmaOperandRoleV1::A
+                || rhs.role != SemanticMfmaOperandRoleV1::B
+                || Some(accumulator) != rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output)
+            {
+                return Err(body_owner_table_mismatch_v1("gfx950 FP4 MFMA contract"));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    lhs_fragment: inputs[1],
+                    rhs_fragment: inputs[2],
+                    accumulator_fragment: inputs[3],
+                    lhs,
+                    rhs,
+                    accumulator,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
+                })
+                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
+                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
+                && rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
+                && rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_output).is_some() =>
+        {
+            let (Some(lhs), Some(rhs), Some(accumulator)) = (
+                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[1]),
+                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]),
+                rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_inputs[3]),
+            ) else {
+                return Err(body_owner_table_mismatch_v1("gfx950 FP8 MFMA contract"));
+            };
+            if lhs.role != SemanticMfmaOperandRoleV1::A
+                || rhs.role != SemanticMfmaOperandRoleV1::B
+                || Some(accumulator) != rust_gfx950_fp8_accumulator_contract_v1(tcx, rust_output)
+            {
+                return Err(body_owner_table_mismatch_v1("gfx950 FP8 MFMA contract"));
             }
             Ok(
                 SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
@@ -1586,6 +2063,10 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
+        | ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
+        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
+        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
         | ProductionTerminalExpansionV1::WaveLaneCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
         | ProductionTerminalExpansionV1::Bf16MatrixARowMajor
@@ -1597,6 +2078,27 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16
+        | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
+        | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
+        | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16
+        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero
+        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues
+        | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposePublish
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
         | ProductionTerminalExpansionV1::ColdPath
         | ProductionTerminalExpansionV1::WorkgroupBarrier => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
@@ -1701,6 +2203,14 @@ fn rust_shared_u16_slice_v1(ty: Ty<'_>) -> bool {
     };
     matches!(*pointee.kind(), TyKind::Slice(element)
         if matches!(element.kind(), TyKind::Uint(UintTy::U16)))
+}
+
+fn rust_shared_u8_slice_v1(ty: Ty<'_>) -> bool {
+    let Some(pointee) = rust_reference_pointee_v1(ty) else {
+        return false;
+    };
+    matches!(*pointee.kind(), TyKind::Slice(element)
+        if matches!(element.kind(), TyKind::Uint(UintTy::U8)))
 }
 
 fn rust_shared_slice_element_v1(ty: Ty<'_>) -> Option<Ty<'_>> {
@@ -1841,6 +2351,165 @@ fn rust_mfma_matrix_role_v1<'tcx>(
         Some(SemanticMfmaOperandRoleV1::A)
     } else if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::MfmaOperandB) {
         Some(SemanticMfmaOperandRoleV1::B)
+    } else {
+        None
+    }
+}
+
+fn rust_gfx950_fp8_fragment_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaOperandContractV1> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Gfx950MfmaFragment)?;
+    let [format, role] = arguments.as_slice() else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(tcx, *format, TrustedDeviceItem::Gfx950Fp8E4M3Format)
+        .then_some(())?;
+    let role = if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::Gfx950MfmaOperandA)
+    {
+        SemanticMfmaOperandRoleV1::A
+    } else if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::Gfx950MfmaOperandB) {
+        SemanticMfmaOperandRoleV1::B
+    } else {
+        return None;
+    };
+    Some(SemanticMfmaOperandContractV1 {
+        role,
+        profile: SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+        wave_width: 64,
+    })
+}
+
+fn rust_gfx950_fp4_fragment_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaOperandContractV1> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Gfx950MfmaFragment)?;
+    let [format, role] = arguments.as_slice() else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(tcx, *format, TrustedDeviceItem::Gfx950Fp4E2M1Format)
+        .then_some(())?;
+    let role = if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::Gfx950MfmaOperandA)
+    {
+        SemanticMfmaOperandRoleV1::A
+    } else if rust_is_exact_trusted_marker_v1(tcx, *role, TrustedDeviceItem::Gfx950MfmaOperandB) {
+        SemanticMfmaOperandRoleV1::B
+    } else {
+        return None;
+    };
+    Some(SemanticMfmaOperandContractV1 {
+        role,
+        profile: SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+        wave_width: 64,
+    })
+}
+
+fn rust_gfx950_fp8_accumulator_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaAccumulatorContractV1> {
+    let arguments = rust_trusted_adt_type_arguments_v1(
+        tcx,
+        ty,
+        TrustedDeviceItem::Gfx950F32AccumulatorFragment,
+    )?;
+    let [format] = arguments.as_slice() else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(tcx, *format, TrustedDeviceItem::Gfx950Fp8E4M3Format)
+        .then_some(())?;
+    Some(SemanticMfmaAccumulatorContractV1 {
+        profile: SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+        wave_width: 64,
+    })
+}
+
+fn rust_gfx950_fp4_accumulator_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaAccumulatorContractV1> {
+    let arguments = rust_trusted_adt_type_arguments_v1(
+        tcx,
+        ty,
+        TrustedDeviceItem::Gfx950F32AccumulatorFragment,
+    )?;
+    let [format] = arguments.as_slice() else {
+        return None;
+    };
+    rust_is_exact_trusted_marker_v1(tcx, *format, TrustedDeviceItem::Gfx950Fp4E2M1Format)
+        .then_some(())?;
+    Some(SemanticMfmaAccumulatorContractV1 {
+        profile: SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+        wave_width: 64,
+    })
+}
+
+fn rust_gfx950_fp8_matrix_role_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaOperandRoleV1> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    let role = match trusted_device_items::classify(tcx, definition.did())? {
+        TrustedDeviceItem::Gfx950MfmaMatrixAView => SemanticMfmaOperandRoleV1::A,
+        TrustedDeviceItem::Gfx950MfmaMatrixBView => SemanticMfmaOperandRoleV1::B,
+        _ => return None,
+    };
+    let mut formats = arguments.types();
+    let format = formats.next()?;
+    if formats.next().is_some()
+        || !rust_is_exact_trusted_marker_v1(tcx, format, TrustedDeviceItem::Gfx950Fp8E4M3Format)
+    {
+        return None;
+    }
+    Some(role)
+}
+
+fn rust_gfx950_fp4_matrix_role_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticMfmaOperandRoleV1> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    let role = match trusted_device_items::classify(tcx, definition.did())? {
+        TrustedDeviceItem::Gfx950MfmaMatrixAView => SemanticMfmaOperandRoleV1::A,
+        TrustedDeviceItem::Gfx950MfmaMatrixBView => SemanticMfmaOperandRoleV1::B,
+        _ => return None,
+    };
+    let mut formats = arguments.types();
+    let format = formats.next()?;
+    if formats.next().is_some()
+        || !rust_is_exact_trusted_marker_v1(tcx, format, TrustedDeviceItem::Gfx950Fp4E2M1Format)
+    {
+        return None;
+    }
+    Some(role)
+}
+
+fn rust_gfx950_lds_transpose_format_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SemanticGfx950LdsTransposeFormatV1> {
+    let arguments =
+        rust_trusted_adt_type_arguments_v1(tcx, ty, TrustedDeviceItem::Gfx950LdsTransposeTile)?;
+    let [format, _state] = arguments.as_slice() else {
+        return None;
+    };
+    if rust_is_exact_trusted_marker_v1(tcx, *format, TrustedDeviceItem::Gfx950Fp4E2M1Format) {
+        Some(SemanticGfx950LdsTransposeFormatV1::Fp4E2M1)
+    } else if rust_is_exact_trusted_marker_v1(tcx, *format, TrustedDeviceItem::Gfx950Fp8E4M3Format)
+    {
+        Some(SemanticGfx950LdsTransposeFormatV1::Fp8E4M3)
     } else {
         None
     }
@@ -2249,6 +2918,31 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
         ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d => 59,
         ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => 60,
+        ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent => 61,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor => 62,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor => 63,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128 => 64,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16 => 65,
+        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero => 66,
+        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues => 67,
+        ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate => 68,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor => 69,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor => 70,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128 => 71,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16 => 72,
+        ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero => 73,
+        ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues => 74,
+        ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate => 75,
+        ProductionTerminalExpansionV1::Gfx950SubgroupCurrent => 76,
+        ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32 => 77,
+        ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32 => 78,
+        ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32 => 79,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent => 80,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4 => 81,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => 82,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposePublish => 83,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
     }
 }
 

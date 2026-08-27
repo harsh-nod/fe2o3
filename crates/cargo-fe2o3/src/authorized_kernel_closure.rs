@@ -197,7 +197,7 @@ const TRUSTED_REGISTRY_PROC_MACROS: [(&str, &str, &str); 8] = [
 const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "pliron-derive",
     "0.17.0",
-    "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed",
+    "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487",
     "2a1c62604e290a3a45b923eac5ef8d0dfaf175a834d9931a9d19cd777adab819",
 )];
 const TRUSTED_FE2O3_MACROS_TREE: &str =

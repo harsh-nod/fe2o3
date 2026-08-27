@@ -10,8 +10,6 @@ use fe2o3_kernel_ir::{
 };
 use fe2o3_mir_model::semantic_mir_v1::SemanticFunctionDeclV1;
 
-use crate::production_target_v1::PRODUCTION_TARGET_V1;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ProductionGeometryV1 {
     rank: u8,
@@ -57,6 +55,7 @@ pub(crate) fn derive_production_geometry_v1(
     module: &Module,
     semantic_function: &SemanticFunctionDeclV1,
     source_launch: &LaunchContract,
+    device_target: &str,
 ) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
     let entry = semantic_function
         .kernel_entry()
@@ -65,19 +64,21 @@ pub(crate) fn derive_production_geometry_v1(
         .source_contract()
         .launch()
         .ok_or(ProductionGeometryErrorV1::MissingSourceWorkgroup)?;
-    derive_production_geometry_from_launch_v1(
+    derive_production_geometry_from_launch_for_target_v1(
         module,
         semantic_launch.required(),
         semantic_launch.maximum(),
         source_launch,
+        device_target,
     )
 }
 
-fn derive_production_geometry_from_launch_v1(
+fn derive_production_geometry_from_launch_for_target_v1(
     module: &Module,
     required: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
     maximum: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
     source_launch: &LaunchContract,
+    device_target: &str,
 ) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
     let required = required.ok_or(ProductionGeometryErrorV1::DynamicSourceWorkgroup)?;
     if maximum.is_some_and(|maximum| maximum != required) {
@@ -132,7 +133,7 @@ fn derive_production_geometry_from_launch_v1(
         .ok_or(ProductionGeometryErrorV1::ArithmeticOverflow(
             "flat workgroup size",
         ))?;
-    let target = AmdTargetId::parse(PRODUCTION_TARGET_V1)
+    let target = AmdTargetId::parse(device_target)
         .map_err(|_| ProductionGeometryErrorV1::MissingTargetCapabilities)?
         .capabilities()
         .map_err(|_| ProductionGeometryErrorV1::MissingTargetCapabilities)?;
@@ -174,6 +175,22 @@ fn derive_production_geometry_from_launch_v1(
         allow_exact_tiled_matrix,
         allow_workgroup_memory,
     })
+}
+
+#[cfg(test)]
+fn derive_production_geometry_from_launch_v1(
+    module: &Module,
+    required: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
+    maximum: Option<fe2o3_mir_model::semantic_mir_v1::SemanticWorkgroupDimensionsV1>,
+    source_launch: &LaunchContract,
+) -> Result<ProductionGeometryV1, ProductionGeometryErrorV1> {
+    derive_production_geometry_from_launch_for_target_v1(
+        module,
+        required,
+        maximum,
+        source_launch,
+        fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
+    )
 }
 
 fn validate_target_workgroup(
@@ -434,11 +451,11 @@ impl fmt::Display for ProductionGeometryErrorV1 {
                 "static KIR launch axis {axis} requires {kir_blocks} block(s), but source descriptor allows {descriptor_blocks}",
             ),
             Self::MissingTargetCapabilities => {
-                formatter.write_str("gfx942 target resource capabilities are unavailable")
+                formatter.write_str("production target resource capabilities are unavailable")
             }
             Self::UnsupportedTargetWorkgroup(workgroup) => write!(
                 formatter,
-                "workgroup {workgroup:?} exceeds reviewed gfx942 limits",
+                "workgroup {workgroup:?} exceeds reviewed production target limits",
             ),
             Self::DynamicWorkgroupMemory => formatter
                 .write_str("production compilation does not support dynamic workgroup memory"),
@@ -457,7 +474,7 @@ impl fmt::Display for ProductionGeometryErrorV1 {
             }
             Self::StaticWorkgroupMemoryLimit { actual, maximum } => write!(
                 formatter,
-                "static workgroup memory requires {actual} bytes, exceeding gfx942 limit {maximum}",
+                "static workgroup memory requires {actual} bytes, exceeding production target limit {maximum}",
             ),
             Self::StaticWorkgroupMemoryMismatch { source, kir } => write!(
                 formatter,
@@ -778,7 +795,7 @@ mod tests {
     #[test]
     fn target_limits_and_invalid_lds_alignment_fail_closed() {
         let oversized = [1025, 1, 1];
-        let target = AmdTargetId::parse(PRODUCTION_TARGET_V1)
+        let target = AmdTargetId::parse(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1)
             .unwrap()
             .capabilities()
             .unwrap();

@@ -980,7 +980,7 @@ fn alpha_zeta_share_semantic_helper_lowering_and_emit_fmul_fadd() {
         )));
     }
 
-    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_xnack_minus_llvm_ir(&module)
+    let llvm = dialect_amdgcn::lower_device_module_to_gfx942_llvm_ir(&module)
         .expect("gfx942 compiler-module LLVM");
     assert!(llvm.contains("fmul float"), "{llvm}");
     assert_eq!(llvm.matches("fadd float").count(), 2, "{llvm}");

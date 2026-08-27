@@ -2,7 +2,7 @@ use crate::api::{
     AgentFacts, ApiError, DirectRuntimeApi, EnvironmentApi, HipFacts, PoolFacts, RuntimeFacts,
 };
 use crate::dispatch::PendingDispatch;
-use fe2o3_amd_target::AmdTargetId;
+use fe2o3_amd_target::{AmdTargetId, FeatureState};
 use fe2o3_core::GpuContext;
 use fe2o3_host::{
     HsaAgentIdentityV1, HsaEnvironmentObservationV1, HsaPhysicalDeviceIdentityV1,
@@ -14,7 +14,8 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-const REQUIRED_PROCESSOR: &str = "gfx942";
+const GFX942_PROCESSOR: &str = "gfx942";
+const GFX950_PROCESSOR: &str = "gfx950";
 const HSA_DEVICE_TYPE_CPU: u32 = 0;
 const HSA_DEVICE_TYPE_GPU: u32 = 1;
 const HSA_AGENT_FEATURE_KERNEL_DISPATCH: u32 = 1;
@@ -33,23 +34,45 @@ pub struct ReviewedHsaRuntimeAdapterV1 {
 }
 
 impl ReviewedHsaRuntimeAdapterV1 {
+    /// Creates the existing exact gfx942 runtime adapter.
     pub fn new(context: Arc<GpuContext>) -> Result<Self, HsaRuntimeAdapterError> {
-        Self::with_api(context, DirectRuntimeApi::new()).map(|core| Self {
-            core,
-            pending_dispatch: None,
-            _not_sync: PhantomData,
-        })
+        Self::with_api_for_processor(context, DirectRuntimeApi::new(), GFX942_PROCESSOR).map(
+            |core| Self {
+                core,
+                pending_dispatch: None,
+                _not_sync: PhantomData,
+            },
+        )
     }
 
-    fn with_api(
+    /// Creates an exact gfx950 runtime adapter for Rust-produced code objects.
+    pub fn new_gfx950(context: Arc<GpuContext>) -> Result<Self, HsaRuntimeAdapterError> {
+        Self::with_api_for_processor(context, DirectRuntimeApi::new(), GFX950_PROCESSOR).map(
+            |core| Self {
+                core,
+                pending_dispatch: None,
+                _not_sync: PhantomData,
+            },
+        )
+    }
+
+    fn with_api_for_processor(
         context: Arc<GpuContext>,
         mut api: DirectRuntimeApi,
+        required_processor: &'static str,
     ) -> Result<AdapterCore<DirectRuntimeApi>, HsaRuntimeAdapterError> {
+        if !matches!(required_processor, GFX942_PROCESSOR | GFX950_PROCESSOR) {
+            return Err(HsaRuntimeAdapterError::UnsupportedTarget(
+                required_processor.to_owned(),
+            ));
+        }
         let target = context
             .observe_target()
             .map_err(|error| HsaRuntimeAdapterError::HipContext(error.to_string()))?;
         let ordinal = target.device_id();
-        if target.target_id().processor() != REQUIRED_PROCESSOR {
+        if target.target_id().processor() != required_processor
+            || target.target_id().xnack() != Some(FeatureState::Disabled)
+        {
             return Err(HsaRuntimeAdapterError::UnsupportedTarget(
                 target.target_id().to_string(),
             ));
@@ -63,7 +86,14 @@ impl ReviewedHsaRuntimeAdapterV1 {
             let pools = api
                 .collect_kernarg_pools()
                 .map_err(HsaRuntimeAdapterError::api)?;
-            select_environment(ordinal, &runtime, &hip, &agents, &pools)
+            select_environment_for_processor(
+                ordinal,
+                &runtime,
+                &hip,
+                &agents,
+                &pools,
+                required_processor,
+            )
         })();
         match result {
             Ok(selected) => Ok(AdapterCore {
@@ -137,12 +167,24 @@ struct SelectedEnvironment {
     kernarg_pool: u64,
 }
 
+#[cfg(test)]
 fn select_environment(
     ordinal: i32,
     runtime: &RuntimeFacts,
     hip: &HipFacts,
     agents: &[AgentFacts],
     pools: &[PoolFacts],
+) -> Result<SelectedEnvironment, HsaRuntimeAdapterError> {
+    select_environment_for_processor(ordinal, runtime, hip, agents, pools, GFX942_PROCESSOR)
+}
+
+fn select_environment_for_processor(
+    ordinal: i32,
+    runtime: &RuntimeFacts,
+    hip: &HipFacts,
+    agents: &[AgentFacts],
+    pools: &[PoolFacts],
+    required_processor: &'static str,
 ) -> Result<SelectedEnvironment, HsaRuntimeAdapterError> {
     if hip.round_trip_ordinal != ordinal {
         return Err(HsaRuntimeAdapterError::HipOrdinalRoundTrip {
@@ -159,7 +201,7 @@ fn select_environment(
         .filter(|agent| {
             agent.device_type == HSA_DEVICE_TYPE_GPU
                 && agent.feature & HSA_AGENT_FEATURE_KERNEL_DISPATCH != 0
-                && agent.name == REQUIRED_PROCESSOR
+                && agent.name == required_processor
                 && agent.domain == u32::from(pci.domain)
                 && agent.bdf_id == pci.bdf_id()
         })
@@ -171,7 +213,7 @@ fn select_environment(
         return Err(HsaRuntimeAdapterError::HsaAgentAmbiguous(matching.len()));
     }
     let agent = matching.pop().expect("one matching HSA agent");
-    let target = parse_hsa_isa_target(&agent.isa)?;
+    let target = parse_hsa_isa_target_for_processor(&agent.isa, required_processor)?;
     if agent.handle == 0 || agent.matching_isa_count != 1 {
         return Err(HsaRuntimeAdapterError::InvalidHsaAgentIdentity);
     }
@@ -224,11 +266,17 @@ fn select_environment(
     })
 }
 
-fn parse_hsa_isa_target(text: &str) -> Result<AmdTargetId, HsaRuntimeAdapterError> {
+fn parse_hsa_isa_target_for_processor(
+    text: &str,
+    required_processor: &str,
+) -> Result<AmdTargetId, HsaRuntimeAdapterError> {
     let target = text
         .strip_prefix("amdgcn-amd-amdhsa--")
         .and_then(|target| AmdTargetId::parse(target).ok())
-        .filter(|target| target.processor() == REQUIRED_PROCESSOR)
+        .filter(|target| {
+            target.processor() == required_processor
+                && target.xnack() == Some(FeatureState::Disabled)
+        })
         .ok_or(HsaRuntimeAdapterError::InvalidHsaAgentIdentity)?;
     Ok(target)
 }
@@ -363,7 +411,7 @@ impl fmt::Display for HsaRuntimeAdapterError {
             Self::UnsupportedTarget(target) => {
                 write!(
                     formatter,
-                    "target {target} is not the reviewed gfx942 profile"
+                    "target {target} is not the constructor's reviewed AMDGPU profile"
                 )
             }
             Self::RuntimeCall { operation, status } => write!(
@@ -398,8 +446,9 @@ impl fmt::Display for HsaRuntimeAdapterError {
             Self::InvalidHipPciBusId => {
                 formatter.write_str("HIP returned a malformed PCI bus identity")
             }
-            Self::HsaAgentNotFound => formatter
-                .write_str("no HSA gfx942 kernel agent matches the HIP PCI device identity"),
+            Self::HsaAgentNotFound => formatter.write_str(
+                "no HSA kernel agent for the required processor matches the HIP PCI device identity",
+            ),
             Self::HsaAgentAmbiguous(count) => write!(
                 formatter,
                 "{count} HSA agents match one HIP PCI device identity"
@@ -520,6 +569,50 @@ mod tests {
     }
 
     #[test]
+    fn exact_hip_hsa_physical_identity_selects_one_gfx950_agent() {
+        let mut agents = agents();
+        agents[1].name = GFX950_PROCESSOR.into();
+        agents[1].isa = "amdgcn-amd-amdhsa--gfx950:sramecc+:xnack-".into();
+        let selected = select_environment_for_processor(
+            0,
+            &runtime(),
+            &hip(),
+            &agents,
+            &pools(),
+            GFX950_PROCESSOR,
+        )
+        .unwrap();
+        assert_eq!(selected.agent, 20);
+        assert_eq!(
+            selected.environment.physical_device().target().to_string(),
+            "gfx950:sramecc+:xnack-"
+        );
+    }
+
+    #[test]
+    fn gfx950_selection_rejects_unspecified_or_enabled_xnack() {
+        for isa in [
+            "amdgcn-amd-amdhsa--gfx950",
+            "amdgcn-amd-amdhsa--gfx950:sramecc+:xnack+",
+        ] {
+            let mut agents = agents();
+            agents[1].name = GFX950_PROCESSOR.into();
+            agents[1].isa = isa.into();
+            assert!(matches!(
+                select_environment_for_processor(
+                    0,
+                    &runtime(),
+                    &hip(),
+                    &agents,
+                    &pools(),
+                    GFX950_PROCESSOR,
+                ),
+                Err(HsaRuntimeAdapterError::InvalidHsaAgentIdentity)
+            ));
+        }
+    }
+
+    #[test]
     fn rocm_ascii_hip_uuid_correlates_with_the_hsa_gpu_unique_id() {
         let mut hip = hip();
         hip.uuid = *b"6ced1647a296545c";
@@ -573,6 +666,8 @@ mod tests {
 
         for invalid_isa in [
             "amdgcn-amd-amdhsa--gfx942evil",
+            "amdgcn-amd-amdhsa--gfx942",
+            "amdgcn-amd-amdhsa--gfx942:xnack+",
             "amdgcn-amd-amdhsa--gfx942:xnack-:xnack+",
             "amdgcn-amd-amdhsa--gfx950:sramecc+:xnack-",
         ] {

@@ -31,6 +31,30 @@ constexpr std::array<StringLiteral, 4> RequiredProviderFiles = {
     "oclc_finite_only_off.bc",
 };
 
+constexpr std::array<StringLiteral, 9> RequiredGfx950ProviderFiles = {
+    "ocml.bc",
+    "ockl.bc",
+    "oclc_daz_opt_off.bc",
+    "oclc_unsafe_math_off.bc",
+    "oclc_finite_only_off.bc",
+    "oclc_correctly_rounded_sqrt_on.bc",
+    "oclc_wavefrontsize64_on.bc",
+    "oclc_isa_version_950.bc",
+    "oclc_abi_version_600.bc",
+};
+
+constexpr std::array<StringLiteral, 9> RequiredGfx950ProviderDigests = {
+    "2e3451857fcf47b931c5c5a29e9c42a6ddc3099c8359079441a9a06a217ead7e",
+    "8320aec59c4dc87cb28fdb374a44a55088a6258b59dffae4a85e8eacec8be456",
+    "3b2344acba86e174b87961e8a5e4a164ab61addf8c8a035e9b6dcd03ddab23fa",
+    "a500bc03fd046bcd7806938ea323758e5c9ba8d56cfd767cef71612b3bd87d37",
+    "e1d1fddf85577b078d02a07212f670324e1e157d1b6608a8c765ad3c171a7b29",
+    "3b2344acba86e174b87961e8a5e4a164ab61addf8c8a035e9b6dcd03ddab23fa",
+    "9560b0d120b9e7c6b28a56a87eeed4ae155b60dec54152700ff9f60b69de1259",
+    "9ea1498966ac0b4d0a54677501a847cb1ee932768e78576613d42985bf394d34",
+    "79d3d09404f5df01c484dc15cc64583c7c1803234463eee6505226f0186a71b1",
+};
+
 Error policyError(const Twine &Message) {
   return createStringError(inconvertibleErrorCode(), Message);
 }
@@ -92,6 +116,26 @@ Error validatePolicy(const Gfx942DeviceLibraryPolicy &Policy) {
   return Error::success();
 }
 
+Error validatePolicy(const Gfx950DeviceLibraryPolicy &Policy) {
+  if (Policy.Directory.empty() || Policy.Directory.size() > PATH_MAX)
+    return policyError("invalid gfx950 device-library directory");
+  if (Policy.Files.size() != RequiredGfx950ProviderFiles.size())
+    return policyError("gfx950 device-library policy has the wrong file set");
+  for (size_t I = 0; I < Policy.Files.size(); ++I) {
+    const PinnedDeviceLibraryFile &File = Policy.Files[I];
+    if (File.Basename != RequiredGfx950ProviderFiles[I])
+      return policyError("gfx950 device-library policy is noncanonical");
+    if (File.MaxBytes == 0 || File.MaxBytes > MaxDeviceLibraryFileBytes)
+      return policyError("gfx950 device-library file bound is invalid");
+    auto Expected = parseDigest(RequiredGfx950ProviderDigests[I]);
+    if (!Expected)
+      return Expected.takeError();
+    if (File.Digest != *Expected)
+      return policyError("gfx950 device-library digest is not reviewed");
+  }
+  return Error::success();
+}
+
 bool sameFileState(const struct stat &Before, const struct stat &After) {
   return Before.st_dev == After.st_dev && Before.st_ino == After.st_ino &&
          Before.st_mode == After.st_mode && Before.st_nlink == After.st_nlink &&
@@ -103,21 +147,24 @@ bool sameFileState(const struct stat &Before, const struct stat &After) {
 }
 
 Expected<Input> readPinnedFile(int Directory,
-                               const PinnedDeviceLibraryFile &Pin) {
+                               const PinnedDeviceLibraryFile &Pin,
+                               StringRef Profile) {
   FileDescriptor File(::openat(Directory, Pin.Basename.c_str(),
                                O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
   if (File.get() < 0)
-    return policyError(Twine("cannot open pinned gfx942 device library '") +
-                       Pin.Basename + "': " + std::strerror(errno));
+    return policyError(Twine("cannot open pinned ") + Profile +
+                       " device library '" + Pin.Basename +
+                       "': " + std::strerror(errno));
 
   struct stat Before{};
   if (::fstat(File.get(), &Before) < 0)
-    return policyError(Twine("cannot inspect pinned gfx942 device library '") +
-                       Pin.Basename + "': " + std::strerror(errno));
+    return policyError(Twine("cannot inspect pinned ") + Profile +
+                       " device library '" + Pin.Basename +
+                       "': " + std::strerror(errno));
   if (!S_ISREG(Before.st_mode) || Before.st_nlink != 1 || Before.st_size <= 0 ||
       static_cast<uint64_t>(Before.st_size) > Pin.MaxBytes)
-    return policyError(Twine("pinned gfx942 device library '") + Pin.Basename +
-                       "' violates its file contract");
+    return policyError(Twine("pinned ") + Profile + " device library '" +
+                       Pin.Basename + "' violates its file contract");
 
   size_t Size = static_cast<size_t>(Before.st_size);
   std::vector<uint8_t> Bytes(Size);
@@ -129,8 +176,8 @@ Expected<Input> readPinnedFile(int Directory,
     if (Read < 0 && errno == EINTR)
       continue;
     if (Read <= 0)
-      return policyError(Twine("cannot read pinned gfx942 device library '") +
-                         Pin.Basename + "'");
+      return policyError(Twine("cannot read pinned ") + Profile +
+                         " device library '" + Pin.Basename + "'");
     Offset += static_cast<size_t>(Read);
   }
   uint8_t Extra = 0;
@@ -139,16 +186,17 @@ Expected<Input> readPinnedFile(int Directory,
     ExtraRead = ::read(File.get(), &Extra, 1);
   } while (ExtraRead < 0 && errno == EINTR);
   if (ExtraRead != 0)
-    return policyError(Twine("pinned gfx942 device library '") + Pin.Basename +
-                       "' changed size while being read");
+    return policyError(Twine("pinned ") + Profile + " device library '" +
+                       Pin.Basename + "' changed size while being read");
 
   struct stat After{};
   if (::fstat(File.get(), &After) < 0 || !sameFileState(Before, After))
-    return policyError(Twine("pinned gfx942 device library '") + Pin.Basename +
-                       "' changed while being read");
+    return policyError(Twine("pinned ") + Profile + " device library '" +
+                       Pin.Basename + "' changed while being read");
   std::array<uint8_t, 32> Digest = SHA256::hash(Bytes);
   if (Digest != Pin.Digest)
-    return policyError(Twine("pinned gfx942 device library '") + Pin.Basename +
+    return policyError(Twine("pinned ") + Profile + " device library '" +
+                       Pin.Basename +
                        "' digest does not match the worker measurement");
   return Input{InputKind::LlvmBitcode, Digest, std::move(Bytes)};
 }
@@ -165,6 +213,14 @@ bool isOcmlImportNamespace(StringRef Symbol) {
 
 bool isSupportedGfx942OcmlCodeObjectVersion(uint8_t Version) {
   return Version == 5 || Version == 6;
+}
+
+bool isSupportedGfx950OcmlImport(StringRef Symbol) {
+  return Symbol == "__ocml_exp_f32";
+}
+
+bool isSupportedGfx950OcmlCodeObjectVersion(uint8_t Version) {
+  return Version == 6;
 }
 
 Expected<Gfx942DeviceLibraryPolicy> measuredGfx942DeviceLibraryPolicy() {
@@ -193,6 +249,27 @@ Expected<Gfx942DeviceLibraryPolicy> measuredGfx942DeviceLibraryPolicy() {
 #else
   return policyError(
       "worker was built without measured gfx942 device libraries");
+#endif
+}
+
+Expected<Gfx950DeviceLibraryPolicy> measuredGfx950DeviceLibraryPolicy() {
+#if FE2O3_GFX950_DEVICE_LIBS_ENABLED
+  Gfx950DeviceLibraryPolicy Result;
+  Result.Directory = FE2O3_GFX950_DEVICE_LIB_DIR;
+  Result.Files.reserve(RequiredGfx950ProviderFiles.size());
+  for (size_t I = 0; I < RequiredGfx950ProviderFiles.size(); ++I) {
+    auto Digest = parseDigest(RequiredGfx950ProviderDigests[I]);
+    if (!Digest)
+      return Digest.takeError();
+    Result.Files.push_back({RequiredGfx950ProviderFiles[I].str(), *Digest,
+                            MaxDeviceLibraryFileBytes});
+  }
+  if (Error E = validatePolicy(Result))
+    return E;
+  return Result;
+#else
+  return policyError("worker was built without the reviewed gfx950 ROCm 7.2.1 "
+                     "device libraries");
 #endif
 }
 
@@ -227,7 +304,46 @@ loadGfx942DeviceLibraries(ArrayRef<std::string> Imports,
   std::vector<Input> Result;
   Result.reserve(Policy.Files.size());
   for (const PinnedDeviceLibraryFile &Pin : Policy.Files) {
-    auto File = readPinnedFile(Directory.get(), Pin);
+    auto File = readPinnedFile(Directory.get(), Pin, "gfx942");
+    if (!File)
+      return File.takeError();
+    Result.push_back(std::move(*File));
+  }
+  return Result;
+}
+
+Expected<std::vector<Input>>
+loadGfx950DeviceLibraries(ArrayRef<std::string> Imports,
+                          const Gfx950DeviceLibraryPolicy &Policy) {
+  bool Required = false;
+  for (StringRef Import : Imports) {
+    if (isSupportedGfx950OcmlImport(Import)) {
+      Required = true;
+      continue;
+    }
+    if (isOcmlImportNamespace(Import))
+      return policyError(Twine("unsupported gfx950 OCML import: ") + Import);
+  }
+  if (!Required)
+    return std::vector<Input>{};
+  if (Error E = validatePolicy(Policy))
+    return E;
+
+  FileDescriptor Directory(
+      ::open(Policy.Directory.c_str(),
+             O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK));
+  if (Directory.get() < 0)
+    return policyError(Twine("cannot open gfx950 device-library directory: ") +
+                       std::strerror(errno));
+  struct stat DirectoryStatus{};
+  if (::fstat(Directory.get(), &DirectoryStatus) < 0 ||
+      !S_ISDIR(DirectoryStatus.st_mode))
+    return policyError("gfx950 device-library path is not a directory");
+
+  std::vector<Input> Result;
+  Result.reserve(Policy.Files.size());
+  for (const PinnedDeviceLibraryFile &Pin : Policy.Files) {
+    auto File = readPinnedFile(Directory.get(), Pin, "gfx950");
     if (!File)
       return File.takeError();
     Result.push_back(std::move(*File));

@@ -63,6 +63,84 @@ pub const PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1: &str =
 /// Parent-owned rustc arguments for production gfx950 target crates.
 pub const PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1: &str = "-Zalways-encode-mir -Ctarget-cpu=gfx950 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack";
 
+/// One exact processor profile admitted by the production AMDGPU transaction.
+///
+/// This selects target facts inside the single production compiler route. It
+/// is not a compiler-pipeline selector.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ProductionAmdTargetProfileV1 {
+    Gfx942,
+    Gfx950,
+}
+
+impl ProductionAmdTargetProfileV1 {
+    /// Resolves an exact configured processor spelling.
+    pub const fn from_cpu(cpu: &str) -> Option<Self> {
+        match cpu.as_bytes() {
+            b"gfx942" => Some(Self::Gfx942),
+            b"gfx950" => Some(Self::Gfx950),
+            _ => None,
+        }
+    }
+
+    /// Resolves one exact canonical AMDHSA production target ID.
+    pub const fn from_device_target(target: &str) -> Option<Self> {
+        match target.as_bytes() {
+            b"gfx942:xnack-" => Some(Self::Gfx942),
+            b"gfx950:xnack-" => Some(Self::Gfx950),
+            _ => None,
+        }
+    }
+
+    /// Exact Cargo/rustc target triple.
+    pub const fn rustc_target(self) -> &'static str {
+        match self {
+            Self::Gfx942 => PRODUCTION_GFX942_RUSTC_TARGET_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_RUSTC_TARGET_V1,
+        }
+    }
+
+    /// Exact LLVM target CPU.
+    pub const fn cpu(self) -> &'static str {
+        match self {
+            Self::Gfx942 => PRODUCTION_GFX942_DEVICE_CPU_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_DEVICE_CPU_V1,
+        }
+    }
+
+    /// Exact AMDHSA target ID.
+    pub const fn device_target(self) -> &'static str {
+        match self {
+            Self::Gfx942 => PRODUCTION_GFX942_DEVICE_TARGET_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_DEVICE_TARGET_V1,
+        }
+    }
+
+    /// Canonical rustc target features.
+    pub const fn rustc_features(self) -> &'static str {
+        match self {
+            Self::Gfx942 => PRODUCTION_GFX942_RUSTC_FEATURES_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_RUSTC_FEATURES_V1,
+        }
+    }
+
+    /// Target-scoped Cargo rustflags environment variable.
+    pub const fn cargo_rustflags_env(self) -> &'static str {
+        match self {
+            Self::Gfx942 => PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1,
+        }
+    }
+
+    /// Parent-owned rustc arguments for target crates.
+    pub const fn cargo_rustflags(self) -> &'static str {
+        match self {
+            Self::Gfx942 => PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
+            Self::Gfx950 => PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1,
+        }
+    }
+}
+
 /// Concrete canonical AMDGPU processor names understood by this crate.
 ///
 /// Membership establishes only that a spelling is recognized. It does not
@@ -586,6 +664,49 @@ mod tests {
             PRODUCTION_GFX950_RUSTC_TARGET_V1,
             PRODUCTION_GFX942_RUSTC_TARGET_V1
         );
+    }
+
+    #[test]
+    fn production_profiles_resolve_only_exact_cpu_spellings() {
+        for (cpu, profile, target) in [
+            (
+                "gfx942",
+                ProductionAmdTargetProfileV1::Gfx942,
+                "gfx942:xnack-",
+            ),
+            (
+                "gfx950",
+                ProductionAmdTargetProfileV1::Gfx950,
+                "gfx950:xnack-",
+            ),
+        ] {
+            assert_eq!(ProductionAmdTargetProfileV1::from_cpu(cpu), Some(profile));
+            assert_eq!(profile.cpu(), cpu);
+            assert_eq!(profile.device_target(), target);
+            assert_eq!(profile.rustc_target(), "amdgcn-amd-amdhsa");
+            assert_eq!(
+                profile.rustc_features(),
+                "-wavefrontsize32,+wavefrontsize64,-xnack"
+            );
+        }
+        for rejected in ["gfx942:xnack-", "gfx950:xnack-", "GFX950", "gfx951"] {
+            assert_eq!(ProductionAmdTargetProfileV1::from_cpu(rejected), None);
+        }
+        for (target, profile) in [
+            ("gfx942:xnack-", ProductionAmdTargetProfileV1::Gfx942),
+            ("gfx950:xnack-", ProductionAmdTargetProfileV1::Gfx950),
+        ] {
+            assert_eq!(
+                ProductionAmdTargetProfileV1::from_device_target(target),
+                Some(profile)
+            );
+        }
+        for rejected in ["gfx942", "gfx950", "gfx950:xnack+", "GFX950:xnack-"] {
+            assert_eq!(
+                ProductionAmdTargetProfileV1::from_device_target(rejected),
+                None
+            );
+        }
     }
 
     #[test]

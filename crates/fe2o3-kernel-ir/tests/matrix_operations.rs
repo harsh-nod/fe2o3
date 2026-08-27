@@ -90,6 +90,65 @@ fn matrix_module() -> Module {
     module
 }
 
+fn gfx950_fp8_matrix_module() -> Module {
+    let mut parameters = vec![Type::Scalar(ScalarType::U32); 16];
+    parameters.extend([Type::F32; 4]);
+    let parameter_ids = (0..20).map(ValueId).collect::<Vec<_>>();
+    let matrix = MatrixOperation::scaled_multiply_accumulate_fp8_e4m3(
+        std::array::from_fn(|index| ValueId(index as u32)),
+        std::array::from_fn(|index| ValueId(8 + index as u32)),
+        std::array::from_fn(|index| ValueId(16 + index as u32)),
+    )
+    .with_declared_tensor_layout(
+        TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
+    );
+    let operation = Operation::new(
+        (20..24)
+            .map(|id| ValueDef::new(ValueId(id), Type::F32))
+            .collect(),
+        OperationKind::Matrix(matrix),
+    );
+    let mut function = Function::kernel_entry(
+        "gfx950_fp8_matrix_impl",
+        Signature::new(parameters, vec![]),
+        parameter_ids,
+        vec![BasicBlock {
+            id: BlockId(0),
+            parameters: vec![],
+            operations: vec![operation],
+            terminator: Some(Terminator::Return { values: vec![] }),
+        }],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let mut kernel = Kernel::new(
+        "gfx950_fp8_matrix",
+        "gfx950_fp8_matrix_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    let mut module = Module::new("tests::gfx950_fp8_matrix");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn gfx950_fp4_matrix_module() -> Module {
+    let mut module = gfx950_fp8_matrix_module();
+    let matrix = operation_mut(&mut module, 0);
+    matrix.kind = MatrixOperationKind::ScaledMultiplyAccumulate {
+        lhs: std::array::from_fn(|index| ValueId(index as u32)),
+        rhs: std::array::from_fn(|index| ValueId(8 + index as u32)),
+        accumulator: std::array::from_fn(|index| ValueId(16 + index as u32)),
+        profile: MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64(),
+    };
+    matrix.tensor_layout =
+        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64());
+    module.functions[0].required_capabilities = module.functions[0].derived_capabilities();
+    module
+}
+
 fn operation_mut(module: &mut Module, index: usize) -> &mut MatrixOperation {
     module.functions[0].body.as_mut().unwrap().blocks[0]
         .operations
@@ -670,4 +729,147 @@ fn tensor_instruction_semantic_data_is_target_owned_and_workload_neutral() {
             .semantic_descriptor()
             .is_none()
     );
+}
+
+#[test]
+fn gfx950_fp8_scaled_mfma_verifies_and_round_trips_v8() {
+    let module = gfx950_fp8_matrix_module();
+    verify_module(&module).unwrap();
+    let bytes = encode_module_v8(&module).unwrap();
+    assert_eq!(decode_module_v8(&bytes).unwrap(), module);
+    let owner = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
+    owner.revalidate().unwrap();
+    assert_eq!(owner.canonical_bytes(), bytes);
+
+    assert_eq!(
+        encode_module_v7(&module),
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: KERNEL_IR_VERSION_V7,
+            feature: "gfx950 scaled matrix multiply",
+        })
+    );
+    let mut forged_v7 = bytes;
+    forged_v7[8..10].copy_from_slice(&KERNEL_IR_VERSION_V7.to_le_bytes());
+    assert_eq!(
+        decode_module_v7(&forged_v7),
+        Err(KernelIrDecodeError::UnknownTag {
+            kind: "matrix operation",
+            tag: 4,
+        })
+    );
+
+    let mut cloned = module.clone();
+    let matrix = operation_mut(&mut cloned, 0).clone();
+    assert_eq!(matrix.operands().len(), 20);
+    assert!(
+        matrix
+            .required_capabilities()
+            .contains(&TargetCapability::Extension {
+                namespace: MATRIX_CAPABILITY_NAMESPACE.to_owned(),
+                name: SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY.to_owned(),
+            })
+    );
+    let layout = matrix.tensor_layout.unwrap();
+    assert!(verify_tensor_layout_contract_v1(&layout).is_empty());
+    assert_eq!(layout.a.logical_coordinate(0, 16), Some([0, 64]));
+    assert_eq!(layout.b.logical_coordinate(63, 31), Some([127, 15]));
+}
+
+#[test]
+fn gfx950_fp8_scaled_mfma_rejects_wrong_profile_and_operand_type() {
+    let mut wrong_profile = gfx950_fp8_matrix_module();
+    let MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } =
+        &mut operation_mut(&mut wrong_profile, 0).kind
+    else {
+        panic!("expected scaled matrix multiply")
+    };
+    profile.k = 16;
+    assert!(
+        verify_module(&wrong_profile)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported scaled matrix multiply profile")
+    );
+
+    let mut wrong_type = gfx950_fp8_matrix_module();
+    wrong_type.functions[0].signature.parameters[0] = Type::F32;
+    assert!(
+        verify_module(&wrong_type)
+            .unwrap_err()
+            .to_string()
+            .contains("expected Scalar(U32)")
+    );
+}
+
+#[test]
+fn gfx950_fp4_scaled_mfma_verifies_and_round_trips_v8() {
+    let module = gfx950_fp4_matrix_module();
+    verify_module(&module).unwrap();
+    let bytes = encode_module_v8(&module).unwrap();
+    assert_eq!(decode_module_v8(&bytes).unwrap(), module);
+    assert_eq!(
+        encode_module_v7(&module),
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: KERNEL_IR_VERSION_V7,
+            feature: "gfx950 scaled matrix multiply",
+        })
+    );
+
+    let matrix = operation_mut(&mut module.clone(), 0).clone();
+    assert!(
+        matrix
+            .required_capabilities()
+            .contains(&TargetCapability::Extension {
+                namespace: MATRIX_CAPABILITY_NAMESPACE.to_owned(),
+                name: SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY.to_owned(),
+            })
+    );
+    let layout = matrix.tensor_layout.unwrap();
+    assert!(verify_tensor_layout_contract_v1(&layout).is_empty());
+    assert_eq!(layout.a.logical_coordinate(32, 0), Some([0, 64]));
+    assert_eq!(layout.b.logical_coordinate(50, 31), Some([127, 2]));
+}
+
+#[test]
+fn gfx950_fp4_scaled_mfma_rejects_wrong_layout_and_operand_type() {
+    let mut wrong_layout = gfx950_fp4_matrix_module();
+    operation_mut(&mut wrong_layout, 0).tensor_layout =
+        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64());
+    assert!(
+        verify_module(&wrong_layout)
+            .unwrap_err()
+            .to_string()
+            .contains("profile and gfx950 tensor layout disagree")
+    );
+
+    let mut wrong_type = gfx950_fp4_matrix_module();
+    wrong_type.functions[0].signature.parameters[0] = Type::F32;
+    assert!(
+        verify_module(&wrong_type)
+            .unwrap_err()
+            .to_string()
+            .contains("expected Scalar(U32)")
+    );
+}
+
+#[test]
+fn regular_mfma_rejects_scaled_low_precision_profiles() {
+    for scaled_profile in [
+        MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64(),
+        MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64(),
+    ] {
+        let mut module = matrix_module();
+        let MatrixOperationKind::MultiplyAccumulate { profile, .. } =
+            &mut operation_mut(&mut module, 2).kind
+        else {
+            panic!("expected regular matrix multiply")
+        };
+        *profile = scaled_profile;
+        assert!(
+            verify_module(&module)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported matrix multiply profile")
+        );
+    }
 }

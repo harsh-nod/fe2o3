@@ -592,6 +592,7 @@ fn operation_name(kind: &OperationKind) -> &'static str {
         OperationKind::WorkgroupBarrier(_) => "workgroup-barrier",
         OperationKind::WorkgroupMemory(_) => "workgroup-memory",
         OperationKind::Matrix(_) => "matrix",
+        OperationKind::Gfx950LdsTranspose(_) => "gfx950-lds-transpose",
         OperationKind::Wave(_) => "wave",
         OperationKind::InlineAssembly(_) => "inline-assembly",
     }

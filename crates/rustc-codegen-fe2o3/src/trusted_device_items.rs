@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x21, 0xd6, 0xe0, 0x85, 0xfe, 0xa8, 0x85, 0x67, 0xe5, 0xe4, 0x58, 0xcd, 0xd2, 0x2a, 0xc8, 0x62,
-    0x33, 0x92, 0xb1, 0xd9, 0xc3, 0xde, 0x7b, 0x7a, 0x1b, 0x95, 0x69, 0xa3, 0xdf, 0x82, 0x84, 0x46,
+    0x16, 0xd3, 0xf6, 0x0d, 0xcd, 0x66, 0x15, 0xc6, 0x3e, 0x35, 0x8b, 0x59, 0xc0, 0x41, 0x7f, 0x1a,
+    0x54, 0xc7, 0x0d, 0x49, 0xe5, 0x52, 0xfc, 0xde, 0xde, 0x3f, 0x38, 0xf1, 0x1d, 0x58, 0xa1, 0x74,
 ];
 #[allow(
     dead_code,
@@ -78,8 +78,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0x72, 0x2b, 0xd3, 0x6f, 0xd0, 0xe3, 0x23, 0x92, 0xba, 0xad, 0xa1, 0x4c, 0x1b, 0xa6, 0x0d, 0x47,
-    0x3b, 0xa8, 0x51, 0x20, 0xb3, 0x39, 0x54, 0x85, 0x40, 0x2d, 0xf1, 0xc0, 0x3f, 0x7b, 0x28, 0xcd,
+    0x1d, 0xd8, 0x61, 0x4d, 0x14, 0x7a, 0x75, 0x16, 0xd4, 0xd1, 0x08, 0xdc, 0xe2, 0xe6, 0x7f, 0x8a,
+    0x54, 0x74, 0x22, 0x3a, 0x1f, 0xae, 0x4c, 0xa1, 0x07, 0x98, 0xe7, 0xe3, 0xb5, 0x9c, 0x68, 0x65,
 ];
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -549,6 +549,43 @@ pub(crate) enum TrustedDeviceItem {
     F32AccumulatorMatrixRowMajor,
     F32AccumulatorMatrixLoadZeroFilledV1,
     DeviceMatrixMultiplyAccumulate,
+    Gfx950Fp4E2M1Format,
+    Gfx950Fp8E4M3Format,
+    Gfx950MfmaOperandA,
+    Gfx950MfmaOperandB,
+    Gfx950MfmaFragment,
+    Gfx950F32AccumulatorFragment,
+    Gfx950Fp4F32AccumulatorFragmentZero,
+    Gfx950Fp4F32AccumulatorFragmentIntoValues,
+    Gfx950F32AccumulatorFragmentZero,
+    Gfx950F32AccumulatorFragmentIntoValues,
+    Gfx950MfmaMatrixViewError,
+    Gfx950MfmaMatrixAView,
+    Gfx950MfmaMatrixBView,
+    Gfx950MfmaMatrixAFp4RowMajor,
+    Gfx950MfmaMatrixBFp4RowMajor,
+    Gfx950MfmaMatrixARowMajor,
+    Gfx950MfmaMatrixBRowMajor,
+    Gfx950MfmaMatrixAFp8LoadM16K128,
+    Gfx950MfmaMatrixBFp8LoadK128N16,
+    Gfx950MfmaMatrixAFp4LoadM16K128,
+    Gfx950MfmaMatrixBFp4LoadK128N16,
+    Gfx950Matrix,
+    Gfx950MatrixCurrent,
+    Gfx950MatrixMultiplyAccumulateFp4,
+    Gfx950MatrixMultiplyAccumulateFp8,
+    Gfx950SubgroupContext,
+    Gfx950SubgroupCurrent,
+    Gfx950SubgroupReduceMaxF32,
+    Gfx950SubgroupReduceSumF32,
+    Gfx950SubgroupBroadcastF32,
+    Gfx950LdsTransposeTile,
+    Gfx950LdsTransposeTileCurrent,
+    Gfx950LdsTransposeStageB4,
+    Gfx950LdsTransposeStageB8,
+    Gfx950LdsTransposePublish,
+    Gfx950LdsTransposeReadB4,
+    Gfx950LdsTransposeReadB8,
     GeneralGemm(TrustedGeneralGemmSurfaceV1, TrustedGeneralGemmOperationV1),
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
@@ -1127,6 +1164,191 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
         "fe2o3_device_matrix_mfma_bf16_f32_m16n16k16_v1",
         "fe2o3_device::DeviceMatrix::multiply_accumulate",
+    ),
+    (
+        TrustedDeviceItem::Gfx950Fp4E2M1Format,
+        "fe2o3_device_gfx950_fp4_e2m1_format_v1",
+        "fe2o3_device::Gfx950Fp4E2M1",
+    ),
+    (
+        TrustedDeviceItem::Gfx950Fp8E4M3Format,
+        "fe2o3_device_gfx950_fp8_e4m3_format_v1",
+        "fe2o3_device::Gfx950Fp8E4M3",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaOperandA,
+        "fe2o3_device_gfx950_mfma_operand_a_role_v1",
+        "fe2o3_device::Gfx950MfmaOperandA",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaOperandB,
+        "fe2o3_device_gfx950_mfma_operand_b_role_v1",
+        "fe2o3_device::Gfx950MfmaOperandB",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaFragment,
+        "fe2o3_device_gfx950_mfma_fragment_v1",
+        "fe2o3_device::Gfx950MfmaFragment",
+    ),
+    (
+        TrustedDeviceItem::Gfx950F32AccumulatorFragment,
+        "fe2o3_device_gfx950_f32_accumulator_fragment_v1",
+        "fe2o3_device::Gfx950F32AccumulatorFragment",
+    ),
+    (
+        TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero,
+        "fe2o3_device_gfx950_fp4_f32_accumulator_zero_v1",
+        "fe2o3_device::Gfx950F32AccumulatorFragment<Gfx950Fp4E2M1>::zero",
+    ),
+    (
+        TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues,
+        "fe2o3_device_gfx950_fp4_f32_accumulator_into_values_v1",
+        "fe2o3_device::Gfx950F32AccumulatorFragment<Gfx950Fp4E2M1>::into_values",
+    ),
+    (
+        TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero,
+        "fe2o3_device_gfx950_f32_accumulator_zero_v1",
+        "fe2o3_device::Gfx950F32AccumulatorFragment::zero",
+    ),
+    (
+        TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues,
+        "fe2o3_device_gfx950_f32_accumulator_into_values_v1",
+        "fe2o3_device::Gfx950F32AccumulatorFragment::into_values",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixViewError,
+        "fe2o3_device_gfx950_mfma_matrix_view_error_v1",
+        "fe2o3_device::Gfx950MatrixViewError",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixAView,
+        "fe2o3_device_gfx950_mfma_matrix_a_view_v1",
+        "fe2o3_device::Gfx950MfmaAMatrix",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixBView,
+        "fe2o3_device_gfx950_mfma_matrix_b_view_v1",
+        "fe2o3_device::Gfx950MfmaBMatrix",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor,
+        "fe2o3_device_gfx950_mfma_matrix_a_fp4_row_major_v1",
+        "fe2o3_device::Gfx950Fp4MfmaAMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor,
+        "fe2o3_device_gfx950_mfma_matrix_b_fp4_row_major_v1",
+        "fe2o3_device::Gfx950Fp4MfmaBMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixARowMajor,
+        "fe2o3_device_gfx950_mfma_matrix_a_row_major_v1",
+        "fe2o3_device::Gfx950MfmaAMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor,
+        "fe2o3_device_gfx950_mfma_matrix_b_row_major_v1",
+        "fe2o3_device::Gfx950MfmaBMatrix::row_major",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128,
+        "fe2o3_device_gfx950_mfma_matrix_a_fp4_load_m16k128_v1",
+        "fe2o3_device::Gfx950Fp4MfmaAMatrix::load_m16k128",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16,
+        "fe2o3_device_gfx950_mfma_matrix_b_fp4_load_k128n16_v1",
+        "fe2o3_device::Gfx950Fp4MfmaBMatrix::load_k128n16",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128,
+        "fe2o3_device_gfx950_mfma_matrix_a_fp8_load_m16k128_v1",
+        "fe2o3_device::Gfx950Fp8MfmaAMatrix::load_m16k128",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16,
+        "fe2o3_device_gfx950_mfma_matrix_b_fp8_load_k128n16_v1",
+        "fe2o3_device::Gfx950Fp8MfmaBMatrix::load_k128n16",
+    ),
+    (
+        TrustedDeviceItem::Gfx950Matrix,
+        "fe2o3_device_gfx950_matrix_context_v1",
+        "fe2o3_device::Gfx950Matrix",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MatrixCurrent,
+        "fe2o3_device_gfx950_matrix_context_current_v1",
+        "fe2o3_device::Gfx950Matrix::current",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+        "fe2o3_device_gfx950_mfma_fp4_f32_m16n16k128_v1",
+        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
+        "fe2o3_device_gfx950_mfma_fp8_f32_m16n16k128_v1",
+        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp8",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupContext,
+        "fe2o3_device_gfx950_subgroup_context_v1",
+        "fe2o3_device::Gfx950Subgroup",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupCurrent,
+        "fe2o3_device_gfx950_subgroup_current_v1",
+        "fe2o3_device::Gfx950Subgroup::current",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupReduceMaxF32,
+        "fe2o3_device_gfx950_subgroup_reduce_max_f32_v1",
+        "fe2o3_device::Gfx950Subgroup::reduce_max_f32",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupReduceSumF32,
+        "fe2o3_device_gfx950_subgroup_reduce_sum_f32_v1",
+        "fe2o3_device::Gfx950Subgroup::reduce_sum_f32",
+    ),
+    (
+        TrustedDeviceItem::Gfx950SubgroupBroadcastF32,
+        "fe2o3_device_gfx950_subgroup_broadcast_f32_v1",
+        "fe2o3_device::Gfx950Subgroup::broadcast_f32",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeTile,
+        "fe2o3_device_gfx950_lds_transpose_tile_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeTileCurrent,
+        "fe2o3_device_gfx950_lds_transpose_tile_current_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile::current",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeStageB4,
+        "fe2o3_device_gfx950_lds_transpose_stage_b4_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp4E2M1>::stage_k_transposed",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeStageB8,
+        "fe2o3_device_gfx950_lds_transpose_stage_b8_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp8E4M3>::stage_k_transposed",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposePublish,
+        "fe2o3_device_gfx950_lds_transpose_publish_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile::publish",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeReadB4,
+        "fe2o3_device_gfx950_lds_transpose_read_b4_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp4E2M1>::read_mfma_fragment",
+    ),
+    (
+        TrustedDeviceItem::Gfx950LdsTransposeReadB8,
+        "fe2o3_device_gfx950_lds_transpose_read_b8_v1",
+        "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp8E4M3>::read_mfma_fragment",
     ),
     (
         TrustedDeviceItem::GeneralGemm(
@@ -1793,6 +2015,91 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
             "fe2o3_device::tensor::{impl#9}::multiply_accumulate"
         }
+        TrustedDeviceItem::Gfx950Fp4E2M1Format => "fe2o3_device::gfx950::Gfx950Fp4E2M1",
+        TrustedDeviceItem::Gfx950Fp8E4M3Format => "fe2o3_device::gfx950::Gfx950Fp8E4M3",
+        TrustedDeviceItem::Gfx950MfmaOperandA => "fe2o3_device::gfx950::Gfx950MfmaOperandA",
+        TrustedDeviceItem::Gfx950MfmaOperandB => "fe2o3_device::gfx950::Gfx950MfmaOperandB",
+        TrustedDeviceItem::Gfx950MfmaFragment => "fe2o3_device::gfx950::Gfx950MfmaFragment",
+        TrustedDeviceItem::Gfx950F32AccumulatorFragment => {
+            "fe2o3_device::gfx950::Gfx950F32AccumulatorFragment"
+        }
+        TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero => {
+            "fe2o3_device::gfx950::{impl#8}::zero"
+        }
+        TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues => {
+            "fe2o3_device::gfx950::{impl#8}::into_values"
+        }
+        TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero => {
+            "fe2o3_device::gfx950::{impl#9}::zero"
+        }
+        TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues => {
+            "fe2o3_device::gfx950::{impl#9}::into_values"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixViewError => {
+            "fe2o3_device::gfx950::Gfx950MatrixViewError"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixAView => "fe2o3_device::gfx950::Gfx950MfmaAMatrix",
+        TrustedDeviceItem::Gfx950MfmaMatrixBView => "fe2o3_device::gfx950::Gfx950MfmaBMatrix",
+        TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor => {
+            "fe2o3_device::gfx950::{impl#13}::row_major"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor => {
+            "fe2o3_device::gfx950::{impl#16}::row_major"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixARowMajor => {
+            "fe2o3_device::gfx950::{impl#14}::row_major"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor => {
+            "fe2o3_device::gfx950::{impl#17}::row_major"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128 => {
+            "fe2o3_device::gfx950::{impl#13}::load_m16k128"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16 => {
+            "fe2o3_device::gfx950::{impl#16}::load_k128n16"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128 => {
+            "fe2o3_device::gfx950::{impl#14}::load_m16k128"
+        }
+        TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16 => {
+            "fe2o3_device::gfx950::{impl#17}::load_k128n16"
+        }
+        TrustedDeviceItem::Gfx950Matrix => "fe2o3_device::gfx950::Gfx950Matrix",
+        TrustedDeviceItem::Gfx950MatrixCurrent => "fe2o3_device::gfx950::{impl#18}::current",
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
+            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4"
+        }
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8 => {
+            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp8"
+        }
+        TrustedDeviceItem::Gfx950SubgroupContext => "fe2o3_device::gfx950::Gfx950Subgroup",
+        TrustedDeviceItem::Gfx950SubgroupCurrent => "fe2o3_device::gfx950::{impl#19}::current",
+        TrustedDeviceItem::Gfx950SubgroupReduceMaxF32 => {
+            "fe2o3_device::gfx950::{impl#19}::reduce_max_f32"
+        }
+        TrustedDeviceItem::Gfx950SubgroupReduceSumF32 => {
+            "fe2o3_device::gfx950::{impl#19}::reduce_sum_f32"
+        }
+        TrustedDeviceItem::Gfx950SubgroupBroadcastF32 => {
+            "fe2o3_device::gfx950::{impl#19}::broadcast_f32"
+        }
+        TrustedDeviceItem::Gfx950LdsTransposeTile => "fe2o3_device::gfx950::Gfx950LdsTransposeTile",
+        TrustedDeviceItem::Gfx950LdsTransposeTileCurrent => {
+            "fe2o3_device::gfx950::{impl#23}::current"
+        }
+        TrustedDeviceItem::Gfx950LdsTransposeStageB4 => {
+            "fe2o3_device::gfx950::{impl#24}::stage_k_transposed"
+        }
+        TrustedDeviceItem::Gfx950LdsTransposeStageB8 => {
+            "fe2o3_device::gfx950::{impl#25}::stage_k_transposed"
+        }
+        TrustedDeviceItem::Gfx950LdsTransposePublish => "fe2o3_device::gfx950::{impl#26}::publish",
+        TrustedDeviceItem::Gfx950LdsTransposeReadB4 => {
+            "fe2o3_device::gfx950::{impl#27}::read_mfma_fragment"
+        }
+        TrustedDeviceItem::Gfx950LdsTransposeReadB8 => {
+            "fe2o3_device::gfx950::{impl#28}::read_mfma_fragment"
+        }
         _ => item.canonical_path(),
     }
 }
@@ -1862,6 +2169,43 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2
             | TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2
             | TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
+            | TrustedDeviceItem::Gfx950Fp4E2M1Format
+            | TrustedDeviceItem::Gfx950Fp8E4M3Format
+            | TrustedDeviceItem::Gfx950MfmaOperandA
+            | TrustedDeviceItem::Gfx950MfmaOperandB
+            | TrustedDeviceItem::Gfx950MfmaFragment
+            | TrustedDeviceItem::Gfx950F32AccumulatorFragment
+            | TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero
+            | TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues
+            | TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero
+            | TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues
+            | TrustedDeviceItem::Gfx950MfmaMatrixViewError
+            | TrustedDeviceItem::Gfx950MfmaMatrixAView
+            | TrustedDeviceItem::Gfx950MfmaMatrixBView
+            | TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor
+            | TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor
+            | TrustedDeviceItem::Gfx950MfmaMatrixARowMajor
+            | TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor
+            | TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128
+            | TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16
+            | TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128
+            | TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16
+            | TrustedDeviceItem::Gfx950Matrix
+            | TrustedDeviceItem::Gfx950MatrixCurrent
+            | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+            | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8
+            | TrustedDeviceItem::Gfx950SubgroupContext
+            | TrustedDeviceItem::Gfx950SubgroupCurrent
+            | TrustedDeviceItem::Gfx950SubgroupReduceMaxF32
+            | TrustedDeviceItem::Gfx950SubgroupReduceSumF32
+            | TrustedDeviceItem::Gfx950SubgroupBroadcastF32
+            | TrustedDeviceItem::Gfx950LdsTransposeTile
+            | TrustedDeviceItem::Gfx950LdsTransposeTileCurrent
+            | TrustedDeviceItem::Gfx950LdsTransposeStageB4
+            | TrustedDeviceItem::Gfx950LdsTransposeStageB8
+            | TrustedDeviceItem::Gfx950LdsTransposePublish
+            | TrustedDeviceItem::Gfx950LdsTransposeReadB4
+            | TrustedDeviceItem::Gfx950LdsTransposeReadB8
             | TrustedDeviceItem::Tiled2DIndexSpace
             | TrustedDeviceItem::RowStriped2DIndexSpace
             | TrustedDeviceItem::DisjointTile2D
@@ -3897,6 +4241,43 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+            TrustedDeviceItem::Gfx950Fp4E2M1Format,
+            TrustedDeviceItem::Gfx950Fp8E4M3Format,
+            TrustedDeviceItem::Gfx950MfmaOperandA,
+            TrustedDeviceItem::Gfx950MfmaOperandB,
+            TrustedDeviceItem::Gfx950MfmaFragment,
+            TrustedDeviceItem::Gfx950F32AccumulatorFragment,
+            TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero,
+            TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero,
+            TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::Gfx950MfmaMatrixViewError,
+            TrustedDeviceItem::Gfx950MfmaMatrixAView,
+            TrustedDeviceItem::Gfx950MfmaMatrixBView,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixARowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16,
+            TrustedDeviceItem::Gfx950Matrix,
+            TrustedDeviceItem::Gfx950MatrixCurrent,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
+            TrustedDeviceItem::Gfx950SubgroupContext,
+            TrustedDeviceItem::Gfx950SubgroupCurrent,
+            TrustedDeviceItem::Gfx950SubgroupReduceMaxF32,
+            TrustedDeviceItem::Gfx950SubgroupReduceSumF32,
+            TrustedDeviceItem::Gfx950SubgroupBroadcastF32,
+            TrustedDeviceItem::Gfx950LdsTransposeTile,
+            TrustedDeviceItem::Gfx950LdsTransposeTileCurrent,
+            TrustedDeviceItem::Gfx950LdsTransposeStageB4,
+            TrustedDeviceItem::Gfx950LdsTransposeStageB8,
+            TrustedDeviceItem::Gfx950LdsTransposePublish,
+            TrustedDeviceItem::Gfx950LdsTransposeReadB4,
+            TrustedDeviceItem::Gfx950LdsTransposeReadB8,
             TrustedDeviceItem::GeneralGemm(
                 TrustedGeneralGemmSurfaceV1::Typestate,
                 TrustedGeneralGemmOperationV1::Acquire,
@@ -4074,6 +4455,43 @@ mod tests {
             TrustedDeviceItem::Bf16MfmaMatrixALoadZeroFilledV2,
             TrustedDeviceItem::Bf16MfmaMatrixBLoadZeroFilledV2,
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
+            TrustedDeviceItem::Gfx950Fp4E2M1Format,
+            TrustedDeviceItem::Gfx950Fp8E4M3Format,
+            TrustedDeviceItem::Gfx950MfmaOperandA,
+            TrustedDeviceItem::Gfx950MfmaOperandB,
+            TrustedDeviceItem::Gfx950MfmaFragment,
+            TrustedDeviceItem::Gfx950F32AccumulatorFragment,
+            TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero,
+            TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero,
+            TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues,
+            TrustedDeviceItem::Gfx950MfmaMatrixViewError,
+            TrustedDeviceItem::Gfx950MfmaMatrixAView,
+            TrustedDeviceItem::Gfx950MfmaMatrixBView,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixARowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16,
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128,
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16,
+            TrustedDeviceItem::Gfx950Matrix,
+            TrustedDeviceItem::Gfx950MatrixCurrent,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
+            TrustedDeviceItem::Gfx950SubgroupContext,
+            TrustedDeviceItem::Gfx950SubgroupCurrent,
+            TrustedDeviceItem::Gfx950SubgroupReduceMaxF32,
+            TrustedDeviceItem::Gfx950SubgroupReduceSumF32,
+            TrustedDeviceItem::Gfx950SubgroupBroadcastF32,
+            TrustedDeviceItem::Gfx950LdsTransposeTile,
+            TrustedDeviceItem::Gfx950LdsTransposeTileCurrent,
+            TrustedDeviceItem::Gfx950LdsTransposeStageB4,
+            TrustedDeviceItem::Gfx950LdsTransposeStageB8,
+            TrustedDeviceItem::Gfx950LdsTransposePublish,
+            TrustedDeviceItem::Gfx950LdsTransposeReadB4,
+            TrustedDeviceItem::Gfx950LdsTransposeReadB8,
         ];
         let mut paths = BTreeSet::new();
         for item in items {
@@ -4083,6 +4501,7 @@ mod tests {
             assert!(
                 path.contains("::collective::")
                     || path.contains("::lds::")
+                    || path.contains("::gfx950::")
                     || path.contains("::sync::")
                     || path.contains("::tensor::")
                     || path.contains("::thread::")

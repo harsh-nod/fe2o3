@@ -50,6 +50,31 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     F32MatrixAccumulatorZero,
     F32MatrixAccumulatorIntoValues,
     MatrixMultiplyAccumulate,
+    Gfx950MatrixContextCurrent,
+    Gfx950Fp4MatrixARowMajor,
+    Gfx950Fp4MatrixBRowMajor,
+    Gfx950Fp4MatrixALoadM16K128,
+    Gfx950Fp4MatrixBLoadK128N16,
+    Gfx950Fp4AccumulatorZero,
+    Gfx950Fp4AccumulatorIntoValues,
+    Gfx950Fp4MultiplyAccumulate,
+    Gfx950Fp8MatrixARowMajor,
+    Gfx950Fp8MatrixBRowMajor,
+    Gfx950Fp8MatrixALoadM16K128,
+    Gfx950Fp8MatrixBLoadK128N16,
+    Gfx950Fp8AccumulatorZero,
+    Gfx950Fp8AccumulatorIntoValues,
+    Gfx950Fp8MultiplyAccumulate,
+    Gfx950SubgroupCurrent,
+    Gfx950SubgroupReduceMaxF32,
+    Gfx950SubgroupReduceSumF32,
+    Gfx950SubgroupBroadcastF32,
+    Gfx950LdsTransposeTileCurrent,
+    Gfx950LdsTransposeStageB4,
+    Gfx950LdsTransposeStageB8,
+    Gfx950LdsTransposePublish,
+    Gfx950LdsTransposeReadB4,
+    Gfx950LdsTransposeReadB8,
     /// Rust's effect-free hint that the current path is unlikely to execute.
     ColdPath,
 }
@@ -201,6 +226,81 @@ impl ProductionSemanticTerminalRuleV1 {
             TrustedDeviceItem::DeviceMatrixMultiplyAccumulate => {
                 Self::Expand(ProductionTerminalExpansionV1::MatrixMultiplyAccumulate)
             }
+            TrustedDeviceItem::Gfx950MatrixCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16)
+            }
+            TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero)
+            }
+            TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues)
+            }
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixARowMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128)
+            }
+            TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16)
+            }
+            TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero)
+            }
+            TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues)
+            }
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate)
+            }
+            TrustedDeviceItem::Gfx950SubgroupCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent)
+            }
+            TrustedDeviceItem::Gfx950SubgroupReduceMaxF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32)
+            }
+            TrustedDeviceItem::Gfx950SubgroupReduceSumF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32)
+            }
+            TrustedDeviceItem::Gfx950SubgroupBroadcastF32 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32)
+            }
+            TrustedDeviceItem::Gfx950LdsTransposeTileCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent)
+            }
+            TrustedDeviceItem::Gfx950LdsTransposeStageB4 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4)
+            }
+            TrustedDeviceItem::Gfx950LdsTransposeStageB8 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8)
+            }
+            TrustedDeviceItem::Gfx950LdsTransposePublish => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposePublish)
+            }
+            TrustedDeviceItem::Gfx950LdsTransposeReadB4 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4)
+            }
+            TrustedDeviceItem::Gfx950LdsTransposeReadB8 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8)
+            }
             unsupported => Self::Reject(unsupported),
         }
     }
@@ -345,6 +445,81 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::MatrixMultiplyAccumulate) => {
                 TrustedDeviceItem::DeviceMatrixMultiplyAccumulate
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent) => {
+                TrustedDeviceItem::Gfx950MatrixCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero) => {
+                TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues) => {
+                TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate) => {
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixARowMajor
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16) => {
+                TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero) => {
+                TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues) => {
+                TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate) => {
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent) => {
+                TrustedDeviceItem::Gfx950SubgroupCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32) => {
+                TrustedDeviceItem::Gfx950SubgroupReduceMaxF32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32) => {
+                TrustedDeviceItem::Gfx950SubgroupReduceSumF32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32) => {
+                TrustedDeviceItem::Gfx950SubgroupBroadcastF32
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent) => {
+                TrustedDeviceItem::Gfx950LdsTransposeTileCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4) => {
+                TrustedDeviceItem::Gfx950LdsTransposeStageB4
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8) => {
+                TrustedDeviceItem::Gfx950LdsTransposeStageB8
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposePublish) => {
+                TrustedDeviceItem::Gfx950LdsTransposePublish
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4) => {
+                TrustedDeviceItem::Gfx950LdsTransposeReadB4
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8) => {
+                TrustedDeviceItem::Gfx950LdsTransposeReadB8
             }
             Self::Expand(ProductionTerminalExpansionV1::ColdPath) => {
                 panic!("core compiler intrinsics are not trusted device items")
@@ -523,6 +698,66 @@ mod tests {
             (
                 TrustedDeviceItem::DeviceMatrixMultiplyAccumulate,
                 ProductionTerminalExpansionV1::MatrixMultiplyAccumulate,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MatrixCurrent,
+                ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixAFp4RowMajor,
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixBFp4RowMajor,
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixAFp4LoadM16K128,
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixBFp4LoadK128N16,
+                ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16,
+            ),
+            (
+                TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentZero,
+                ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero,
+            ),
+            (
+                TrustedDeviceItem::Gfx950Fp4F32AccumulatorFragmentIntoValues,
+                ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+                ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixARowMajor,
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixBRowMajor,
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixAFp8LoadM16K128,
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MfmaMatrixBFp8LoadK128N16,
+                ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16,
+            ),
+            (
+                TrustedDeviceItem::Gfx950F32AccumulatorFragmentZero,
+                ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero,
+            ),
+            (
+                TrustedDeviceItem::Gfx950F32AccumulatorFragmentIntoValues,
+                ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
+                ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate,
             ),
             (
                 TrustedDeviceItem::ThreadIndexCheckedTiled2D,

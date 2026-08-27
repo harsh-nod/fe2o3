@@ -155,10 +155,7 @@ pub struct Gfx950F32AccumulatorFragment<'wave, Format> {
 }
 
 impl<'wave, Format: Gfx950MfmaFormat> Gfx950F32AccumulatorFragment<'wave, Format> {
-    /// Creates the all-zero accumulator for one authenticated Wave64 lane.
-    #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_f32_accumulator_zero_v1"]
-    pub fn zero(_lane: &'wave WaveLane<Wave64>) -> Self {
+    fn zero_inner(_lane: &'wave WaveLane<Wave64>) -> Self {
         Self {
             values: [0.0; 4],
             _contract: PhantomData,
@@ -166,10 +163,7 @@ impl<'wave, Format: Gfx950MfmaFormat> Gfx950F32AccumulatorFragment<'wave, Format
         }
     }
 
-    /// Returns the four row-major FP32 results uniquely owned by this lane.
-    #[inline(never)]
-    #[rustc_diagnostic_item = "fe2o3_device_gfx950_f32_accumulator_into_values_v1"]
-    pub fn into_values(self) -> [f32; 4] {
+    fn into_values_inner(self) -> [f32; 4] {
         self.values
     }
 
@@ -180,6 +174,38 @@ impl<'wave, Format: Gfx950MfmaFormat> Gfx950F32AccumulatorFragment<'wave, Format
             _contract: PhantomData,
             _not_send_sync: PhantomData,
         }
+    }
+}
+
+impl<'wave> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp4E2M1> {
+    /// Creates the all-zero FP4 accumulator for one authenticated Wave64 lane.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_fp4_f32_accumulator_zero_v1"]
+    pub fn zero(lane: &'wave WaveLane<Wave64>) -> Self {
+        Self::zero_inner(lane)
+    }
+
+    /// Returns this lane's four row-major FP4 MFMA results.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_fp4_f32_accumulator_into_values_v1"]
+    pub fn into_values(self) -> [f32; 4] {
+        self.into_values_inner()
+    }
+}
+
+impl<'wave> Gfx950F32AccumulatorFragment<'wave, Gfx950Fp8E4M3> {
+    /// Creates the all-zero FP8 accumulator for one authenticated Wave64 lane.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_f32_accumulator_zero_v1"]
+    pub fn zero(lane: &'wave WaveLane<Wave64>) -> Self {
+        Self::zero_inner(lane)
+    }
+
+    /// Returns this lane's four row-major FP8 MFMA results.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_f32_accumulator_into_values_v1"]
+    pub fn into_values(self) -> [f32; 4] {
+        self.into_values_inner()
     }
 }
 
@@ -268,8 +294,7 @@ pub struct Gfx950MfmaAMatrix<'data, Format> {
 }
 
 impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaAMatrix<'data, Format> {
-    /// Validates row-major `rows x reduction` byte storage.
-    pub fn row_major(
+    fn row_major_inner(
         bits: &'data [u8],
         offset: usize,
         rows: usize,
@@ -284,7 +309,22 @@ impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaAMatrix<'data, Format> {
 }
 
 impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1> {
+    /// Validates row-major FP4 `rows x reduction` byte storage.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_fp4_row_major_v1"]
+    #[inline(never)]
+    pub fn row_major(
+        bits: &'data [u8],
+        offset: usize,
+        rows: usize,
+        reduction: usize,
+        stride: usize,
+    ) -> Result<Self, Gfx950MatrixViewError> {
+        Self::row_major_inner(bits, offset, rows, reduction, stride)
+    }
+
     /// Loads this lane's FP4 values from one logical M16xK128 A tile.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_fp4_load_m16k128_v1"]
+    #[inline(never)]
     pub fn load_m16k128<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,
@@ -299,7 +339,22 @@ impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp4E2M1> {
 }
 
 impl<'data> Gfx950MfmaAMatrix<'data, Gfx950Fp8E4M3> {
+    /// Validates row-major FP8 `rows x reduction` byte storage.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_row_major_v1"]
+    #[inline(never)]
+    pub fn row_major(
+        bits: &'data [u8],
+        offset: usize,
+        rows: usize,
+        reduction: usize,
+        stride: usize,
+    ) -> Result<Self, Gfx950MatrixViewError> {
+        Self::row_major_inner(bits, offset, rows, reduction, stride)
+    }
+
     /// Loads this lane's FP8 values from one logical M16xK128 A tile.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_a_fp8_load_m16k128_v1"]
+    #[inline(never)]
     pub fn load_m16k128<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,
@@ -324,8 +379,7 @@ pub struct Gfx950MfmaBMatrix<'data, Format> {
 }
 
 impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaBMatrix<'data, Format> {
-    /// Validates row-major `reduction x columns` byte storage.
-    pub fn row_major(
+    fn row_major_inner(
         bits: &'data [u8],
         offset: usize,
         reduction: usize,
@@ -340,7 +394,22 @@ impl<'data, Format: Gfx950MfmaFormat> Gfx950MfmaBMatrix<'data, Format> {
 }
 
 impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1> {
+    /// Validates row-major FP4 `reduction x columns` byte storage.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_fp4_row_major_v1"]
+    #[inline(never)]
+    pub fn row_major(
+        bits: &'data [u8],
+        offset: usize,
+        reduction: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<Self, Gfx950MatrixViewError> {
+        Self::row_major_inner(bits, offset, reduction, columns, stride)
+    }
+
     /// Loads this lane's FP4 values from one logical K128xN16 B tile.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_fp4_load_k128n16_v1"]
+    #[inline(never)]
     pub fn load_k128n16<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,
@@ -360,7 +429,22 @@ impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp4E2M1> {
 }
 
 impl<'data> Gfx950MfmaBMatrix<'data, Gfx950Fp8E4M3> {
+    /// Validates row-major FP8 `reduction x columns` byte storage.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_row_major_v1"]
+    #[inline(never)]
+    pub fn row_major(
+        bits: &'data [u8],
+        offset: usize,
+        reduction: usize,
+        columns: usize,
+        stride: usize,
+    ) -> Result<Self, Gfx950MatrixViewError> {
+        Self::row_major_inner(bits, offset, reduction, columns, stride)
+    }
+
     /// Loads this lane's FP8 values from one logical K128xN16 B tile.
+    #[rustc_diagnostic_item = "fe2o3_device_gfx950_mfma_matrix_b_fp8_load_k128n16_v1"]
+    #[inline(never)]
     pub fn load_k128n16<'wave>(
         &self,
         lane: &'wave WaveLane<Wave64>,

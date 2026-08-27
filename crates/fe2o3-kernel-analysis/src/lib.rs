@@ -3,6 +3,8 @@
 //! This crate reports analysis facts and rejected obligations. It does not
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
+#![deny(unsafe_code)]
+
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod control_flow;
@@ -44,6 +46,8 @@ mod pliron_race;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_ranked_bounds;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_report_validation;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_semantic_refinement;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_simt_protocol;
@@ -51,6 +55,8 @@ mod pliron_simt_protocol;
 mod pliron_sparse_index;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_tensor_layout;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_transform_refinement;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -104,6 +110,8 @@ pub use pliron_race::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_ranked_bounds::*;
 #[cfg(feature = "pliron-analysis")]
+pub use pliron_report_validation::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_semantic_refinement::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_simt_protocol::*;
@@ -111,6 +119,8 @@ pub use pliron_simt_protocol::*;
 pub use pliron_sparse_index::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_tensor_layout::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_transform_refinement::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_workgroup_memory::*;
 #[cfg(feature = "authenticated-machine-effect")]

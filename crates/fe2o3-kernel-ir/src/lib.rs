@@ -14,9 +14,10 @@
 //! encodings. [`encode_module_v6`] adds checked integer add/subtract/multiply
 //! with explicit value and overflow results without changing the frozen V1-V5
 //! encodings. [`encode_module_v7`] adds the complete checked tensor-layout
-//! contract without changing the frozen V1-V6 encodings. Decoding establishes
-//! wire well-formedness only; consumers must call [`verify_module`] before
-//! relying on semantic invariants. V1-V7
+//! contract without changing the frozen V1-V6 encodings. [`encode_module_v8`]
+//! adds gfx950 FP8 scaled matrix operations and layouts without changing the
+//! frozen V1-V7 encodings. Decoding establishes wire well-formedness only;
+//! consumers must call [`verify_module`] before relying on semantic invariants. V1-V8
 //! reconstruct kernel-entry and import roles from their legacy records; they
 //! reject device-FFI exports because the frozen function records cannot
 //! distinguish those definitions from internal helpers.
@@ -28,11 +29,14 @@
 mod canonical_kir_v5;
 mod canonical_kir_v6;
 mod canonical_kir_v7;
+mod canonical_kir_v8;
+mod canonical_kir_v9;
 mod control_flow;
 mod effect_extraction;
 mod flash_attention_v1;
 mod formal_memory_obligations;
 mod general_gemm_kir_v1;
+mod gfx950_attention_v1;
 mod integer_semantic_oracle_v1;
 mod interprocedural_effects;
 mod ir;
@@ -61,11 +65,14 @@ mod workgroup_sync_v1;
 pub use canonical_kir_v5::*;
 pub use canonical_kir_v6::*;
 pub use canonical_kir_v7::*;
+pub use canonical_kir_v8::*;
+pub use canonical_kir_v9::*;
 pub use control_flow::*;
 pub use effect_extraction::*;
 pub use flash_attention_v1::*;
 pub use formal_memory_obligations::*;
 pub use general_gemm_kir_v1::*;
+pub use gfx950_attention_v1::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
     InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,

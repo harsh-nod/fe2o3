@@ -1121,17 +1121,19 @@ fn validate_production_cargo_inputs(
     args: &[OsString],
     device_target: Option<&OsStr>,
 ) -> Result<(), String> {
-    if device_target
-        != Some(OsStr::new(
-            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
-        ))
-    {
-        return Err(format!(
-            "production compilation requires exact {TARGET_ENV}={}",
-            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1
-        ));
-    }
+    production_target_profile(device_target)?;
     reject_caller_target(args)
+}
+
+fn production_target_profile(
+    device_target: Option<&OsStr>,
+) -> Result<fe2o3_amd_target::ProductionAmdTargetProfileV1, String> {
+    let profile = device_target
+        .and_then(OsStr::to_str)
+        .and_then(fe2o3_amd_target::ProductionAmdTargetProfileV1::from_cpu);
+    profile.ok_or_else(|| {
+        format!("production compilation requires exact {TARGET_ENV}=gfx942 or {TARGET_ENV}=gfx950")
+    })
 }
 
 fn reject_caller_target(args: &[OsString]) -> Result<(), String> {
@@ -1216,6 +1218,7 @@ fn pin_authority_cargo_binding_trampoline() -> Result<pinned_executable::PinnedE
 
 struct BackendRunContext {
     target: String,
+    target_profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
     host_target: String,
     project: project::CargoProject,
     backend: PathBuf,
@@ -1262,7 +1265,8 @@ impl BackendRunContext {
             protected_compiler_closure,
             authorized_closure,
         } = preparation;
-        let target = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1.to_owned();
+        let target_profile = production_target_profile(env::var_os(TARGET_ENV).as_deref())?;
+        let target = target_profile.cpu().to_owned();
         let target_dir = project.open_or_create_target()?;
         pinned_rustc.assert_lib_tree_unmutated()?;
         let host_target = pinned_rustc_host_target(&pinned_rustc)?;
@@ -1347,7 +1351,7 @@ impl BackendRunContext {
                 .extend_from_slice(&(authorized_closure.snapshot().len() as u64).to_le_bytes());
             cargo_configuration.extend_from_slice(authorized_closure.snapshot());
         }
-        append_production_target_semantic_configuration(&mut cargo_configuration);
+        append_production_target_semantic_configuration(&mut cargo_configuration, target_profile);
         let backend_reference = pinned_backend
             .fixed_child_descriptor_path(BACKEND_CHILD_FD)
             .map_err(|error| format!("failed to retain pinned codegen backend: {error}"))?;
@@ -1362,6 +1366,7 @@ impl BackendRunContext {
             generation::managed_rustc_args(&backend_reference, generation.token())?;
         Ok(Self {
             target,
+            target_profile,
             host_target,
             project,
             backend,
@@ -1385,12 +1390,14 @@ impl BackendRunContext {
     }
 }
 
-fn append_production_target_semantic_configuration(configuration: &mut Vec<u8>) {
+fn append_production_target_semantic_configuration(
+    configuration: &mut Vec<u8>,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+) {
     configuration.extend_from_slice(b"fe2o3-production-target-profile-v1\0");
-    configuration.extend_from_slice(fe2o3_amd_target::PRODUCTION_GFX942_RUSTC_TARGET_V1.as_bytes());
+    configuration.extend_from_slice(profile.rustc_target().as_bytes());
     configuration.push(0);
-    configuration
-        .extend_from_slice(fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1.as_bytes());
+    configuration.extend_from_slice(profile.cargo_rustflags().as_bytes());
     configuration.push(0);
 }
 
@@ -1531,7 +1538,7 @@ fn run_cargo_with_backend_inner(
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
     scrub_simulation_build_environment(cargo.as_command_mut());
-    configure_production_target_environment(cargo.as_command_mut());
+    configure_production_target_environment(cargo.as_command_mut(), context.target_profile);
     if context.requires_locked_closure {
         // Authority builds do not admit unpinned C tools, ROCm headers, or native libraries.
         cargo.as_command_mut().env("FE2O3_HIP_SYS_DISABLE", "1");
@@ -1688,6 +1695,7 @@ fn run_production_host_cargo(
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove(fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1)
+        .env_remove(fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1)
         .env_remove(build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV)
         .env_remove(build_config::PRODUCTION_BUILD_CONFIG_ENV)
         .env_remove(build_config::WORKER_V2_EXPECTED_ID_ENV)
@@ -1789,18 +1797,17 @@ fn scrub_simulation_build_environment(command: &mut Command) {
         .env_remove("FE2O3_HIP_SYS_DISABLE");
 }
 
-fn configure_production_target_environment(command: &mut Command) {
+fn configure_production_target_environment(
+    command: &mut Command,
+    profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+) {
     command
-        .env(
-            TARGET_ENV,
-            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
-        )
+        .env(TARGET_ENV, profile.device_target())
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .env(
-            fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
-            fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
-        );
+        .env_remove(fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1)
+        .env_remove(fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1)
+        .env(profile.cargo_rustflags_env(), profile.cargo_rustflags());
 }
 
 fn aggregate_post_spawn_results<const N: usize>(
@@ -3674,7 +3681,10 @@ mod tests {
                 fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
                 "attacker",
             );
-        configure_production_target_environment(&mut command);
+        configure_production_target_environment(
+            &mut command,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        );
         assert_eq!(command_environment(&command, "RUSTFLAGS"), None);
         assert_eq!(
             command_environment(&command, TARGET_ENV),
@@ -3695,19 +3705,43 @@ mod tests {
                 fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
             ))
         );
+
+        let mut gfx950 = Command::new("cargo");
+        gfx950.env(TARGET_ENV, "gfx942:xnack-").env(
+            fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_ENV_V1,
+            fe2o3_amd_target::PRODUCTION_GFX942_CARGO_RUSTFLAGS_V1,
+        );
+        configure_production_target_environment(
+            &mut gfx950,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+        );
+        assert_eq!(
+            command_environment(&gfx950, TARGET_ENV),
+            Some(OsStr::new(
+                fe2o3_amd_target::PRODUCTION_GFX950_DEVICE_TARGET_V1
+            ))
+        );
+        assert_eq!(
+            command_environment(
+                &gfx950,
+                fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_ENV_V1,
+            ),
+            Some(OsStr::new(
+                fe2o3_amd_target::PRODUCTION_GFX950_CARGO_RUSTFLAGS_V1,
+            ))
+        );
     }
 
     #[test]
     fn production_target_selection_is_owned_by_the_orchestrator() {
-        assert!(
-            validate_production_cargo_inputs(
-                &["--lib".into()],
-                Some(OsStr::new(
-                    fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
-                )),
-            )
-            .is_ok()
-        );
+        for cpu in [
+            fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_CPU_V1,
+            fe2o3_amd_target::PRODUCTION_GFX950_DEVICE_CPU_V1,
+        ] {
+            assert!(
+                validate_production_cargo_inputs(&["--lib".into()], Some(OsStr::new(cpu))).is_ok()
+            );
+        }
         for args in [
             vec![
                 "--target".into(),
@@ -3726,6 +3760,8 @@ mod tests {
             );
         }
         assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("gfx942:xnack-"))).is_err());
+        assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("gfx950:xnack-"))).is_err());
+        assert!(validate_production_cargo_inputs(&[], Some(OsStr::new("GFX950"))).is_err());
     }
 
     #[test]

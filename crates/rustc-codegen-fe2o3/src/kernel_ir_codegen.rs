@@ -380,10 +380,10 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     })
 }
 
-/// Retains exact gfx942 LLVM text already produced by the move-only
+/// Retains exact target-bound LLVM text already produced by the move-only
 /// production transaction. This path performs no profile recognition,
 /// target rebinding, or second KIR-to-LLVM lowering.
-pub(crate) fn retain_production_gfx942_compiler_module_text_v1(
+pub(crate) fn retain_production_compiler_module_text_v1(
     module: &Module,
     llvm_ir: String,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {
@@ -4023,12 +4023,22 @@ mod tests {
     #[test]
     fn exact_target_bound_module_cannot_lower_through_a_processor_only_alias() {
         let mut module = inert_compiler_module_fixture();
-        module
+        let exact_target = TargetCapability::Extension {
+            namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+        };
+        let entry = module.kernels[0].entry.clone();
+        module.required_capabilities.insert(exact_target.clone());
+        module.kernels[0]
             .required_capabilities
-            .insert(TargetCapability::Extension {
-                namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
-                name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
-            });
+            .insert(exact_target.clone());
+        module
+            .functions
+            .iter_mut()
+            .find(|function| function.id == entry)
+            .expect("fixture kernel entry")
+            .required_capabilities
+            .insert(exact_target);
 
         let exact = construct_inert_compiler_module_text_for_target_v1(
             &module,

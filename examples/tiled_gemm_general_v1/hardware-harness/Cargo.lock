@@ -611,6 +611,7 @@ dependencies = [
  "dialect-kernel",
  "dialect-proof",
  "fe2o3-kernel-ir",
+ "fe2o3-pliron-owner-core",
  "pliron",
  "sha2 0.11.0",
 ]
@@ -649,6 +650,8 @@ dependencies = [
 name = "fe2o3-llvm-worker-handoff"
 version = "0.1.0"
 dependencies = [
+ "fe2o3-amd-target",
+ "fe2o3-compiler-ffi",
  "fe2o3-llvm-handoff",
  "sha2 0.11.0",
 ]
@@ -978,7 +981,7 @@ dependencies = [
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
 dependencies = [
  "awint",
  "combine",
@@ -1005,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
 dependencies = [
  "combine",
  "convert_case",
@@ -1019,7 +1022,7 @@ dependencies = [
 [[package]]
 name = "pliron-llvm"
 version = "0.17.0"
-source = "git+https://github.com/pliron-org/pliron.git?rev=2610651306ea3ba670f68d5d8b1e1159bcd521ed#2610651306ea3ba670f68d5d8b1e1159bcd521ed"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=5bdf861bf03e7f20242b25717fb653336d02e487#5bdf861bf03e7f20242b25717fb653336d02e487"
 dependencies = [
  "bitflags",
  "log",

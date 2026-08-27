@@ -28,7 +28,7 @@ single-backend but is not yet the owner of the rustc production composition.
   production request and output. `fe2o3-compiler-driver` owns exactly one
   configured backend with no selector or fallback slot.
 - `fe2o3-pliron` pins Pliron v0.17.0 commit
-  `2610651306ea3ba670f68d5d8b1e1159bcd521ed` and implements a bounded D0
+  `5bdf861bf03e7f20242b25717fb653336d02e487` and implements a bounded D0
   context, private identity anchor, registration, verification, and pass-plan
   shell. It does not expose generic pass execution over contextless pointers. Seven target-neutral
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,

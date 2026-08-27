@@ -330,10 +330,21 @@ fn gfx950_low_precision_and_transpose_capabilities_are_exact() {
         AdvancedCapabilityStatus::Supported
     );
     assert_eq!(gfx950.max_lds_bytes_per_workgroup(), 160 * 1024);
-    assert!(gfx950.workgroup_limits().is_none());
     assert_eq!(
         gfx950.workgroup_limits_support(),
-        AdvancedCapabilityStatus::Unreviewed
+        AdvancedCapabilityStatus::Supported
+    );
+    let limits = gfx950.workgroup_limits().unwrap();
+    assert_eq!(limits.max_workitems(), 1024);
+    for axis in [WorkgroupAxis::X, WorkgroupAxis::Y, WorkgroupAxis::Z] {
+        assert_eq!(limits.max_extent(axis), 1024);
+    }
+    assert!(limits.supports_dimensions(1024, 1, 1));
+    assert!(limits.supports_dimensions(16, 8, 8));
+    assert!(!limits.supports_dimensions(1024, 2, 1));
+    assert_eq!(
+        gfx950.max_wavefronts_per_workgroup(WavefrontWidth::Wave64),
+        Some(16)
     );
     assert!(gfx950.standard_atomic_widths().is_empty());
     assert_eq!(

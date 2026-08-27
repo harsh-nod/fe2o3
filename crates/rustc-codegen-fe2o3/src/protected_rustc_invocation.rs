@@ -21,7 +21,8 @@ use crate::qualification_selection::{
     RustcInvocationPolicy, SelectedQualificationOracle, rustc_invocation_policy,
 };
 
-const EXACT_PROTECTED_TARGET_V1: &str = "gfx942:xnack-";
+#[cfg(test)]
+const BASELINE_PROTECTED_TARGET_V1: &str = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1;
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
@@ -168,7 +169,9 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
             ),
             Self::TargetMismatch { found } => write!(
                 formatter,
-                "sealed V3 target must be exactly {EXACT_PROTECTED_TARGET_V1}, found {found}"
+                "sealed V3 target must be exactly {} or {}, found {found}",
+                fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1,
+                fe2o3_amd_target::PRODUCTION_GFX950_DEVICE_TARGET_V1,
             ),
             Self::BackendPathMismatch { found } => write!(
                 formatter,
@@ -424,7 +427,9 @@ fn validate_capability(
     if descriptor.compile_environment() != &observation.compile_environment {
         return Err(ProtectedRustcInvocationErrorV1::CompileEnvironmentMismatch);
     }
-    if descriptor.amd_target() != EXACT_PROTECTED_TARGET_V1 {
+    if fe2o3_amd_target::ProductionAmdTargetProfileV1::from_device_target(descriptor.amd_target())
+        .is_none()
+    {
         return Err(ProtectedRustcInvocationErrorV1::TargetMismatch {
             found: descriptor.amd_target().to_owned(),
         });

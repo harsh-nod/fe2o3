@@ -172,6 +172,14 @@ impl AdmittedInertSemanticMirV1 {
         Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V5))
     }
 
+    /// Decodes bytes canonical specifically under the closed V6 attention schema.
+    pub fn decode_exact_v6_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V6))
+    }
+
     fn decode_for_schema(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -189,6 +197,7 @@ impl AdmittedInertSemanticMirV1 {
         let request = decoder.request()?;
         decoder.finish()?;
         let admitted = match expected_wire_version {
+            Some(SemanticMirWireVersionV1::V6) => request.admit_exact_v6(limits)?,
             Some(SemanticMirWireVersionV1::V5) => request.admit_exact_v5(limits)?,
             Some(SemanticMirWireVersionV1::V4) => request.admit_exact_v4(limits)?,
             Some(SemanticMirWireVersionV1::V3) => request.admit_exact_v3(limits)?,
@@ -239,7 +248,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         Self {
             bytes,
             offset: 0,
-            wire_version: SemanticMirWireVersionV1::V5,
+            wire_version: SemanticMirWireVersionV1::V6,
             expected_wire_version,
             limits,
             totals: DecodeTotalsV1::default(),
@@ -1405,8 +1414,10 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V5 {
-            40
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V6 {
+            51
+        } else if self.wire_version >= SemanticMirWireVersionV1::V5 {
+            44
         } else {
             36
         };
@@ -1638,6 +1649,72 @@ impl<'a> CanonicalDecoderV1<'a> {
                 lanes_per_row: self.u64()?,
                 elements_per_lane: self.u64()?,
             },
+            41 => SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+                result: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                error: SemanticTypeIdV1(self.u32()?),
+                role: self.mfma_role()?,
+                storage_layout: self.mfma_storage_layout()?,
+            },
+            42 => SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+                fragment: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                lane: SemanticTypeIdV1(self.u32()?),
+                contract: self.mfma_operand_contract()?,
+                storage_layout: self.mfma_storage_layout()?,
+            },
+            43 => SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+                result: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                error: SemanticTypeIdV1(self.u32()?),
+                role: self.mfma_role()?,
+                storage_layout: self.mfma_storage_layout()?,
+            },
+            44 => SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+                fragment: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                lane: SemanticTypeIdV1(self.u32()?),
+                contract: self.mfma_operand_contract()?,
+                storage_layout: self.mfma_storage_layout()?,
+            },
+            45 => SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 {
+                context: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+            },
+            46 => SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
+                tile: SemanticTypeIdV1(self.u32()?),
+                lane: SemanticTypeIdV1(self.u32()?),
+                format: self.gfx950_lds_transpose_format()?,
+            },
+            47 => SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                input_tile: SemanticTypeIdV1(self.u32()?),
+                output_tile: SemanticTypeIdV1(self.u32()?),
+                view: SemanticTypeIdV1(self.u32()?),
+                format: self.gfx950_lds_transpose_format()?,
+            },
+            48 => SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                input_tile: SemanticTypeIdV1(self.u32()?),
+                output_tile: SemanticTypeIdV1(self.u32()?),
+                format: self.gfx950_lds_transpose_format()?,
+            },
+            49 => SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                tile: SemanticTypeIdV1(self.u32()?),
+                fragment: SemanticTypeIdV1(self.u32()?),
+                contract: self.mfma_operand_contract()?,
+                format: self.gfx950_lds_transpose_format()?,
+            },
+            50 => SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent {
+                context: SemanticTypeIdV1(self.u32()?),
+            },
+            51 => SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+                context: SemanticTypeIdV1(self.u32()?),
+                width: self.u32()?,
+                kind: match self.tagged("gfx950 subgroup reduction kind", 1)? {
+                    0 => SemanticSubgroupReductionKindV1::Sum,
+                    1 => SemanticSubgroupReductionKindV1::Maximum,
+                    _ => unreachable!(),
+                },
+            },
             _ => unreachable!(),
         })
     }
@@ -1646,6 +1723,16 @@ impl<'a> CanonicalDecoderV1<'a> {
         Ok(match self.tagged("MFMA operand role", 1)? {
             0 => SemanticMfmaOperandRoleV1::A,
             1 => SemanticMfmaOperandRoleV1::B,
+            _ => unreachable!(),
+        })
+    }
+
+    fn gfx950_lds_transpose_format(
+        &mut self,
+    ) -> Result<SemanticGfx950LdsTransposeFormatV1, SemanticMirDecodeErrorV1> {
+        Ok(match self.tagged("gfx950 LDS transpose format", 1)? {
+            0 => SemanticGfx950LdsTransposeFormatV1::Fp4E2M1,
+            1 => SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
             _ => unreachable!(),
         })
     }
@@ -1664,12 +1751,15 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticMfmaOperandContractV1, SemanticMirDecodeErrorV1> {
         let role = self.mfma_role()?;
-        let profile = match self.tagged("MFMA profile", 0)? {
+        let profile = match self.tagged("MFMA profile", 2)? {
             0 => SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            1 => SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            2 => SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
             _ => unreachable!(),
         };
-        let register_distribution = match self.tagged("MFMA register distribution", 0)? {
+        let register_distribution = match self.tagged("MFMA register distribution", 1)? {
             0 => SemanticMfmaRegisterDistributionV1::Tile16x16,
+            1 => SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
             _ => unreachable!(),
         };
         let wave_width = self.u32()?;
@@ -1684,8 +1774,10 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn mfma_accumulator_contract(
         &mut self,
     ) -> Result<SemanticMfmaAccumulatorContractV1, SemanticMirDecodeErrorV1> {
-        let profile = match self.tagged("MFMA profile", 0)? {
+        let profile = match self.tagged("MFMA profile", 2)? {
             0 => SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            1 => SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            2 => SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
             _ => unreachable!(),
         };
         let distribution = match self.tagged("MFMA accumulator distribution", 0)? {
@@ -2913,6 +3005,12 @@ mod tests {
             distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
             wave_width: 64,
         };
+        let gfx950_rhs = SemanticMfmaOperandContractV1 {
+            role: SemanticMfmaOperandRoleV1::B,
+            profile: SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+            wave_width: 64,
+        };
         let mut operations = vec![
             SemanticCompilerIntrinsicOperationV1::ThreadIndex(SemanticAxisV1::X),
             SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(SemanticAxisV1::Y),
@@ -3091,6 +3189,38 @@ mod tests {
                 context: t(0),
                 width: 64,
                 kind: SemanticSubgroupReductionKindV1::Sum,
+            },
+            SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { context: t(0) },
+            SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+                context: t(0),
+                width: 16,
+                kind: SemanticSubgroupReductionKindV1::Maximum,
+            },
+            SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 {
+                context: t(0),
+                width: 16,
+            },
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
+                tile: t(1),
+                lane: t(2),
+                format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            },
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                input_tile: t(1),
+                output_tile: t(2),
+                view: t(3),
+                format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            },
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                input_tile: t(1),
+                output_tile: t(2),
+                format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            },
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                tile: t(1),
+                fragment: t(2),
+                contract: gfx950_rhs,
+                format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
             },
             SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context: t(0) },
         ];

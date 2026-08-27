@@ -5,10 +5,7 @@ use fe2o3_compiler_ffi::{
     CompilerFfiEnvelopeV1, CompilerModuleSymbolManifestErrorV1, CompilerModuleSymbolManifestV1,
     CompilerModuleSymbolRoleV1, DeviceTargetV1,
 };
-use fe2o3_kernel_ir::{
-    AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
-    Module, TargetCapability,
-};
+use fe2o3_kernel_ir::{AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, Module, TargetCapability};
 use std::collections::BTreeSet;
 
 pub(crate) fn construct_symbol_manifest(
@@ -93,10 +90,7 @@ pub(crate) fn validate_exact_target_binding(
     }
 
     let envelope_target = envelope_target.to_string();
-    if bindings.len() == 1
-        && bindings.contains(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
-        && envelope_target == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
-    {
+    if bindings.len() == 1 && bindings.contains(&envelope_target) {
         return Ok(());
     }
 
