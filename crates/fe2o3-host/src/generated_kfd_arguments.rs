@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use fe2o3_aql::AqlDispatchGeometryV1;
+use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_kfd::{Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1};
 use fe2o3_runtime::{
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942RuntimeBufferAccessV1,
@@ -58,39 +59,52 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         let current = admission
             .acquire_retained_currentness_token()
             .map_err(GeneratedKfdPrepareError::CurrentPublication)?;
-        let prepared = (|| {
-            let generated = Arguments::generated_argument_layout()
-                .map_err(GeneratedKfdPrepareError::GeneratedLayout)?;
-            let plan = validate_worker_v3_argument_packing(
-                admission.descriptor_table(),
-                admission.descriptor(),
-                &generated,
-            )
-            .map_err(GeneratedKfdPrepareError::PackingPlan)?;
-            let binding = arguments
-                .bind_kfd_arguments(&plan)
-                .map_err(GeneratedKfdPrepareError::Bind)?;
-            let packed = binding
-                .pack(&plan)
-                .map_err(GeneratedKfdPrepareError::Bind)?;
-            if packed.kernel_id() != admission.descriptor().kernel_id()
-                || packed.explicit_kernarg().len()
-                    != usize::try_from(admission.descriptor().abi_layout().explicit_argument_size())
-                        .unwrap_or(usize::MAX)
-                || packed.alignment()
-                    != admission
-                        .descriptor()
-                        .abi_layout()
-                        .kernarg_segment_alignment()
-            {
-                return Err(GeneratedKfdPrepareError::PackedSubstitution);
-            }
-            Ok(packed)
-        })();
+        let prepared = self.prepare_generated_kfd_arguments_with_current(&current, arguments);
         admission
             .revalidate_retained_currentness_token(&current)
             .map_err(GeneratedKfdPrepareError::CurrentPublication)?;
         prepared
+    }
+
+    pub(crate) fn prepare_generated_kfd_arguments_with_current<'allocation, Arguments>(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+        arguments: Arguments,
+    ) -> Result<GeneratedKfdPackedArguments<'allocation>, GeneratedKfdPrepareError>
+    where
+        Arguments: CompilerGeneratedKfdArguments<'allocation, K>,
+    {
+        let admission = self.admission();
+        admission
+            .revalidate_retained_currentness_token(current)
+            .map_err(GeneratedKfdPrepareError::CurrentPublication)?;
+        let generated = Arguments::generated_argument_layout()
+            .map_err(GeneratedKfdPrepareError::GeneratedLayout)?;
+        let plan = validate_worker_v3_argument_packing(
+            admission.descriptor_table(),
+            admission.descriptor(),
+            &generated,
+        )
+        .map_err(GeneratedKfdPrepareError::PackingPlan)?;
+        let binding = arguments
+            .bind_kfd_arguments(&plan)
+            .map_err(GeneratedKfdPrepareError::Bind)?;
+        let packed = binding
+            .pack(&plan)
+            .map_err(GeneratedKfdPrepareError::Bind)?;
+        if packed.kernel_id() != admission.descriptor().kernel_id()
+            || packed.explicit_kernarg().len()
+                != usize::try_from(admission.descriptor().abi_layout().explicit_argument_size())
+                    .unwrap_or(usize::MAX)
+            || packed.alignment()
+                != admission
+                    .descriptor()
+                    .abi_layout()
+                    .kernarg_segment_alignment()
+        {
+            return Err(GeneratedKfdPrepareError::PackedSubstitution);
+        }
+        Ok(packed)
     }
 }
 

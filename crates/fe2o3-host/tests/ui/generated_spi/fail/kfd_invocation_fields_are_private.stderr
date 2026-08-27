@@ -1,0 +1,25 @@
+error[E0451]: fields `authority`, `device`, `prepared` and `completion` of struct `GeneratedWorkerV3KfdInvocation` are private
+ --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:5:9
+  |
+4 |     let GeneratedWorkerV3KfdInvocation {
+  |         ------------------------------ in this type
+5 |         authority,
+  |         ^^^^^^^^^ private field
+6 |         device,
+  |         ^^^^^^ private field
+7 |         prepared,
+  |         ^^^^^^^^ private field
+8 |         completion,
+  |         ^^^^^^^^^^ private field
+
+error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecutionAuthority<K>` is private
+ --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:5:9
+  |
+5 |         authority,
+  |         ^^^^^^^^^ private type
+
+error: type `fe2o3_host::generated_kfd_invocation::GeneratedWorkerV3KfdExecutionAuthority<K>` is private
+  --> tests/ui/generated_spi/fail/kfd_invocation_fields_are_private.rs:10:13
+   |
+10 |     let _ = (authority, device, prepared, completion);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private type

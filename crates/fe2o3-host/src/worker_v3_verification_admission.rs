@@ -24,6 +24,8 @@ pub enum WorkerV3SafetyPropertyV1 {
     Initialization,
     RaceFreedom,
     LaunchValidity,
+    Synchronization,
+    SemanticRefinement,
 }
 
 impl WorkerV3SafetyPropertyV1 {
@@ -35,6 +37,8 @@ impl WorkerV3SafetyPropertyV1 {
             Self::Initialization => 1 << 3,
             Self::RaceFreedom => 1 << 4,
             Self::LaunchValidity => 1 << 5,
+            Self::Synchronization => 1 << 6,
+            Self::SemanticRefinement => 1 << 7,
         }
     }
 }
@@ -44,14 +48,12 @@ impl WorkerV3SafetyPropertyV1 {
 pub struct WorkerV3SafetyPropertiesV1(u8);
 
 impl WorkerV3SafetyPropertiesV1 {
-    const KNOWN_BITS: u8 = (1 << 6) - 1;
+    const KNOWN_BITS: u8 = u8::MAX;
 
     pub const fn new(bits: u8) -> Option<Self> {
-        if bits & !Self::KNOWN_BITS == 0 {
-            Some(Self(bits))
-        } else {
-            None
-        }
+        // V1 assigns every bit in its u8 wire representation. Keep the fallible constructor
+        // signature stable so a later wire version can reject unknown bits without API churn.
+        Some(Self(bits))
     }
 
     pub const fn required() -> Self {
@@ -202,9 +204,12 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 /// Implementations must authenticate immutable compiler and verifier executions under an
 /// approved policy. They must establish that the formal-memory and proof-binding receipts apply
 /// to this exact semantic capsule, descriptor, final HSACO, and generated Rust marker, and that
-/// every reported safety property covers all executable memory effects. The inert V3 receipts do
-/// not establish these claims by themselves. A false implementation can later authorize native
-/// code loading from safe generated code.
+/// every reported safety property covers all executable memory effects for every concrete
+/// invocation satisfying the generated ABI, effect, alias, initialization, and launch contracts.
+/// This is a universally quantified kernel theorem: the later safe composition boundary may
+/// instantiate it only with compiler-generated capabilities and independently checked physical
+/// runtime inputs. The inert V3 receipts do not establish these claims by themselves. A false
+/// implementation can later authorize native code loading from safe generated code.
 pub unsafe trait WorkerV3VerifierV1<K: CompilerGeneratedKernelExpectationV1> {
     type Error;
 
@@ -619,6 +624,8 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
         WorkerV3SafetyPropertyV1::Initialization,
         WorkerV3SafetyPropertyV1::RaceFreedom,
         WorkerV3SafetyPropertyV1::LaunchValidity,
+        WorkerV3SafetyPropertyV1::Synchronization,
+        WorkerV3SafetyPropertyV1::SemanticRefinement,
     ] {
         if !decision.safety_properties.contains(property) {
             return Err(WorkerV3VerificationDecisionErrorV1::MissingSafetyProperty(
@@ -731,6 +738,30 @@ where
             Self::CurrentPublication(error) => Some(error),
             Self::Auditor(error) => Some(error),
             Self::Marker(_) | Self::UnsupportedGeneratedProfile => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_worker_v3_properties_are_explicit_and_complete() {
+        let required = WorkerV3SafetyPropertiesV1::required();
+        assert_eq!(required.bits(), u8::MAX);
+        assert_eq!(WorkerV3SafetyPropertiesV1::new(u8::MAX), Some(required));
+        for property in [
+            WorkerV3SafetyPropertyV1::Bounds,
+            WorkerV3SafetyPropertyV1::AddressOverflowFreedom,
+            WorkerV3SafetyPropertyV1::MemorySafety,
+            WorkerV3SafetyPropertyV1::Initialization,
+            WorkerV3SafetyPropertyV1::RaceFreedom,
+            WorkerV3SafetyPropertyV1::LaunchValidity,
+            WorkerV3SafetyPropertyV1::Synchronization,
+            WorkerV3SafetyPropertyV1::SemanticRefinement,
+        ] {
+            assert!(required.contains(property));
         }
     }
 }

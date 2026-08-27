@@ -26,25 +26,24 @@ use fe2o3_artifacts::{
     AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, DigestAlgorithm,
     DigestBytes, Mutability, Name, PayloadDigest, PointerWidth,
 };
-use fe2o3_core::{DeviceBuffer, GpuContext};
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::__generated::{
-    GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice, load_admitted_worker_v3_application_v1,
+    GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, load_admitted_worker_v3_application_v1,
 };
 use fe2o3_host::{
     __hardware_test::{
         application_handoff_observed_context_fixture_v1,
         generated_shared_f32_argument_pair_fixture_v1,
     },
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKernelProfileV1, CompilerGeneratedWorkerV3ArgumentsV1,
-    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
-    GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
-    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
-    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
-    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
-    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
-    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ObservedContext,
+    AqlDispatchGeometryV1, AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+    CompilerGeneratedWorkerV3ArgumentsV1, DeviceSelector, GeneratedArgumentLayoutError,
+    GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
+    GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1, HsaAgentIdentityV1,
+    HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1, HsaEnvironmentObservationV1,
+    HsaExecutableObjectIdentityV1, HsaImplicitKernargInitializationObservationV1,
+    HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchGeometryV1,
+    HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1, OpenedKfd,
     ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
@@ -53,7 +52,6 @@ use fe2o3_host::{
     WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
     audit_recovered_worker_v3_verification_v1,
 };
-use fe2o3_hsa_runtime::ReviewedHsaRuntimeAdapterV1;
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
@@ -1447,8 +1445,8 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
 }
 
 #[test]
-#[ignore = "requires FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO and a gfx942:xnack- GPU"]
-fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
+#[ignore = "requires exact scalar-GEMM HSACO, FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID, and a gfx942:xnack- GPU"]
+fn synthetic_verifier_executes_real_scalar_gemm_through_joined_kfd_authority() {
     const M: u32 = 3;
     const N: u32 = 5;
     const K: u32 = 7;
@@ -1482,21 +1480,28 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
     );
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
 
-    let context = GpuContext::new(0).unwrap();
-    let observed = ObservedContext::observe(&context).unwrap();
+    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     let admitted =
         admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
-    let adapter = ReviewedHsaRuntimeAdapterV1::new(context.clone()).unwrap();
-    let mut loaded = load_admitted_worker_v3_application_v1::<scalar_gemm_v1_gpu::Marker, _, _>(
-        admitted,
-        &mut ReviewedTestWorkerV3Verifier {
-            substitute_finalized: false,
-        },
-        adapter,
-    )
-    .unwrap();
+    let authenticated =
+        AuthenticatedWorkerV3ExecutableV1::<scalar_gemm_v1_gpu::Marker>::authenticate(
+            admitted,
+            &mut ReviewedTestWorkerV3Verifier {
+                substitute_finalized: false,
+            },
+        )
+        .unwrap();
+    let unique_id = std::env::var("FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID")
+        .map(|value| parse_u64(&value))
+        .expect("FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID is not set")
+        .expect("FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID is invalid");
+    let device = OpenedKfd::open_default()
+        .unwrap()
+        .admit_uapi()
+        .unwrap()
+        .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))
+        .unwrap();
 
-    let stream = context.default_stream();
     let a_host = (0..usize::try_from(M * K).unwrap())
         .map(|index| (index % 11) as f32 - 5.0)
         .collect::<Vec<_>>();
@@ -1504,47 +1509,46 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_strict_v3() {
         .map(|index| (index % 7) as f32 - 3.0)
         .collect::<Vec<_>>();
     let expected = scalar_gemm_reference(&a_host, &b_host, M, N, K);
-    let a = DeviceBuffer::from_host(&stream, &a_host).unwrap();
-    let b = DeviceBuffer::from_host(&stream, &b_host).unwrap();
-    let mut guarded = DeviceBuffer::from_host(
-        &stream,
-        &std::iter::once(CANARY)
-            .chain(std::iter::repeat_n(CANARY, expected.len()))
-            .chain(std::iter::once(CANARY))
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
+    let mut guarded = std::iter::once(CANARY)
+        .chain(std::iter::repeat_n(CANARY, expected.len()))
+        .chain(std::iter::once(CANARY))
+        .collect::<Vec<_>>();
 
     {
-        let (_left, output, _right) = guarded.split_range_mut(1..1 + expected.len()).unwrap();
+        let output = &mut guarded[1..1 + expected.len()];
         let arguments = scalar_gemm_v1_gpu::Arguments::new(
-            GeneratedReadDeviceSlice::new(&observed, &a).unwrap(),
-            GeneratedReadDeviceSlice::new(&observed, &b).unwrap(),
-            GeneratedReadWriteDeviceSlice::from_view_mut(&observed, output).unwrap(),
+            GeneratedKfdReadSlice::new(&a_host),
+            GeneratedKfdReadSlice::new(&b_host),
+            GeneratedKfdReadWriteSlice::new(output),
             M,
             N,
             K,
         );
-        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [256, 1, 1], 0);
-        let completed = arguments
-            .prepare_worker_v3(&mut loaded, &observed, geometry)
-            .unwrap()
-            .dispatch()
+        let geometry = AqlDispatchGeometryV1::new([256, 1, 1], [256, 1, 1]).unwrap();
+        let invocation = authenticated
+            .prepare_generated_kfd_invocation(arguments, device, geometry, 0, 5_000)
             .unwrap();
-        assert_eq!(completed.kernel_id(), kernel_id);
-        assert_eq!(completed.completed_dispatch().geometry(), geometry);
-        assert!(completed.completed_dispatch().dispatch().completed());
+        assert_eq!(invocation.kernel_name(), "scalar_gemm_v1");
+        assert_eq!(invocation.device_unique_id(), unique_id);
+        assert_ne!(invocation.dispatch_contract_sha256(), [0; 32]);
+        let completed = invocation.execute().unwrap();
+        assert_eq!(completed.buffers().len(), 3);
+        assert_eq!(completed.buffers()[0].bytes().len(), a_host.len() * 4);
+        assert_eq!(completed.buffers()[1].bytes().len(), b_host.len() * 4);
+        assert_eq!(completed.buffers()[2].bytes().len(), expected.len() * 4);
     }
 
-    let guarded_after = guarded.to_host_vec(&stream).unwrap();
-    assert_eq!(guarded_after[0].to_bits(), CANARY.to_bits());
-    assert_eq!(guarded_after.last().unwrap().to_bits(), CANARY.to_bits());
-    for (actual, expected) in guarded_after[1..1 + expected.len()].iter().zip(&expected) {
+    assert_eq!(guarded[0].to_bits(), CANARY.to_bits());
+    assert_eq!(guarded.last().unwrap().to_bits(), CANARY.to_bits());
+    for (actual, expected) in guarded[1..1 + expected.len()].iter().zip(&expected) {
         assert_eq!(actual.to_bits(), expected.to_bits());
     }
-    assert_eq!(a.to_host_vec(&stream).unwrap(), a_host);
-    assert_eq!(b.to_host_vec(&stream).unwrap(), b_host);
-    assert!(loaded.unload().unwrap().unload_observation().released());
+}
+
+fn parse_u64(value: &str) -> Result<u64, std::num::ParseIntError> {
+    value
+        .strip_prefix("0x")
+        .map_or_else(|| value.parse(), |digits| u64::from_str_radix(digits, 16))
 }
 
 #[test]

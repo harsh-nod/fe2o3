@@ -16,8 +16,6 @@ worker-v3-host-consumer-fixture = ["dep:fe2o3-host", "fe2o3-host/hardware-test-h
 worker-v3-envelope-integration-test-only = [
     "application-handoff-adversarial-fixture",
     "application-handoff-fault-injection-test-only",
-    "dep:fe2o3-core",
-    "dep:fe2o3-hsa-runtime",
     "dep:fe2o3-scalar-gemm-v1",
     "dep:fe2o3-worker-v3-authority",
     "worker-v3-host-consumer-fixture",
@@ -31,8 +29,6 @@ fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
-fe2o3-core = { workspace = true, optional = true }
-fe2o3-hsa-runtime = { workspace = true, optional = true }
 fe2o3-hsaco.workspace = true
 fe2o3-hsaco-finalize.workspace = true
 fe2o3-host = { workspace = true, optional = true }

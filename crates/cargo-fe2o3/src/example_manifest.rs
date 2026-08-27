@@ -3063,11 +3063,15 @@ pub fn alpha() {}"#,
         let error = scan_test_package(root).expect_err("deep tree must fail");
         assert!(error.contains("depth"), "{error}");
 
-        let mut state = PackageSourceScanState::default();
-        state.bytes = super::MAX_PACKAGE_SOURCE_TREE_BYTES;
+        let mut state = PackageSourceScanState {
+            bytes: super::MAX_PACKAGE_SOURCE_TREE_BYTES,
+            ..PackageSourceScanState::default()
+        };
         assert!(state.admit_source(1).is_err());
-        state = PackageSourceScanState::default();
-        state.files = super::MAX_PACKAGE_SOURCE_FILES;
+        state = PackageSourceScanState {
+            files: super::MAX_PACKAGE_SOURCE_FILES,
+            ..PackageSourceScanState::default()
+        };
         assert!(state.admit_source(0).is_err());
 
         for usage in [

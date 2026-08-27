@@ -4,6 +4,7 @@ mod argument_alias;
 mod artifact_binding;
 mod generated_argument_plan;
 mod generated_kfd_arguments;
+mod generated_kfd_invocation;
 mod generated_worker_v3_dispatch;
 mod hsa_executable_lifecycle;
 mod prepared_launch;
@@ -102,7 +103,12 @@ pub use artifact_binding::{
     CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
     semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
 };
+pub use fe2o3_aql::{AqlDispatchGeometryV1, AqlGeometryError};
 pub use fe2o3_kernel_descriptor::{BlockSizeV1, DimensionsV1, KernelId, LaunchConstraintsV1};
+pub use fe2o3_kfd::{
+    CheckedGfx942XnackMinusDevice, DeviceBindingError, DeviceSelector, KfdAdapterError,
+    KfdWithAdmittedUapi, OpenedKfd,
+};
 #[doc(hidden)]
 pub use generated_argument_plan::{
     CompilerGeneratedArgumentLayoutV1, GeneratedArgumentFieldProperty,
@@ -116,6 +122,10 @@ pub use generated_kfd_arguments::{
     GeneratedKfdCompletion, GeneratedKfdCompletionError, GeneratedKfdPackedArguments,
     GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
     GeneratedKfdSliceBinding,
+};
+pub use generated_kfd_invocation::{
+    GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
+    GeneratedWorkerV3KfdInvocationError,
 };
 #[doc(hidden)]
 pub use generated_worker_v3_dispatch::{
@@ -191,9 +201,10 @@ pub mod __generated {
         GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
         GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
         GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
-        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
-        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
-        validate_compiler_generated_semantic_witness_v1,
+        GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
+        GeneratedWorkerV3KfdInvocationError, GeneratedWorkerV3PrepareErrorV1,
+        GeneratedWorkerV3PreparedInvocationV1, ValidatedCompilerGeneratedSemanticWitnessV1,
+        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,
