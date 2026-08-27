@@ -32,8 +32,8 @@ use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1
 use crate::pliron_sparse_index::{SparseAffineIndexV1, SparseIndexFactV1};
 use crate::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_PRESBURGER_WORK_UNITS_V1,
-    PlironPresburgerAnalysisV1, PresburgerCollisionDecisionV1, SparseIndexAnalysisV1,
-    SparseIndexFailureV1,
+    PlironPresburgerAnalysisV1, PresburgerCollisionDecisionV1, PresburgerMachineIntSemanticsV1,
+    PresburgerMachineRangeDecisionV1, SparseIndexAnalysisV1, SparseIndexFailureV1,
 };
 
 pub const MAX_PLIRON_RACE_INVOCATIONS_V1: u64 = 65_536;
@@ -316,9 +316,7 @@ struct EffectV1 {
     indices: Vec<Value>,
     atomic_scope: Option<AtomicScopeAttr>,
     atomic_ordering: Option<AtomicOrderingAttr>,
-    allocation_origin: u64,
     noalias_class: u64,
-    view_signature: Option<(u32, Vec<u64>)>,
     conservative: bool,
 }
 
@@ -400,6 +398,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
 ) -> RankedRaceReportV1 {
     analyses.prepare_sparse_indices(context, function);
     analyses.prepare_presburger(context, function);
+    analyses.prepare_provenance_alias(context, function);
     if let Err(failure) = analyses.sparse_indices() {
         return one(RankedRaceFindingV1::SparseIndexAnalysisFailed {
             detail: sparse_failure(failure),
@@ -422,6 +421,19 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
             });
         }
     };
+    let provenance = match analyses.provenance_alias() {
+        Ok(provenance) => provenance,
+        Err(failure) => {
+            return one(RankedRaceFindingV1::AllocationContractUnavailable {
+                detail: failure.to_string(),
+            });
+        }
+    };
+    if let Err(failure) = provenance.validate_space(MemorySpaceAttr::Global) {
+        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+            detail: failure.to_string(),
+        });
+    }
     let mut effects = Vec::new();
     let mut has_global_fence = false;
     for (block_index, block) in function
@@ -475,9 +487,7 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                     indices: vec![],
                     atomic_scope: None,
                     atomic_ordering: None,
-                    allocation_origin,
                     noalias_class: effect.noalias_class(context).unwrap_or(0),
-                    view_signature: None,
                     conservative: true,
                 });
                 continue;
@@ -537,108 +547,20 @@ pub(crate) fn run_pliron_ranked_race_check_with_analyses_v1(
                 indices: access.indices(context),
                 atomic_scope: access.atomic_scope(context),
                 atomic_ordering: access.atomic_ordering(context),
-                allocation_origin: view_op.allocation_origin(context).unwrap_or(0),
                 noalias_class: view_op.noalias_class(context).unwrap_or(0),
-                view_signature: view_op.view_type(context).map(|ty| {
-                    let ty = ty.deref(context);
-                    (ty.element_width(), ty.shape().to_vec())
-                }),
                 conservative: false,
             });
         }
     }
 
-    let mut classes_by_origin = HashMap::new();
-    for effect in &effects {
-        if effect.noalias_class != 0 && effect.allocation_origin == 0 {
-            return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                detail: format!(
-                    "view {} claims no-alias class {} without a compiler-issued allocation origin",
-                    effect.view_name, effect.noalias_class
-                ),
-            });
-        }
-        if effect.allocation_origin != 0
-            && classes_by_origin
-                .insert(effect.allocation_origin, effect.noalias_class)
-                .is_some_and(|previous| previous != effect.noalias_class)
-        {
-            return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                detail: format!(
-                    "allocation origin {} is assigned inconsistent no-alias classes",
-                    effect.allocation_origin
-                ),
-            });
-        }
-    }
-    let distinct_views = effects
-        .iter()
-        .map(|effect| effect.identity)
-        .collect::<HashSet<_>>();
-    if effects.iter().any(|effect| effect.noalias_class == 0)
-        && effects.iter().any(|effect| effect.kind.writes_memory())
-        && distinct_views.len() > 1
-    {
-        return one(RankedRaceFindingV1::AllocationContractUnavailable {
-            detail: "an unknown-alias view may overlap a distinct allocation origin, but ranked IR does not retain their relative base offset"
-                .to_owned(),
-        });
-    }
-    let mut origins_by_class = HashMap::<u64, HashSet<u64>>::new();
-    let mut writable_classes = HashSet::new();
-    for effect in &effects {
-        if effect.noalias_class == 0 {
-            continue;
-        }
-        origins_by_class
-            .entry(effect.noalias_class)
-            .or_default()
-            .insert(effect.allocation_origin);
-        if effect.kind.writes_memory() {
-            writable_classes.insert(effect.noalias_class);
-        }
-    }
-    if let Some((&class, _)) = origins_by_class
-        .iter()
-        .find(|(class, origins)| origins.len() > 1 && writable_classes.contains(class))
-    {
-        return one(RankedRaceFindingV1::AllocationContractUnavailable {
-            detail: format!(
-                "potentially aliasing class {class} contains writable views from distinct allocation origins, but ranked IR does not retain their relative base offset"
-            ),
-        });
-    }
-    let has_unknown_alias = effects.iter().any(|effect| effect.noalias_class == 0);
     for effect in &mut effects {
-        if has_unknown_alias {
-            effect.noalias_class = 0;
-        }
+        effect.noalias_class =
+            provenance.canonical_class(MemorySpaceAttr::Global, effect.noalias_class);
     }
     let classes_with_writes = effects
         .iter()
         .filter_map(|effect| effect.kind.writes_memory().then_some(effect.noalias_class))
         .collect::<HashSet<_>>();
-    let mut signatures_by_class = HashMap::new();
-    for effect in &effects {
-        if !classes_with_writes.contains(&effect.noalias_class) {
-            continue;
-        }
-        let Some(signature) = effect.view_signature.clone() else {
-            continue;
-        };
-        if signatures_by_class
-            .insert(effect.noalias_class, signature.clone())
-            .is_some_and(|previous| previous != signature)
-        {
-            return one(RankedRaceFindingV1::AllocationContractUnavailable {
-                detail: format!(
-                    "potentially aliasing view {} has an incompatible element width or rank/shape",
-                    effect.view_name
-                ),
-            });
-        }
-    }
-
     let layout = match analyses.execution_layout() {
         Ok(layout) => layout,
         Err(failure) => {
@@ -1175,6 +1097,13 @@ fn presburger_proves_no_conflicts(
             ) else {
                 return false;
             };
+            if first_map.find_machine_overflow(PresburgerMachineIntSemanticsV1::unsigned_64())
+                != PresburgerMachineRangeDecisionV1::Proved
+                || second_map.find_machine_overflow(PresburgerMachineIntSemanticsV1::unsigned_64())
+                    != PresburgerMachineRangeDecisionV1::Proved
+            {
+                return false;
+            }
             if first_map.find_cross_collision(&second_map, true)
                 != PresburgerCollisionDecisionV1::Proved
             {

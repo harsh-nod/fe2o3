@@ -1,0 +1,14 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-ABI-004]
+// CHECK: requires 64 bytes but the host contract provides 32
+// CHECK: help[FE2O3-FIX-TARGET]
+// TARGET: grid=65535,65535,65535 workgroup=1024,1024,64 invocations=1024 subgroups=32,64 lds=65536 alignment=16 allocations=8
+// HOST-ALLOCATION: 2 32 16
+builtin.func @target_host_abi_small: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent 256, gpu_execution_global_y: gpu.execution_extent 1, gpu_execution_global_z: gpu.execution_extent 1, gpu_execution_workgroup_x: gpu.execution_extent 64, gpu_execution_workgroup_y: gpu.execution_extent 1, gpu_execution_workgroup_z: gpu.execution_extent 1, gpu_execution_subgroup_size: gpu.subgroup_size 64, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 2, kernel_noalias_class: kernel.noalias_class 2]: <() -> (kernel.ranked_view <32,true,[16]>)>;
+    kernel.return () [] []: <() -> ()>
+}

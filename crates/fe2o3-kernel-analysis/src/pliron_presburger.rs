@@ -21,6 +21,7 @@ pub const MAX_PRESBURGER_WORK_UNITS_V1: usize = 1_048_576;
 pub enum PresburgerFailureV1 {
     InvalidModel { detail: &'static str },
     Unsupported { detail: &'static str },
+    MachineIntegerOverflow { bits: u8, signed: bool },
     ArithmeticOverflow,
     ResourceLimit { limit: usize, actual: usize },
 }
@@ -34,6 +35,11 @@ impl fmt::Display for PresburgerFailureV1 {
             Self::Unsupported { detail } => {
                 write!(formatter, "unsupported Presburger relation: {detail}")
             }
+            Self::MachineIntegerOverflow { bits, signed } => write!(
+                formatter,
+                "index expression may overflow a {bits}-bit {} machine integer",
+                if *signed { "signed" } else { "unsigned" },
+            ),
             Self::ArithmeticOverflow => {
                 formatter.write_str("Presburger arithmetic overflowed signed 128-bit evaluation")
             }
@@ -458,6 +464,52 @@ pub struct PresburgerMapV1 {
     outputs: Vec<PresburgerMapExprV1>,
 }
 
+/// Exact non-wrapping integer semantics required by checked Kernel IR indices.
+///
+/// This is separate from the solver's signed `i128` arithmetic: exceeding a
+/// target integer range is a kernel counterexample, while exceeding `i128` is
+/// an incomplete analysis result.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct PresburgerMachineIntSemanticsV1 {
+    bits: u8,
+    signed: bool,
+}
+
+impl PresburgerMachineIntSemanticsV1 {
+    pub fn new(bits: u8, signed: bool) -> Result<Self, PresburgerFailureV1> {
+        if bits == 0 || bits > 127 {
+            return Err(PresburgerFailureV1::InvalidModel {
+                detail: "machine-integer width must be between 1 and 127 bits",
+            });
+        }
+        Ok(Self { bits, signed })
+    }
+
+    pub const fn unsigned_64() -> Self {
+        Self {
+            bits: 64,
+            signed: false,
+        }
+    }
+
+    pub const fn bits(self) -> u8 {
+        self.bits
+    }
+
+    pub const fn is_signed(self) -> bool {
+        self.signed
+    }
+
+    fn bounds(self) -> (i128, i128) {
+        if self.signed {
+            let magnitude = 1_i128 << (self.bits - 1);
+            (-magnitude, magnitude - 1)
+        } else {
+            (0, (1_i128 << self.bits) - 1)
+        }
+    }
+}
+
 impl PresburgerMapV1 {
     pub fn new(
         domain: PresburgerSetV1,
@@ -488,6 +540,46 @@ impl PresburgerMapV1 {
             .iter()
             .map(|output| output.evaluate(point))
             .collect()
+    }
+
+    /// Proves that every result is representable without target integer wrap,
+    /// or returns the first concrete invocation and overflowing result.
+    pub fn find_machine_overflow(
+        &self,
+        semantics: PresburgerMachineIntSemanticsV1,
+    ) -> PresburgerMachineRangeDecisionV1 {
+        let (minimum, maximum) = semantics.bounds();
+        let mut budget = PresburgerBudgetV1::default();
+        let mut counterexample = None;
+        let result = self.domain.visit_points_with_budget(&mut budget, |point| {
+            let range = self.evaluate(point)?;
+            if let Some((output, value)) = range
+                .iter()
+                .copied()
+                .enumerate()
+                .find(|(_, value)| *value < minimum || *value > maximum)
+            {
+                counterexample = Some((point.to_vec(), range, output, value));
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        });
+        match (result, counterexample) {
+            (Ok(()), Some((domain, range, output, value))) => {
+                PresburgerMachineRangeDecisionV1::Counterexample {
+                    domain,
+                    range,
+                    output,
+                    value,
+                    minimum,
+                    maximum,
+                    semantics,
+                }
+            }
+            (Ok(()), None) => PresburgerMachineRangeDecisionV1::Proved,
+            (Err(failure), _) => PresburgerMachineRangeDecisionV1::Incomplete(failure),
+        }
     }
 
     pub fn find_out_of_bounds(&self, extents: &[u64]) -> PresburgerRangeDecisionV1 {
@@ -736,6 +828,21 @@ impl PresburgerSetV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PresburgerMachineRangeDecisionV1 {
+    Proved,
+    Counterexample {
+        domain: Vec<i128>,
+        range: Vec<i128>,
+        output: usize,
+        value: i128,
+        minimum: i128,
+        maximum: i128,
+        semantics: PresburgerMachineIntSemanticsV1,
+    },
+    Incomplete(PresburgerFailureV1),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PresburgerRangeDecisionV1 {
     Proved,
     Counterexample { domain: Vec<i128>, range: Vec<i128> },
@@ -913,19 +1020,11 @@ impl PlironPresburgerAnalysisV1 {
             )
         };
         match fact {
-            SparseIndexFactV1::Affine(expression) => {
-                if expression.maximum(launch_extents).is_none() {
-                    return Err(PresburgerFailureV1::ArithmeticOverflow);
-                }
-                Ok(PresburgerMapExprV1::Affine(affine(
-                    expression.constant_term(),
-                    expression.coefficients(),
-                )?))
-            }
+            SparseIndexFactV1::Affine(expression) => Ok(PresburgerMapExprV1::Affine(affine(
+                expression.constant_term(),
+                expression.coefficients(),
+            )?)),
             SparseIndexFactV1::Remainder { dividend, modulus } if *modulus != 0 => {
-                if dividend.maximum(launch_extents).is_none() {
-                    return Err(PresburgerFailureV1::ArithmeticOverflow);
-                }
                 Ok(PresburgerMapExprV1::Remainder {
                     dividend: affine(dividend.constant_term(), dividend.coefficients())?,
                     modulus: i128::from(*modulus),
@@ -934,6 +1033,12 @@ impl PlironPresburgerAnalysisV1 {
             SparseIndexFactV1::Remainder { .. } => Err(PresburgerFailureV1::InvalidModel {
                 detail: "sparse remainder has a zero modulus",
             }),
+            SparseIndexFactV1::MachineOverflow(_) => {
+                Err(PresburgerFailureV1::MachineIntegerOverflow {
+                    bits: 64,
+                    signed: false,
+                })
+            }
             SparseIndexFactV1::Unknown
             | SparseIndexFactV1::CheckedTiled2D(_)
             | SparseIndexFactV1::CheckedRowStriped2D(_) => Err(PresburgerFailureV1::Unsupported {

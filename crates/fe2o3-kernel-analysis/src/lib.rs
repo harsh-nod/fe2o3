@@ -3,6 +3,8 @@
 //! This crate reports analysis facts and rejected obligations. It does not
 //! grant `Checked`, `Verified`, safe-launch, or any other assurance authority.
 
+#![deny(unsafe_code)]
+
 #[cfg(feature = "authenticated-machine-effect")]
 mod authenticated_machine_effect;
 mod control_flow;
@@ -24,19 +26,37 @@ mod pliron_hierarchical_ownership;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_invocation_trace;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_ir_identity;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_launch_contract;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_memory_order;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_pass_contract;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_pipeline;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_presburger;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_progress;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_provenance_alias;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_race;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_ranked_bounds;
 #[cfg(feature = "pliron-analysis")]
+mod pliron_report_validation;
+#[cfg(feature = "pliron-analysis")]
 mod pliron_semantic_refinement;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_simt_protocol;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_sparse_index;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_tensor_layout;
+#[cfg(feature = "pliron-analysis")]
+mod pliron_transform_refinement;
 #[cfg(feature = "pliron-analysis")]
 mod pliron_workgroup_memory;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -68,19 +88,37 @@ pub use pliron_effect_refinement::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_hierarchical_ownership::*;
 #[cfg(feature = "pliron-analysis")]
+pub use pliron_ir_identity::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_launch_contract::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_memory_order::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_pass_contract::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_pipeline::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_presburger::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_progress::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_provenance_alias::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_race::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_ranked_bounds::*;
 #[cfg(feature = "pliron-analysis")]
+pub use pliron_report_validation::*;
+#[cfg(feature = "pliron-analysis")]
 pub use pliron_semantic_refinement::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_simt_protocol::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_sparse_index::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_tensor_layout::*;
+#[cfg(feature = "pliron-analysis")]
+pub use pliron_transform_refinement::*;
 #[cfg(feature = "pliron-analysis")]
 pub use pliron_workgroup_memory::*;
 #[cfg(feature = "authenticated-machine-effect")]

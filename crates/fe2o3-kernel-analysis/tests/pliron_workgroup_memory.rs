@@ -189,6 +189,98 @@ fn atomic_reads_and_read_modify_write_require_initialization_but_atomic_store_do
 }
 
 #[test]
+fn matched_atomic_flag_keeps_following_data_read_incomplete() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "matched_atomic_flag", 8, 8);
+    let entry = function.get_entry_block(context);
+    let flag = view_with_contract(context, vec![1], 1, 1);
+    let data = view_with_contract(context, vec![1], 2, 2);
+    let zero = IndexConstantOp::new(context, 0);
+    let release = access(
+        context,
+        AccessKindAttr::AtomicWrite,
+        &flag,
+        zero.result(context),
+    );
+    let acquire = access(
+        context,
+        AccessKindAttr::AtomicRead,
+        &flag,
+        zero.result(context),
+    );
+    let data_read = access(context, AccessKindAttr::Read, &data, zero.result(context));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &flag);
+    append(context, entry, &data);
+    append(context, entry, &zero);
+    append(context, entry, &release);
+    append(context, entry, &acquire);
+    append(context, entry, &data_read);
+    append(context, entry, &ret);
+
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }
+            if detail.contains("cannot derive read-from")
+    )));
+    assert!(!report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironWorkgroupMemoryFindingV1::ReadBeforeInitialization { .. }
+    )));
+}
+
+#[test]
+fn unrelated_atomics_do_not_weaken_uninitialized_data_read() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "unrelated_atomic_flags", 8, 8);
+    let entry = function.get_entry_block(context);
+    let release_flag = view_with_contract(context, vec![1], 1, 1);
+    let acquire_flag = view_with_contract(context, vec![1], 2, 2);
+    let data = view_with_contract(context, vec![1], 3, 3);
+    let zero = IndexConstantOp::new(context, 0);
+    let release = access(
+        context,
+        AccessKindAttr::AtomicWrite,
+        &release_flag,
+        zero.result(context),
+    );
+    let acquire = access(
+        context,
+        AccessKindAttr::AtomicRead,
+        &acquire_flag,
+        zero.result(context),
+    );
+    let data_read = access(context, AccessKindAttr::Read, &data, zero.result(context));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &release_flag);
+    append(context, entry, &acquire_flag);
+    append(context, entry, &data);
+    append(context, entry, &zero);
+    append(context, entry, &release);
+    append(context, entry, &acquire);
+    append(context, entry, &data_read);
+    append(context, entry, &ret);
+
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(!report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { .. }
+    )));
+    assert!(
+        report
+            .findings()
+            .iter()
+            .filter(|finding| matches!(
+                finding,
+                PlironWorkgroupMemoryFindingV1::ReadBeforeInitialization { .. }
+            ))
+            .count()
+            >= 2
+    );
+}
+
+#[test]
 fn same_invocation_write_then_read_needs_no_barrier() {
     let context = &mut setup();
     let function = function(context, "private_order_in_shared_memory");
@@ -413,6 +505,48 @@ fn unknown_lds_alias_views_without_relative_offsets_fail_closed() {
         PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }
             if detail.contains("relative base offset")
     )));
+}
+
+#[test]
+fn alias_class_with_incompatible_ranked_signatures_fails_closed() {
+    let context = &mut setup();
+    let function = function_with_layout(context, "incompatible_alias_signatures", 2, 2);
+    let entry = function.get_entry_block(context);
+    let narrow = view_with_contract(context, vec![4], 901, 71);
+    let wide = view_with_contract(context, vec![8], 901, 71);
+    let zero = IndexConstantOp::new(context, 0);
+    let first = access(
+        context,
+        AccessKindAttr::Write,
+        &narrow,
+        zero.result(context),
+    );
+    let second = access(context, AccessKindAttr::Write, &wide, zero.result(context));
+    let ret = ReturnOp::new(context);
+    append(context, entry, &narrow);
+    append(context, entry, &wide);
+    append(context, entry, &zero);
+    append(context, entry, &first);
+    append(context, entry, &second);
+    append(context, entry, &ret);
+
+    let report = run_pliron_workgroup_memory_check_v1(context, &function);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("incompatible element widths or rank/shapes")
+    ));
+}
+
+#[test]
+fn distinct_writable_origins_in_one_alias_class_never_share_versions() {
+    let report = cross_view_lds_alias_report(911, 81, 912, 81);
+    assert!(matches!(
+        report.findings(),
+        [PlironWorkgroupMemoryFindingV1::AnalysisIncomplete { detail }]
+            if detail.contains("distinct allocation origins")
+                && detail.contains("relative base offsets")
+    ));
 }
 
 #[test]

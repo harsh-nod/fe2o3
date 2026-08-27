@@ -10,7 +10,7 @@ use crate::{
     InvocationPairing, InvocationRange1d, MemoryAccess, MemoryRegion, Module, NoConflictReason,
     Operation, OperationKind, RegionAnalysisError, RegionEffect, RegionEffectKind,
     RegionValidationError, ScalarType, SynchronizationEpoch, Type, ValueId, VerificationErrors,
-    analyze_effect_conflict, verify_module,
+    analyze_effect_conflict, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
 /// Stable location of an operation within one function body.
@@ -270,7 +270,10 @@ pub fn extract_function_region_effects(
     function: &FunctionId,
     bindings: &FunctionEffectBindings,
 ) -> Result<FunctionRegionEffectReport, FunctionRegionEffectExtractionError> {
-    verify_module(module).map_err(FunctionRegionEffectExtractionError::InvalidModule)?;
+    let verified =
+        verify_module_ref(module).map_err(FunctionRegionEffectExtractionError::InvalidModule)?;
+    let summaries = analyze_interprocedural_effects_from_verified_v1(verified)
+        .expect("verified module remains valid while deriving effect summaries");
     let function = module.function(function).ok_or_else(|| {
         FunctionRegionEffectExtractionError::MissingFunction {
             function: function.clone(),
@@ -299,6 +302,9 @@ pub fn extract_function_region_effects(
             let location = FunctionOperationLocation::new(block.id, operation_index);
             if let OperationKind::Call { callee, .. } = &operation.kind
                 && !operation.has_complete_effect_summary()
+                && !summaries
+                    .function(callee)
+                    .is_some_and(|summary| summary.is_complete_and_pure())
             {
                 extraction_issues.push(EffectExtractionIssue::CallEffectsUnavailable {
                     location,
