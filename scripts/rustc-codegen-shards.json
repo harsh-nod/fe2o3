@@ -29,7 +29,8 @@
       "id": "08-abi-collectives",
       "tests": [
         "g2_layout",
-        "general_two_kernel_import"
+        "general_two_kernel_import",
+        "production_workgroup_sync_driver_v1"
       ]
     }
   ],
