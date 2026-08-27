@@ -294,17 +294,13 @@ target lowering, and host execution into explicit ownership boundaries:
   bounded `mir.*` Pliron shell only with its non-default `pliron` feature.
   These crates construct and verify in-memory representations; they do not
   form a production MIR-to-HSACO pipeline.
-- Bridge and transformation shells: `fe2o3-kir-pliron-bridge` retains exact
-  canonical KIR V1-V5 bytes in an opaque context-bound envelope and rejects any
-  inconsistent, substituted, or foreign-context Pliron projection.
-  `fe2o3-lower-mir-kernel` implements a narrow, terminally fail-closed
-  `mir.*`-to-`kernel.*` service, and `fe2o3-lower-kernel-gpu`
-  implements a bounded target-neutral `kernel.*`-to-`gpu.*` detached service.
-  Their results are context-bound and stale handles fail with typed errors.
-  The rustc integration now retains an owner-controlled typed MIR graph for a
-  return-only subset; every other observed MIR operation rejects terminally.
-  These services do not implement Pliron's in-tree `Pass` contract and are not
-  a general Rust frontend, AMD lowering, artifact producer, or production route.
+- Retained MIR projection support: `fe2o3-lower-mir-kernel` remains a narrow,
+  terminally fail-closed, context-bound `mir.*`-to-`kernel.*` conformance
+  service. The rustc integration owns the production semantic MIR to ranked
+  Pliron to canonical KIR transaction; stale handles fail with typed errors.
+  The former detached KIR-envelope, kernel-to-GPU, and parallel
+  AMDGPU-to-LLVM shells were removed because they were not production routes.
+  No workload selector or alternate lowering fallback remains.
 - Target model and facades: `fe2o3-amd-target` owns canonical AMD target
   contracts. The existing strict AMDGPU lowering implementation moved to
   `fe2o3-amdgcn-model`; `dialect-amdgcn` now preserves the historical crate API

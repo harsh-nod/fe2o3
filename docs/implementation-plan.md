@@ -182,11 +182,11 @@ authority. The backend fixture is not Rust user source.
 - `dialect-kernel`, `dialect-schedule`, `dialect-tile`, `dialect-gpu`,
   `dialect-proof`, `dialect-dispatch`, `dialect-autotune`: target-neutral,
   representation-only Pliron shells.
-- `fe2o3-kir-pliron-bridge`: opaque context-bound exact canonical KIR V1-V5
-  byte envelope with a redundant checked Pliron projection.
-- `fe2o3-lower-mir-kernel`, `fe2o3-lower-kernel-gpu`: bounded target-neutral
-  detached lowering services; neither is an in-tree Pliron pass or production
-  pipeline selector.
+- `fe2o3-lower-mir-kernel`: bounded target-neutral MIR-to-kernel conformance
+  service; it is neither an in-tree Pliron pass nor a production selector.
+- The detached KIR-envelope and kernel-to-GPU services are retired. Canonical
+  KIR custody and generic lowering remain inside the sole production
+  transaction.
 - `fe2o3-amdgcn-model`: existing AMDGPU intrinsic and strict lowering model.
 - `dialect-amdgcn`: historical compatibility re-export; not yet an AMD Pliron
   dialect.

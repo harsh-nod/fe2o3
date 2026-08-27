@@ -91,5 +91,5 @@ fn represented_cases_are_only_handoff_representation_claims() {
         .filter(|case| matches!(case.expectation(), ConformanceExpectationV1::CoverageGap(_)))
         .count();
 
-    assert_eq!((represented, rejected, gaps), (11, 26, 4));
+    assert_eq!((represented, rejected, gaps), (10, 22, 4));
 }

@@ -417,7 +417,7 @@ Work remains parallel only at frozen ownership boundaries:
 | Rust import | `fe2o3-mir-model`, `dialect-mir`, rustc importer module | both rustc entry paths return the same generic MIR owner |
 | MIR to Kernel IR | `fe2o3-lower-mir-kernel`, correspondence tests | general `KernelModule` for the first scalar/control-flow slice |
 | Kernel/GPU passes | dialect and lowering services | deterministic checked pass sequence over owner handles |
-| AMDGPU/LLVM | `fe2o3-amdgcn-model`, `fe2o3-lower-amdgcn-llvm` | complete typed target contract and canonical handoff |
+| AMDGPU/LLVM | `fe2o3-amdgcn-model`, production target lowering | complete typed target contract and canonical handoff |
 | Worker/finalizer | Worker handoff and `fe2o3-hsaco-finalize` | generic retained inspected-artifact owner |
 | Host/runtime | generated host and protected runtime adapters | ABI/descriptor agreement and one-shot checked launch |
 | Migration/oracles | integration tests, scripts, evidence docs | each old selector removed after differential hardware gates |

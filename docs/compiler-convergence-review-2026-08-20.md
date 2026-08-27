@@ -72,12 +72,10 @@ but their semantic import code must not be called from
 
 ### High: detached Pliron lowering shells duplicate the wrong boundary
 
-`fe2o3-lower-mir-kernel` and `fe2o3-lower-kernel-gpu` repeat registration,
-context identity, error, and detached-service machinery around raw Pliron
-contexts. They are migration and conformance bridges. A shared raw-context pass
-framework would make #140 harder to close. Reuse belongs in the closed
-owner-authenticated production session above the dialect crates; the detached
-shells are deleted when that session owns their last caller.
+`fe2o3-lower-mir-kernel` retains bounded registration, context identity, and
+error coverage for MIR-to-kernel conformance. The parallel detached GPU shell
+has been removed. Reuse belongs in the closed owner-authenticated production
+session above the dialect crates, not in a second raw-context lowering route.
 
 ### High: exact-profile ownership is still embedded in backend dependencies
 

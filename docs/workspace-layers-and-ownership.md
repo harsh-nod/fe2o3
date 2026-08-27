@@ -187,12 +187,11 @@ where finalized-machine evidence is required.
 move-only constructed-to-bounds-verified typestate transition; callers never
 receive its retained Pliron function pointer. This does not create a second
 lowering route or relax the owner-handle requirement.
-`fe2o3-kir-pliron-bridge` implements an opaque context-bound exact-byte
-canonical KIR envelope, while `fe2o3-lower-mir-kernel` and
-`fe2o3-lower-kernel-gpu` implement narrow bounded detached lowering services
-with context-bound results. The ranked construction/bounds transition is a
-production-owned pre-lowering stage; semantic MIR projection and generic
-ranked-memory GPU lowering remain unimplemented.
+`fe2o3-lower-mir-kernel` retains a narrow bounded MIR-to-kernel conformance
+service with context-bound results. The detached KIR-envelope and
+kernel-to-GPU services were removed; ranked construction, bounds verification,
+semantic MIR projection, and generic ranked-memory lowering belong only to the
+production-owned transaction.
 
 The mandatory [general Kernel IR check pipeline](general-kernel-check-pipeline-v1.md)
 runs before Pliron projection or transformation. It is a closed target-neutral
@@ -307,8 +306,8 @@ it does not mean production compilation exists.
 | Source/model extraction | `fe2o3-mir-model`, frontend adapters | Canonical model extracted; general frontend integration remains open |
 | Pliron context | `fe2o3-pliron` | Pinned context, private identity anchor, registration, and bounded pass planning landed; generic execution awaits owner-aware handles |
 | Dialects | One `dialect-*` crate per operation family | Seven target-neutral shells plus feature-gated `mir.*` shell landed |
-| Transformations | One `fe2o3-lower-*` family | Narrow context-bound MIR-to-kernel and kernel-to-GPU detached services landed; full production ladder remains open |
-| KIR bridge | `fe2o3-kir-pliron-bridge` | Opaque context-bound exact-byte V1-V5 envelope landed; complete semantic bridge gate remains open |
+| Transformations | Production transaction plus retained MIR conformance service | Context-bound MIR-to-kernel conformance remains; detached GPU lowering is retired |
+| KIR custody | Production transaction | Canonical KIR is retained inside the sole compiler-owned transaction |
 | Proof overlays | `fe2o3-proof-contracts`, `dialect-proof` | Solver-neutral records and inert Pliron overlay landed; proof integration remains open |
 | AMD lowering | AMD model/dialect/lowering crates | Existing implementation extracted to `fe2o3-amdgcn-model`; future Pliron AMD lowering remains open |
 | Production composition | `cargo-fe2o3`, `rustc-codegen-fe2o3` | One Worker V3 route from attributed Rust source; no workload oracle is compiled |

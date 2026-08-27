@@ -690,17 +690,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-amdgcn-pliron-llvm"
-version = "0.1.0"
-dependencies = [
- "fe2o3-amdgcn-model",
- "fe2o3-llvm-handoff",
- "fe2o3-pliron",
- "pliron",
- "pliron-llvm",
-]
-
-[[package]]
 name = "fe2o3-amdhsa-loader"
 version = "0.1.0"
 dependencies = [
@@ -1053,17 +1042,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-kir-pliron-bridge"
-version = "0.1.0"
-dependencies = [
- "dialect-gpu",
- "dialect-kernel",
- "fe2o3-kernel-ir",
- "fe2o3-pliron",
- "pliron",
-]
-
-[[package]]
 name = "fe2o3-kir-sim"
 version = "0.1.0"
 dependencies = [
@@ -1103,11 +1081,8 @@ dependencies = [
 name = "fe2o3-llvm-route-conformance"
 version = "0.1.0"
 dependencies = [
- "fe2o3-amdgcn-model",
- "fe2o3-amdgcn-pliron-llvm",
  "fe2o3-llvm-handoff",
  "fe2o3-llvm-worker-handoff",
- "fe2o3-lower-amdgcn-llvm",
 ]
 
 [[package]]
@@ -1126,30 +1101,6 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-llvm-handoff",
  "sha2 0.11.0",
-]
-
-[[package]]
-name = "fe2o3-lower-amdgcn-llvm"
-version = "0.1.0"
-dependencies = [
- "dialect-amdgcn",
- "fe2o3-llvm-handoff",
- "fe2o3-llvm-text",
- "fe2o3-llvm-worker-handoff",
- "fe2o3-pliron",
- "pliron",
- "pliron-llvm",
- "sha2 0.11.0",
-]
-
-[[package]]
-name = "fe2o3-lower-kernel-gpu"
-version = "0.1.0"
-dependencies = [
- "dialect-gpu",
- "dialect-kernel",
- "fe2o3-pliron",
- "pliron",
 ]
 
 [[package]]
@@ -1249,9 +1200,6 @@ dependencies = [
  "dialect-proof",
  "dialect-schedule",
  "dialect-tile",
- "fe2o3-kernel-ir",
- "fe2o3-kir-pliron-bridge",
- "fe2o3-lower-kernel-gpu",
  "fe2o3-lower-mir-kernel",
  "fe2o3-pliron",
  "pliron",

@@ -30,10 +30,10 @@ compiler enters one unselected production transaction inside
   representation shells exist for `kernel.*`, `schedule.*`, `tile.*`,
   `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`. They perform no connected
   lowering, target selection, artifact production, or launch.
-- `fe2o3-kir-pliron-bridge` preserves exact canonical KIR V1-V5 bytes in an
-  opaque context-bound Pliron envelope. `fe2o3-lower-mir-kernel` and
-  `fe2o3-lower-kernel-gpu` provide narrow bounded detached lowering services. They
-  are not connected to rustc extraction, AMD lowering, or production selection.
+- `fe2o3-lower-mir-kernel` retains a narrow bounded MIR-to-kernel conformance
+  service. Detached KIR-envelope and kernel-to-GPU lowering services were
+  removed; the production compiler owns canonical KIR custody and target
+  lowering without an alternate selector or fallback.
 - `fe2o3-amdgcn-model` now owns the existing strict AMDGPU target vocabulary
   and lowering implementation. `dialect-amdgcn` is its historical compatibility
   facade, not an implemented AMD Pliron dialect.

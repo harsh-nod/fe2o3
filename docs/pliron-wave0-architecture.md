@@ -101,17 +101,12 @@ The following infrastructure is implemented:
   module/function/block representation only under its non-default `pliron`
   feature. Without that feature it remains the compatibility facade that
   re-exports `fe2o3-mir-model`.
-- `fe2o3-kir-pliron-bridge` keeps canonical KIR V1-V5 bytes as the only durable
-  record, wraps each redundant Pliron projection in an opaque context-bound
-  envelope, and requires exact expected-record agreement before recovery. This
-  is bounded D2 envelope coverage, not completion of the full D2 semantic
-  bridge gate.
 - `fe2o3-lower-mir-kernel` accepts a deliberately narrow verified `mir.*`
-  subset and emits bounded `kernel.*` roots. `fe2o3-lower-kernel-gpu` converts
-  bounded kernel roots into target-neutral `gpu.*` operations. Both are
-  detached services rather than in-tree Pliron passes; their results are bound
-  to the owning context and erased handles return typed errors. Both expose
-  terminal unsupported errors and no fallback, target, or artifact authority.
+  subset and emits bounded `kernel.*` roots as a retained conformance service.
+  Its results are bound to the owning context and erased handles return typed
+  errors. Detached KIR-envelope and kernel-to-GPU services were retired; the
+  production transaction owns canonical KIR and target lowering with no
+  alternate fallback.
 - The existing strict AMDGPU vocabulary and lowering moved into
   `fe2o3-amdgcn-model`. `dialect-amdgcn` is now a compatibility re-export, not
   an implemented `amdgcn.*` Pliron dialect. Canonical target contracts remain

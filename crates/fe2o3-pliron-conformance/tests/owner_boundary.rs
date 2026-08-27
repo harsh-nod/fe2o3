@@ -7,20 +7,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
-use dialect_gpu::AddressSpaceAttr;
-use dialect_kernel::AlgorithmOp;
 use dialect_mir::{
     MirTypeId,
     pliron::{MirDialectLimits, MirModuleOp},
 };
-use fe2o3_kernel_ir::{
-    BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent, Module, Signature,
-    Terminator,
-};
-use fe2o3_kir_pliron_bridge::{
-    BridgeEnvelope, BridgeError, BridgeLimits, CanonicalKirRecord, KirVersion, recover_exact,
-};
-use fe2o3_lower_kernel_gpu as lower_kernel_gpu;
 use fe2o3_lower_mir_kernel as lower_mir_kernel;
 use fe2o3_pliron::{
     CONTEXT_IDENTITY_MARKER_KEY, ContextBuildError, Diagnostic, DiagnosticCode,
@@ -46,37 +36,6 @@ fn mir_config() -> lower_mir_kernel::LoweringConfig {
     .expect("bounded MIR lowering configuration")
 }
 
-fn gpu_config() -> lower_kernel_gpu::LoweringConfig {
-    lower_kernel_gpu::LoweringConfig::new(
-        lower_kernel_gpu::WorkgroupShape::new(&[64]).expect("bounded workgroup"),
-        1,
-        &[AddressSpaceAttr::Global],
-        lower_kernel_gpu::SynchronizationMode::None,
-        4,
-    )
-    .expect("bounded GPU lowering configuration")
-}
-
-fn kir_module() -> Module {
-    let mut block = BasicBlock::new(BlockId(0));
-    block.terminator = Some(Terminator::Return { values: vec![] });
-    let mut module = Module::new("owner-boundary-kir");
-    module.functions.push(Function::kernel_entry(
-        "entry",
-        Signature::new(vec![], vec![]),
-        vec![],
-        vec![block],
-    ));
-    module.kernels.push(Kernel::new(
-        "kernel",
-        "entry",
-        LaunchDomain::D1 {
-            x: LaunchExtent::Dynamic,
-        },
-    ));
-    module
-}
-
 fn lower_mir(context: &mut Context, identity: &str) -> lower_mir_kernel::LoweringResult {
     let source = mir_source(context, identity);
     let mut service = lower_mir_kernel::MirKernelLoweringPass::new(mir_config());
@@ -86,31 +45,11 @@ fn lower_mir(context: &mut Context, identity: &str) -> lower_mir_kernel::Lowerin
     service.take_result().expect("MIR result exists")
 }
 
-fn lower_gpu(context: &mut Context) -> lower_kernel_gpu::LoweringResult {
-    let source = AlgorithmOp::new(context, 1).expect("valid kernel source");
-    let mut service = lower_kernel_gpu::KernelGpuLoweringPass::new(gpu_config());
-    service
-        .run_checked(source.get_operation(), context)
-        .expect("GPU lowering succeeds");
-    service.take_result().expect("GPU result exists")
-}
-
-struct BoundArtifacts {
-    mir: lower_mir_kernel::LoweringResult,
-    gpu: lower_kernel_gpu::LoweringResult,
-    bridge: BridgeEnvelope,
-}
-
-fn populated_context(record: &CanonicalKirRecord) -> (Context, BoundArtifacts) {
+fn populated_context() -> (Context, lower_mir_kernel::LoweringResult) {
     let mut context = Context::new();
     lower_mir_kernel::register_pass(&mut context).expect("MIR registration succeeds");
-    lower_kernel_gpu::register_pass(&mut context).expect("GPU registration succeeds");
-    let mir = lower_mir(&mut context, "owner-boundary-mir");
-    let gpu = lower_gpu(&mut context);
-    let bridge = record
-        .project_to_pliron(&mut context, BridgeLimits::default())
-        .expect("bridge projection succeeds");
-    (context, BoundArtifacts { mir, gpu, bridge })
+    let result = lower_mir(&mut context, "owner-boundary-mir");
+    (context, result)
 }
 
 fn marker_key(value: &str) -> Identifier {
@@ -137,64 +76,31 @@ fn transplant_marker(owner: &mut Context, foreign: &mut Context, key: &str) {
 }
 
 #[test]
-fn equal_slot_foreign_contexts_reject_every_owner_bound_artifact() {
-    let limits = BridgeLimits::default();
-    let record = CanonicalKirRecord::from_module(&kir_module(), KirVersion::V5, limits)
-        .expect("canonical KIR record");
-    let (owner_context, owner) = populated_context(&record);
-    let (foreign_context, foreign) = populated_context(&record);
+fn equal_slot_foreign_contexts_reject_owner_bound_mir_results() {
+    let (owner_context, owner) = populated_context();
+    let (foreign_context, foreign) = populated_context();
 
-    assert_eq!(owner.mir.source_root(), foreign.mir.source_root());
-    assert_eq!(owner.mir.operations(), foreign.mir.operations());
-    assert_eq!(owner.gpu.operations(), foreign.gpu.operations());
+    assert_eq!(owner.source_root(), foreign.source_root());
+    assert_eq!(owner.operations(), foreign.operations());
+    assert_eq!(owner.validate(&owner_context), Ok(()));
+
+    let rejection = catch_unwind(AssertUnwindSafe(|| owner.validate(&foreign_context)))
+        .expect("foreign validation must not unwind");
     assert_eq!(
-        owner.bridge.shell().get_operation(),
-        foreign.bridge.shell().get_operation()
-    );
-
-    assert_eq!(owner.mir.validate(&owner_context), Ok(()));
-    assert_eq!(owner.gpu.validate(&owner_context), Ok(()));
-    recover_exact(&owner_context, &owner.bridge, &record, limits)
-        .expect("owner recovers its bridge envelope");
-
-    let rejection = catch_unwind(AssertUnwindSafe(|| {
-        (
-            owner.mir.validate(&foreign_context),
-            owner.gpu.validate(&foreign_context),
-            recover_exact(&foreign_context, &owner.bridge, &record, limits),
-        )
-    }))
-    .expect("foreign validation must not unwind");
-    assert_eq!(
-        rejection.0,
+        rejection,
         Err(lower_mir_kernel::PostconditionError::ContextMismatch)
     );
-    assert_eq!(
-        rejection.1,
-        Err(lower_kernel_gpu::PostconditionError::ContextMismatch)
-    );
-    assert!(matches!(rejection.2, Err(BridgeError::ContextMismatch)));
 }
 
 #[test]
 fn transplanted_identity_and_registration_markers_cannot_transfer_ownership() {
-    let limits = BridgeLimits::default();
-    let record = CanonicalKirRecord::from_module(&kir_module(), KirVersion::V5, limits)
-        .expect("canonical KIR record");
-    let (mut owner_context, owner) = populated_context(&record);
-    let (mut foreign_context, foreign) = populated_context(&record);
-
-    assert_eq!(owner.mir.operations(), foreign.mir.operations());
-    assert_eq!(owner.gpu.operations(), foreign.gpu.operations());
-    assert_eq!(
-        owner.bridge.shell().get_operation(),
-        foreign.bridge.shell().get_operation()
-    );
+    let (mut owner_context, owner) = populated_context();
+    let (mut foreign_context, foreign) = populated_context();
+    assert_eq!(owner.operations(), foreign.operations());
 
     for key in [
         CONTEXT_IDENTITY_MARKER_KEY,
         lower_mir_kernel::PASS_REGISTRATION_MARKER_KEY,
-        lower_kernel_gpu::PASS_REGISTRATION_MARKER_KEY,
     ] {
         transplant_marker(&mut owner_context, &mut foreign_context, key);
     }
@@ -203,62 +109,28 @@ fn transplanted_identity_and_registration_markers_cannot_transfer_ownership() {
         lower_mir_kernel::register_pass(&mut foreign_context),
         Err(lower_mir_kernel::PassRegistrationError::CorruptMarker)
     );
+    let rejection = catch_unwind(AssertUnwindSafe(|| owner.validate(&foreign_context)))
+        .expect("transplanted-marker validation must not unwind");
     assert_eq!(
-        lower_kernel_gpu::register_pass(&mut foreign_context),
-        Err(lower_kernel_gpu::PassRegistrationError::CorruptMarker)
-    );
-
-    let rejection = catch_unwind(AssertUnwindSafe(|| {
-        (
-            owner.mir.validate(&foreign_context),
-            owner.gpu.validate(&foreign_context),
-            recover_exact(&foreign_context, &owner.bridge, &record, limits),
-        )
-    }))
-    .expect("transplanted-marker validation must not unwind");
-    assert_eq!(
-        rejection.0,
+        rejection,
         Err(lower_mir_kernel::PostconditionError::ContextMismatch)
     );
-    assert_eq!(
-        rejection.1,
-        Err(lower_kernel_gpu::PostconditionError::ContextMismatch)
-    );
-    assert!(matches!(
-        rejection.2,
-        Err(BridgeError::ContextIdentity(
-            fe2o3_pliron::ContextIdentityError::CorruptMarker
-        ))
-    ));
 }
 
 #[test]
 fn erased_owner_handles_return_typed_errors_without_unwinding() {
-    let limits = BridgeLimits::default();
-    let record = CanonicalKirRecord::from_module(&kir_module(), KirVersion::V5, limits)
-        .expect("canonical KIR record");
     let mut context = Context::new();
     lower_mir_kernel::register_pass(&mut context).expect("MIR registration succeeds");
-    lower_kernel_gpu::register_pass(&mut context).expect("GPU registration succeeds");
-
     let erased_source = lower_mir(&mut context, "erased-source");
-    let erased_mir_output = lower_mir(&mut context, "erased-mir-output");
-    let erased_gpu_output = lower_gpu(&mut context);
-    let erased_bridge = record
-        .project_to_pliron(&mut context, limits)
-        .expect("bridge projection succeeds");
+    let erased_output = lower_mir(&mut context, "erased-output");
 
     Operation::erase(erased_source.source_root(), &mut context);
-    Operation::erase(erased_mir_output.operations()[0], &mut context);
-    Operation::erase(erased_gpu_output.operations()[0], &mut context);
-    Operation::erase(erased_bridge.shell().get_operation(), &mut context);
+    Operation::erase(erased_output.operations()[0], &mut context);
 
     let rejection = catch_unwind(AssertUnwindSafe(|| {
         (
             erased_source.validate(&context),
-            erased_mir_output.validate(&context),
-            erased_gpu_output.validate(&context),
-            recover_exact(&context, &erased_bridge, &record, limits),
+            erased_output.validate(&context),
         )
     }))
     .expect("erased-handle validation must not unwind");
@@ -270,11 +142,6 @@ fn erased_owner_handles_return_typed_errors_without_unwinding() {
         rejection.1,
         Err(lower_mir_kernel::PostconditionError::InvalidKernelOperation { index: 0 })
     );
-    assert_eq!(
-        rejection.2,
-        Err(lower_kernel_gpu::PostconditionError::InvalidGpuOperation { index: 0 })
-    );
-    assert!(matches!(rejection.3, Err(BridgeError::MalformedShell)));
 }
 
 fn panicking_registration(

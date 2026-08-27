@@ -57,8 +57,6 @@
         "dialect-schedule",
         "dialect-tile",
         "fe2o3-kernel-analysis",
-        "fe2o3-kir-pliron-bridge",
-        "fe2o3-lower-kernel-gpu",
         "fe2o3-lower-mir-kernel",
         "fe2o3-pliron",
         "fe2o3-pliron-owner-core"
@@ -72,7 +70,6 @@
         "fe2o3-hsaco-finalize",
         "fe2o3-llvm-text",
         "fe2o3-llvm-worker-handoff",
-        "fe2o3-lower-amdgcn-llvm",
         "fe2o3-lower-gpu-amdgcn"
       ]
     },
@@ -103,7 +100,6 @@
       "name": "integration",
       "packages": [
         "cargo-fe2o3",
-        "fe2o3-amdgcn-pliron-llvm",
         "fe2o3-differential",
         "fe2o3-general-gemm-compiler",
         "fe2o3-kir-sim-cli",

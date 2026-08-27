@@ -68,11 +68,10 @@ but both issues remain open.
   `tile.*`, `gpu.*`, `proof.*`, `dispatch.*`, and `autotune.*`.
   `dialect-mir` adds a bounded `mir.*` shell only with feature `pliron` while
   preserving its default compatibility facade over `fe2o3-mir-model`.
-- `fe2o3-kir-pliron-bridge` round-trips exact canonical KIR V1-V5 bytes through
-  an opaque context-bound Pliron envelope. `fe2o3-lower-mir-kernel` and
-  `fe2o3-lower-kernel-gpu` add narrow, bounded, terminally fail-closed lowering
-  services with context-bound results. rustc now retains an owner-controlled
-  typed MIR graph for the return-only subset; broader MIR remains unsupported.
+- `fe2o3-lower-mir-kernel` retains narrow, bounded, terminally fail-closed
+  MIR-to-kernel conformance with context-bound results. Detached KIR-envelope
+  and kernel-to-GPU services were removed; rustc owns the production semantic
+  MIR through canonical KIR transaction.
 - Existing AMDGPU lowering is owned by `fe2o3-amdgcn-model` and re-exported by
   the historical `dialect-amdgcn` facade. A production `gpu.*` to `amdgcn.*`
   Pliron route has not landed; the implemented scalar dialect slice is not

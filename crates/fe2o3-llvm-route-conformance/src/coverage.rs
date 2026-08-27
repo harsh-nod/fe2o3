@@ -33,8 +33,6 @@ pub enum ConformanceSemanticV1 {
     Obligation,
     /// Device-library kind, digest, and size identity.
     DeviceLibraryIdentity,
-    /// Typed Pliron LLVM lowering lane.
-    PlironLoweringLane,
     /// Isolated-worker handoff admission lane.
     WorkerAdmissionLane,
 }
@@ -86,14 +84,6 @@ pub enum ExpectedRejectionV1 {
     WorkerBuildFieldTooLong,
     /// A handoff device-library kind outside the worker's closed set.
     WorkerUnsupportedDeviceLibrary,
-    /// A function call outside the scalar Pliron lowering vocabulary.
-    PlironLoweringUnsupportedCall,
-    /// A scalar type outside the scalar Pliron lowering vocabulary.
-    PlironLoweringUnsupportedType,
-    /// An address space outside the scalar Pliron lowering vocabulary.
-    PlironLoweringUnsupportedAddressSpace,
-    /// A target policy outside the scalar Pliron lowering vocabulary.
-    PlironLoweringUnsupportedTargetPolicy,
 }
 
 /// A semantic that cannot yet be exercised through a current public API.
@@ -332,30 +322,6 @@ pub const GFX942_CONFORMANCE_CORPUS_V1: &[ConformanceCaseV1] = &[
         "lane.worker-admission.unsupported-device-library",
         ConformanceSemanticV1::WorkerAdmissionLane,
         ExpectedRejectionV1::WorkerUnsupportedDeviceLibrary,
-    ),
-    represented(
-        "lane.pliron-lowering.canonical-deterministic",
-        ConformanceSemanticV1::PlironLoweringLane,
-    ),
-    rejected(
-        "lane.pliron-lowering.unsupported-call",
-        ConformanceSemanticV1::PlironLoweringLane,
-        ExpectedRejectionV1::PlironLoweringUnsupportedCall,
-    ),
-    rejected(
-        "lane.pliron-lowering.unsupported-type",
-        ConformanceSemanticV1::PlironLoweringLane,
-        ExpectedRejectionV1::PlironLoweringUnsupportedType,
-    ),
-    rejected(
-        "lane.pliron-lowering.unsupported-address-space",
-        ConformanceSemanticV1::PlironLoweringLane,
-        ExpectedRejectionV1::PlironLoweringUnsupportedAddressSpace,
-    ),
-    rejected(
-        "lane.pliron-lowering.unsupported-target-policy",
-        ConformanceSemanticV1::PlironLoweringLane,
-        ExpectedRejectionV1::PlironLoweringUnsupportedTargetPolicy,
     ),
     gap(
         "atomic.operation.unrepresented",
