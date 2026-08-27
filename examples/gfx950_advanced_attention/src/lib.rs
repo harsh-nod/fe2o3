@@ -1,13 +1,97 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(target_arch = "amdgpu", no_std)]
 
-//! Fixed-shape Rust teaching kernels corresponding to the gfx950 advanced
-//! attention HIP fixture.
+//! Fixed-shape Rust gfx950 advanced-attention kernels.
 //!
-//! The attributed functions are real ordinary Rust source with independent
-//! safe CPU references. They deliberately use conservative scalar algorithms
-//! and carry no claim of compiler lowering, gfx950 ISA selection, hardware
-//! execution, proof, performance, or model equivalence.
+//! The attributed functions are ordinary Rust source with independent safe CPU
+//! references. AMDGPU builds select exactly one production kernel root.
+
+#[cfg(all(
+    target_arch = "amdgpu",
+    not(any(
+        feature = "kernel-kda-decode",
+        feature = "kernel-kda-prefill",
+        feature = "kernel-content-sparse-attention",
+        feature = "kernel-compressed-hybrid-attention",
+        feature = "kernel-attnres-aggregate",
+        feature = "kernel-four-branch-residual",
+        feature = "kernel-mhc-sinkhorn-mix",
+    ))
+))]
+compile_error!("an AMDGPU build must select exactly one advanced-attention kernel feature");
+
+#[cfg(all(
+    target_arch = "amdgpu",
+    any(
+        all(feature = "kernel-kda-decode", feature = "kernel-kda-prefill"),
+        all(
+            feature = "kernel-kda-decode",
+            feature = "kernel-content-sparse-attention"
+        ),
+        all(
+            feature = "kernel-kda-decode",
+            feature = "kernel-compressed-hybrid-attention"
+        ),
+        all(feature = "kernel-kda-decode", feature = "kernel-attnres-aggregate"),
+        all(feature = "kernel-kda-decode", feature = "kernel-four-branch-residual"),
+        all(feature = "kernel-kda-decode", feature = "kernel-mhc-sinkhorn-mix"),
+        all(
+            feature = "kernel-kda-prefill",
+            feature = "kernel-content-sparse-attention"
+        ),
+        all(
+            feature = "kernel-kda-prefill",
+            feature = "kernel-compressed-hybrid-attention"
+        ),
+        all(feature = "kernel-kda-prefill", feature = "kernel-attnres-aggregate"),
+        all(
+            feature = "kernel-kda-prefill",
+            feature = "kernel-four-branch-residual"
+        ),
+        all(feature = "kernel-kda-prefill", feature = "kernel-mhc-sinkhorn-mix"),
+        all(
+            feature = "kernel-content-sparse-attention",
+            feature = "kernel-compressed-hybrid-attention"
+        ),
+        all(
+            feature = "kernel-content-sparse-attention",
+            feature = "kernel-attnres-aggregate"
+        ),
+        all(
+            feature = "kernel-content-sparse-attention",
+            feature = "kernel-four-branch-residual"
+        ),
+        all(
+            feature = "kernel-content-sparse-attention",
+            feature = "kernel-mhc-sinkhorn-mix"
+        ),
+        all(
+            feature = "kernel-compressed-hybrid-attention",
+            feature = "kernel-attnres-aggregate"
+        ),
+        all(
+            feature = "kernel-compressed-hybrid-attention",
+            feature = "kernel-four-branch-residual"
+        ),
+        all(
+            feature = "kernel-compressed-hybrid-attention",
+            feature = "kernel-mhc-sinkhorn-mix"
+        ),
+        all(
+            feature = "kernel-attnres-aggregate",
+            feature = "kernel-four-branch-residual"
+        ),
+        all(
+            feature = "kernel-attnres-aggregate",
+            feature = "kernel-mhc-sinkhorn-mix"
+        ),
+        all(
+            feature = "kernel-four-branch-residual",
+            feature = "kernel-mhc-sinkhorn-mix"
+        ),
+    )
+))]
+compile_error!("an AMDGPU build must not select more than one advanced-attention kernel feature");
 
 pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
@@ -40,7 +124,7 @@ pub const SINKHORN_ITERATIONS_V1: usize = 3;
 pub const GFX950_ADVANCED_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
 /// Exact grid dimensions declared by every teaching kernel.
 pub const GFX950_ADVANCED_ATTENTION_GRID_V1: [u32; 3] = [1, 1, 1];
-/// Whether an authenticated MIR-to-Kernel-IR lowering profile exists.
-pub const GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = false;
-/// Current boundary of the Rust-first source package.
-pub const GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1: &str = "the seven fixed-shape attributed kernels have no authenticated MIR-to-Kernel-IR profiles; gfx950 tensor/transpose lowering, finalization, runtime execution, proof, and performance evidence are pending";
+/// Whether the seven source roots use the production semantic lowering surface.
+pub const GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true;
+/// Boundary not established by the production source-lowering and runtime suite.
+pub const GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1: &str = "the retained production extraction, finalization, ISA inspection, and gfx950 numerical runs do not establish formal compiler refinement, protected publication authority, performance, or full-model behavior";

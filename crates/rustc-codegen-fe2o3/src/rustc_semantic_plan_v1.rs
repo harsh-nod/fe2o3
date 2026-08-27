@@ -2198,6 +2198,7 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::Gfx950LdsTransposePublish => 83,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 86,
     }
 }
 
@@ -2308,6 +2309,12 @@ mod tests {
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate),
         ];
         assert_eq!(gfx950_fp4, [69, 70, 71, 72, 73, 74, 75]);
+        assert_eq!(
+            terminal_expansion_tag_v1(
+                ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate,
+            ),
+            86,
+        );
 
         let gfx950_attention = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent),

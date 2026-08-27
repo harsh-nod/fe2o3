@@ -15,6 +15,13 @@ fn u32_type() -> Type {
 
 fn diagnostic_capability() -> TargetCapability {
     TargetCapability::Extension {
+        namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+        name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+    }
+}
+
+fn legacy_diagnostic_capability() -> TargetCapability {
+    TargetCapability::Extension {
         namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
         name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
     }
@@ -137,6 +144,25 @@ fn gfx942_emits_bounded_nonconvergent_diagnostic_ir() {
     assert!(llvm.contains("call void @llvm.debugtrap()"));
     assert!(!llvm.contains("convergent"));
     assert!(!llvm.contains("__fe2o3_ir_amdgpu_diagnostics"));
+}
+
+#[test]
+fn frozen_gfx942_diagnostic_capability_and_declarations_still_lower() {
+    let mut module = diagnostic_module();
+    module.required_capabilities = BTreeSet::from([legacy_diagnostic_capability()]);
+    for function in &mut module.functions {
+        if function
+            .id
+            .as_str()
+            .starts_with("__fe2o3_ir_amdgpu_diagnostics_gfx942_v1_")
+        {
+            function.required_capabilities = BTreeSet::from([legacy_diagnostic_capability()]);
+        }
+    }
+
+    let llvm = lower_compiler_module_to_gfx942_llvm_ir(&module).unwrap();
+    assert!(llvm.contains("call i64 @llvm.amdgcn.s.memrealtime()"));
+    assert_eq!(llvm.matches("call void @llvm.trap()").count(), 2);
 }
 
 #[test]

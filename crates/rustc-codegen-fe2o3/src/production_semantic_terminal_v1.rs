@@ -58,6 +58,7 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx950Fp4AccumulatorZero,
     Gfx950Fp4AccumulatorIntoValues,
     Gfx950Fp4MultiplyAccumulate,
+    Gfx950Fp4Fp8MultiplyAccumulate,
     Gfx950Fp8MatrixARowMajor,
     Gfx950Fp8MatrixBRowMajor,
     Gfx950Fp8MatrixALoadM16K128,
@@ -249,6 +250,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate)
+            }
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8 => {
+                Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate)
             }
             TrustedDeviceItem::Gfx950MfmaMatrixARowMajor => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor)
@@ -469,6 +473,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate) => {
                 TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+            }
+            Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate) => {
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8
             }
             Self::Expand(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor) => {
                 TrustedDeviceItem::Gfx950MfmaMatrixARowMajor
@@ -730,6 +737,10 @@ mod tests {
             (
                 TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
                 ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate,
+            ),
+            (
+                TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
+                ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate,
             ),
             (
                 TrustedDeviceItem::Gfx950MfmaMatrixARowMajor,

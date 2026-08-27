@@ -1592,6 +1592,46 @@ fn terminal_operation_v1<'tcx>(
                 },
             )
         }
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::Gfx950Matrix)
+                })
+                && rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]).is_some()
+                && rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]).is_some()
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]).is_some()
+                && rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output).is_some() =>
+        {
+            let (Some(lhs), Some(rhs), Some(accumulator)) = (
+                rust_gfx950_fp4_fragment_contract_v1(tcx, rust_inputs[1]),
+                rust_gfx950_fp8_fragment_contract_v1(tcx, rust_inputs[2]),
+                rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_inputs[3]),
+            ) else {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 mixed FP4xFP8 MFMA contract",
+                ));
+            };
+            if lhs.role != SemanticMfmaOperandRoleV1::A
+                || rhs.role != SemanticMfmaOperandRoleV1::B
+                || Some(accumulator) != rust_gfx950_fp4_accumulator_contract_v1(tcx, rust_output)
+            {
+                return Err(body_owner_table_mismatch_v1(
+                    "gfx950 mixed FP4xFP8 MFMA contract",
+                ));
+            }
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                    context: pointer_pointee_v1(types, inputs[0])?,
+                    lhs_fragment: inputs[1],
+                    rhs_fragment: inputs[2],
+                    accumulator_fragment: inputs[3],
+                    lhs,
+                    rhs,
+                    accumulator,
+                },
+            )
+        }
         ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
             if inputs.len() == 4
                 && rust_inputs.len() == 4
@@ -2086,6 +2126,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
         | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor
         | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
@@ -2943,6 +2984,7 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::Gfx950LdsTransposePublish => 83,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 86,
     }
 }
 

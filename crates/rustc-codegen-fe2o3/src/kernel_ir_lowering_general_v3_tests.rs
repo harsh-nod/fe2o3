@@ -1401,9 +1401,8 @@ fn gfx942_diagnostic_items_lower_to_closed_ir_contracts() {
         module
             .required_capabilities
             .contains(&TargetCapability::Extension {
-                namespace: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
-                    .to_owned(),
-                name: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+                namespace: fe2o3_kernel_ir::AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+                name: fe2o3_kernel_ir::AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
             })
     );
 }

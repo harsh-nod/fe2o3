@@ -161,9 +161,19 @@ fn derive_production_geometry_from_launch_for_target_v1(
     if static_shared_memory_bytes != 0 && !allow_workgroup_memory {
         return Err(ProductionGeometryErrorV1::MissingWorkgroupMemoryCapability);
     }
-    let allow_exact_tiled_matrix = effective.contains(&TargetCapability::Extension {
-        namespace: fe2o3_kernel_ir::MATRIX_CAPABILITY_NAMESPACE.to_owned(),
-        name: fe2o3_kernel_ir::BF16_F32_M16N16K16_CAPABILITY.to_owned(),
+    let allow_exact_tiled_matrix = effective.iter().any(|capability| {
+        matches!(
+            capability,
+            TargetCapability::Extension { namespace, name }
+                if namespace == fe2o3_kernel_ir::MATRIX_CAPABILITY_NAMESPACE
+                    && matches!(
+                        name.as_str(),
+                        fe2o3_kernel_ir::BF16_F32_M16N16K16_CAPABILITY
+                            | fe2o3_kernel_ir::SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
+                            | fe2o3_kernel_ir::SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                            | fe2o3_kernel_ir::SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                    )
+        )
     });
 
     Ok(ProductionGeometryV1 {

@@ -120,6 +120,50 @@ fn attention_module() -> Module {
     module
 }
 
+fn masked_broadcast_module(mask: Option<u32>, mask_on_left: bool) -> Module {
+    let mut module = attention_module();
+    let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
+    let mut broadcast = block.operations.pop().expect("broadcast operation");
+    let mask_value = ValueId(22);
+    let masked_value = ValueId(23);
+    if let Some(mask) = mask {
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(mask_value, Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(mask)),
+        ));
+    }
+    let dynamic = ValueId(11);
+    let other = mask.map_or(ValueId(12), |_| mask_value);
+    let (lhs, rhs) = if mask_on_left {
+        (other, dynamic)
+    } else {
+        (dynamic, other)
+    };
+    block.operations.push(Operation::effect_free(
+        ValueDef::new(masked_value, Type::Scalar(ScalarType::U32)),
+        OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            lhs,
+            rhs,
+        },
+    ));
+    let OperationKind::Wave(wave) = &mut broadcast.kind else {
+        panic!("expected broadcast")
+    };
+    let WaveOperationKind::BroadcastF32 {
+        source_lane,
+        tile_width,
+        ..
+    } = &mut wave.kind
+    else {
+        panic!("expected f32 broadcast")
+    };
+    *source_lane = masked_value;
+    *tile_width = 64;
+    block.operations.push(broadcast);
+    module
+}
+
 #[test]
 fn exact_attention_surface_round_trips_only_as_v9() {
     let module = attention_module();
@@ -185,4 +229,20 @@ fn broadcast_rejects_an_out_of_tile_or_dynamic_source_lane() {
             .unwrap_err()
             .contains(DiagnosticCode::InvalidWaveOperation)
     );
+}
+
+#[test]
+fn broadcast_accepts_direct_mask63_and_rejects_mask64_or_nonconstant_mask() {
+    verify_module(&masked_broadcast_module(Some(63), false)).unwrap();
+    verify_module(&masked_broadcast_module(Some(63), true)).unwrap();
+    for hostile in [
+        masked_broadcast_module(Some(64), false),
+        masked_broadcast_module(None, false),
+    ] {
+        assert!(
+            verify_module(&hostile)
+                .unwrap_err()
+                .contains(DiagnosticCode::InvalidWaveOperation)
+        );
+    }
 }

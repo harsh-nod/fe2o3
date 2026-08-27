@@ -159,6 +159,21 @@ fn invalid_types_arity_and_implementation_fail_closed() {
             .contains(DiagnosticCode::InvalidFloatOperation)
     );
 
+    let falsely_constrained_sqrt = module_with_operation(
+        vec![Type::F32],
+        Type::F32,
+        FloatOperation::F32Math {
+            function: F32MathFunction::Sqrt,
+            implementation: F32MathImplementation::ConstrainedLlvm,
+            arguments: vec![ValueId(0)],
+        },
+    );
+    assert!(
+        verify_module(&falsely_constrained_sqrt)
+            .unwrap_err()
+            .contains(DiagnosticCode::InvalidFloatOperation)
+    );
+
     let wrong_arity = module_with_operation(
         vec![Type::F32],
         Type::F32,
@@ -172,6 +187,23 @@ fn invalid_types_arity_and_implementation_fail_closed() {
         verify_module(&wrong_arity)
             .unwrap_err()
             .contains(DiagnosticCode::InvalidFloatOperation)
+    );
+}
+
+#[test]
+fn sqrt_call_identity_reconstructs_the_ieee_semantic_contract() {
+    let sqrt = FloatOperation::F32Math {
+        function: F32MathFunction::Sqrt,
+        implementation: F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
+        arguments: vec![ValueId(9)],
+    };
+    assert_eq!(
+        F32MathFunction::Sqrt.required_implementation(),
+        F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1
+    );
+    assert_eq!(
+        FloatOperation::from_intrinsic_call(&sqrt.intrinsic_function_id(), &[ValueId(9)]),
+        Some(sqrt)
     );
 }
 

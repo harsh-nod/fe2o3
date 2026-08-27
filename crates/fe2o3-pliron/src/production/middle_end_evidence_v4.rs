@@ -1866,6 +1866,9 @@ pub(super) fn hash_tensor_layout_contract(digest: &mut Sha256, contract: &Tensor
         TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
             digest.update([5])
         }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {
+            digest.update([6])
+        }
         TensorInstructionProfileV1::IncompatibleWave32 => digest.update([2]),
         TensorInstructionProfileV1::Opaque(identity) => {
             digest.update([3]);

@@ -1,20 +1,95 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(target_arch = "amdgpu", no_std)]
 #![deny(missing_docs)]
 
 //! Ordinary attributed Rust source and independent CPU references for bounded
 //! gfx950 ML systems kernels.
 //!
 //! The Rust source is the fe2o3 tutorial implementation. The adjacent HIP
-//! program is a separate ISA-validation companion until the fe2o3 compiler has
-//! an authenticated gfx950 low-precision lowering profile.
+//! program remains a separate compiler and ISA-validation companion.
+
+#[cfg(all(
+    target_arch = "amdgpu",
+    not(any(
+        feature = "kernel-moe-route",
+        feature = "kernel-moe-expert-rank",
+        feature = "kernel-combine-expert-ranks",
+        feature = "kernel-speculative-transaction",
+        feature = "kernel-qwen-ngram-gather",
+        feature = "kernel-stage-gradient-shard",
+        feature = "kernel-muon-update",
+    ))
+))]
+compile_error!("an AMDGPU build must select exactly one gfx950 advanced-systems kernel feature");
+
+#[cfg(all(
+    target_arch = "amdgpu",
+    any(
+        all(
+            feature = "kernel-moe-route",
+            any(
+                feature = "kernel-moe-expert-rank",
+                feature = "kernel-combine-expert-ranks",
+                feature = "kernel-speculative-transaction",
+                feature = "kernel-qwen-ngram-gather",
+                feature = "kernel-stage-gradient-shard",
+                feature = "kernel-muon-update"
+            )
+        ),
+        all(
+            feature = "kernel-moe-expert-rank",
+            any(
+                feature = "kernel-combine-expert-ranks",
+                feature = "kernel-speculative-transaction",
+                feature = "kernel-qwen-ngram-gather",
+                feature = "kernel-stage-gradient-shard",
+                feature = "kernel-muon-update"
+            )
+        ),
+        all(
+            feature = "kernel-combine-expert-ranks",
+            any(
+                feature = "kernel-speculative-transaction",
+                feature = "kernel-qwen-ngram-gather",
+                feature = "kernel-stage-gradient-shard",
+                feature = "kernel-muon-update"
+            )
+        ),
+        all(
+            feature = "kernel-speculative-transaction",
+            any(
+                feature = "kernel-qwen-ngram-gather",
+                feature = "kernel-stage-gradient-shard",
+                feature = "kernel-muon-update"
+            )
+        ),
+        all(
+            feature = "kernel-qwen-ngram-gather",
+            any(
+                feature = "kernel-stage-gradient-shard",
+                feature = "kernel-muon-update"
+            )
+        ),
+        all(
+            feature = "kernel-stage-gradient-shard",
+            feature = "kernel-muon-update"
+        ),
+    )
+))]
+compile_error!(
+    "an AMDGPU build must not select more than one gfx950 advanced-systems kernel feature"
+);
 
 pub mod kernel;
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
 
-/// The fixed source profile has no authenticated Rust-to-gfx950 lowering yet.
-pub const GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED: bool = false;
-/// The exact boundary that prevents the Rust source from claiming GPU evidence.
-pub const GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER: &str = "gfx950 FP4/FP8 MFMA and gfx950 production target lowering are not authenticated by rustc-codegen-fe2o3";
+/// The ordinary Rust kernel sources are present and host-checked.
+pub const GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1: bool = true;
+/// Whether all seven source roots use the production semantic lowering surface.
+pub const GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED: bool = true;
+/// Boundary not established by the production source-lowering and runtime suite.
+pub const GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER: &str = "the retained production extraction, finalization, ISA inspection, and gfx950 numerical runs do not establish formal compiler refinement, protected publication authority, performance, distributed-runtime behavior, or full-model behavior";
 
 /// Number of MoE tokens.
 pub const TOKENS: usize = 16;

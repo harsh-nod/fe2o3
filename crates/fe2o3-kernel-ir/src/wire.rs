@@ -1802,6 +1802,10 @@ fn encode_tensor_layout_contract_v1(
             require_v8(writer, "gfx950 FP8 tensor instruction profile")?;
             writer.u8(4)?;
         }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64 => {
+            require_v8(writer, "gfx950 mixed FP4-by-FP8 tensor instruction profile")?;
+            writer.u8(6)?;
+        }
         TensorInstructionProfileV1::IncompatibleWave32 => writer.u8(2)?,
         TensorInstructionProfileV1::Opaque(identity) => {
             writer.u8(3)?;
@@ -1837,6 +1841,9 @@ fn decode_tensor_layout_contract_v1(
         }
         5 if reader.version >= KERNEL_IR_VERSION_V8 => {
             TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
+        }
+        6 if reader.version >= KERNEL_IR_VERSION_V8 => {
+            TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1Fp8E4M3F32M16N16K128Wave64
         }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {

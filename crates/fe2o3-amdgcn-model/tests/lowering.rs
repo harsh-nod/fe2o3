@@ -471,6 +471,92 @@ fn gfx950_scaled_fp4_mfma_module() -> Module {
     exact_gfx950_xnack_minus(module)
 }
 
+fn gfx950_scaled_mixed_fp4_fp8_mfma_module() -> Module {
+    let mut module = gfx950_scaled_fp4_mfma_module();
+    let operation = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[0];
+    let OperationKind::Matrix(matrix) = &mut operation.kind else {
+        panic!("expected scaled matrix operation")
+    };
+    matrix.tensor_layout =
+        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64());
+    module.functions[0].required_capabilities = module.functions[0].derived_capabilities();
+    exact_gfx950_xnack_minus(module)
+}
+
+fn gfx950_diagnostic_module(diagnostic: AmdGpuDiagnosticOperation) -> Module {
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(diagnostic.operation(None));
+    block.terminator = Some(Terminator::Unreachable);
+
+    let mut function = Function::kernel_entry(
+        "gfx950_diagnostic_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![block],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let diagnostic_capabilities = function.required_capabilities.clone();
+
+    let mut kernel = Kernel::new(
+        "gfx950_diagnostic",
+        "gfx950_diagnostic_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    kernel
+        .required_capabilities
+        .extend(diagnostic_capabilities.iter().cloned());
+
+    let declaration = diagnostic.declaration();
+    let mut module = Module::new("tests::gfx950_diagnostic");
+    module.required_capabilities.extend(diagnostic_capabilities);
+    module.functions.push(function);
+    module.functions.push(declaration);
+    module.kernels.push(kernel);
+    exact_gfx950_xnack_minus(module)
+}
+
+fn sqrt_module() -> Module {
+    let sqrt = FloatOperation::F32Math {
+        function: F32MathFunction::Sqrt,
+        implementation: F32MathImplementation::IeeeSqrtRoundTiesEvenIgnoreExceptionsV1,
+        arguments: vec![ValueId(0)],
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations.push(sqrt.operation(ValueId(1)));
+    block.terminator = Some(Terminator::Return { values: vec![] });
+
+    let mut function = Function::kernel_entry(
+        "sqrt_impl",
+        Signature::new(vec![Type::F32], vec![]),
+        vec![ValueId(0)],
+        vec![block],
+    );
+    function.required_capabilities = function.derived_capabilities();
+    let capabilities = function.required_capabilities.clone();
+
+    let mut kernel = Kernel::new(
+        "sqrt_kernel",
+        "sqrt_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+    kernel
+        .required_capabilities
+        .extend(capabilities.iter().cloned());
+
+    let mut module = Module::new("tests::sqrt");
+    module.required_capabilities.extend(capabilities);
+    module.functions.push(function);
+    module.functions.push(sqrt.declaration());
+    module.kernels.push(kernel);
+    module
+}
+
 fn phi_loop_module() -> Module {
     let slice = global_slice(AccessMode::ReadOnly);
     let pointer = global_pointer(AccessMode::ReadOnly);
@@ -1249,6 +1335,34 @@ fn gfx950_exact_lowering_binds_cpu_features_layout_and_physical_barrier() {
 }
 
 #[test]
+fn gfx950_sqrt_uses_the_native_llvm_intrinsic_accepted_by_rocm() {
+    let gfx950 = exact_gfx950_xnack_minus(sqrt_module());
+    let llvm =
+        lower_kernel_to_gfx950_xnack_minus_llvm_ir(&gfx950, &KernelId::new("sqrt_kernel")).unwrap();
+    assert_occurrences(&llvm, "declare float @llvm.sqrt.f32(float)", 1);
+    assert_occurrences(&llvm, "call float @llvm.sqrt.f32(float %arg0)", 1);
+    assert!(!llvm.contains("llvm.experimental.constrained.sqrt.f32"));
+    assert!(llvm.contains("\"unsafe-fp-math\"=\"false\""));
+    assert!(llvm.contains("\"approx-func-fp-math\"=\"false\""));
+    assert!(llvm.contains("\"denormal-fp-math-f32\"=\"ieee,ieee\""));
+    assert!(!llvm.contains("call fast float @llvm.sqrt.f32"));
+
+    let gfx942 = exact_gfx942_xnack_minus(sqrt_module());
+    let llvm =
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&gfx942, &KernelId::new("sqrt_kernel")).unwrap();
+    assert_occurrences(
+        &llvm,
+        "declare float @llvm.experimental.constrained.sqrt.f32(float, metadata, metadata)",
+        1,
+    );
+    assert_occurrences(
+        &llvm,
+        "call float @llvm.experimental.constrained.sqrt.f32(float %arg0, metadata !\"round.tonearest\", metadata !\"fpexcept.ignore\")",
+        1,
+    );
+}
+
+#[test]
 fn gfx950_full_module_lowers_scaled_fp8_mfma_with_exact_intrinsic_abi() {
     let module = gfx950_scaled_mfma_module();
     let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
@@ -1288,6 +1402,37 @@ fn gfx950_full_module_lowers_scaled_fp4_mfma_with_format_selectors_4_4() {
     assert!(
         lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("gfx950_scaled_mfma"))
             .is_err()
+    );
+}
+
+#[test]
+fn gfx950_full_module_lowers_mixed_fp4_by_fp8_mfma_with_format_selectors_4_0() {
+    let module = gfx950_scaled_mixed_fp4_fp8_mfma_module();
+    let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+
+    assert!(llvm.contains(
+        "<8 x i32> %matrix.0.0.lhs.7, <8 x i32> %matrix.0.0.rhs.7, <4 x float> %matrix.0.0.acc.3, i32 4, i32 0, i32 0, i32 0, i32 0, i32 0"
+    ));
+    assert!(!llvm.contains("<4 x float> %matrix.0.0.acc.3, i32 0, i32 4"));
+    assert!(
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("gfx950_scaled_mfma"))
+            .is_err()
+    );
+}
+
+#[test]
+fn gfx950_exact_diagnostics_admit_only_terminating_traps() {
+    let trap = gfx950_diagnostic_module(AmdGpuDiagnosticOperation::Trap);
+    let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&trap).unwrap();
+    assert_eq!(llvm.matches("declare void @llvm.trap()").count(), 1);
+    assert_eq!(llvm.matches("call void @llvm.trap()").count(), 1);
+    assert!(!llvm.contains(AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME));
+
+    let debug_trap = gfx950_diagnostic_module(AmdGpuDiagnosticOperation::DebugTrap);
+    assert!(
+        lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&debug_trap)
+            .unwrap_err()
+            .contains(LoweringDiagnosticCode::UnsupportedDiagnosticOperation)
     );
 }
 

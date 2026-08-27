@@ -11,7 +11,7 @@ use fe2o3_rustc_invocation::{
     CargoTargetV1, CompileEnvironmentEntryV1, CrateTypeV1, DeviceConfigurationV1, EditionV1,
     OutputDomainV1, RustcIdentityV1, RustcInvocationDescriptorV1, RustcInvocationDescriptorV2,
     RustcInvocationDescriptorV3, RustcUnitV1, RustcUnitV2, TestStateV1, ToolIdentityV1,
-    VerificationModeV1, encode_descriptor_v1, encode_descriptor_v2,
+    ValidationError, VerificationModeV1, encode_descriptor_v1, encode_descriptor_v2,
 };
 
 #[cfg(feature = "qualification-oracles-test-only")]
@@ -73,6 +73,17 @@ fn descriptor_with(
     closure_observation: [u8; 32],
     backend_observation: [u8; 32],
 ) -> RustcInvocationDescriptorV3 {
+    let v2 =
+        descriptor_v2_with(&closure, target, closure_observation, backend_observation).unwrap();
+    RustcInvocationDescriptorV3::new(v2, closure).unwrap()
+}
+
+fn descriptor_v2_with(
+    closure: &CompilerClosureV2,
+    target: &str,
+    closure_observation: [u8; 32],
+    backend_observation: [u8; 32],
+) -> Result<RustcInvocationDescriptorV2, ValidationError> {
     let rustc = RustcUnitV2::new(
         "/workspace",
         vec![
@@ -83,14 +94,12 @@ fn descriptor_with(
         ],
     )
     .unwrap();
-    let v2 = RustcInvocationDescriptorV2::new(
+    RustcInvocationDescriptorV2::new(
         closure.rustc_executable_sha256(),
         closure.codegen_backend_sha256(),
         rustc,
         environment(target, closure_observation, backend_observation),
     )
-    .unwrap();
-    RustcInvocationDescriptorV3::new(v2, closure).unwrap()
 }
 
 fn baseline_descriptor() -> RustcInvocationDescriptorV3 {
@@ -579,7 +588,6 @@ fn protected_target_admission_accepts_only_exact_typed_production_profiles() {
         "gfx950",
         "gfx950:xnack+",
         "gfx950:sramecc+:xnack-",
-        "GFX950:xnack-",
     ] {
         let closure = baseline_closure();
         let descriptor = descriptor_with(
@@ -593,6 +601,17 @@ fn protected_target_admission_accepts_only_exact_typed_production_profiles() {
             Err(ProtectedRustcInvocationErrorV1::TargetMismatch { .. })
         ));
     }
+
+    let closure = baseline_closure();
+    assert!(matches!(
+        descriptor_v2_with(
+            &closure,
+            "GFX950:xnack-",
+            closure.identity_sha256(),
+            closure.codegen_backend_sha256(),
+        ),
+        Err(ValidationError::InvalidAmdTarget)
+    ));
 }
 
 #[test]

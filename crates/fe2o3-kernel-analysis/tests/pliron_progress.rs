@@ -1,6 +1,6 @@
 use dialect_kernel::{
-    BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexType, ReturnOp, register_dialect,
+    AnalysisSplitOp, BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchArgsOp, IndexType, ReturnOp, TrapOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, PlironProgressFindingV1, run_pliron_progress_check_v1,
@@ -44,6 +44,13 @@ fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
     operation.get_operation().insert_at_back(block, context);
 }
 
+macro_rules! append_created {
+    ($context:expr, $block:expr, $operation:expr $(,)?) => {{
+        let operation = $operation;
+        operation.get_operation().insert_at_back($block, $context);
+    }};
+}
+
 fn block(context: &mut Context, function: &FuncOp, name: &str) -> Ptr<BasicBlock> {
     let block = BasicBlock::new(context, Some(name.try_into().unwrap()), vec![]);
     block.insert_at_back(function.get_region(context), context);
@@ -56,6 +63,110 @@ fn index_block(context: &mut Context, function: &FuncOp, name: &str) -> (Ptr<Bas
     let argument = block.deref(context).get_argument(0);
     block.insert_at_back(function.get_region(context), context);
     (block, argument)
+}
+
+fn index_tuple_block(
+    context: &mut Context,
+    function: &FuncOp,
+    name: &str,
+    arguments: usize,
+) -> (Ptr<BasicBlock>, Vec<Value>) {
+    let index: TypeHandle = IndexType::get(context).into();
+    let block = BasicBlock::new(
+        context,
+        Some(name.try_into().unwrap()),
+        vec![index; arguments],
+    );
+    let values = (0..arguments)
+        .map(|argument| block.deref(context).get_argument(argument))
+        .collect();
+    block.insert_at_back(function.get_region(context), context);
+    (block, values)
+}
+
+fn guarded_loop(context: &mut Context, step_value: u64, irreducible_entry: bool) -> FuncOp {
+    let (function, _) = make_function(context, "guarded_loop", 0);
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (guard, guard_induction) = index_block(context, &function, "guard");
+    let (body, body_induction) = index_block(context, &function, "body");
+    let trap = block(context, &function, "trap");
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let bound = IndexConstantOp::new(context, 8);
+    let step = IndexConstantOp::new(context, step_value);
+    for operation in [
+        zero.get_operation(),
+        one.get_operation(),
+        bound.get_operation(),
+        step.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    if irreducible_entry {
+        append_created!(
+            context,
+            entry,
+            &IndexLessThanBranchArgsOp::new(
+                context,
+                zero.result(context),
+                one.result(context),
+                vec![zero.result(context)],
+                vec![zero.result(context)],
+                header,
+                guard,
+            ),
+        );
+    } else {
+        append_created!(
+            context,
+            entry,
+            &BranchArgsOp::new(context, vec![zero.result(context)], header),
+        );
+    }
+    append_created!(
+        context,
+        header,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            induction,
+            bound.result(context),
+            vec![induction],
+            vec![],
+            guard,
+            exit,
+        ),
+    );
+    append_created!(
+        context,
+        guard,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            zero.result(context),
+            one.result(context),
+            vec![guard_induction],
+            vec![],
+            body,
+            trap,
+        ),
+    );
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        body_induction,
+        step.result(context),
+    );
+    append(context, body, &next);
+    append_created!(
+        context,
+        body,
+        &BranchArgsOp::new(context, vec![next.result(context)], header),
+    );
+    append_created!(context, trap, &TrapOp::new(context));
+    append_created!(context, exit, &ReturnOp::new(context));
+    verify_operation(function.get_operation(), context).unwrap();
+    function
 }
 
 fn constant_loop(context: &mut Context, start: u64, bound: u64, step: u64) -> FuncOp {
@@ -109,6 +220,373 @@ fn canonical_unit_induction_proves_machine_finite_progress() {
     assert!(report.is_clean());
     assert_eq!(report.certificates().len(), 1);
     assert_eq!(report.certificates()[0].step(), 1);
+}
+
+#[test]
+fn guarded_multi_block_induction_proves_machine_finite_progress() {
+    let context = &mut setup();
+    let function = guarded_loop(context, 1, false);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{:?}", report.findings());
+    assert_eq!(report.certificates().len(), 1);
+    assert_eq!(report.certificates()[0].step(), 1);
+}
+
+#[test]
+fn nested_positive_inductions_receive_independent_certificates() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "nested_loops", 0);
+    let entry = function.get_entry_block(context);
+    let (outer_header, outer_induction) = index_block(context, &function, "outer_header");
+    let (inner_preheader, outer_at_preheader) = index_block(context, &function, "inner_preheader");
+    let (inner_header, inner_tuple) = index_tuple_block(context, &function, "inner_header", 2);
+    let (inner_latch, inner_latch_tuple) = index_tuple_block(context, &function, "inner_latch", 2);
+    let (outer_latch, outer_at_latch) = index_block(context, &function, "outer_latch");
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let outer_bound = IndexConstantOp::new(context, 4);
+    let inner_bound = IndexConstantOp::new(context, 8);
+    for operation in [
+        zero.get_operation(),
+        one.get_operation(),
+        outer_bound.get_operation(),
+        inner_bound.get_operation(),
+        BranchArgsOp::new(context, vec![zero.result(context)], outer_header).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append_created!(
+        context,
+        outer_header,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            outer_induction,
+            outer_bound.result(context),
+            vec![outer_induction],
+            vec![],
+            inner_preheader,
+            exit,
+        ),
+    );
+    append_created!(
+        context,
+        inner_preheader,
+        &BranchArgsOp::new(
+            context,
+            vec![outer_at_preheader, zero.result(context)],
+            inner_header,
+        ),
+    );
+    append_created!(
+        context,
+        inner_header,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            inner_tuple[1],
+            inner_bound.result(context),
+            inner_tuple.clone(),
+            vec![inner_tuple[0]],
+            inner_latch,
+            outer_latch,
+        ),
+    );
+    let inner_next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        inner_latch_tuple[1],
+        one.result(context),
+    );
+    append(context, inner_latch, &inner_next);
+    append_created!(
+        context,
+        inner_latch,
+        &BranchArgsOp::new(
+            context,
+            vec![inner_latch_tuple[0], inner_next.result(context)],
+            inner_header,
+        ),
+    );
+    let outer_next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        outer_at_latch,
+        one.result(context),
+    );
+    append(context, outer_latch, &outer_next);
+    append_created!(
+        context,
+        outer_latch,
+        &BranchArgsOp::new(context, vec![outer_next.result(context)], outer_header),
+    );
+    append_created!(context, exit, &ReturnOp::new(context));
+    verify_operation(function.get_operation(), context).unwrap();
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{:?}", report.findings());
+    assert_eq!(report.certificates().len(), 2);
+    assert!(
+        report
+            .certificates()
+            .iter()
+            .all(|certificate| certificate.step() == 1)
+    );
+}
+
+#[test]
+fn irreducible_non_header_entry_is_not_certified() {
+    let context = &mut setup();
+    let function = guarded_loop(context, 1, true);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(report.certificates().is_empty());
+}
+
+#[test]
+fn guarded_zero_step_retains_a_live_nontermination_witness() {
+    let context = &mut setup();
+    let function = guarded_loop(context, 0, false);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::NonTerminatingCycle { counterexample, .. }]
+            if counterexample.contains("i = 0") && counterexample.contains("bound = 8")
+    ));
+}
+
+#[test]
+fn backedge_cannot_substitute_a_non_induction_tuple_slot() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "tuple_substitution", 0);
+    let entry = function.get_entry_block(context);
+    let (header, header_tuple) = index_tuple_block(context, &function, "header", 2);
+    let (body, body_tuple) = index_tuple_block(context, &function, "body", 2);
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let bound = IndexConstantOp::new(context, 8);
+    for operation in [
+        zero.get_operation(),
+        one.get_operation(),
+        bound.get_operation(),
+        BranchArgsOp::new(
+            context,
+            vec![zero.result(context), one.result(context)],
+            header,
+        )
+        .get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append_created!(
+        context,
+        header,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            header_tuple[0],
+            bound.result(context),
+            header_tuple.clone(),
+            vec![],
+            body,
+            exit,
+        ),
+    );
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        body_tuple[0],
+        one.result(context),
+    );
+    append(context, body, &next);
+    append_created!(
+        context,
+        body,
+        &BranchArgsOp::new(
+            context,
+            vec![next.result(context), zero.result(context)],
+            header,
+        ),
+    );
+    append_created!(context, exit, &ReturnOp::new(context));
+    verify_operation(function.get_operation(), context).unwrap();
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("non-induction live tuple slot")
+    ));
+}
+
+#[test]
+fn multiple_dominated_backedges_are_not_merged_into_one_certificate() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "two_backedges", 0);
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (split, split_induction) = index_block(context, &function, "split");
+    let (first_latch, first_induction) = index_block(context, &function, "first_latch");
+    let (second_latch, second_induction) = index_block(context, &function, "second_latch");
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let bound = IndexConstantOp::new(context, 8);
+    for operation in [
+        zero.get_operation(),
+        one.get_operation(),
+        bound.get_operation(),
+        BranchArgsOp::new(context, vec![zero.result(context)], header).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append_created!(
+        context,
+        header,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            induction,
+            bound.result(context),
+            vec![induction],
+            vec![],
+            split,
+            exit,
+        ),
+    );
+    append_created!(
+        context,
+        split,
+        &AnalysisSplitOp::new_with_arguments(
+            context,
+            vec![split_induction],
+            vec![split_induction],
+            first_latch,
+            second_latch,
+        ),
+    );
+    let first_next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        first_induction,
+        one.result(context),
+    );
+    append(context, first_latch, &first_next);
+    append_created!(
+        context,
+        first_latch,
+        &BranchArgsOp::new(context, vec![first_next.result(context)], header),
+    );
+    let second_next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        second_induction,
+        one.result(context),
+    );
+    append(context, second_latch, &second_next);
+    append_created!(
+        context,
+        second_latch,
+        &BranchArgsOp::new(context, vec![second_next.result(context)], header),
+    );
+    append_created!(context, exit, &ReturnOp::new(context));
+    verify_operation(function.get_operation(), context).unwrap();
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("more than one dominated backedge")
+    ));
+}
+
+#[test]
+fn residual_irreducible_cycle_survives_backedge_removal_and_is_rejected() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "residual_cycle", 0);
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (split, split_induction) = index_block(context, &function, "split");
+    let (first, first_induction) = index_block(context, &function, "first");
+    let (second, second_induction) = index_block(context, &function, "second");
+    let (latch, latch_induction) = index_block(context, &function, "latch");
+    let exit = block(context, &function, "exit");
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let bound = IndexConstantOp::new(context, 8);
+    for operation in [
+        zero.get_operation(),
+        one.get_operation(),
+        bound.get_operation(),
+        BranchArgsOp::new(context, vec![zero.result(context)], header).get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    append_created!(
+        context,
+        header,
+        &IndexLessThanBranchArgsOp::new(
+            context,
+            induction,
+            bound.result(context),
+            vec![induction],
+            vec![],
+            split,
+            exit,
+        ),
+    );
+    append_created!(
+        context,
+        split,
+        &AnalysisSplitOp::new_with_arguments(
+            context,
+            vec![split_induction],
+            vec![split_induction],
+            first,
+            second,
+        ),
+    );
+    append_created!(
+        context,
+        first,
+        &AnalysisSplitOp::new_with_arguments(
+            context,
+            vec![first_induction],
+            vec![first_induction],
+            second,
+            latch,
+        ),
+    );
+    append_created!(
+        context,
+        second,
+        &AnalysisSplitOp::new_with_arguments(
+            context,
+            vec![second_induction],
+            vec![second_induction],
+            first,
+            latch,
+        ),
+    );
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        latch_induction,
+        one.result(context),
+    );
+    append(context, latch, &next);
+    append_created!(
+        context,
+        latch,
+        &BranchArgsOp::new(context, vec![next.result(context)], header),
+    );
+    append_created!(context, exit, &ReturnOp::new(context));
+    verify_operation(function.get_operation(), context).unwrap();
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("residual backedge")
+    ));
 }
 
 #[test]

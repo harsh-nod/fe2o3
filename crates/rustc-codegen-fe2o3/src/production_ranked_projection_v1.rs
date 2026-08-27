@@ -3602,9 +3602,12 @@ fn authenticate_tensor_instruction_v1(
     {
         return Err("an MFMA call with swapped or incompatible operand roles");
     }
-    if rhs_contract.profile != lhs_contract.profile
-        || accumulator_contract.profile != lhs_contract.profile
-    {
+    let homogeneous = rhs_contract.profile == lhs_contract.profile
+        && accumulator_contract.profile == lhs_contract.profile;
+    let fp4_by_fp8 = lhs_contract.profile == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+        && rhs_contract.profile == SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+        && accumulator_contract.profile == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128;
+    if !homogeneous && !fp4_by_fp8 {
         return Err("an MFMA call with incompatible instruction profiles");
     }
     if accumulator_contract.distribution != SemanticMfmaAccumulatorDistributionV1::RowMajor {
@@ -3618,8 +3621,23 @@ fn authenticate_tensor_instruction_v1(
     {
         return Err("an MFMA call whose operands do not share one authenticated wave64 lane");
     }
-    let mut contract = match lhs_contract.profile {
-        SemanticMfmaProfileV1::Bf16F32M16N16K16
+    let mut contract = match (lhs_contract.profile, rhs_contract.profile) {
+        (
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        ) if lhs_contract.register_distribution
+            == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+            && rhs_contract.register_distribution
+                == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+            && lhs.storage_layout == SemanticMfmaStorageLayoutV1::RowMajor
+            && rhs.storage_layout == SemanticMfmaStorageLayoutV1::RowMajor =>
+        {
+            fe2o3_kernel_ir::TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64()
+        }
+        (
+            SemanticMfmaProfileV1::Bf16F32M16N16K16,
+            SemanticMfmaProfileV1::Bf16F32M16N16K16,
+        )
             if lhs_contract.register_distribution
                 == SemanticMfmaRegisterDistributionV1::Tile16x16
                 && rhs_contract.register_distribution
@@ -3628,7 +3646,10 @@ fn authenticate_tensor_instruction_v1(
             fe2o3_kernel_ir::TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
                 .with_zero_filled_predicate_inputs()
         }
-        SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+        (
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        )
             if lhs_contract.register_distribution
                 == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
                 && rhs_contract.register_distribution
@@ -3638,7 +3659,10 @@ fn authenticate_tensor_instruction_v1(
         {
             fe2o3_kernel_ir::TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64()
         }
-        SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+        (
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        )
             if lhs_contract.register_distribution
                 == SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
                 && rhs_contract.register_distribution
@@ -14183,8 +14207,8 @@ mod tests {
             (1, [128, 1, 1], [u32::MAX, 1, 1], [0, 1, 1]),
             (2, [64, 1, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
             (2, [8, 8, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
-            (3, [64, 1, 1], [u32::MAX, u32::MAX, u32::MAX], [0, 0, 0]),
-            (3, [4, 4, 4], [u32::MAX, u32::MAX, u32::MAX], [0, 0, 0]),
+            (3, [64, 1, 1], [1024, 1024, 1024], [65_536, 1024, 1024]),
+            (3, [4, 4, 4], [1024, 1024, 1024], [4096, 4096, 4096]),
         ] {
             let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
             let launch =
@@ -15536,61 +15560,91 @@ mod tests {
     }
 
     #[test]
-    fn gfx950_ranked_tensor_authentication_rejects_cross_profile_substitution() {
+    fn gfx950_ranked_tensor_authentication_accepts_exact_mixed_profile_only() {
         let fp4 = SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128;
         let fp8 = SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128;
         let lhs_contract = gfx950_mfma_operand_contract(fp4, SemanticMfmaOperandRoleV1::A);
         let rhs_contract = gfx950_mfma_operand_contract(fp8, SemanticMfmaOperandRoleV1::B);
         let accumulator_contract = gfx950_mfma_accumulator_contract(fp4);
-        let state = HashMap::from([
-            (
-                0,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
-                    root: 10,
-                }),
-            ),
-            (
-                1,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
-                    ProjectedMfmaOperandV1 {
-                        contract: lhs_contract,
-                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                        lane_root: 20,
-                        allocation: tensor_test_allocation(),
-                    },
-                )),
-            ),
-            (
-                2,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
-                    ProjectedMfmaOperandV1 {
-                        contract: rhs_contract,
-                        storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
-                        lane_root: 20,
-                        allocation: tensor_test_allocation(),
-                    },
-                )),
-            ),
-            (
-                3,
-                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
-                    ProjectedMfmaAccumulatorV1 {
-                        contract: accumulator_contract,
-                        lane_root: 20,
-                        value_root: 30,
-                        flow_root: 30,
-                    },
-                )),
-            ),
-        ]);
+        let state_for = |lhs_contract, rhs_contract, accumulator_contract| {
+            HashMap::from([
+                (
+                    0,
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::MatrixContext {
+                        root: 10,
+                    }),
+                ),
+                (
+                    1,
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                        ProjectedMfmaOperandV1 {
+                            contract: lhs_contract,
+                            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                            lane_root: 20,
+                            allocation: tensor_test_allocation(),
+                        },
+                    )),
+                ),
+                (
+                    2,
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Operand(
+                        ProjectedMfmaOperandV1 {
+                            contract: rhs_contract,
+                            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+                            lane_root: 20,
+                            allocation: tensor_test_allocation(),
+                        },
+                    )),
+                ),
+                (
+                    3,
+                    ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::Accumulator(
+                        ProjectedMfmaAccumulatorV1 {
+                            contract: accumulator_contract,
+                            lane_root: 20,
+                            value_root: 30,
+                            flow_root: 30,
+                        },
+                    )),
+                ),
+            ])
+        };
 
+        let authenticated = authenticate_tensor_instruction_v1(
+            &tensor_test_call(),
+            &state_for(lhs_contract, rhs_contract, accumulator_contract),
+            lhs_contract,
+            rhs_contract,
+            accumulator_contract,
+        )
+        .unwrap();
+        assert_eq!(
+            authenticated.contract,
+            fe2o3_kernel_ir::TensorLayoutContractV1::
+                gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64(),
+        );
+
+        let reversed_lhs = gfx950_mfma_operand_contract(fp8, SemanticMfmaOperandRoleV1::A);
+        let reversed_rhs = gfx950_mfma_operand_contract(fp4, SemanticMfmaOperandRoleV1::B);
         assert_eq!(
             authenticate_tensor_instruction_v1(
                 &tensor_test_call(),
-                &state,
+                &state_for(reversed_lhs, reversed_rhs, accumulator_contract),
+                reversed_lhs,
+                reversed_rhs,
+                accumulator_contract,
+            ),
+            Err("an MFMA call with incompatible instruction profiles"),
+        );
+
+        let wrong_accumulator = gfx950_mfma_accumulator_contract(fp8);
+        assert_eq!(
+            authenticate_tensor_instruction_v1(
+                &tensor_test_call(),
+                &state_for(lhs_contract, rhs_contract, wrong_accumulator),
                 lhs_contract,
                 rhs_contract,
-                accumulator_contract,
+                wrong_accumulator,
             ),
             Err("an MFMA call with incompatible instruction profiles"),
         );

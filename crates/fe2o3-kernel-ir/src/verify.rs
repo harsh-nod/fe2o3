@@ -3,6 +3,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
+    AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
+    AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE,
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
     AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
     BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, ControlFlowError, Fence,
@@ -345,10 +347,12 @@ impl<'module> ModuleVerifier<'module> {
             let valid = AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id).is_some_and(
                 |diagnostic| {
                     let expected = diagnostic.declaration();
+                    let legacy = diagnostic.legacy_gfx942_declaration();
                     function.role == expected.role
                         && function.body.is_none()
                         && function.signature == expected.signature
-                        && function.required_capabilities == expected.required_capabilities
+                        && (function.required_capabilities == expected.required_capabilities
+                            || function.required_capabilities == legacy.required_capabilities)
                 },
             );
             if !valid {
@@ -1698,7 +1702,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     location.clone(),
                 );
                 self.verify_wave_tile_width(wave, tile_width, location.clone());
-                if !matches!(self.constant_u32(source_lane), Some(lane) if lane < tile_width) {
+                if !self.bounded_u32_source_lane(source_lane, tile_width) {
                     self.emit(
                         location.clone(),
                         DiagnosticCode::InvalidWaveOperation,
@@ -1729,15 +1733,40 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
     }
 
     fn constant_u32(&self, value: ValueId) -> Option<u32> {
-        let definition = self.definitions.get(&value)?;
-        let DefSite::Operation(block, operation_index) = definition.site else {
-            return None;
-        };
-        let operation = self.blocks.get(&block)?.operations.get(operation_index)?;
+        let operation = self.defining_operation(value)?;
         match operation.kind {
             OperationKind::Constant(Constant::U32(value)) => Some(value),
             _ => None,
         }
+    }
+
+    fn bounded_u32_source_lane(&self, value: ValueId, width: u32) -> bool {
+        if width == 0 || !width.is_power_of_two() || width > 64 {
+            return false;
+        }
+        if self.constant_u32(value).is_some_and(|lane| lane < width) {
+            return true;
+        }
+        let Some(OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            lhs,
+            rhs,
+        }) = self
+            .defining_operation(value)
+            .map(|operation| &operation.kind)
+        else {
+            return false;
+        };
+        self.constant_u32(*lhs).is_some_and(|mask| mask < width)
+            || self.constant_u32(*rhs).is_some_and(|mask| mask < width)
+    }
+
+    fn defining_operation(&self, value: ValueId) -> Option<&Operation> {
+        let definition = self.definitions.get(&value)?;
+        let DefSite::Operation(block, operation_index) = definition.site else {
+            return None;
+        };
+        self.blocks.get(&block)?.operations.get(operation_index)
     }
 
     fn verify_binary(
@@ -2502,6 +2531,26 @@ fn capability_is_supported(
                     && supported_scope.rank() >= max_scope.rank()
             )
         }),
+        TargetCapability::Extension { namespace, name }
+            if namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME =>
+        {
+            supported.contains(required)
+                || supported.contains(&TargetCapability::Extension {
+                    namespace: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+                    name: AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+                })
+        }
+        TargetCapability::Extension { namespace, name }
+            if namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME =>
+        {
+            supported.contains(required)
+                || supported.contains(&TargetCapability::Extension {
+                    namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+                    name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+                })
+        }
         _ => supported.contains(required),
     }
 }

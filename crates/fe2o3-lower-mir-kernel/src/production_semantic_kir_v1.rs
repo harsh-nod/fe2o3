@@ -4277,6 +4277,8 @@ struct SemanticFunctionLoweringV1<'a> {
     assert_failure_block: Option<BlockId>,
     max_operations: usize,
     emitted_operations: usize,
+    emitted_u32_constants: BTreeMap<ValueId, u32>,
+    emitted_u32_bitand_masks: BTreeMap<ValueId, u32>,
 }
 
 struct SemanticParameterBindingsV1<'a> {
@@ -4366,6 +4368,8 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             assert_failure_block,
             max_operations,
             emitted_operations: 0,
+            emitted_u32_constants: BTreeMap::new(),
+            emitted_u32_bitand_masks: BTreeMap::new(),
         })
     }
 
@@ -4958,7 +4962,32 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 } else {
                     self.lower_operand(block, statement, left, operations)?
                 };
-                let right = if canonicalize_right {
+                let (mut left, mut left_ty) = left
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+                let canonical_shift_right = if !semantic_operands_match
+                    && matches!(
+                        operation,
+                        SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+                    ) {
+                    let semantic_right_lowered_type =
+                        lower_scalar_type(self.types, semantic_right_type)?;
+                    canonical_shift_rhs_constant_v1(
+                        *operation,
+                        right,
+                        &semantic_right_lowered_type,
+                        &left_ty,
+                    )
+                } else {
+                    None
+                };
+                let right = if let Some(constant) = canonical_shift_right {
+                    self.emit(
+                        operations,
+                        left_ty.clone(),
+                        OperationKind::Constant(constant),
+                    )?
+                } else if canonicalize_right {
                     self.emit(
                         operations,
                         Type::INDEX,
@@ -4967,9 +4996,6 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 } else {
                     self.lower_operand(block, statement, right, operations)?
                 };
-                let (mut left, mut left_ty) = left
-                    .value()
-                    .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
                 let (mut right, mut right_ty) = right
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
@@ -4998,6 +5024,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         Some(block.index()),
                         statement,
                         "semantic binary operand types differ",
+                    ));
+                }
+                if matches!(
+                    operation,
+                    SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+                ) && !left_ty.as_scalar().is_some_and(ScalarType::is_integer)
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        statement,
+                        "semantic shift operands are not integral scalars",
                     ));
                 }
                 if let Some(predicate) = lower_compare(*operation) {
@@ -6169,10 +6207,18 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .lower_operand(block, None, &call.arguments()[2], operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
-                let bounded_source = operations.iter().any(|operation| {
-                    operation.results.iter().any(|result| result.id == source_lane)
-                        && matches!(operation.kind, OperationKind::Constant(Constant::U32(lane)) if lane < *width)
-                });
+                let bounded_source = subgroup_broadcast_source_is_statically_bounded(
+                    operations,
+                    source_lane,
+                    *width,
+                ) || self
+                    .emitted_u32_constants
+                    .get(&source_lane)
+                    .is_some_and(|lane| *lane < *width)
+                    || self
+                        .emitted_u32_bitand_masks
+                        .get(&source_lane)
+                        .is_some_and(|mask| *mask < *width);
                 if value_ty != Type::Scalar(ScalarType::F32)
                     || source_ty != Type::Scalar(ScalarType::U32)
                     || *width == 0
@@ -6546,14 +6592,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     let matrix = if expected_accumulator.profile
                         == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
                     {
-                        MatrixOperation::scaled_multiply_accumulate_fp4_e2m1(
-                            lhs,
-                            rhs,
-                            accumulator,
-                        )
-                        .with_declared_tensor_layout(
-                            TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64(),
-                        )
+                        let layout = if expected_lhs.profile
+                            == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                            && expected_rhs.profile == SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+                        {
+                            TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64()
+                        } else {
+                            TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64()
+                        };
+                        MatrixOperation::scaled_multiply_accumulate_fp4_e2m1(lhs, rhs, accumulator)
+                            .with_declared_tensor_layout(layout)
                     } else {
                         MatrixOperation::scaled_multiply_accumulate_fp8_e4m3(
                             lhs,
@@ -10341,6 +10389,29 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         kind: OperationKind,
     ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
         let id = ValueId(self.next_value);
+        let emitted_u32_constant = if ty == Type::Scalar(ScalarType::U32) {
+            match &kind {
+                OperationKind::Constant(Constant::U32(constant)) => Some(*constant),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let emitted_u32_bitand_mask = if ty == Type::Scalar(ScalarType::U32) {
+            match &kind {
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs,
+                    rhs,
+                } => [*lhs, *rhs]
+                    .into_iter()
+                    .filter_map(|operand| self.emitted_u32_constants.get(&operand).copied())
+                    .min(),
+                _ => None,
+            }
+        } else {
+            None
+        };
         self.next_value = self
             .next_value
             .checked_add(1)
@@ -10348,6 +10419,12 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
         self.push_operation(operations, || {
             Operation::effect_free(ValueDef::new(id, ty.clone()), kind)
         })?;
+        if let Some(constant) = emitted_u32_constant {
+            self.emitted_u32_constants.insert(id, constant);
+        }
+        if let Some(mask) = emitted_u32_bitand_mask {
+            self.emitted_u32_bitand_masks.insert(id, mask);
+        }
         Ok(SemanticValueBindingV1::Value { id, ty })
     }
 
@@ -11816,6 +11893,60 @@ fn canonical_index_constant_v1(
         .flatten()
 }
 
+fn canonical_shift_rhs_constant_v1(
+    operation: SemanticBinaryOpV1,
+    operand: &SemanticOperandV1,
+    semantic_rhs_type: &Type,
+    lhs_transport_type: &Type,
+) -> Option<Constant> {
+    if !matches!(
+        operation,
+        SemanticBinaryOpV1::ShiftLeft | SemanticBinaryOpV1::ShiftRight
+    ) {
+        return None;
+    }
+    let source = semantic_rhs_type.as_scalar()?;
+    let destination = lhs_transport_type.as_scalar()?;
+    if !source.is_integer() || !destination.is_integer() {
+        return None;
+    }
+    let SemanticOperandV1::Constant(constant) = operand else {
+        return None;
+    };
+    let SemanticConstantValueV1::Scalar(value) = constant.value() else {
+        return None;
+    };
+    let source_width = match source {
+        ScalarType::Index => 64,
+        source => source.bit_width()?,
+    };
+    if u16::from(value.size_bytes()) * 8 != source_width {
+        return None;
+    }
+    let value = value.bits();
+    if source.is_signed_integer() && value & (1_u128 << (source_width - 1)) != 0 {
+        return None;
+    }
+    match destination {
+        ScalarType::I8 => i8::try_from(value).ok().map(Constant::I8),
+        ScalarType::I16 => i16::try_from(value).ok().map(Constant::I16),
+        ScalarType::I32 => i32::try_from(value).ok().map(Constant::I32),
+        ScalarType::I64 => i64::try_from(value).ok().map(Constant::I64),
+        ScalarType::U8 => u8::try_from(value).ok().map(Constant::U8),
+        ScalarType::U16 => u16::try_from(value).ok().map(Constant::U16),
+        ScalarType::U32 => u32::try_from(value).ok().map(Constant::U32),
+        ScalarType::U64 => u64::try_from(value).ok().map(Constant::U64),
+        ScalarType::Index => u64::try_from(value).ok().map(Constant::Index),
+        ScalarType::Bool
+        | ScalarType::I128
+        | ScalarType::U128
+        | ScalarType::F16
+        | ScalarType::Bf16
+        | ScalarType::F32
+        | ScalarType::F64 => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn index_binary_coercion_v1(
     semantic_operands_match: bool,
@@ -11999,6 +12130,48 @@ fn enforce_limit(
     }
 }
 
+fn subgroup_broadcast_source_is_statically_bounded(
+    operations: &[Operation],
+    source_lane: ValueId,
+    width: u32,
+) -> bool {
+    if width == 0 || !width.is_power_of_two() || width > 64 {
+        return false;
+    }
+    let u32_constant = |value| {
+        operations.iter().find_map(|operation| {
+            let defines_value = operation
+                .results
+                .iter()
+                .any(|result| result.id == value && result.ty == Type::Scalar(ScalarType::U32));
+            match operation.kind {
+                OperationKind::Constant(Constant::U32(constant)) if defines_value => Some(constant),
+                _ => None,
+            }
+        })
+    };
+    let Some(producer) = operations.iter().find(|operation| {
+        operation
+            .results
+            .iter()
+            .any(|result| result.id == source_lane && result.ty == Type::Scalar(ScalarType::U32))
+    }) else {
+        return false;
+    };
+    match producer.kind {
+        OperationKind::Constant(Constant::U32(lane)) => lane < width,
+        OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            lhs,
+            rhs,
+        } => {
+            u32_constant(lhs).is_some_and(|mask| mask < width)
+                || u32_constant(rhs).is_some_and(|mask| mask < width)
+        }
+        _ => false,
+    }
+}
+
 const fn unsupported(
     function: u32,
     block: Option<u32>,
@@ -12045,6 +12218,75 @@ mod resource_tests {
         ProductionRankedTerminatorV1, ProductionRankedValueIdV1, ProductionSessionLimitsV1,
         compile_ranked_kernel_for_lowering_v1,
     };
+
+    #[test]
+    fn subgroup_broadcast_accepts_local_u32_mask_below_wave64_width() {
+        let unknown = ValueId(0);
+        let mask = ValueId(1);
+        let masked = ValueId(2);
+        let constant = Operation::effect_free(
+            ValueDef::new(mask, Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(63)),
+        );
+        for kind in [
+            OperationKind::Binary {
+                op: BinaryOp::BitAnd,
+                lhs: unknown,
+                rhs: mask,
+            },
+            OperationKind::Binary {
+                op: BinaryOp::BitAnd,
+                lhs: mask,
+                rhs: unknown,
+            },
+        ] {
+            let operations = [
+                constant.clone(),
+                Operation::effect_free(ValueDef::new(masked, Type::Scalar(ScalarType::U32)), kind),
+            ];
+            assert!(subgroup_broadcast_source_is_statically_bounded(
+                &operations,
+                masked,
+                64,
+            ));
+        }
+        assert!(subgroup_broadcast_source_is_statically_bounded(
+            &[constant],
+            mask,
+            64,
+        ));
+    }
+
+    #[test]
+    fn subgroup_broadcast_rejects_mask_at_width_and_missing_constant_mask() {
+        let unknown = ValueId(0);
+        let mask = ValueId(1);
+        let masked = ValueId(2);
+        let mask64 = Operation::effect_free(
+            ValueDef::new(mask, Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(64)),
+        );
+        let bitand = |rhs| {
+            Operation::effect_free(
+                ValueDef::new(masked, Type::Scalar(ScalarType::U32)),
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs: unknown,
+                    rhs,
+                },
+            )
+        };
+        assert!(!subgroup_broadcast_source_is_statically_bounded(
+            &[mask64, bitand(mask)],
+            masked,
+            64,
+        ));
+        assert!(!subgroup_broadcast_source_is_statically_bounded(
+            &[bitand(ValueId(3))],
+            masked,
+            64,
+        ));
+    }
 
     #[test]
     fn semantic_casts_use_the_shared_bounded_kernel_ir_index_paths() {
@@ -12334,6 +12576,198 @@ mod resource_tests {
         );
     }
 
+    fn lower_heterogeneous_u8_shift(
+        right: SemanticOperandV1,
+        max_operations: usize,
+    ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
+        let unit = SemanticTypeIdV1::from_index(0);
+        let u8_ty = SemanticTypeIdV1::from_index(1);
+        let i32_ty = SemanticTypeIdV1::from_index(2);
+        let types = [
+            unit_type(),
+            integer_type(81, false, 8),
+            integer_type(83, true, 32),
+        ];
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([85; 32]),
+            SemanticLayoutIdentityV1::from_sha256([86; 32]),
+            SemanticCanonAbiV1::GpuKernel,
+            SemanticExternAbiV1::GpuKernel,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        let block = SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([87; 32]),
+            source,
+            vec![],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap();
+        let function = SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([88; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([89; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([90; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([91; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([92; 32]),
+            source,
+            abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([93; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([94; 32]),
+                    u8_ty,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([95; 32]),
+                    i32_ty,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![block],
+        )
+        .unwrap();
+        let mut lowering = SemanticFunctionLoweringV1::new(
+            &types,
+            &[],
+            &function,
+            SemanticParameterBindingsV1 {
+                declarations: &[],
+                values: &[],
+                types: &[],
+            },
+            None,
+            max_operations,
+        )
+        .unwrap();
+        lowering.locals[1] = Some(SemanticValueBindingV1::Value {
+            id: ValueId(0),
+            ty: Type::Scalar(ScalarType::U8),
+        });
+        lowering.locals[2] = Some(SemanticValueBindingV1::Value {
+            id: ValueId(1),
+            ty: Type::Scalar(ScalarType::I32),
+        });
+        lowering.next_value = 2;
+        let left = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], u8_ty).unwrap(),
+        );
+        let mut operations = Vec::new();
+        lowering.lower_rvalue(
+            SemanticBlockIdV1::from_index(0),
+            Some(0),
+            u8_ty,
+            &SemanticRvalueKindV1::Binary {
+                operation: SemanticBinaryOpV1::ShiftRight,
+                left,
+                right,
+            },
+            &mut operations,
+        )?;
+        Ok(operations)
+    }
+
+    #[test]
+    fn heterogeneous_constant_shift_count_is_canonicalized_to_the_lhs_type() {
+        let i32_ty = SemanticTypeIdV1::from_index(2);
+        let right = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            i32_ty,
+            SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(3, 4).unwrap()),
+        ));
+        let operations = lower_heterogeneous_u8_shift(right, 2).unwrap();
+        assert_eq!(operations.len(), 2);
+        assert!(matches!(
+            &operations[0].kind,
+            OperationKind::Constant(Constant::U8(3))
+        ));
+        assert!(matches!(
+            &operations[1],
+            Operation {
+                results,
+                kind: OperationKind::Binary {
+                    op: BinaryOp::ShiftRight,
+                    lhs: ValueId(0),
+                    rhs: ValueId(2),
+                },
+                ..
+            } if results == &[ValueDef::new(ValueId(3), Type::Scalar(ScalarType::U8))]
+        ));
+        assert!(!operations.iter().any(|operation| matches!(
+            operation.kind,
+            OperationKind::Constant(Constant::I32(_)) | OperationKind::Cast { .. }
+        )));
+    }
+
+    #[test]
+    fn heterogeneous_shift_count_rejects_nonconstant_and_unrepresentable_values() {
+        let i32_ty = SemanticTypeIdV1::from_index(2);
+        let dynamic = SemanticOperandV1::Copy(
+            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(2), vec![], i32_ty).unwrap(),
+        );
+        assert!(matches!(
+            lower_heterogeneous_u8_shift(dynamic, 2),
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "semantic binary operand types differ",
+                ..
+            })
+        ));
+
+        let constant = |bits| {
+            SemanticOperandV1::Constant(SemanticConstantV1::new(
+                i32_ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(bits, 4).unwrap()),
+            ))
+        };
+        for hostile in [constant(u128::from(u32::MAX)), constant(256)] {
+            assert!(matches!(
+                lower_heterogeneous_u8_shift(hostile, 2),
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "semantic binary operand types differ",
+                    ..
+                })
+            ));
+        }
+
+        let float = SemanticOperandV1::Constant(SemanticConstantV1::new(
+            i32_ty,
+            SemanticConstantValueV1::Scalar(
+                SemanticScalarValueV1::new(u128::from(3.0_f32.to_bits()), 4).unwrap(),
+            ),
+        ));
+        assert!(
+            canonical_shift_rhs_constant_v1(
+                SemanticBinaryOpV1::ShiftRight,
+                &float,
+                &Type::Scalar(ScalarType::F32),
+                &Type::Scalar(ScalarType::U8),
+            )
+            .is_none()
+        );
+        assert!(
+            canonical_shift_rhs_constant_v1(
+                SemanticBinaryOpV1::Add,
+                &constant(3),
+                &Type::Scalar(ScalarType::I32),
+                &Type::Scalar(ScalarType::U8),
+            )
+            .is_none()
+        );
+    }
+
     fn unit_type() -> SemanticTypeDeclV1 {
         SemanticTypeDeclV1::new(
             SemanticTypeIdentityV1::from_sha256([1; 32]),
@@ -12365,6 +12799,16 @@ mod resource_tests {
                 signed: false,
                 bits: 64,
             }),
+        )
+    }
+
+    fn integer_type(identity: u8, signed: bool, bits: u16) -> SemanticTypeDeclV1 {
+        let size = u64::from(bits / 8);
+        SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([identity; 32]),
+            SemanticLayoutIdentityV1::from_sha256([identity.wrapping_add(1); 32]),
+            SemanticTypeLayoutV1::new(Some(size), size).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed, bits }),
         )
     }
 

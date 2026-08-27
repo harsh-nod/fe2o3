@@ -7699,6 +7699,16 @@ fn compiler_intrinsic_signature_matches(
             rhs,
             accumulator,
         } => {
+            let homogeneous_profiles =
+                lhs.profile == rhs.profile && lhs.profile == accumulator.profile;
+            let gfx950_fp4_by_fp8 = matches!(
+                (lhs.profile, rhs.profile, accumulator.profile),
+                (
+                    SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+                    SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+                    SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+                )
+            );
             inputs.len() == 4
                 && shared_reference_to(request, inputs[0], context)
                 && inputs[1] == lhs_fragment
@@ -7710,8 +7720,7 @@ fn compiler_intrinsic_signature_matches(
                 && mfma_accumulator_contract_valid(accumulator)
                 && lhs.role == SemanticMfmaOperandRoleV1::A
                 && rhs.role == SemanticMfmaOperandRoleV1::B
-                && lhs.profile == rhs.profile
-                && lhs.profile == accumulator.profile
+                && (homogeneous_profiles || gfx950_fp4_by_fp8)
                 && lhs.register_distribution == rhs.register_distribution
                 && lhs.wave_width == rhs.wave_width
                 && lhs.wave_width == accumulator.wave_width
@@ -17049,6 +17058,126 @@ mod private_tests {
             layout,
             shape,
         )
+    }
+
+    fn gfx950_mfma_signature_matches(
+        lhs_profile: SemanticMfmaProfileV1,
+        rhs_profile: SemanticMfmaProfileV1,
+        accumulator_profile: SemanticMfmaProfileV1,
+    ) -> bool {
+        let context = SemanticTypeIdV1::from_index(0);
+        let context_reference = SemanticTypeIdV1::from_index(1);
+        let lhs_fragment = SemanticTypeIdV1::from_index(2);
+        let rhs_fragment = SemanticTypeIdV1::from_index(3);
+        let accumulator_fragment = SemanticTypeIdV1::from_index(4);
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([6; 32])),
+            vec![
+                test_type(
+                    1,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+                test_type(
+                    2,
+                    SemanticTypeLayoutV1::new(Some(8), 8).unwrap(),
+                    SemanticTypeShapeV1::Pointer(
+                        SemanticPointerTypeV1::new_with_kind(
+                            context,
+                            SemanticPointerKindV1::Reference,
+                            SemanticMutabilityV1::Immutable,
+                            0,
+                            64,
+                            SemanticPointerMetadataV1::None,
+                        )
+                        .unwrap(),
+                    ),
+                ),
+                test_type(
+                    3,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+                test_type(
+                    4,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+                test_type(
+                    5,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Opaque,
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let abi_value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+        let abi = SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([7; 32]),
+            SemanticLayoutIdentityV1::from_sha256([8; 32]),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![
+                abi_value(context_reference),
+                abi_value(lhs_fragment),
+                abi_value(rhs_fragment),
+                abi_value(accumulator_fragment),
+            ],
+            abi_value(accumulator_fragment),
+        )
+        .unwrap();
+        let operand_contract = |role, profile| SemanticMfmaOperandContractV1 {
+            role,
+            profile,
+            register_distribution: SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128,
+            wave_width: 64,
+        };
+        compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
+                context,
+                lhs_fragment,
+                rhs_fragment,
+                accumulator_fragment,
+                lhs: operand_contract(SemanticMfmaOperandRoleV1::A, lhs_profile),
+                rhs: operand_contract(SemanticMfmaOperandRoleV1::B, rhs_profile),
+                accumulator: SemanticMfmaAccumulatorContractV1 {
+                    profile: accumulator_profile,
+                    distribution: SemanticMfmaAccumulatorDistributionV1::RowMajor,
+                    wave_width: 64,
+                },
+            },
+            &abi,
+        )
+    }
+
+    #[test]
+    fn gfx950_mfma_signature_accepts_exact_fp4_a_fp8_b_fp4_accumulator() {
+        assert!(gfx950_mfma_signature_matches(
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        ));
+    }
+
+    #[test]
+    fn gfx950_mfma_signature_rejects_reversed_profiles_and_wrong_accumulator() {
+        assert!(!gfx950_mfma_signature_matches(
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+        ));
+        assert!(!gfx950_mfma_signature_matches(
+            SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+            SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128,
+        ));
     }
 
     #[test]

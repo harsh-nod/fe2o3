@@ -2,7 +2,15 @@
 
 #![allow(missing_docs)] // The kernel macro emits an undocumented helper module.
 
-use fe2o3_device::{DeviceMath, DisjointSlice, GridExclusive, GridLeader, kernel, thread};
+use fe2o3_device::{DeviceMath, DisjointSlice, thread};
+#[cfg(target_arch = "amdgpu")]
+use fe2o3_device::{
+    Gfx950F32AccumulatorFragment, Gfx950Fp8E4M3, Gfx950Fp8MfmaAMatrix, Gfx950LdsTransposeTile,
+    Gfx950Matrix, Gfx950Subgroup, Gfx950TransposeUninitialized, Index1D, KernelError, KernelResult,
+    RowStriped2D, StridedReadView2D, Wave64, WaveLane, kernel,
+};
+#[cfg(not(target_arch = "amdgpu"))]
+use fe2o3_device::{GridExclusive, GridLeader};
 
 use crate::{
     ATTENTION_TOKENS_V1, CHANNELS_V1, HEAD_DIMENSION_V1, KDA_TAPS_V1, MIXING_STREAMS_V1,
@@ -13,6 +21,7 @@ use crate::{
 const ATTENTION_SCALE_V1: f32 = 0.088_388_346;
 const RMS_EPSILON_V1: f32 = 1.0e-5;
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn finite_slice_v1(values: &[f32], expected: usize) -> bool {
     if values.len() != expected {
         return false;
@@ -27,18 +36,21 @@ fn finite_slice_v1(values: &[f32], expected: usize) -> bool {
     true
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn sigmoid_v1(math: &DeviceMath, value: f32) -> Option<f32> {
     let exponential = math.exp_f32(-value);
     let result = 1.0 / (1.0 + exponential);
     result.is_finite().then_some(result)
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn tanh_v1(math: &DeviceMath, value: f32) -> Option<f32> {
     let sigmoid = 1.0 / (1.0 + math.exp_f32(-2.0 * value));
     let result = 2.0 * sigmoid - 1.0;
     result.is_finite().then_some(result)
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn decode_fp8_e4m3_v1(value: u8) -> f32 {
     let exponent = ((value >> 3) & 15) as i32;
     let mantissa = (value & 7) as f32;
@@ -57,6 +69,66 @@ fn decode_fp8_e4m3_v1(value: u8) -> f32 {
     }
 }
 
+#[cfg(target_arch = "amdgpu")]
+macro_rules! decode_fp8_e4m3_v1 {
+    ($value:expr) => {{
+        let bits = $value;
+        let exponent = (bits >> 3_u8) & 0xf;
+        let mantissa = bits & 0x7;
+        let magnitude = if exponent == 0xf && mantissa == 0x7 {
+            let nan_source = f32::from(mantissa - 7_u8);
+            nan_source / nan_source
+        } else if exponent == 0 {
+            f32::from(mantissa) / 512.0
+        } else {
+            let scale = if exponent < 8 {
+                f32::from(1_u8 << exponent) / 128.0
+            } else {
+                f32::from(1_u8 << (exponent - 7_u8))
+            };
+            (1.0 + f32::from(mantissa) / 8.0) * scale
+        };
+        if bits & 0x80 == 0 {
+            magnitude
+        } else {
+            -magnitude
+        }
+    }};
+}
+
+#[cfg(target_arch = "amdgpu")]
+macro_rules! consider_sparse_candidate_v1 {
+    ($id:expr, $rank:expr, $attention:expr, $id0:ident, $rank0:ident, $attention0:ident,
+     $id1:ident, $rank1:ident, $attention1:ident,
+     $id2:ident, $rank2:ident, $attention2:ident) => {{
+        let candidate_rank = $rank;
+        let candidate_attention = $attention;
+        if candidate_rank > $rank0 {
+            $id2 = $id1;
+            $rank2 = $rank1;
+            $attention2 = $attention1;
+            $id1 = $id0;
+            $rank1 = $rank0;
+            $attention1 = $attention0;
+            $id0 = $id;
+            $rank0 = candidate_rank;
+            $attention0 = candidate_attention;
+        } else if candidate_rank > $rank1 {
+            $id2 = $id1;
+            $rank2 = $rank1;
+            $attention2 = $attention1;
+            $id1 = $id;
+            $rank1 = candidate_rank;
+            $attention1 = candidate_attention;
+        } else if candidate_rank > $rank2 {
+            $id2 = $id;
+            $rank2 = candidate_rank;
+            $attention2 = candidate_attention;
+        }
+    }};
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 fn exp2_integer_v1(exponent: i32) -> f32 {
     let mut result = 1.0_f32;
     let mut step = 0;
@@ -74,6 +146,7 @@ fn exp2_integer_v1(exponent: i32) -> f32 {
     result
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn write_f32_v1(
     output: &mut DisjointSlice<f32, GridExclusive>,
     leader: &GridLeader,
@@ -87,6 +160,7 @@ fn write_f32_v1(
     *slot = value;
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn write_u32_v1(
     output: &mut DisjointSlice<u32, GridExclusive>,
     leader: &GridLeader,
@@ -100,6 +174,7 @@ fn write_u32_v1(
     *slot = value;
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn kda_update_v1(
     math: &DeviceMath,
     history: &[f32],
@@ -140,12 +215,65 @@ fn kda_update_v1(
 }
 
 /// Applies one three-tap gated recurrence and RMS-normalizes its 16-channel state.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-decode"))]
 #[kernel(
     typed,
-    namespace = "ee41c04158f6f9bd299168ab92fbef9a9965b5496cbe795428506befe2d17e0d",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(16))
+    namespace = "e2036047357df97405feba4d64aa7e95868109636c92a6f6853119580fd72fe4",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
+pub fn gfx950_kda_gdn_decode(
+    history: &[f32],
+    gate_input: &[f32],
+    state: &[f32],
+    convolution_weights: &[f32],
+    mut state_output: DisjointSlice<f32, Index1D>,
+    mut normalized_output: DisjointSlice<f32, Index1D>,
+) {
+    if history.len() != KDA_TAPS_V1 * CHANNELS_V1
+        || gate_input.len() != CHANNELS_V1
+        || state.len() != CHANNELS_V1
+        || convolution_weights.len() != KDA_TAPS_V1
+        || state_output.len() != CHANNELS_V1
+        || normalized_output.len() != CHANNELS_V1
+    {
+        return;
+    }
+    let Ok(weights) = StridedReadView2D::from_shared_slice(convolution_weights, 0, 1, 3, 3) else {
+        return;
+    };
+    let Ok(history) = StridedReadView2D::from_shared_slice(history, 0, 3, 16, 16) else {
+        return;
+    };
+    let Ok(gates) = StridedReadView2D::from_shared_slice(gate_input, 0, 1, 16, 16) else {
+        return;
+    };
+    let Ok(state) = StridedReadView2D::from_shared_slice(state, 0, 1, 16, 16) else {
+        return;
+    };
+    let index = thread::index_1d();
+    let channel = index.get();
+    let math = DeviceMath::current();
+    let current_state = state.load_or(0, channel, 0.0);
+    let convolution = history.load_or(0, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + history.load_or(1, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + history.load_or(2, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal_input = convolution + 0.25 * current_state;
+    let proposal = 2.0 / (1.0 + math.exp_f32(-2.0 * proposal_input)) - 1.0;
+    let gate = 1.0 / (1.0 + math.exp_f32(-gates.load_or(0, channel, 0.0)));
+    let updated = gate * current_state + (1.0 - gate) * proposal;
+    let square_sum = Gfx950Subgroup::current().reduce_sum_f32::<16>(updated * updated);
+    let root = math.sqrt_f32(square_sum / CHANNELS_V1 as f32 + RMS_EPSILON_V1);
+    if channel < CHANNELS_V1 {
+        if let Some(slot) = state_output.get_mut(thread::index_1d()) {
+            *slot = updated;
+        }
+        if let Some(slot) = normalized_output.get_mut(thread::index_1d()) {
+            *slot = updated / root;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_kda_gdn_decode(
     history: &[f32],
     gate_input: &[f32],
@@ -190,12 +318,152 @@ pub fn gfx950_kda_gdn_decode(
 }
 
 /// Applies the same recurrence to eight ordered tokens in two four-token chunks.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-kda-prefill"))]
 #[kernel(
     typed,
-    namespace = "d7eb54ccc0cde5d616c700746ffaabca1fc9e22f85e8b603a8505703c65b0898",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(2, 4, 3, 16, 16, 16))
+    namespace = "5348fe56c1135474870729b49de57ae9150bdd6ecfb682da5c8ed03b73ccb98e",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
+pub fn gfx950_kda_gdn_prefill(
+    input: &[f32],
+    gate_input: &[f32],
+    initial_state: &[f32],
+    convolution_weights: &[f32],
+    mut final_state: DisjointSlice<f32, Index1D>,
+    mut normalized_output: DisjointSlice<f32, RowStriped2D<Index1D, 16, 8>>,
+) {
+    if input.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
+        || gate_input.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
+        || initial_state.len() != CHANNELS_V1
+        || convolution_weights.len() != KDA_TAPS_V1
+        || final_state.len() != CHANNELS_V1
+        || normalized_output.len() != PREFILL_TOKENS_V1 * CHANNELS_V1
+    {
+        return;
+    }
+    let Ok(weights) = StridedReadView2D::from_shared_slice(convolution_weights, 0, 1, 3, 3) else {
+        return;
+    };
+    let Ok(input) = StridedReadView2D::from_shared_slice(input, 0, 8, 16, 16) else {
+        return;
+    };
+    let Ok(gates) = StridedReadView2D::from_shared_slice(gate_input, 0, 8, 16, 16) else {
+        return;
+    };
+    let Ok(initial_state) = StridedReadView2D::from_shared_slice(initial_state, 0, 1, 16, 16)
+    else {
+        return;
+    };
+    let index = thread::index_1d();
+    let linear = index.get();
+    let channel = linear % CHANNELS_V1;
+    let Some(stripe) = index.checked_row_striped_2d::<16, 8>() else {
+        return;
+    };
+    let math = DeviceMath::current();
+    let subgroup = Gfx950Subgroup::current();
+    let mut state = initial_state.load_or(0, channel, 0.0);
+    let convolution0 = input.load_or(0, channel, 0.0) * weights.load_or(0, 0, 0.0);
+    let proposal0 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution0 + 0.25 * state))) - 1.0;
+    let gate0 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(0, channel, 0.0)));
+    state = gate0 * state + (1.0 - gate0) * proposal0;
+    let square_sum0 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized0 = state / math.sqrt_f32(square_sum0 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution1 = input.load_or(1, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(0, channel, 0.0) * weights.load_or(0, 1, 0.0);
+    let proposal1 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution1 + 0.25 * state))) - 1.0;
+    let gate1 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(1, channel, 0.0)));
+    state = gate1 * state + (1.0 - gate1) * proposal1;
+    let square_sum1 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized1 = state / math.sqrt_f32(square_sum1 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution2 = input.load_or(2, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(1, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + input.load_or(0, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal2 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution2 + 0.25 * state))) - 1.0;
+    let gate2 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(2, channel, 0.0)));
+    state = gate2 * state + (1.0 - gate2) * proposal2;
+    let square_sum2 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized2 = state / math.sqrt_f32(square_sum2 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution3 = input.load_or(3, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(2, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + input.load_or(1, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal3 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution3 + 0.25 * state))) - 1.0;
+    let gate3 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(3, channel, 0.0)));
+    state = gate3 * state + (1.0 - gate3) * proposal3;
+    let square_sum3 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized3 = state / math.sqrt_f32(square_sum3 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution4 = input.load_or(4, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(3, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + input.load_or(2, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal4 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution4 + 0.25 * state))) - 1.0;
+    let gate4 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(4, channel, 0.0)));
+    state = gate4 * state + (1.0 - gate4) * proposal4;
+    let square_sum4 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized4 = state / math.sqrt_f32(square_sum4 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution5 = input.load_or(5, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(4, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + input.load_or(3, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal5 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution5 + 0.25 * state))) - 1.0;
+    let gate5 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(5, channel, 0.0)));
+    state = gate5 * state + (1.0 - gate5) * proposal5;
+    let square_sum5 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized5 = state / math.sqrt_f32(square_sum5 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution6 = input.load_or(6, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(5, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + input.load_or(4, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal6 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution6 + 0.25 * state))) - 1.0;
+    let gate6 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(6, channel, 0.0)));
+    state = gate6 * state + (1.0 - gate6) * proposal6;
+    let square_sum6 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized6 = state / math.sqrt_f32(square_sum6 / 16.0 + RMS_EPSILON_V1);
+
+    let convolution7 = input.load_or(7, channel, 0.0) * weights.load_or(0, 0, 0.0)
+        + input.load_or(6, channel, 0.0) * weights.load_or(0, 1, 0.0)
+        + input.load_or(5, channel, 0.0) * weights.load_or(0, 2, 0.0);
+    let proposal7 = 2.0 / (1.0 + math.exp_f32(-2.0 * (convolution7 + 0.25 * state))) - 1.0;
+    let gate7 = 1.0 / (1.0 + math.exp_f32(-gates.load_or(7, channel, 0.0)));
+    state = gate7 * state + (1.0 - gate7) * proposal7;
+    let square_sum7 = subgroup.reduce_sum_f32::<16>(state * state);
+    let normalized7 = state / math.sqrt_f32(square_sum7 / 16.0 + RMS_EPSILON_V1);
+
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 0, 1, 128, 128) {
+        *slot = normalized0;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 1, 1, 128, 128) {
+        *slot = normalized1;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 2, 1, 128, 128) {
+        *slot = normalized2;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 3, 1, 128, 128) {
+        *slot = normalized3;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 4, 1, 128, 128) {
+        *slot = normalized4;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 5, 1, 128, 128) {
+        *slot = normalized5;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 6, 1, 128, 128) {
+        *slot = normalized6;
+    }
+    if let Some(slot) = normalized_output.get_row_striped_2d_mut(&stripe, 7, 1, 128, 128) {
+        *slot = normalized7;
+    }
+    if linear < CHANNELS_V1 {
+        if let Some(slot) = final_state.get_mut(thread::index_1d()) {
+            *slot = state;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_kda_gdn_prefill(
     input: &[f32],
     gate_input: &[f32],
@@ -217,7 +485,6 @@ pub fn gfx950_kda_gdn_prefill(
         fe2o3_device::trap();
         return;
     }
-
     let math = DeviceMath::current();
     let mut state = [0.0_f32; CHANNELS_V1];
     state.copy_from_slice(initial_state);
@@ -269,6 +536,7 @@ pub fn gfx950_kda_gdn_prefill(
     }
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn select_sparse_tokens_v1(content_scores: &[f32]) -> [usize; SELECTED_TOKENS_V1] {
     let mut block_maxima = [f32::NEG_INFINITY; SPARSE_BLOCKS_V1];
     let mut block = 0;
@@ -325,6 +593,7 @@ fn select_sparse_tokens_v1(content_scores: &[f32]) -> [usize; SELECTED_TOKENS_V1
     selected_tokens
 }
 
+#[cfg(not(target_arch = "amdgpu"))]
 fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
     let mut dot = 0.0_f32;
     let mut depth = 0;
@@ -341,12 +610,470 @@ fn attention_score_v1(q: &[u8], k: &[u8], token: usize) -> Option<f32> {
 }
 
 /// Selects two content blocks, retains three tokens, and computes one 16-value output.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-content-sparse-attention"))]
 #[kernel(
     typed,
-    namespace = "4113e541a94ca80028142dfcf53760b4ed3c36dc4fe567e8399b206f31620f10",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(3, 3, 3, 16, 3))
+    namespace = "4eb73f6d2e84dc00a2f62f794f44dc346ec7f413e975999a7bb1eda506a601e5",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
+pub fn gfx950_content_sparse_attention(
+    q: &[u8],
+    k: &[u8],
+    v: &[u8],
+    content_scores: &[f32],
+    mut output: DisjointSlice<f32, Index1D>,
+    mut selected_output: DisjointSlice<u32, Index1D>,
+) {
+    if q.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || k.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || v.len() != ATTENTION_TOKENS_V1 * CHANNELS_V1
+        || content_scores.len() != ATTENTION_TOKENS_V1
+        || output.len() != CHANNELS_V1
+        || selected_output.len() != SELECTED_TOKENS_V1
+    {
+        return;
+    }
+    let index = thread::index_1d();
+    let column = index.get() % ATTENTION_TOKENS_V1;
+    let lane = WaveLane::<Wave64>::current();
+    let Ok(query) = Gfx950Fp8MfmaAMatrix::row_major(
+        q,
+        0,
+        ATTENTION_TOKENS_V1,
+        HEAD_DIMENSION_V1,
+        HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let query = query.load_m16k128(&lane, 0, 0);
+    let Ok(key) = Gfx950Fp8MfmaAMatrix::row_major(
+        k,
+        0,
+        ATTENTION_TOKENS_V1,
+        HEAD_DIMENSION_V1,
+        HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let key = Gfx950LdsTransposeTile::<Gfx950Fp8E4M3, Gfx950TransposeUninitialized>::current(&lane)
+        .stage_k_transposed(&key, 0, 0)
+        .publish()
+        .read_mfma_fragment();
+    let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp8E4M3>::zero(&lane);
+    let scores = Gfx950Matrix::current()
+        .multiply_accumulate_fp8(query, key, accumulator)
+        .into_values();
+    let Ok(content) = StridedReadView2D::from_shared_slice(
+        content_scores,
+        0,
+        1,
+        ATTENTION_TOKENS_V1,
+        ATTENTION_TOKENS_V1,
+    ) else {
+        return;
+    };
+
+    let subgroup = Gfx950Subgroup::current();
+    let math = DeviceMath::current();
+    let lane_content = content.load_or(0, column, f32::NEG_INFINITY);
+    let lane_attention = scores[0] * ATTENTION_SCALE_V1 + 0.75 * lane_content;
+    let c0 = subgroup.broadcast_f32::<16>(lane_content, 0);
+    let c1 = subgroup.broadcast_f32::<16>(lane_content, 1);
+    let c2 = subgroup.broadcast_f32::<16>(lane_content, 2);
+    let c3 = subgroup.broadcast_f32::<16>(lane_content, 3);
+    let c4 = subgroup.broadcast_f32::<16>(lane_content, 4);
+    let c5 = subgroup.broadcast_f32::<16>(lane_content, 5);
+    let c6 = subgroup.broadcast_f32::<16>(lane_content, 6);
+    let c7 = subgroup.broadcast_f32::<16>(lane_content, 7);
+    let c8 = subgroup.broadcast_f32::<16>(lane_content, 8);
+    let c9 = subgroup.broadcast_f32::<16>(lane_content, 9);
+    let c10 = subgroup.broadcast_f32::<16>(lane_content, 10);
+    let c11 = subgroup.broadcast_f32::<16>(lane_content, 11);
+    let c12 = subgroup.broadcast_f32::<16>(lane_content, 12);
+    let c13 = subgroup.broadcast_f32::<16>(lane_content, 13);
+    let c14 = subgroup.broadcast_f32::<16>(lane_content, 14);
+    let c15 = subgroup.broadcast_f32::<16>(lane_content, 15);
+    let a0 = subgroup.broadcast_f32::<16>(lane_attention, 0);
+    let a1 = subgroup.broadcast_f32::<16>(lane_attention, 1);
+    let a2 = subgroup.broadcast_f32::<16>(lane_attention, 2);
+    let a3 = subgroup.broadcast_f32::<16>(lane_attention, 3);
+    let a4 = subgroup.broadcast_f32::<16>(lane_attention, 4);
+    let a5 = subgroup.broadcast_f32::<16>(lane_attention, 5);
+    let a6 = subgroup.broadcast_f32::<16>(lane_attention, 6);
+    let a7 = subgroup.broadcast_f32::<16>(lane_attention, 7);
+    let a8 = subgroup.broadcast_f32::<16>(lane_attention, 8);
+    let a9 = subgroup.broadcast_f32::<16>(lane_attention, 9);
+    let a10 = subgroup.broadcast_f32::<16>(lane_attention, 10);
+    let a11 = subgroup.broadcast_f32::<16>(lane_attention, 11);
+    let a12 = subgroup.broadcast_f32::<16>(lane_attention, 12);
+    let a13 = subgroup.broadcast_f32::<16>(lane_attention, 13);
+    let a14 = subgroup.broadcast_f32::<16>(lane_attention, 14);
+    let a15 = subgroup.broadcast_f32::<16>(lane_attention, 15);
+
+    let mut block0 = c0;
+    if c1 > block0 {
+        block0 = c1;
+    }
+    if c2 > block0 {
+        block0 = c2;
+    }
+    if c3 > block0 {
+        block0 = c3;
+    }
+    let mut block1 = c4;
+    if c5 > block1 {
+        block1 = c5;
+    }
+    if c6 > block1 {
+        block1 = c6;
+    }
+    if c7 > block1 {
+        block1 = c7;
+    }
+    let mut block2 = c8;
+    if c9 > block2 {
+        block2 = c9;
+    }
+    if c10 > block2 {
+        block2 = c10;
+    }
+    if c11 > block2 {
+        block2 = c11;
+    }
+    let mut block3 = c12;
+    if c13 > block3 {
+        block3 = c13;
+    }
+    if c14 > block3 {
+        block3 = c14;
+    }
+    if c15 > block3 {
+        block3 = c15;
+    }
+    let mut first_block = 0;
+    let mut first_block_score = block0;
+    if block1 > first_block_score {
+        first_block = 1;
+        first_block_score = block1;
+    }
+    if block2 > first_block_score {
+        first_block = 2;
+        first_block_score = block2;
+    }
+    if block3 > first_block_score {
+        first_block = 3;
+    }
+    let mut second_block = if first_block == 0 { 1 } else { 0 };
+    let mut second_block_score = if second_block == 0 { block0 } else { block1 };
+    if first_block != 1 && block1 > second_block_score {
+        second_block = 1;
+        second_block_score = block1;
+    }
+    if first_block != 2 && block2 > second_block_score {
+        second_block = 2;
+        second_block_score = block2;
+    }
+    if first_block != 3 && block3 > second_block_score {
+        second_block = 3;
+    }
+
+    let keep0 = first_block == 0 || second_block == 0;
+    let keep1 = first_block == 1 || second_block == 1;
+    let keep2 = first_block == 2 || second_block == 2;
+    let keep3 = first_block == 3 || second_block == 3;
+    let e0 = if keep0 { c0 } else { f32::NEG_INFINITY };
+    let e1 = if keep0 { c1 } else { f32::NEG_INFINITY };
+    let e2 = if keep0 { c2 } else { f32::NEG_INFINITY };
+    let e3 = if keep0 { c3 } else { f32::NEG_INFINITY };
+    let e4 = if keep1 { c4 } else { f32::NEG_INFINITY };
+    let e5 = if keep1 { c5 } else { f32::NEG_INFINITY };
+    let e6 = if keep1 { c6 } else { f32::NEG_INFINITY };
+    let e7 = if keep1 { c7 } else { f32::NEG_INFINITY };
+    let e8 = if keep2 { c8 } else { f32::NEG_INFINITY };
+    let e9 = if keep2 { c9 } else { f32::NEG_INFINITY };
+    let e10 = if keep2 { c10 } else { f32::NEG_INFINITY };
+    let e11 = if keep2 { c11 } else { f32::NEG_INFINITY };
+    let e12 = if keep3 { c12 } else { f32::NEG_INFINITY };
+    let e13 = if keep3 { c13 } else { f32::NEG_INFINITY };
+    let e14 = if keep3 { c14 } else { f32::NEG_INFINITY };
+    let e15 = if keep3 { c15 } else { f32::NEG_INFINITY };
+
+    let mut selected0 = usize::MAX;
+    let mut selected0_rank = f32::NEG_INFINITY;
+    let mut selected0_attention = f32::NEG_INFINITY;
+    let mut selected1 = usize::MAX;
+    let mut selected1_rank = f32::NEG_INFINITY;
+    let mut selected1_attention = f32::NEG_INFINITY;
+    let mut selected2 = usize::MAX;
+    let mut selected2_rank = f32::NEG_INFINITY;
+    let mut selected2_attention = f32::NEG_INFINITY;
+    consider_sparse_candidate_v1!(
+        0,
+        e0,
+        a0,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        1,
+        e1,
+        a1,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        2,
+        e2,
+        a2,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        3,
+        e3,
+        a3,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        4,
+        e4,
+        a4,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        5,
+        e5,
+        a5,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        6,
+        e6,
+        a6,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        7,
+        e7,
+        a7,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        8,
+        e8,
+        a8,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        9,
+        e9,
+        a9,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        10,
+        e10,
+        a10,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        11,
+        e11,
+        a11,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        12,
+        e12,
+        a12,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        13,
+        e13,
+        a13,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        14,
+        e14,
+        a14,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    consider_sparse_candidate_v1!(
+        15,
+        e15,
+        a15,
+        selected0,
+        selected0_rank,
+        selected0_attention,
+        selected1,
+        selected1_rank,
+        selected1_attention,
+        selected2,
+        selected2_rank,
+        selected2_attention
+    );
+    let selected_index = thread::index_1d();
+    let selected_rank = selected_index.get();
+    if selected_rank < SELECTED_TOKENS_V1 {
+        let selected = if selected_rank == 0 {
+            selected0
+        } else if selected_rank == 1 {
+            selected1
+        } else {
+            selected2
+        };
+        if let Some(slot) = selected_output.get_mut(selected_index) {
+            *slot = selected as u32;
+        }
+    }
+
+    let Ok(value) =
+        StridedReadView2D::from_shared_slice(v, 0, ATTENTION_TOKENS_V1, CHANNELS_V1, CHANNELS_V1)
+    else {
+        return;
+    };
+    let mut maximum = selected0_attention;
+    if selected1_attention > maximum {
+        maximum = selected1_attention;
+    }
+    if selected2_attention > maximum {
+        maximum = selected2_attention;
+    }
+    let weight0 = math.exp_f32(selected0_attention - maximum);
+    let weight1 = math.exp_f32(selected1_attention - maximum);
+    let weight2 = math.exp_f32(selected2_attention - maximum);
+    let denominator = weight0 + weight1 + weight2;
+    let result = weight0 / denominator * decode_fp8_e4m3_v1!(value.load_or(selected0, column, 0))
+        + weight1 / denominator * decode_fp8_e4m3_v1!(value.load_or(selected1, column, 0))
+        + weight2 / denominator * decode_fp8_e4m3_v1!(value.load_or(selected2, column, 0));
+    let output_gate = 1.0 / (1.0 + math.exp_f32(-maximum * 0.01));
+    if index.get() < CHANNELS_V1 {
+        if let Some(slot) = output.get_mut(index) {
+            *slot = result * output_gate;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_content_sparse_attention(
     q: &[u8],
     k: &[u8],
@@ -374,7 +1101,6 @@ pub fn gfx950_content_sparse_attention(
         write_u32_v1(&mut selected_output, &leader, rank, selected[rank] as u32);
         rank += 1;
     }
-
     let mut scores = [0.0_f32; SELECTED_TOKENS_V1];
     let mut maximum = f32::NEG_INFINITY;
     rank = 0;
@@ -390,7 +1116,6 @@ pub fn gfx950_content_sparse_attention(
         }
         rank += 1;
     }
-
     let math = DeviceMath::current();
     let mut probabilities = [0.0_f32; SELECTED_TOKENS_V1];
     let mut denominator = 0.0_f32;
@@ -424,12 +1149,134 @@ pub fn gfx950_content_sparse_attention(
 }
 
 /// Mixes a four-token local window with three four-token compressed global blocks.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-compressed-hybrid-attention"))]
 #[kernel(
     typed,
-    namespace = "44be0e88b5376e713b306cdc4d347668cf7d3b235df5e1d2283c86825cc6cd0b",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(16, 16, 3, 4, 3, 16, 4, 3, 4))
+    namespace = "385748dbb7bdd90c5273ed179062a78b392e297bbeff9833a4df11b446088b44",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1])
 )]
+pub fn gfx950_compressed_hybrid_attention(
+    q: &[u8],
+    k: &[u8],
+    v: &[u8],
+    token_bias: &[f32],
+    mut output: DisjointSlice<f32, Index1D>,
+) {
+    if q.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || k.len() != ATTENTION_TOKENS_V1 * HEAD_DIMENSION_V1
+        || v.len() != ATTENTION_TOKENS_V1 * CHANNELS_V1
+        || token_bias.len() != ATTENTION_TOKENS_V1
+        || output.len() != CHANNELS_V1
+    {
+        return;
+    }
+    let index = thread::index_1d();
+    let column = index.get() % ATTENTION_TOKENS_V1;
+    let lane = WaveLane::<Wave64>::current();
+    let Ok(query) = Gfx950Fp8MfmaAMatrix::row_major(
+        q,
+        0,
+        ATTENTION_TOKENS_V1,
+        HEAD_DIMENSION_V1,
+        HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let query = query.load_m16k128(&lane, 0, 0);
+    let Ok(key) = Gfx950Fp8MfmaAMatrix::row_major(
+        k,
+        0,
+        ATTENTION_TOKENS_V1,
+        HEAD_DIMENSION_V1,
+        HEAD_DIMENSION_V1,
+    ) else {
+        return;
+    };
+    let key = Gfx950LdsTransposeTile::<Gfx950Fp8E4M3, Gfx950TransposeUninitialized>::current(&lane)
+        .stage_k_transposed(&key, 0, 0)
+        .publish()
+        .read_mfma_fragment();
+    let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp8E4M3>::zero(&lane);
+    let scores = Gfx950Matrix::current()
+        .multiply_accumulate_fp8(query, key, accumulator)
+        .into_values();
+    let Ok(value) =
+        StridedReadView2D::from_shared_slice(v, 0, ATTENTION_TOKENS_V1, CHANNELS_V1, CHANNELS_V1)
+    else {
+        return;
+    };
+    let Ok(bias) = StridedReadView2D::from_shared_slice(token_bias, 0, 1, 16, 16) else {
+        return;
+    };
+    let subgroup = Gfx950Subgroup::current();
+    let math = DeviceMath::current();
+    let score = scores[0] * ATTENTION_SCALE_V1 + bias.load_or(0, column, 0.0);
+    let score0 = subgroup.broadcast_f32::<16>(score, 0);
+    let score4 = subgroup.broadcast_f32::<16>(score, 4);
+    let score8 = subgroup.broadcast_f32::<16>(score, 8);
+    let score12 = subgroup.broadcast_f32::<16>(score, 12);
+    let score13 = subgroup.broadcast_f32::<16>(score, 13);
+    let score14 = subgroup.broadcast_f32::<16>(score, 14);
+    let score15 = subgroup.broadcast_f32::<16>(score, 15);
+
+    let mut local_maximum = score12;
+    if score13 > local_maximum {
+        local_maximum = score13;
+    }
+    if score14 > local_maximum {
+        local_maximum = score14;
+    }
+    if score15 > local_maximum {
+        local_maximum = score15;
+    }
+    let local_weight0 = math.exp_f32(score12 - local_maximum);
+    let local_weight1 = math.exp_f32(score13 - local_maximum);
+    let local_weight2 = math.exp_f32(score14 - local_maximum);
+    let local_weight3 = math.exp_f32(score15 - local_maximum);
+    let local_sum = local_weight0 + local_weight1 + local_weight2 + local_weight3;
+    let local_value = local_weight0 / local_sum * decode_fp8_e4m3_v1!(value.load_or(12, column, 0))
+        + local_weight1 / local_sum * decode_fp8_e4m3_v1!(value.load_or(13, column, 0))
+        + local_weight2 / local_sum * decode_fp8_e4m3_v1!(value.load_or(14, column, 0))
+        + local_weight3 / local_sum * decode_fp8_e4m3_v1!(value.load_or(15, column, 0));
+
+    let mut global_maximum = score0;
+    if score4 > global_maximum {
+        global_maximum = score4;
+    }
+    if score8 > global_maximum {
+        global_maximum = score8;
+    }
+    let global_weight0 = math.exp_f32(score0 - global_maximum);
+    let global_weight1 = math.exp_f32(score4 - global_maximum);
+    let global_weight2 = math.exp_f32(score8 - global_maximum);
+    let global_sum = global_weight0 + global_weight1 + global_weight2;
+    let compressed0 = (decode_fp8_e4m3_v1!(value.load_or(0, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(1, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(2, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(3, column, 0)))
+        * 0.25;
+    let compressed1 = (decode_fp8_e4m3_v1!(value.load_or(4, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(5, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(6, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(7, column, 0)))
+        * 0.25;
+    let compressed2 = (decode_fp8_e4m3_v1!(value.load_or(8, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(9, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(10, column, 0))
+        + decode_fp8_e4m3_v1!(value.load_or(11, column, 0)))
+        * 0.25;
+    let global_value = global_weight0 / global_sum * compressed0
+        + global_weight1 / global_sum * compressed1
+        + global_weight2 / global_sum * compressed2;
+    let mix = 1.0 / (1.0 + math.exp_f32(-score0 * 0.01));
+    if index.get() < CHANNELS_V1 {
+        if let Some(slot) = output.get_mut(index) {
+            *slot = mix * global_value + (1.0 - mix) * local_value;
+        }
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_compressed_hybrid_attention(
     q: &[u8],
     k: &[u8],
@@ -449,7 +1296,6 @@ pub fn gfx950_compressed_hybrid_attention(
         fe2o3_device::trap();
         return;
     }
-
     let mut scores = [0.0_f32; ATTENTION_TOKENS_V1];
     let mut token = 0;
     while token < ATTENTION_TOKENS_V1 {
@@ -476,7 +1322,6 @@ pub fn gfx950_compressed_hybrid_attention(
         }
         block += 1;
     }
-
     let math = DeviceMath::current();
     let mut local_weights = [0.0_f32; TOKENS_PER_BLOCK_V1];
     let mut global_weights = [0.0_f32; 3];
@@ -502,7 +1347,6 @@ pub fn gfx950_compressed_hybrid_attention(
         fe2o3_device::trap();
         return;
     }
-
     let mut channel = 0;
     while channel < CHANNELS_V1 {
         let mut local_value = 0.0_f32;
@@ -537,12 +1381,57 @@ pub fn gfx950_compressed_hybrid_attention(
 }
 
 /// Softmax-aggregates four residual depths independently for each channel.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-attnres-aggregate"))]
 #[kernel(
     typed,
-    namespace = "7e0cbfed6cef5800c858545c60a9af1077cc58adb44e7a30d45b24af2b06912c",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(16, 4, 4))
+    namespace = "a65038e3cb567081a97476ed759abecdcf789e1607626117c929491ce0edffe7",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(4, 4))
 )]
+pub fn gfx950_attnres_aggregate(
+    depth_values: &[f32],
+    depth_logits: &[f32],
+    mut output: DisjointSlice<f32, Index1D>,
+) -> KernelResult {
+    if depth_values.len() != MIXING_STREAMS_V1 * CHANNELS_V1
+        || depth_logits.len() != MIXING_STREAMS_V1 * CHANNELS_V1
+        || output.len() != CHANNELS_V1
+    {
+        return Err(KernelError::InvalidArgument);
+    }
+    let index = thread::index_1d();
+    let channel = index.get();
+    if channel >= CHANNELS_V1 {
+        return Ok(());
+    }
+    let Ok(values) = StridedReadView2D::from_shared_slice(depth_values, 0, 4, 16, 16) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let Ok(logits) = StridedReadView2D::from_shared_slice(depth_logits, 0, 4, 16, 16) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let math = DeviceMath::current();
+    let mut maximum = logits.load_or(0, channel, f32::NEG_INFINITY);
+    for depth in 1..4 {
+        let logit = logits.load_or(depth, channel, f32::NEG_INFINITY);
+        if logit > maximum {
+            maximum = logit;
+        }
+    }
+    let mut denominator = 0.0;
+    let mut value = 0.0;
+    for depth in 0..4 {
+        let weight = math.exp_f32(logits.load_or(depth, channel, f32::NEG_INFINITY) - maximum);
+        denominator += weight;
+        value += weight * values.load_or(depth, channel, 0.0);
+    }
+    if let Some(slot) = output.get_mut(index) {
+        *slot = value / denominator;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_attnres_aggregate(
     depth_values: &[f32],
     depth_logits: &[f32],
@@ -589,12 +1478,43 @@ pub fn gfx950_attnres_aggregate(
 }
 
 /// Adds four sigmoid-gated branches to one 16-channel residual.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-four-branch-residual"))]
 #[kernel(
     typed,
-    namespace = "daa0d2be9c26f84a19bccf606b449abd952628599d5d1e6db996edc368dffa38",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(16, 4))
+    namespace = "632e4eb1a578d4a75b833c6bececaa239cb7f754e8999cb3513690a4b0badc12",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(4))
 )]
+pub fn gfx950_four_branch_residual(
+    residual: &[f32],
+    branches: &[f32],
+    gate_logits: &[f32],
+    mut output: DisjointSlice<f32, Index1D>,
+) {
+    if residual.len() != CHANNELS_V1
+        || branches.len() != MIXING_STREAMS_V1 * CHANNELS_V1
+        || gate_logits.len() != MIXING_STREAMS_V1 * CHANNELS_V1
+        || output.len() != CHANNELS_V1
+    {
+        return;
+    }
+    let index = thread::index_1d();
+    let channel = index.get();
+    if channel >= CHANNELS_V1 {
+        return;
+    }
+    let math = DeviceMath::current();
+    let mut value = residual[channel];
+    for branch in 0..4 {
+        let gate = 1.0 / (1.0 + math.exp_f32(-gate_logits[branch * CHANNELS_V1 + channel]));
+        value += 0.25 * gate * branches[branch * CHANNELS_V1 + channel];
+    }
+    if let Some(slot) = output.get_mut(index) {
+        *slot = value;
+    }
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_four_branch_residual(
     residual: &[f32],
     branches: &[f32],
@@ -635,12 +1555,125 @@ pub fn gfx950_four_branch_residual(
 }
 
 /// Runs three Sinkhorn row/column normalizations and mixes four input streams.
+#[cfg(all(target_arch = "amdgpu", feature = "kernel-mhc-sinkhorn-mix"))]
 #[kernel(
     typed,
-    namespace = "3549ff86c422a24a0d67bac54b9fd644700d3a164d590f091f185bf1f0b47bae",
-    launch(required = [64, 1, 1], max = [64, 1, 1]),
-    control_flow(loop_bounds(16, 3, 4, 4, 4, 4, 4, 4, 4, 16, 4))
+    namespace = "0c00c566c0a9487644fd52739a8ffe3a447048d77114666223b99fa8cfd6a9cf",
+    launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [1, 1, 1]),
+    control_flow(loop_bounds(3))
 )]
+pub fn gfx950_mhc_sinkhorn_mix(
+    streams: &[f32],
+    mixing_logits: &[f32],
+    mut output: DisjointSlice<f32, Index1D>,
+) -> KernelResult {
+    if streams.len() != MIXING_STREAMS_V1 * CHANNELS_V1
+        || mixing_logits.len() != MIXING_STREAMS_V1 * MIXING_STREAMS_V1
+        || output.len() != MIXING_STREAMS_V1 * CHANNELS_V1
+    {
+        return Err(KernelError::InvalidArgument);
+    }
+    let index = thread::index_1d();
+    let linear = index.get();
+    if linear >= MIXING_STREAMS_V1 * CHANNELS_V1 {
+        return Ok(());
+    }
+    let math = DeviceMath::current();
+    let Ok(logits) = StridedReadView2D::from_shared_slice(mixing_logits, 0, 1, 16, 16) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let Ok(streams) = StridedReadView2D::from_shared_slice(streams, 0, 4, 16, 16) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let mut m00 = math.exp_f32(logits.load_or(0, 0, 0.0));
+    let mut m01 = math.exp_f32(logits.load_or(0, 1, 0.0));
+    let mut m02 = math.exp_f32(logits.load_or(0, 2, 0.0));
+    let mut m03 = math.exp_f32(logits.load_or(0, 3, 0.0));
+    let mut m10 = math.exp_f32(logits.load_or(0, 4, 0.0));
+    let mut m11 = math.exp_f32(logits.load_or(0, 5, 0.0));
+    let mut m12 = math.exp_f32(logits.load_or(0, 6, 0.0));
+    let mut m13 = math.exp_f32(logits.load_or(0, 7, 0.0));
+    let mut m20 = math.exp_f32(logits.load_or(0, 8, 0.0));
+    let mut m21 = math.exp_f32(logits.load_or(0, 9, 0.0));
+    let mut m22 = math.exp_f32(logits.load_or(0, 10, 0.0));
+    let mut m23 = math.exp_f32(logits.load_or(0, 11, 0.0));
+    let mut m30 = math.exp_f32(logits.load_or(0, 12, 0.0));
+    let mut m31 = math.exp_f32(logits.load_or(0, 13, 0.0));
+    let mut m32 = math.exp_f32(logits.load_or(0, 14, 0.0));
+    let mut m33 = math.exp_f32(logits.load_or(0, 15, 0.0));
+    for _iteration in 0..3 {
+        let row0 = m00 + m01 + m02 + m03;
+        m00 /= row0;
+        m01 /= row0;
+        m02 /= row0;
+        m03 /= row0;
+        let row1 = m10 + m11 + m12 + m13;
+        m10 /= row1;
+        m11 /= row1;
+        m12 /= row1;
+        m13 /= row1;
+        let row2 = m20 + m21 + m22 + m23;
+        m20 /= row2;
+        m21 /= row2;
+        m22 /= row2;
+        m23 /= row2;
+        let row3 = m30 + m31 + m32 + m33;
+        m30 /= row3;
+        m31 /= row3;
+        m32 /= row3;
+        m33 /= row3;
+
+        let column0 = m00 + m10 + m20 + m30;
+        m00 /= column0;
+        m10 /= column0;
+        m20 /= column0;
+        m30 /= column0;
+        let column1 = m01 + m11 + m21 + m31;
+        m01 /= column1;
+        m11 /= column1;
+        m21 /= column1;
+        m31 /= column1;
+        let column2 = m02 + m12 + m22 + m32;
+        m02 /= column2;
+        m12 /= column2;
+        m22 /= column2;
+        m32 /= column2;
+        let column3 = m03 + m13 + m23 + m33;
+        m03 /= column3;
+        m13 /= column3;
+        m23 /= column3;
+        m33 /= column3;
+    }
+    let row = linear / CHANNELS_V1;
+    let channel = linear % CHANNELS_V1;
+    let value = if row == 0 {
+        m00 * streams.load_or(0, channel, 0.0)
+            + m01 * streams.load_or(1, channel, 0.0)
+            + m02 * streams.load_or(2, channel, 0.0)
+            + m03 * streams.load_or(3, channel, 0.0)
+    } else if row == 1 {
+        m10 * streams.load_or(0, channel, 0.0)
+            + m11 * streams.load_or(1, channel, 0.0)
+            + m12 * streams.load_or(2, channel, 0.0)
+            + m13 * streams.load_or(3, channel, 0.0)
+    } else if row == 2 {
+        m20 * streams.load_or(0, channel, 0.0)
+            + m21 * streams.load_or(1, channel, 0.0)
+            + m22 * streams.load_or(2, channel, 0.0)
+            + m23 * streams.load_or(3, channel, 0.0)
+    } else {
+        m30 * streams.load_or(0, channel, 0.0)
+            + m31 * streams.load_or(1, channel, 0.0)
+            + m32 * streams.load_or(2, channel, 0.0)
+            + m33 * streams.load_or(3, channel, 0.0)
+    };
+    if let Some(slot) = output.get_mut(index) {
+        *slot = value;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "amdgpu"))]
 pub fn gfx950_mhc_sinkhorn_mix(
     streams: &[f32],
     mixing_logits: &[f32],

@@ -144,6 +144,50 @@ fn attention_module(format: Gfx950LdsTransposeFormatV1) -> Module {
     module
 }
 
+fn masked_wave64_broadcast_module(mask: Option<u32>, mask_on_left: bool) -> Module {
+    let mut module = attention_module(Gfx950LdsTransposeFormatV1::Fp8E4M3);
+    let block = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
+    let mut broadcast = block.operations.pop().expect("broadcast operation");
+    let mask_value = ValueId(25);
+    let masked_value = ValueId(26);
+    if let Some(mask) = mask {
+        block.operations.push(Operation::effect_free(
+            ValueDef::new(mask_value, Type::Scalar(ScalarType::U32)),
+            OperationKind::Constant(Constant::U32(mask)),
+        ));
+    }
+    let dynamic = ValueId(13);
+    let other = mask.map_or(ValueId(14), |_| mask_value);
+    let (lhs, rhs) = if mask_on_left {
+        (other, dynamic)
+    } else {
+        (dynamic, other)
+    };
+    block.operations.push(Operation::effect_free(
+        ValueDef::new(masked_value, Type::Scalar(ScalarType::U32)),
+        OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            lhs,
+            rhs,
+        },
+    ));
+    let OperationKind::Wave(wave) = &mut broadcast.kind else {
+        panic!("expected broadcast")
+    };
+    let WaveOperationKind::BroadcastF32 {
+        source_lane,
+        tile_width,
+        ..
+    } = &mut wave.kind
+    else {
+        panic!("expected f32 broadcast")
+    };
+    *source_lane = masked_value;
+    *tile_width = 64;
+    block.operations.push(broadcast);
+    module
+}
+
 fn assert_llvm_parses(llvm: &str, label: &str) {
     let directory = std::env::temp_dir().join(format!(
         "fe2o3-gfx950-attention-{}-{label}",
@@ -288,6 +332,29 @@ fn rejects_wrong_target_collective_width_and_unbounded_broadcast() {
             .contains("statically bounded tile-local source lane"),
         "{error:?}"
     );
+}
+
+#[test]
+fn lowers_mask63_wave64_broadcast_and_rejects_hostile_masks() {
+    for mask_on_left in [false, true] {
+        let module = masked_wave64_broadcast_module(Some(63), mask_on_left);
+        verify_module(&module).unwrap();
+        let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+        assert!(llvm.contains(".tile.base = and i32 %v24.lane, -64"));
+        assert!(llvm.contains(".source = add i32 %v24.tile.base, %v26"));
+    }
+    for hostile in [
+        masked_wave64_broadcast_module(Some(64), false),
+        masked_wave64_broadcast_module(None, false),
+    ] {
+        let error = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&hostile).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("statically bounded tile-local source lane"),
+            "{error:?}"
+        );
+    }
 }
 
 #[test]

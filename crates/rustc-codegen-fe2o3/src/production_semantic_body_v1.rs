@@ -1804,6 +1804,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate => Some(4),
         ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),

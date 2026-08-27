@@ -6,13 +6,12 @@ contains independent safe CPU references, and `cargo test --offline` checks
 their fixed-shape numerical and selection contracts. The HIP program remains
 a separate compiler, ISA, and MI350 hardware-validation companion.
 
-The current rustc backend cannot lower these Rust sources to gfx950 HSACO: its
-production profile is still exact `gfx942:xnack-`, and gfx950 low-precision
-tensor, transpose, device-math, and control-flow lowering are pending. The
-Rust kernels therefore use conservative scalar grid-leader algorithms and set
-`GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1` to `false`. They
-claim source and CPU-reference evidence only; the HIP ISA and runtime results
-below do not become fe2o3 artifact or execution evidence.
+Each `run-*-gfx950.sh` entry point selects exactly one kernel feature, invokes
+the production fe2o3 extractor, checks the compiler-published crate binding,
+links an exact gfx950:xnack- COV6 HSACO, validates its single-kernel metadata
+and symbol-scoped ISA, and runs a digest-pinned numerical HSA test. This is an
+explicit verification path; it does not grant protected artifact publication
+authority. The HIP ISA and runtime results below remain independent evidence.
 
 This directory is a bounded educational validation suite for AMD CDNA 4
 (`gfx950`). It is not a production implementation, performance claim, model
@@ -50,7 +49,43 @@ Run the Rust source and independent CPU-reference checks:
 cargo test --offline
 ```
 
-Build, inspect, and run the companion HIP validation on a gfx950 system:
+Run the production Rust lowering and numerical verification on a gfx950 host:
+
+```bash
+./run-kda-decode-gfx950.sh
+./run-kda-prefill-gfx950.sh
+./run-content-sparse-attention-gfx950.sh
+./run-compressed-hybrid-attention-gfx950.sh
+./run-attnres-aggregate-gfx950.sh
+./run-four-branch-residual-gfx950.sh
+./run-mhc-sinkhorn-mix-gfx950.sh
+```
+
+The sparse and hybrid runners additionally require exactly four
+`ds_read_b64_tr_b8` instructions before one FP8
+`v_mfma_f32_16x16x128_f8f6f4`. Exponential device math uses only the reviewed
+ROCm 7.2.1 OCML `exp` closure shared with the low-precision examples; gfx950
+square root lowers to its target-native LLVM intrinsic. Set
+`FE2O3_REPO_ROOT`, `ROCM_PATH`, `RUSTUP`, `CARGO`, or the documented tool and
+target-directory environment variables when validating a copied checkout.
+
+## Production Rust validation evidence
+
+On 2026-08-27, all seven production Rust wrappers passed on SSH host `mi350`
+(`smci350-rck-g03-b19-03`) with ROCm 7.2.1 and eight visible MI350X devices.
+The largest observed absolute errors were `4.172325134e-7` for KDA decode,
+`1.072883606e-6` for KDA prefill, `0` for both attention kernels and AttnRes,
+`0` for four-branch residual, and `4.470348358e-8` for mHC. The harness
+tolerances are `3e-3` for the recurrent and mixing kernels and `5e-3` for the
+FP8 attention kernels. Sparse token IDs were checked exactly.
+
+The sparse and hybrid Rust HSACOs each contained exactly four
+`ds_read_b64_tr_b8` instructions before one
+`v_mfma_f32_16x16x128_f8f6f4` with E4M3 selectors. The per-kernel portable
+namespace and LLVM/HSACO SHA-256 values are printed by each wrapper and pinned
+by the corresponding advanced tutorial evidence record.
+
+Build, inspect, and run the independent companion HIP validation:
 
 ```bash
 ./build_and_test.sh

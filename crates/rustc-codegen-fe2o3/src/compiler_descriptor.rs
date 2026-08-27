@@ -22,8 +22,10 @@ use fe2o3_kernel_descriptor::{
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_descriptor::{AliasSemantics, OwnershipSemantics, PhysicalAbiComponentKind};
 use fe2o3_kernel_ir::{
-    BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module, TargetCapability,
-    WaveWidth, WorkgroupSize,
+    AMDGPU_DIAGNOSTICS_CAPABILITY_NAME, AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE,
+    BF16_F32_M16N16K16_CAPABILITY, MATRIX_CAPABILITY_NAMESPACE, Module,
+    SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY, SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY,
+    SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, TargetCapability, WaveWidth, WorkgroupSize,
 };
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use fe2o3_kernel_ir::{
@@ -1755,13 +1757,28 @@ fn descriptor_capabilities(
             .iter()
             .flat_map(|function| function.effective_capabilities()),
     );
+    let has_exact_diagnostic_target = effective.iter().any(|capability| {
+        matches!(
+            capability,
+            TargetCapability::Extension { namespace, name }
+                if namespace == fe2o3_kernel_ir::AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
+                    && matches!(
+                        name.as_str(),
+                        fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+                            | fe2o3_kernel_ir::AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME
+                    )
+        )
+    });
     for capability in effective {
         match capability {
             TargetCapability::Int64 => {}
             TargetCapability::Extension { namespace, name }
                 if namespace == fe2o3_kernel_ir::AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
-                    && name
-                        == fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME =>
+                    && matches!(
+                        name.as_str(),
+                        fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME
+                            | fe2o3_kernel_ir::AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME
+                    ) =>
             {
                 // Exact target binding is represented by the descriptor table's
                 // device target, not as an executable kernel capability.
@@ -1784,7 +1801,13 @@ fn descriptor_capabilities(
             TargetCapability::Extension { namespace, name }
                 if allow_exact_tiled_matrix
                     && namespace == MATRIX_CAPABILITY_NAMESPACE
-                    && name == BF16_F32_M16N16K16_CAPABILITY =>
+                    && matches!(
+                        name.as_str(),
+                        BF16_F32_M16N16K16_CAPABILITY
+                            | SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
+                            | SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                            | SCALED_FP4_E2M1_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                    ) =>
             {
                 result.insert(CapabilityV1::MatrixMultiply);
                 result.insert(CapabilityV1::AmdMfma);
@@ -1795,6 +1818,14 @@ fn descriptor_capabilities(
                     && name == fe2o3_kernel_ir::LDS_TILE_16X16_XOR4_CAPABILITY =>
             {
                 result.insert(CapabilityV1::WorkgroupMemory);
+            }
+            TargetCapability::Extension { namespace, name }
+                if has_exact_diagnostic_target
+                    && namespace == AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    && name == AMDGPU_DIAGNOSTICS_CAPABILITY_NAME =>
+            {
+                // Diagnostics are lowered by the exact target backend and do
+                // not add a kernel descriptor launch or ABI capability.
             }
             unsupported => {
                 return Err(CompilerDescriptorError::UnsupportedCapability(format!(
@@ -2935,6 +2966,34 @@ mod tests {
             .required_capabilities
             .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
         module
+    }
+
+    #[test]
+    fn descriptor_admits_target_neutral_diagnostics_only_with_exact_target_binding() {
+        let diagnostic = TargetCapability::Extension {
+            namespace: AMDGPU_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+            name: AMDGPU_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+        };
+        let mut unbound = Module::new("diagnostic-without-target");
+        unbound.required_capabilities.insert(diagnostic.clone());
+        assert!(matches!(
+            descriptor_capabilities(&unbound, false, false),
+            Err(CompilerDescriptorError::UnsupportedCapability(_))
+        ));
+
+        for target in [
+            fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+            fe2o3_kernel_ir::AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+        ] {
+            let mut bound = unbound.clone();
+            bound
+                .required_capabilities
+                .insert(TargetCapability::Extension {
+                    namespace: fe2o3_kernel_ir::AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+                    name: target.to_owned(),
+                });
+            assert_eq!(descriptor_capabilities(&bound, false, false).unwrap(), []);
+        }
     }
 
     fn module_for(exports: &[&str]) -> Module {

@@ -40,8 +40,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x53, 0x83, 0xe3, 0x2d, 0x91, 0xef, 0x7f, 0xce, 0xf8, 0x64, 0x1d, 0x10, 0x1a, 0xb4, 0x54, 0xc9,
-    0x8a, 0x04, 0x50, 0xfc, 0x83, 0x8c, 0xe8, 0xbc, 0xac, 0xe9, 0x55, 0x29, 0x0a, 0xdf, 0x8c, 0x09,
+    0x6c, 0xe6, 0xca, 0x86, 0xc6, 0x10, 0x23, 0x50, 0x36, 0xa3, 0x7a, 0xe0, 0xe0, 0xc2, 0x28, 0xd6,
+    0xef, 0xa3, 0x27, 0xb0, 0x5d, 0xae, 0x3c, 0xef, 0x17, 0x21, 0x01, 0x05, 0xa7, 0x5f, 0x3d, 0xf0,
 ];
 #[allow(
     dead_code,
@@ -78,8 +78,8 @@ const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
 // Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
 // definition and reference source closure used by the store signatures.
 const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0xb6, 0xf6, 0x7f, 0xf1, 0x08, 0xd8, 0x6d, 0xda, 0x55, 0x87, 0x49, 0x2b, 0xc5, 0xb6, 0xfa, 0x22,
-    0xc8, 0x2a, 0xec, 0x07, 0x35, 0xc9, 0xe7, 0xad, 0xf0, 0xcb, 0xd3, 0x74, 0x74, 0xb6, 0x6b, 0xc5,
+    0xb1, 0x08, 0x02, 0xe5, 0x7e, 0xa1, 0x76, 0x8a, 0x10, 0xf4, 0x5f, 0x13, 0xd1, 0x02, 0xf1, 0xed,
+    0x4e, 0x6e, 0x1f, 0x4a, 0x14, 0x1f, 0x47, 0x2e, 0x6d, 0x6b, 0x27, 0xcf, 0x19, 0x6a, 0x1d, 0x31,
 ];
 
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
@@ -569,6 +569,7 @@ pub(crate) enum TrustedDeviceItem {
     Gfx950Matrix,
     Gfx950MatrixCurrent,
     Gfx950MatrixMultiplyAccumulateFp4,
+    Gfx950MatrixMultiplyAccumulateFp4Fp8,
     Gfx950MatrixMultiplyAccumulateFp8,
     Gfx950SubgroupContext,
     Gfx950SubgroupCurrent,
@@ -1260,6 +1261,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
         "fe2o3_device_gfx950_mfma_fp4_f32_m16n16k128_v1",
         "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4",
+    ),
+    (
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
+        "fe2o3_device_gfx950_mfma_fp4_fp8_f32_m16n16k128_v1",
+        "fe2o3_device::Gfx950Matrix::multiply_accumulate_fp4_fp8",
     ),
     (
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
@@ -2035,6 +2041,9 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4 => {
             "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4"
         }
+        TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8 => {
+            "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp4_fp8"
+        }
         TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8 => {
             "fe2o3_device::gfx950::{impl#18}::multiply_accumulate_fp8"
         }
@@ -2155,6 +2164,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx950Matrix
             | TrustedDeviceItem::Gfx950MatrixCurrent
             | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4
+            | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8
             | TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8
             | TrustedDeviceItem::Gfx950SubgroupContext
             | TrustedDeviceItem::Gfx950SubgroupCurrent
@@ -4213,6 +4223,7 @@ mod tests {
             TrustedDeviceItem::Gfx950Matrix,
             TrustedDeviceItem::Gfx950MatrixCurrent,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
             TrustedDeviceItem::Gfx950SubgroupContext,
             TrustedDeviceItem::Gfx950SubgroupCurrent,
@@ -4427,6 +4438,7 @@ mod tests {
             TrustedDeviceItem::Gfx950Matrix,
             TrustedDeviceItem::Gfx950MatrixCurrent,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4,
+            TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp4Fp8,
             TrustedDeviceItem::Gfx950MatrixMultiplyAccumulateFp8,
             TrustedDeviceItem::Gfx950SubgroupContext,
             TrustedDeviceItem::Gfx950SubgroupCurrent,
