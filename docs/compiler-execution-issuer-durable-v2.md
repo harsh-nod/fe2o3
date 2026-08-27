@@ -1,7 +1,8 @@
-# Protected Compiler-Execution Issuer Durable State V1
+# Protected Compiler-Execution Issuer Durable State V2
 
-Status: implemented local issuer state, authority-free remote process observation, and exact
-subject/current-publication join; bounded service transport and Worker V3 authority remain open.
+Status: implemented local issuer state, exact subject/current-publication join,
+and publication-bound ACK journal; bounded service transport and durable Worker
+authority remain open.
 
 This contract consumes
 [`ProtectedCompilerExecutionIssuerAdmissionV1`](compiler-execution-issuer-admission-v1.md)
@@ -51,15 +52,15 @@ accepting a caller-provided substitute.
 
 ## Canonical Record
 
-The journal is one fixed 2,500-byte record. Integers are little-endian and all
+The journal is one fixed 2,788-byte record. Integers are little-endian and all
 reserved or absent fields are zero.
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
-| 0 | 8 | magic `F2O3CEJ1` |
-| 8 | 2 | version `1` |
+| 0 | 8 | magic `F2O3CEJ2` |
+| 8 | 2 | version `2` |
 | 10 | 2 | reserved |
-| 12 | 8 | total byte length `2500` |
+| 12 | 8 | total byte length `2788` |
 | 20 | 4 | reserved |
 | 24 | 1 | stage: `Ready=1`, `Prepared=2`, `Issued=3` |
 | 25 | 7 | stage padding |
@@ -67,18 +68,19 @@ reserved or absent fields are zero.
 | 64 | 8 | nonzero sequence |
 | 72 | 32 | prior rollback anchor |
 | 104 | 32 | last acknowledged receipt identity |
-| 136 | 32 | exact live compiler-occurrence identity or zero |
-| 168 | 690 | canonical compiler-execution subject or zero |
-| 858 | 200 | canonical issuer challenge or zero |
-| 1058 | 946 | canonical attestation request or zero |
-| 2004 | 400 | canonical signed receipt or zero |
-| 2404 | 64 | Ed25519 journal signature |
-| 2468 | 32 | domain-separated journal identity |
+| 136 | 288 | complete last publication ACK claim or zero |
+| 424 | 32 | exact live compiler-occurrence identity or zero |
+| 456 | 690 | canonical compiler-execution subject or zero |
+| 1146 | 200 | canonical issuer challenge or zero |
+| 1346 | 946 | canonical attestation request or zero |
+| 2292 | 400 | canonical signed receipt or zero |
+| 2692 | 64 | Ed25519 journal signature |
+| 2756 | 32 | domain-separated journal identity |
 
-The signature covers bytes `0..2404` under
-`FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-SIGNATURE/V1`. The terminal identity
-covers bytes `0..2468` under
-`FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-IDENTITY/V1`. Both digests include the
+The signature covers bytes `0..2692` under
+`FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-SIGNATURE/V2`. The terminal identity
+covers bytes `0..2756` under
+`FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-IDENTITY/V2`. Both digests include the
 domain, an explicit input length, and the complete input bytes.
 
 Decoding verifies the journal signature before interpreting semantic fields.
@@ -92,13 +94,18 @@ Only these transitions are legal:
 
 1. `Ready(N, A) -> Prepared(N, A, occurrence, subject, challenge)`
 2. `Prepared(N, A, occurrence, subject, challenge) -> Issued(N, A, occurrence, subject, challenge, request, receipt)`
-3. `Issued(N, A, receipt) -> Ready(N+1, receipt.next_anchor)`
+3. `Issued(N, A, receipt) -> Ready(N+1, receipt.next_anchor, complete_ack)`
 
-Genesis is `Ready(1, zero)`. Later ready states require nonzero prior and
-last-receipt anchors. Prepared and issued records retain the same sequence,
-anchor, subject, and challenge. Acknowledgment advances exactly once; repeating
-the last receipt identity returns `AlreadyAcknowledged` without another write.
-Sequence overflow fails closed.
+Genesis is `Ready(1, zero, no_ack)`. Every later state retains the complete ACK
+from the preceding sequence. Its policy, receipt, sequence, and current anchor
+must match the journal's last receipt and current rollback position. Prepared
+and issued records retain that ACK together with the same sequence, anchor,
+subject, and challenge. An issued record reconstructs its exact 584-byte
+sidecar from its own signed journal and occurrence identities. ACK must match
+every sidecar field before the transition can be signed. Repeating only the
+same complete ACK returns `AlreadyAcknowledged`; a same-receipt ACK naming a
+different publication or Worker record rejects. Sequence overflow fails
+closed.
 
 Issuer continuity is checked before signing, immediately after the signed next
 state is formed, and after durable commit. The challenge or receipt wrapper is
@@ -129,7 +136,10 @@ Recovery accepts only one of these shapes:
 Any malformed, unsigned, wrong-policy, noncanonical, stale/non-successor redo,
 symlink, hard link, wrong owner, wrong mode, wrong size, or changed directory
 identity fails closed. A recovered prepared state re-emits the exact challenge.
-A recovered issued state re-emits the exact receipt.
+A recovered issued state reconstructs and re-emits the exact receipt sidecar.
+Presence of either historical V1 journal name fails before V2 genesis. V1
+advanced state lacks a publication-bound ACK and therefore requires an explicit
+offline migration policy rather than an implicit reset.
 
 ## Security Limit
 
@@ -138,8 +148,11 @@ single-live-writer exclusion. It does not provide local anti-rollback against
 an actor that can replace the entire service-owned directory with an older
 valid signed snapshot. Worker V3 must maintain its own protected current
 rollback anchor, verify the receipt against that anchor, durably advance it,
-and only then acknowledge the issuer receipt. This independent join is required
-before `CompilerExecutionProvenance` can close.
+and independently reacquire the exact durable record named by the canonical
+[publication ACK](compiler-execution-receipt-publication-v1.md). Raw ACK bytes
+cannot construct the move-only committed-publication token accepted by the
+issuer. This independent join is required before `CompilerExecutionProvenance`
+can close.
 
 ## Shared Process Validation
 
@@ -180,7 +193,9 @@ self-observation as protected evidence.
 The package suite checks all three stage encodings, truncation and extension,
 wrong key and policy, request/subject/occurrence substitutions, singleton
 exclusion, exact challenge and receipt re-emission, idempotent acknowledgment,
-and mutation of every one of the 2,500 issued-record bytes. Deterministic fault
+and mutation of every one of the 2,788 issued and acknowledged record bytes.
+It also rejects legacy V1 journal presence and same-receipt/different-Worker
+ACK replay. Deterministic fault
 injection exercises both sides of all seven retained-directory boundaries for
 genesis and each of the three legal transitions. Recovery must produce only
 the exact prior record or exact legal successor.
@@ -192,6 +207,6 @@ invocation, non-compile input, and missing or malformed managed attempts.
 The issuer constructs every occurrence from its own admission, and a guard
 contention test proves a superseding attempt cannot advance until issuer
 currentness custody is explicitly dropped. Production distinct-UID inspection
-policy, the bounded `SOCK_SEQPACKET` service
-protocol with restart-durable occurrence binding, Worker V3 wire carriage,
-verifier rollback ledger, and the MI300X Cargo-to-KFD run remain required.
+policy, the bounded `SOCK_SEQPACKET` service, Worker V3 durable sidecar
+publication and rollback ledger, and the MI300X Cargo-to-KFD run remain
+required.

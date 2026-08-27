@@ -136,7 +136,8 @@ pub use compiler_execution_issuer::{
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_issuer_durable::{
-    COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V1, CompilerExecutionIssuerAckV1,
+    COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V2,
+    CommittedCompilerExecutionReceiptPublicationV1, CompilerExecutionIssuerAckV1,
     CompilerExecutionIssuerRecoveryV1, ProtectedCompilerExecutionChallengeV1,
     ProtectedCompilerExecutionIssuerErrorV1, ProtectedCompilerExecutionIssuerV1,
     ProtectedCompilerExecutionReceiptV1,

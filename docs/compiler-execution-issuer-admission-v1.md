@@ -74,11 +74,13 @@ is exposed by the API.
 ## Durable Issuer State
 
 This admission is now consumed by one
-[signed crash-safe state machine](compiler-execution-issuer-durable-v1.md). It
+[signed crash-safe state machine](compiler-execution-issuer-durable-v2.md). It
 owns OS nonce generation, sequence and rollback state,
 challenge-before-release durability, exact request/subject comparison,
 receipt-before-release durability, crash replay, singleton exclusion, and
-idempotent acknowledgment. The signing entry points construct a fresh
+publication-bound idempotent acknowledgment. Journal V2 retains the complete
+Worker publication ACK in every later state and rejects raw receipt-digest
+acknowledgments. The signing entry points construct a fresh
 `ProtectedCompilerExecutionOccurrenceV1` from this admission's own retained
 service session. They accept no occurrence parameter, so descriptor-only,
 foreign-admission, and caller-constructed subjects cannot reach signing.
@@ -90,12 +92,13 @@ directory. The authority service now joins that observation to the exact
 current production-slot V3 publication, reconstructs the subject under the
 publication lock, and retains both custody values through issuer use. The
 currentness guard keeps that lock through request comparison, signing, and
-durable receipt commit. The
-remaining issuer work is to launch inspection under the production distinct-UID
+durable receipt commit. The issuer accepts a publication acknowledgment only
+through a move-only committed-publication capability that callers cannot
+construct from wire bytes. The remaining issuer work is to implement the
+protected Worker ledger that creates that capability after independently
+committing and reacquiring the exact sidecar, launch inspection under the production distinct-UID
 policy and expose the durable issuer through a bounded `SOCK_SEQPACKET` service
-loop that carries the journal-bound occurrence/session identity. Worker V3 must
-then carry and verify the receipt under its own protected current rollback
-ledger.
+loop that carries the journal-bound occurrence/session identity.
 Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification

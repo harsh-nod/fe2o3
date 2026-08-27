@@ -150,7 +150,7 @@ The protocol suite must retain:
 
 These tests qualify only the codec and pinned-key signature boundary. The
 [protected issuer admission](compiler-execution-issuer-admission-v1.md) and
-[durable issuer state](compiler-execution-issuer-durable-v1.md) implement the
+[durable issuer state](compiler-execution-issuer-durable-v2.md) implement the
 local protected signer and supervised occurrence foundation. The receipt
 sidecar codec is frozen separately. Bounded service transport, durable Worker V3
 carriage and verification, and MI300X end-to-end tests remain required.
