@@ -205,6 +205,11 @@ pub mod __generated {
     pub struct GeneratedArgumentPackError;
 
     #[derive(Debug)]
+    pub enum GeneratedKfdArgumentError {
+        Pack(GeneratedArgumentPackError),
+    }
+
+    #[derive(Debug)]
     pub struct GeneratedWorkerV3PrepareErrorV1;
 
     pub struct CompilerGeneratedArgumentLayoutV1;
@@ -236,6 +241,47 @@ pub mod __generated {
 
     pub struct GeneratedWorkerV3ArgumentBindingV1<'allocation>(PhantomData<&'allocation ()>);
 
+    pub struct GeneratedKfdSliceBinding<'allocation>(PhantomData<&'allocation ()>);
+
+    pub struct GeneratedKfdReadSlice<'allocation, T> {
+        _values: &'allocation [T],
+    }
+
+    impl<'allocation, T> GeneratedKfdReadSlice<'allocation, T> {
+        pub fn bind_argument(
+            self,
+            _plan: &GeneratedArgumentPackingPlanV1,
+            _argument_index: usize,
+        ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+            Ok(GeneratedKfdSliceBinding(PhantomData))
+        }
+    }
+
+    pub struct GeneratedKfdReadWriteSlice<'allocation, T> {
+        _values: &'allocation mut [T],
+    }
+
+    impl<'allocation, T> GeneratedKfdReadWriteSlice<'allocation, T> {
+        pub fn bind_argument(
+            self,
+            _plan: &GeneratedArgumentPackingPlanV1,
+            _argument_index: usize,
+        ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+            Ok(GeneratedKfdSliceBinding(PhantomData))
+        }
+    }
+
+    pub struct GeneratedKfdArgumentBinding<'allocation>(PhantomData<&'allocation ()>);
+
+    impl<'allocation> GeneratedKfdArgumentBinding<'allocation> {
+        pub fn from_compiler_generated_parts(
+            _scalars: Vec<GeneratedArgumentInputV1<'static>>,
+            _memory: Vec<GeneratedKfdSliceBinding<'allocation>>,
+        ) -> Self {
+            Self(PhantomData)
+        }
+    }
+
     impl<'allocation> GeneratedWorkerV3ArgumentBindingV1<'allocation> {
         pub fn from_compiler_generated_parts_v1(
             _scalars: Vec<GeneratedArgumentInputV1<'static>>,
@@ -261,6 +307,24 @@ pub mod __generated {
             &self,
             plan: &GeneratedArgumentPackingPlanV1,
         ) -> Result<GeneratedWorkerV3ArgumentBindingV1<'allocation>, GeneratedArgumentPackError>;
+    }
+
+    /// Minimal fixture copy of the address-free generated KFD argument bridge.
+    ///
+    /// # Safety
+    ///
+    /// Implementations must describe the exact marker signature and effects.
+    pub unsafe trait CompilerGeneratedKfdArguments<
+        'allocation,
+        K: CompilerGeneratedKernelExpectationV1,
+    > {
+        fn generated_argument_layout(
+        ) -> Result<CompilerGeneratedArgumentLayoutV1, GeneratedArgumentLayoutError>;
+
+        fn bind_kfd_arguments(
+            self,
+            plan: &GeneratedArgumentPackingPlanV1,
+        ) -> Result<GeneratedKfdArgumentBinding<'allocation>, GeneratedKfdArgumentError>;
     }
 
     pub struct HsaLaunchGeometryV1;

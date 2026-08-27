@@ -40,11 +40,35 @@ pub fn assert_generated_adapters() {
     {
     }
 
+    fn assert_kfd_adapter<'allocation, K, Arguments>()
+    where
+        K: gpu_host::__generated::CompilerGeneratedKernelExpectationV1,
+        Arguments: gpu_host::__generated::CompilerGeneratedKfdArguments<'allocation, K>,
+    {
+    }
+
     assert_adapter::<alpha_gpu::Marker, alpha_gpu::Arguments<'static>>();
     assert_adapter::<zeta_gpu::Marker, zeta_gpu::Arguments<'static>>();
     assert_adapter::<
         scalar_gemm_v1_gpu::Marker,
         scalar_gemm_v1_gpu::Arguments<'static>,
+    >();
+    assert_kfd_adapter::<
+        alpha_gpu::Marker,
+        alpha_gpu::Arguments<
+            'static,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, f32>,
+            gpu_host::__generated::GeneratedKfdReadWriteSlice<'static, f32>,
+        >,
+    >();
+    assert_kfd_adapter::<
+        scalar_gemm_v1_gpu::Marker,
+        scalar_gemm_v1_gpu::Arguments<
+            'static,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, f32>,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, f32>,
+            gpu_host::__generated::GeneratedKfdReadWriteSlice<'static, f32>,
+        >,
     >();
 }
 

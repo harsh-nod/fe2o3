@@ -34,6 +34,9 @@ pub trait GeneratedDeviceScalarV1: generated_device_scalar_seal::Sealed + Device
     fn encode_le_bytes_v1(self) -> ([u8; 8], u8);
 
     #[doc(hidden)]
+    fn decode_le_bytes_v1(bytes: &[u8]) -> Option<Self>;
+
+    #[doc(hidden)]
     fn scalar_type_identity_v1(pointer_width: PointerWidth) -> TypeIdentity {
         canonical_scalar_layout_v1(Self::RUST_SCALAR_TYPE, pointer_width).type_identity()
     }
@@ -110,6 +113,11 @@ macro_rules! impl_generated_device_integer_scalar_v1 {
                     bytes[..encoded.len()].copy_from_slice(&encoded);
                     (bytes, encoded.len() as u8)
                 }
+
+                fn decode_le_bytes_v1(bytes: &[u8]) -> Option<Self> {
+                    let encoded: [u8; size_of::<Self>()] = bytes.try_into().ok()?;
+                    Some(Self::from_le_bytes(encoded))
+                }
             }
         )+
     };
@@ -130,6 +138,11 @@ macro_rules! impl_generated_device_float_scalar_v1 {
                     let mut bytes = [0_u8; 8];
                     bytes[..encoded.len()].copy_from_slice(&encoded);
                     (bytes, encoded.len() as u8)
+                }
+
+                fn decode_le_bytes_v1(bytes: &[u8]) -> Option<Self> {
+                    let encoded: [u8; size_of::<$bits>()] = bytes.try_into().ok()?;
+                    Some(Self::from_bits(<$bits>::from_le_bytes(encoded)))
                 }
             }
         )+
@@ -326,6 +339,12 @@ enum GeneratedArgumentValueV1 {
         address_space: AddressSpace,
         access: Access,
     },
+    AddressFreeSlice {
+        length: u64,
+        pointer_width: PointerWidth,
+        address_space: AddressSpace,
+        access: Access,
+    },
 }
 
 /// One value bound by generated code to an exact manifest argument.
@@ -376,6 +395,13 @@ impl GeneratedArgumentInputV1<'_> {
             element_size,
             access,
         })
+    }
+
+    pub(crate) fn is_address_free_slice_v1(&self) -> bool {
+        matches!(
+            self.value,
+            GeneratedArgumentValueV1::AddressFreeSlice { .. }
+        )
     }
 }
 
@@ -686,6 +712,110 @@ impl GeneratedArgumentPackingPlanV1 {
             length,
             GeneratedSliceEffectV1::ExclusiveReadWrite,
             borrow,
+        )
+    }
+
+    pub(crate) fn bind_generated_address_free_read_slice_v1<
+        'allocation,
+        T: GeneratedDeviceScalarV1,
+    >(
+        &self,
+        argument_index: usize,
+        length: usize,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_address_free_slice_v1::<T>(
+            argument_index,
+            length,
+            GeneratedSliceEffectV1::SharedRead,
+            borrow,
+        )
+    }
+
+    pub(crate) fn bind_generated_address_free_read_write_slice_v1<
+        'allocation,
+        T: GeneratedDeviceScalarV1,
+    >(
+        &self,
+        argument_index: usize,
+        length: usize,
+        borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        self.bind_generated_address_free_slice_v1::<T>(
+            argument_index,
+            length,
+            GeneratedSliceEffectV1::ExclusiveReadWrite,
+            borrow,
+        )
+    }
+
+    fn bind_generated_address_free_slice_v1<'allocation, T: GeneratedDeviceScalarV1>(
+        &self,
+        argument_index: usize,
+        length: usize,
+        effect: GeneratedSliceEffectV1,
+        _borrow: GeneratedArgumentBorrowV1<'allocation>,
+    ) -> Result<GeneratedArgumentInputV1<'allocation>, GeneratedArgumentPackError> {
+        let width = self.pointer_width.bytes();
+        let (type_identity, mutability, access, ownership, alias_class) = match effect {
+            GeneratedSliceEffectV1::SharedRead => (
+                T::shared_slice_type_identity_v1(self.pointer_width),
+                Mutability::Immutable,
+                Access::ReadOnly,
+                ArgumentOwnership::SharedBorrow,
+                AliasClass::SharedReadOnly,
+            ),
+            GeneratedSliceEffectV1::ExclusiveReadWrite => (
+                T::disjoint_slice_type_identity_v1(self.pointer_width),
+                Mutability::Mutable,
+                Access::ReadWrite,
+                ArgumentOwnership::UniqueBorrow,
+                AliasClass::Exclusive,
+            ),
+        };
+        let expected = GeneratedFieldExpectationV1 {
+            kind: AbiKind::Slice {
+                element_size: T::RUST_SCALAR_TYPE.size_bytes(),
+                element_alignment: u32::try_from(T::RUST_SCALAR_TYPE.size_bytes())
+                    .expect("supported scalar alignment fits u32"),
+            },
+            size: width * 2,
+            alignment: u32::try_from(width).expect("pointer width fits u32"),
+            type_identity,
+            mutability,
+            access,
+            address_space: AddressSpace::Global,
+            ownership,
+            alias_class,
+        };
+        validate_generated_field_v1(self, argument_index, expected)?;
+        let length = u64::try_from(length).map_err(|_| {
+            GeneratedArgumentPackError::IntegerWidthOverflow {
+                argument_index,
+                component: GeneratedPackingComponentKindV1::SliceLength,
+                value: u64::MAX,
+                pointer_width: self.pointer_width,
+            }
+        })?;
+        self.bind_input(
+            argument_index,
+            GeneratedArgumentValueV1::AddressFreeSlice {
+                length,
+                pointer_width: self.pointer_width,
+                address_space: AddressSpace::Global,
+                access,
+            },
+        )
+    }
+
+    pub(crate) fn address_free_slice_pointer_component_v1(
+        &self,
+        argument_index: usize,
+    ) -> Result<GeneratedPackingComponentV1, GeneratedArgumentPackError> {
+        exact_component(
+            self,
+            argument_index,
+            GeneratedPackingComponentKindV1::SlicePointer,
         )
     }
 
@@ -1338,6 +1468,37 @@ fn pack_arguments<'allocation>(
                     &value[..usize::from(byte_length)],
                 )?;
             }
+            GeneratedArgumentValueV1::AddressFreeSlice {
+                length,
+                pointer_width,
+                ..
+            } => {
+                let pointer_component = exact_component(
+                    plan,
+                    argument_index,
+                    GeneratedPackingComponentKindV1::SlicePointer,
+                )?;
+                write_component(
+                    &mut bytes,
+                    plan.kernarg_size,
+                    pointer_component,
+                    &[0_u8; 8][..usize::try_from(pointer_width.bytes()).expect("width is bounded")],
+                )?;
+
+                let encoded_length = encode_width(length, pointer_width);
+                let length_component = exact_component(
+                    plan,
+                    argument_index,
+                    GeneratedPackingComponentKindV1::SliceLength,
+                )?;
+                write_component(
+                    &mut bytes,
+                    plan.kernarg_size,
+                    length_component,
+                    &encoded_length
+                        [..usize::try_from(pointer_width.bytes()).expect("width is bounded")],
+                )?;
+            }
             GeneratedArgumentValueV1::Slice {
                 address,
                 length,
@@ -1515,20 +1676,76 @@ fn validate_input(
                 width,
             )
         }
-        (GeneratedArgumentValueV1::Slice { .. }, AbiKind::Scalar(_)) => {
-            Err(GeneratedArgumentPackError::KindMismatch {
+        (
+            GeneratedArgumentValueV1::AddressFreeSlice {
+                length,
+                pointer_width,
+                address_space,
+                access,
+            },
+            AbiKind::Slice { .. },
+        ) => {
+            if *pointer_width != plan.pointer_width {
+                return Err(GeneratedArgumentPackError::PointerWidthMismatch {
+                    argument_index,
+                    expected: plan.pointer_width,
+                    provided: *pointer_width,
+                });
+            }
+            if *address_space != field.address_space() {
+                return Err(GeneratedArgumentPackError::AddressSpaceMismatch {
+                    argument_index,
+                    expected: field.address_space(),
+                    provided: *address_space,
+                });
+            }
+            if *access != field.access() {
+                return Err(GeneratedArgumentPackError::AccessMismatch {
+                    argument_index,
+                    expected: field.access(),
+                    provided: *access,
+                });
+            }
+            validate_width_value(
                 argument_index,
-                expected: "scalar",
-                provided: "slice",
-            })
-        }
-        (GeneratedArgumentValueV1::Slice { .. }, AbiKind::Pointer { .. }) => {
-            Err(GeneratedArgumentPackError::KindMismatch {
+                GeneratedPackingComponentKindV1::SliceLength,
+                *length,
+                *pointer_width,
+            )?;
+            let width = pointer_width.bytes();
+            validate_exact_component(
+                plan,
                 argument_index,
-                expected: "pointer",
-                provided: "slice",
-            })
+                GeneratedPackingComponentKindV1::SlicePointer,
+                field.offset(),
+                width,
+            )?;
+            validate_exact_component(
+                plan,
+                argument_index,
+                GeneratedPackingComponentKindV1::SliceLength,
+                field.offset() + width,
+                width,
+            )
         }
+        (
+            GeneratedArgumentValueV1::Slice { .. }
+            | GeneratedArgumentValueV1::AddressFreeSlice { .. },
+            AbiKind::Scalar(_),
+        ) => Err(GeneratedArgumentPackError::KindMismatch {
+            argument_index,
+            expected: "scalar",
+            provided: "slice",
+        }),
+        (
+            GeneratedArgumentValueV1::Slice { .. }
+            | GeneratedArgumentValueV1::AddressFreeSlice { .. },
+            AbiKind::Pointer { .. },
+        ) => Err(GeneratedArgumentPackError::KindMismatch {
+            argument_index,
+            expected: "pointer",
+            provided: "slice",
+        }),
     }
 }
 

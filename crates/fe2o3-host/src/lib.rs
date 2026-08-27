@@ -3,6 +3,7 @@ mod application_descriptor_handoff;
 mod argument_alias;
 mod artifact_binding;
 mod generated_argument_plan;
+mod generated_kfd_arguments;
 mod generated_worker_v3_dispatch;
 mod hsa_executable_lifecycle;
 mod prepared_launch;
@@ -110,6 +111,13 @@ pub use generated_argument_plan::{
     GeneratedPackingComponentV1,
 };
 #[doc(hidden)]
+pub use generated_kfd_arguments::{
+    CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
+    GeneratedKfdCompletion, GeneratedKfdCompletionError, GeneratedKfdPackedArguments,
+    GeneratedKfdPrepareError, GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice,
+    GeneratedKfdSliceBinding,
+};
+#[doc(hidden)]
 pub use generated_worker_v3_dispatch::{
     CompilerGeneratedWorkerV3ArgumentsV1, GeneratedWorkerV3ArgumentBindingV1,
     GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
@@ -173,15 +181,19 @@ pub mod __generated {
 
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-        CompilerGeneratedKernelProfileV1, CompilerGeneratedSemanticWitnessErrorV1,
-        CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentFieldProperty,
-        GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingError,
-        GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
-        GeneratedPackingComponentV1, GeneratedReadDeviceSlice, GeneratedReadWriteDeviceSlice,
-        GeneratedSliceArgumentPairV1, GeneratedWorkerV3ArgumentBindingV1,
-        GeneratedWorkerV3ArgumentErrorV1, GeneratedWorkerV3PrepareErrorV1,
-        GeneratedWorkerV3PreparedInvocationV1, ValidatedCompilerGeneratedSemanticWitnessV1,
-        semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
+        CompilerGeneratedKernelProfileV1, CompilerGeneratedKfdArguments,
+        CompilerGeneratedSemanticWitnessErrorV1, CompilerGeneratedWorkerV3ArgumentsV1,
+        GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+        GeneratedArgumentPackingError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
+        GeneratedKfdArgumentBinding, GeneratedKfdArgumentError, GeneratedKfdCompletion,
+        GeneratedKfdCompletionError, GeneratedKfdPackedArguments, GeneratedKfdPrepareError,
+        GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, GeneratedKfdSliceBinding,
+        GeneratedPackingComponentKindV1, GeneratedPackingComponentV1, GeneratedReadDeviceSlice,
+        GeneratedReadWriteDeviceSlice, GeneratedSliceArgumentPairV1,
+        GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3ArgumentErrorV1,
+        GeneratedWorkerV3PrepareErrorV1, GeneratedWorkerV3PreparedInvocationV1,
+        ValidatedCompilerGeneratedSemanticWitnessV1, semantic_witness_from_backend_v1,
+        validate_compiler_generated_semantic_witness_v1,
     };
     pub use fe2o3_artifacts::{
         AbiField, AbiKind, Access, AddressSpace, AliasClass, ArgumentOwnership, Mutability, Name,

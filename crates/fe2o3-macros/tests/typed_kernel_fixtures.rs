@@ -134,7 +134,7 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
         ),
         (
             "scalar_private_fields",
-            &["fields `a`, `b`, `c`, `m`, `n` and `k`", "are private"],
+            &["cannot construct", "private fields"],
         ),
         ("scalar_raw_pointer_escape", &["field `a`", "is private"]),
         (
@@ -144,6 +144,30 @@ fn generated_worker_v3_adapter_rejects_unsafe_escape_hatches() {
         ("scalar_non_clone", &["no method named `clone`"]),
         (
             "scalar_abi_substitution",
+            &[
+                "error[E0277]",
+                "CompilerGeneratedWorkerV3ArgumentsV1",
+                "is not implemented",
+            ],
+        ),
+        (
+            "kfd_trait_requires_unsafe_impl",
+            &["error[E0200]", "CompilerGeneratedKfdArguments"],
+        ),
+        (
+            "kfd_mutable_alias",
+            &["cannot borrow `*output` as mutable more than once"],
+        ),
+        (
+            "hsa_arguments_reject_kfd_route",
+            &[
+                "error[E0277]",
+                "CompilerGeneratedKfdArguments",
+                "is not implemented",
+            ],
+        ),
+        (
+            "kfd_arguments_reject_hsa_route",
             &[
                 "error[E0277]",
                 "CompilerGeneratedWorkerV3ArgumentsV1",

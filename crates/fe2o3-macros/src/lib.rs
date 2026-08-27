@@ -1989,27 +1989,29 @@ fn generated_general_typed_arguments_v1(
             }
         })
         .collect::<Vec<_>>();
+    let memory_type_parameters = arguments
+        .iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            matches!(
+                argument,
+                GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            )
+            .then(|| format_ident!("__Fe2o3MemoryArgument{index}"))
+        })
+        .collect::<Vec<_>>();
     let field_types = arguments
         .iter()
-        .map(|argument| match argument {
+        .zip(&memory_type_parameters)
+        .map(|(argument, type_parameter)| match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
-            GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
-                let scalar = scalar.rust_type_tokens();
-                quote!(
-                    __fe2o3_kernel_host::__generated::GeneratedReadDeviceSlice<
-                        'allocation,
-                        #scalar
-                    >
-                )
-            }
-            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
-                let scalar = scalar.rust_type_tokens();
-                quote!(
-                    __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
-                        'allocation,
-                        #scalar
-                    >
-                )
+            GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
+                let type_parameter = type_parameter
+                    .as_ref()
+                    .expect("slice arguments have generated capability parameters");
+                quote!(#type_parameter)
             }
             GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
                 let scalar = scalar.rust_type_tokens();
@@ -2025,6 +2027,40 @@ fn generated_general_typed_arguments_v1(
                 quote!(GlobalMut<'allocation, #scalar>)
             }
         })
+        .collect::<Vec<_>>();
+    let generic_parameters = memory_type_parameters.iter().flatten().collect::<Vec<_>>();
+    let generic_declarations = arguments
+        .iter()
+        .zip(&memory_type_parameters)
+        .filter_map(|(argument, type_parameter)| {
+            let type_parameter = type_parameter.as_ref()?;
+            let default = match argument {
+                GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
+                    let scalar = scalar.rust_type_tokens();
+                    quote!(
+                        __fe2o3_kernel_host::__generated::GeneratedReadDeviceSlice<
+                            'allocation,
+                            #scalar
+                        >
+                    )
+                }
+                GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+                    let scalar = scalar.rust_type_tokens();
+                    quote!(
+                        __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                            'allocation,
+                            #scalar
+                        >
+                    )
+                }
+                _ => unreachable!("only generated slice capability types are parameterized"),
+            };
+            Some(quote!(#type_parameter: 'allocation = #default))
+        })
+        .collect::<Vec<_>>();
+    let generic_impl_parameters = generic_parameters
+        .iter()
+        .map(|parameter| quote!(#parameter: 'allocation))
         .collect::<Vec<_>>();
     let retains_borrows = arguments.iter().any(|argument| {
         matches!(
@@ -2103,15 +2139,40 @@ fn generated_general_typed_arguments_v1(
             }
         });
 
-    if retains_borrows {
+    if retains_borrows && !generic_parameters.is_empty() {
         quote! {
             #global_mut_pointer_support
 
             /// Opaque host arguments for this exact kernel signature.
             ///
-            /// This value only retains typed values and device-buffer borrows;
+            /// This value only retains typed values and storage capabilities;
             /// it does not pack arguments, authorize a launch, or launch a kernel.
-            #[must_use = "generated arguments retain device-buffer borrows but do not launch a kernel"]
+            #[must_use = "generated arguments retain storage borrows but do not launch a kernel"]
+            #[allow(dead_code)]
+            pub struct Arguments<'allocation, #(#generic_declarations),*> {
+                #(#fields: #field_types,)*
+                __fe2o3_allocation: ::core::marker::PhantomData<&'allocation ()>,
+            }
+
+            impl<'allocation, #(#generic_impl_parameters),*>
+                Arguments<'allocation, #(#generic_parameters),*>
+            {
+                /// Retains the typed host capabilities for this kernel signature.
+                #[allow(clippy::too_many_arguments)]
+                pub fn new(#(#fields: #field_types),*) -> Self {
+                    Self {
+                        #(#fields),*,
+                        __fe2o3_allocation: ::core::marker::PhantomData,
+                    }
+                }
+            }
+        }
+    } else if retains_borrows {
+        quote! {
+            #global_mut_pointer_support
+
+            /// Opaque host arguments for this exact kernel signature.
+            #[must_use = "generated arguments retain storage borrows but do not launch a kernel"]
             #[allow(dead_code)]
             pub struct Arguments<'allocation> {
                 #(#fields: #field_types,)*
@@ -2199,6 +2260,58 @@ fn generated_worker_v3_adapter_v1(
         })
         .map(|(index, (_, field))| quote!(self.#field.bind_argument_pair(plan, #index)?))
         .collect::<Vec<_>>();
+    let kfd_scalar_inputs = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .enumerate()
+        .filter(|(_, (argument, _))| matches!(argument, GeneralTypedArgumentKindV1::Scalar(_)))
+        .map(|(index, (_, field))| {
+            quote!(
+                plan.scalar(#index, self.#field)
+                    .map_err(__fe2o3_kernel_host::__generated::GeneratedKfdArgumentError::Pack)?
+            )
+        })
+        .collect::<Vec<_>>();
+    let kfd_memory_arguments = model
+        .arguments
+        .iter()
+        .zip(&fields)
+        .enumerate()
+        .filter(|(_, (argument, _))| {
+            matches!(
+                argument,
+                GeneralTypedArgumentKindV1::SharedSlice(_)
+                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            )
+        })
+        .map(|(index, (_, field))| quote!(self.#field.bind_argument(plan, #index)?))
+        .collect::<Vec<_>>();
+    let kfd_memory_types = model
+        .arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            GeneralTypedArgumentKindV1::SharedSlice(scalar) => {
+                let scalar = scalar.rust_type_tokens();
+                Some(quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedKfdReadSlice<
+                        'allocation,
+                        #scalar
+                    >
+                ))
+            }
+            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+                let scalar = scalar.rust_type_tokens();
+                Some(quote!(
+                    __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
+                        'allocation,
+                        #scalar
+                    >
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let layout = generated_worker_v3_layout_v1(model);
     let retains_borrows = model.arguments.iter().any(|argument| {
         matches!(
@@ -2209,6 +2322,11 @@ fn generated_worker_v3_adapter_v1(
     });
     let arguments_type = if retains_borrows {
         quote!(Arguments<'allocation>)
+    } else {
+        quote!(Arguments)
+    };
+    let kfd_arguments_type = if retains_borrows {
+        quote!(Arguments<'allocation, #(#kfd_memory_types),*>)
     } else {
         quote!(Arguments)
     };
@@ -2296,6 +2414,38 @@ fn generated_worker_v3_adapter_v1(
                 Ok(
                     __fe2o3_kernel_host::__generated::GeneratedWorkerV3ArgumentBindingV1::
                         from_compiler_generated_parts_v1(scalar_inputs, memory_arguments),
+                )
+            }
+        }
+
+        // SAFETY: this implementation is emitted from the same parsed signature, canonical ABI,
+        // marker, and effect model as the compiler registration. KFD capabilities produce owned
+        // address-free buffers and zero pointer placeholders together with their exact fixups.
+        unsafe impl<'allocation>
+            __fe2o3_kernel_host::__generated::CompilerGeneratedKfdArguments<
+                'allocation,
+                Marker,
+            > for #kfd_arguments_type
+        {
+            fn generated_argument_layout() -> Result<
+                __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1,
+                __fe2o3_kernel_host::__generated::GeneratedArgumentLayoutError,
+            > {
+                #layout
+            }
+
+            fn bind_kfd_arguments(
+                self,
+                plan: &__fe2o3_kernel_host::__generated::GeneratedArgumentPackingPlanV1,
+            ) -> Result<
+                __fe2o3_kernel_host::__generated::GeneratedKfdArgumentBinding<'allocation>,
+                __fe2o3_kernel_host::__generated::GeneratedKfdArgumentError,
+            > {
+                let scalar_inputs = [#(#kfd_scalar_inputs),*].into_iter().collect();
+                let memory_arguments = [#(#kfd_memory_arguments),*].into_iter().collect();
+                Ok(
+                    __fe2o3_kernel_host::__generated::GeneratedKfdArgumentBinding::
+                        from_compiler_generated_parts(scalar_inputs, memory_arguments),
                 )
             }
         }
@@ -5108,6 +5258,9 @@ mod tests {
         .to_string();
 
         assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(expansion.contains("CompilerGeneratedKfdArguments"));
+        assert!(expansion.contains("GeneratedKfdReadSlice"));
+        assert!(expansion.contains("GeneratedKfdReadWriteSlice"));
         assert!(expansion.contains("prepare_worker_v3"));
         assert!(expansion.contains(TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3));
         assert!(expansion.contains("pub struct Arguments"));
@@ -5148,9 +5301,9 @@ mod tests {
             })
             .expect("generated Arguments struct");
         assert!(matches!(arguments.vis, Visibility::Public(_)));
-        assert_eq!(arguments.generics.params.len(), 1);
+        assert_eq!(arguments.generics.params.len(), 3);
         let fields = arguments.fields.iter().collect::<Vec<_>>();
-        assert_eq!(fields.len(), 3);
+        assert_eq!(fields.len(), 4);
         assert!(
             fields
                 .iter()
@@ -5161,13 +5314,14 @@ mod tests {
         assert_eq!(fields[1].ident.as_ref().unwrap(), "input");
         assert_eq!(
             fields[1].ty.to_token_stream().to_string(),
-            "__fe2o3_kernel_host :: __generated :: GeneratedReadDeviceSlice < 'allocation , u16 >"
+            "__Fe2o3MemoryArgument1"
         );
         assert_eq!(fields[2].ident.as_ref().unwrap(), "output");
         assert_eq!(
             fields[2].ty.to_token_stream().to_string(),
-            "__fe2o3_kernel_host :: __generated :: GeneratedReadWriteDeviceSlice < 'allocation , i32 >"
+            "__Fe2o3MemoryArgument2"
         );
+        assert_eq!(fields[3].ident.as_ref().unwrap(), "__fe2o3_allocation");
 
         let constructor = file
             .items
@@ -5194,6 +5348,7 @@ mod tests {
             constructor_types,
             fields
                 .iter()
+                .take(3)
                 .map(|field| field.ty.to_token_stream().to_string())
                 .collect::<Vec<_>>()
         );
@@ -5551,7 +5706,7 @@ mod tests {
             assert!(expansion.contains(&format!(
                 "pub type Marker = super :: __fe2o3_kernel_marker_{name}"
             )));
-            assert!(expansion.contains("pub struct Arguments < 'allocation >"));
+            assert!(expansion.contains("pub struct Arguments < 'allocation ,"));
             assert!(expansion.contains("pub fn new"));
             assert!(expansion.contains("CompilerGeneratedKernelExpectationV1"));
             assert!(expansion.contains("CompilerGeneratedKernelProfileV1 :: new"));
@@ -5562,6 +5717,9 @@ mod tests {
             assert!(!expansion.contains("fn semantic_witness_v1"));
             assert!(!expansion.contains("semantic_witness_from_backend_v1"));
             assert!(expansion.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+            assert!(expansion.contains("CompilerGeneratedKfdArguments"));
+            assert!(expansion.contains("GeneratedKfdReadSlice"));
+            assert!(expansion.contains("GeneratedKfdReadWriteSlice"));
             assert!(expansion.contains("pub fn prepare_worker_v3"));
             assert!(expansion.contains("prepare_generated_worker_v3_v1"));
             assert!(!expansion.contains("CompilerGeneratedAlphaZetaCov6ArgumentsV1"));
