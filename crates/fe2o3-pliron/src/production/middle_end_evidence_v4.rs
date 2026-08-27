@@ -14,10 +14,7 @@ use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, IndexBinaryKindAttr, MemorySpaceAttr,
     SemanticBinaryKindAttr,
 };
-use fe2o3_kernel_analysis::{
-    KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1,
-    PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2,
-};
+use fe2o3_kernel_analysis::{KernelCheckPassKindV1, PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2};
 use fe2o3_kernel_ir::{
     MatrixElement, TensorElementPackingV1, TensorFragmentLayoutV1, TensorInstructionProfileV1,
     TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1, TensorOperandRoleV1,
@@ -135,6 +132,21 @@ impl ProductionMiddleEndEvidencePassV4 {
             | KernelCheckPassKindV1::HierarchicalOwnership => None,
         }
     }
+}
+
+// V4 predates the ownership report. This is a projection of the sole live V2
+// pipeline into the frozen wire schema, not an executable analysis manifest.
+fn legacy_wire_analysis_projection_v4() -> Option<[KernelCheckPassKindV1; PASS_COUNT_V4]> {
+    let mut projection = [KernelCheckPassKindV1::Structural; PASS_COUNT_V4];
+    let mut length = 0;
+    for pass in PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2 {
+        if ProductionMiddleEndEvidencePassV4::from_analysis(pass).is_some() {
+            let slot = projection.get_mut(length)?;
+            *slot = pass;
+            length += 1;
+        }
+    }
+    (length == PASS_COUNT_V4).then_some(projection)
 }
 
 /// Fixed pass order encoded by every V4 record.
@@ -893,9 +905,15 @@ fn validate_live_reports(
 fn validate_observed_pass_facts(
     facts: &[ObservedPassFactV4; PASS_COUNT_V4],
 ) -> Result<(), ProductionMiddleEndEvidenceCodecErrorV4> {
+    let analysis_projection = legacy_wire_analysis_projection_v4().ok_or(
+        ProductionMiddleEndEvidenceCodecErrorV4::ReportPassOrderMismatch {
+            index: 0,
+            expected: PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4[0],
+        },
+    )?;
     for (index, ((fact, analysis_expected), evidence_expected)) in facts
         .iter()
-        .zip(PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1.iter())
+        .zip(analysis_projection.iter())
         .zip(PRODUCTION_MIDDLE_END_EVIDENCE_PASS_ORDER_V4.iter())
         .enumerate()
     {
@@ -2253,13 +2271,32 @@ mod tests {
     use crate::ProductionRankedValueIdV1;
 
     fn clean_facts() -> [ObservedPassFactV4; PASS_COUNT_V4] {
-        PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V1.map(|pass| ObservedPassFactV4 {
-            pass,
-            clean: true,
-            findings: 0,
-            compiler_authority: false,
-            artifact_authority: false,
-        })
+        legacy_wire_analysis_projection_v4()
+            .expect("V2 has every report represented by the frozen V4 wire projection")
+            .map(|pass| ObservedPassFactV4 {
+                pass,
+                clean: true,
+                findings: 0,
+                compiler_authority: false,
+                artifact_authority: false,
+            })
+    }
+
+    #[test]
+    fn legacy_wire_projection_is_derived_from_the_only_production_manifest() {
+        let projection = legacy_wire_analysis_projection_v4().unwrap();
+        let expected = PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
+            .into_iter()
+            .filter(|pass| ProductionMiddleEndEvidencePassV4::from_analysis(*pass).is_some())
+            .collect::<Vec<_>>();
+
+        assert_eq!(projection.as_slice(), expected);
+        assert_eq!(projection.len(), PASS_COUNT_V4);
+        assert!(!projection.contains(&KernelCheckPassKindV1::HierarchicalOwnership));
+        assert!(
+            PRODUCTION_PLIRON_PRELOWERING_PASS_ORDER_V2
+                .contains(&KernelCheckPassKindV1::HierarchicalOwnership)
+        );
     }
 
     #[test]
