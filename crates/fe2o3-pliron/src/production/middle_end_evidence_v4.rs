@@ -1239,7 +1239,6 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::SemanticExpression { .. } => 28,
         ProductionRankedOperationV1::CollectiveSemantics { .. } => 29,
         ProductionRankedOperationV1::RequireEquivalent { .. } => 22,
-        ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => 23,
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
         | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. } => 24,
         ProductionRankedOperationV1::RequireEffectRefinement { .. }
@@ -1841,25 +1840,6 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([12]);
             hash_value(digest, *actual);
             hash_value(digest, *expected);
-        }
-        ProductionRankedOperationV1::RequireReferenceEquivalent {
-            actual,
-            expected,
-            proof,
-        } => {
-            digest.update([23]);
-            hash_value(digest, *actual);
-            hash_value(digest, *expected);
-            for identity in [
-                proof.obligation_id(),
-                proof.subject_id(),
-                proof.model_id(),
-                proof.evidence_id(),
-            ] {
-                for word in identity {
-                    digest.update(word.to_le_bytes());
-                }
-            }
         }
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,

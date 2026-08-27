@@ -298,60 +298,6 @@ pub enum ProductionRankedValueV1 {
     Local(ProductionRankedValueIdV1),
 }
 
-/// Legacy declarative identities retained for compatibility.
-///
-/// V1 declarations are never admitted as authenticated functional-refinement
-/// evidence by a production compile. Use [`ProductionReferenceProofV2`] plus an
-/// imported V2 receipt instead.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProductionReferenceProofV1 {
-    obligation_id: [u64; 4],
-    subject_id: [u64; 4],
-    model_id: [u64; 4],
-    evidence_id: [u64; 4],
-}
-
-impl ProductionReferenceProofV1 {
-    pub fn declare_exact(
-        obligation_id: [u64; 4],
-        subject_id: [u64; 4],
-        model_id: [u64; 4],
-        evidence_id: [u64; 4],
-    ) -> Result<Self, ProductionRankedKernelErrorV1> {
-        let identities = [obligation_id, subject_id, model_id, evidence_id];
-        if identities.iter().any(|identity| *identity == [0; 4])
-            || identities
-                .iter()
-                .enumerate()
-                .any(|(index, identity)| identities[..index].contains(identity))
-        {
-            return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
-        }
-        Ok(Self {
-            obligation_id,
-            subject_id,
-            model_id,
-            evidence_id,
-        })
-    }
-
-    pub const fn obligation_id(&self) -> [u64; 4] {
-        self.obligation_id
-    }
-
-    pub const fn subject_id(&self) -> [u64; 4] {
-        self.subject_id
-    }
-
-    pub const fn model_id(&self) -> [u64; 4] {
-        self.model_id
-    }
-
-    pub const fn evidence_id(&self) -> [u64; 4] {
-        self.evidence_id
-    }
-}
-
 /// Exact receipt and semantic binding requested by one ranked recipe operation.
 ///
 /// This cloneable request is not evidence. Only
@@ -1767,13 +1713,6 @@ pub enum ProductionRankedOperationV1 {
         actual: ProductionRankedValueV1,
         expected: ProductionRankedValueV1,
     },
-    /// Requires one semantic equality and binds it to exact source-level Verus
-    /// proof identities. The generic semantic pass validates the join.
-    RequireReferenceEquivalent {
-        actual: ProductionRankedValueV1,
-        expected: ProductionRankedValueV1,
-        proof: ProductionReferenceProofV1,
-    },
     /// Requires semantic equality backed by an exact authenticated V2 receipt.
     /// The request itself is inert until the V2 production entrypoint consumes
     /// and reconciles the corresponding imported proof.
@@ -2098,8 +2037,7 @@ impl ProductionRankedKernelV1 {
                         }
                         _ if matches!(
                             operation,
-                            ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
-                                | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                            ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
@@ -3533,9 +3471,6 @@ fn validate_operation(
             Ok(None)
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
-        | ProductionRankedOperationV1::RequireReferenceEquivalent {
-            actual, expected, ..
-        }
         | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,
             expected,
@@ -3790,9 +3725,6 @@ fn validate_block_argument_values_v1(
             validate(*value)?;
         }
         ProductionRankedOperationV1::RequireEquivalent { actual, expected }
-        | ProductionRankedOperationV1::RequireReferenceEquivalent {
-            actual, expected, ..
-        }
         | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,
             expected,
@@ -4287,8 +4219,7 @@ impl ProductionPlironSessionV1 {
             block.operations.iter().any(|operation| {
                 matches!(
                     operation,
-                    ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
-                        | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
+                    ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
                         | ProductionRankedOperationV1::RequireEffectRefinement { .. }
                 )
             })
@@ -5298,37 +5229,6 @@ fn materialize_operation(
             );
             (op.get_operation(), None)
         }
-        ProductionRankedOperationV1::RequireReferenceEquivalent {
-            actual,
-            expected,
-            proof,
-        } => {
-            let obligation_id = ProofIdAttr::new(proof.obligation_id());
-            let obligation = ObligationOp::new(
-                context,
-                obligation_id.clone(),
-                ProofIdAttr::new(proof.subject_id()),
-                ProofIdAttr::new(proof.model_id()),
-                PropertyAttr::FunctionalRefinement,
-            );
-            obligation.get_operation().insert_at_back(block, context);
-            let evidence = EvidenceRefOp::new(
-                context,
-                ProofIdAttr::new(proof.evidence_id()),
-                obligation_id.clone(),
-                PropertyAttr::FunctionalRefinement,
-                EvidenceStatusAttr::Unsupported,
-                CoveredBoundaryAttr::Mir,
-            );
-            evidence.get_operation().insert_at_back(block, context);
-            let op = RequireRefinementOp::new(
-                context,
-                obligation_id,
-                resolve_value(*actual, arguments, locals, block_arguments)?,
-                resolve_value(*expected, arguments, locals, block_arguments)?,
-            );
-            (op.get_operation(), None)
-        }
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,
             expected,
@@ -6154,7 +6054,6 @@ impl Error for ProductionRankedCompileErrorV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionFunctionalRefinementAdmissionErrorV2 {
     WrongConstructionKind,
-    LegacyV1Declaration,
     UnboundRequest,
     DuplicateImportedReceipt(FunctionalRefinementReceiptIdentityV2),
     DuplicateReceiptClaim(FunctionalRefinementReceiptIdentityV2),
@@ -6173,9 +6072,6 @@ impl fmt::Display for ProductionFunctionalRefinementAdmissionErrorV2 {
         match self {
             Self::WrongConstructionKind => formatter.write_str(
                 "functional-refinement receipts can be admitted only for a ranked kernel",
-            ),
-            Self::LegacyV1Declaration => formatter.write_str(
-                "legacy declarative reference proof is non-authoritative; an imported V2 receipt is required",
             ),
             Self::UnboundRequest => formatter.write_str(
                 "functional-refinement generator request must be bound to an imported receipt before production compilation",
@@ -6312,11 +6208,6 @@ fn admit_functional_refinement_v2(
     for (block_index, block) in kernel.blocks.iter().enumerate() {
         for (operation_index, operation) in block.operations.iter().enumerate() {
             match operation {
-                ProductionRankedOperationV1::RequireReferenceEquivalent { .. } => {
-                    return Err(
-                        ProductionFunctionalRefinementAdmissionErrorV2::LegacyV1Declaration,
-                    );
-                }
                 ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequestEffectRefinement { .. }
                 | ProductionRankedOperationV1::RequestNumericalRefinement { .. }

@@ -10838,19 +10838,6 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*actual),
             ranked_value_text_v1(*expected),
         ),
-        ProductionRankedOperationV1::RequireReferenceEquivalent {
-            actual,
-            expected,
-            proof,
-        } => format!(
-            "  proof.require_refinement {}, {} <obligation={:016x}{:016x}{:016x}{:016x}>\n",
-            ranked_value_text_v1(*actual),
-            ranked_value_text_v1(*expected),
-            proof.obligation_id()[0],
-            proof.obligation_id()[1],
-            proof.obligation_id()[2],
-            proof.obligation_id()[3],
-        ),
         ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent {
             actual,
             expected,
@@ -14023,7 +14010,6 @@ mod tests {
                 | ProductionRankedOperationV1::SemanticExpression { .. }
                 | ProductionRankedOperationV1::CollectiveSemantics { .. }
                 | ProductionRankedOperationV1::RequireEquivalent { .. }
-                | ProductionRankedOperationV1::RequireReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequireAuthenticatedReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent { .. }
                 | ProductionRankedOperationV1::RequireEffectRefinement { .. }

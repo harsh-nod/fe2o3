@@ -9,9 +9,10 @@ for the bound MIR subjects and normalized obligation/effect transcript. It does
 not grant lowering, source-to-ISA, artifact, load, launch, runtime, or hardware
 authority.
 
-`ProductionReferenceProofV1::declare_exact` is compatibility data. The V1
-production path materializes it as unsupported evidence, so a declarative
-`Proved` value cannot make the semantic pipeline clean.
+Legacy declarative proof identities are not part of the production API.
+Functional-refinement evidence enters only through an authenticated V2 receipt;
+callers cannot construct an unsupported compatibility operation inside the
+ranked graph.
 
 Construction is acyclic: the initial ranked graph contains an unbound request
 with subjects but no receipt. The typed producer executes that exact request,
