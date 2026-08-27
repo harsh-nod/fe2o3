@@ -151,7 +151,9 @@ pub use prepared_launch::{
 };
 #[cfg(target_os = "linux")]
 pub use production_application::{
-    ProductionWorkerV3ApplicationLoadErrorV1, load_inherited_worker_v3_application_v1,
+    ProductionWorkerV3ApplicationLoadErrorV1, ProductionWorkerV3KfdApplicationErrorV1,
+    ProductionWorkerV3KfdPreparationErrorV1, load_inherited_worker_v3_application_v1,
+    prepare_inherited_worker_v3_kfd_application_v1,
 };
 pub use published_direct_link::{
     PublishedDirectLinkAdmissionError, ValidatedPublishedDirectLinkSelectionV1,
@@ -187,7 +189,9 @@ pub use worker_v3_verification_admission::{
 #[doc(hidden)]
 pub mod __generated {
     #[cfg(target_os = "linux")]
-    pub use crate::production_application::load_admitted_worker_v3_application_v1;
+    pub use crate::production_application::{
+        load_admitted_worker_v3_application_v1, prepare_admitted_worker_v3_kfd_application_v1,
+    };
 
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,

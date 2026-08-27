@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::recovered_worker_v3_admission::WorkerV3HostLineageEvidenceV1;
 use crate::{
-    CompilerGeneratedKernelExpectationV1, DeviceIdentity, RecoveredWorkerV3AdmissionErrorV1,
+    CompilerGeneratedKernelExpectationV1, RecoveredWorkerV3AdmissionErrorV1,
     RecoveredWorkerV3PinnedDescriptorV1, WorkerV3HostLineageIdentityV1,
 };
 
@@ -88,7 +88,6 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     descriptor: &'admission KernelDescriptorV1,
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
-    device: &'admission DeviceIdentity,
     generated_host_contract: [u8; 32],
     _marker: PhantomData<fn() -> K>,
 }
@@ -174,10 +173,6 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
 
     pub const fn code_object_version(&self) -> CodeObjectVersion {
         self.code_object_version
-    }
-
-    pub const fn device(&self) -> &DeviceIdentity {
-        self.device
     }
 
     pub const fn marker_logical_name(&self) -> &'static str {
@@ -335,8 +330,8 @@ impl WorkerV3VerificationDecisionV1 {
 
 /// Authenticated compiler/Verus state for one exact V3 executable.
 ///
-/// This value is linear and still grants no HSA load or launch authority. A later transition must
-/// bind it to a reviewed HSA runtime and a retained current-publication token.
+/// This value is linear and still grants no load or launch authority. A later runtime-specific
+/// transition must bind it to a checked live device and a retained current-publication token.
 pub struct AuthenticatedWorkerV3ExecutableV1<K> {
     admission: RecoveredWorkerV3PinnedDescriptorV1,
     verification: WorkerV3VerificationDecisionV1,
@@ -399,22 +394,19 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         self.admission.target()
     }
 
-    pub const fn device(&self) -> &DeviceIdentity {
-        self.admission.device()
-    }
-
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         self.admission.revalidate_currentness()
     }
 
     pub fn authorize_hsa_load<A: crate::ReviewedHsaExecutableLifecycleAdapterV1>(
         self,
+        observed: crate::ObservedContext,
         adapter: A,
     ) -> Result<
         crate::AuthorizedWorkerV3HsaLoadV1<K, A>,
         crate::WorkerV3HsaLoadAuthorizationErrorV1<A::Error>,
     > {
-        crate::hsa_executable_lifecycle::authorize_worker_v3_hsa_load_v1(self, adapter)
+        crate::hsa_executable_lifecycle::authorize_worker_v3_hsa_load_v1(self, observed, adapter)
     }
 
     pub const fn authenticates_verification_authority(&self) -> bool {
@@ -488,7 +480,6 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
         descriptor: admission.descriptor(),
         target: admission.target(),
         code_object_version: admission.code_object_version(),
-        device: admission.device(),
         generated_host_contract,
         _marker: PhantomData,
     })

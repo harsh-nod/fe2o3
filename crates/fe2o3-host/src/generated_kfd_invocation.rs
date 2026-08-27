@@ -192,9 +192,8 @@ fn validate_gfx942_target<K: CompilerGeneratedKernelExpectationV1>(
     let expected = AmdTargetId::parse(PRODUCTION_GFX942_DEVICE_TARGET_V1)
         .expect("the canonical production gfx942 target is valid");
     let artifact = authenticated.target();
-    let observed = authenticated.device().target_id();
-    if artifact != expected || observed != expected {
-        return Err(GeneratedWorkerV3KfdInvocationError::TargetMismatch { artifact, observed });
+    if artifact != expected {
+        return Err(GeneratedWorkerV3KfdInvocationError::TargetMismatch { artifact });
     }
     Ok(())
 }
@@ -239,10 +238,7 @@ fn validate_runtime_identity_fields(
 pub enum GeneratedWorkerV3KfdInvocationError {
     CurrentPublication(RecoveredWorkerV3AdmissionErrorV1),
     DeviceCurrentness(DeviceBindingError),
-    TargetMismatch {
-        artifact: AmdTargetId,
-        observed: AmdTargetId,
-    },
+    TargetMismatch { artifact: AmdTargetId },
     Arguments(GeneratedKfdPrepareError),
     RuntimePreparation(Gfx942RuntimePreparationErrorV1),
     ArtifactIdentityMismatch,
@@ -259,9 +255,9 @@ impl fmt::Display for GeneratedWorkerV3KfdInvocationError {
             Self::DeviceCurrentness(error) => {
                 write!(formatter, "checked KFD device is not current: {error}")
             }
-            Self::TargetMismatch { artifact, observed } => write!(
+            Self::TargetMismatch { artifact } => write!(
                 formatter,
-                "pure-KFD invocation requires {PRODUCTION_GFX942_DEVICE_TARGET_V1}; artifact is {artifact} and inherited observation is {observed}"
+                "pure-KFD invocation requires {PRODUCTION_GFX942_DEVICE_TARGET_V1}; artifact is {artifact}"
             ),
             Self::Arguments(error) => write!(formatter, "generated KFD arguments failed: {error}"),
             Self::RuntimePreparation(error) => {

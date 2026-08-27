@@ -29,21 +29,22 @@ use fe2o3_artifacts::{
 use fe2o3_device::KernelMarkerV1;
 use fe2o3_host::__generated::{
     GeneratedKfdReadSlice, GeneratedKfdReadWriteSlice, load_admitted_worker_v3_application_v1,
+    prepare_admitted_worker_v3_kfd_application_v1,
 };
 use fe2o3_host::{
     __hardware_test::{
         application_handoff_observed_context_fixture_v1,
         generated_shared_f32_argument_pair_fixture_v1,
     },
-    AqlDispatchGeometryV1, AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
-    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
-    CompilerGeneratedWorkerV3ArgumentsV1, DeviceSelector, GeneratedArgumentLayoutError,
-    GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1,
-    GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1, HsaAgentIdentityV1,
-    HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1, HsaEnvironmentObservationV1,
-    HsaExecutableObjectIdentityV1, HsaImplicitKernargInitializationObservationV1,
-    HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchGeometryV1,
-    HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1, OpenedKfd,
+    AqlDispatchGeometryV1, CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
+    CompilerGeneratedKernelProfileV1, CompilerGeneratedWorkerV3ArgumentsV1, DeviceSelector,
+    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
+    GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
+    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
+    HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
+    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
+    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
+    HsaRuntimeIdentityV1, HsaUnloadObservationV1, OpenedKfd,
     ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
     ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
     WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1, WorkerV3SafetyPropertiesV1,
@@ -1281,12 +1282,9 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert!(!recovered.grants_launch_authority());
 
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     assert_eq!(admitted.descriptor().entry_name().as_str(), "vecadd");
     assert_eq!(
         admitted.descriptor().descriptor_symbol().as_str(),
@@ -1307,6 +1305,7 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     let (adapter, adapter_state) = ReviewedTestHsaAdapter::new();
     let mut loaded = load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
         admitted,
+        &observed,
         &mut ReviewedTestWorkerV3Verifier {
             substitute_finalized: false,
         },
@@ -1480,17 +1479,10 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_joined_kfd_authority() {
     );
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
 
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted =
-        admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
-    let authenticated =
-        AuthenticatedWorkerV3ExecutableV1::<scalar_gemm_v1_gpu::Marker>::authenticate(
-            admitted,
-            &mut ReviewedTestWorkerV3Verifier {
-                substitute_finalized: false,
-            },
-        )
-        .unwrap();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id).unwrap();
+    let mut verifier = ReviewedTestWorkerV3Verifier {
+        substitute_finalized: false,
+    };
     let unique_id = std::env::var("FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID")
         .map(|value| parse_u64(&value))
         .expect("FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID is not set")
@@ -1525,9 +1517,16 @@ fn synthetic_verifier_executes_real_scalar_gemm_through_joined_kfd_authority() {
             K,
         );
         let geometry = AqlDispatchGeometryV1::new([256, 1, 1], [256, 1, 1]).unwrap();
-        let invocation = authenticated
-            .prepare_generated_kfd_invocation(arguments, device, geometry, 0, 5_000)
-            .unwrap();
+        let invocation = prepare_admitted_worker_v3_kfd_application_v1(
+            admitted,
+            &mut verifier,
+            arguments,
+            device,
+            geometry,
+            0,
+            5_000,
+        )
+        .unwrap();
         assert_eq!(invocation.kernel_name(), "scalar_gemm_v1");
         assert_eq!(invocation.device_unique_id(), unique_id);
         assert_ne!(invocation.dispatch_contract_sha256(), [0; 32]);
@@ -1555,11 +1554,9 @@ fn parse_u64(value: &str) -> Result<u64, std::num::ParseIntError> {
 fn production_scalar_request_auditor_validates_exact_deterministic_hsaco_and_kir() {
     let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     let admitted = admit_recovered_worker_v3_descriptor_v1(
         recovered,
         KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
     )
     .unwrap();
     let lineage = admitted.lineage_identity();
@@ -1600,11 +1597,9 @@ fn production_scalar_request_auditor_validates_exact_deterministic_hsaco_and_kir
 fn production_scalar_request_auditor_rejects_substituted_canonical_kir() {
     let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture_with_substituted_kir();
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     let admitted = admit_recovered_worker_v3_descriptor_v1(
         recovered,
         KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
     )
     .unwrap();
     let lineage = admitted.lineage_identity();
@@ -1630,13 +1625,9 @@ fn production_scalar_request_auditor_rejects_substituted_canonical_kir() {
 #[test]
 fn production_scalar_request_auditor_rejects_a_different_generated_kernel_profile() {
     let (_directory, recovered) = recovered_host_fixture();
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     let lineage = admitted.lineage_identity();
     let mut auditor = ProductionScalarGemmWorkerV3RequestAuditorV1::<WorkerV3VecAddMarker>::new();
 
@@ -1658,13 +1649,9 @@ fn worker_v3_gate_rejects_substituted_descriptor_identity_before_audit() {
     let fixture =
         worker_v3_fixture::published_scalar_gemm_worker_v3_fixture_with_substituted_descriptor_binding();
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xc1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xc1; 32]))
+            .unwrap();
     let mut auditor =
         ProductionScalarGemmWorkerV3RequestAuditorV1::<scalar_gemm_v1_gpu::Marker>::new();
 
@@ -1682,11 +1669,9 @@ fn worker_v3_gate_rejects_substituted_descriptor_identity_before_audit() {
 fn worker_v3_gate_rejects_substituted_marker_binding_before_audit() {
     let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     let admitted = admit_recovered_worker_v3_descriptor_v1(
         recovered,
         KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
     )
     .unwrap();
     let mut auditor =
@@ -1706,11 +1691,9 @@ fn worker_v3_gate_rejects_substituted_marker_binding_before_audit() {
 fn borrowed_scalar_request_audit_rejects_publication_mutation_during_validation() {
     let fixture = worker_v3_fixture::published_scalar_gemm_worker_v3_fixture();
     let (directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     let admitted = admit_recovered_worker_v3_descriptor_v1(
         recovered,
         KernelId::from_bytes(SCALAR_GEMM_MARKER_BINDING),
-        &observed,
     )
     .unwrap();
     let mut auditor = MutatingCurrentPublicationAuditor {
@@ -1753,9 +1736,7 @@ fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
         "scalar_gemm_v1.kd",
     );
     let (_directory, recovered) = recover_published_worker_v3_fixture(fixture);
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted =
-        admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id, &observed).unwrap();
+    let admitted = admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id).unwrap();
     let mut verifier = ProductionScalarGemmWorkerV3VerifierV1::<scalar_gemm_v1_gpu::Marker>::open(
         runtime_root,
         120,
@@ -1822,41 +1803,40 @@ fn scalar_gemm_reference(a: &[f32], b: &[f32], m: u32, n: u32, k: u32) -> Vec<f3
 #[test]
 fn v3_host_admission_rejects_an_unknown_kernel_identity() {
     let (_directory, recovered) = recovered_host_fixture();
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
     assert!(matches!(
-        admit_recovered_worker_v3_descriptor_v1(
-            recovered,
-            KernelId::from_bytes([0xff; 32]),
-            &observed,
-        ),
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xff; 32]),),
         Err(RecoveredWorkerV3AdmissionErrorV1::KernelNotFound)
     ));
 }
 
 #[test]
-fn v3_host_admission_rejects_incompatible_observed_target_features() {
+fn v3_hsa_migration_rejects_incompatible_observed_target_features() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack+");
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     assert!(matches!(
-        admit_recovered_worker_v3_descriptor_v1(
-            recovered,
-            KernelId::from_bytes([0xa1; 32]),
+        load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
+            admitted,
             &observed,
+            &mut ReviewedTestWorkerV3Verifier {
+                substitute_finalized: false,
+            },
+            ReviewedTestHsaAdapter::new().0,
         ),
-        Err(RecoveredWorkerV3AdmissionErrorV1::ObservedTargetMismatch)
+        Err(ProductionWorkerV3ApplicationLoadErrorV1::LoadAuthorization(
+            fe2o3_host::WorkerV3HsaLoadAuthorizationErrorV1::Environment(_)
+        ))
     ));
 }
 
 #[test]
 fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
     let (_directory, recovered) = recovered_host_fixture();
-    let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     let lineage = admitted.lineage_identity();
     let (finalized_sha256, finalized_length) = audit_recovered_worker_v3_verification_v1::<
         WorkerV3VecAddMarker,
@@ -1876,15 +1856,13 @@ fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
 fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     assert!(matches!(
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
+            &observed,
             &mut ReviewedTestWorkerV3Verifier {
                 substitute_finalized: true,
             },
@@ -1902,16 +1880,14 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
 fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
     let (_directory, recovered) = recovered_host_fixture();
     let observed = application_handoff_observed_context_fixture_v1("gfx942:xnack-");
-    let admitted = admit_recovered_worker_v3_descriptor_v1(
-        recovered,
-        KernelId::from_bytes([0xa1; 32]),
-        &observed,
-    )
-    .unwrap();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
     let (adapter, adapter_state) = ReviewedTestHsaAdapter::with_substituted_load_digest();
     assert!(matches!(
         load_admitted_worker_v3_application_v1::<WorkerV3VecAddMarker, _, _>(
             admitted,
+            &observed,
             &mut ReviewedTestWorkerV3Verifier {
                 substitute_finalized: false,
             },
