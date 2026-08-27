@@ -47,8 +47,9 @@ as reverse execution of the original dispatch.
 Resolved source locations carry a closed provenance class. `caller_bound`
 means the map and expected subject were supplied through a low-level external
 admission boundary; it is not compiler authenticity.
-`compiler_bundle_authenticated` is reserved for exact map bytes whose digest
-and subject were verified by the compiler-owned bundle decode transaction.
+`compiler_bundle_bound` is reserved for exact map bytes whose digest and
+subject were verified by the compiler-owned bundle decode transaction. It is
+content association, not protected compiler-execution authentication.
 Absent, optimized-out, and many-to-one mappings remain typed unavailable
 states. Stack frames are captured backend facts with one-based identities and
 typed value availability, never name-derived or UI-synthesized frames.

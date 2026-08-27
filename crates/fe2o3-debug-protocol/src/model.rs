@@ -736,7 +736,7 @@ pub struct SourceLocationV1 {
 #[serde(rename_all = "snake_case")]
 pub enum SourceMapProvenanceV1 {
     CallerBound,
-    CompilerBundleAuthenticated,
+    CompilerBundleBound,
 }
 
 impl SourceLocationV1 {

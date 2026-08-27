@@ -1450,7 +1450,7 @@ pub fn run_admitted_jsonl_with_compiler_source_map_v1<R: BufRead, W: Write>(
         configuration,
         verified_bundle_subject,
         Some(committed_map_identity),
-        SourceMapProvenanceV1::CompilerBundleAuthenticated,
+        SourceMapProvenanceV1::CompilerBundleBound,
     )?;
     let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))?;
     run_jsonl_v1(backend, reader, writer)
@@ -3109,7 +3109,7 @@ impl SimulatorBackendV1 {
                 DebugOperationNameV1::InspectValues,
                 DebugCapabilityNameV1::SourceVariableValues,
                 CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
-                "source variables require an exact-KIR authenticated source map",
+                "source variables are not represented by the V1 source map",
             );
         }
         let Some(record) = self.session.current() else {
@@ -3885,12 +3885,12 @@ mod tests {
             configuration,
             fixture_subject(),
             Some(actual),
-            SourceMapProvenanceV1::CompilerBundleAuthenticated,
+            SourceMapProvenanceV1::CompilerBundleBound,
         )
         .expect("admit bundle-committed map");
         assert_eq!(
             admitted.provenance,
-            SourceMapProvenanceV1::CompilerBundleAuthenticated
+            SourceMapProvenanceV1::CompilerBundleBound
         );
         assert!(
             admit_source_map_with_provenance_v1(
@@ -3899,7 +3899,7 @@ mod tests {
                 configuration,
                 fixture_subject(),
                 Some(nonzero_identity([7; 32])),
-                SourceMapProvenanceV1::CompilerBundleAuthenticated,
+                SourceMapProvenanceV1::CompilerBundleBound,
             )
             .unwrap_err()
             .contains("bundle commitment")

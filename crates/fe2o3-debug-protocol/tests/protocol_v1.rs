@@ -222,7 +222,7 @@ fn source_provenance_and_stack_availability_round_trip_without_addresses() {
                     source: SourceSiteAvailabilityV1::Resolved {
                         location: SourceLocationV1 {
                             map_identity: identity(4),
-                            provenance: SourceMapProvenanceV1::CompilerBundleAuthenticated,
+                            provenance: SourceMapProvenanceV1::CompilerBundleBound,
                             file_identity: identity(5),
                             byte_start: 7,
                             byte_end: 12,
@@ -246,7 +246,7 @@ fn source_provenance_and_stack_availability_round_trip_without_addresses() {
     };
     let encoded = encode_response_line_v1(&response, ProtocolLimitsV1::default()).unwrap();
     let text = std::str::from_utf8(&encoded).unwrap();
-    assert!(text.contains("compiler_bundle_authenticated"));
+    assert!(text.contains("compiler_bundle_bound"));
     assert!(!text.contains("address"));
     assert_eq!(
         decode_response_line_v1(&encoded, ProtocolLimitsV1::default()).unwrap(),

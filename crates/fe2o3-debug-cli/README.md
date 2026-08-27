@@ -32,12 +32,13 @@ a source path from the map. KIR/source resolution, source breakpoints, and
 source stepping return distinct absent, eliminated, and many-to-one states.
 
 This command-line pair is a low-level/test consistency boundary. Because the
-caller supplies both documents, it is labeled `caller_bound`, not
-authenticated compiler provenance. Production compiler integration must call
+caller supplies both documents, it is labeled `caller_bound`, not compiler
+provenance. Production compiler integration must call
 `run_admitted_jsonl_with_compiler_source_map_v1` with exact map bytes, the
 verified bundle subject, and the bundle-committed map identity obtained from the
 same compiler extraction/bundle decode transaction. Only that path emits
-`compiler_bundle_authenticated`. The bundle subject excludes the map payload
+`compiler_bundle_bound`. This proves exact bundle content association, not
+protected compiler execution. The bundle subject excludes the map payload
 to avoid circular identity; the enclosing bundle identity commits the map's
 domain-separated identity and exact length. `debug_source_map_identity_v1`
 implements the bundle's exact map-identity algorithm.
