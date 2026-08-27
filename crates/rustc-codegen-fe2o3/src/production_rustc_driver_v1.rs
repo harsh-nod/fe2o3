@@ -1,6 +1,10 @@
 //! Process-isolated AMD rustc entry for production semantic extraction.
 
 use std::env;
+use std::fs::OpenOptions;
+use std::io::Write as _;
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 
 use rustc_driver::{Callbacks, Compilation};
@@ -14,13 +18,16 @@ struct ProductionExtractionCallbacksV1 {
     amdgpu_llvm_output: Option<PathBuf>,
     expected_llvm_target: Option<&'static str>,
     gfx942_compiler_handoff_output: Option<PathBuf>,
+    simulation_bundle_output: Option<PathBuf>,
     result: Option<Result<(), String>>,
 }
 
 impl Callbacks for ProductionExtractionCallbacksV1 {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some(
-            if let Some(output) = self.gfx942_compiler_handoff_output.as_deref() {
+            if let Some(output) = self.simulation_bundle_output.as_deref() {
+                extract_simulation_bundle_in_active_session_v1(tcx, output)
+            } else if let Some(output) = self.gfx942_compiler_handoff_output.as_deref() {
                 extract_gfx942_compiler_handoff_in_active_session_v1(tcx, output)
             } else if let Some(output) = self.amdgpu_llvm_output.as_deref() {
                 extract_amdgpu_llvm_in_active_session_v1(tcx, output, self.expected_llvm_target)
@@ -175,6 +182,89 @@ fn extract_gfx942_compiler_handoff_in_active_session_v1(
     Ok(())
 }
 
+fn extract_simulation_bundle_in_active_session_v1(
+    tcx: TyCtxt<'_>,
+    output: &Path,
+) -> Result<(), String> {
+    let bundle = transaction_in_active_session_v1(tcx)?
+        .export_simulation_bundle_v1()
+        .map_err(|error| error.to_string())?;
+    publish_new_simulation_bundle_v1(output, bundle.canonical_bytes())?;
+    eprintln!(
+        "fe2o3 production extraction: ordinary Rust -> semantic MIR -> ranked PLIRON checks -> sole target-neutral Kernel IR lowering -> exact verified KIR V7 simulation bundle; target {}, {} kernel(s), simulation_bundle_subject {}, content {}, {} byte(s), compiler_execution_binding=extraction_only_unavailable, authenticates_compiler_execution=false, debug map {}, proof/artifact/compiler/hardware/load/launch authority false",
+        bundle.target(),
+        bundle.kernel_count(),
+        lower_hex_v1(bundle.subject_identity()),
+        lower_hex_v1(bundle.identity().as_bytes()),
+        bundle.canonical_bytes().len(),
+        if bundle.debug_map().is_some() {
+            "present"
+        } else {
+            "none"
+        },
+    );
+    Ok(())
+}
+
+fn publish_new_simulation_bundle_v1(output: &Path, bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() || bytes.len() > fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V1 {
+        return Err("refusing to publish an empty or oversized simulation bundle".to_owned());
+    }
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(output).map_err(|error| {
+        format!(
+            "failed to create new simulation bundle output `{}`: {error}",
+            output.display()
+        )
+    })?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        return Err(format!(
+            "failed to publish simulation bundle `{}`; the create-new partial output was retained for fail-closed cleanup: {error}",
+            output.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let descriptor = file.metadata().map_err(|error| {
+            format!(
+                "failed to inspect published simulation bundle descriptor `{}`: {error}",
+                output.display()
+            )
+        })?;
+        let path = std::fs::symlink_metadata(output).map_err(|error| {
+            format!(
+                "failed to re-inspect published simulation bundle path `{}`: {error}",
+                output.display()
+            )
+        })?;
+        if !descriptor.is_file()
+            || descriptor.len() != bytes.len() as u64
+            || descriptor.dev() != path.dev()
+            || descriptor.ino() != path.ino()
+            || path.file_type().is_symlink()
+        {
+            return Err(format!(
+                "simulation bundle output `{}` changed identity during publication",
+                output.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn lower_hex_v1(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[usize::from(byte >> 4)] as char);
+        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    encoded
+}
+
 /// Runs one already-targeted rustc invocation in this process.
 ///
 /// The caller must provide the complete rustc argument vector, including argv0.
@@ -196,6 +286,7 @@ pub fn run_production_ranked_extraction_driver_v1(args: &[String]) -> Result<(),
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -215,6 +306,7 @@ pub fn run_production_amdgpu_llvm_extraction_driver_v1(
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -233,6 +325,7 @@ pub fn run_production_gfx942_llvm_extraction_driver_v1(
         amdgpu_llvm_output: Some(output.to_path_buf()),
         expected_llvm_target: Some(fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1),
         gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -253,6 +346,7 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
         amdgpu_llvm_output: None,
         expected_llvm_target: None,
         gfx942_compiler_handoff_output: Some(output.to_path_buf()),
+        simulation_bundle_output: None,
         result: None,
     };
     rustc_driver::run_compiler(args, &mut callbacks);
@@ -262,4 +356,82 @@ pub fn run_production_gfx942_compiler_handoff_extraction_driver_v1(
                 .to_owned(),
         )
     })
+}
+
+/// Runs the sole production source transaction through target-neutral lowering
+/// and publishes one authority-free exact KIR V7 simulation bundle. This path
+/// never enters LLVM, artifact publication, a runtime, or hardware fallback.
+pub fn run_production_simulation_bundle_extraction_driver_v1(
+    args: &[String],
+    output: &Path,
+) -> Result<(), String> {
+    let mut callbacks = ProductionExtractionCallbacksV1 {
+        ranked_memory: false,
+        amdgpu_llvm_output: None,
+        expected_llvm_target: None,
+        gfx942_compiler_handoff_output: None,
+        simulation_bundle_output: Some(output.to_path_buf()),
+        result: None,
+    };
+    rustc_driver::run_compiler(args, &mut callbacks);
+    callbacks.result.unwrap_or_else(|| {
+        Err(
+            "production simulation-bundle extraction callback did not reach rustc analysis"
+                .to_owned(),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "fe2o3-simulation-bundle-output-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn simulation_bundle_output_is_create_new_exact_and_private() {
+        let root = scratch();
+        let output = root.join("kernel.fe2sim");
+        publish_new_simulation_bundle_v1(&output, b"exact-bundle").unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), b"exact-bundle");
+        assert!(publish_new_simulation_bundle_v1(&output, b"replacement").is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"exact-bundle");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt as _, symlink};
+            assert_eq!(
+                std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let link = root.join("link.fe2sim");
+            symlink(&output, &link).unwrap();
+            assert!(publish_new_simulation_bundle_v1(&link, b"replacement").is_err());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn simulation_bundle_output_rejects_empty_and_oversized_payloads() {
+        let root = scratch();
+        assert!(publish_new_simulation_bundle_v1(&root.join("empty"), b"").is_err());
+        assert!(
+            publish_new_simulation_bundle_v1(
+                &root.join("oversized"),
+                &vec![0; fe2o3_kernel_ir::MAX_SIMULATION_BUNDLE_BYTES_V1 + 1],
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

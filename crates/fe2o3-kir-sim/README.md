@@ -5,6 +5,12 @@ explicit subset of verified canonical Kernel IR V7. Admission consumes a
 `VerifiedCanonicalKernelIrV7`; raw in-memory modules and older wire formats are
 not execution inputs.
 
+Ordinary admitted Rust can obtain these exact V7 bytes from a strict
+`VerifiedSimulationBundleV1` produced by the authority-free
+[`fe2o3-export-sim`](../../docs/simulation-bundle-v1.md) transaction. Bundle
+export does not execute or authorize a kernel, and its extraction-only compiler
+binding does not authenticate compiler execution.
+
 Admission relies on that consumed owner's private immutable bytes and identity:
 the owner cannot be constructed without exact V7 canonical decoding and full
 semantic verification. The simulator therefore does not rerun the semantic

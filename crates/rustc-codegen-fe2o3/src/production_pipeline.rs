@@ -40,6 +40,10 @@ pub(crate) enum ProductionPipelineError {
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
+    SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
+    SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
+    SimulationProductionKirV9,
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
@@ -78,6 +82,20 @@ impl fmt::Display for ProductionPipelineError {
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
+            Self::SimulationKernelIrV7(error) => write!(
+                formatter,
+                "production compilation cannot project the already-lowered module to exact simulation Kernel IR V7: {error}"
+            ),
+            Self::SimulationBundle(error) => {
+                write!(formatter, "production compilation simulation bundle failed: {error}")
+            }
+            Self::SimulationSourceLineage(error) => write!(
+                formatter,
+                "production compilation simulation source-lineage receipt failed: {error}"
+            ),
+            Self::SimulationProductionKirV9 => formatter.write_str(
+                "production Kernel IR V9 is not representable by the exact V7 CPU simulator; no downgrade or hardware fallback was attempted",
+            ),
             Self::FormalMemoryAdmission(error) => {
                 write!(formatter, "production compilation formal memory admission failed: {error}")
             }
@@ -132,6 +150,9 @@ impl std::error::Error for ProductionPipelineError {
             Self::RankedProjection(error) => Some(error),
             Self::RankedVerification(error) => Some(error),
             Self::TargetNeutralLowering(error) => Some(error),
+            Self::SimulationKernelIrV7(error) => Some(error),
+            Self::SimulationBundle(error) => Some(error),
+            Self::SimulationSourceLineage(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
@@ -145,6 +166,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::RustcLineageMismatch
+            | Self::SimulationProductionKirV9
             | Self::UpstreamLlvmLayoutBinding(_)
             | Self::ExtractionCannotPublish
             | Self::WorkerHandoffExtractionRequiresExtractionCustody => None,
@@ -324,6 +346,72 @@ impl AuthenticatedProductionTargetModule {
 }
 
 impl TargetNeutralProductionCompilation {
+    fn into_simulation_bundle_v1(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+        debug_map: Option<fe2o3_kernel_ir::SimulationDebugMapV1>,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
+        let Self {
+            lowered,
+            ranked_verification: _,
+            bindings,
+        } = self;
+        lowered
+            .verify_equivalence()
+            .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        if bindings
+            .rustc_preflight_plan
+            .rustc_identity_inventory_sha256()
+            != bindings.rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        let production_identity = lowered.canonical_kernel_ir_identity();
+        let production_identity = match production_identity.version() {
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V8 => {
+                fe2o3_kernel_ir::SimulationProductionKirIdentityV1::v8(
+                    *production_identity.digest(),
+                    production_identity.canonical_length(),
+                )
+                .map_err(ProductionPipelineError::SimulationBundle)?
+            }
+            fe2o3_lower_mir_kernel::ProductionCanonicalKernelIrVersionV1::V9 => {
+                return Err(ProductionPipelineError::SimulationProductionKirV9);
+            }
+        };
+        let canonical_v7 =
+            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV7::from_module(lowered.module().clone())
+                .map_err(ProductionPipelineError::SimulationKernelIrV7)?;
+        let inventory_receipt =
+            fe2o3_compiler_lineage::InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(
+                bindings.rustc_identity_inventory.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let preflight_receipt =
+            fe2o3_compiler_lineage::InertRustcPreflightPlanReceiptV3::from_canonical_preimage(
+                bindings.rustc_preflight_plan.canonical_transcript(),
+            )
+            .map_err(ProductionPipelineError::SimulationSourceLineage)?;
+        let inventory_identity = inventory_receipt.identity();
+        let preflight_identity = preflight_receipt.identity();
+        let lineage = fe2o3_kernel_ir::SimulationSourceLineageV1::new(
+            *inventory_identity.sha256(),
+            inventory_identity.byte_len(),
+            *preflight_identity.sha256(),
+            preflight_identity.byte_len(),
+        )
+        .map_err(ProductionPipelineError::SimulationBundle)?;
+        fe2o3_kernel_ir::VerifiedSimulationBundleV1::new(
+            compiler_execution_binding,
+            lineage,
+            production_identity,
+            bindings.rustc_target.profile().device_target(),
+            canonical_v7,
+            debug_map,
+        )
+        .map_err(ProductionPipelineError::SimulationBundle)
+    }
+
     fn admit_formal_memory(
         self,
     ) -> Result<FormalMemoryAdmittedProductionCompilation, ProductionPipelineError> {
@@ -888,6 +976,24 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .lower_target_neutral()?
             .admit_formal_memory()?
             .lower_production_target()
+    }
+
+    /// Consumes the sole production transaction through the same admitted
+    /// source, ranked checks, and target-neutral lowering as production, then
+    /// emits an inert exact-V7 simulation input. No target lowering or
+    /// artifact transaction is entered.
+    pub(crate) fn export_simulation_bundle_v1(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v1(
+                fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+                None,
+            )
     }
 
     /// Publishes the exact production compiler module into the managed,

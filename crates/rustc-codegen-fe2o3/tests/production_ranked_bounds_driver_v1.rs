@@ -169,6 +169,80 @@ fn production_barrier_cfg_preserves_order_and_fails_closed() {
     );
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle() {
+    let target = ScratchTarget::new();
+    let bundle_path = target.path().join("copy-static.fe2sim");
+    let mut command = base_command("check", target.path());
+    command
+        .env(
+            "RUSTC_WORKSPACE_WRAPPER",
+            env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
+        )
+        .env(
+            "FE2O3_EXTRACT_CRATE_V1",
+            "fe2o3_production_ranked_bounds_fixture",
+        )
+        .env("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1", &bundle_path);
+    let result = output(command, "run production simulation-bundle extraction");
+
+    assert!(
+        result.status.success(),
+        "ordinary source simulation-bundle extraction failed:\n{}",
+        result.stderr,
+    );
+    assert!(
+        result
+            .stderr
+            .contains("sole target-neutral Kernel IR lowering")
+            && result
+                .stderr
+                .contains("exact verified KIR V7 simulation bundle")
+            && result
+                .stderr
+                .contains("compiler_execution_binding=extraction_only_unavailable")
+            && result
+                .stderr
+                .contains("authenticates_compiler_execution=false")
+            && result
+                .stderr
+                .contains("proof/artifact/compiler/hardware/load/launch authority false"),
+        "simulation-bundle diagnostic overclaimed or omitted its transaction boundary:\n{}",
+        result.stderr,
+    );
+    let bytes = std::fs::read(bundle_path).expect("read exact simulation bundle");
+    let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(bytes)
+        .expect("decode compiler-produced simulation bundle");
+    assert_eq!(bundle.target(), "gfx942:xnack-");
+    assert_eq!(bundle.kernel_count(), 1);
+    assert_eq!(
+        bundle.compiler_execution_binding(),
+        &fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly
+    );
+    assert!(
+        bundle
+            .require_canonical_compiler_execution_association()
+            .is_err()
+    );
+    assert!(
+        bundle
+            .source_lineage()
+            .rustc_identity_inventory_receipt_bytes()
+            > 0
+    );
+    assert!(bundle.source_lineage().rustc_preflight_plan_receipt_bytes() > 0);
+    assert!(bundle.debug_map().is_none());
+    assert!(!bundle.canonical_kir_v7().is_empty());
+    assert!(!bundle.grants_proof_authority());
+    assert!(!bundle.grants_artifact_authority());
+    assert!(!bundle.grants_compiler_authority());
+    assert!(!bundle.grants_hardware_authority());
+    assert!(!bundle.grants_load_authority());
+    assert!(!bundle.grants_launch_authority());
+    assert!(!bundle.authenticates_compiler_execution());
+}
+
 struct ExtractionOutput {
     status: std::process::ExitStatus,
     stderr: String,

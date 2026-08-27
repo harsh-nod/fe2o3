@@ -44,6 +44,7 @@ mod matrix;
 mod region_effects;
 pub mod scalar_ops_v2;
 mod semantic_operations;
+mod simulation_bundle_v1;
 mod standard_atomics;
 mod types;
 mod verify;
@@ -82,6 +83,7 @@ pub use launch_kernel_contract_v2::{
 pub use matrix::*;
 pub use region_effects::*;
 pub use semantic_operations::*;
+pub use simulation_bundle_v1::*;
 pub use standard_atomics::*;
 pub use types::*;
 pub use verify::*;

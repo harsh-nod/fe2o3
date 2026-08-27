@@ -22,6 +22,12 @@ artifact, runtime, and proof boundaries described below. See the
 [testing guide](docs/testing.md) defines the generic, Verus, ROCm compile, and
 hardware execution lanes.
 
+CPU-only source extraction is available through the explicit, authority-free
+[`fe2o3-export-sim` bundle workflow](docs/simulation-bundle-v1.md). It reuses
+the production source/MIR/KIR stages under extraction-only custody, records
+that no compiler-execution subject is available, and never silently falls back
+from hardware execution.
+
 Feature-free production has one compiler transaction and no pipeline selector.
 `cargo fe2o3 build` and `cargo fe2o3 run` first build the selected crate graph
 for the fixed AMDGPU target through fe2o3, commit the exact device artifact

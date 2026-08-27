@@ -26,6 +26,7 @@ const EXTRACT_AMDGPU_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1
 const EXTRACT_GFX942_LLVM_PATH_ENV_V1: &str = "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1";
 const EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1: &str =
     "FE2O3_EXTRACT_GFX942_COMPILER_HANDOFF_PATH_V1";
+const EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
 const EXTRACT_CRATE_BINDING_PATH_ENV_V1: &str = "FE2O3_EXTRACT_CRATE_BINDING_PATH_V1";
 const PORTABLE_SELECTED_METADATA_DOMAIN_V1: &[u8] = b"FE2O3/PORTABLE-SELECTED-RUSTC-METADATA/V1\0";
 const PORTABLE_CODEGEN_IDENTITY_KEYS_V1: &[&str] = &[
@@ -57,6 +58,7 @@ fn main() {
         env::var_os(EXTRACT_AMDGPU_LLVM_PATH_ENV_V1),
         env::var_os(EXTRACT_GFX942_LLVM_PATH_ENV_V1),
         env::var_os(EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1),
+        env::var_os(EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1),
         env::var_os(EXTRACT_CRATE_BINDING_PATH_ENV_V1),
         None,
     );
@@ -225,6 +227,7 @@ enum ExtractionModeV1 {
     AmdgpuLlvm(OsString),
     Gfx942Llvm(OsString),
     Gfx942CompilerHandoff(OsString),
+    SimulationBundle(OsString),
 }
 
 fn prepare(
@@ -234,6 +237,7 @@ fn prepare(
     amdgpu_llvm_path: Option<OsString>,
     gfx942_llvm_path: Option<OsString>,
     gfx942_compiler_handoff_path: Option<OsString>,
+    simulation_bundle_path: Option<OsString>,
     crate_binding_path: Option<OsString>,
     package_identity: Option<PortablePackageIdentityV1>,
 ) -> Result<PreparedExtractionV1, String> {
@@ -296,13 +300,21 @@ fn prepare(
     let selected_modes = usize::from(ranked_memory.is_some())
         + usize::from(amdgpu_llvm_path.is_some())
         + usize::from(gfx942_llvm_path.is_some())
-        + usize::from(gfx942_compiler_handoff_path.is_some());
+        + usize::from(gfx942_compiler_handoff_path.is_some())
+        + usize::from(simulation_bundle_path.is_some());
     if selected_modes > 1 {
         return Err(format!(
-            "{EXTRACT_RANKED_MEMORY_ENV_V1}, {EXTRACT_AMDGPU_LLVM_PATH_ENV_V1}, legacy {EXTRACT_GFX942_LLVM_PATH_ENV_V1}, and {EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} are mutually exclusive"
+            "{EXTRACT_RANKED_MEMORY_ENV_V1}, {EXTRACT_AMDGPU_LLVM_PATH_ENV_V1}, legacy {EXTRACT_GFX942_LLVM_PATH_ENV_V1}, {EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1}, and {EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1} are mutually exclusive"
         ));
     }
-    let mode = if let Some(output) = gfx942_compiler_handoff_path {
+    let mode = if let Some(output) = simulation_bundle_path {
+        if output.is_empty() {
+            return Err(format!(
+                "{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1} must not be empty"
+            ));
+        }
+        ExtractionModeV1::SimulationBundle(output)
+    } else if let Some(output) = gfx942_compiler_handoff_path {
         if output.is_empty() {
             return Err(format!(
                 "{EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} must not be empty"
@@ -622,6 +634,12 @@ fn execute_selected(selected: SelectedExtractionV1) -> Result<i32, String> {
                 std::path::Path::new(&output),
             )?;
         }
+        ExtractionModeV1::SimulationBundle(output) => {
+            rustc_codegen_fe2o3::run_production_simulation_bundle_extraction_driver_v1(
+                &selected.args,
+                std::path::Path::new(&output),
+            )?;
+        }
     }
     if let Some(output) = selected.crate_binding_output {
         publish_selected_crate_binding_v1(&output, selected.crate_binding)?;
@@ -718,6 +736,7 @@ mod tests {
         let prepared = prepare(
             compile_argv(crate_name, metadata),
             Some(OsString::from(crate_name)),
+            None,
             None,
             None,
             None,
@@ -826,6 +845,7 @@ mod tests {
             let PreparedExtractionV1::Selected(selected) = prepare(
                 argv,
                 Some(OsString::from("unit")),
+                None,
                 None,
                 None,
                 None,
@@ -1001,6 +1021,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap() else {
@@ -1026,6 +1047,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap_err();
         assert!(missing.contains("has no explicit -C metadata value"));
@@ -1033,6 +1055,7 @@ mod tests {
         let empty_path = prepare(
             compile_argv("unit", &["metadata"]),
             Some(OsString::from("unit")),
+            None,
             None,
             None,
             None,
@@ -1057,6 +1080,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap();
@@ -1077,6 +1101,7 @@ mod tests {
             Some(OsString::from("gfx942.ll")),
             None,
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap_err();
@@ -1087,6 +1112,7 @@ mod tests {
             Some(OsString::from("unit")),
             None,
             Some(OsString::new()),
+            None,
             None,
             None,
             None,
@@ -1105,6 +1131,7 @@ mod tests {
             None,
             None,
             Some(OsString::from("module.handoff")),
+            None,
             None,
             Some(package_identity("1.0.0", 1)),
         )
@@ -1126,12 +1153,51 @@ mod tests {
             None,
             Some(OsString::new()),
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap_err();
         assert_eq!(
             empty_handoff,
             format!("{EXTRACT_GFX942_COMPILER_HANDOFF_PATH_ENV_V1} must not be empty")
+        );
+
+        let simulation = prepare(
+            compile_argv("unit", &["metadata"]),
+            Some(OsString::from("unit")),
+            None,
+            None,
+            None,
+            None,
+            Some(OsString::from("kernel.fe2sim")),
+            None,
+            Some(package_identity("1.0.0", 1)),
+        )
+        .unwrap();
+        let PreparedExtractionV1::Selected(SelectedExtractionV1 {
+            mode: ExtractionModeV1::SimulationBundle(output),
+            ..
+        }) = simulation
+        else {
+            panic!("simulation bundle output must select the simulation exporter");
+        };
+        assert_eq!(output, "kernel.fe2sim");
+
+        let empty_simulation = prepare(
+            compile_argv("unit", &["metadata"]),
+            Some(OsString::from("unit")),
+            None,
+            None,
+            None,
+            None,
+            Some(OsString::new()),
+            None,
+            Some(package_identity("1.0.0", 1)),
+        )
+        .unwrap_err();
+        assert_eq!(
+            empty_simulation,
+            format!("{EXTRACT_SIMULATION_BUNDLE_PATH_ENV_V1} must not be empty")
         );
     }
 
@@ -1140,6 +1206,7 @@ mod tests {
         let prepared = prepare(
             compile_argv("dependency", &["metadata"]),
             Some(OsString::from("selected")),
+            None,
             None,
             None,
             None,
@@ -1187,6 +1254,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap(),
             PreparedExtractionV1::Passthrough { .. }
@@ -1203,6 +1271,7 @@ mod tests {
             prepare(
                 managed_stdin_probe,
                 Some(OsString::from("selected")),
+                None,
                 None,
                 None,
                 None,
