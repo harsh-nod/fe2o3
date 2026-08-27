@@ -1081,27 +1081,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe2o3-llvm-route-conformance"
-version = "0.1.0"
-dependencies = [
- "fe2o3-llvm-handoff",
- "fe2o3-llvm-worker-handoff",
-]
-
-[[package]]
 name = "fe2o3-llvm-text"
 version = "0.1.0"
 dependencies = [
- "fe2o3-llvm-handoff",
- "sha2 0.11.0",
-]
-
-[[package]]
-name = "fe2o3-llvm-worker-handoff"
-version = "0.1.0"
-dependencies = [
- "fe2o3-amd-target",
- "fe2o3-compiler-ffi",
  "fe2o3-llvm-handoff",
  "sha2 0.11.0",
 ]

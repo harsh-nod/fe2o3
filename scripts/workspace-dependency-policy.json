@@ -69,7 +69,6 @@
         "fe2o3-amdgcn-model",
         "fe2o3-hsaco-finalize",
         "fe2o3-llvm-text",
-        "fe2o3-llvm-worker-handoff",
         "fe2o3-lower-gpu-amdgcn"
       ]
     },
@@ -105,7 +104,6 @@
         "fe2o3-kir-sim-cli",
         "fe2o3-semantic-import",
         "fe2o3-semantic-query",
-        "fe2o3-llvm-route-conformance",
         "fe2o3-pliron-conformance",
         "fe2o3-pliron-llvm-smoke",
         "rustc-codegen-fe2o3"
