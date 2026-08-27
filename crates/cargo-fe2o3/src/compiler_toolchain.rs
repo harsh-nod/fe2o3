@@ -111,10 +111,9 @@ mod tests {
         );
     }
 
-    // Golden vector shared with RowSoftmaxV1CompilerClosurePolicyV1. Keep this content-only;
-    // cross-branch integration also constructs the public finalizer policy from these four pins.
+    // This content-only identity remains distinct from the six-pin protected compiler closure.
     #[test]
-    fn row_softmax_compiler_closure_golden_vector() {
+    fn content_only_compiler_closure_golden_vector() {
         assert_eq!(
             compiler_closure_sha256_v1(&[0x05; 32], &[0x06; 32], &[0x07; 32], &[0x08; 32]),
             [

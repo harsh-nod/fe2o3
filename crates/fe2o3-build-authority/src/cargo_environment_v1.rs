@@ -332,8 +332,7 @@ impl AuthorityCargoEnvironmentV1 {
         encode_authority_cargo_environment_v1(self)
     }
 
-    /// Computes the identity suitable for Broker V3's
-    /// `cargo_environment_identity` field.
+    /// Computes the canonical identity of this Cargo environment.
     pub fn identity_sha256(&self) -> [u8; 32] {
         hash_environment(&self.encode())
     }
@@ -684,7 +683,7 @@ pub fn decode_authority_cargo_environment_v1(
     AuthorityCargoEnvironmentV1::new(entries, provisioned_cargo_cache_sha256)
 }
 
-/// Validates wire bytes and computes the Broker V3 Cargo-environment identity.
+/// Validates wire bytes and computes the canonical Cargo-environment identity.
 pub fn authority_cargo_environment_identity_sha256_v1(
     encoded: &[u8],
 ) -> Result<[u8; 32], AuthorityCargoEnvironmentErrorV1> {

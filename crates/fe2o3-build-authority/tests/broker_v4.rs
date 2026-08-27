@@ -2,14 +2,14 @@ use fe2o3_build_authority::{
     BROKER_V4_BINDING_IDENTITY_DOMAIN, BROKER_V4_BINDING_OFFSET, BROKER_V4_BINDING_WIRE_LEN,
     BROKER_V4_HEADER_LEN, BROKER_V4_MAGIC, BROKER_V4_PROCESS_OFFSET, BROKER_V4_VERSION,
     BrokerFrameKindV4, BrokerFrameV4, BrokerIdentityFieldV4, BrokerProtocolErrorV4, BrokerTargetV4,
-    CapabilityBindingV3, CapabilityBindingV4, HOST_LINK_CLOSURE_OFFSET_V4,
-    HOST_LINK_COMMIT_DURABLE_PLAN_OFFSET_V4, HOST_LINK_COMMIT_OUTPUT_LENGTH_OFFSET_V4,
-    HOST_LINK_COMMIT_OUTPUT_MODE_OFFSET_V4, HOST_LINK_COMMIT_OUTPUT_SHA256_OFFSET_V4,
-    HOST_LINK_COMMIT_RESERVED_OFFSET_V4, HOST_LINK_COMMIT_V4_PAYLOAD_LEN,
-    HOST_LINK_GRANT_OFFSET_V4, HOST_LINK_GRANT_V4_PAYLOAD_LEN, HOST_LINK_OUTPUT_MODE_V4,
-    HOST_LINK_PLAN_OFFSET_V4, HOST_LINK_PREPARE_V4_PAYLOAD_LEN, HOST_LINK_REQUEST_OFFSET_V4,
-    HostLinkCommitV4, HostLinkGrantV4, HostLinkPrepareV4, PROCESS_IDENTITY_V4_WIRE_LEN, PipelineV1,
-    ProcessIdentityV4, PublicationRightsV1, decode_broker_frame_v4, decode_capability_binding_v4,
+    CapabilityBindingV4, HOST_LINK_CLOSURE_OFFSET_V4, HOST_LINK_COMMIT_DURABLE_PLAN_OFFSET_V4,
+    HOST_LINK_COMMIT_OUTPUT_LENGTH_OFFSET_V4, HOST_LINK_COMMIT_OUTPUT_MODE_OFFSET_V4,
+    HOST_LINK_COMMIT_OUTPUT_SHA256_OFFSET_V4, HOST_LINK_COMMIT_RESERVED_OFFSET_V4,
+    HOST_LINK_COMMIT_V4_PAYLOAD_LEN, HOST_LINK_GRANT_OFFSET_V4, HOST_LINK_GRANT_V4_PAYLOAD_LEN,
+    HOST_LINK_OUTPUT_MODE_V4, HOST_LINK_PLAN_OFFSET_V4, HOST_LINK_PREPARE_V4_PAYLOAD_LEN,
+    HOST_LINK_REQUEST_OFFSET_V4, HostLinkCommitV4, HostLinkGrantV4, HostLinkPrepareV4,
+    PROCESS_IDENTITY_V4_WIRE_LEN, ProcessIdentityV4, decode_broker_frame_v4,
+    decode_capability_binding_v4,
 };
 use sha2::{Digest, Sha256};
 
@@ -138,11 +138,14 @@ fn binding_layout_identity_target_and_zero_rights_are_stable() {
     assert_eq!(u16::from_le_bytes(encoded[96..98].try_into().unwrap()), 1);
     assert_eq!(&encoded[98..100], &[0; 2]);
     assert_eq!(&encoded[100..104], &[0; 4]);
-    assert_eq!(binding.broker_v3_binding_identity(), digest(1));
+    assert_eq!(binding.base_binding_identity(), digest(1));
     assert_eq!(binding.release_contract_identity(), digest(2));
     assert_eq!(binding.static_host_lld_identity(), digest(3));
     assert_eq!(binding.target(), BrokerTargetV4::Gfx942XnackMinus);
-    assert_eq!(binding.publication_rights(), PublicationRightsV1::NONE);
+    assert_eq!(
+        binding.authority(),
+        fe2o3_build_authority::BrokerAuthorityV4::None
+    );
     assert_eq!(binding.identity_sha256(), GOLDEN_BINDING_IDENTITY);
     assert_eq!(decode_capability_binding_v4(&encoded), Ok(binding));
     assert_eq!(
@@ -152,23 +155,10 @@ fn binding_layout_identity_target_and_zero_rights_are_stable() {
 }
 
 #[test]
-fn v4_extension_constructor_binds_the_unmodified_v3_identity() {
-    let v3 = CapabilityBindingV3::new(
-        digest(10),
-        digest(11),
-        digest(12),
-        PipelineV1::CollectedTiledGemm,
-        digest(13),
-        digest(14),
-        digest(15),
-        digest(16),
-        digest(17),
-        digest(18),
-        Some(digest(19)),
-    )
-    .unwrap();
-    let v4 = CapabilityBindingV4::for_v3(v3, digest(20), digest(21)).unwrap();
-    assert_eq!(v4.broker_v3_binding_identity(), v3.identity_sha256());
+fn v4_constructor_binds_the_unmodified_base_identity() {
+    let base = digest(10);
+    let v4 = CapabilityBindingV4::new(base, digest(20), digest(21)).unwrap();
+    assert_eq!(v4.base_binding_identity(), base);
     assert_eq!(v4.release_contract_identity(), digest(20));
     assert_eq!(v4.static_host_lld_identity(), digest(21));
 }
@@ -435,12 +425,12 @@ fn process_commit_and_identity_adversaries_fail_closed() {
         );
     }
 
-    for (v3, release, lld, field) in [
+    for (base, release, lld, field) in [
         (
             [0; 32],
             digest(2),
             digest(3),
-            BrokerIdentityFieldV4::BrokerV3Binding,
+            BrokerIdentityFieldV4::BaseBinding,
         ),
         (
             digest(1),
@@ -456,7 +446,7 @@ fn process_commit_and_identity_adversaries_fail_closed() {
         ),
     ] {
         assert_eq!(
-            CapabilityBindingV4::new(v3, release, lld),
+            CapabilityBindingV4::new(base, release, lld),
             Err(BrokerProtocolErrorV4::ZeroIdentity { field })
         );
     }

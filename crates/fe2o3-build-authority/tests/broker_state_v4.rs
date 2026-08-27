@@ -3,7 +3,7 @@ use fe2o3_build_authority::{
     BrokerStateErrorV4, BrokerTranscriptFieldV4, BrokerTranscriptValidatorV4, CapabilityBindingV4,
     CompletedBrokerTranscriptV4, GrantedHostLinkTranscriptV4, HOST_LINK_OUTPUT_MODE_V4,
     HostLinkCommitV4, HostLinkGrantV4, HostLinkPrepareV4, PreparedHostLinkTranscriptV4,
-    ProcessIdentityV4, PublicationRightsV1,
+    ProcessIdentityV4,
 };
 
 fn digest(seed: u8) -> [u8; 32] {
@@ -159,7 +159,6 @@ fn transcript_validation_consumes_prepare_grant_and_commit_in_order() {
     assert_eq!(complete.output_length(), 85_597_472);
     assert_eq!(complete.output_mode(), HOST_LINK_OUTPUT_MODE_V4);
     assert_eq!(complete.durable_plan_identity(), transcript.durable);
-    assert_eq!(complete.publication_rights(), PublicationRightsV1::NONE);
     assert_eq!(complete.authority(), BrokerAuthorityV4::None);
     assert_eq!(complete.authority(), BROKER_V4_AUTHORITY);
 }
@@ -430,8 +429,6 @@ fn equivalent_validators_can_validate_the_same_transcript_and_grant_no_authority
     assert_eq!(second.authority(), BrokerAuthorityV4::None);
     assert_eq!(transcript.binding.authority(), BrokerAuthorityV4::None);
     assert_eq!(transcript.grant().authority(), BrokerAuthorityV4::None);
-    assert_eq!(first.publication_rights(), PublicationRightsV1::NONE);
-    assert_eq!(second.publication_rights(), PublicationRightsV1::NONE);
 }
 
 #[derive(Debug, Eq, PartialEq)]

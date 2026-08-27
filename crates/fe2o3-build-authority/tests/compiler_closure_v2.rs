@@ -1,7 +1,8 @@
 use fe2o3_build_authority::{
-    CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V1,
-    COMPILER_CLOSURE_IDENTITY_DOMAIN_V2, CompilerClosureDigestFieldV2, CompilerClosureErrorV2,
-    CompilerClosureV1, CompilerClosureV2, derive_compiler_closure_identity_v2,
+    CARGO_BINDING_TRANSITION_PROTOCOL_VERSION_V1, COMPILER_CLOSURE_IDENTITY_DOMAIN_V2,
+    CompilerClosureDigestFieldV2, CompilerClosureErrorV2, CompilerClosureV2,
+    derive_compiler_closure_identity_v1, derive_compiler_closure_identity_v2,
+    derive_rustc_executable_runtime_identity_v1,
 };
 
 const PINS: [[u8; 32]; 6] = [
@@ -120,15 +121,13 @@ fn noncanonical_protocol_zero_pins_and_mismatched_identity_fail_closed() {
 }
 
 #[test]
-fn v1_domain_and_shared_golden_identity_are_unchanged() {
+fn live_content_only_identity_format_is_unchanged() {
     assert_eq!(
-        COMPILER_CLOSURE_IDENTITY_DOMAIN_V1,
-        b"fe2o3-compiler-closure-identity-v1\0"
-    );
-    assert_eq!(
-        CompilerClosureV1::new([0x05; 32], [0x06; 32], [0x07; 32], [0x08; 32])
-            .unwrap()
-            .identity_sha256(),
+        derive_compiler_closure_identity_v1(
+            [0x05; 32],
+            derive_rustc_executable_runtime_identity_v1([0x06; 32], [0x07; 32]),
+            [0x08; 32],
+        ),
         [
             0x1f, 0xea, 0xcf, 0xc5, 0x87, 0x9b, 0x85, 0x3c, 0x7b, 0xa5, 0x5c, 0x34, 0x53, 0x93,
             0x98, 0xe8, 0x57, 0xc0, 0xf9, 0x7d, 0x68, 0x6c, 0xbb, 0x63, 0xcf, 0x99, 0x79, 0x5a,

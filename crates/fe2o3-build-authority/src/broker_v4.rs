@@ -2,8 +2,6 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::{CapabilityBindingV3, PublicationRightsV1};
-
 /// Distinct Broker V4 frame magic.
 pub const BROKER_V4_MAGIC: [u8; 8] = *b"F2AUBR4\0";
 /// Broker V4 wire version.
@@ -53,12 +51,13 @@ pub const HOST_LINK_GRANT_V4_PAYLOAD_LEN: usize = 176;
 pub const HOST_LINK_COMMIT_V4_PAYLOAD_LEN: usize = 256;
 
 const IDENTITY_LEN: usize = 32;
-const BINDING_V3_IDENTITY_OFFSET: usize = 0;
+const BASE_BINDING_IDENTITY_OFFSET: usize = 0;
 const RELEASE_CONTRACT_IDENTITY_OFFSET: usize = 32;
 const STATIC_HOST_LLD_IDENTITY_OFFSET: usize = 64;
 const TARGET_OFFSET: usize = 96;
 const BINDING_RESERVED_OFFSET: usize = 98;
 const PUBLICATION_RIGHTS_OFFSET: usize = 100;
+const NO_PUBLICATION_RIGHTS: u32 = 0;
 
 /// One assigned Broker V4 extension frame type and sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,8 +130,8 @@ pub enum BrokerAuthorityV4 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum BrokerIdentityFieldV4 {
-    /// Completed canonical Broker V3 binding identity.
-    BrokerV3Binding,
+    /// Exact caller-owned base binding identity.
+    BaseBinding,
     /// Canonical authority-release contract identity.
     ReleaseContract,
     /// Authenticated static upstream-LLVM host LLD identity.
@@ -156,7 +155,7 @@ pub enum BrokerIdentityFieldV4 {
 impl fmt::Display for BrokerIdentityFieldV4 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            Self::BrokerV3Binding => "Broker V3 binding",
+            Self::BaseBinding => "base binding",
             Self::ReleaseContract => "release contract",
             Self::StaticHostLld => "static host LLD",
             Self::CapabilityBinding => "Broker V4 capability binding",
@@ -219,7 +218,7 @@ impl ProcessIdentityV4 {
 /// Canonical zero-publication-rights binding for the Broker V4 extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityBindingV4 {
-    broker_v3_binding_identity: [u8; 32],
+    base_binding_identity: [u8; 32],
     release_contract_identity: [u8; 32],
     static_host_lld_identity: [u8; 32],
 }
@@ -227,15 +226,12 @@ pub struct CapabilityBindingV4 {
 impl CapabilityBindingV4 {
     /// Constructs one V4 extension binding from exact nonzero identities.
     pub fn new(
-        broker_v3_binding_identity: [u8; 32],
+        base_binding_identity: [u8; 32],
         release_contract_identity: [u8; 32],
         static_host_lld_identity: [u8; 32],
     ) -> Result<Self, BrokerProtocolErrorV4> {
         for (field, identity) in [
-            (
-                BrokerIdentityFieldV4::BrokerV3Binding,
-                broker_v3_binding_identity,
-            ),
+            (BrokerIdentityFieldV4::BaseBinding, base_binding_identity),
             (
                 BrokerIdentityFieldV4::ReleaseContract,
                 release_contract_identity,
@@ -248,28 +244,15 @@ impl CapabilityBindingV4 {
             validate_identity(identity, field)?;
         }
         Ok(Self {
-            broker_v3_binding_identity,
+            base_binding_identity,
             release_contract_identity,
             static_host_lld_identity,
         })
     }
 
-    /// Constructs a V4 extension binding from a complete canonical V3 binding.
-    pub fn for_v3(
-        broker_v3_binding: CapabilityBindingV3,
-        release_contract_identity: [u8; 32],
-        static_host_lld_identity: [u8; 32],
-    ) -> Result<Self, BrokerProtocolErrorV4> {
-        Self::new(
-            broker_v3_binding.identity_sha256(),
-            release_contract_identity,
-            static_host_lld_identity,
-        )
-    }
-
-    /// Returns the completed Broker V3 binding identity.
-    pub const fn broker_v3_binding_identity(self) -> [u8; 32] {
-        self.broker_v3_binding_identity
+    /// Returns the exact caller-owned base binding identity.
+    pub const fn base_binding_identity(self) -> [u8; 32] {
+        self.base_binding_identity
     }
 
     /// Returns the authority-release contract identity.
@@ -286,14 +269,9 @@ impl CapabilityBindingV4 {
         self.static_host_lld_identity
     }
 
-    /// Returns the fixed gfx942 XNACK-minus target inherited from Broker V3.
+    /// Returns the fixed gfx942 XNACK-minus target.
     pub const fn target(self) -> BrokerTargetV4 {
         BrokerTargetV4::Gfx942XnackMinus
-    }
-
-    /// Returns the unconditionally empty publication-rights set.
-    pub const fn publication_rights(self) -> PublicationRightsV1 {
-        PublicationRightsV1::NONE
     }
 
     /// Returns the fixed `AUTHORITY=none` semantic classification.
@@ -304,8 +282,8 @@ impl CapabilityBindingV4 {
     /// Returns the exact fixed-width canonical encoding.
     pub fn encode(self) -> [u8; BROKER_V4_BINDING_WIRE_LEN] {
         let mut encoded = [0_u8; BROKER_V4_BINDING_WIRE_LEN];
-        encoded[BINDING_V3_IDENTITY_OFFSET..RELEASE_CONTRACT_IDENTITY_OFFSET]
-            .copy_from_slice(&self.broker_v3_binding_identity);
+        encoded[BASE_BINDING_IDENTITY_OFFSET..RELEASE_CONTRACT_IDENTITY_OFFSET]
+            .copy_from_slice(&self.base_binding_identity);
         encoded[RELEASE_CONTRACT_IDENTITY_OFFSET..STATIC_HOST_LLD_IDENTITY_OFFSET]
             .copy_from_slice(&self.release_contract_identity);
         encoded[STATIC_HOST_LLD_IDENTITY_OFFSET..TARGET_OFFSET]
@@ -313,7 +291,7 @@ impl CapabilityBindingV4 {
         encoded[TARGET_OFFSET..BINDING_RESERVED_OFFSET]
             .copy_from_slice(&(BrokerTargetV4::Gfx942XnackMinus as u16).to_le_bytes());
         encoded[PUBLICATION_RIGHTS_OFFSET..BROKER_V4_BINDING_WIRE_LEN]
-            .copy_from_slice(&PublicationRightsV1::NONE.bits().to_le_bytes());
+            .copy_from_slice(&NO_PUBLICATION_RIGHTS.to_le_bytes());
         encoded
     }
 
@@ -341,11 +319,11 @@ pub fn decode_capability_binding_v4(
         return Err(BrokerProtocolErrorV4::NonzeroBindingReserved);
     }
     let rights = read_u32(encoded, PUBLICATION_RIGHTS_OFFSET);
-    if rights != PublicationRightsV1::NONE.bits() {
+    if rights != NO_PUBLICATION_RIGHTS {
         return Err(BrokerProtocolErrorV4::PublicationAuthorityForbidden { actual: rights });
     }
     CapabilityBindingV4::new(
-        digest_at(encoded, BINDING_V3_IDENTITY_OFFSET),
+        digest_at(encoded, BASE_BINDING_IDENTITY_OFFSET),
         digest_at(encoded, RELEASE_CONTRACT_IDENTITY_OFFSET),
         digest_at(encoded, STATIC_HOST_LLD_IDENTITY_OFFSET),
     )
@@ -1299,11 +1277,6 @@ impl CompletedBrokerTranscriptV4 {
             self.plan_identity,
             self.closure_identity,
         )
-    }
-
-    /// Returns the unconditionally empty publication-rights set.
-    pub const fn publication_rights(&self) -> PublicationRightsV1 {
-        PublicationRightsV1::NONE
     }
 
     /// Returns the fixed `AUTHORITY=none` semantic classification.

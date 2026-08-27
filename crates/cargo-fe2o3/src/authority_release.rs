@@ -579,7 +579,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
     command
         .as_command_mut()
         .arg0(OsStr::from_bytes(
-            fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1,
+            fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0,
         ))
         .arg(INTERNAL_CHILD_ARG)
         .args(args)
@@ -981,7 +981,7 @@ fn environment_bytes(values: &[(OsString, OsString)]) -> Vec<(Vec<u8>, Vec<u8>)>
 
 fn planned_child_argv(args: &[OsString]) -> Result<Vec<Vec<u8>>, String> {
     child_argv_with(
-        OsStr::from_bytes(fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1),
+        OsStr::from_bytes(fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0),
         args,
     )
 }
@@ -1400,7 +1400,7 @@ fn validate_fields(argv: &[Vec<u8>], environment: &[(Vec<u8>, Vec<u8>)]) -> Resu
     if argv.len() < 3 || argv.len() > MAX_ARGUMENTS {
         return Err("release contract argv has an invalid count".to_owned());
     }
-    if argv[0] != fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1
+    if argv[0] != fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0
         || argv[1] != INTERNAL_CHILD_ARG.as_bytes()
     {
         return Err("release contract argv prefix differs".to_owned());
@@ -1596,7 +1596,7 @@ mod tests {
             ],
             compiler: compiler_observation(),
             argv: vec![
-                fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0_V1.to_vec(),
+                fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0.to_vec(),
                 INTERNAL_CHILD_ARG.as_bytes().to_vec(),
                 b"probe".to_vec(),
             ],

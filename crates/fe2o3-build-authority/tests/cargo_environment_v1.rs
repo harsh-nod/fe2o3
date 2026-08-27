@@ -5,8 +5,8 @@ use fe2o3_build_authority::{
     AUTHORITY_CARGO_ENVIRONMENT_MAX_WIRE_LEN_V1, AUTHORITY_CARGO_ENVIRONMENT_TARGET_V1,
     AUTHORITY_CARGO_ENVIRONMENT_VERSION_V1, AUTHORITY_CARGO_MODE_ARGV_V1,
     AuthorityCargoEnvironmentErrorV1, AuthorityCargoEnvironmentPathErrorV1,
-    AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentVariableV1, CapabilityBindingV3,
-    ForbiddenCargoEnvironmentChannelV1, PipelineV1, authority_cargo_environment_identity_sha256_v1,
+    AuthorityCargoEnvironmentV1, AuthorityCargoEnvironmentVariableV1,
+    ForbiddenCargoEnvironmentChannelV1, authority_cargo_environment_identity_sha256_v1,
     decode_authority_cargo_environment_v1,
 };
 
@@ -157,26 +157,6 @@ fn exact_sorted_map_is_insertion_order_independent() {
             ("TZ", "UTC"),
         ]
     );
-}
-
-#[test]
-fn identity_is_accepted_by_capability_binding_v3() {
-    let identity = golden_environment().identity_sha256();
-    let binding = CapabilityBindingV3::new(
-        [1; 32],
-        [2; 32],
-        [3; 32],
-        PipelineV1::CollectedTiledGemm,
-        identity,
-        [4; 32],
-        [5; 32],
-        [6; 32],
-        [7; 32],
-        [8; 32],
-        None,
-    )
-    .unwrap();
-    assert_eq!(binding.cargo_environment_identity(), identity);
 }
 
 #[test]
