@@ -398,8 +398,9 @@ joined composition and native mechanics, not production compiler or proof
 authority.
 
 The host crate enforces the same split. Its feature-free build exposes the
-Worker V3 application, admission, verification, HSA load, and generated
-dispatch route. Worker V2 application recovery, embedded-artifact loading,
+Worker V3 application, admission, verification, private joined KFD invocation,
+and HSA-backed generated migration route. Worker V2 application recovery,
+embedded-artifact loading,
 direct HIP module/function loading, raw parameter packing, cooperative launch,
 and workload-specific host adapters are deleted in every feature configuration.
 The former host qualification feature is deleted and cannot restore an
