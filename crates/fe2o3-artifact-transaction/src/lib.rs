@@ -69,6 +69,13 @@ mod worker_v3_load_readiness;
 mod worker_v3_publication_binding;
 mod worker_v3_publication_intent;
 
+/// Canonical environment key carrying the preselected managed build attempt.
+///
+/// The Cargo wrapper, rustc backend, and protected execution issuer must all interpret this exact
+/// key identically. The value remains an inert [`BuildAttempt`] encoding until the artifact
+/// transaction independently validates it against the current attempt registry.
+pub const BUILD_ATTEMPT_ENV_V1: &str = "FE2O3_BUILD_ATTEMPT_V1";
+
 fn encode_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
 

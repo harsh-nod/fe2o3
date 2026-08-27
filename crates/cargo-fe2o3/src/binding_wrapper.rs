@@ -62,7 +62,7 @@ use crate::{
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
-const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
+const BUILD_ATTEMPT_ENV: &str = fe2o3_artifact_transaction::BUILD_ATTEMPT_ENV_V1;
 const QUALIFICATION_RELEASE_ACTION_ENV: &str = "FE2O3_PROTECTED_RELEASE_ACTION_V1";
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
@@ -991,29 +991,30 @@ fn credential_like_environment_name(name: &[u8]) -> bool {
 }
 
 fn managed_reviewed_child_environment(name: &OsStr) -> bool {
-    matches!(
-        os_bytes(name),
-        b"LANG"
-            | b"PATH"
-            | b"TMPDIR"
-            | b"FE2O3_HSACO_DIR"
-            | b"FE2O3_BUILD_ATTEMPT_V1"
-            | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
-            | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
-            | b"FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1"
-            | b"FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2"
-            | b"FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2"
-            | b"FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2"
-            | b"FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2"
-            | b"FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2"
-            | b"FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2"
-            | b"FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2"
-            | b"FE2O3_OBSERVED_PARENT_PID_BUILD_OBSERVATION_V2"
-            | b"FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2"
-            | b"FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1"
-            | b"FE2O3_CRATE_BINDING_ID_V1"
-            | b"FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1"
-    )
+    let name = os_bytes(name);
+    name == BUILD_ATTEMPT_ENV.as_bytes()
+        || matches!(
+            name,
+            b"LANG"
+                | b"PATH"
+                | b"TMPDIR"
+                | b"FE2O3_HSACO_DIR"
+                | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
+                | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
+                | b"FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1"
+                | b"FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2"
+                | b"FE2O3_WORKER_EXECUTABLE_BUILD_OBSERVATION_V2"
+                | b"FE2O3_WORKER_BUILD_IDENTITY_OBSERVATION_V2"
+                | b"FE2O3_LLVM_BUILD_IDENTITY_OBSERVATION_V2"
+                | b"FE2O3_CARGO_FE2O3_EXECUTABLE_BUILD_OBSERVATION_V2"
+                | b"FE2O3_DECLARED_CARGO_EXECUTABLE_BUILD_OBSERVATION_V2"
+                | b"FE2O3_PINNED_CARGO_IMAGE_BUILD_OBSERVATION_V2"
+                | b"FE2O3_OBSERVED_PARENT_PID_BUILD_OBSERVATION_V2"
+                | b"FE2O3_OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_V2"
+                | b"FE2O3_WORKER_V2_SOURCE_DEBUG_PROFILE_V1"
+                | b"FE2O3_CRATE_BINDING_ID_V1"
+                | b"FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1"
+        )
 }
 
 fn managed_rustc_args_from_environment() -> Result<Vec<OsString>, BindingWrapperError> {

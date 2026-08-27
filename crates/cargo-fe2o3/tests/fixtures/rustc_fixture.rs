@@ -8,12 +8,12 @@ use std::path::Path;
 use std::process::{Command, ExitCode};
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, EmitError, ProducerIdentity, emit_artifact_transaction_for_attempt,
+    BUILD_ATTEMPT_ENV_V1, BuildAttempt, EmitError, ProducerIdentity,
+    emit_artifact_transaction_for_attempt,
 };
 use fe2o3_rustc_invocation::{RustcInvocationV2, classify_rustc_invocation_v2};
 use reserved_fe2o3_symbols::CRATE_BINDING_ID_ENV_V1;
 
-const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
 const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 
 fn main() -> ExitCode {
@@ -55,7 +55,7 @@ fn run() -> Result<std::process::ExitStatus, String> {
         record_compiler_route(compile.crate_name(), &raw_args)?;
     }
     match invocation {
-        Ok(RustcInvocationV2::Compile(compile)) if env::var_os(BUILD_ATTEMPT_ENV).is_some() => {
+        Ok(RustcInvocationV2::Compile(compile)) if env::var_os(BUILD_ATTEMPT_ENV_V1).is_some() => {
             publish_probe(compile.crate_name(), compile.source_path())?;
             if let Some(report) = env::var_os("FE2O3_TEST_COMPILER_CLOSURE_RUSTC_REPORT") {
                 let closure = env::var("FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1")
@@ -66,7 +66,7 @@ fn run() -> Result<std::process::ExitStatus, String> {
         }
         Ok(RustcInvocationV2::Compile(_)) => {}
         Ok(_) => {}
-        Err(_) if env::var_os(BUILD_ATTEMPT_ENV).is_none() => {}
+        Err(_) if env::var_os(BUILD_ATTEMPT_ENV_V1).is_none() => {}
         Err(error) => return Err(format!("classify filtered rustc invocation: {error}")),
     }
     Command::new(real_rustc)
@@ -99,7 +99,7 @@ fn record_compiler_route(crate_name: &str, raw_args: &[OsString]) -> Result<(), 
         env::var_os("FE2O3_QUALIFICATION_ORACLE_V1").is_some(),
         env::var_os("FE2O3_BACKEND").is_some(),
         env::var_os(HSACO_DIR_ENV).is_some(),
-        env::var_os(BUILD_ATTEMPT_ENV).is_some(),
+        env::var_os(BUILD_ATTEMPT_ENV_V1).is_some(),
     )
     .map_err(|error| format!("write rustc route report: {error}"))
 }
@@ -110,7 +110,7 @@ fn publish_probe(crate_name: &str, source: &Path) -> Result<(), String> {
     if invocation_open {
         return Err("ordinary rustc inherited protected invocation fd199".to_owned());
     }
-    let attempt = env::var(BUILD_ATTEMPT_ENV)
+    let attempt = env::var(BUILD_ATTEMPT_ENV_V1)
         .ok()
         .and_then(|value| BuildAttempt::from_env_value(&value).ok())
         .ok_or_else(|| "compile invocation has no canonical build attempt".to_string())?;

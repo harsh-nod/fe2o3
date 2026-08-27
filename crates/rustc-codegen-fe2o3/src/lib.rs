@@ -84,7 +84,7 @@ pub const DUMP_MIR_ENV: &str = "FE2O3_DUMP_MIR";
 pub const DUMP_LLVM_ENV: &str = "FE2O3_DUMP_LLVM";
 pub const OBSOLETE_CODEGEN_PIPELINE_ENV: &str = "FE2O3_CODEGEN_PIPELINE";
 pub const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
-pub const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
+pub const BUILD_ATTEMPT_ENV: &str = artifact_transaction::BUILD_ATTEMPT_ENV_V1;
 
 fn encode_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";

@@ -5,6 +5,7 @@
 //! broker, build attempt, publication, or GPU authority and performs no performance
 //! prediction. Test execution remains trusted project code; this wrapper is not a sandbox.
 
+use fe2o3_artifact_transaction::BUILD_ATTEMPT_ENV_V1;
 use fe2o3_rustc_invocation::{
     RustcArgsErrorV2, RustcCodegenMetadataErrorV1, RustcInvocationV2, classify_rustc_invocation_v2,
     is_rustc_codegen_backend_selector_v2, ordered_rustc_codegen_metadata_v1,
@@ -28,7 +29,7 @@ const PROHIBITED_ENVIRONMENT: &[&str] = &[
     "FE2O3_AUTHORITY_RUSTC_SHA256_V1",
     "FE2O3_BACKEND",
     "FE2O3_BINDING_WRAPPER_MODE_V1",
-    "FE2O3_BUILD_ATTEMPT_V1",
+    BUILD_ATTEMPT_ENV_V1,
     "FE2O3_BUILD_CARGO_FE2O3_EXECUTABLE_SHA256_V1",
     "FE2O3_BUILD_SESSION_V1",
     "FE2O3_CAPABILITY_BROKER_V1",
