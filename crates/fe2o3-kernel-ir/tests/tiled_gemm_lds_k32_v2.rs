@@ -260,6 +260,9 @@ fn canonical_graph_is_a_real_bounded_accumulator_carrying_loop() {
                         .collect::<Vec<_>>(),
                 );
             }
+            MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
+                unreachable!("the gfx942 BF16 fixture cannot contain a scaled gfx950 MFMA")
+            }
         }
     }
     assert_eq!(store_bases, allocation_ids);
@@ -533,7 +536,8 @@ fn aliased_tiles_and_extra_output_owner_fail_closed() {
         match &mut matrix.kind {
             MatrixOperationKind::LdsStore { base, .. }
             | MatrixOperationKind::LdsLoad { base, .. } => *base = a_lds,
-            MatrixOperationKind::MultiplyAccumulate { .. } => unreachable!(),
+            MatrixOperationKind::MultiplyAccumulate { .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => unreachable!(),
         }
     }
     assert_valid_but_noncanonical(aliased);

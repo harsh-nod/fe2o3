@@ -24,13 +24,42 @@ Run the Rust source and oracle checks with:
 cargo test --manifest-path Cargo.toml
 ```
 
-The production rustc importer, Kernel IR schema, gfx950 production target
-profile, and full-module AMDGPU lowering do not yet consume these new device
-terminals. `GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1` is therefore `false`;
-the repository does not claim that these Rust sources currently produce the
-HSACO described below.
+The production rustc importer, V8/V9 Kernel IR schemas, exact gfx950 target
+profile, and full-module AMDGPU lowering consume all of these device terminals.
+`GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1` is therefore `true`.
 
-## HIP compiler and hardware fixture
+## Production Rust to gfx950 HSACO
+
+Each runner rebuilds the production extractor, compiles exactly one ordinary
+Rust kernel for `amdgcn-amd-amdhsa`, validates the crate-binding handoff and
+LLVM profile, finalizes a COV6 object, checks symbol-scoped ISA and metadata,
+and executes a digest-pinned HSA numerical test:
+
+```bash
+./run-fp4-gemm-gfx950.sh
+./run-fp8-gemm-gfx950.sh
+./run-fp4-attention-gfx950.sh
+./run-fp8-attention-gfx950.sh
+```
+
+The attention runner disables Clang's implicit GPU libraries and links only the
+ordered nine-file ROCm 7.2.1 closure accepted by
+`gfx950-ocml-rocm-7.2.1.manifest`. It requires one scaled gfx950 MFMA, two B4 or
+four B8 transpose reads, one uniform publication barrier, and the exact static
+LDS allocation before dispatch.
+
+The selected root extraction namespace is portable across checkout paths.
+Cargo's original ordered metadata remains a separate build observation; only
+the terminal analysis session receives the package-, manifest-, feature-,
+target-, and profile-bound portable token. Dependency compilations and general
+Cargo wrapper invocations are not rewritten.
+
+The strict Worker V3 provider and admission policy also pin this exact closure
+and reject caller-supplied providers. A measured native protected-worker build
+still requires matching LLVM/LLD development packages; this does not block the
+ordinary Rust-to-HSACO runners above.
+
+## HIP comparison fixture
 
 The neighboring standalone HIP fixture contains four fixed-shape, single-wave
 kernels for AMD CDNA 4 (`gfx950`):
@@ -71,7 +100,26 @@ softmax result. The comparison rejects NaN and infinity before applying its
 error tolerance. Execution is rejected when the selected HIP device is not
 `gfx950`.
 
-## Validation evidence
+## Rust validation evidence
+
+On 2026-08-26, all four ordinary Rust runners passed through SSH host alias
+`mi350` (remote hostname `smci350-rck-g03-b19-03`) with ROCm 7.2.1 on gfx950.
+Every test checked all 256 outputs, immutable inputs, output canaries, exact
+gfx950:xnack- COV6 metadata, and symbol-scoped ISA.
+
+| Rust kernel | Portable namespace | LLVM SHA-256 | HSACO SHA-256 | Required ISA | Maximum absolute error |
+| --- | --- | --- | --- | --- | --- |
+| `gfx950_fp4_gemm_rust` | `ff22ff3610dda0a94803a8011ced229b78c77400ca63c9b929d6ecba78ed6f01` | `b92ceef45655bb2ae131c2b09645ff8fb588299a994e9cbf84b07b7868fca115` | `f170671b0b778cda3876faee253e4ac3a092efdd9c1ebbfcfe901590ea3e4e4d` | scaled MFMA, `cbsz:4 blgp:4` | `0` |
+| `gfx950_fp8_gemm_rust` | `d67f1755b38fbdac67cec83da3ebc359f874e3fbf90fcc036471455ec117dfea` | `351dbfeecec00e673e3e15557b97dc1c53006839dfb9d1a0a7b03ac6c23ae6e3` | `4c19d4a90ec71afa7621cc7f9f8d4d5af8e9dd87486536c702b8eb6dcc4c3d8f` | scaled MFMA, FP8 selectors | `0` |
+| `gfx950_fp4_attention_rust` | `a9a878f0e2fc3a42ad17edf0a326a89695398bb6d7460eaf278ea3e8c53f4cf5` | `ea183b9dedc375a1e98278d1053b7a500e0e8f4efe618230479e19bc1b81ecaa` | `390b8cd9d8493ddbfb953e53c4a17cfb0cdab5074365b77b7c14bf64b6f64008` | scaled MFMA, two `ds_read_b64_tr_b4` | `2.235174179e-8` |
+| `gfx950_fp8_attention_rust` | `0c9610e86137831ce25b08b9ad87073ec16f459aa11aeea6806733f788bbeec1` | `2e6a2c79a57e0a8796fe95c806fbbf3a8406bae6c55646802beb235b01d88c2b` | `5511819cf16a7119f846c6fe01de703257fd9c217b8fa7f32438bf47635c9221` | scaled MFMA, four `ds_read_b64_tr_b8` | `5.960464478e-8` |
+
+The GEMM tolerance is `1e-5`. Attention uses `2e-3` absolute plus `2e-3`
+relative tolerance to cover MFMA accumulation, Wave64 reductions, and the
+device exponential approximation; the measured errors are substantially
+smaller.
+
+## HIP validation evidence
 
 On 2026-08-26, the complete `./build_and_test.sh` path passed through SSH host
 alias `mi350` (remote hostname `smci350-rck-g03-b19-03`) with ROCm 7.2.1,

@@ -9,6 +9,8 @@ description = "Fail-closed canonical LLVM handoff admission for the isolated wor
 publish = false
 
 [dependencies]
+fe2o3-amd-target.workspace = true
+fe2o3-compiler-ffi.workspace = true
 fe2o3-llvm-handoff.workspace = true
 sha2.workspace = true
 

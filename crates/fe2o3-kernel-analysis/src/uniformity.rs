@@ -540,6 +540,16 @@ impl<'a> Analyzer<'a> {
             OperationKind::MemoryIntrinsic(_) => Variation::Varying,
             OperationKind::InlineAssembly(_) => Variation::Varying,
             OperationKind::Matrix(_) => Variation::Varying,
+            OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
+                fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current { .. }
+                | fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Stage { .. }
+                | fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Publish { .. } => {
+                    Variation::WorkgroupUniform
+                }
+                fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Read { .. } => {
+                    Variation::Varying
+                }
+            },
             OperationKind::Alloca {
                 count,
                 address_space,
@@ -572,6 +582,30 @@ impl<'a> Analyzer<'a> {
                         .value(source_lane)
                         .is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup)
                     {
+                        Variation::SubgroupUniform
+                    } else {
+                        Variation::Varying
+                    }
+                }
+                WaveOperationKind::ReduceF32 {
+                    value, tile_width, ..
+                } => {
+                    let value = self.value(value);
+                    if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
+                        value
+                    } else if tile_width == wave.width.lanes() {
+                        Variation::SubgroupUniform
+                    } else {
+                        Variation::Varying
+                    }
+                }
+                WaveOperationKind::BroadcastF32 {
+                    value, tile_width, ..
+                } => {
+                    let value = self.value(value);
+                    if value.is_uniform_for(fe2o3_kernel_ir::SynchronizationScope::Subgroup) {
+                        value
+                    } else if tile_width == wave.width.lanes() {
                         Variation::SubgroupUniform
                     } else {
                         Variation::Varying

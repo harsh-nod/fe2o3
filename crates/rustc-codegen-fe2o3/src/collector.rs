@@ -921,8 +921,8 @@ fn general_typed_launch_v3(
     const DEFAULT: [u32; 3] = [256, 1, 1];
     const WAVE64: [u32; 3] = [64, 1, 1];
 
-    let dimensions = match frontend.and_then(|frontend| frontend.contract().launch()) {
-        None => DEFAULT,
+    let (dimensions, max_grid) = match frontend.and_then(|frontend| frontend.contract().launch()) {
+        None => (DEFAULT, [u32::MAX, 1, 1]),
         Some(launch) => {
             if launch.min_workgroups_per_compute_unit().is_some() {
                 return Err(RegistrationError::new(
@@ -952,7 +952,13 @@ fn general_typed_launch_v3(
                     "general typed V3 supports only exact 64x1x1 or 256x1x1 launch dimensions",
                 ));
             }
-            required
+            (
+                required,
+                launch
+                    .max_grid()
+                    .map(|dimensions| dimensions.as_array())
+                    .unwrap_or([u32::MAX, 1, 1]),
+            )
         }
     };
     LaunchContract::new(
@@ -961,7 +967,7 @@ fn general_typed_launch_v3(
             Dimensions::new(dimensions[0], dimensions[1], dimensions[2])
                 .map_err(|error| RegistrationError::new(registration_path, error.to_string()))?,
         ),
-        Dimensions::new(u32::MAX, 1, 1)
+        Dimensions::new(max_grid[0], max_grid[1], max_grid[2])
             .map_err(|error| RegistrationError::new(registration_path, error.to_string()))?,
         0,
         0,
@@ -3984,7 +3990,7 @@ mod tests {
     use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
     use fe2o3_rustc_front::{
         ASSEMBLY_OPERAND_SGPR_V1, ASSEMBLY_OPTION_NOMEM_V1, ASSEMBLY_OPTION_NOSTACK_V1,
-        ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendLaunchBoundsV1,
+        ASSEMBLY_OPTION_PRESERVES_FLAGS_V1, FrontendGridDimensionsV1, FrontendLaunchBoundsV1,
         FrontendUnsafeAssemblyDeclarationV1, FrontendUnsafeAssemblyTargetV1,
         FrontendWorkgroupDimensionsV1, KernelFrontendContractV1,
     };
@@ -4600,6 +4606,23 @@ mod tests {
                 )
             );
         }
+
+        let finite_launch = FrontendLaunchBoundsV1::new_with_max_grid(
+            Some(FrontendWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+            Some(FrontendWorkgroupDimensionsV1::new([64, 1, 1]).unwrap()),
+            None,
+            Some(FrontendGridDimensionsV1::new([1, 1, 1]).unwrap()),
+        )
+        .unwrap();
+        let finite_frontend = AuthenticatedKernelFrontendContractV1::for_test(
+            KernelFrontendContractV1::new(Some(finite_launch), None).unwrap(),
+        );
+        assert_eq!(
+            general_typed_launch_v3(Some(&finite_frontend), "registration")
+                .unwrap()
+                .max_grid(),
+            Dimensions::new(1, 1, 1).unwrap()
+        );
 
         for frontend in [
             authenticated(None, Some([64, 1, 1]), None),

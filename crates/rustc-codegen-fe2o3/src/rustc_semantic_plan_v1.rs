@@ -2173,6 +2173,31 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::StridedReadView2DLoadOr => 58,
         ProductionTerminalExpansionV1::ThreadIndexCheckedRowStriped2d => 59,
         ProductionTerminalExpansionV1::DisjointSliceGetRowStriped2dMut => 60,
+        ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent => 61,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor => 62,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor => 63,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128 => 64,
+        ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16 => 65,
+        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero => 66,
+        ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues => 67,
+        ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate => 68,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor => 69,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor => 70,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128 => 71,
+        ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16 => 72,
+        ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero => 73,
+        ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues => 74,
+        ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate => 75,
+        ProductionTerminalExpansionV1::Gfx950SubgroupCurrent => 76,
+        ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32 => 77,
+        ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32 => 78,
+        ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32 => 79,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent => 80,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4 => 81,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => 82,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposePublish => 83,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
     }
 }
 
@@ -2256,6 +2281,47 @@ mod tests {
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::DisjointSliceGetMut),
         ];
         assert_eq!(tags, [0, 1, 2]);
+
+        let gfx950 = [
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero),
+            terminal_expansion_tag_v1(
+                ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues,
+            ),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate),
+        ];
+        assert_eq!(gfx950, [61, 62, 63, 64, 65, 66, 67, 68]);
+
+        let gfx950_fp4 = [
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero),
+            terminal_expansion_tag_v1(
+                ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues,
+            ),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate),
+        ];
+        assert_eq!(gfx950_fp4, [69, 70, 71, 72, 73, 74, 75]);
+
+        let gfx950_attention = [
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupCurrent),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposePublish),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8),
+        ];
+        assert_eq!(gfx950_attention, [76, 77, 78, 79, 80, 81, 82, 83, 84, 85]);
     }
 
     #[test]

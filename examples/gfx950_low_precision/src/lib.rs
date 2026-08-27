@@ -7,6 +7,30 @@
 //! neighboring HIP file is a compiler/ISA/hardware fixture, not the source of
 //! these Rust kernels.
 
+#[cfg(all(
+    target_arch = "amdgpu",
+    not(any(
+        feature = "kernel-fp4-gemm",
+        feature = "kernel-fp8-gemm",
+        feature = "kernel-fp4-attention",
+        feature = "kernel-fp8-attention",
+    ))
+))]
+compile_error!("an AMDGPU build must select exactly one gfx950 kernel feature");
+
+#[cfg(all(
+    target_arch = "amdgpu",
+    any(
+        all(feature = "kernel-fp4-gemm", feature = "kernel-fp8-gemm"),
+        all(feature = "kernel-fp4-gemm", feature = "kernel-fp4-attention"),
+        all(feature = "kernel-fp4-gemm", feature = "kernel-fp8-attention"),
+        all(feature = "kernel-fp8-gemm", feature = "kernel-fp4-attention"),
+        all(feature = "kernel-fp8-gemm", feature = "kernel-fp8-attention"),
+        all(feature = "kernel-fp4-attention", feature = "kernel-fp8-attention"),
+    )
+))]
+compile_error!("an AMDGPU build must not select more than one gfx950 kernel feature");
+
 pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
@@ -14,23 +38,27 @@ pub mod reference;
 /// The ordinary Rust kernel source exists and is checked by host compilation.
 pub const GFX950_RUST_KERNEL_SOURCE_PRESENT_V1: bool = true;
 
-/// The production fe2o3 compiler cannot yet lower the gfx950 device terminals.
-pub const GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1: bool = false;
+/// The production extractor and exact ROCm closure lower all four kernels.
+pub const GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1: bool = true;
 
-/// Exact missing boundary between these sources and a fe2o3-produced HSACO.
-pub const GFX950_RUST_TO_HSACO_BLOCKER_V1: &str = "the rustc semantic importer, Kernel IR schema, production target profile, and AMDGPU module lowering do not yet consume the gfx950 scaled-MFMA, LDS-transpose, subgroup, or DeviceMath exp_f32 terminals";
+/// Exact production finalization contract used by the runnable examples.
+pub const GFX950_PRODUCTION_FINALIZER_V1: &str = "ROCm 7.2.1 clang/LLD with implicit device libraries disabled and the manifest-pinned nine-file gfx950 OCML closure";
+
+/// Remaining boundary for protected Worker V3 publication, not Rust lowering.
+pub const GFX950_PROTECTED_WORKER_BUILD_BOUNDARY_V1: &str = "the reviewed gfx950 Worker V3 provider is implemented and admission-tested, but a measured native worker build still requires a matching LLVM/LLD development package";
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn lowering_boundary_is_explicit() {
+    fn production_lowering_and_protected_boundary_are_explicit() {
         let source = include_str!("lib.rs");
         assert!(source.contains("GFX950_RUST_KERNEL_SOURCE_PRESENT_V1: bool = true"));
-        assert!(source.contains("GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1: bool = false"));
-        assert!(GFX950_RUST_TO_HSACO_BLOCKER_V1.contains("semantic importer"));
-        assert!(GFX950_RUST_TO_HSACO_BLOCKER_V1.contains("Kernel IR"));
-        assert!(GFX950_RUST_TO_HSACO_BLOCKER_V1.contains("production target"));
+        assert!(source.contains("GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1: bool = true"));
+        assert!(GFX950_PRODUCTION_FINALIZER_V1.contains("implicit device libraries disabled"));
+        assert!(GFX950_PRODUCTION_FINALIZER_V1.contains("nine-file gfx950 OCML closure"));
+        assert!(GFX950_PROTECTED_WORKER_BUILD_BOUNDARY_V1.contains("admission-tested"));
+        assert!(GFX950_PROTECTED_WORKER_BUILD_BOUNDARY_V1.contains("LLVM/LLD development package"));
     }
 }

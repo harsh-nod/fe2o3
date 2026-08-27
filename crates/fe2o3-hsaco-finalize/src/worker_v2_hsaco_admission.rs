@@ -13,9 +13,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
     CodeObjectVersion as CompilerCodeObjectVersion, CompilerFfiEnvelopeIdentityV1,
-    CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
+    CompilerModuleHandoffV2, CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1,
     InertFinalCompilerModuleCommitmentV3, InertSemanticCompilerModuleHandoffIdentityV3,
-    InertSemanticCompilerModuleHandoffV3,
+    InertSemanticCompilerModuleHandoffV3, ProductionGfx950CompilerFfiEnvelopeKindV1,
+    inspect_production_gfx950_compiler_ffi_envelope_v1,
 };
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, CodeObjectVersion as InspectedCodeObjectVersion,
@@ -32,7 +33,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME, FinalizationError,
-    FirstBuildWorkerV2IdentityV1, InertFirstBuildWorkerV2EvidenceV1,
+    FirstBuildWorkerV2IdentityV1, InertDecodedWorkerExchangeV2, InertFirstBuildWorkerV2EvidenceV1,
     InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
     MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1, ProtectedCompilerHandoffBindingIdentityV3,
     ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV2IdentityV1,
@@ -40,7 +41,8 @@ use crate::{
     WorkerMeasurementV1, request_construction::decode_link_options,
 };
 
-const EXPECTED_PROCESSOR: &str = "gfx942";
+const PRODUCTION_GFX942_TARGET: &str = "gfx942:xnack-";
+const PRODUCTION_GFX950_TARGET: &str = "gfx950:xnack-";
 const REQUIRED_WORKGROUP_SIZE: [u32; 3] = [256, 1, 1];
 const REQUIRED_MAX_FLAT_WORKGROUP_SIZE: u32 = 256;
 const REQUIRED_WAVEFRONT_SIZE: u32 = 64;
@@ -806,6 +808,9 @@ pub enum WorkerV2RawHsacoInspectionError {
     KernelDescriptorRoleMismatch,
     CompilerEnvelopeImportRoleMismatch,
     CompilerEnvelopeExportRoleMismatch,
+    StrictV3Gfx950DeviceFfiPolicy,
+    StrictV3Gfx950OcmlProviderClosureUnmeasured,
+    StrictV3Gfx950OcmlProviderClosureMismatch,
     DefinedSymbolInspection,
     DefinedSymbolClosureMismatch {
         expected: Vec<String>,
@@ -979,7 +984,7 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
             Self::UnsupportedTarget(target) => {
                 write!(
                     formatter,
-                    "raw Worker V2 inspection supports only gfx942, found {target}"
+                    "raw Worker V2 inspection profile does not support {target}; gfx950 is admitted only as exact {PRODUCTION_GFX950_TARGET} by the production profile"
                 )
             }
             Self::LinkPolicy => formatter.write_str("retained link policy is invalid"),
@@ -1005,6 +1010,15 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
             ),
             Self::CompilerEnvelopeExportRoleMismatch => formatter.write_str(
                 "retained compiler envelope exports differ from retained manifest roles",
+            ),
+            Self::StrictV3Gfx950DeviceFfiPolicy => formatter.write_str(
+                "strict V3 gfx950 compiler handoff has a noncanonical device-FFI or LLVM import closure",
+            ),
+            Self::StrictV3Gfx950OcmlProviderClosureUnmeasured => formatter.write_str(
+                "strict V3 gfx950 OCML exp finalization requires a measured, identity-pinned ROCm gfx950 OCML provider/link closure",
+            ),
+            Self::StrictV3Gfx950OcmlProviderClosureMismatch => formatter.write_str(
+                "strict V3 gfx950 OCML exp finalization observed a missing, substituted, or non-reproducible ROCm 7.2.1 provider closure",
             ),
             Self::DefinedSymbolInspection => {
                 formatter.write_str("failed to inspect raw HSACO static symbols")
@@ -1563,7 +1577,7 @@ fn inspect_worker_v2_raw_hsaco_shared_v1(
     diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
 ) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV2RawHsacoInspectionError> {
     let target = source.plan().target();
-    if target.as_amd_target_id().processor() != EXPECTED_PROCESSOR {
+    if !target_is_supported_for_profile(target, diagnostic_profile) {
         return Err(WorkerV2RawHsacoInspectionError::UnsupportedTarget(
             target.to_string(),
         ));
@@ -1593,7 +1607,7 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
     launch: WorkerV2RawLaunchContractV1,
     diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
 ) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV2RawHsacoInspectionError> {
-    if target.as_amd_target_id().processor() != EXPECTED_PROCESSOR {
+    if !target_is_supported_for_profile(target, diagnostic_profile) {
         return Err(WorkerV2RawHsacoInspectionError::UnsupportedTarget(
             target.to_string(),
         ));
@@ -1744,6 +1758,21 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         abi_observation_preimage,
         resource_observation_preimage,
     })
+}
+
+fn target_is_supported_for_profile(
+    target: DeviceTargetV1,
+    profile: WorkerV2RawLaunchDiagnosticProfileV1,
+) -> bool {
+    let target = target.to_string();
+    if profile == WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 {
+        matches!(
+            target.as_str(),
+            PRODUCTION_GFX942_TARGET | PRODUCTION_GFX950_TARGET
+        )
+    } else {
+        target == PRODUCTION_GFX942_TARGET
+    }
 }
 
 fn required_workgroup_size_mismatch(
@@ -2279,6 +2308,7 @@ fn validate_protected_v3_lineage(
             "strict V3 compiler envelope target/code-object version",
         ));
     }
+    let gfx950_ffi = validate_strict_v3_gfx950_device_ffi(nested)?;
     let directional = nested.envelope().directional_symbols();
     if !nested
         .symbol_manifest()
@@ -2298,6 +2328,7 @@ fn validate_protected_v3_lineage(
     let expected_envelope = nested.envelope().identity();
     let bootstrap = source.bootstrap();
     let replay = source.exact_replay();
+    validate_strict_v3_gfx950_provider_exchanges(source, gfx950_ffi, bootstrap, replay)?;
     for execution in [bootstrap, replay] {
         let response = execution.response();
         if source.worker_measurement().executable() != execution.worker_executable()
@@ -2344,6 +2375,205 @@ fn validate_protected_v3_lineage(
         ));
     }
     Ok(())
+}
+
+fn validate_strict_v3_gfx950_device_ffi(
+    nested: &CompilerModuleHandoffV2,
+) -> Result<ProductionGfx950CompilerFfiEnvelopeKindV1, WorkerV2RawHsacoInspectionError> {
+    if nested.target().to_string() != PRODUCTION_GFX950_TARGET {
+        return Ok(ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi);
+    }
+    let kind = inspect_production_gfx950_compiler_ffi_envelope_v1(nested.envelope())
+        .ok_or(WorkerV2RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)?;
+    let llvm = std::str::from_utf8(nested.module_bytes())
+        .map_err(|_| WorkerV2RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)?;
+    match kind {
+        ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
+            if llvm.contains("@__ocml_") {
+                return Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy);
+            }
+            Ok(kind)
+        }
+        ProductionGfx950CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. } => {
+            let exact_llvm = llvm.matches("declare float @__ocml_exp_f32(float)").count() == 1
+                && llvm.matches("call float @__ocml_exp_f32(float ").count() >= 1
+                && llvm
+                    .split("@__ocml_")
+                    .skip(1)
+                    .all(|suffix| suffix.starts_with("exp_f32"));
+            if !exact_llvm {
+                return Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy);
+            }
+            Ok(kind)
+        }
+    }
+}
+
+const GFX950_OCML_PROVIDER_IDENTITY_V1: &str = "gfx950-ocml-rocm-7.2.1-v1";
+const GFX950_OCML_PROVIDER_DIAGNOSTIC_V1: &str = "device_library.check=identity status=ok provider=gfx950-ocml-rocm-7.2.1-v1 roots=[__ocml_exp_f32] files=9";
+const GFX950_OCML_PROVIDER_FILES_V1: [(&str, &str); 9] = [
+    (
+        "ocml.bc",
+        "2e3451857fcf47b931c5c5a29e9c42a6ddc3099c8359079441a9a06a217ead7e",
+    ),
+    (
+        "ockl.bc",
+        "8320aec59c4dc87cb28fdb374a44a55088a6258b59dffae4a85e8eacec8be456",
+    ),
+    (
+        "oclc_daz_opt_off.bc",
+        "3b2344acba86e174b87961e8a5e4a164ab61addf8c8a035e9b6dcd03ddab23fa",
+    ),
+    (
+        "oclc_unsafe_math_off.bc",
+        "a500bc03fd046bcd7806938ea323758e5c9ba8d56cfd767cef71612b3bd87d37",
+    ),
+    (
+        "oclc_finite_only_off.bc",
+        "e1d1fddf85577b078d02a07212f670324e1e157d1b6608a8c765ad3c171a7b29",
+    ),
+    (
+        "oclc_correctly_rounded_sqrt_on.bc",
+        "3b2344acba86e174b87961e8a5e4a164ab61addf8c8a035e9b6dcd03ddab23fa",
+    ),
+    (
+        "oclc_wavefrontsize64_on.bc",
+        "9560b0d120b9e7c6b28a56a87eeed4ae155b60dec54152700ff9f60b69de1259",
+    ),
+    (
+        "oclc_isa_version_950.bc",
+        "9ea1498966ac0b4d0a54677501a847cb1ee932768e78576613d42985bf394d34",
+    ),
+    (
+        "oclc_abi_version_600.bc",
+        "79d3d09404f5df01c484dc15cc64583c7c1803234463eee6505226f0186a71b1",
+    ),
+];
+
+fn validate_strict_v3_gfx950_provider_exchanges(
+    source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
+    kind: ProductionGfx950CompilerFfiEnvelopeKindV1,
+    bootstrap: &crate::InertProtectedCompilerHandoffExecutionV3,
+    replay: &crate::InertProtectedCompilerHandoffExecutionV3,
+) -> Result<(), WorkerV2RawHsacoInspectionError> {
+    if source.handoff().module_handoff().target().to_string() != PRODUCTION_GFX950_TARGET {
+        return Ok(());
+    }
+    let bootstrap_exchange = InertDecodedWorkerExchangeV2::decode(
+        source.bootstrap_request_bytes(),
+        bootstrap.response().canonical_bytes(),
+    )
+    .map_err(|_| WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
+    let replay_exchange = InertDecodedWorkerExchangeV2::decode(
+        source.exact_replay_request_bytes(),
+        replay.response().canonical_bytes(),
+    )
+    .map_err(|_| WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)?;
+
+    match kind {
+        ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
+            for exchange in [&bootstrap_exchange, &replay_exchange] {
+                validate_strict_v3_gfx950_provider_exchange(kind, exchange)?;
+            }
+            Ok(())
+        }
+        ProductionGfx950CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. } => {
+            for exchange in [&bootstrap_exchange, &replay_exchange] {
+                validate_strict_v3_gfx950_provider_exchange(kind, exchange)?;
+            }
+            if bootstrap_exchange.response().device_library_provider()
+                != replay_exchange.response().device_library_provider()
+            {
+                return Err(
+                    WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_strict_v3_gfx950_provider_exchange(
+    kind: ProductionGfx950CompilerFfiEnvelopeKindV1,
+    exchange: &InertDecodedWorkerExchangeV2,
+) -> Result<(), WorkerV2RawHsacoInspectionError> {
+    let request = exchange.request();
+    if !request.external_providers().is_empty()
+        || request.target().to_string() != PRODUCTION_GFX950_TARGET
+        || request.code_object_version() != CodeObjectVersion::V6
+    {
+        return Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
+    }
+    match kind {
+        ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi => {
+            if !request.import_symbols().is_empty()
+                || exchange.response().device_library_provider().is_some()
+            {
+                return Err(
+                    WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                );
+            }
+        }
+        ProductionGfx950CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. } => {
+            if request.import_symbols() != ["__ocml_exp_f32"]
+                || !exchange
+                    .response()
+                    .diagnostics()
+                    .iter()
+                    .any(|value| value == GFX950_OCML_PROVIDER_DIAGNOSTIC_V1)
+            {
+                return Err(
+                    WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                );
+            }
+            validate_gfx950_ocml_provider_evidence(
+                exchange.response().device_library_provider().ok_or(
+                    WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch,
+                )?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_gfx950_ocml_provider_evidence(
+    evidence: &crate::WorkerDeviceLibraryProviderEvidenceV1,
+) -> Result<(), WorkerV2RawHsacoInspectionError> {
+    if evidence.provider_identity() != GFX950_OCML_PROVIDER_IDENTITY_V1
+        || evidence.target().to_string() != PRODUCTION_GFX950_TARGET
+        || evidence.code_object_version() != CodeObjectVersion::V6
+        || evidence.import_symbols() != ["__ocml_exp_f32"]
+        || evidence.files().len() != GFX950_OCML_PROVIDER_FILES_V1.len()
+    {
+        return Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
+    }
+    for (actual, (basename, sha256)) in evidence.files().iter().zip(GFX950_OCML_PROVIDER_FILES_V1) {
+        if actual.basename() != basename
+            || decode_sha256_hex(sha256).as_ref() != Some(actual.sha256())
+        {
+            return Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch);
+        }
+    }
+    Ok(())
+}
+
+fn decode_sha256_hex(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut result = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        result[index] = (decode_hex_nibble(pair[0])? << 4) | decode_hex_nibble(pair[1])?;
+    }
+    Some(result)
+}
+
+const fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn expected_defined_symbols(manifest: &CompilerModuleSymbolManifestV1) -> Vec<String> {
@@ -2986,5 +3216,218 @@ const fn code_object_version_tag(version: CodeObjectVersion) -> u8 {
         CodeObjectVersion::V4 => 4,
         CodeObjectVersion::V5 => 5,
         CodeObjectVersion::V6 => 6,
+    }
+}
+
+#[cfg(test)]
+mod exact_production_target_tests {
+    use super::*;
+    use crate::{
+        WorkerCompilerFfiEnvelopeIdentityV2, WorkerInputKindV1, WorkerInputV1,
+        WorkerOptimizationLevelV1, WorkerOptionsV1, WorkerOutputConstraintsV1,
+        worker_protocol_v2::{
+            SealedWorkerRequestV2Parts, WorkerRequestV2, WorkerResponseReplayMetadataV1,
+            reconstruct_complete_worker_response_v2,
+        },
+    };
+    use fe2o3_compiler_ffi::{
+        CompilerFfiEnvelopeV1, CompilerModuleKindV1, CompilerModuleSymbolRoleV1,
+        construct_production_gfx950_ocml_exp_envelope_v1,
+    };
+
+    #[test]
+    fn production_raw_hsaco_admission_accepts_only_canonical_production_targets() {
+        for accepted in [PRODUCTION_GFX942_TARGET, PRODUCTION_GFX950_TARGET] {
+            assert!(target_is_supported_for_profile(
+                DeviceTargetV1::parse(accepted).unwrap(),
+                WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+            ));
+        }
+
+        for rejected in [
+            "gfx942",
+            "gfx942:xnack+",
+            "gfx942:sramecc+:xnack-",
+            "gfx950",
+            "gfx950:xnack+",
+            "gfx950:sramecc+:xnack-",
+            "gfx90a:xnack-",
+        ] {
+            assert!(!target_is_supported_for_profile(
+                DeviceTargetV1::parse(rejected).unwrap(),
+                WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+            ));
+        }
+    }
+
+    #[test]
+    fn legacy_and_specialized_routes_remain_gfx942_only() {
+        let gfx942 = DeviceTargetV1::parse(PRODUCTION_GFX942_TARGET).unwrap();
+        let gfx950 = DeviceTargetV1::parse(PRODUCTION_GFX950_TARGET).unwrap();
+        for profile in [
+            WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1,
+            WorkerV2RawLaunchDiagnosticProfileV1::TiledGemmV1,
+            WorkerV2RawLaunchDiagnosticProfileV1::GeneralGemmV1,
+            WorkerV2RawLaunchDiagnosticProfileV1::RowSoftmaxV1,
+            WorkerV2RawLaunchDiagnosticProfileV1::FlashAttentionV1,
+            WorkerV2RawLaunchDiagnosticProfileV1::Wave64CollectivesV1,
+            WorkerV2RawLaunchDiagnosticProfileV1::WorkgroupSyncV1,
+            WorkerV2RawLaunchDiagnosticProfileV1::MoeTop2V1,
+        ] {
+            assert!(target_is_supported_for_profile(gfx942, profile));
+            assert!(!target_is_supported_for_profile(gfx950, profile));
+        }
+    }
+
+    fn gfx950_handoff(
+        envelope: CompilerFfiEnvelopeV1,
+        llvm: &[u8],
+        import: bool,
+    ) -> CompilerModuleHandoffV2 {
+        let target = DeviceTargetV1::parse(PRODUCTION_GFX950_TARGET).unwrap();
+        let mut symbols = vec![
+            (CompilerModuleSymbolRoleV1::KernelEntry, "kernel"),
+            (CompilerModuleSymbolRoleV1::KernelDescriptor, "kernel.kd"),
+        ];
+        if import {
+            symbols.push((
+                CompilerModuleSymbolRoleV1::UnresolvedExternalImport,
+                "__ocml_exp_f32",
+            ));
+        }
+        CompilerModuleHandoffV2::new(
+            CompilerModuleKindV1::LlvmTextIr,
+            target,
+            CompilerCodeObjectVersion::V6,
+            envelope,
+            CompilerModuleSymbolManifestV1::new(symbols).unwrap(),
+            llvm,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn strict_v3_gfx950_gemm_retains_no_device_ffi() {
+        let target = DeviceTargetV1::parse(PRODUCTION_GFX950_TARGET).unwrap();
+        let envelope = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            target,
+            CompilerCodeObjectVersion::V6,
+        )
+        .unwrap();
+        let handoff = gfx950_handoff(
+            envelope,
+            b"target triple = \"amdgcn-amd-amdhsa\"\ndefine amdgpu_kernel void @kernel() { ret void }\n",
+            false,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx950_device_ffi(&handoff),
+            Ok(ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi)
+        );
+    }
+
+    #[test]
+    fn strict_v3_gfx950_no_ffi_rejects_external_provider_injection() {
+        let request = WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+            request_id: [0x11; 32],
+            llvm_build_identity: "llvm-gfx950-test".to_owned(),
+            worker_build_identity: "worker-gfx950-test".to_owned(),
+            worker_executable: ContentIdentityV1::from_parts([0x22; 32], 4096),
+            target: DeviceTargetV1::parse(PRODUCTION_GFX950_TARGET).unwrap(),
+            code_object_version: CodeObjectVersion::V6,
+            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
+            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_test_bytes([0x33; 32]),
+            compiler_module: WorkerInputV1::new(
+                WorkerInputKindV1::LlvmTextIr,
+                b"compiler module".to_vec(),
+            )
+            .unwrap(),
+            external_providers: vec![
+                WorkerInputV1::new(
+                    WorkerInputKindV1::LlvmBitcode,
+                    b"injected provider".to_vec(),
+                )
+                .unwrap(),
+            ],
+            import_symbols: Vec::new(),
+            export_symbols: vec!["kernel".to_owned()],
+            final_symbols: vec!["kernel".to_owned()],
+            output: WorkerOutputConstraintsV1::new(4096).unwrap(),
+        })
+        .unwrap();
+        let diagnostics_body = 0_u32.to_le_bytes();
+        let response = reconstruct_complete_worker_response_v2(
+            &request,
+            b"inert hsaco",
+            WorkerResponseReplayMetadataV1::from_test_bodies(&diagnostics_body, None),
+        )
+        .unwrap();
+        let exchange = InertDecodedWorkerExchangeV2::decode(
+            request.canonical_bytes(),
+            response.canonical_bytes(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_strict_v3_gfx950_provider_exchange(
+                ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi,
+                &exchange,
+            ),
+            Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950OcmlProviderClosureMismatch)
+        );
+    }
+
+    #[test]
+    fn strict_v3_gfx950_ocml_requires_the_measured_provider_exchange() {
+        let envelope = construct_production_gfx950_ocml_exp_envelope_v1([0x38; 32]).unwrap();
+        let handoff = gfx950_handoff(
+            envelope,
+            b"target triple = \"amdgcn-amd-amdhsa\"\n\
+              declare float @__ocml_exp_f32(float)\n\
+              define amdgpu_kernel void @kernel() {\n\
+                %value = call float @__ocml_exp_f32(float 0.000000e+00)\n\
+                ret void\n\
+              }\n",
+            true,
+        );
+        assert!(matches!(
+            validate_strict_v3_gfx950_device_ffi(&handoff),
+            Ok(ProductionGfx950CompilerFfiEnvelopeKindV1::OcmlExpF32 { .. })
+        ));
+        assert_eq!(
+            decode_sha256_hex(GFX950_OCML_PROVIDER_FILES_V1[0].1)
+                .unwrap()
+                .len(),
+            32
+        );
+    }
+
+    #[test]
+    fn strict_v3_gfx950_rejects_hidden_or_substituted_ocml_llvm() {
+        let target = DeviceTargetV1::parse(PRODUCTION_GFX950_TARGET).unwrap();
+        let no_ffi = CompilerFfiEnvelopeV1::for_module_without_device_ffi(
+            target,
+            CompilerCodeObjectVersion::V6,
+        )
+        .unwrap();
+        let hidden = gfx950_handoff(
+            no_ffi,
+            b"target triple = \"amdgcn-amd-amdhsa\"\ndeclare float @__ocml_exp_f32(float)\ndefine amdgpu_kernel void @kernel() { ret void }\n",
+            false,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx950_device_ffi(&hidden),
+            Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)
+        );
+
+        let envelope = construct_production_gfx950_ocml_exp_envelope_v1([0x38; 32]).unwrap();
+        let missing_call = gfx950_handoff(
+            envelope,
+            b"target triple = \"amdgcn-amd-amdhsa\"\ndeclare float @__ocml_exp_f32(float)\ndefine amdgpu_kernel void @kernel() { ret void }\n",
+            true,
+        );
+        assert_eq!(
+            validate_strict_v3_gfx950_device_ffi(&missing_call),
+            Err(WorkerV2RawHsacoInspectionError::StrictV3Gfx950DeviceFfiPolicy)
+        );
     }
 }

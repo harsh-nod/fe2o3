@@ -4,7 +4,7 @@ use std::fmt;
 
 pub const FRONTEND_KERNEL_CONTRACT_MAGIC_V1: [u8; 8] = *b"FE2O3KF\0";
 pub const FRONTEND_KERNEL_CONTRACT_VERSION_V1: u16 = 1;
-pub const MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1: usize = 64;
+pub const MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1: usize = 76;
 
 pub const KERNEL_FRONTEND_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_frontend_contract_v1_";
 pub const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KFA");
@@ -17,6 +17,7 @@ const FLAG_UNSAFE_ASSEMBLY: u16 = 0x0002;
 const LAUNCH_FLAG_REQUIRED: u16 = 0x0001;
 const LAUNCH_FLAG_MAXIMUM: u16 = 0x0002;
 const LAUNCH_FLAG_OCCUPANCY: u16 = 0x0004;
+const LAUNCH_FLAG_MAX_GRID: u16 = 0x0008;
 const MAX_WORKGROUP_THREADS_V1: u64 = 1_024;
 const MAX_RESIDENT_WORKGROUPS_PER_COMPUTE_UNIT_V1: u16 = 64;
 
@@ -46,6 +47,7 @@ const ASSEMBLY_EFFECTS_V1: u16 = 0x007f;
 pub enum KernelFrontendContractValidationErrorV1 {
     Empty,
     ZeroWorkgroupDimension,
+    ZeroGridDimension,
     WorkgroupVolumeTooLarge(u64),
     RequiredExceedsMaximum,
     OccupancyRequiresMaximum,
@@ -65,6 +67,7 @@ impl fmt::Display for KernelFrontendContractValidationErrorV1 {
             Self::ZeroWorkgroupDimension => {
                 formatter.write_str("workgroup dimensions must be nonzero")
             }
+            Self::ZeroGridDimension => formatter.write_str("grid dimensions must be nonzero"),
             Self::WorkgroupVolumeTooLarge(actual) => {
                 write!(formatter, "workgroup volume {actual} exceeds 1024")
             }
@@ -119,7 +122,10 @@ pub enum KernelFrontendContractDecodeErrorV1 {
 impl fmt::Display for KernelFrontendContractDecodeErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooLarge => formatter.write_str("kernel frontend contract exceeds 64 bytes"),
+            Self::TooLarge => write!(
+                formatter,
+                "kernel frontend contract exceeds {MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1} bytes"
+            ),
             Self::Truncated => formatter.write_str("kernel frontend contract is truncated"),
             Self::InvalidMagic => formatter.write_str("kernel frontend contract magic is invalid"),
             Self::UnknownVersion(version) => {
@@ -199,10 +205,27 @@ impl FrontendWorkgroupDimensionsV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrontendGridDimensionsV1([u32; 3]);
+
+impl FrontendGridDimensionsV1 {
+    pub fn new(value: [u32; 3]) -> Result<Self, KernelFrontendContractValidationErrorV1> {
+        if value.contains(&0) {
+            return Err(KernelFrontendContractValidationErrorV1::ZeroGridDimension);
+        }
+        Ok(Self(value))
+    }
+
+    pub const fn as_array(self) -> [u32; 3] {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrontendLaunchBoundsV1 {
     required: Option<FrontendWorkgroupDimensionsV1>,
     maximum: Option<FrontendWorkgroupDimensionsV1>,
     min_workgroups_per_compute_unit: Option<u16>,
+    max_grid: Option<FrontendGridDimensionsV1>,
 }
 
 impl FrontendLaunchBoundsV1 {
@@ -210,6 +233,15 @@ impl FrontendLaunchBoundsV1 {
         required: Option<FrontendWorkgroupDimensionsV1>,
         maximum: Option<FrontendWorkgroupDimensionsV1>,
         min_workgroups_per_compute_unit: Option<u16>,
+    ) -> Result<Self, KernelFrontendContractValidationErrorV1> {
+        Self::new_with_max_grid(required, maximum, min_workgroups_per_compute_unit, None)
+    }
+
+    pub fn new_with_max_grid(
+        required: Option<FrontendWorkgroupDimensionsV1>,
+        maximum: Option<FrontendWorkgroupDimensionsV1>,
+        min_workgroups_per_compute_unit: Option<u16>,
+        max_grid: Option<FrontendGridDimensionsV1>,
     ) -> Result<Self, KernelFrontendContractValidationErrorV1> {
         if required.is_none() && maximum.is_none() {
             return Err(KernelFrontendContractValidationErrorV1::Empty);
@@ -233,6 +265,7 @@ impl FrontendLaunchBoundsV1 {
             required,
             maximum,
             min_workgroups_per_compute_unit,
+            max_grid,
         })
     }
 
@@ -246,6 +279,10 @@ impl FrontendLaunchBoundsV1 {
 
     pub const fn min_workgroups_per_compute_unit(self) -> Option<u16> {
         self.min_workgroups_per_compute_unit
+    }
+
+    pub const fn max_grid(self) -> Option<FrontendGridDimensionsV1> {
+        self.max_grid
     }
 }
 
@@ -390,7 +427,8 @@ pub fn encode_kernel_frontend_contract_v1(contract: KernelFrontendContractV1) ->
     if let Some(launch) = contract.launch {
         let launch_flags = (u16::from(launch.required.is_some()) * LAUNCH_FLAG_REQUIRED)
             | (u16::from(launch.maximum.is_some()) * LAUNCH_FLAG_MAXIMUM)
-            | (u16::from(launch.min_workgroups_per_compute_unit.is_some()) * LAUNCH_FLAG_OCCUPANCY);
+            | (u16::from(launch.min_workgroups_per_compute_unit.is_some()) * LAUNCH_FLAG_OCCUPANCY)
+            | (u16::from(launch.max_grid.is_some()) * LAUNCH_FLAG_MAX_GRID);
         push_u16(&mut bytes, launch_flags);
         push_u16(&mut bytes, 0);
         push_dimensions(&mut bytes, launch.required);
@@ -400,6 +438,9 @@ pub fn encode_kernel_frontend_contract_v1(contract: KernelFrontendContractV1) ->
             launch.min_workgroups_per_compute_unit.unwrap_or(0),
         );
         push_u16(&mut bytes, 0);
+        if launch.max_grid.is_some() {
+            push_grid_dimensions(&mut bytes, launch.max_grid);
+        }
     }
     if let Some(assembly) = contract.unsafe_assembly {
         push_u16(&mut bytes, assembly.target as u16);
@@ -470,7 +511,12 @@ fn decode_launch(
 ) -> Result<FrontendLaunchBoundsV1, KernelFrontendContractDecodeErrorV1> {
     let flags = reader.u16()?;
     if flags == 0
-        || flags & !(LAUNCH_FLAG_REQUIRED | LAUNCH_FLAG_MAXIMUM | LAUNCH_FLAG_OCCUPANCY) != 0
+        || flags
+            & !(LAUNCH_FLAG_REQUIRED
+                | LAUNCH_FLAG_MAXIMUM
+                | LAUNCH_FLAG_OCCUPANCY
+                | LAUNCH_FLAG_MAX_GRID)
+            != 0
     {
         return Err(KernelFrontendContractDecodeErrorV1::UnsupportedFlags(flags));
     }
@@ -491,7 +537,13 @@ fn decode_launch(
             "absent occupancy",
         ));
     };
-    FrontendLaunchBoundsV1::new(required, maximum, occupancy).map_err(Into::into)
+    let max_grid = if flags & LAUNCH_FLAG_MAX_GRID != 0 {
+        Some(FrontendGridDimensionsV1::new(reader.dimensions()?)?)
+    } else {
+        None
+    };
+    FrontendLaunchBoundsV1::new_with_max_grid(required, maximum, occupancy, max_grid)
+        .map_err(Into::into)
 }
 
 fn decode_optional_dimensions(
@@ -530,6 +582,12 @@ fn decode_assembly(
 
 fn push_dimensions(bytes: &mut Vec<u8>, value: Option<FrontendWorkgroupDimensionsV1>) {
     for component in value.map_or([0; 3], FrontendWorkgroupDimensionsV1::as_array) {
+        push_u32(bytes, component);
+    }
+}
+
+fn push_grid_dimensions(bytes: &mut Vec<u8>, value: Option<FrontendGridDimensionsV1>) {
+    for component in value.map_or([0; 3], FrontendGridDimensionsV1::as_array) {
         push_u32(bytes, component);
     }
 }

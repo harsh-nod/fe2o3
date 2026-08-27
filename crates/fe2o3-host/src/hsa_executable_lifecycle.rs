@@ -4,7 +4,7 @@ use crate::{
     CompilerGeneratedKernelExpectationV1, DeviceIdentity, GeneratedArgumentPackingError,
     GeneratedArgumentPackingPlanV1, RecoveredWorkerV3AdmissionErrorV1,
 };
-use fe2o3_amd_target::{AmdTargetId, FeatureState};
+use fe2o3_amd_target::{AmdTargetId, ProductionAmdTargetProfileV1};
 use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
 use fe2o3_hsaco::InspectedKernel;
@@ -13,9 +13,8 @@ use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
 
-const REQUIRED_TARGET: &str = "gfx942";
-const REQUIRED_RUNTIME_TARGET: &str = "gfx942:xnack-";
 const HSA_MINIMUM_KERNARG_ALIGNMENT: u64 = 16;
+const COV6_IMPLICIT_KERNARG_BYTES: usize = 256;
 const MAX_HSA_IDENTITY_TEXT_BYTES: usize = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -575,7 +574,8 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
     ) -> Result<HsaUnloadObservationV1, Self::Error>;
 }
 
-/// Reviewed extension that prepares compiler-declared implicit kernargs.
+/// Reviewed extension that prepares compiler-declared implicit kernargs and
+/// binds the exact launch queue for explicit-only kernels.
 ///
 /// The base lifecycle adapter deliberately accepts only complete raw kernarg
 /// storage. Generated typed launch code uses this extension so application code
@@ -584,15 +584,17 @@ pub unsafe trait ReviewedHsaExecutableLifecycleAdapterV1 {
 /// # Safety
 ///
 /// Implementations must preserve every byte in the explicit span, initialize
-/// the complete implicit span for the exact executable, kernel, and geometry,
-/// and report an observation derived from that same operation. Success must not
-/// be reported while any hidden byte required by the code-object ABI remains
-/// uninitialized. Implementing this trait does not itself grant launch
+/// the complete implicit span when present for the exact executable, kernel,
+/// and geometry, bind exactly one reviewed queue even when the implicit span is
+/// empty, and report an observation derived from that same operation. Success
+/// must not be reported while any hidden byte required by the code-object ABI
+/// remains uninitialized. Implementing this trait does not itself grant launch
 /// authority; the lifecycle validates the observation before dispatch.
 pub unsafe trait ReviewedHsaImplicitKernargAdapterV1:
     ReviewedHsaExecutableLifecycleAdapterV1
 {
-    /// Initializes only the compiler-declared implicit span in `kernarg`.
+    /// Initializes only the compiler-declared implicit span in `kernarg` and
+    /// creates the exact queue binding used by the following launch.
     ///
     /// # Safety
     ///
@@ -1066,13 +1068,18 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaImplicitKernargAdapt
             usize::try_from(self.descriptor().abi_layout().explicit_argument_size())
                 .map_err(|_| WorkerV3GeneratedDispatchErrorV1::KernargSize)?;
         let physical = self.physical_kernel();
+        let physical_implicit_matches = physical_implicit_kernarg_metadata_matches(
+            implicit_byte_offset,
+            implicit_byte_len,
+            physical.implicit_argument_offset(),
+            physical.implicit_argument_size(),
+        );
         if kernarg.len() != expected_size
             || expected_size
                 != usize::try_from(physical.kernarg_segment_size()).unwrap_or(usize::MAX)
             || explicit_byte_len != expected_explicit
             || explicit_byte_len != implicit_byte_offset
-            || physical.implicit_argument_offset() != Some(implicit_byte_offset as u64)
-            || physical.implicit_argument_size() != implicit_byte_len as u64
+            || !physical_implicit_matches
             || implicit_byte_offset
                 .checked_add(implicit_byte_len)
                 .is_none_or(|end| end != expected_size)
@@ -1160,6 +1167,22 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaImplicitKernargAdapt
     }
 }
 
+fn physical_implicit_kernarg_metadata_matches(
+    implicit_byte_offset: usize,
+    implicit_byte_len: usize,
+    physical_offset: Option<u64>,
+    physical_size: u64,
+) -> bool {
+    match implicit_byte_len {
+        0 => physical_offset.is_none() && physical_size == 0,
+        COV6_IMPLICIT_KERNARG_BYTES => {
+            u64::try_from(implicit_byte_offset).is_ok_and(|offset| physical_offset == Some(offset))
+                && physical_size == COV6_IMPLICIT_KERNARG_BYTES as u64
+        }
+        _ => false,
+    }
+}
+
 /// Quiescent completion evidence for one exact Worker V3 kernel occurrence.
 #[derive(Debug)]
 pub struct HsaCompletedWorkerV3DispatchV1<K> {
@@ -1218,8 +1241,10 @@ impl fmt::Display for HsaEnvironmentMismatch {
 
 impl Error for HsaEnvironmentMismatch {}
 
-fn is_required_artifact_target(target: AmdTargetId) -> bool {
-    target.processor() == REQUIRED_TARGET && target.xnack() == Some(FeatureState::Disabled)
+fn production_profile_for_artifact_target(
+    target: AmdTargetId,
+) -> Option<ProductionAmdTargetProfileV1> {
+    ProductionAmdTargetProfileV1::from_device_target(&target.to_string())
 }
 
 fn validate_environment_facts(
@@ -1228,9 +1253,14 @@ fn validate_environment_facts(
     environment: &HsaEnvironmentObservationV1,
 ) -> Result<(), HsaEnvironmentMismatch> {
     let actual_target = environment.physical_device.target;
-    let required_runtime_target = AmdTargetId::parse(REQUIRED_RUNTIME_TARGET)
-        .expect("reviewed runtime target ID is a valid static constant");
-    if !is_required_artifact_target(expected_target)
+    let Some(profile) = production_profile_for_artifact_target(expected_target) else {
+        return Err(HsaEnvironmentMismatch::Target {
+            actual: actual_target.to_string(),
+        });
+    };
+    let required_runtime_target = AmdTargetId::parse(profile.device_target())
+        .expect("typed production target profile must contain a canonical target ID");
+    if required_runtime_target != expected_target
         || !expected_target.is_compatible_with_observed(&actual_target)
         || !required_runtime_target.is_compatible_with_observed(&actual_target)
         || environment.agent.target != actual_target
@@ -1681,6 +1711,20 @@ fn validate_nonzero_bytes(bytes: &[u8], field: &'static str) -> Result<(), HsaOb
 mod tests {
     use super::*;
 
+    fn environment(target: &str, ordinal: i32) -> HsaEnvironmentObservationV1 {
+        let target = AmdTargetId::parse(target).unwrap();
+        let runtime = HsaRuntimeIdentityV1::new("ROCr", "v1", digest(1), [1; 16]).unwrap();
+        let device = HsaPhysicalDeviceIdentityV1::new([2; 16], 0, ordinal, target).unwrap();
+        let agent = HsaAgentIdentityV1::new(runtime.instance(), 3, device.uuid(), target).unwrap();
+        HsaEnvironmentObservationV1::new(runtime, device, agent).unwrap()
+    }
+
+    fn device(target: &str, ordinal: i32) -> DeviceIdentity {
+        crate::ObservedContext::for_test(4, ordinal, target, 1_024, 65_536)
+            .device()
+            .clone()
+    }
+
     fn digest(seed: u8) -> PayloadDigest {
         PayloadDigest::new(DigestAlgorithm::Sha256, DigestBytes::from_bytes([seed; 32]))
     }
@@ -1728,5 +1772,79 @@ mod tests {
         let unload = HsaUnloadObservationV1::new(executable, runtime_instance, agent_handle, true);
         assert_eq!(unload.runtime_instance(), runtime_instance);
         assert_eq!(unload.agent_handle(), agent_handle);
+    }
+
+    #[test]
+    fn generated_dispatch_accepts_only_the_two_reviewed_physical_implicit_layouts() {
+        assert!(physical_implicit_kernarg_metadata_matches(48, 0, None, 0));
+        assert!(physical_implicit_kernarg_metadata_matches(
+            48,
+            COV6_IMPLICIT_KERNARG_BYTES,
+            Some(48),
+            COV6_IMPLICIT_KERNARG_BYTES as u64,
+        ));
+
+        for (implicit, offset, size) in [
+            (0, Some(48), 0),
+            (0, None, COV6_IMPLICIT_KERNARG_BYTES as u64),
+            (1, None, 0),
+            (255, Some(48), 255),
+            (257, Some(48), 257),
+            (COV6_IMPLICIT_KERNARG_BYTES, None, 256),
+            (COV6_IMPLICIT_KERNARG_BYTES, Some(47), 256),
+            (COV6_IMPLICIT_KERNARG_BYTES, Some(48), 0),
+        ] {
+            assert!(!physical_implicit_kernarg_metadata_matches(
+                48, implicit, offset, size,
+            ));
+        }
+    }
+
+    #[test]
+    fn production_environment_accepts_exact_gfx942_and_gfx950_profiles() {
+        for (artifact, observed) in [
+            ("gfx942:xnack-", "gfx942:sramecc+:xnack-"),
+            ("gfx950:xnack-", "gfx950:sramecc+:xnack-"),
+        ] {
+            validate_environment_facts(
+                AmdTargetId::parse(artifact).unwrap(),
+                &device(observed, 0),
+                &environment(observed, 0),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn production_environment_rejects_unspecified_or_enabled_xnack_artifacts() {
+        for artifact in ["gfx942", "gfx942:xnack+", "gfx950", "gfx950:xnack+"] {
+            let processor = AmdTargetId::parse(artifact).unwrap().processor();
+            let observed = format!("{processor}:sramecc+:xnack-");
+            assert!(matches!(
+                validate_environment_facts(
+                    AmdTargetId::parse(artifact).unwrap(),
+                    &device(&observed, 0),
+                    &environment(&observed, 0),
+                ),
+                Err(HsaEnvironmentMismatch::Target { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn production_environment_rejects_cross_processor_substitution() {
+        for (artifact, observed) in [
+            ("gfx942:xnack-", "gfx950:sramecc+:xnack-"),
+            ("gfx950:xnack-", "gfx942:sramecc+:xnack-"),
+        ] {
+            assert!(matches!(
+                validate_environment_facts(
+                    AmdTargetId::parse(artifact).unwrap(),
+                    &device(observed, 0),
+                    &environment(observed, 0),
+                ),
+                Err(HsaEnvironmentMismatch::Target { .. })
+            ));
+        }
     }
 }

@@ -262,12 +262,13 @@ impl PreparedProductionSemanticLineageV3 {
                 "authenticated rustc target has no active features",
             ),
         )?;
+        let configured_target = target.to_string();
         let target_binding = TargetBindingTranscriptV3::new(TargetBindingTranscriptInputsV3 {
             protected_rustc_invocation: invocation_identity,
             semantic_mir: semantic_identity,
             target_neutral_kir: self.neutral_kir_identity,
             target_bound_kir: self.bound_kir_identity,
-            configured_target: crate::production_target_v1::PRODUCTION_TARGET_V1,
+            configured_target: &configured_target,
             rustc_llvm_target: self.rustc_layout.llvm_target(),
             target_cpu: rustc_cpu,
             target_features: rustc_features,
@@ -316,7 +317,7 @@ impl PreparedProductionSemanticLineageV3 {
             target_binding: target_binding_identity,
             data_layout: data_layout_identity,
             target_bound_kir: self.bound_kir_identity,
-            configured_target: crate::production_target_v1::PRODUCTION_TARGET_V1,
+            configured_target: &configured_target,
             pre_descriptor_llvm: &self.pre_descriptor_llvm,
         })?;
         let amdgpu_lowering = InertAmdgpuLoweringReceiptV3::from_canonical_preimage(

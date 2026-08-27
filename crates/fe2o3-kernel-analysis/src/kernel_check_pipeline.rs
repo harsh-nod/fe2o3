@@ -1107,7 +1107,8 @@ fn matrix_lds_region(operation: &fe2o3_kernel_ir::Operation) -> Option<LdsRegion
             base: *base,
             profile: *profile,
         }),
-        MatrixOperationKind::MultiplyAccumulate { .. } => None,
+        MatrixOperationKind::MultiplyAccumulate { .. }
+        | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => None,
     }
 }
 
@@ -1147,7 +1148,8 @@ fn transfer_workgroup_memory(
                         });
                     }
                 }
-                MatrixOperationKind::MultiplyAccumulate { .. } => {}
+                MatrixOperationKind::MultiplyAccumulate { .. }
+                | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {}
             },
             OperationKind::WorkgroupBarrier(barrier) => {
                 if barrier

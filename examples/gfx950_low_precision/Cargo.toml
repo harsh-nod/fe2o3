@@ -7,6 +7,12 @@ repository = "https://github.com/fe2o3-gpu/fe2o3"
 rust-version = "1.94"
 publish = false
 
+[features]
+kernel-fp4-gemm = []
+kernel-fp8-gemm = []
+kernel-fp4-attention = []
+kernel-fp8-attention = []
+
 [workspace]
 members = []
 resolver = "3"

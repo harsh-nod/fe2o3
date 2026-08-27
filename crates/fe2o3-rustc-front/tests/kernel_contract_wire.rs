@@ -29,6 +29,23 @@ fn fixture() -> KernelFrontendContractV1 {
     .unwrap()
 }
 
+fn bounded_grid_fixture() -> KernelFrontendContractV1 {
+    let launch = fixture().launch().unwrap();
+    KernelFrontendContractV1::new(
+        Some(
+            FrontendLaunchBoundsV1::new_with_max_grid(
+                launch.required(),
+                launch.maximum(),
+                launch.min_workgroups_per_compute_unit(),
+                Some(FrontendGridDimensionsV1::new([1, 1, 1]).unwrap()),
+            )
+            .unwrap(),
+        ),
+        fixture().unsafe_assembly(),
+    )
+    .unwrap()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -37,7 +54,7 @@ fn hex(bytes: &[u8]) -> String {
 fn canonical_round_trip_and_golden_are_stable() {
     const GOLDEN: &str = "4645324f334b46000100030040000000000000000700000000010000010000000100000000010000010000000100000002000000010005001500000000000000";
     let encoded = encode_kernel_frontend_contract_v1(fixture());
-    assert_eq!(encoded.len(), MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1);
+    assert_eq!(encoded.len(), 64);
     assert_eq!(hex(&encoded), GOLDEN);
     let decoded = decode_kernel_frontend_contract_v1(&encoded).unwrap();
     assert_eq!(decoded, fixture());
@@ -45,6 +62,28 @@ fn canonical_round_trip_and_golden_are_stable() {
     assert_eq!(
         decoded.unsafe_assembly().unwrap().target().canonical_name(),
         "gfx942"
+    );
+}
+
+#[test]
+fn finite_max_grid_is_an_append_only_authenticated_extension() {
+    let encoded = encode_kernel_frontend_contract_v1(bounded_grid_fixture());
+    assert_eq!(encoded.len(), MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1);
+    let decoded = decode_kernel_frontend_contract_v1(&encoded).unwrap();
+    assert_eq!(decoded, bounded_grid_fixture());
+    assert_eq!(
+        decoded.launch().unwrap().max_grid().unwrap().as_array(),
+        [1, 1, 1]
+    );
+    assert_eq!(encode_kernel_frontend_contract_v1(decoded), encoded);
+
+    let mut invalid = encoded;
+    invalid[52..56].copy_from_slice(&0_u32.to_le_bytes());
+    assert_eq!(
+        decode_kernel_frontend_contract_v1(&invalid),
+        Err(KernelFrontendContractDecodeErrorV1::Validation(
+            KernelFrontendContractValidationErrorV1::ZeroGridDimension
+        ))
     );
 }
 
@@ -65,6 +104,10 @@ fn constructors_reject_conflicts_and_unknown_authority_bits() {
         FrontendWorkgroupDimensionsV1::new([1_025, 1, 1]),
         Err(KernelFrontendContractValidationErrorV1::WorkgroupVolumeTooLarge(_))
     ));
+    assert_eq!(
+        FrontendGridDimensionsV1::new([1, 0, 1]),
+        Err(KernelFrontendContractValidationErrorV1::ZeroGridDimension)
+    );
     assert_eq!(
         FrontendLaunchBoundsV1::new(
             Some(dimensions([256, 1, 1])),
@@ -157,7 +200,7 @@ fn malformed_headers_and_fields_fail_closed() {
     );
 
     let mut invalid = encoded;
-    invalid.push(0);
+    invalid.resize(MAX_FRONTEND_KERNEL_CONTRACT_BYTES_V1 + 1, 0);
     assert_eq!(
         decode_kernel_frontend_contract_v1(&invalid),
         Err(KernelFrontendContractDecodeErrorV1::TooLarge)

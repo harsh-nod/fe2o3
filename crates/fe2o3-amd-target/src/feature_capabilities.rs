@@ -29,6 +29,13 @@ impl WorkgroupLimits {
         max_extents: [1024, 1024, 1024],
     };
 
+    // Reviewed against rocminfo on an MI350X (gfx950), ROCm 7.2.1 / HSA
+    // runtime 1.18: total and per-dimension workgroup limits are all 1024.
+    pub(crate) const GFX950_MI350_ROCM_7_2_REVIEWED: Self = Self {
+        max_workitems: 1024,
+        max_extents: [1024, 1024, 1024],
+    };
+
     /// Maximum total work-items in one workgroup.
     pub const fn max_workitems(self) -> u32 {
         self.max_workitems
@@ -459,8 +466,8 @@ impl AdvancedTargetCapabilities {
         } else if processor == "gfx950" {
             Self {
                 profile_status: AdvancedCapabilityStatus::Supported,
-                workgroup_limits: None,
-                workgroup_limits_status: AdvancedCapabilityStatus::Unreviewed,
+                workgroup_limits: Some(WorkgroupLimits::GFX950_MI350_ROCM_7_2_REVIEWED),
+                workgroup_limits_status: AdvancedCapabilityStatus::Supported,
                 standard_atomic_widths: AtomicWidths::NONE,
                 standard_atomic_scopes: AtomicScopes::NONE,
                 standard_atomic_orderings: AtomicOrderings::NONE,

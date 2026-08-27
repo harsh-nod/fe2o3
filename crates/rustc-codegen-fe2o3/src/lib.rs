@@ -111,8 +111,8 @@ mod worker_v2_producer;
 
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
-    run_production_extraction_driver_v1, run_production_gfx942_llvm_extraction_driver_v1,
-    run_production_ranked_extraction_driver_v1,
+    run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,
+    run_production_gfx942_llvm_extraction_driver_v1, run_production_ranked_extraction_driver_v1,
 };
 
 use fe2o3_artifact_transaction as artifact_transaction;

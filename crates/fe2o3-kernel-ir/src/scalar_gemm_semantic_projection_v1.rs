@@ -555,6 +555,7 @@ fn project_operation_kind(
         | OperationKind::Fence(_)
         | OperationKind::WorkgroupBarrier(_)
         | OperationKind::WorkgroupMemory(_)
+        | OperationKind::Gfx950LdsTranspose(_)
         | OperationKind::Matrix(_)
         | OperationKind::Wave(_)
         | OperationKind::InlineAssembly(_) => Err(

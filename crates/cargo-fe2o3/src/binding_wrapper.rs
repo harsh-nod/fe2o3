@@ -490,7 +490,10 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                         "cannot bind prepared rustc invocation to compiler closure: {error}"
                     ))
                 })?;
-                debug_assert_eq!(capture.amd_target(), "gfx942:xnack-");
+                debug_assert!(matches!(
+                    capture.amd_target(),
+                    "gfx942:xnack-" | "gfx950:xnack-"
+                ));
                 debug_assert_eq!(
                     capture.descriptor_v3().is_some(),
                     protected_compiler_closure.is_some()
@@ -914,7 +917,7 @@ impl FixedReviewedInheritedInputV2 {
                 path.is_absolute() && os_bytes(value).len() <= 4096
             }
             Self::QualificationOracle => qualification_oracle == Some(value),
-            Self::Target => value == "gfx942:xnack-",
+            Self::Target => matches!(value.to_str(), Some("gfx942:xnack-" | "gfx950:xnack-")),
         }
     }
 }
@@ -927,7 +930,7 @@ fn materialize_production_child_environment(
     inherited: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Result<Option<CompleteReviewedChildEnvironmentV2>, BindingWrapperError> {
     match profile {
-        Some(BuildCompileEnvironmentProfileV1::ProductionGfx942) => {
+        Some(BuildCompileEnvironmentProfileV1::ProductionAmd) => {
             materialize_closed_child_environment(command, inherited, None, "production").map(Some)
         }
         None => Ok(None),

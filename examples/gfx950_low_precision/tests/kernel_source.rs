@@ -13,11 +13,10 @@ fn gfx950_kernels_are_safe_attributed_rust_with_typed_operations() {
     assert!(source.contains("stage_k_transposed"));
     assert!(source.contains("read_mfma_fragment"));
     assert!(source.contains("Gfx950Subgroup::current"));
-    assert_eq!(source.matches("broadcast_f32::<16>").count(), 8);
-    assert_eq!(
-        source.matches("value.load_or(token, lane_column").count(),
-        2
-    );
+    // Each attention kernel materializes four query rows across all 16 value
+    // lanes so the semantic importer sees a fixed, statically ranked graph.
+    assert_eq!(source.matches("broadcast_f32::<16>").count(), 2 * 4 * 16);
+    assert_eq!(source.matches("value.load_or(").count(), 2 * 16);
     assert!(!source.contains("unsafe"));
     assert!(!source.contains("asm!"));
     assert!(!source.contains("__builtin_amdgcn"));

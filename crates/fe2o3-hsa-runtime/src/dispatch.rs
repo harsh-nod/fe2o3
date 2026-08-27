@@ -150,6 +150,7 @@ impl ReviewedHsaRuntimeAdapterV1 {
 struct ReviewedImplicitKernargLayout {
     explicit_byte_len: usize,
     implicit_byte_offset: usize,
+    implicit_byte_len: usize,
     total_byte_len: usize,
 }
 
@@ -190,9 +191,10 @@ enum CompletionTransition {
 }
 
 // SAFETY: the bounded explicit prefix is supplied by the reviewed host
-// lifecycle and preserved byte-for-byte. The exact 256-byte COV6 hidden span
-// is initialized from reviewed geometry and the exact private HSA queue
-// retained for the following launch. Every other layout and launch
+// lifecycle and preserved byte-for-byte. An exact 256-byte COV6 hidden span is
+// initialized from reviewed geometry and the exact private HSA queue retained
+// for the following launch. An explicit-only COV6 ABI still binds that exact
+// queue but performs no kernarg writes. Every other layout and launch
 // substitution is rejected.
 unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedHsaRuntimeAdapterV1 {
     unsafe fn initialize_implicit_kernarg(
@@ -244,19 +246,19 @@ fn validate_implicit_kernarg(
     let explicit_byte_len_u64 = u64::try_from(explicit_byte_len).map_err(|_| {
         HsaRuntimeAdapterError::InvalidImplicitKernarg("bounded explicit kernarg prefix")
     })?;
-    let total_byte_len = explicit_byte_len.checked_add(IMPLICIT_BYTES).ok_or(
+    let total_byte_len = explicit_byte_len.checked_add(implicit_byte_len).ok_or(
         HsaRuntimeAdapterError::InvalidImplicitKernarg("kernarg layout size overflow"),
     )?;
     if explicit_byte_len_u64 > MAX_ABI_BYTES
         || implicit_byte_offset != explicit_byte_len
-        || implicit_byte_len != IMPLICIT_BYTES
+        || !matches!(implicit_byte_len, 0 | IMPLICIT_BYTES)
         || kernarg.len() != total_byte_len
         || usize::try_from(kernel.kernarg_segment_size).ok() != Some(kernarg.len())
         || kernel.kernarg_segment_alignment == 0
         || !kernel.kernarg_segment_alignment.is_power_of_two()
     {
         return Err(HsaRuntimeAdapterError::InvalidImplicitKernarg(
-            "bounded explicit prefix plus exact 256-byte hidden span",
+            "bounded explicit prefix plus zero or exact 256-byte hidden span",
         ));
     }
     let grid = geometry.grid();
@@ -278,6 +280,7 @@ fn validate_implicit_kernarg(
     Ok(ReviewedImplicitKernargLayout {
         explicit_byte_len,
         implicit_byte_offset,
+        implicit_byte_len,
         total_byte_len,
     })
 }
@@ -341,44 +344,46 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
     let workgroup = geometry.workgroup();
     let implicit_offset = layout.implicit_byte_offset;
     let explicit = kernarg[..layout.explicit_byte_len].to_vec();
-    kernarg[implicit_offset..layout.total_byte_len].fill(0);
-    put_u32(kernarg, implicit_offset + BLOCK_COUNT_X, grid[0]);
-    put_u32(kernarg, implicit_offset + BLOCK_COUNT_Y, grid[1]);
-    put_u32(kernarg, implicit_offset + BLOCK_COUNT_Z, grid[2]);
-    put_u16(kernarg, implicit_offset + GROUP_SIZE_X, workgroup[0] as u16);
-    put_u16(kernarg, implicit_offset + GROUP_SIZE_Y, workgroup[1] as u16);
-    put_u16(kernarg, implicit_offset + GROUP_SIZE_Z, workgroup[2] as u16);
-    put_u16(kernarg, implicit_offset + REMAINDER_X, 0);
-    put_u16(kernarg, implicit_offset + REMAINDER_Y, 0);
-    put_u16(kernarg, implicit_offset + REMAINDER_Z, 0);
-    put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_X, 0);
-    put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_Y, 0);
-    put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_Z, 0);
-    let dimensions = if grid[2]
-        .checked_mul(workgroup[2])
-        .is_some_and(|size| size > 1)
-    {
-        3
-    } else if grid[1]
-        .checked_mul(workgroup[1])
-        .is_some_and(|size| size > 1)
-    {
-        2
-    } else {
-        1
-    };
-    put_u16(kernarg, implicit_offset + GRID_DIMS, dimensions);
-    put_u64(kernarg, implicit_offset + HOSTCALL_PTR, 0);
-    put_u64(kernarg, implicit_offset + MULTIGRID_SYNC_ARG, 0);
-    put_u64(kernarg, implicit_offset + HEAP_V1_PTR, 0);
-    put_u64(kernarg, implicit_offset + DEFAULT_QUEUE_PTR, 0);
-    put_u64(kernarg, implicit_offset + COMPLETION_ACTION, 0);
-    put_u32(
-        kernarg,
-        implicit_offset + DYNAMIC_LDS_SIZE,
-        geometry.dynamic_shared_memory_bytes(),
-    );
-    put_u64(kernarg, implicit_offset + QUEUE_PTR, queue_pointer);
+    if layout.implicit_byte_len == IMPLICIT_BYTES {
+        kernarg[implicit_offset..layout.total_byte_len].fill(0);
+        put_u32(kernarg, implicit_offset + BLOCK_COUNT_X, grid[0]);
+        put_u32(kernarg, implicit_offset + BLOCK_COUNT_Y, grid[1]);
+        put_u32(kernarg, implicit_offset + BLOCK_COUNT_Z, grid[2]);
+        put_u16(kernarg, implicit_offset + GROUP_SIZE_X, workgroup[0] as u16);
+        put_u16(kernarg, implicit_offset + GROUP_SIZE_Y, workgroup[1] as u16);
+        put_u16(kernarg, implicit_offset + GROUP_SIZE_Z, workgroup[2] as u16);
+        put_u16(kernarg, implicit_offset + REMAINDER_X, 0);
+        put_u16(kernarg, implicit_offset + REMAINDER_Y, 0);
+        put_u16(kernarg, implicit_offset + REMAINDER_Z, 0);
+        put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_X, 0);
+        put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_Y, 0);
+        put_u64(kernarg, implicit_offset + GLOBAL_OFFSET_Z, 0);
+        let dimensions = if grid[2]
+            .checked_mul(workgroup[2])
+            .is_some_and(|size| size > 1)
+        {
+            3
+        } else if grid[1]
+            .checked_mul(workgroup[1])
+            .is_some_and(|size| size > 1)
+        {
+            2
+        } else {
+            1
+        };
+        put_u16(kernarg, implicit_offset + GRID_DIMS, dimensions);
+        put_u64(kernarg, implicit_offset + HOSTCALL_PTR, 0);
+        put_u64(kernarg, implicit_offset + MULTIGRID_SYNC_ARG, 0);
+        put_u64(kernarg, implicit_offset + HEAP_V1_PTR, 0);
+        put_u64(kernarg, implicit_offset + DEFAULT_QUEUE_PTR, 0);
+        put_u64(kernarg, implicit_offset + COMPLETION_ACTION, 0);
+        put_u32(
+            kernarg,
+            implicit_offset + DYNAMIC_LDS_SIZE,
+            geometry.dynamic_shared_memory_bytes(),
+        );
+        put_u64(kernarg, implicit_offset + QUEUE_PTR, queue_pointer);
+    }
     if kernarg[..layout.explicit_byte_len] != explicit {
         std::process::abort();
     }
@@ -397,7 +402,8 @@ fn prepare_implicit_kernarg<A: DispatchApi>(
         u64::try_from(layout.explicit_byte_len).expect("validated explicit length fits u64");
     let implicit_byte_offset =
         u64::try_from(layout.implicit_byte_offset).expect("validated implicit offset fits u64");
-    let implicit_byte_len = IMPLICIT_BYTES as u64;
+    let implicit_byte_len =
+        u64::try_from(layout.implicit_byte_len).expect("validated implicit length fits u64");
     Ok(HsaImplicitKernargInitializationObservationV1::new(
         state.identity,
         kernel.identity,
@@ -1236,11 +1242,70 @@ mod tests {
     }
 
     #[test]
+    fn explicit_only_layout_preserves_kernarg_and_owns_one_queue_through_launch() {
+        let (executable, mut kernel) = handles();
+        kernel.kernarg_segment_size = EXPLICIT_BYTES as u32;
+        let mut bytes = kernarg()[..EXPLICIT_BYTES].to_vec();
+        let original = bytes.clone();
+        let mut core = make_core(MockApi::default());
+        let mut pending = None;
+
+        let observation = prepare_implicit_kernarg(
+            &mut core,
+            &mut pending,
+            &executable,
+            &kernel,
+            geometry(),
+            EXPLICIT_BYTES,
+            EXPLICIT_BYTES,
+            0,
+            &mut bytes,
+        )
+        .unwrap();
+
+        assert!(observation.initialized());
+        assert_eq!(observation.explicit_byte_len(), EXPLICIT_BYTES as u64);
+        assert_eq!(observation.implicit_byte_offset(), EXPLICIT_BYTES as u64);
+        assert_eq!(observation.implicit_byte_len(), 0);
+        assert_eq!(bytes, original);
+        assert_eq!(core.api.log, ["queue_create", "queue_async_error"]);
+
+        launch_and_wait(
+            &mut core,
+            &mut pending,
+            &executable,
+            &kernel,
+            geometry(),
+            &mut bytes,
+        )
+        .unwrap();
+        assert_eq!(bytes, original);
+        assert_eq!(
+            core.api
+                .log
+                .iter()
+                .filter(|operation| **operation == "queue_create")
+                .count(),
+            1
+        );
+        assert_eq!(
+            core.api
+                .log
+                .iter()
+                .filter(|operation| **operation == "publish")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn implicit_initialization_rejects_layout_and_handle_substitution() {
         let (executable, mut kernel) = handles();
         for (explicit, offset, implicit) in [
             (48, 47, 256),
             (48, 49, 256),
+            (48, 48, 0),
+            (48, 48, 1),
             (48, 48, 255),
             (48, 48, 257),
             (32, 32, 256),

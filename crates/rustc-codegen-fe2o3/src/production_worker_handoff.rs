@@ -13,15 +13,20 @@ use crate::compiler_module_contract::{
 };
 use crate::kernel_ir_codegen::{
     CompilerModuleConstructionError, bind_compiler_descriptor_source_v1,
-    retain_production_gfx942_compiler_module_text_v1,
+    retain_production_compiler_module_text_v1,
 };
 use fe2o3_compiler_ffi::{
     CodeObjectVersion, CompilerDescriptorSourceV1, CompilerFfiEnvelopeError, CompilerFfiEnvelopeV1,
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffV2, CompilerModuleKindV1,
-    CompilerModuleSymbolManifestErrorV1, DeviceTargetV1,
+    CompilerModuleSymbolManifestErrorV1, PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1,
+    ProductionGfx950CompilerFfiEnvelopeKindV1, construct_production_gfx950_ocml_exp_envelope_v1,
+    inspect_production_gfx950_compiler_ffi_envelope_v1,
 };
-use fe2o3_kernel_ir::AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME;
+use fe2o3_kernel_ir::{
+    F32MathFunction, F32MathImplementation, FloatOperation, FunctionRole, Module, OperationKind,
+};
 use sha2::{Digest as _, Sha256};
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -58,19 +63,24 @@ impl PreparedProductionWorkerHandoff {
 /// code-object envelope, and constructs canonical coordination bytes. It does
 /// not invoke LLVM, link, publish an artifact, load, or launch.
 pub(crate) fn prepare_production_worker_handoff(
-    authenticated: crate::production_pipeline::AuthenticatedProductionGfx942Module,
+    authenticated: crate::production_pipeline::AuthenticatedProductionTargetModule,
 ) -> Result<PreparedProductionWorkerHandoff, ProductionWorkerHandoffError> {
-    let (formal, module, llvm_ir, typed_roots, compiler_ffi_envelope) = authenticated.into_parts();
-    let target = DeviceTargetV1::parse(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME)
-        .expect("fixed production target is valid");
+    let (formal, target, module, llvm_ir, typed_roots, compiler_ffi_envelope) =
+        authenticated.into_parts();
     validate_exact_target_binding(target, &module)?;
-    let compiler_module = retain_production_gfx942_compiler_module_text_v1(&module, llvm_ir)
+    let canonical_kernel_ir_identity = *formal
+        .semantic_kir()
+        .canonical_kernel_ir_identity()
+        .digest();
+    let compiler_module = retain_production_compiler_module_text_v1(&module, llvm_ir)
         .map_err(ProductionWorkerHandoffError::CompilerModule)?;
-    let envelope = match compiler_ffi_envelope {
-        Some(envelope) => envelope,
-        None => CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
-            .map_err(ProductionWorkerHandoffError::CompilerEnvelope)?,
-    };
+    let envelope = derive_production_compiler_ffi_envelope(
+        target,
+        &module,
+        &compiler_module,
+        compiler_ffi_envelope,
+        canonical_kernel_ir_identity,
+    )?;
     validate_exact_target_binding(envelope.target(), &module)?;
     validate_envelope_module_roles(&envelope, &compiler_module)?;
     let descriptor_source = construct_production_v1_compiler_descriptor_source_v1(
@@ -102,6 +112,155 @@ pub(crate) fn prepare_production_worker_handoff(
     })
 }
 
+fn derive_production_compiler_ffi_envelope(
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
+    module: &Module,
+    compiler_module: &crate::kernel_ir_codegen::InertCompilerModuleTextV1,
+    observed_source_envelope: Option<CompilerFfiEnvelopeV1>,
+    canonical_kernel_ir_identity: [u8; 32],
+) -> Result<CompilerFfiEnvelopeV1, ProductionWorkerHandoffError> {
+    if target.to_string() != "gfx950:xnack-" {
+        return match observed_source_envelope {
+            Some(envelope) => Ok(envelope),
+            None => {
+                CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+                    .map_err(ProductionWorkerHandoffError::CompilerEnvelope)
+            }
+        };
+    }
+
+    if observed_source_envelope
+        .as_ref()
+        .is_some_and(|envelope| envelope.directional_symbols().total_count() != 0)
+    {
+        return Err(ProductionWorkerHandoffError::Gfx950SourceFfiNotAdmitted);
+    }
+
+    let ocml_imports = typed_ocml_imports(module);
+    match ocml_imports.as_slice() {
+        [] => {
+            if !compiler_module.external_declarations().is_empty()
+                || compiler_module.llvm_ir().contains("@__ocml_")
+            {
+                return Err(ProductionWorkerHandoffError::Gfx950OcmlImportPolicy);
+            }
+            let envelope =
+                CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V6)
+                    .map_err(ProductionWorkerHandoffError::CompilerEnvelope)?;
+            debug_assert_eq!(
+                inspect_production_gfx950_compiler_ffi_envelope_v1(&envelope),
+                Some(ProductionGfx950CompilerFfiEnvelopeKindV1::NoDeviceFfi)
+            );
+            Ok(envelope)
+        }
+        [symbol] if *symbol == PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1 => {
+            if !reachable_ocml_exp_f32_call(module) {
+                return Err(ProductionWorkerHandoffError::Gfx950OcmlExpNotExecutable);
+            }
+            if compiler_module.external_declarations() != [PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1]
+                || !has_exact_ocml_exp_llvm_shape(compiler_module.llvm_ir())
+            {
+                return Err(ProductionWorkerHandoffError::Gfx950OcmlLlvmMismatch);
+            }
+            construct_production_gfx950_ocml_exp_envelope_v1(canonical_kernel_ir_identity)
+                .map_err(ProductionWorkerHandoffError::CompilerEnvelope)
+        }
+        _ => Err(ProductionWorkerHandoffError::Gfx950OcmlImportPolicy),
+    }
+}
+
+fn typed_ocml_imports(module: &Module) -> Vec<&'static str> {
+    let mut imports = module
+        .functions
+        .iter()
+        .filter_map(|function| {
+            let FloatOperation::F32Math {
+                function,
+                implementation: F32MathImplementation::OcmlAbiV1,
+                ..
+            } = FloatOperation::from_intrinsic_id(&function.id)?
+            else {
+                return None;
+            };
+            Some(match function {
+                F32MathFunction::Exp => PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1,
+                F32MathFunction::Sin => "__ocml_sin_f32",
+                F32MathFunction::Cos => "__ocml_cos_f32",
+                F32MathFunction::Exp2 => "__ocml_exp2_f32",
+                F32MathFunction::Ln => "__ocml_log_f32",
+                F32MathFunction::Log2 => "__ocml_log2_f32",
+                F32MathFunction::Log10 => "__ocml_log10_f32",
+                F32MathFunction::Sqrt
+                | F32MathFunction::FusedMultiplyAdd
+                | F32MathFunction::Floor
+                | F32MathFunction::Ceil
+                | F32MathFunction::Truncate
+                | F32MathFunction::RoundTiesEven => return None,
+            })
+        })
+        .collect::<Vec<_>>();
+    imports.sort_unstable();
+    imports.dedup();
+    imports
+}
+
+fn reachable_ocml_exp_f32_call(module: &Module) -> bool {
+    let mut pending = module
+        .kernels
+        .iter()
+        .map(|kernel| kernel.entry.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let mut visited = BTreeSet::new();
+    while let Some(function_id) = pending.pop() {
+        if !visited.insert(function_id.clone()) {
+            continue;
+        }
+        let Some(function) = module
+            .functions
+            .iter()
+            .find(|function| function.id.as_str() == function_id)
+        else {
+            continue;
+        };
+        let Some(body) = &function.body else {
+            continue;
+        };
+        for operation in body.blocks.iter().flat_map(|block| &block.operations) {
+            let OperationKind::Call { callee, .. } = &operation.kind else {
+                continue;
+            };
+            if FloatOperation::from_intrinsic_id(callee).is_some_and(|operation| {
+                matches!(
+                    operation,
+                    FloatOperation::F32Math {
+                        function: F32MathFunction::Exp,
+                        implementation: F32MathImplementation::OcmlAbiV1,
+                        ..
+                    }
+                )
+            }) {
+                return module.function(callee).is_some_and(|declaration| {
+                    declaration.role == FunctionRole::ExternalImport && declaration.body.is_none()
+                });
+            }
+            pending.push(callee.as_str().to_owned());
+        }
+    }
+    false
+}
+
+fn has_exact_ocml_exp_llvm_shape(llvm_ir: &str) -> bool {
+    llvm_ir
+        .matches("declare float @__ocml_exp_f32(float)")
+        .count()
+        == 1
+        && llvm_ir.matches("call float @__ocml_exp_f32(float ").count() >= 1
+        && llvm_ir
+            .split("@__ocml_")
+            .skip(1)
+            .all(|suffix| suffix.starts_with("exp_f32"))
+}
+
 #[derive(Debug)]
 pub(crate) enum ProductionWorkerHandoffError {
     MissingProductionBindings,
@@ -111,6 +270,10 @@ pub(crate) enum ProductionWorkerHandoffError {
         module: Vec<String>,
         envelope: String,
     },
+    Gfx950SourceFfiNotAdmitted,
+    Gfx950OcmlImportPolicy,
+    Gfx950OcmlExpNotExecutable,
+    Gfx950OcmlLlvmMismatch,
     CompilerModule(CompilerModuleConstructionError),
     CompilerEnvelope(CompilerFfiEnvelopeError),
     CompilerDescriptor(CompilerDescriptorError),
@@ -134,6 +297,18 @@ impl fmt::Display for ProductionWorkerHandoffError {
             Self::TargetBindingMismatch { module, envelope } => write!(
                 formatter,
                 "compiler-module exact target bindings {module:?} do not match production envelope target {envelope:?}"
+            ),
+            Self::Gfx950SourceFfiNotAdmitted => formatter.write_str(
+                "production gfx950 admits no caller/source-authored device FFI envelope",
+            ),
+            Self::Gfx950OcmlImportPolicy => formatter.write_str(
+                "production gfx950 admits either no device FFI or only compiler-derived __ocml_exp_f32",
+            ),
+            Self::Gfx950OcmlExpNotExecutable => formatter.write_str(
+                "production gfx950 OCML exp declaration is not called from the executable Kernel IR closure",
+            ),
+            Self::Gfx950OcmlLlvmMismatch => formatter.write_str(
+                "production gfx950 LLVM does not retain the exact Kernel-IR-derived OCML exp declaration/call closure",
             ),
             Self::CompilerModule(error) => {
                 write!(
@@ -177,6 +352,10 @@ impl Error for ProductionWorkerHandoffError {
             Self::MissingProductionBindings
             | Self::MissingExternalDeclaration(_)
             | Self::MissingCompilerDefinition(_)
+            | Self::Gfx950SourceFfiNotAdmitted
+            | Self::Gfx950OcmlImportPolicy
+            | Self::Gfx950OcmlExpNotExecutable
+            | Self::Gfx950OcmlLlvmMismatch
             | Self::TargetBindingMismatch { .. } => None,
         }
     }

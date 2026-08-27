@@ -21,6 +21,7 @@ mod flash_attention_sections;
 mod inert_semantic_module_handoff_v3;
 mod module_handoff;
 mod module_handoff_v2;
+mod production_gfx950_ocml;
 mod row_softmax_sections;
 mod symbol_manifest;
 
@@ -80,6 +81,12 @@ pub use module_handoff::{
 pub use module_handoff_v2::{
     CompilerModuleHandoffErrorV2, CompilerModuleHandoffIdentityV2, CompilerModuleHandoffPartsV2,
     CompilerModuleHandoffV2, MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+};
+pub use production_gfx950_ocml::{
+    PRODUCTION_GFX950_OCML_EXP_F32_ABI_V1, PRODUCTION_GFX950_OCML_EXP_F32_EFFECTS_V1,
+    PRODUCTION_GFX950_OCML_EXP_F32_SYMBOL_V1, ProductionGfx950CompilerFfiEnvelopeKindV1,
+    construct_production_gfx950_ocml_exp_envelope_v1,
+    inspect_production_gfx950_compiler_ffi_envelope_v1,
 };
 pub use row_softmax_sections::{
     DecodedRowSoftmaxCompilerSectionsV1, MAX_ROW_SOFTMAX_AUTHORITY_TRANSCRIPT_BYTES_V1,

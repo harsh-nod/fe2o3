@@ -103,7 +103,7 @@ pub(crate) struct PreparedProductionBuildConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BuildCompileEnvironmentProfileV1 {
-    ProductionGfx942,
+    ProductionAmd,
 }
 
 impl PreparedProductionBuildConfig {
@@ -151,7 +151,7 @@ impl PreparedProductionBuildConfig {
         working_directory: &Path,
     ) -> Option<BuildCompileEnvironmentProfileV1> {
         self.selects(crate_name, source, working_directory)
-            .then_some(BuildCompileEnvironmentProfileV1::ProductionGfx942)
+            .then_some(BuildCompileEnvironmentProfileV1::ProductionAmd)
     }
 
     pub(crate) fn selects(

@@ -216,9 +216,10 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 /// Marks a device kernel and emits its collector registration.
 ///
 /// V1 launch declarations use `launch(required = [x, y, z], max = [x, y, z],
-/// min_workgroups_per_compute_unit = n)`. Each dimension is nonzero and the
-/// product is at most 1024. Exact typed profiles require `required`; `max` may
-/// be omitted or identical. The occupancy field requires `max`.
+/// max_grid = [x, y, z], min_workgroups_per_compute_unit = n)`. Every
+/// dimension is nonzero; workgroup products are at most 1024. Exact typed
+/// profiles require `required`; `max` may be omitted or identical. `max_grid`
+/// defaults to `[u32::MAX, 1, 1]`, and the occupancy field requires `max`.
 ///
 /// Ordinary kernels are safe Rust entry points: their signatures and direct
 /// bodies may not contain unsafe Rust syntax. Target assembly is an explicitly
@@ -398,6 +399,7 @@ const ASSEMBLY_EFFECT_CONTROL_FLOW_V1: u16 = 0x0040;
 struct ParsedLaunchBoundsV1 {
     required: Option<[u32; 3]>,
     maximum: Option<[u32; 3]>,
+    max_grid: Option<[u32; 3]>,
     min_workgroups_per_compute_unit: Option<u16>,
 }
 
@@ -518,6 +520,16 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
             "#[kernel] safe Rust reference bindings require typed mode",
         ));
     }
+    if launch
+        .as_ref()
+        .is_some_and(|launch| launch.max_grid.is_some())
+        && !typed
+    {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[kernel] max_grid requires typed mode",
+        ));
+    }
     Ok(KernelOptions {
         mode: if typed {
             KernelMode::Typed
@@ -535,6 +547,7 @@ fn parse_kernel_options(attr: proc_macro2::TokenStream) -> syn::Result<KernelOpt
 fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBoundsV1> {
     let mut required = None;
     let mut maximum = None;
+    let mut max_grid = None;
     let mut occupancy = None;
     list.parse_nested_meta(|meta| {
         if meta.path.is_ident("required") {
@@ -551,6 +564,13 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
             maximum = Some(parse_workgroup_dimensions_v1(&meta)?);
             return Ok(());
         }
+        if meta.path.is_ident("max_grid") {
+            if max_grid.is_some() {
+                return Err(meta.error("launch maximum grid dimensions are duplicated"));
+            }
+            max_grid = Some(parse_grid_dimensions_v1(&meta)?);
+            return Ok(());
+        }
         if meta.path.is_ident("min_workgroups_per_compute_unit") {
             if occupancy.is_some() {
                 return Err(meta.error("launch occupancy constraint is duplicated"));
@@ -565,7 +585,7 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
             return Ok(());
         }
         Err(meta.error(
-            "launch supports only required = [x, y, z], max = [x, y, z], and min_workgroups_per_compute_unit = n",
+            "launch supports only required = [x, y, z], max = [x, y, z], max_grid = [x, y, z], and min_workgroups_per_compute_unit = n",
         ))
     })?;
 
@@ -595,8 +615,42 @@ fn parse_launch_bounds_v1(list: &syn::MetaList) -> syn::Result<ParsedLaunchBound
     Ok(ParsedLaunchBoundsV1 {
         required,
         maximum,
+        max_grid,
         min_workgroups_per_compute_unit: occupancy,
     })
+}
+
+fn parse_grid_dimensions_v1(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<[u32; 3]> {
+    let array = meta.value()?.parse::<ExprArray>()?;
+    if array.elems.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            array,
+            "grid dimensions require exactly three integer components",
+        ));
+    }
+    let mut result = [0_u32; 3];
+    for (index, expression) in array.elems.iter().enumerate() {
+        let Expr::Lit(literal) = expression else {
+            return Err(syn::Error::new_spanned(
+                expression,
+                "grid dimensions must be integer literals",
+            ));
+        };
+        let Lit::Int(integer) = &literal.lit else {
+            return Err(syn::Error::new_spanned(
+                expression,
+                "grid dimensions must be integer literals",
+            ));
+        };
+        result[index] = integer.base10_parse::<u32>()?;
+        if result[index] == 0 {
+            return Err(syn::Error::new_spanned(
+                integer,
+                "grid dimensions must be nonzero",
+            ));
+        }
+    }
+    Ok(result)
 }
 
 fn parse_workgroup_dimensions_v1(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<[u32; 3]> {
@@ -3106,7 +3160,10 @@ fn general_typed_launch_v1(
         Some(launch) => exact_general_typed_block_v1(launch, &span)?,
     };
     let block_size = BlockSize::Exact(general_typed_dimensions_v1(exact_block));
-    let max_grid = Dimensions::new(u32::MAX, 1, 1).expect("the fixed V1 maximum grid is valid");
+    let max_grid = launch
+        .and_then(|launch| launch.max_grid)
+        .unwrap_or([u32::MAX, 1, 1]);
+    let max_grid = general_typed_dimensions_v1(max_grid);
     LaunchContract::new(1, block_size, max_grid, 0, 0).map_err(|error| {
         syn::Error::new_spanned(span, format!("invalid general typed V1 launch: {error}"))
     })
@@ -3150,6 +3207,12 @@ fn validate_fixed_wg256_launch_v1(
     let Some(launch) = launch else {
         return Ok(());
     };
+    if launch.max_grid.is_some() {
+        return Err(syn::Error::new_spanned(
+            &span,
+            "the typed vecadd V2 profile does not support max_grid",
+        ));
+    }
     let exact = exact_general_typed_block_v1(launch, &span)?;
     if exact != GENERAL_TYPED_DEFAULT_BLOCK_V1 {
         return Err(syn::Error::new_spanned(
@@ -3178,7 +3241,7 @@ fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>
     if options.launch.is_none() && options.unsafe_assembly.is_none() {
         return None;
     }
-    let mut bytes = Vec::with_capacity(64);
+    let mut bytes = Vec::with_capacity(76);
     bytes.extend_from_slice(&FRONTEND_KERNEL_CONTRACT_MAGIC_V1);
     push_u16(&mut bytes, 1);
     let flags = u16::from(options.launch.is_some())
@@ -3189,7 +3252,8 @@ fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>
     if let Some(launch) = options.launch {
         let launch_flags = u16::from(launch.required.is_some())
             | (u16::from(launch.maximum.is_some()) * 0x0002)
-            | (u16::from(launch.min_workgroups_per_compute_unit.is_some()) * 0x0004);
+            | (u16::from(launch.min_workgroups_per_compute_unit.is_some()) * 0x0004)
+            | (u16::from(launch.max_grid.is_some()) * 0x0008);
         push_u16(&mut bytes, launch_flags);
         push_u16(&mut bytes, 0);
         push_dimensions(&mut bytes, launch.required);
@@ -3199,6 +3263,9 @@ fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>
             launch.min_workgroups_per_compute_unit.unwrap_or(0),
         );
         push_u16(&mut bytes, 0);
+        if launch.max_grid.is_some() {
+            push_dimensions(&mut bytes, launch.max_grid);
+        }
     }
     if let Some(assembly) = options.unsafe_assembly {
         push_u16(&mut bytes, assembly.target);
@@ -3209,7 +3276,7 @@ fn encode_kernel_frontend_contract_v1(options: &KernelOptions) -> Option<Vec<u8>
     }
     let length = u32::try_from(bytes.len()).expect("V1 kernel contract is bounded below u32");
     bytes[12..16].copy_from_slice(&length.to_le_bytes());
-    debug_assert!(bytes.len() <= 64);
+    debug_assert!(bytes.len() <= 76);
     Some(bytes)
 }
 
@@ -4609,6 +4676,13 @@ mod tests {
             quote::quote!(launch(required = [64, 1])),
             quote::quote!(launch(required = [0, 1, 1])),
             quote::quote!(launch(max = [1025, 1, 1])),
+            quote::quote!(launch(required = [64, 1, 1], max_grid = [1, 1])),
+            quote::quote!(launch(required = [64, 1, 1], max_grid = [0, 1, 1])),
+            quote::quote!(launch(
+                required = [64, 1, 1],
+                max_grid = [1, 1, 1],
+                max_grid = [1, 1, 1]
+            )),
             quote::quote!(launch(required = [64, 2, 1], max = [32, 2, 1])),
             quote::quote!(launch(
                 required = [64, 1, 1],
@@ -5824,6 +5898,46 @@ mod tests {
         assert_eq!(model.launch.max_grid().x(), u32::MAX);
         assert_eq!(model.launch.max_grid().y(), 1);
         assert_eq!(model.launch.max_grid().z(), 1);
+    }
+
+    #[test]
+    fn general_typed_model_binds_finite_rank_one_max_grid() {
+        let input: ItemFn = parse_quote!(
+            pub fn bounded(input: &[u8], output: DisjointSlice<f32>) {}
+        );
+        let default_options = parse_kernel_options(quote!(
+            typed,
+            launch(required = [64, 1, 1], max = [64, 1, 1])
+        ))
+        .unwrap();
+        let bounded_options = parse_kernel_options(quote!(
+            typed,
+            launch(
+                required = [64, 1, 1],
+                max = [64, 1, 1],
+                max_grid = [1, 1, 1]
+            )
+        ))
+        .unwrap();
+        let default =
+            model_general_typed_signature_v1(&input, &default_options, [0x42; 32]).unwrap();
+        let bounded =
+            model_general_typed_signature_v1(&input, &bounded_options, [0x42; 32]).unwrap();
+        assert_eq!(
+            bounded.launch.max_grid(),
+            fe2o3_artifacts::Dimensions::new(1, 1, 1).unwrap()
+        );
+        assert_ne!(
+            bounded.generated_host_contract_identity,
+            default.generated_host_contract_identity
+        );
+
+        let wrong_rank = parse_kernel_options(quote!(
+            typed,
+            launch(required = [64, 1, 1], max_grid = [1, 2, 1])
+        ))
+        .unwrap();
+        assert!(model_general_typed_signature_v1(&input, &wrong_rank, [0x42; 32]).is_err());
     }
 
     #[test]

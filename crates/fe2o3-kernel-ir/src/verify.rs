@@ -5,13 +5,15 @@ use std::fmt;
 use crate::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyEffect,
     AssemblyOperandKind, AssemblyOption, Atomic, AtomicKind, Barrier, BasicBlock, BinaryOp,
-    BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, ControlFlowError, Fence,
-    FloatOperation, Function, FunctionId, FunctionRole, IndexedControlFlow, InlineAssembly, Kernel,
-    KernelId, LaunchExtent, MatrixOperation, MatrixOperationKind, MatrixVerificationIssueKind,
-    MemoryOrdering, Module, ModuleId, Operation, OperationKind, ScalarType,
-    SemanticOperationIssueKind, SemanticOperationVerificationContext, SynchronizationScope,
-    TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation, WaveOperationKind,
-    WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, analyze_control_flow, pointer_for,
+    BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, ControlFlowError, Fence,
+    FloatOperation, Function, FunctionId, FunctionRole, Gfx950LdsTransposeFormatV1,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexedControlFlow,
+    InlineAssembly, Kernel, KernelId, LaunchExtent, MatrixOperation, MatrixOperationKind,
+    MatrixVerificationIssueKind, MemoryOrdering, Module, ModuleId, Operation, OperationKind,
+    ScalarType, SemanticOperationIssueKind, SemanticOperationVerificationContext,
+    SynchronizationScope, TargetCapability, Terminator, Type, UnaryOp, ValueId, WaveOperation,
+    WaveOperationKind, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent,
+    analyze_control_flow, pointer_for,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -54,6 +56,7 @@ pub enum DiagnosticCode {
     InvalidConvergence,
     ResourceLimit,
     InvalidWorkgroupMemory,
+    InvalidGfx950LdsTranspose,
     InvalidWaveOperation,
     InvalidFloatOperation,
     InvalidAmdGpuDiagnosticOperation,
@@ -676,6 +679,7 @@ struct FunctionVerifier<'a, 'module> {
     blocks: BTreeMap<BlockId, &'module BasicBlock>,
     control_flow: Option<IndexedControlFlow>,
     dynamic_workgroup_memory_declarations: usize,
+    gfx950_lds_transpose_currents: BTreeSet<Gfx950LdsTransposeFormatV1>,
 }
 
 impl<'a, 'module> FunctionVerifier<'a, 'module> {
@@ -697,6 +701,7 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
             blocks: BTreeMap::new(),
             control_flow,
             dynamic_workgroup_memory_declarations: 0,
+            gfx950_lds_transpose_currents: BTreeSet::new(),
         }
     }
 
@@ -1137,6 +1142,9 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 }
                 self.verify_matrix_lds_allocation(matrix, location);
             }
+            OperationKind::Gfx950LdsTranspose(transpose) => {
+                self.verify_gfx950_lds_transpose(operation, transpose, location)
+            }
             OperationKind::Wave(wave) => self.verify_wave(operation, wave, location),
             OperationKind::InlineAssembly(assembly) => {
                 self.verify_inline_assembly(operation, assembly, location)
@@ -1150,7 +1158,8 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
         location: DiagnosticLocation,
     ) {
         let (base, profile) = match &matrix.kind {
-            MatrixOperationKind::MultiplyAccumulate { .. } => return,
+            MatrixOperationKind::MultiplyAccumulate { .. }
+            | MatrixOperationKind::ScaledMultiplyAccumulate { .. } => return,
             MatrixOperationKind::LdsLoad { base, profile }
             | MatrixOperationKind::LdsStore { base, profile, .. } => (*base, *profile),
         };
@@ -1212,6 +1221,166 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                 ),
             );
         }
+    }
+
+    fn verify_gfx950_lds_transpose(
+        &mut self,
+        operation: &Operation,
+        transpose: &Gfx950LdsTransposeOperationV1,
+        location: DiagnosticLocation,
+    ) {
+        let storage_ty = Type::pointer(
+            Type::Scalar(ScalarType::U8),
+            AddressSpace::Workgroup,
+            AccessMode::ReadWrite,
+        );
+        if transpose.width != crate::WaveWidth::Wave64 || transpose.active_lanes != 64 {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidGfx950LdsTranspose,
+                "gfx950 LDS transpose requires one fully active Wave64",
+            );
+        }
+        if transpose.convergence.scope() != SynchronizationScope::Workgroup {
+            self.emit(
+                location.clone(),
+                DiagnosticCode::InvalidConvergence,
+                "gfx950 LDS transpose requires uniform workgroup convergence",
+            );
+        }
+
+        match transpose.kind {
+            Gfx950LdsTransposeOperationKindV1::Current { format } => {
+                self.expect_results(
+                    operation,
+                    std::slice::from_ref(&storage_ty),
+                    location.clone(),
+                );
+                let exact_entry = self.function.role == FunctionRole::KernelEntry
+                    && self.module.kernels.iter().any(|kernel| {
+                        kernel.entry == self.function.id
+                            && kernel.workgroup_size == Some(crate::WorkgroupSize::new(64, 1, 1))
+                    });
+                if !exact_entry {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidGfx950LdsTranspose,
+                        "gfx950 LDS transpose storage requires a kernel entry with exact workgroup size [64, 1, 1]",
+                    );
+                }
+                if !self.gfx950_lds_transpose_currents.insert(format) {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidGfx950LdsTranspose,
+                        "one kernel entry may declare at most one gfx950 LDS transpose tile per format",
+                    );
+                }
+            }
+            Gfx950LdsTransposeOperationKindV1::Stage {
+                format,
+                storage,
+                source_slice,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+            } => {
+                self.expect_results(
+                    operation,
+                    std::slice::from_ref(&storage_ty),
+                    location.clone(),
+                );
+                self.expect_type(storage, &storage_ty, location.clone());
+                let valid_source = matches!(
+                    self.ty(source_slice),
+                    Some(Type::Slice(slice))
+                        if *slice.element == Type::Scalar(ScalarType::U8)
+                            && slice.address_space == AddressSpace::Global
+                            && slice.access == AccessMode::ReadOnly
+                );
+                if !valid_source {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidOperandType,
+                        "gfx950 LDS transpose stage source must be an exact global read-only u8 slice",
+                    );
+                }
+                for value in [offset, rows, columns, stride, token_base, reduction_base] {
+                    self.expect_type(value, &Type::INDEX, location.clone());
+                }
+                if !matches!(
+                    self.gfx950_lds_transpose_producer(storage),
+                    Some(Gfx950LdsTransposeOperationKindV1::Current { format: producer })
+                        if producer == format
+                ) {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidGfx950LdsTranspose,
+                        "gfx950 LDS transpose stage must directly consume the matching Current token",
+                    );
+                }
+            }
+            Gfx950LdsTransposeOperationKindV1::Publish { format, storage } => {
+                self.expect_results(
+                    operation,
+                    std::slice::from_ref(&storage_ty),
+                    location.clone(),
+                );
+                self.expect_type(storage, &storage_ty, location.clone());
+                if !matches!(
+                    self.gfx950_lds_transpose_producer(storage),
+                    Some(Gfx950LdsTransposeOperationKindV1::Stage { format: producer, .. })
+                        if producer == format
+                ) {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidGfx950LdsTranspose,
+                        "gfx950 LDS transpose publish must directly consume the matching staged token",
+                    );
+                }
+            }
+            Gfx950LdsTransposeOperationKindV1::Read { format, storage } => {
+                self.expect_results(
+                    operation,
+                    &vec![Type::Scalar(ScalarType::U32); 8],
+                    location.clone(),
+                );
+                self.expect_type(storage, &storage_ty, location.clone());
+                if !matches!(
+                    self.gfx950_lds_transpose_producer(storage),
+                    Some(Gfx950LdsTransposeOperationKindV1::Publish { format: producer, .. })
+                        if producer == format
+                ) {
+                    self.emit(
+                        location,
+                        DiagnosticCode::InvalidGfx950LdsTranspose,
+                        "gfx950 LDS transpose read must directly consume the matching dominating Publish token",
+                    );
+                }
+            }
+        }
+    }
+
+    fn gfx950_lds_transpose_producer(
+        &self,
+        value: ValueId,
+    ) -> Option<Gfx950LdsTransposeOperationKindV1> {
+        let definition = self.definitions.get(&value)?;
+        let DefSite::Operation(block, operation_index) = definition.site else {
+            return None;
+        };
+        let block = self.blocks.get(&block)?;
+        let operation = block.operations.get(operation_index)?;
+        let OperationKind::Gfx950LdsTranspose(transpose) = &operation.kind else {
+            return None;
+        };
+        operation
+            .results
+            .iter()
+            .any(|result| result.id == value)
+            .then_some(transpose.kind)
     }
 
     fn verify_inline_assembly(
@@ -1510,6 +1679,64 @@ impl<'a, 'module> FunctionVerifier<'a, 'module> {
                     self.expect_results(operation, &[value_ty], location);
                 }
             }
+            WaveOperationKind::ReduceF32 {
+                value, tile_width, ..
+            } => {
+                self.expect_type(value, &Type::Scalar(ScalarType::F32), location.clone());
+                self.verify_wave_tile_width(wave, tile_width, location.clone());
+                self.expect_results(operation, &[Type::Scalar(ScalarType::F32)], location);
+            }
+            WaveOperationKind::BroadcastF32 {
+                value,
+                source_lane,
+                tile_width,
+            } => {
+                self.expect_type(value, &Type::Scalar(ScalarType::F32), location.clone());
+                self.expect_type(
+                    source_lane,
+                    &Type::Scalar(ScalarType::U32),
+                    location.clone(),
+                );
+                self.verify_wave_tile_width(wave, tile_width, location.clone());
+                if !matches!(self.constant_u32(source_lane), Some(lane) if lane < tile_width) {
+                    self.emit(
+                        location.clone(),
+                        DiagnosticCode::InvalidWaveOperation,
+                        "wave f32 broadcast requires a statically bounded tile-local source lane",
+                    );
+                }
+                self.expect_results(operation, &[Type::Scalar(ScalarType::F32)], location);
+            }
+        }
+    }
+
+    fn verify_wave_tile_width(
+        &mut self,
+        wave: &WaveOperation,
+        tile_width: u32,
+        location: DiagnosticLocation,
+    ) {
+        if tile_width == 0 || !tile_width.is_power_of_two() || tile_width > wave.width.lanes() {
+            self.emit(
+                location,
+                DiagnosticCode::InvalidWaveOperation,
+                format!(
+                    "wave tile width {tile_width} must be a non-zero power of two no larger than {}",
+                    wave.width.lanes()
+                ),
+            );
+        }
+    }
+
+    fn constant_u32(&self, value: ValueId) -> Option<u32> {
+        let definition = self.definitions.get(&value)?;
+        let DefSite::Operation(block, operation_index) = definition.site else {
+            return None;
+        };
+        let operation = self.blocks.get(&block)?.operations.get(operation_index)?;
+        match operation.kind {
+            OperationKind::Constant(Constant::U32(value)) => Some(value),
+            _ => None,
         }
     }
 

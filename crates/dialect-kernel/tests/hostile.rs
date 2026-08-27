@@ -268,6 +268,21 @@ fn tensor_layout_round_trips_full_opaque_identities_without_aliasing() {
 }
 
 #[test]
+fn tensor_layout_round_trips_exact_gfx950_fp4_profile() {
+    let mut context = Context::new();
+    register_dialect(&mut context, &kernel_name()).unwrap();
+    let contract = TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64();
+    let op = TensorLayoutOp::new(
+        &mut context,
+        &contract,
+        TensorConvergenceAttr::UniformSubgroup,
+        64,
+    );
+    verify_op(&op, &context).expect("locally well-formed gfx950 FP4 contract");
+    assert_eq!(op.contract(&context).unwrap(), contract);
+}
+
+#[test]
 fn registration_is_real_idempotent_and_collision_safe() {
     let context = &mut Context::new();
     assert_eq!(

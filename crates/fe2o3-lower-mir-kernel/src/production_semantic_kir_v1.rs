@@ -13,14 +13,17 @@ use fe2o3_kernel_ir::{
     AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
     BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Convergence,
     F32MathFunction, FloatOperation, FormalMemoryIncompleteReason, Function, FunctionBody,
-    FunctionId, FunctionOperationLocation, IndexKind, IntrinsicKind, IntrinsicOperation, Kernel,
-    LaunchDomain, LaunchExtent, MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation,
-    MemoryAccess, MemoryOrdering, Module, Operation, OperationKind, ScalarType, Signature,
-    SwitchCase, SynchronizationScope, TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef,
-    ValueId, VerificationErrors, VerifiedCanonicalKernelIrErrorV7,
-    VerifiedCanonicalKernelIrIdentityV7, VerifiedCanonicalKernelIrV7, WaveOperation,
-    WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize, plan_integer_cast_v1,
-    verify_module,
+    FunctionId, FunctionOperationLocation, Gfx950LdsTransposeFormatV1,
+    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
+    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MemoryAccess, MemoryOrdering,
+    Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope,
+    TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
+    VerifiedCanonicalKernelIrErrorV8, VerifiedCanonicalKernelIrErrorV9,
+    VerifiedCanonicalKernelIrIdentityV8, VerifiedCanonicalKernelIrIdentityV9,
+    VerifiedCanonicalKernelIrV8, VerifiedCanonicalKernelIrV9, WaveF32ReductionKindV1,
+    WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier, WorkgroupSize,
+    plan_integer_cast_v1, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1,
@@ -28,8 +31,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
     SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
     SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaProfileV1, SemanticMfmaStorageLayoutV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
+    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
     SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1,
     SemanticProjectionKindV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
     SemanticScalarValueV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
@@ -427,8 +431,10 @@ pub enum ProductionSemanticKirErrorV1 {
     },
     /// The constructed Kernel IR failed structural or semantic verification.
     InvalidKernelIr(VerificationErrors),
-    /// The lowered module could not become exact verified canonical Kernel IR V7.
-    CanonicalKernelIrV7(VerifiedCanonicalKernelIrErrorV7),
+    /// The lowered module could not become exact verified canonical Kernel IR V8.
+    CanonicalKernelIrV8(VerifiedCanonicalKernelIrErrorV8),
+    /// The lowered attention module could not become exact verified canonical Kernel IR V9.
+    CanonicalKernelIrV9(VerifiedCanonicalKernelIrErrorV9),
     /// Retained correspondence no longer matches the exact source owner.
     CorrespondenceMismatch,
 }
@@ -511,10 +517,16 @@ impl fmt::Display for ProductionSemanticKirErrorV1 {
                 "semantic-to-Kernel-IR scalar lowering rejected semantic type {semantic_type} with shape {shape}",
             ),
             Self::InvalidKernelIr(error) => error.fmt(formatter),
-            Self::CanonicalKernelIrV7(error) => {
+            Self::CanonicalKernelIrV8(error) => {
                 write!(
                     formatter,
-                    "canonical Kernel IR V7 admission failed: {error}"
+                    "canonical Kernel IR V8 admission failed: {error}"
+                )
+            }
+            Self::CanonicalKernelIrV9(error) => {
+                write!(
+                    formatter,
+                    "canonical Kernel IR V9 admission failed: {error}"
                 )
             }
             Self::CorrespondenceMismatch => formatter.write_str(
@@ -529,7 +541,8 @@ impl Error for ProductionSemanticKirErrorV1 {
         match self {
             Self::SemanticOwner(error) => Some(error),
             Self::InvalidKernelIr(error) => Some(error),
-            Self::CanonicalKernelIrV7(error) => Some(error),
+            Self::CanonicalKernelIrV8(error) => Some(error),
+            Self::CanonicalKernelIrV9(error) => Some(error),
             Self::ResourceLimit { .. }
             | Self::AllocationFailure { .. }
             | Self::Unsupported { .. }
@@ -709,11 +722,118 @@ impl ProductionRankedSemanticProjectionReceiptV1 {
 pub struct ProductionSemanticKirOwnerV1 {
     semantic: ProductionSemanticMirOwnerV1,
     module: Module,
-    canonical_kernel_ir_v7: VerifiedCanonicalKernelIrV7,
+    canonical_kernel_ir: ProductionCanonicalKernelIrV1,
     correspondence: SemanticKirCorrespondenceV1,
     limits: ProductionSemanticKirLimitsV1,
     launch_rank: Option<u8>,
     generic_checks: Option<RetainedGenericKernelChecksV1>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ProductionCanonicalKernelIrV1 {
+    V8(VerifiedCanonicalKernelIrV8),
+    V9(VerifiedCanonicalKernelIrV9),
+}
+
+/// Exact canonical Kernel IR wire version retained by production lowering.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ProductionCanonicalKernelIrVersionV1 {
+    /// Exact canonical Kernel IR V8.
+    V8,
+    /// Exact canonical Kernel IR V9.
+    V9,
+}
+
+/// Version-bound identity of the canonical Kernel IR bytes retained by the owner.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProductionCanonicalKernelIrIdentityV1 {
+    version: ProductionCanonicalKernelIrVersionV1,
+    digest: [u8; 32],
+    canonical_length: u64,
+}
+
+impl ProductionCanonicalKernelIrIdentityV1 {
+    /// Returns the exact canonical wire version committed by this identity.
+    pub const fn version(&self) -> ProductionCanonicalKernelIrVersionV1 {
+        self.version
+    }
+
+    /// Returns the version-domain-separated SHA-256 digest.
+    pub const fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+
+    /// Returns the exact retained canonical byte length.
+    pub const fn canonical_length(&self) -> u64 {
+        self.canonical_length
+    }
+}
+
+impl ProductionCanonicalKernelIrV1 {
+    fn from_module(module: Module) -> Result<Self, ProductionSemanticKirErrorV1> {
+        if module_uses_kernel_ir_v9_attention_v1(&module) {
+            VerifiedCanonicalKernelIrV9::from_module(module)
+                .map(Self::V9)
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV9)
+        } else {
+            VerifiedCanonicalKernelIrV8::from_module(module)
+                .map(Self::V8)
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV8)
+        }
+    }
+
+    fn revalidate(&self) -> Result<(), ProductionSemanticKirErrorV1> {
+        match self {
+            Self::V8(owner) => owner
+                .revalidate()
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV8),
+            Self::V9(owner) => owner
+                .revalidate()
+                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV9),
+        }
+    }
+
+    fn canonical_bytes(&self) -> &[u8] {
+        match self {
+            Self::V8(owner) => owner.canonical_bytes(),
+            Self::V9(owner) => owner.canonical_bytes(),
+        }
+    }
+
+    fn identity(&self) -> ProductionCanonicalKernelIrIdentityV1 {
+        match self {
+            Self::V8(owner) => ProductionCanonicalKernelIrIdentityV1 {
+                version: ProductionCanonicalKernelIrVersionV1::V8,
+                digest: *owner.identity().digest(),
+                canonical_length: owner.identity().canonical_length(),
+            },
+            Self::V9(owner) => ProductionCanonicalKernelIrIdentityV1 {
+                version: ProductionCanonicalKernelIrVersionV1::V9,
+                digest: *owner.identity().digest(),
+                canonical_length: owner.identity().canonical_length(),
+            },
+        }
+    }
+}
+
+fn module_uses_kernel_ir_v9_attention_v1(module: &Module) -> bool {
+    module.functions.iter().any(|function| {
+        function.body.as_ref().is_some_and(|body| {
+            body.blocks.iter().any(|block| {
+                block.operations.iter().any(|operation| {
+                    matches!(
+                        operation.kind,
+                        OperationKind::Gfx950LdsTranspose(_)
+                            | OperationKind::Wave(WaveOperation {
+                                kind: WaveOperationKind::ReduceF32 { .. }
+                                    | WaveOperationKind::BroadcastF32 { .. },
+                                ..
+                            })
+                    )
+                })
+            })
+        })
+    })
 }
 
 struct RetainedGenericKernelChecksV1 {
@@ -729,10 +849,7 @@ impl fmt::Debug for ProductionSemanticKirOwnerV1 {
         formatter
             .debug_struct("ProductionSemanticKirOwnerV1")
             .field("module", &self.module.id)
-            .field(
-                "canonical_kernel_ir_v7_identity",
-                self.canonical_kernel_ir_v7.identity(),
-            )
+            .field("canonical_kernel_ir", &self.canonical_kernel_ir)
             .field("correspondence", &self.correspondence)
             .field("limits", &self.limits)
             .field("launch_rank", &self.launch_rank)
@@ -751,12 +868,11 @@ impl ProductionSemanticKirOwnerV1 {
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
         let (module, correspondence) = lower_module(&semantic, limits, None)?;
-        let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
-            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
+        let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
             semantic,
             module,
-            canonical_kernel_ir_v7,
+            canonical_kernel_ir,
             correspondence,
             limits,
             launch_rank: None,
@@ -793,12 +909,11 @@ impl ProductionSemanticKirOwnerV1 {
             ));
         }
         let (module, correspondence) = lower_module(&semantic, limits, Some(launch_rank))?;
-        let canonical_kernel_ir_v7 = VerifiedCanonicalKernelIrV7::from_module(module.clone())
-            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
+        let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
             semantic,
             module,
-            canonical_kernel_ir_v7,
+            canonical_kernel_ir,
             correspondence,
             limits,
             launch_rank: Some(launch_rank),
@@ -819,20 +934,17 @@ impl ProductionSemanticKirOwnerV1 {
         self.semantic
             .verify_equivalence()
             .map_err(ProductionSemanticKirErrorV1::SemanticOwner)?;
-        self.canonical_kernel_ir_v7
-            .revalidate()
-            .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
+        self.canonical_kernel_ir.revalidate()?;
         verify_module(&self.module).map_err(ProductionSemanticKirErrorV1::InvalidKernelIr)?;
         let (rederived_module, rederived_correspondence) =
             lower_module(&self.semantic, self.limits, self.launch_rank)?;
-        let rederived_canonical_kernel_ir_v7 =
-            VerifiedCanonicalKernelIrV7::from_module(rederived_module.clone())
-                .map_err(ProductionSemanticKirErrorV1::CanonicalKernelIrV7)?;
+        let rederived_canonical_kernel_ir =
+            ProductionCanonicalKernelIrV1::from_module(rederived_module.clone())?;
         if self.module != rederived_module
             || self.correspondence != rederived_correspondence
-            || self.canonical_kernel_ir_v7.identity() != rederived_canonical_kernel_ir_v7.identity()
-            || self.canonical_kernel_ir_v7.canonical_bytes()
-                != rederived_canonical_kernel_ir_v7.canonical_bytes()
+            || self.canonical_kernel_ir != rederived_canonical_kernel_ir
+            || self.canonical_kernel_ir.canonical_bytes()
+                != rederived_canonical_kernel_ir.canonical_bytes()
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
@@ -865,14 +977,43 @@ impl ProductionSemanticKirOwnerV1 {
         &self.module
     }
 
-    /// Borrows the authoritative exact, semantically verified Kernel IR V7 bytes.
-    pub const fn canonical_kernel_ir_v7(&self) -> &VerifiedCanonicalKernelIrV7 {
-        &self.canonical_kernel_ir_v7
+    /// Borrows the authoritative exact, semantically verified Kernel IR V8 bytes.
+    pub const fn canonical_kernel_ir_v8(&self) -> &VerifiedCanonicalKernelIrV8 {
+        match &self.canonical_kernel_ir {
+            ProductionCanonicalKernelIrV1::V8(owner) => owner,
+            ProductionCanonicalKernelIrV1::V9(_) => {
+                panic!("Kernel IR V9 has no canonical V8 owner")
+            }
+        }
     }
 
-    /// Borrows the typed identity of the authoritative canonical Kernel IR V7 bytes.
-    pub const fn canonical_kernel_ir_v7_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV7 {
-        self.canonical_kernel_ir_v7.identity()
+    /// Borrows the typed identity of the authoritative canonical Kernel IR V8 bytes.
+    pub const fn canonical_kernel_ir_v8_identity(&self) -> &VerifiedCanonicalKernelIrIdentityV8 {
+        self.canonical_kernel_ir_v8().identity()
+    }
+
+    /// Borrows canonical V9 ownership when the lowered module uses the exact
+    /// gfx950 attention surface.
+    pub const fn canonical_kernel_ir_v9(&self) -> Option<&VerifiedCanonicalKernelIrV9> {
+        match &self.canonical_kernel_ir {
+            ProductionCanonicalKernelIrV1::V8(_) => None,
+            ProductionCanonicalKernelIrV1::V9(owner) => Some(owner),
+        }
+    }
+
+    /// Borrows the typed V9 identity for an exact gfx950 attention module.
+    pub const fn canonical_kernel_ir_v9_identity(
+        &self,
+    ) -> Option<&VerifiedCanonicalKernelIrIdentityV9> {
+        match self.canonical_kernel_ir_v9() {
+            Some(owner) => Some(owner.identity()),
+            None => None,
+        }
+    }
+
+    /// Returns the exact version-bound identity of the retained canonical KIR.
+    pub fn canonical_kernel_ir_identity(&self) -> ProductionCanonicalKernelIrIdentityV1 {
+        self.canonical_kernel_ir.identity()
     }
 
     /// Borrows pointer-independent source correspondence evidence.
@@ -2687,6 +2828,17 @@ enum SemanticPromotedBindingV1 {
     AccumulatorFragment {
         contract: SemanticMfmaAccumulatorContractV1,
     },
+    Gfx950LdsTransposeTile {
+        format: SemanticGfx950LdsTransposeFormatV1,
+        state: SemanticGfx950LdsTransposeStateV1,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SemanticGfx950LdsTransposeStateV1 {
+    Uninitialized,
+    Staged,
+    Published,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2708,14 +2860,23 @@ impl SemanticPromotedBindingV1 {
     ) -> Result<Vec<Type>, ProductionSemanticKirErrorV1> {
         let transport = match self {
             Self::Ordinary => lower_ssa_value_types(types, semantic_type)?,
-            Self::MatrixFragment { contract, .. } => {
-                vec![Type::Scalar(ScalarType::Bf16); contract.profile.operand_components_per_lane()]
-            }
-            Self::AccumulatorFragment { contract } => match contract.profile {
+            Self::MatrixFragment { contract, .. } => match contract.profile {
                 SemanticMfmaProfileV1::Bf16F32M16N16K16 => {
+                    vec![Type::Scalar(ScalarType::Bf16); 4]
+                }
+                SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128 => {
+                    vec![Type::Scalar(ScalarType::U32); 8]
+                }
+            },
+            Self::AccumulatorFragment { contract } => match contract.profile {
+                SemanticMfmaProfileV1::Bf16F32M16N16K16
+                | SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128 => {
                     vec![Type::Scalar(ScalarType::F32); 4]
                 }
             },
+            Self::Gfx950LdsTransposeTile { .. } => vec![gfx950_lds_transpose_pointer_type_v1()],
         };
         Ok(transport)
     }
@@ -2729,6 +2890,7 @@ impl SemanticPromotedBindingV1 {
             Self::AccumulatorFragment { contract } => {
                 Some(SemanticCurrentWaveV1::new(contract.wave_width))
             }
+            Self::Gfx950LdsTransposeTile { .. } => Some(SemanticCurrentWaveV1::new(64)),
         }
     }
 
@@ -2765,11 +2927,24 @@ impl SemanticPromotedBindingV1 {
             ) if contract == *actual_contract && self.current_wave() == Some(*wave) => {
                 Ok(values.clone())
             }
+            (
+                Self::Gfx950LdsTransposeTile { format, state },
+                SemanticValueBindingV1::Gfx950LdsTransposeTile {
+                    storage,
+                    format: actual_format,
+                    state: actual_state,
+                },
+            ) if format == *actual_format && state == *actual_state => {
+                Ok(vec![(*storage, gfx950_lds_transpose_pointer_type_v1())])
+            }
             (Self::MatrixFragment { .. }, _) => {
                 Err("promoted matrix fragment lacks its authenticated producer metadata")
             }
             (Self::AccumulatorFragment { .. }, _) => {
                 Err("promoted accumulator fragment lacks its authenticated producer metadata")
+            }
+            (Self::Gfx950LdsTransposeTile { .. }, _) => {
+                Err("promoted gfx950 LDS transpose tile lacks its authenticated state")
             }
         }
     }
@@ -2822,8 +2997,23 @@ impl SemanticPromotedBindingV1 {
                     wave,
                 })
             }
+            Self::Gfx950LdsTransposeTile { format, state } => {
+                Ok(SemanticValueBindingV1::Gfx950LdsTransposeTile {
+                    storage: components[0].0,
+                    format,
+                    state,
+                })
+            }
         }
     }
+}
+
+fn gfx950_lds_transpose_pointer_type_v1() -> Type {
+    Type::pointer(
+        Type::Scalar(ScalarType::U8),
+        AddressSpace::Workgroup,
+        AccessMode::ReadWrite,
+    )
 }
 
 fn insert_compiler_issued_ssa_binding_v1(
@@ -2859,12 +3049,72 @@ fn compiler_issued_ssa_bindings_v1(
                 contract,
                 storage_layout,
                 ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+                fragment,
+                contract,
+                storage_layout,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+                fragment,
+                contract,
+                storage_layout,
+                ..
             } => insert_compiler_issued_ssa_binding_v1(
                 &mut bindings,
                 *fragment,
                 SemanticPromotedBindingV1::MatrixFragment {
                     contract: *contract,
                     storage_layout: *storage_layout,
+                },
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent {
+                tile,
+                format,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *tile,
+                SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
+                    format: *format,
+                    state: SemanticGfx950LdsTransposeStateV1::Uninitialized,
+                },
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                output_tile,
+                format,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *output_tile,
+                SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
+                    format: *format,
+                    state: SemanticGfx950LdsTransposeStateV1::Staged,
+                },
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                output_tile,
+                format,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *output_tile,
+                SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
+                    format: *format,
+                    state: SemanticGfx950LdsTransposeStateV1::Published,
+                },
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                fragment,
+                contract,
+                ..
+            } => insert_compiler_issued_ssa_binding_v1(
+                &mut bindings,
+                *fragment,
+                SemanticPromotedBindingV1::MatrixFragment {
+                    contract: *contract,
+                    storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
                 },
             )?,
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
@@ -2931,6 +3181,70 @@ fn compiler_issued_ssa_bindings_v1(
                         None,
                         None,
                         "accumulator projection conflicts with its compiler-issued fragment type",
+                    ));
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                input_tile,
+                format,
+                ..
+            } => {
+                if let Some(binding) = bindings.get(input_tile)
+                    && !matches!(
+                        binding,
+                        SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
+                            format: actual_format,
+                            state: SemanticGfx950LdsTransposeStateV1::Uninitialized,
+                        } if actual_format == format
+                    )
+                {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "gfx950 LDS transpose stage input has conflicting compiler-issued state",
+                    ));
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                input_tile,
+                format,
+                ..
+            } => {
+                if let Some(binding) = bindings.get(input_tile)
+                    && !matches!(
+                        binding,
+                        SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
+                            format: actual_format,
+                            state: SemanticGfx950LdsTransposeStateV1::Staged,
+                        } if actual_format == format
+                    )
+                {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "gfx950 LDS transpose publish input has conflicting compiler-issued state",
+                    ));
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                tile, format, ..
+            } => {
+                if let Some(binding) = bindings.get(tile)
+                    && !matches!(
+                        binding,
+                        SemanticPromotedBindingV1::Gfx950LdsTransposeTile {
+                            format: actual_format,
+                            state: SemanticGfx950LdsTransposeStateV1::Published,
+                        } if actual_format == format
+                    )
+                {
+                    return Err(unsupported(
+                        0,
+                        None,
+                        None,
+                        "gfx950 LDS transpose read input has conflicting compiler-issued state",
                     ));
                 }
             }
@@ -3613,6 +3927,11 @@ enum SemanticValueBindingV1 {
         contract: SemanticMfmaAccumulatorContractV1,
         wave: SemanticCurrentWaveV1,
     },
+    Gfx950LdsTransposeTile {
+        storage: ValueId,
+        format: SemanticGfx950LdsTransposeFormatV1,
+        state: SemanticGfx950LdsTransposeStateV1,
+    },
     Value {
         id: ValueId,
         ty: Type,
@@ -3683,6 +4002,7 @@ fn semantic_binding_kind_v1(binding: &SemanticValueBindingV1) -> &'static str {
         SemanticValueBindingV1::WaveLane { .. } => "wave lane",
         SemanticValueBindingV1::MatrixFragment { .. } => "matrix fragment",
         SemanticValueBindingV1::AccumulatorFragment { .. } => "accumulator fragment",
+        SemanticValueBindingV1::Gfx950LdsTransposeTile { .. } => "gfx950 LDS transpose tile",
         SemanticValueBindingV1::Value { .. } => "ordinary value",
         SemanticValueBindingV1::OptionPointer { .. } => "optional pointer",
         SemanticValueBindingV1::IndexWitness { .. } => "index witness",
@@ -3703,6 +4023,7 @@ fn semantic_binding_can_restore_from_unique_source_v1(binding: &SemanticValueBin
         | SemanticValueBindingV1::WaveLane { .. }
         | SemanticValueBindingV1::MatrixFragment { .. }
         | SemanticValueBindingV1::AccumulatorFragment { .. }
+        | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
         | SemanticValueBindingV1::IndexWitness { .. }
         | SemanticValueBindingV1::GridLeader { .. }
         | SemanticValueBindingV1::ComponentWitness { .. } => true,
@@ -3759,6 +4080,7 @@ fn reauthenticate_capabilities_from_enum_payload_v1(
         | SemanticValueBindingV1::WaveLane { .. }
         | SemanticValueBindingV1::MatrixFragment { .. }
         | SemanticValueBindingV1::AccumulatorFragment { .. }
+        | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
         | SemanticValueBindingV1::Value { .. }
         | SemanticValueBindingV1::OptionPointer { .. }
         | SemanticValueBindingV1::IndexWitness {
@@ -3787,6 +4109,7 @@ impl SemanticValueBindingV1 {
             | Self::MatrixContext
             | Self::MatrixFragment { .. }
             | Self::AccumulatorFragment { .. }
+            | Self::Gfx950LdsTransposeTile { .. }
             | Self::OptionPointer { .. }
             | Self::OptionIndexWitness { .. }
             | Self::ComponentWitness { .. }
@@ -3823,6 +4146,9 @@ impl SemanticValueBindingV1 {
                 values: components, ..
             } => {
                 values.extend(components.iter().cloned());
+            }
+            Self::Gfx950LdsTransposeTile { storage, .. } => {
+                values.push((*storage, gfx950_lds_transpose_pointer_type_v1()));
             }
             Self::Enum {
                 discriminant,
@@ -4532,6 +4858,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     | SemanticValueBindingV1::WaveLane { .. }
                     | SemanticValueBindingV1::MatrixFragment { .. }
                     | SemanticValueBindingV1::AccumulatorFragment { .. }
+                    | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
                     | SemanticValueBindingV1::Value { .. }
                     | SemanticValueBindingV1::IndexWitness { .. }
                     | SemanticValueBindingV1::ComponentWitness { .. }
@@ -5773,6 +6100,106 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let value = self.lower_operand(block, None, &call.arguments()[1], operations)?;
                 self.lower_subgroup_reduce_f32(block, operations, value, *width, *kind)?
             }
+            SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { .. } => {
+                self.require_call_argument_count(block, call, 0)?;
+                SemanticValueBindingV1::CollectiveContext
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupReduceF32 {
+                width, kind, ..
+            } => {
+                self.require_call_argument_count(block, call, 2)?;
+                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                if !matches!(context, SemanticValueBindingV1::CollectiveContext) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "gfx950 subgroup reduction lacks compiler-issued authority",
+                    ));
+                }
+                let (value, ty) = self
+                    .lower_operand(block, None, &call.arguments()[1], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                if ty != Type::Scalar(ScalarType::F32)
+                    || *width == 0
+                    || !width.is_power_of_two()
+                    || *width > 64
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "gfx950 subgroup reduction type or width changed",
+                    ));
+                }
+                let kind = match kind {
+                    SemanticSubgroupReductionKindV1::Sum => WaveF32ReductionKindV1::Sum,
+                    SemanticSubgroupReductionKindV1::Maximum => WaveF32ReductionKindV1::Maximum,
+                };
+                self.emit(
+                    operations,
+                    Type::Scalar(ScalarType::F32),
+                    OperationKind::Wave(WaveOperation::full(
+                        WaveOperationKind::ReduceF32 {
+                            value,
+                            tile_width: *width,
+                            kind,
+                        },
+                        WaveWidth::Wave64,
+                    )),
+                )?
+            }
+            SemanticCompilerIntrinsicOperationV1::SubgroupBroadcastF32 { width, .. } => {
+                self.require_call_argument_count(block, call, 3)?;
+                let context = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+                if !matches!(context, SemanticValueBindingV1::CollectiveContext) {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "gfx950 subgroup broadcast lacks compiler-issued authority",
+                    ));
+                }
+                let (value, value_ty) = self
+                    .lower_operand(block, None, &call.arguments()[1], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let (source_lane, source_ty) = self
+                    .lower_operand(block, None, &call.arguments()[2], operations)?
+                    .value()
+                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let bounded_source = operations.iter().any(|operation| {
+                    operation.results.iter().any(|result| result.id == source_lane)
+                        && matches!(operation.kind, OperationKind::Constant(Constant::U32(lane)) if lane < *width)
+                });
+                if value_ty != Type::Scalar(ScalarType::F32)
+                    || source_ty != Type::Scalar(ScalarType::U32)
+                    || *width == 0
+                    || !width.is_power_of_two()
+                    || *width > 64
+                    || !bounded_source
+                {
+                    return Err(unsupported(
+                        0,
+                        Some(block.index()),
+                        None,
+                        "gfx950 subgroup broadcast requires f32, a valid width, and a statically bounded source lane",
+                    ));
+                }
+                self.emit(
+                    operations,
+                    Type::Scalar(ScalarType::F32),
+                    OperationKind::Wave(WaveOperation::full(
+                        WaveOperationKind::BroadcastF32 {
+                            value,
+                            source_lane,
+                            tile_width: *width,
+                        },
+                        WaveWidth::Wave64,
+                    )),
+                )?
+            }
             SemanticCompilerIntrinsicOperationV1::MatrixContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MatrixContext
@@ -5820,6 +6247,26 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 *error,
                 Type::Scalar(ScalarType::U16),
             )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor {
+                result,
+                view,
+                error,
+                ..
+            }
+            | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor {
+                result,
+                view,
+                error,
+                ..
+            } => self.lower_checked_strided_read_view(
+                block,
+                call,
+                operations,
+                *result,
+                *view,
+                *error,
+                Type::Scalar(ScalarType::U8),
+            )?,
             SemanticCompilerIntrinsicOperationV1::StridedReadView2DFromSharedSlice {
                 result,
                 view,
@@ -5856,6 +6303,61 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             } => {
                 self.lower_bf16_matrix_load(block, call, operations, *contract, *storage_layout)?
             }
+            SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixLoadM16K128 {
+                contract,
+                storage_layout,
+                ..
+            } => self.lower_gfx950_low_precision_matrix_load(
+                block,
+                call,
+                operations,
+                *contract,
+                *storage_layout,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixLoadM16K128 {
+                contract,
+                storage_layout,
+                ..
+            } => self.lower_gfx950_low_precision_matrix_load(
+                block,
+                call,
+                operations,
+                *contract,
+                *storage_layout,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeCurrent { format, .. } => {
+                self.lower_gfx950_lds_transpose_current(block, call, operations, *format)?
+            }
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                input_tile,
+                format,
+                ..
+            } => self.lower_gfx950_lds_transpose_stage(
+                block,
+                call,
+                operations,
+                *input_tile,
+                *format,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                input_tile,
+                format,
+                ..
+            } => self.lower_gfx950_lds_transpose_publish(
+                block,
+                call,
+                operations,
+                *input_tile,
+                *format,
+            )?,
+            SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeRead {
+                tile,
+                contract,
+                format,
+                ..
+            } => self.lower_gfx950_lds_transpose_read(
+                block, call, operations, *tile, *contract, *format,
+            )?,
             SemanticCompilerIntrinsicOperationV1::F32MatrixAccumulatorZero {
                 fragment,
                 contract,
@@ -5990,70 +6492,158 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                         "matrix operand producer contracts or wave associations differ",
                     ));
                 }
-                let lhs = require_components(
-                    block,
-                    lhs,
-                    Type::Scalar(ScalarType::Bf16),
-                    4,
-                    "matrix lhs fragment",
-                )?;
-                let rhs = require_components(
-                    block,
-                    rhs,
-                    Type::Scalar(ScalarType::Bf16),
-                    4,
-                    "matrix rhs fragment",
-                )?;
-                let accumulator = require_components(
-                    block,
-                    accumulator,
-                    Type::Scalar(ScalarType::F32),
-                    4,
-                    "matrix accumulator fragment",
-                )?;
-                let lhs = lhs
+                if matches!(
+                    expected_accumulator.profile,
+                    SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                        | SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+                ) {
+                    if lhs_storage != SemanticMfmaStorageLayoutV1::RowMajor
+                        || rhs_storage != SemanticMfmaStorageLayoutV1::RowMajor
+                    {
+                        return Err(unsupported(
+                            0,
+                            Some(block.index()),
+                            None,
+                            "gfx950 low-precision matrix operands require checked row-major producers",
+                        ));
+                    }
+                    let lhs = require_components(
+                        block,
+                        lhs,
+                        Type::Scalar(ScalarType::U32),
+                        8,
+                        "gfx950 low-precision matrix lhs fragment",
+                    )?
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect::<Vec<_>>()
                     .try_into()
-                    .expect("four checked lhs components");
-                let rhs = rhs
+                    .expect("eight checked gfx950 lhs dwords");
+                    let rhs = require_components(
+                        block,
+                        rhs,
+                        Type::Scalar(ScalarType::U32),
+                        8,
+                        "gfx950 low-precision matrix rhs fragment",
+                    )?
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect::<Vec<_>>()
                     .try_into()
-                    .expect("four checked rhs components");
-                let accumulator = accumulator
+                    .expect("eight checked gfx950 rhs dwords");
+                    let accumulator = require_components(
+                        block,
+                        accumulator,
+                        Type::Scalar(ScalarType::F32),
+                        4,
+                        "gfx950 low-precision matrix accumulator fragment",
+                    )?
                     .into_iter()
                     .map(|(id, _)| id)
                     .collect::<Vec<_>>()
                     .try_into()
-                    .expect("four checked accumulator components");
-                let mut tensor_layout =
-                    TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
-                        .with_zero_filled_predicate_inputs();
-                if lhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
-                    tensor_layout = tensor_layout.with_a_lds_xor4();
-                }
-                if rhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
-                    tensor_layout = tensor_layout.with_b_lds_xor4();
-                }
-                let results = self.emit_results(
-                    operations,
-                    vec![Type::Scalar(ScalarType::F32); 4],
-                    OperationKind::Matrix(
-                        MatrixOperation::multiply_accumulate(lhs, rhs, accumulator)
-                            .with_declared_tensor_layout(tensor_layout),
-                    ),
-                )?;
-                let _ = accumulator_fragment;
-                SemanticValueBindingV1::AccumulatorFragment {
-                    values: results
+                    .expect("four checked gfx950 accumulator components");
+                    let matrix = if expected_accumulator.profile
+                        == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+                    {
+                        MatrixOperation::scaled_multiply_accumulate_fp4_e2m1(
+                            lhs,
+                            rhs,
+                            accumulator,
+                        )
+                        .with_declared_tensor_layout(
+                            TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64(),
+                        )
+                    } else {
+                        MatrixOperation::scaled_multiply_accumulate_fp8_e4m3(
+                            lhs,
+                            rhs,
+                            accumulator,
+                        )
+                        .with_declared_tensor_layout(
+                            TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
+                        )
+                    };
+                    let results = self.emit_results(
+                        operations,
+                        vec![Type::Scalar(ScalarType::F32); 4],
+                        OperationKind::Matrix(matrix),
+                    )?;
+                    let _ = accumulator_fragment;
+                    SemanticValueBindingV1::AccumulatorFragment {
+                        values: results
+                            .into_iter()
+                            .map(|value| (value.id, value.ty))
+                            .collect(),
+                        contract: accumulator_contract,
+                        wave: accumulator_wave,
+                    }
+                } else {
+                    let lhs = require_components(
+                        block,
+                        lhs,
+                        Type::Scalar(ScalarType::Bf16),
+                        4,
+                        "matrix lhs fragment",
+                    )?;
+                    let rhs = require_components(
+                        block,
+                        rhs,
+                        Type::Scalar(ScalarType::Bf16),
+                        4,
+                        "matrix rhs fragment",
+                    )?;
+                    let accumulator = require_components(
+                        block,
+                        accumulator,
+                        Type::Scalar(ScalarType::F32),
+                        4,
+                        "matrix accumulator fragment",
+                    )?;
+                    let lhs = lhs
                         .into_iter()
-                        .map(|value| (value.id, value.ty))
-                        .collect(),
-                    contract: accumulator_contract,
-                    wave: accumulator_wave,
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .expect("four checked lhs components");
+                    let rhs = rhs
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .expect("four checked rhs components");
+                    let accumulator = accumulator
+                        .into_iter()
+                        .map(|(id, _)| id)
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .expect("four checked accumulator components");
+                    let mut tensor_layout =
+                        TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64()
+                            .with_zero_filled_predicate_inputs();
+                    if lhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
+                        tensor_layout = tensor_layout.with_a_lds_xor4();
+                    }
+                    if rhs_storage == SemanticMfmaStorageLayoutV1::LdsXor4 {
+                        tensor_layout = tensor_layout.with_b_lds_xor4();
+                    }
+                    let results = self.emit_results(
+                        operations,
+                        vec![Type::Scalar(ScalarType::F32); 4],
+                        OperationKind::Matrix(
+                            MatrixOperation::multiply_accumulate(lhs, rhs, accumulator)
+                                .with_declared_tensor_layout(tensor_layout),
+                        ),
+                    )?;
+                    let _ = accumulator_fragment;
+                    SemanticValueBindingV1::AccumulatorFragment {
+                        values: results
+                            .into_iter()
+                            .map(|value| (value.id, value.ty))
+                            .collect(),
+                        contract: accumulator_contract,
+                        wave: accumulator_wave,
+                    }
                 }
             }
             SemanticCompilerIntrinsicOperationV1::ThreadIndex1d { .. } => {
@@ -7419,6 +8009,597 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             contract,
             storage_layout,
             wave,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_gfx950_low_precision_matrix_load(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        contract: SemanticMfmaOperandContractV1,
+        storage_layout: SemanticMfmaStorageLayoutV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        let fp4 = contract.profile == SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128;
+        if !fp4 && contract.profile != SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+            || contract.register_distribution
+                != SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+            || storage_layout != SemanticMfmaStorageLayoutV1::RowMajor
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 low-precision load profile or distribution changed",
+            ));
+        }
+        self.require_call_argument_count(block, call, 4)?;
+        let view = self.lower_operand(block, None, &call.arguments()[0], operations)?;
+        let view = view
+            .values()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let [
+            (_, bits_ty),
+            (offset, _),
+            (rows, _),
+            (columns, _),
+            (stride, _),
+        ] = view.as_slice()
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 low-precision matrix load view has no exact checked representation",
+            ));
+        };
+        let (bits, _) = view[0].clone();
+        let Type::Slice(slice) = bits_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 low-precision matrix view storage is not a slice",
+            ));
+        };
+        if *slice.element != Type::Scalar(ScalarType::U8) {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 low-precision matrix view element type changed",
+            ));
+        }
+        let offset = *offset;
+        let rows = *rows;
+        let columns = *columns;
+        let stride = *stride;
+        let (lane, wave) = require_current_wave_lane(
+            block,
+            self.lower_operand(block, None, &call.arguments()[1], operations)?,
+            contract.wave_width,
+            "gfx950 low-precision matrix load lane",
+        )?;
+        let lane_index = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::Cast {
+                kind: CastKind::ZeroExtend,
+                value: lane,
+                to: Type::INDEX,
+            },
+        )?;
+        let first_base = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+        let first_base = self
+            .coerce_index(block, operations, first_base)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let second_base = self.lower_operand(block, None, &call.arguments()[3], operations)?;
+        let second_base = self
+            .coerce_index(block, operations, second_base)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+
+        let fifteen = self.emit_index_constant(operations, 15)?;
+        let sixteen = self.emit_index_constant(operations, 16)?;
+        let lane_minor =
+            self.emit_index_binary(operations, BinaryOp::BitAnd, lane_index, fifteen)?;
+        let lane_group =
+            self.emit_index_binary(operations, BinaryOp::Divide, lane_index, sixteen)?;
+        let group_width = self.emit_index_constant(operations, if fp4 { 32 } else { 16 })?;
+        let lane_group =
+            self.emit_index_binary(operations, BinaryOp::Multiply, lane_group, group_width)?;
+        let bases = semantic_mfma_operand_bases_v1(contract.role, first_base, second_base);
+        let (row_or_column, minor_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Add,
+            bases.minor,
+            lane_minor,
+        )?;
+        let (group_reduction, reduction_safe) = self.emit_checked_index(
+            operations,
+            CheckedBinaryOperator::Add,
+            bases.reduction,
+            lane_group,
+        )?;
+        let present = self.emit_bool_and(operations, minor_safe, reduction_safe)?;
+        let data = self.emit_id(
+            operations,
+            Type::pointer(
+                Type::Scalar(ScalarType::U8),
+                slice.address_space,
+                slice.access,
+            ),
+            OperationKind::SliceData { slice: bits },
+        )?;
+        let length = self.emit_id(
+            operations,
+            Type::INDEX,
+            OperationKind::SliceLength { slice: bits },
+        )?;
+        let zero_index = self.emit_index_constant(operations, 0)?;
+        let zero_u8 = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U8),
+            OperationKind::Constant(Constant::U8(0)),
+        )?;
+        let zero_u32 = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Constant(Constant::U32(0)),
+        )?;
+        let fifteen_u32 = self.emit_id(
+            operations,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Constant(Constant::U32(15)),
+        )?;
+        let mut values = Vec::with_capacity(8);
+        let mut packed = zero_u32;
+        for component in 0_u64..32 {
+            let split_k = if fp4 {
+                component
+            } else {
+                (component % 16) + (component / 16) * 64
+            };
+            let split_k = self.emit_index_constant(operations, split_k)?;
+            let (reduction, component_safe) = self.emit_checked_index(
+                operations,
+                CheckedBinaryOperator::Add,
+                group_reduction,
+                split_k,
+            )?;
+            let component_present = self.emit_bool_and(operations, present, component_safe)?;
+            let (row, column) = match contract.role {
+                SemanticMfmaOperandRoleV1::A => (row_or_column, reduction),
+                SemanticMfmaOperandRoleV1::B => (reduction, row_or_column),
+            };
+            let row_valid = self.emit_compare(operations, ComparePredicate::LessThan, row, rows)?;
+            let column_valid =
+                self.emit_compare(operations, ComparePredicate::LessThan, column, columns)?;
+            let (row_offset, row_safe) =
+                self.emit_checked_index(operations, CheckedBinaryOperator::Multiply, row, stride)?;
+            let (index, offset_safe) = self.emit_checked_index(
+                operations,
+                CheckedBinaryOperator::Add,
+                offset,
+                row_offset,
+            )?;
+            let (index, column_safe) =
+                self.emit_checked_index(operations, CheckedBinaryOperator::Add, index, column)?;
+            let index_in_bounds =
+                self.emit_compare(operations, ComparePredicate::LessThan, index, length)?;
+            let mut guard = self.emit_bool_and(operations, component_present, row_valid)?;
+            guard = self.emit_bool_and(operations, guard, column_valid)?;
+            guard = self.emit_bool_and(operations, guard, row_safe)?;
+            guard = self.emit_bool_and(operations, guard, offset_safe)?;
+            guard = self.emit_bool_and(operations, guard, column_safe)?;
+            guard = self.emit_bool_and(operations, guard, index_in_bounds)?;
+            let safe_index = self.emit_select_index(operations, guard, index, zero_index)?;
+            let pointer = self.emit_id(
+                operations,
+                Type::pointer(
+                    Type::Scalar(ScalarType::U8),
+                    slice.address_space,
+                    slice.access,
+                ),
+                OperationKind::GetElementPointer {
+                    base: data,
+                    offset: safe_index,
+                },
+            )?;
+            let loaded = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U8),
+                OperationKind::GuardedLoad {
+                    pointer,
+                    predicate: guard,
+                    fallback: zero_u8,
+                    access: MemoryAccess::new(slice.address_space, 1),
+                },
+            )?;
+            let mut widened = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Cast {
+                    kind: CastKind::ZeroExtend,
+                    value: loaded,
+                    to: Type::Scalar(ScalarType::U32),
+                },
+            )?;
+            if fp4 {
+                widened = self.emit_id(
+                    operations,
+                    Type::Scalar(ScalarType::U32),
+                    OperationKind::Binary {
+                        op: BinaryOp::BitAnd,
+                        lhs: widened,
+                        rhs: fifteen_u32,
+                    },
+                )?;
+            }
+            let shift = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Constant(Constant::U32(if fp4 {
+                    ((component % 8) * 4) as u32
+                } else {
+                    ((component % 4) * 8) as u32
+                })),
+            )?;
+            let shifted = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Binary {
+                    op: BinaryOp::ShiftLeft,
+                    lhs: widened,
+                    rhs: shift,
+                },
+            )?;
+            packed = self.emit_id(
+                operations,
+                Type::Scalar(ScalarType::U32),
+                OperationKind::Binary {
+                    op: BinaryOp::BitOr,
+                    lhs: packed,
+                    rhs: shifted,
+                },
+            )?;
+            if component % (if fp4 { 8 } else { 4 }) == (if fp4 { 7 } else { 3 }) {
+                values.push((packed, Type::Scalar(ScalarType::U32)));
+                packed = zero_u32;
+            }
+        }
+        while values.len() < 8 {
+            values.push((zero_u32, Type::Scalar(ScalarType::U32)));
+        }
+        Ok(SemanticValueBindingV1::MatrixFragment {
+            values,
+            contract,
+            storage_layout,
+            wave,
+        })
+    }
+
+    fn lower_gfx950_lds_transpose_tile_operand(
+        &mut self,
+        block: SemanticBlockIdV1,
+        operand: &SemanticOperandV1,
+        operations: &mut Vec<Operation>,
+        expected_type: SemanticTypeIdV1,
+        expected_format: SemanticGfx950LdsTransposeFormatV1,
+        expected_state: SemanticGfx950LdsTransposeStateV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        if semantic_operand_type(operand) != expected_type {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose receiver type differs from its intrinsic contract",
+            ));
+        }
+        if !matches!(
+            operand,
+            SemanticOperandV1::Constant(constant)
+                if matches!(constant.value(), SemanticConstantValueV1::ZeroSized)
+        ) {
+            return self.lower_operand(block, None, operand, operations);
+        }
+
+        let mut candidates = self.locals.iter().filter_map(|binding| match binding {
+            Some(
+                binding @ SemanticValueBindingV1::Gfx950LdsTransposeTile { format, state, .. },
+            ) if *format == expected_format && *state == expected_state => Some(binding.clone()),
+            _ => None,
+        });
+        let candidate = candidates.next().ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose ZST receiver has no live authenticated state token",
+            )
+        })?;
+        if candidates.next().is_some() {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose ZST receiver has ambiguous authenticated state tokens",
+            ));
+        }
+        Ok(candidate)
+    }
+
+    fn lower_gfx950_lds_transpose_current(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 1)?;
+        let _ = require_current_wave_lane(
+            block,
+            self.lower_operand(block, None, &call.arguments()[0], operations)?,
+            64,
+            "gfx950 LDS transpose current lane",
+        )?;
+        let format = lower_gfx950_lds_transpose_format_v1(format);
+        let results = self.emit_results(
+            operations,
+            vec![gfx950_lds_transpose_pointer_type_v1()],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Current { format },
+            )),
+        )?;
+        Ok(SemanticValueBindingV1::Gfx950LdsTransposeTile {
+            storage: results[0].id,
+            format: semantic_gfx950_lds_transpose_format_v1(format),
+            state: SemanticGfx950LdsTransposeStateV1::Uninitialized,
+        })
+    }
+
+    fn lower_gfx950_lds_transpose_stage(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        input_tile_type: SemanticTypeIdV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 4)?;
+        let tile = self.lower_gfx950_lds_transpose_tile_operand(
+            block,
+            &call.arguments()[0],
+            operations,
+            input_tile_type,
+            format,
+            SemanticGfx950LdsTransposeStateV1::Uninitialized,
+        )?;
+        let SemanticValueBindingV1::Gfx950LdsTransposeTile {
+            storage,
+            format: actual_format,
+            state: SemanticGfx950LdsTransposeStateV1::Uninitialized,
+        } = tile
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose stage requires an uninitialized tile",
+            ));
+        };
+        if actual_format != format {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose stage format differs from its tile",
+            ));
+        }
+        let view = self
+            .lower_operand(block, None, &call.arguments()[1], operations)?
+            .values()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+        let [
+            (source_slice, source_ty),
+            (offset, offset_ty),
+            (rows, rows_ty),
+            (columns, columns_ty),
+            (stride, stride_ty),
+        ] = view.as_slice()
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose stage view has no exact checked representation",
+            ));
+        };
+        let Type::Slice(slice) = source_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose stage source is not a slice",
+            ));
+        };
+        if *slice.element != Type::Scalar(ScalarType::U8)
+            || slice.address_space != AddressSpace::Global
+            || slice.access != AccessMode::ReadOnly
+            || [offset_ty, rows_ty, columns_ty, stride_ty]
+                .iter()
+                .any(|ty| **ty != Type::INDEX)
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose stage source view type changed",
+            ));
+        }
+        let token_base = self.lower_operand(block, None, &call.arguments()[2], operations)?;
+        let token_base = self
+            .coerce_index(block, operations, token_base)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let reduction_base = self.lower_operand(block, None, &call.arguments()[3], operations)?;
+        let reduction_base = self
+            .coerce_index(block, operations, reduction_base)?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+            .0;
+        let format = lower_gfx950_lds_transpose_format_v1(format);
+        let results = self.emit_results(
+            operations,
+            vec![gfx950_lds_transpose_pointer_type_v1()],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Stage {
+                    format,
+                    storage,
+                    source_slice: *source_slice,
+                    offset: *offset,
+                    rows: *rows,
+                    columns: *columns,
+                    stride: *stride,
+                    token_base,
+                    reduction_base,
+                },
+            )),
+        )?;
+        Ok(SemanticValueBindingV1::Gfx950LdsTransposeTile {
+            storage: results[0].id,
+            format: semantic_gfx950_lds_transpose_format_v1(format),
+            state: SemanticGfx950LdsTransposeStateV1::Staged,
+        })
+    }
+
+    fn lower_gfx950_lds_transpose_publish(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        input_tile_type: SemanticTypeIdV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 1)?;
+        let tile = self.lower_gfx950_lds_transpose_tile_operand(
+            block,
+            &call.arguments()[0],
+            operations,
+            input_tile_type,
+            format,
+            SemanticGfx950LdsTransposeStateV1::Staged,
+        )?;
+        let SemanticValueBindingV1::Gfx950LdsTransposeTile {
+            storage,
+            format: actual_format,
+            state: SemanticGfx950LdsTransposeStateV1::Staged,
+        } = tile
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose publish requires a staged tile",
+            ));
+        };
+        if actual_format != format {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose publish format differs from its tile",
+            ));
+        }
+        let format = lower_gfx950_lds_transpose_format_v1(format);
+        let results = self.emit_results(
+            operations,
+            vec![gfx950_lds_transpose_pointer_type_v1()],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Publish { format, storage },
+            )),
+        )?;
+        Ok(SemanticValueBindingV1::Gfx950LdsTransposeTile {
+            storage: results[0].id,
+            format: semantic_gfx950_lds_transpose_format_v1(format),
+            state: SemanticGfx950LdsTransposeStateV1::Published,
+        })
+    }
+
+    fn lower_gfx950_lds_transpose_read(
+        &mut self,
+        block: SemanticBlockIdV1,
+        call: &SemanticDirectCallV1,
+        operations: &mut Vec<Operation>,
+        tile_type: SemanticTypeIdV1,
+        contract: SemanticMfmaOperandContractV1,
+        format: SemanticGfx950LdsTransposeFormatV1,
+    ) -> Result<SemanticValueBindingV1, ProductionSemanticKirErrorV1> {
+        self.require_call_argument_count(block, call, 1)?;
+        let tile = self.lower_gfx950_lds_transpose_tile_operand(
+            block,
+            &call.arguments()[0],
+            operations,
+            tile_type,
+            format,
+            SemanticGfx950LdsTransposeStateV1::Published,
+        )?;
+        let SemanticValueBindingV1::Gfx950LdsTransposeTile {
+            storage,
+            format: actual_format,
+            state: SemanticGfx950LdsTransposeStateV1::Published,
+        } = tile
+        else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose read requires a published tile",
+            ));
+        };
+        let expected_profile = match format {
+            SemanticGfx950LdsTransposeFormatV1::Fp4E2M1 => {
+                SemanticMfmaProfileV1::Fp4E2M1F32M16N16K128
+            }
+            SemanticGfx950LdsTransposeFormatV1::Fp8E4M3 => {
+                SemanticMfmaProfileV1::Fp8E4M3F32M16N16K128
+            }
+        };
+        if actual_format != format
+            || contract.role != SemanticMfmaOperandRoleV1::B
+            || contract.profile != expected_profile
+            || contract.register_distribution
+                != SemanticMfmaRegisterDistributionV1::Gfx950M16N16K128
+            || contract.wave_width != 64
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                None,
+                "gfx950 LDS transpose read contract differs from its published tile",
+            ));
+        }
+        let format = lower_gfx950_lds_transpose_format_v1(format);
+        let results = self.emit_results(
+            operations,
+            vec![Type::Scalar(ScalarType::U32); 8],
+            OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1::full(
+                Gfx950LdsTransposeOperationKindV1::Read { format, storage },
+            )),
+        )?;
+        Ok(SemanticValueBindingV1::MatrixFragment {
+            values: results
+                .into_iter()
+                .map(|result| (result.id, result.ty))
+                .collect(),
+            contract,
+            storage_layout: SemanticMfmaStorageLayoutV1::RowMajor,
+            wave: SemanticCurrentWaveV1::new(64),
         })
     }
 
@@ -9037,6 +10218,7 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             | SemanticValueBindingV1::WaveLane { .. }
             | SemanticValueBindingV1::MatrixFragment { .. }
             | SemanticValueBindingV1::AccumulatorFragment { .. }
+            | SemanticValueBindingV1::Gfx950LdsTransposeTile { .. }
             | SemanticValueBindingV1::Value { .. }
             | SemanticValueBindingV1::OptionPointer { .. }
             | SemanticValueBindingV1::IndexWitness {
@@ -10367,6 +11549,24 @@ const fn lower_f32_math_function(function: SemanticF32MathFunctionV1) -> F32Math
         SemanticF32MathFunctionV1::Ln => F32MathFunction::Ln,
         SemanticF32MathFunctionV1::Log2 => F32MathFunction::Log2,
         SemanticF32MathFunctionV1::Log10 => F32MathFunction::Log10,
+    }
+}
+
+const fn lower_gfx950_lds_transpose_format_v1(
+    format: SemanticGfx950LdsTransposeFormatV1,
+) -> Gfx950LdsTransposeFormatV1 {
+    match format {
+        SemanticGfx950LdsTransposeFormatV1::Fp4E2M1 => Gfx950LdsTransposeFormatV1::Fp4E2M1,
+        SemanticGfx950LdsTransposeFormatV1::Fp8E4M3 => Gfx950LdsTransposeFormatV1::Fp8E4M3,
+    }
+}
+
+const fn semantic_gfx950_lds_transpose_format_v1(
+    format: Gfx950LdsTransposeFormatV1,
+) -> SemanticGfx950LdsTransposeFormatV1 {
+    match format {
+        Gfx950LdsTransposeFormatV1::Fp4E2M1 => SemanticGfx950LdsTransposeFormatV1::Fp4E2M1,
+        Gfx950LdsTransposeFormatV1::Fp8E4M3 => SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
     }
 }
 

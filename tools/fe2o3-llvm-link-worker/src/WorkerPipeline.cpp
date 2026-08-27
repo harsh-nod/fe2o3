@@ -2093,8 +2093,7 @@ parseProductionGeneralGemmV1Descriptor(StringRef Text) {
   SmallVector<StringRef, 256> Lines;
   Text.drop_front(BodyEnd + 1).split(Lines, '\n', -1, true);
   if (Lines.size() < 3 ||
-      Lines[0] !=
-          "module asm \".section .fe2o3.kd.v1,\\22\\22,@progbits\"" ||
+      Lines[0] != "module asm \".section .fe2o3.kd.v1,\\22\\22,@progbits\"" ||
       Lines[1] != "module asm \".balign 8\"")
     return pipelineError(
         "production general GEMM descriptor envelope does not match");
@@ -2137,9 +2136,9 @@ parseProductionGeneralGemmV1Descriptor(StringRef Text) {
   return Descriptor;
 }
 
-Error validateProductionGeneralGemmV1Module(
-    const Module &ModuleValue, const DataLayout &ExpectedLayout,
-    StringRef CompilerText) {
+Error validateProductionGeneralGemmV1Module(const Module &ModuleValue,
+                                            const DataLayout &ExpectedLayout,
+                                            StringRef CompilerText) {
   if (ModuleValue.getTargetTriple().getTriple() != AmdGpuTriple ||
       ModuleValue.getDataLayout() != ExpectedLayout ||
       ModuleValue.global_begin() != ModuleValue.global_end())
@@ -2162,8 +2161,8 @@ Error validateProductionGeneralGemmV1Module(
     Kernel = &FunctionValue;
   }
   const std::set<std::string> ExpectedDeclarations = {
-      "llvm.amdgcn.mfma.f32.16x16x16bf16.1k",
-      "llvm.amdgcn.workgroup.id.x", "llvm.amdgcn.workitem.id.x"};
+      "llvm.amdgcn.mfma.f32.16x16x16bf16.1k", "llvm.amdgcn.workgroup.id.x",
+      "llvm.amdgcn.workitem.id.x"};
   if (!Kernel || Kernel->getName() != ExactGeneralGemmV1Entry ||
       Kernel->getCallingConv() != CallingConv::AMDGPU_KERNEL ||
       !Kernel->getReturnType()->isVoidTy() || Kernel->isVarArg() ||
@@ -2229,8 +2228,7 @@ Error validateProductionGeneralGemmV1Module(
       return pipelineError(
           "production general GEMM LLVM private allocation does not match");
     Type *Allocated = Alloca->getAllocatedType();
-    if (Allocated->isPointerTy() &&
-        Allocated->getPointerAddressSpace() == 1 &&
+    if (Allocated->isPointerTy() && Allocated->getPointerAddressSpace() == 1 &&
         Alloca->getAlign() == Align(8)) {
       ++PointerAllocas;
       AdmittedPointerAllocas.insert(Alloca);
@@ -2306,17 +2304,14 @@ Error validateProductionGeneralGemmV1Module(
   }
   if (Mfmas != 1 || WorkitemIds != 1 || WorkgroupIds != 1 ||
       GlobalLoads != 12 || GlobalStores != 4 || PrivateLoads != 8 ||
-      PrivateStores != 8 || PointerAllocas != 8 ||
-      DeadIntegerAllocas != 1)
+      PrivateStores != 8 || PointerAllocas != 8 || DeadIntegerAllocas != 1)
     return pipelineError(
         Twine("production general GEMM LLVM effect closure does not match ") +
         "mfma=" + Twine(Mfmas) + " workitem_ids=" + Twine(WorkitemIds) +
-        " workgroup_ids=" + Twine(WorkgroupIds) +
-        " global_loads=" + Twine(GlobalLoads) +
-        " global_stores=" + Twine(GlobalStores) +
-        " private_loads=" + Twine(PrivateLoads) +
-        " private_stores=" + Twine(PrivateStores) +
-        " pointer_allocas=" + Twine(PointerAllocas) +
+        " workgroup_ids=" + Twine(WorkgroupIds) + " global_loads=" +
+        Twine(GlobalLoads) + " global_stores=" + Twine(GlobalStores) +
+        " private_loads=" + Twine(PrivateLoads) + " private_stores=" +
+        Twine(PrivateStores) + " pointer_allocas=" + Twine(PointerAllocas) +
         " dead_integer_allocas=" + Twine(DeadIntegerAllocas));
   return Error::success();
 }
@@ -2971,7 +2966,8 @@ Error setAndCheckModuleContract(Module &ModuleValue,
   TargetParts Parts = parseTarget(RequestValue.Target);
   const Triple &ExistingTriple = ModuleValue.getTargetTriple();
   if (!ExistingTriple.getTriple().empty() &&
-      Triple::normalize(ExistingTriple.getTriple()) != AmdGpuTriple)
+      Triple::normalize(ExistingTriple.getTriple()) != AmdGpuTriple &&
+      !MeasuredBuiltinProvider)
     return pipelineError("bitcode target triple does not match AMDHSA");
   bool ExactProducerLayout =
       (isExactPlironScalarAddV1RequestCandidate(RequestValue) ||
@@ -3165,7 +3161,7 @@ parseModuleInput(const Input &InputValue, StringRef InputName,
   if (!Parsed)
     return pipelineError(Twine(InputName) + ": " +
                          errorToDiagnostic(Parsed.takeError()));
-  if (!AcceptedLayout)
+  if (!AcceptedLayout && !MeasuredBuiltinProvider)
     return pipelineError(
         "LLVM module data layout does not match target machine");
   if (!MeasuredBuiltinProvider &&
@@ -3538,8 +3534,7 @@ inspectCompilerKernelLaunchContract(const Function &Kernel) {
     const auto *Value =
         mdconst::dyn_extract<ConstantInt>(Workgroup->getOperand(Index));
     if (!Value || Value->isNegative() ||
-        Value->getValue().getActiveBits() > 32 ||
-        Value->isZero())
+        Value->getValue().getActiveBits() > 32 || Value->isZero())
       return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
                            "' has invalid required-workgroup metadata");
     Required[Index] = Value->getZExtValue();
@@ -3558,9 +3553,9 @@ inspectCompilerKernelLaunchContract(const Function &Kernel) {
   uint64_t Minimum = 0;
   uint64_t Maximum = 0;
   if (FlatParts.size() != 2 || FlatParts[0].getAsInteger(10, Minimum) ||
-      FlatParts[1].getAsInteger(10, Maximum) || Minimum == 0 ||
-      Maximum == 0 || Minimum > Maximum || FlatSize < Minimum ||
-      FlatSize > Maximum || Maximum > std::numeric_limits<uint32_t>::max())
+      FlatParts[1].getAsInteger(10, Maximum) || Minimum == 0 || Maximum == 0 ||
+      Minimum > Maximum || FlatSize < Minimum || FlatSize > Maximum ||
+      Maximum > std::numeric_limits<uint32_t>::max())
     return pipelineError(Twine("compiler kernel '") + Kernel.getName() +
                          "' has an invalid flat-workgroup contract");
 
@@ -3708,9 +3703,10 @@ inspectNormalizedCompilerModule(const Request &RequestValue,
         *Profile == PostLinkProfile::ProductionGeneralGemmV1;
   else
     consumeError(Profile.takeError());
-  bool HasDescriptors = llvm::any_of(ExpectedSymbols, [](const std::string &Name) {
-    return StringRef(Name).ends_with(".kd");
-  });
+  bool HasDescriptors =
+      llvm::any_of(ExpectedSymbols, [](const std::string &Name) {
+        return StringRef(Name).ends_with(".kd");
+      });
   if (GenericCompilerProfile && HasDescriptors) {
     for (const Function &FunctionValue : **Parsed) {
       if (FunctionValue.isDeclaration() ||
@@ -3734,7 +3730,8 @@ inspectNormalizedCompilerModule(const Request &RequestValue,
     return ObjectSymbols.takeError();
   SymbolContract EmittedSymbols{std::move(ObjectSymbols->Definitions),
                                 std::move(ObjectSymbols->PublicDefinitions),
-                                std::move(ObjectSymbols->RequiredImports), {}};
+                                std::move(ObjectSymbols->RequiredImports),
+                                {}};
 
   if (Error E = validateExactDynamicLdsPseudoImport(
           RequestValue, IrSymbols.RequiredImports, "LLVM module", true))
@@ -3765,7 +3762,8 @@ Expected<SymbolContract> inspectInputSymbols(const Input &InputValue,
     return Elf.takeError();
   return SymbolContract{std::move(Elf->Definitions),
                         std::move(Elf->PublicDefinitions),
-                        std::move(Elf->RequiredImports), {}};
+                        std::move(Elf->RequiredImports),
+                        {}};
 }
 
 Error validateV2SymbolRoles(const Request &RequestValue,
@@ -4644,9 +4642,8 @@ Expected<Wave64CallScanner> createWave64CallScanner() {
 
 enum class GeneralGemmMachineProfile { ExactLds, ProductionGlobal };
 
-Error validateGeneralGemmV1Machine(
-    const ELFObjectFile<ELF64LE> &ObjectValue,
-    GeneralGemmMachineProfile Profile) {
+Error validateGeneralGemmV1Machine(const ELFObjectFile<ELF64LE> &ObjectValue,
+                                   GeneralGemmMachineProfile Profile) {
   const StringRef Check = Profile == GeneralGemmMachineProfile::ExactLds
                               ? ExactGeneralGemmV1Check
                               : ProductionGeneralGemmV1Check;
@@ -4680,7 +4677,7 @@ Error validateGeneralGemmV1Machine(
         return postLinkError(Check, "machine_entry_symbol");
       const ELF64LE::Shdr &Section = Sections[Symbol.st_shndx];
       if ((Section.sh_flags & (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR)) !=
-          (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
+              (ELF::SHF_ALLOC | ELF::SHF_EXECINSTR) ||
           Symbol.st_value < Section.sh_addr)
         return postLinkError(Check, "machine_entry_section");
       uint64_t Offset = Symbol.st_value - Section.sh_addr;
@@ -4798,11 +4795,10 @@ Error validateGeneralGemmV1Machine(
           Check,
           (Twine("machine_effect_shape instructions=") +
            Twine(InstructionCount) + " barriers=" + Twine(Barriers) +
-           " mfmas=" + Twine(Mfmas) + " global_loads=" +
-           Twine(GlobalLoads) + " global_stores=" + Twine(GlobalStores) +
-           " scalar_loads=" + Twine(ScalarLoads) + " lds_reads=" +
-           Twine(LdsReads) + " lds_writes=" + Twine(LdsWrites) +
-           " endpgm=" + Twine(EndPrograms))
+           " mfmas=" + Twine(Mfmas) + " global_loads=" + Twine(GlobalLoads) +
+           " global_stores=" + Twine(GlobalStores) + " scalar_loads=" +
+           Twine(ScalarLoads) + " lds_reads=" + Twine(LdsReads) +
+           " lds_writes=" + Twine(LdsWrites) + " endpgm=" + Twine(EndPrograms))
               .str());
     return Error::success();
   }
@@ -6171,8 +6167,7 @@ Error validateProductionGeneralGemmV1Metadata(
                          (Twine("kernel_contract_") + Field).str());
   };
   if (Metadata.Kernels.size() != 1)
-    return postLinkError(ProductionGeneralGemmV1Check,
-                         "kernel_cardinality");
+    return postLinkError(ProductionGeneralGemmV1Check, "kernel_cardinality");
   const KernelLaunchContract &Kernel = Metadata.Kernels.front();
   if (Kernel.Name != ExactGeneralGemmV1Entry ||
       Kernel.Symbol != ExactGeneralGemmV1Descriptor)
@@ -6192,8 +6187,8 @@ Error validateProductionGeneralGemmV1Metadata(
     return Mismatch("group_segment_fixed_size");
   if (Kernel.PrivateSegmentFixedSize != 0)
     return Mismatch("private_segment_fixed_size");
-  if (Kernel.SgprCount != 52 || Kernel.VgprCount != 44 ||
-      !Kernel.AgprCount || *Kernel.AgprCount != 0)
+  if (Kernel.SgprCount != 52 || Kernel.VgprCount != 44 || !Kernel.AgprCount ||
+      *Kernel.AgprCount != 0)
     return Mismatch("register_counts");
   if (!Kernel.SgprSpillCount || *Kernel.SgprSpillCount != 0)
     return Mismatch("sgpr_spill_count");
@@ -6937,14 +6932,11 @@ Error validateExactMoeTop2V1Metadata(const MetadataContract &Metadata) {
   return Error::success();
 }
 
-Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
-                                                 const ElfContract &Expected,
-                                                 const Request &RequestValue,
-                                                 const std::map<
-                                                     std::string,
-                                                     CompilerKernelLaunchContract>
-                                                     *CompilerLaunchContracts =
-                                                         nullptr) {
+Expected<std::vector<std::string>>
+inspectOutput(ArrayRef<uint8_t> Bytes, const ElfContract &Expected,
+              const Request &RequestValue,
+              const std::map<std::string, CompilerKernelLaunchContract>
+                  *CompilerLaunchContracts = nullptr) {
   StringRef Data(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
   auto ObjectOrError =
       ObjectFile::createObjectFile(MemoryBufferRef(Data, "<output>"));
@@ -7227,38 +7219,38 @@ Expected<std::vector<std::string>> inspectOutput(ArrayRef<uint8_t> Bytes,
       (*Profile == PostLinkProfile::LegacyGfx942G1 ||
        *Profile == PostLinkProfile::ProductionGeneralGemmV1) &&
       RequestValue.Protocol == ProtocolVersion::V2) {
-    if (!CompilerLaunchContracts || CompilerLaunchContracts->size() !=
-                                        Metadata->Kernels.size())
+    if (!CompilerLaunchContracts ||
+        CompilerLaunchContracts->size() != Metadata->Kernels.size())
       return pipelineError(
           "post_link.check=compiler_launch_contract status=failed "
           "reason=kernel_cardinality");
     for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
       auto ExpectedLaunch = CompilerLaunchContracts->find(Kernel.Name);
       if (ExpectedLaunch == CompilerLaunchContracts->end())
-        return pipelineError(
-            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) +
-            " field=compiler_kernel_presence");
+        return pipelineError(Twine("post_link.check=compiler_launch_contract "
+                                   "status=failed kernel=") +
+                             diagnosticAtom(Kernel.Name) +
+                             " field=compiler_kernel_presence");
       if (!Kernel.RequiredWorkgroupSize ||
           *Kernel.RequiredWorkgroupSize !=
               ExpectedLaunch->second.RequiredWorkgroupSize)
-        return pipelineError(
-            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) +
-            " field=reqd_workgroup_size");
+        return pipelineError(Twine("post_link.check=compiler_launch_contract "
+                                   "status=failed kernel=") +
+                             diagnosticAtom(Kernel.Name) +
+                             " field=reqd_workgroup_size");
       if (Kernel.MaxFlatWorkgroupSize !=
           ExpectedLaunch->second.MaxFlatWorkgroupSize)
-        return pipelineError(
-            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) +
-            " field=max_flat_workgroup_size");
+        return pipelineError(Twine("post_link.check=compiler_launch_contract "
+                                   "status=failed kernel=") +
+                             diagnosticAtom(Kernel.Name) +
+                             " field=max_flat_workgroup_size");
       if (Kernel.WavefrontSize != ExpectedLaunch->second.WavefrontSize)
-        return pipelineError(
-            Twine("post_link.check=compiler_launch_contract status=failed kernel=") +
-            diagnosticAtom(Kernel.Name) + " field=wavefront_size");
+        return pipelineError(Twine("post_link.check=compiler_launch_contract "
+                                   "status=failed kernel=") +
+                             diagnosticAtom(Kernel.Name) +
+                             " field=wavefront_size");
     }
-  } else if (RequestedTarget.Cpu == "gfx942" &&
-             !ExpectedDescriptors.empty() &&
+  } else if (RequestedTarget.Cpu == "gfx942" && !ExpectedDescriptors.empty() &&
              *Profile == PostLinkProfile::LegacyGfx942G1) {
     static constexpr std::array<uint64_t, 3> G1Workgroup = {256, 1, 1};
     for (const KernelLaunchContract &Kernel : Metadata->Kernels) {
@@ -7871,9 +7863,9 @@ Error validateProductionGeneralGemmV1MetadataForTesting(
   Metadata.Present = true;
   std::set<std::string> Names;
   std::set<std::string> Symbols;
-  if (Error E = appendMetadataBlob(
-          MetadataBlob, Metadata, Names, Symbols,
-          MetadataValidationPolicy::ProductionGeneralGemmV1))
+  if (Error E =
+          appendMetadataBlob(MetadataBlob, Metadata, Names, Symbols,
+                             MetadataValidationPolicy::ProductionGeneralGemmV1))
     return E;
   if (!Metadata.Target ||
       *Metadata.Target != "amdgcn-amd-amdhsa--gfx942:xnack-")
@@ -8014,13 +8006,14 @@ inspectLinkedOutputForPublication(ArrayRef<uint8_t> Bytes,
       return Inspected.takeError();
     CompilerModule = std::move(*Inspected);
   }
-  return inspectOutput(
-      Bytes, *ExpectedElf, RequestValue,
-      CompilerModule ? &CompilerModule->KernelLaunchContracts : nullptr);
+  return inspectOutput(Bytes, *ExpectedElf, RequestValue,
+                       CompilerModule ? &CompilerModule->KernelLaunchContracts
+                                      : nullptr);
 }
 
 Response executeImpl(const Request &RequestValue,
-                     const Gfx942DeviceLibraryPolicy *TestPolicy) {
+                     const Gfx942DeviceLibraryPolicy *Gfx942TestPolicy,
+                     const Gfx950DeviceLibraryPolicy *Gfx950TestPolicy) {
   if (RequestValue.LlvmBuildIdentity != LlvmBuildIdentity)
     return failure(RequestValue, Stage::Toolchain,
                    {"request LLVM identity does not match worker measurement"});
@@ -8031,6 +8024,11 @@ Response executeImpl(const Request &RequestValue,
         {"request worker identity does not match worker measurement"});
   if (Error E = validateRequest(RequestValue))
     return failure(RequestValue, Stage::InputValidation, std::move(E));
+  if (parseTarget(RequestValue.Target).Cpu == "gfx950" &&
+      !RequestValue.ExternalProviders.empty())
+    return failure(RequestValue, Stage::InputValidation,
+                   {"gfx950 accepts only the measured built-in device-library "
+                    "provider"});
   if (mentionsExactPlironScalarAddV1(RequestValue) &&
       !isClosedExactPlironScalarAddV1Request(RequestValue))
     return failure(RequestValue, Stage::InputValidation,
@@ -8099,44 +8097,75 @@ Response executeImpl(const Request &RequestValue,
   const std::set<std::string> NoImports;
   const std::set<std::string> &MeasuredImports =
       CompilerModule ? CompilerModule->RequiredImports : NoImports;
+  TargetParts RequestedTarget = parseTarget(RequestValue.Target);
   for (const std::string &Import : MeasuredImports) {
-    if (isSupportedGfx942OcmlImport(Import)) {
+    bool Supported =
+        RequestedTarget.Cpu == "gfx942"   ? isSupportedGfx942OcmlImport(Import)
+        : RequestedTarget.Cpu == "gfx950" ? isSupportedGfx950OcmlImport(Import)
+                                          : false;
+    if (Supported) {
       BuiltinOcmlImports.insert(Import);
       continue;
     }
     if (isOcmlImportNamespace(Import))
-      return failure(RequestValue, Stage::InputValidation,
-                     {"unsupported gfx942 OCML import: " + Import});
+      return failure(
+          RequestValue, Stage::InputValidation,
+          {"unsupported " + RequestedTarget.Cpu + " OCML import: " + Import});
   }
 
   std::vector<Input> BuiltinProviders;
   std::optional<DeviceLibraryProviderEvidence> ProviderEvidence;
+  std::string ProviderIdentity;
   if (!BuiltinOcmlImports.empty()) {
-    TargetParts Parts = parseTarget(RequestValue.Target);
-    if (RequestValue.Protocol != ProtocolVersion::V2 || Parts.Cpu != "gfx942" ||
-        !isSupportedGfx942OcmlCodeObjectVersion(RequestValue.CodeObjectVersion))
+    bool SupportedVersion = RequestedTarget.Cpu == "gfx942"
+                                ? isSupportedGfx942OcmlCodeObjectVersion(
+                                      RequestValue.CodeObjectVersion)
+                            : RequestedTarget.Cpu == "gfx950"
+                                ? isSupportedGfx950OcmlCodeObjectVersion(
+                                      RequestValue.CodeObjectVersion)
+                                : false;
+    if (RequestValue.Protocol != ProtocolVersion::V2 || !SupportedVersion)
       return failure(RequestValue, Stage::InputValidation,
-                     {"measured OCML providers require Worker V2, gfx942, and "
-                      "code-object V5 or V6"});
-    Expected<Gfx942DeviceLibraryPolicy> Measured =
-        TestPolicy ? Expected<Gfx942DeviceLibraryPolicy>(*TestPolicy)
-                   : measuredGfx942DeviceLibraryPolicy();
-    if (!Measured)
-      return failure(RequestValue, Stage::Toolchain, Measured.takeError());
+                     {"measured OCML provider target/code-object version is "
+                      "not supported"});
     std::vector<std::string> MeasuredImportList(MeasuredImports.begin(),
                                                 MeasuredImports.end());
-    auto Loaded = loadGfx942DeviceLibraries(MeasuredImportList, *Measured);
-    if (!Loaded)
-      return failure(RequestValue, Stage::Toolchain, Loaded.takeError());
-    BuiltinProviders = std::move(*Loaded);
+    std::vector<PinnedDeviceLibraryFile> ProviderFiles;
+    if (RequestedTarget.Cpu == "gfx942") {
+      Expected<Gfx942DeviceLibraryPolicy> Measured =
+          Gfx942TestPolicy
+              ? Expected<Gfx942DeviceLibraryPolicy>(*Gfx942TestPolicy)
+              : measuredGfx942DeviceLibraryPolicy();
+      if (!Measured)
+        return failure(RequestValue, Stage::Toolchain, Measured.takeError());
+      auto Loaded = loadGfx942DeviceLibraries(MeasuredImportList, *Measured);
+      if (!Loaded)
+        return failure(RequestValue, Stage::Toolchain, Loaded.takeError());
+      BuiltinProviders = std::move(*Loaded);
+      ProviderFiles = Measured->Files;
+      ProviderIdentity = "gfx942-ocml-v1";
+    } else {
+      Expected<Gfx950DeviceLibraryPolicy> Measured =
+          Gfx950TestPolicy
+              ? Expected<Gfx950DeviceLibraryPolicy>(*Gfx950TestPolicy)
+              : measuredGfx950DeviceLibraryPolicy();
+      if (!Measured)
+        return failure(RequestValue, Stage::Toolchain, Measured.takeError());
+      auto Loaded = loadGfx950DeviceLibraries(MeasuredImportList, *Measured);
+      if (!Loaded)
+        return failure(RequestValue, Stage::Toolchain, Loaded.takeError());
+      BuiltinProviders = std::move(*Loaded);
+      ProviderFiles = Measured->Files;
+      ProviderIdentity = "gfx950-ocml-rocm-7.2.1-v1";
+    }
 
     DeviceLibraryProviderEvidence Evidence;
-    Evidence.ProviderIdentity = "gfx942-ocml-v1";
+    Evidence.ProviderIdentity = ProviderIdentity;
     Evidence.Target = RequestValue.Target;
     Evidence.CodeObjectVersion = RequestValue.CodeObjectVersion;
     Evidence.ImportSymbols.assign(BuiltinOcmlImports.begin(),
                                   BuiltinOcmlImports.end());
-    for (const PinnedDeviceLibraryFile &File : Measured->Files)
+    for (const PinnedDeviceLibraryFile &File : ProviderFiles)
       Evidence.Files.push_back({File.Basename, File.Digest});
     auto ManifestIdentity = calculateProviderManifestIdentity(Evidence);
     if (!ManifestIdentity)
@@ -8230,8 +8259,8 @@ Response executeImpl(const Request &RequestValue,
   std::vector<std::string> LinkDiagnostics;
   if (!BuiltinProviders.empty())
     LinkDiagnostics.push_back(
-        (Twine("device_library.check=identity status=ok ") +
-         "provider=gfx942-ocml-v1 roots=" + diagnosticList(BuiltinOcmlImports) +
+        (Twine("device_library.check=identity status=ok ") + "provider=" +
+         ProviderIdentity + " roots=" + diagnosticList(BuiltinOcmlImports) +
          " files=" + Twine(BuiltinProviders.size()))
             .str());
   auto LinkedBytes =
@@ -8272,14 +8301,15 @@ Response executeImpl(const Request &RequestValue,
   }
 
   Output ResultOutput{SHA256::hash(*LinkedBytes), std::move(*LinkedBytes)};
-  Response Result{
-      RequestValue.RequestId,
-      RequestValue.Identity,
-      (TestPolicy ? UnauthenticatedTestWorkerIdentity : WorkerBuildIdentity)
-          .str(),
-      Stage::Complete,
-      canonicalDiagnostics(LinkDiagnostics, Temporary.Path),
-      std::move(ResultOutput)};
+  Response Result{RequestValue.RequestId,
+                  RequestValue.Identity,
+                  ((Gfx942TestPolicy || Gfx950TestPolicy)
+                       ? UnauthenticatedTestWorkerIdentity
+                       : WorkerBuildIdentity)
+                      .str(),
+                  Stage::Complete,
+                  canonicalDiagnostics(LinkDiagnostics, Temporary.Path),
+                  std::move(ResultOutput)};
   Result.Protocol = RequestValue.Protocol;
   Result.CompilerEnvelopeIdentity = RequestValue.CompilerEnvelopeIdentity;
   Result.DeviceLibraryProvider = std::move(ProviderEvidence);
@@ -8287,12 +8317,17 @@ Response executeImpl(const Request &RequestValue,
 }
 
 Response execute(const Request &RequestValue) {
-  return executeImpl(RequestValue, nullptr);
+  return executeImpl(RequestValue, nullptr, nullptr);
 }
 
 Response executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
     const Request &RequestValue, const Gfx942DeviceLibraryPolicy &Policy) {
-  return executeImpl(RequestValue, &Policy);
+  return executeImpl(RequestValue, &Policy, nullptr);
+}
+
+Response executeWithUnauthenticatedGfx950DeviceLibraryPolicyForTesting(
+    const Request &RequestValue, const Gfx950DeviceLibraryPolicy &Policy) {
+  return executeImpl(RequestValue, nullptr, &Policy);
 }
 
 } // namespace fe2o3::worker

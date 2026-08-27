@@ -1534,7 +1534,7 @@ fn tensor_element_scalar(element: MatrixElement) -> Option<SemanticTypedScalarV1
         }
         // BF16 is currently an operand storage scalar, not a semantic result
         // scalar in the typed-reference dialect.
-        MatrixElement::Bf16 => None,
+        MatrixElement::Bf16 | MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3 => None,
     }
 }
 

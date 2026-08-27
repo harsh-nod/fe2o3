@@ -8,28 +8,32 @@ use fe2o3_kernel_ir::{
     AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE, AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME,
     AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE, AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAME,
     AMDGPU_GFX942_INLINE_ASSEMBLY_CAPABILITY_NAMESPACE,
-    AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME, AddressSpace as KernelAddressSpace,
+    AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+    AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME, AddressSpace as KernelAddressSpace,
     AmdGpuDiagnosticOperation, AssemblyConstraint, AssemblyOperandKind, AssemblyOption, Atomic,
     AtomicKind, Axis, BF16_F32_M16N16K16_CAPABILITY, BasicBlock, BinaryOp, BlockId, CastKind,
     CheckedBinaryOperator, ComparePredicate, Constant,
     DiagnosticCode as VerificationDiagnosticCode, F32MathFunction, F32MathImplementation,
-    FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole, IndexKind,
-    IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel, KernelId,
-    LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent, MATRIX_CAPABILITY_NAMESPACE,
-    MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1, MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2,
-    MatrixElement, MatrixFrontendBindingV2, MatrixOperation, MatrixOperationKind,
-    MatrixProjectedKernargPolicyV1, MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering,
-    Module, ModuleId, NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract,
-    PointerDistanceKind, PointerDistanceUnit, ScalarGemmTargetRequirementsV1, ScalarGemmV1Error,
+    FloatConversionKind, FloatOperation, Function, FunctionId, FunctionRole,
+    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
+    IndexKind, IndexedControlFlow, InlineAssembly, InlineAssemblyTarget, IntrinsicKind, Kernel,
+    KernelId, LDS_TILE_16X16_XOR4_CAPABILITY, LaunchDomain, LaunchExtent,
+    MATRIX_CAPABILITY_NAMESPACE, MATRIX_PROJECTED_KERNARG_POLICY_NAMESPACE_V1,
+    MATRIX_SOURCE_ABI_OBSERVATION_NAMESPACE_V2, MatrixElement, MatrixFrontendBindingV2,
+    MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind, MatrixProjectedKernargPolicyV1,
+    MemoryElementType, MemoryIntrinsicOperation, MemoryOrdering, Module, ModuleId,
+    NarrowFloatFormat, Operation, OperationKind, PointerDistanceContract, PointerDistanceKind,
+    PointerDistanceUnit, SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY,
+    SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY, ScalarGemmTargetRequirementsV1, ScalarGemmV1Error,
     ScalarType, Signature, SynchronizationScope, TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_X,
     TILED_GEMM_LDS_EDGES_V1_LAUNCH_EXTENT_Y, TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_X,
     TILED_GEMM_LDS_GRID_V1_LAUNCH_EXTENT_Y, TargetCapability, Terminator, TiledGemmLdsEdgesV1Error,
     TiledGemmLdsEdgesV1Profile, TiledGemmLdsGridV1Error, TiledGemmLdsGridV1Profile,
     TiledGemmLdsK32V2Error, TiledGemmLdsK32V2Profile, TiledGemmLdsV1Error, TiledGemmLdsV1Profile,
     TiledGemmV1Error, TiledGemmV1Profile, Type, UnaryOp, ValueId, VerificationErrors,
-    WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp, WorkgroupMemoryExtent,
-    WorkgroupSize, analyze_control_flow, encode_module_v4, gfx942_xnack_minus_target_capability,
-    verify_module, verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_edges_v1_module,
+    WaveF32ReductionKindV1, WaveOperation, WaveOperationKind, WaveWidth, WidenedFloatBinaryOp,
+    WorkgroupMemoryExtent, WorkgroupSize, analyze_control_flow, encode_module_v4, verify_module,
+    verify_scalar_gemm_v1_module, verify_tiled_gemm_lds_edges_v1_module,
     verify_tiled_gemm_lds_grid_v1_module, verify_tiled_gemm_lds_k32_v2_module,
     verify_tiled_gemm_lds_v1_module, verify_tiled_gemm_v1_module,
 };
@@ -62,6 +66,7 @@ enum LoweringTarget {
     Baseline,
     Gfx942StrictFloatV1,
     Gfx942XnackMinusV1,
+    Gfx950XnackMinusV1,
     Gfx942RowSoftmaxV1,
     Gfx942ScalarGemmV1,
     Gfx942TiledGemmV1,
@@ -81,15 +86,23 @@ impl LoweringTarget {
     }
 
     const fn supports_gfx942_inline_assembly(self) -> bool {
-        !matches!(self, Self::Baseline)
+        !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
     }
 
     const fn supports_gfx942_matrix(self) -> bool {
-        !matches!(self, Self::Baseline)
+        !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
+    }
+
+    const fn supports_gfx950_scaled_matrix(self) -> bool {
+        matches!(self, Self::Gfx950XnackMinusV1)
+    }
+
+    const fn supports_gfx950_attention(self) -> bool {
+        matches!(self, Self::Gfx950XnackMinusV1)
     }
 
     const fn supports_gfx942_diagnostics(self) -> bool {
-        !matches!(self, Self::Baseline)
+        !matches!(self, Self::Baseline | Self::Gfx950XnackMinusV1)
     }
 
     const fn supports_gfx942_xnack_minus_binding(self) -> bool {
@@ -104,6 +117,14 @@ impl LoweringTarget {
                 | Self::Gfx942TiledGemmLdsGridV1
                 | Self::Gfx942TiledGemmLdsEdgesV1
         )
+    }
+
+    const fn exact_target_binding(self) -> Option<&'static str> {
+        match self {
+            Self::Gfx942XnackMinusV1 => Some(AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME),
+            Self::Gfx950XnackMinusV1 => Some(AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME),
+            _ => None,
+        }
     }
 
     const fn llvm_function_attributes(self) -> &'static str {
@@ -122,6 +143,9 @@ impl LoweringTarget {
             | Self::Gfx942TiledGemmLdsEdgesV1 => {
                 " \"target-cpu\"=\"gfx942\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
             }
+            Self::Gfx950XnackMinusV1 => {
+                " \"target-cpu\"=\"gfx950\" \"denormal-fp-math-f32\"=\"ieee,ieee\" \"unsafe-fp-math\"=\"false\" \"no-infs-fp-math\"=\"false\" \"no-nans-fp-math\"=\"false\" \"no-signed-zeros-fp-math\"=\"false\" \"approx-func-fp-math\"=\"false\" \"fp-contract\"=\"off\""
+            }
         }
     }
 
@@ -129,6 +153,7 @@ impl LoweringTarget {
         match self {
             Self::Gfx942ScalarGemmV1 => Some(GFX942_UPSTREAM_LLVM_DATA_LAYOUT_V1),
             Self::Gfx942XnackMinusV1
+            | Self::Gfx950XnackMinusV1
             | Self::Gfx942RowSoftmaxV1
             | Self::Gfx942TiledGemmV1
             | Self::Gfx942TiledGemmLdsV1
@@ -143,6 +168,7 @@ impl LoweringTarget {
         match (self, width) {
             (
                 Self::Gfx942XnackMinusV1
+                | Self::Gfx950XnackMinusV1
                 | Self::Gfx942RowSoftmaxV1
                 | Self::Gfx942ScalarGemmV1
                 | Self::Gfx942TiledGemmV1
@@ -154,6 +180,7 @@ impl LoweringTarget {
             ) => " \"target-features\"=\"+wavefrontsize32,-wavefrontsize64,-xnack\"",
             (
                 Self::Gfx942XnackMinusV1
+                | Self::Gfx950XnackMinusV1
                 | Self::Gfx942RowSoftmaxV1
                 | Self::Gfx942ScalarGemmV1
                 | Self::Gfx942TiledGemmV1
@@ -464,6 +491,18 @@ pub fn lower_kernel_to_gfx942_xnack_minus_llvm_ir(
     lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx942XnackMinusV1)
 }
 
+/// Lowers one kernel only when Kernel IR retains the exact gfx950:xnack- binding.
+///
+/// The returned module binds the reviewed AMDGPU data layout, gfx950 processor,
+/// explicit `-xnack`, Wave64 policy, and strict floating-point attributes. It
+/// remains inert LLVM text and grants no code-object or execution authority.
+pub fn lower_kernel_to_gfx950_xnack_minus_llvm_ir(
+    module: &Module,
+    kernel_id: &KernelId,
+) -> Result<String, LoweringErrors> {
+    lower_kernel_to_llvm_ir_for_target(module, kernel_id, LoweringTarget::Gfx950XnackMinusV1)
+}
+
 fn lower_kernel_to_llvm_ir_for_target(
     module: &Module,
     kernel_id: &KernelId,
@@ -542,8 +581,8 @@ fn lower_kernel_to_llvm_ir_for_target(
         "entry function",
         target,
     )?;
-    if target == LoweringTarget::Gfx942XnackMinusV1 {
-        require_exact_kernel_binding(module, kernel, entry)?;
+    if let Some(exact_target) = target.exact_target_binding() {
+        require_exact_kernel_binding(module, kernel, entry, exact_target)?;
     }
     validate_matrix_frontend_abi_binding(module, kernel, entry, target)?;
     let wave_widths = [module_wave, kernel_wave, function_wave]
@@ -596,6 +635,18 @@ pub fn lower_compiler_module_to_gfx942_llvm_ir(module: &Module) -> Result<String
     lower_compiler_module_to_llvm_ir_for_target(
         module,
         LoweringTarget::Gfx942StrictFloatV1,
+        None,
+        true,
+    )
+}
+
+/// Lowers a complete compiler module for the exact gfx950:xnack- profile.
+pub fn lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(
+    module: &Module,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_to_llvm_ir_for_target(
+        module,
+        LoweringTarget::Gfx950XnackMinusV1,
         None,
         true,
     )
@@ -2309,6 +2360,17 @@ fn lower_compiler_module_to_llvm_ir_for_target(
     }
     verify_module(module).map_err(LoweringErrors::verification)?;
 
+    if let Some(exact_target) = target.exact_target_binding() {
+        for kernel in &module.kernels {
+            let entry = module
+                .functions
+                .iter()
+                .find(|function| function.id == kernel.entry)
+                .expect("verify_module established every kernel entry");
+            require_exact_kernel_binding(module, kernel, entry, exact_target)?;
+        }
+    }
+
     let module_wave = validate_capabilities(
         LoweringLocation::module(module),
         &module.required_capabilities,
@@ -3067,6 +3129,7 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
                         OperationKind::WorkgroupBarrier(_)
                             | OperationKind::Wave(_)
                             | OperationKind::Matrix(_)
+                            | OperationKind::Gfx950LdsTranspose(_)
                     )
                     .then_some((block.id, operation))
                 })
@@ -3097,6 +3160,7 @@ fn validate_convergent_cfg(lowerer: &FunctionLowerer<'_>) -> Result<(), Lowering
             OperationKind::WorkgroupBarrier(barrier) => barrier.convergence.scope(),
             OperationKind::Wave(wave) => wave.convergence.scope(),
             OperationKind::Matrix(matrix) => matrix.convergence.scope(),
+            OperationKind::Gfx950LdsTranspose(transpose) => transpose.convergence.scope(),
             _ => unreachable!("convergent operation inventory is exact"),
         };
         let control = report.block_control(block);
@@ -4018,7 +4082,10 @@ fn collect_intrinsic_declarations<'a>(
                 OperationKind::Wave(wave) => {
                     if matches!(
                         wave.kind,
-                        WaveOperationKind::LaneId | WaveOperationKind::ShuffleIndex { .. }
+                        WaveOperationKind::LaneId
+                            | WaveOperationKind::ShuffleIndex { .. }
+                            | WaveOperationKind::ReduceF32 { .. }
+                            | WaveOperationKind::BroadcastF32 { .. }
                     ) {
                         insert_intrinsic(
                             &mut declarations,
@@ -4053,7 +4120,12 @@ fn collect_intrinsic_declarations<'a>(
                             },
                         );
                     }
-                    if matches!(wave.kind, WaveOperationKind::ShuffleIndex { .. }) {
+                    if matches!(
+                        wave.kind,
+                        WaveOperationKind::ShuffleIndex { .. }
+                            | WaveOperationKind::ReduceF32 { .. }
+                            | WaveOperationKind::BroadcastF32 { .. }
+                    ) {
                         insert_intrinsic(
                             &mut declarations,
                             AmdgcnIntrinsic::DsBpermute,
@@ -4063,12 +4135,76 @@ fn collect_intrinsic_declarations<'a>(
                         );
                     }
                 }
+                OperationKind::Gfx950LdsTranspose(transpose) => match transpose.kind {
+                    Gfx950LdsTransposeOperationKindV1::Current { .. }
+                    | Gfx950LdsTransposeOperationKindV1::Publish { .. } => {}
+                    Gfx950LdsTransposeOperationKindV1::Stage { .. } => {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntLo,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntHi,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        for name in ["llvm.uadd.with.overflow.i64", "llvm.umul.with.overflow.i64"] {
+                            declarations.insert(
+                                name.to_owned(),
+                                IntrinsicDeclaration {
+                                    result: "{ i64, i1 }",
+                                    arguments: "i64, i64",
+                                    attribute: IntrinsicAttribute::ReadNone,
+                                },
+                            );
+                        }
+                    }
+                    Gfx950LdsTransposeOperationKindV1::Read { format, .. } => {
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntLo,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        insert_intrinsic(
+                            &mut declarations,
+                            AmdgcnIntrinsic::MbcntHi,
+                            "i32",
+                            "i32, i32",
+                            IntrinsicAttribute::ReadNone,
+                        );
+                        let intrinsic = match format {
+                            Gfx950LdsTransposeFormatV1::Fp4E2M1 => AmdgcnIntrinsic::DsReadTr4B64,
+                            Gfx950LdsTransposeFormatV1::Fp8E4M3 => AmdgcnIntrinsic::DsReadTr8B64,
+                        };
+                        insert_intrinsic(
+                            &mut declarations,
+                            intrinsic,
+                            "<2 x i32>",
+                            "ptr addrspace(3) nocapture",
+                            IntrinsicAttribute::Convergent,
+                        );
+                    }
+                },
                 OperationKind::Matrix(matrix) => match &matrix.kind {
                     MatrixOperationKind::MultiplyAccumulate { .. } => insert_intrinsic(
                         &mut declarations,
                         AmdgcnIntrinsic::MfmaF32M16N16K16Bf16,
                         "<4 x float>",
                         "<4 x i16>, <4 x i16>, <4 x float>, i32, i32, i32",
+                        IntrinsicAttribute::Convergent,
+                    ),
+                    MatrixOperationKind::ScaledMultiplyAccumulate { .. } => insert_intrinsic(
+                        &mut declarations,
+                        AmdgcnIntrinsic::MfmaScaleF32M16N16K128F8F6F4V8I32,
+                        "<4 x float>",
+                        "<8 x i32>, <8 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32",
                         IntrinsicAttribute::Convergent,
                     ),
                     MatrixOperationKind::LdsLoad { .. } | MatrixOperationKind::LdsStore { .. } => {
@@ -4193,6 +4329,14 @@ fn validate_capabilities(
                         BF16_F32_M16N16K16_CAPABILITY | LDS_TILE_16X16_XOR4_CAPABILITY
                     ) => {}
             TargetCapability::Extension { namespace, name }
+                if target.supports_gfx950_scaled_matrix()
+                    && namespace == MATRIX_CAPABILITY_NAMESPACE
+                    && matches!(
+                        name.as_str(),
+                        SCALED_FP4_E2M1_F32_M16N16K128_CAPABILITY
+                            | SCALED_FP8_E4M3_F32_M16N16K128_CAPABILITY
+                    ) => {}
+            TargetCapability::Extension { namespace, name }
                 if target.supports_gfx942_diagnostics()
                     && namespace == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME => {}
@@ -4200,6 +4344,9 @@ fn validate_capabilities(
                 if target.supports_gfx942_xnack_minus_binding()
                     && namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
                     && name == AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME => {}
+            TargetCapability::Extension { namespace, name }
+                if target.exact_target_binding() == Some(name.as_str())
+                    && namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE => {}
             TargetCapability::Extension { namespace, name }
                 if target == LoweringTarget::Gfx942XnackMinusV1
                     && matches!(
@@ -4231,8 +4378,12 @@ fn require_exact_kernel_binding(
     module: &Module,
     kernel: &Kernel,
     entry: &Function,
+    exact_target: &'static str,
 ) -> Result<(), LoweringErrors> {
-    let required = gfx942_xnack_minus_target_capability();
+    let required = TargetCapability::Extension {
+        namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+        name: exact_target.to_owned(),
+    };
     for (location, owner, capabilities) in [
         (
             LoweringLocation::module(module),
@@ -4254,7 +4405,7 @@ fn require_exact_kernel_binding(
             return Err(LoweringErrors::one(
                 location,
                 LoweringDiagnosticCode::UnsupportedCapability,
-                format!("exact gfx942:xnack- lowering requires {required:?} on the {owner}"),
+                format!("exact {exact_target} lowering requires {required:?} on the {owner}"),
             ));
         }
     }
@@ -4305,7 +4456,12 @@ fn validate_matrix_frontend_abi_binding(
             "matrix source ABI observations and projected kernarg policy are admitted only by exact gfx942:xnack- lowering",
         ));
     }
-    require_exact_kernel_binding(module, kernel, entry)?;
+    require_exact_kernel_binding(
+        module,
+        kernel,
+        entry,
+        AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME,
+    )?;
     let [binding] = bindings.as_slice() else {
         return Err(LoweringErrors::one(
             LoweringLocation::function(module, kernel, entry),
@@ -4383,6 +4539,7 @@ fn validate_launch(
                 LoweringTarget::Baseline
                     | LoweringTarget::Gfx942StrictFloatV1
                     | LoweringTarget::Gfx942XnackMinusV1
+                    | LoweringTarget::Gfx950XnackMinusV1
             ) => {}
         LaunchDomain::D2 { .. } | LaunchDomain::D3 { .. } => {
             return Err(LoweringErrors::one(
@@ -4541,6 +4698,8 @@ fn emit_matrix_projected_kernarg_policy(
         let kind = match parameter.element {
             MatrixElement::Bf16 => "bf16",
             MatrixElement::F32 => "f32",
+            MatrixElement::Fp4E2M1 => "fp4-e2m1",
+            MatrixElement::Fp8E4M3 => "fp8-e4m3",
         };
         writeln!(
             output,
@@ -4846,12 +5005,22 @@ impl<'a> FunctionLowerer<'a> {
         );
         let is_inline_assembly = matches!(operation.kind, OperationKind::InlineAssembly(_));
         let is_matrix = matches!(operation.kind, OperationKind::Matrix(_));
+        let is_gfx950_attention = matches!(
+            operation.kind,
+            OperationKind::Gfx950LdsTranspose(_)
+                | OperationKind::Wave(WaveOperation {
+                    kind: WaveOperationKind::ReduceF32 { .. }
+                        | WaveOperationKind::BroadcastF32 { .. },
+                    ..
+                })
+        );
         if !is_float
             && !is_diagnostic
             && !is_inline_assembly
             && !is_matrix
+            && !is_gfx950_attention
             && !matches!(
-                operation.kind,
+                &operation.kind,
                 OperationKind::Fence(_)
                     | OperationKind::WorkgroupBarrier(_)
                     | OperationKind::WorkgroupMemory(_)
@@ -4868,6 +5037,9 @@ impl<'a> FunctionLowerer<'a> {
                     TargetCapability::WorkgroupMemory
                         | TargetCapability::DynamicWorkgroupMemory
                         | TargetCapability::WorkgroupBarrier
+                        | TargetCapability::Subgroups
+                        | TargetCapability::SubgroupSize(_)
+                        | TargetCapability::WaveWidth(_)
                         | TargetCapability::Float16
                         | TargetCapability::BFloat16
                 ) || matches!(
@@ -4905,19 +5077,34 @@ impl<'a> FunctionLowerer<'a> {
         let mut static_end = 0u64;
         for block in &body.blocks {
             for (operation_index, operation) in block.operations.iter().enumerate() {
-                let OperationKind::WorkgroupMemory(memory) = &operation.kind else {
-                    continue;
+                let (alignment, static_bytes) = match &operation.kind {
+                    OperationKind::WorkgroupMemory(memory) => {
+                        let bytes = match memory.extent {
+                            WorkgroupMemoryExtent::Static(elements) => {
+                                let element_bytes = amdgpu_lds_element_bytes(&memory.element)
+                                    .expect("operation preflight accepted the LDS element type");
+                                Some(u64::from(elements) * element_bytes)
+                            }
+                            WorkgroupMemoryExtent::Dynamic
+                            | WorkgroupMemoryExtent::DynamicAtLeast(_) => None,
+                        };
+                        (u64::from(memory.alignment), bytes)
+                    }
+                    OperationKind::Gfx950LdsTranspose(transpose)
+                        if let Gfx950LdsTransposeOperationKindV1::Current { format } =
+                            transpose.kind =>
+                    {
+                        (64, Some(u64::from(format.lds_bytes())))
+                    }
+                    _ => continue,
                 };
-                let alignment = u64::from(memory.alignment);
                 let padding = (alignment - static_end % alignment) % alignment;
                 static_end = static_end
                     .checked_add(padding)
                     .expect("u32 LDS alignments cannot overflow u64");
-                if let WorkgroupMemoryExtent::Static(elements) = memory.extent {
-                    let element_bytes = amdgpu_lds_element_bytes(&memory.element)
-                        .expect("operation preflight accepted the LDS element type");
+                if let Some(bytes) = static_bytes {
                     static_end = static_end
-                        .checked_add(u64::from(elements) * element_bytes)
+                        .checked_add(bytes)
                         .expect("u32 LDS extents cannot overflow u64");
                 }
                 if static_end > u64::from(u32::MAX) {
@@ -5377,6 +5564,9 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Matrix(matrix) => {
                 self.validate_matrix(matrix, &location)?;
             }
+            OperationKind::Gfx950LdsTranspose(transpose) => {
+                self.validate_gfx950_lds_transpose(transpose, &location)?;
+            }
             OperationKind::Wave(wave) => self.validate_wave(wave, &location)?,
             OperationKind::Atomic(atomic) => self.validate_atomic(atomic, &location)?,
             OperationKind::Barrier(_) => {
@@ -5454,13 +5644,6 @@ impl<'a> FunctionLowerer<'a> {
         matrix: &MatrixOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
-        if !self.target.supports_gfx942_matrix() {
-            return Err(LoweringErrors::one(
-                location.clone(),
-                LoweringDiagnosticCode::UnsupportedMatrixOperation,
-                "matrix operations require the strict gfx942 lowering entry point",
-            ));
-        }
         if self.kernel.is_none() {
             return Err(LoweringErrors::one(
                 location.clone(),
@@ -5490,9 +5673,23 @@ impl<'a> FunctionLowerer<'a> {
             ));
         }
         let supported = match &matrix.kind {
-            MatrixOperationKind::MultiplyAccumulate { profile, .. } => profile.is_supported_v1(),
+            MatrixOperationKind::MultiplyAccumulate { profile, .. } => {
+                self.target.supports_gfx942_matrix() && profile.is_supported_v1()
+            }
+            MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } => {
+                self.target.supports_gfx950_scaled_matrix()
+                    && matches!(
+                        *profile,
+                        value if value
+                            == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64()
+                            || value
+                                == MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64()
+                    )
+            }
             MatrixOperationKind::LdsLoad { profile, .. }
-            | MatrixOperationKind::LdsStore { profile, .. } => profile.is_supported_v1(),
+            | MatrixOperationKind::LdsStore { profile, .. } => {
+                self.target.supports_gfx942_matrix() && profile.is_supported_v1()
+            }
         };
         if !supported || matrix.active_lanes != 64 {
             return Err(LoweringErrors::one(
@@ -5872,16 +6069,25 @@ impl<'a> FunctionLowerer<'a> {
                     .operations
                     .iter()
                     .enumerate()
-                    .filter(|(_, operation)| {
-                        matches!(operation.kind, OperationKind::GuardedLoad { .. })
+                    .filter_map(|(operation_index, operation)| match &operation.kind {
+                        OperationKind::GuardedLoad { .. } => {
+                            Some(guarded_load_merge_label(block.id, operation_index))
+                        }
+                        OperationKind::Gfx950LdsTranspose(transpose)
+                            if matches!(
+                                transpose.kind,
+                                Gfx950LdsTransposeOperationKindV1::Stage { .. }
+                            ) =>
+                        {
+                            let result = operation.results.first().expect("verified stage result");
+                            let prefix = format!("v{}.transpose", result.id.0);
+                            Some(gfx950_stage_load_merge_label(&prefix, 31))
+                        }
+                        _ => None,
                     })
-                    .map(|(operation, _)| operation)
                     .next_back()
             })
-            .map_or_else(
-                || block_label(block),
-                |operation| guarded_load_merge_label(block, operation),
-            )
+            .unwrap_or_else(|| block_label(block))
     }
 
     fn value_type(&self, value: ValueId) -> &Type {
@@ -5901,11 +6107,88 @@ impl<'a> FunctionLowerer<'a> {
             .expect("validated scalar or pointer value")
     }
 
+    fn validate_gfx950_lds_transpose(
+        &self,
+        transpose: &Gfx950LdsTransposeOperationV1,
+        location: &LoweringLocation,
+    ) -> Result<(), LoweringErrors> {
+        if !self.target.supports_gfx950_attention() {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedOperation,
+                "gfx950 LDS transpose requires the exact gfx950:xnack- lowering entry point",
+            ));
+        }
+        if self.kernel.is_none()
+            || self.wave_width != Some(WaveWidth::Wave64)
+            || self.workgroup_size != Some(WorkgroupSize::new(64, 1, 1))
+            || transpose.width != WaveWidth::Wave64
+            || transpose.active_lanes != 64
+            || transpose.convergence.scope() != SynchronizationScope::Workgroup
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedOperation,
+                "gfx950 LDS transpose requires one fully active Wave64 kernel entry with exact workgroup size [64, 1, 1] and workgroup-uniform convergence",
+            ));
+        }
+        if let Gfx950LdsTransposeOperationKindV1::Stage { source_slice, .. } = transpose.kind {
+            let valid_source = matches!(
+                self.value_type(source_slice),
+                Type::Slice(slice)
+                    if *slice.element == Type::Scalar(ScalarType::U8)
+                        && slice.address_space == KernelAddressSpace::Global
+                        && slice.access == fe2o3_kernel_ir::AccessMode::ReadOnly
+            );
+            if !valid_source {
+                return Err(LoweringErrors::one(
+                    location.clone(),
+                    LoweringDiagnosticCode::UnsupportedOperation,
+                    "gfx950 LDS transpose staging requires an exact global read-only u8 slice",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_wave(
         &self,
         wave: &WaveOperation,
         location: &LoweringLocation,
     ) -> Result<(), LoweringErrors> {
+        match wave.kind {
+            WaveOperationKind::ReduceF32 { tile_width, .. }
+            | WaveOperationKind::BroadcastF32 { tile_width, .. } => {
+                if !self.target.supports_gfx950_attention()
+                    || self.kernel.is_none()
+                    || wave.width != WaveWidth::Wave64
+                    || wave.active_lanes != 64
+                    || tile_width != 16
+                {
+                    return Err(LoweringErrors::one(
+                        location.clone(),
+                        LoweringDiagnosticCode::UnsupportedWaveOperation,
+                        "gfx950 attention f32 collectives require the exact gfx950:xnack- kernel profile, one fully active Wave64, and tile width 16",
+                    ));
+                }
+            }
+            _ => {}
+        }
+        if let WaveOperationKind::BroadcastF32 {
+            source_lane,
+            tile_width,
+            ..
+        } = wave.kind
+            && !self
+                .constant_u32(source_lane)
+                .is_some_and(|lane| lane < tile_width)
+        {
+            return Err(LoweringErrors::one(
+                location.clone(),
+                LoweringDiagnosticCode::UnsupportedWaveOperation,
+                "gfx950 attention broadcast requires a statically bounded tile-local source lane",
+            ));
+        }
         let Some(flat_workgroup_size) = self.flat_workgroup_size() else {
             return Err(LoweringErrors::one(
                 location.clone(),
@@ -5986,13 +6269,26 @@ impl<'a> FunctionLowerer<'a> {
         });
         let has_matrix_mfma = self
             .has_matrix_kind(|kind| matches!(kind, MatrixOperationKind::MultiplyAccumulate { .. }));
+        let has_scaled_matrix_mfma = self.has_matrix_kind(|kind| {
+            matches!(kind, MatrixOperationKind::ScaledMultiplyAccumulate { .. })
+        });
         let has_wave_lane_id = self.has_wave_kind(|kind| {
             matches!(
                 kind,
-                WaveOperationKind::LaneId | WaveOperationKind::ShuffleIndex { .. }
+                WaveOperationKind::LaneId
+                    | WaveOperationKind::ShuffleIndex { .. }
+                    | WaveOperationKind::ReduceF32 { .. }
+                    | WaveOperationKind::BroadcastF32 { .. }
             )
         });
-        let has_lane_id = has_matrix_lds || has_wave_lane_id;
+        let has_transpose_lane_id = self.has_gfx950_transpose_kind(|kind| {
+            matches!(
+                kind,
+                Gfx950LdsTransposeOperationKindV1::Stage { .. }
+                    | Gfx950LdsTransposeOperationKindV1::Read { .. }
+            )
+        });
+        let has_lane_id = has_matrix_lds || has_wave_lane_id || has_transpose_lane_id;
         let has_ballot = self.has_wave_kind(|kind| {
             matches!(
                 kind,
@@ -6001,10 +6297,40 @@ impl<'a> FunctionLowerer<'a> {
                     | WaveOperationKind::All { .. }
             )
         });
-        let has_shuffle =
-            self.has_wave_kind(|kind| matches!(kind, WaveOperationKind::ShuffleIndex { .. }));
-        let has_convergent_operation =
-            has_workgroup_barrier || has_matrix_mfma || self.has_wave_kind(|_| true);
+        let has_shuffle = self.has_wave_kind(|kind| {
+            matches!(
+                kind,
+                WaveOperationKind::ShuffleIndex { .. }
+                    | WaveOperationKind::ReduceF32 { .. }
+                    | WaveOperationKind::BroadcastF32 { .. }
+            )
+        });
+        let has_gfx950_stage = self.has_gfx950_transpose_kind(|kind| {
+            matches!(kind, Gfx950LdsTransposeOperationKindV1::Stage { .. })
+        });
+        let has_gfx950_read_b4 = self.has_gfx950_transpose_kind(|kind| {
+            matches!(
+                kind,
+                Gfx950LdsTransposeOperationKindV1::Read {
+                    format: Gfx950LdsTransposeFormatV1::Fp4E2M1,
+                    ..
+                }
+            )
+        });
+        let has_gfx950_read_b8 = self.has_gfx950_transpose_kind(|kind| {
+            matches!(
+                kind,
+                Gfx950LdsTransposeOperationKindV1::Read {
+                    format: Gfx950LdsTransposeFormatV1::Fp8E4M3,
+                    ..
+                }
+            )
+        });
+        let has_convergent_operation = has_workgroup_barrier
+            || has_matrix_mfma
+            || has_scaled_matrix_mfma
+            || self.has_wave_kind(|_| true)
+            || self.has_gfx950_transpose_kind(|_| true);
         if self.emit_workgroup_memory_declarations(&mut output) {
             writeln!(output).unwrap();
         }
@@ -6060,11 +6386,47 @@ impl<'a> FunctionLowerer<'a> {
             )
             .unwrap();
         }
+        if has_gfx950_stage {
+            writeln!(
+                output,
+                "declare {{ i64, i1 }} @llvm.uadd.with.overflow.i64(i64, i64) #1"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "declare {{ i64, i1 }} @llvm.umul.with.overflow.i64(i64, i64) #1"
+            )
+            .unwrap();
+        }
+        if has_gfx950_read_b4 {
+            writeln!(
+                output,
+                "declare <2 x i32> @{}(ptr addrspace(3) nocapture) #2",
+                AmdgcnIntrinsic::DsReadTr4B64.llvm_name()
+            )
+            .unwrap();
+        }
+        if has_gfx950_read_b8 {
+            writeln!(
+                output,
+                "declare <2 x i32> @{}(ptr addrspace(3) nocapture) #2",
+                AmdgcnIntrinsic::DsReadTr8B64.llvm_name()
+            )
+            .unwrap();
+        }
         if has_matrix_mfma {
             writeln!(
                 output,
                 "declare <4 x float> @{}(<4 x i16>, <4 x i16>, <4 x float>, i32, i32, i32) #2",
                 AmdgcnIntrinsic::MfmaF32M16N16K16Bf16.llvm_name()
+            )
+            .unwrap();
+        }
+        if has_scaled_matrix_mfma {
+            writeln!(
+                output,
+                "declare <4 x float> @{}(<8 x i32>, <8 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32) #2",
+                AmdgcnIntrinsic::MfmaScaleF32M16N16K128F8F6F4V8I32.llvm_name()
             )
             .unwrap();
         }
@@ -6208,13 +6570,38 @@ impl<'a> FunctionLowerer<'a> {
             })
     }
 
+    fn has_gfx950_transpose_kind(
+        &self,
+        predicate: impl Fn(&Gfx950LdsTransposeOperationKindV1) -> bool,
+    ) -> bool {
+        self.function
+            .body
+            .iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.operations)
+            .any(|operation| {
+                matches!(
+                    &operation.kind,
+                    OperationKind::Gfx950LdsTranspose(transpose)
+                        if predicate(&transpose.kind)
+                )
+            })
+    }
+
     fn emit_workgroup_memory_declarations(&self, output: &mut dyn fmt::Write) -> bool {
         let mut emitted = false;
         let body = self.function.body.as_ref().expect("definition required");
         for operation in body.blocks.iter().flat_map(|block| &block.operations) {
-            let OperationKind::WorkgroupMemory(memory) = &operation.kind else {
+            if !matches!(
+                operation.kind,
+                OperationKind::WorkgroupMemory(_)
+                    | OperationKind::Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1 {
+                        kind: Gfx950LdsTransposeOperationKindV1::Current { .. },
+                        ..
+                    })
+            ) {
                 continue;
-            };
+            }
             emitted = true;
             let result = operation.results.first().expect("verified LDS result");
             let symbol = lds_symbol(
@@ -6222,21 +6609,37 @@ impl<'a> FunctionLowerer<'a> {
                     .expect("workgroup memory declarations require a kernel"),
                 result.id,
             );
-            let element = llvm_type(&memory.element);
-            match memory.extent {
-                WorkgroupMemoryExtent::Static(elements) => writeln!(
-                    output,
-                    "{symbol} = internal addrspace(3) global [{elements} x {element}] undef, align {}",
-                    memory.alignment
-                )
-                .unwrap(),
-                WorkgroupMemoryExtent::Dynamic
-                | WorkgroupMemoryExtent::DynamicAtLeast(_) => writeln!(
-                    output,
-                    "{symbol} = external addrspace(3) global [0 x {element}], align {}",
-                    memory.alignment
-                )
-                .unwrap(),
+            match &operation.kind {
+                OperationKind::WorkgroupMemory(memory) => {
+                    let element = llvm_type(&memory.element);
+                    match memory.extent {
+                        WorkgroupMemoryExtent::Static(elements) => writeln!(
+                            output,
+                            "{symbol} = internal addrspace(3) global [{elements} x {element}] undef, align {}",
+                            memory.alignment
+                        )
+                        .unwrap(),
+                        WorkgroupMemoryExtent::Dynamic
+                        | WorkgroupMemoryExtent::DynamicAtLeast(_) => writeln!(
+                            output,
+                            "{symbol} = external addrspace(3) global [0 x {element}], align {}",
+                            memory.alignment
+                        )
+                        .unwrap(),
+                    }
+                }
+                OperationKind::Gfx950LdsTranspose(transpose)
+                    if let Gfx950LdsTransposeOperationKindV1::Current { format } =
+                        transpose.kind =>
+                {
+                    let bytes = format.lds_bytes();
+                    writeln!(
+                        output,
+                        "{symbol} = internal addrspace(3) global [{bytes} x i8] undef, align 64"
+                    )
+                    .unwrap();
+                }
+                _ => unreachable!("declaration inventory is exact"),
             }
         }
         emitted
@@ -6817,6 +7220,9 @@ impl<'a> FunctionLowerer<'a> {
             OperationKind::Matrix(matrix) => {
                 self.emit_matrix(output, block, operation_index, operation, matrix);
             }
+            OperationKind::Gfx950LdsTranspose(transpose) => {
+                self.emit_gfx950_lds_transpose(output, operation, transpose);
+            }
             OperationKind::Wave(wave) => {
                 self.emit_wave(
                     output,
@@ -6917,6 +7323,53 @@ impl<'a> FunctionLowerer<'a> {
                     .unwrap();
                 }
             }
+            MatrixOperationKind::ScaledMultiplyAccumulate {
+                lhs,
+                rhs,
+                accumulator,
+                profile,
+            } => {
+                for (label, values, ty) in [
+                    ("lhs", lhs.as_slice(), "i32"),
+                    ("rhs", rhs.as_slice(), "i32"),
+                    ("acc", accumulator.as_slice(), "float"),
+                ] {
+                    let width = values.len();
+                    for (index, value) in values.iter().enumerate() {
+                        let source = self.value(*value).0;
+                        let prior = if index == 0 {
+                            "poison".to_string()
+                        } else {
+                            format!("%{temporary}.{label}.{}", index - 1)
+                        };
+                        writeln!(
+                            output,
+                            "  %{temporary}.{label}.{index} = insertelement <{width} x {ty}> {prior}, {ty} {source}, i64 {index}"
+                        )
+                        .unwrap();
+                    }
+                }
+                let format_selector =
+                    if *profile == MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64() {
+                        4
+                    } else {
+                        0
+                    };
+                writeln!(
+                    output,
+                    "  %{temporary}.mfma = call <4 x float> @{}(<8 x i32> %{temporary}.lhs.7, <8 x i32> %{temporary}.rhs.7, <4 x float> %{temporary}.acc.3, i32 {format_selector}, i32 {format_selector}, i32 0, i32 0, i32 0, i32 0)",
+                    AmdgcnIntrinsic::MfmaScaleF32M16N16K128F8F6F4V8I32.llvm_name(),
+                )
+                .unwrap();
+                for (index, result) in operation.results.iter().enumerate() {
+                    writeln!(
+                        output,
+                        "  {} = extractelement <4 x float> %{temporary}.mfma, i64 {index}",
+                        value_name(result.id)
+                    )
+                    .unwrap();
+                }
+            }
             MatrixOperationKind::LdsLoad { base, profile } => {
                 self.emit_matrix_lds_lane_address(output, &temporary);
                 let base = self.value(*base).0;
@@ -6924,6 +7377,7 @@ impl<'a> FunctionLowerer<'a> {
                 let alignment = match profile.element {
                     MatrixElement::Bf16 => 2,
                     MatrixElement::F32 => 4,
+                    MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3 => 1,
                 };
                 for (index, result) in operation.results.iter().enumerate() {
                     self.emit_matrix_lds_pointer(output, &temporary, index, element, base);
@@ -6946,6 +7400,7 @@ impl<'a> FunctionLowerer<'a> {
                 let alignment = match profile.element {
                     MatrixElement::Bf16 => 2,
                     MatrixElement::F32 => 4,
+                    MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3 => 1,
                 };
                 for (index, value) in values.iter().enumerate() {
                     self.emit_matrix_lds_pointer(output, &temporary, index, element, base);
@@ -7236,6 +7691,645 @@ impl<'a> FunctionLowerer<'a> {
         .unwrap();
     }
 
+    fn emit_gfx950_lds_transpose(
+        &self,
+        output: &mut dyn fmt::Write,
+        operation: &Operation,
+        transpose: &Gfx950LdsTransposeOperationV1,
+    ) {
+        match transpose.kind {
+            Gfx950LdsTransposeOperationKindV1::Current { format } => {
+                let result = operation
+                    .results
+                    .first()
+                    .expect("verified transpose result");
+                let bytes = format.lds_bytes();
+                writeln!(
+                    output,
+                    "  {} = getelementptr [{bytes} x i8], ptr addrspace(3) {}, i32 0, i32 0",
+                    value_name(result.id),
+                    lds_symbol(
+                        self.kernel
+                            .expect("gfx950 transpose storage requires a kernel"),
+                        result.id,
+                    )
+                )
+                .unwrap();
+            }
+            Gfx950LdsTransposeOperationKindV1::Stage {
+                format,
+                storage,
+                source_slice,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+            } => self.emit_gfx950_lds_transpose_stage(
+                output,
+                operation,
+                format,
+                storage,
+                source_slice,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+            ),
+            Gfx950LdsTransposeOperationKindV1::Publish { storage, .. } => {
+                emit_fence(
+                    output,
+                    SynchronizationScope::Workgroup,
+                    MemoryOrdering::Release,
+                );
+                writeln!(output, "  call void asm sideeffect \"s_barrier\", \"\"()").unwrap();
+                emit_fence(
+                    output,
+                    SynchronizationScope::Workgroup,
+                    MemoryOrdering::Acquire,
+                );
+                let result = operation
+                    .results
+                    .first()
+                    .expect("verified transpose result");
+                writeln!(
+                    output,
+                    "  {} = getelementptr i8, ptr addrspace(3) {}, i32 0",
+                    value_name(result.id),
+                    self.value(storage).0,
+                )
+                .unwrap();
+            }
+            Gfx950LdsTransposeOperationKindV1::Read { format, storage } => {
+                self.emit_gfx950_lds_transpose_read(output, operation, format, storage);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_gfx950_lds_transpose_stage(
+        &self,
+        output: &mut dyn fmt::Write,
+        operation: &Operation,
+        format: Gfx950LdsTransposeFormatV1,
+        storage: ValueId,
+        source_slice: ValueId,
+        offset: ValueId,
+        rows: ValueId,
+        columns: ValueId,
+        stride: ValueId,
+        token_base: ValueId,
+        reduction_base: ValueId,
+    ) {
+        let result = operation
+            .results
+            .first()
+            .expect("verified transpose result");
+        let prefix = format!("v{}.transpose", result.id.0);
+        let storage = self.value(storage).0;
+        let (source_data, source_length) = match self
+            .bindings
+            .get(&source_slice)
+            .expect("verified transpose source")
+        {
+            ValueBinding::Slice {
+                data_name,
+                length_name,
+                ..
+            } => (data_name.as_str(), length_name.as_str()),
+            ValueBinding::Value { .. } => unreachable!("verified transpose source is a slice"),
+        };
+        let offset = self.value(offset).0;
+        let rows = self.value(rows).0;
+        let columns = self.value(columns).0;
+        let stride = self.value(stride).0;
+        let token_base = self.value(token_base).0;
+        let reduction_base = self.value(reduction_base).0;
+
+        self.emit_lane_id(output, &format!("%{prefix}.lane"), WaveWidth::Wave64);
+        let lane_stride = format.lane_byte_stride();
+        writeln!(
+            output,
+            "  %{prefix}.lds.lane.base = mul i32 %{prefix}.lane, {lane_stride}"
+        )
+        .unwrap();
+
+        match format {
+            Gfx950LdsTransposeFormatV1::Fp4E2M1 => {
+                // Match the gfx950 B4 source layout: each contiguous group of
+                // sixteen lanes owns 32 reduction elements, split over two
+                // eight-byte transpose sources per lane.
+                writeln!(
+                    output,
+                    "  %{prefix}.lane.in.group = and i32 %{prefix}.lane, 15"
+                )
+                .unwrap();
+                writeln!(output, "  %{prefix}.group = lshr i32 %{prefix}.lane, 4").unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.group.depth = shl i32 %{prefix}.group, 5"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.depth.base = add i32 %{prefix}.group.depth, %{prefix}.lane.in.group"
+                )
+                .unwrap();
+                for part in 0..2u32 {
+                    self.emit_gfx950_stage_column(
+                        output,
+                        &prefix,
+                        part,
+                        reduction_base,
+                        columns,
+                        part * 16,
+                    );
+                    for byte in 0..8u32 {
+                        let low_ordinal = part * 16 + byte * 2;
+                        let high_ordinal = low_ordinal + 1;
+                        self.emit_gfx950_stage_checked_load(
+                            output,
+                            &prefix,
+                            low_ordinal,
+                            part,
+                            byte * 2,
+                            source_data,
+                            source_length,
+                            offset,
+                            rows,
+                            stride,
+                            token_base,
+                        );
+                        self.emit_gfx950_stage_checked_load(
+                            output,
+                            &prefix,
+                            high_ordinal,
+                            part,
+                            byte * 2 + 1,
+                            source_data,
+                            source_length,
+                            offset,
+                            rows,
+                            stride,
+                            token_base,
+                        );
+                        writeln!(
+                            output,
+                            "  %{prefix}.packed.low.{part}.{byte} = and i8 %{prefix}.loaded.{low_ordinal}, 15"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  %{prefix}.packed.high.mask.{part}.{byte} = and i8 %{prefix}.loaded.{high_ordinal}, 15"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  %{prefix}.packed.high.{part}.{byte} = shl i8 %{prefix}.packed.high.mask.{part}.{byte}, 4"
+                        )
+                        .unwrap();
+                        writeln!(
+                            output,
+                            "  %{prefix}.packed.{part}.{byte} = or i8 %{prefix}.packed.low.{part}.{byte}, %{prefix}.packed.high.{part}.{byte}"
+                        )
+                        .unwrap();
+                        self.emit_gfx950_stage_store(
+                            output,
+                            &prefix,
+                            storage,
+                            part,
+                            byte,
+                            &format!("%{prefix}.packed.{part}.{byte}"),
+                        );
+                    }
+                }
+            }
+            Gfx950LdsTransposeFormatV1::Fp8E4M3 => {
+                // B8 divides each sixteen-lane group into two eight-token
+                // source bands. Four per-lane parts cover both 64-element K
+                // halves consumed by the scaled MFMA instruction.
+                writeln!(
+                    output,
+                    "  %{prefix}.lane.in.group = and i32 %{prefix}.lane, 15"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.token.band.bit = and i32 %{prefix}.lane.in.group, 1"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.token.band = shl i32 %{prefix}.token.band.bit, 3"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.lane.depth = lshr i32 %{prefix}.lane.in.group, 1"
+                )
+                .unwrap();
+                writeln!(output, "  %{prefix}.group = lshr i32 %{prefix}.lane, 4").unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.group.depth = shl i32 %{prefix}.group, 4"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  %{prefix}.depth.base = add i32 %{prefix}.group.depth, %{prefix}.lane.depth"
+                )
+                .unwrap();
+                for part in 0..4u32 {
+                    let depth_offset = (part % 2) * 8 + if part >= 2 { 64 } else { 0 };
+                    self.emit_gfx950_stage_column(
+                        output,
+                        &prefix,
+                        part,
+                        reduction_base,
+                        columns,
+                        depth_offset,
+                    );
+                    for byte in 0..8u32 {
+                        let ordinal = part * 8 + byte;
+                        self.emit_gfx950_stage_checked_load_with_row_offset(
+                            output,
+                            &prefix,
+                            ordinal,
+                            part,
+                            byte,
+                            &format!("%{prefix}.token.band"),
+                            source_data,
+                            source_length,
+                            offset,
+                            rows,
+                            stride,
+                            token_base,
+                        );
+                        self.emit_gfx950_stage_store(
+                            output,
+                            &prefix,
+                            storage,
+                            part,
+                            byte,
+                            &format!("%{prefix}.loaded.{ordinal}"),
+                        );
+                    }
+                }
+            }
+        }
+        writeln!(
+            output,
+            "  {} = getelementptr i8, ptr addrspace(3) {storage}, i32 0",
+            value_name(result.id)
+        )
+        .unwrap();
+    }
+
+    fn emit_gfx950_stage_column(
+        &self,
+        output: &mut dyn fmt::Write,
+        prefix: &str,
+        part: u32,
+        reduction_base: &str,
+        columns: &str,
+        depth_offset: u32,
+    ) {
+        writeln!(
+            output,
+            "  %{prefix}.depth.i32.{part} = add i32 %{prefix}.depth.base, {depth_offset}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.depth.{part} = zext i32 %{prefix}.depth.i32.{part} to i64"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.column.add.{part} = call {{ i64, i1 }} @llvm.uadd.with.overflow.i64(i64 {reduction_base}, i64 %{prefix}.depth.{part})"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.column.{part} = extractvalue {{ i64, i1 }} %{prefix}.column.add.{part}, 0"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.column.overflow.{part} = extractvalue {{ i64, i1 }} %{prefix}.column.add.{part}, 1"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.column.nooverflow.{part} = xor i1 %{prefix}.column.overflow.{part}, true"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.column.inbounds.{part} = icmp ult i64 %{prefix}.column.{part}, {columns}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.column.valid.{part} = and i1 %{prefix}.column.nooverflow.{part}, %{prefix}.column.inbounds.{part}"
+        )
+        .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_gfx950_stage_checked_load(
+        &self,
+        output: &mut dyn fmt::Write,
+        prefix: &str,
+        ordinal: u32,
+        part: u32,
+        row_delta: u32,
+        source_data: &str,
+        source_length: &str,
+        offset: &str,
+        rows: &str,
+        stride: &str,
+        token_base: &str,
+    ) {
+        self.emit_gfx950_stage_checked_load_with_row_offset(
+            output,
+            prefix,
+            ordinal,
+            part,
+            row_delta,
+            "0",
+            source_data,
+            source_length,
+            offset,
+            rows,
+            stride,
+            token_base,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_gfx950_stage_checked_load_with_row_offset(
+        &self,
+        output: &mut dyn fmt::Write,
+        prefix: &str,
+        ordinal: u32,
+        part: u32,
+        row_delta: u32,
+        row_offset: &str,
+        source_data: &str,
+        source_length: &str,
+        offset: &str,
+        rows: &str,
+        stride: &str,
+        token_base: &str,
+    ) {
+        writeln!(
+            output,
+            "  %{prefix}.row.band.i32.{ordinal} = add i32 {row_offset}, {row_delta}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.band.{ordinal} = zext i32 %{prefix}.row.band.i32.{ordinal} to i64"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.add.{ordinal} = call {{ i64, i1 }} @llvm.uadd.with.overflow.i64(i64 {token_base}, i64 %{prefix}.row.band.{ordinal})"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.row.add.{ordinal}, 0"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.overflow.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.row.add.{ordinal}, 1"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.nooverflow.{ordinal} = xor i1 %{prefix}.row.overflow.{ordinal}, true"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.inbounds.{ordinal} = icmp ult i64 %{prefix}.row.{ordinal}, {rows}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.valid.0.{ordinal} = and i1 %{prefix}.row.nooverflow.{ordinal}, %{prefix}.row.inbounds.{ordinal}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.mul.{ordinal} = call {{ i64, i1 }} @llvm.umul.with.overflow.i64(i64 %{prefix}.row.{ordinal}, i64 {stride})"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.offset.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.row.mul.{ordinal}, 0"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.mul.overflow.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.row.mul.{ordinal}, 1"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.row.mul.nooverflow.{ordinal} = xor i1 %{prefix}.row.mul.overflow.{ordinal}, true"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.linear.add.{ordinal} = call {{ i64, i1 }} @llvm.uadd.with.overflow.i64(i64 %{prefix}.row.offset.{ordinal}, i64 %{prefix}.column.{part})"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.linear.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.linear.add.{ordinal}, 0"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.linear.overflow.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.linear.add.{ordinal}, 1"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.linear.nooverflow.{ordinal} = xor i1 %{prefix}.linear.overflow.{ordinal}, true"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.index.add.{ordinal} = call {{ i64, i1 }} @llvm.uadd.with.overflow.i64(i64 {offset}, i64 %{prefix}.linear.{ordinal})"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.index.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.index.add.{ordinal}, 0"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.index.overflow.{ordinal} = extractvalue {{ i64, i1 }} %{prefix}.index.add.{ordinal}, 1"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.index.nooverflow.{ordinal} = xor i1 %{prefix}.index.overflow.{ordinal}, true"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.index.inbounds.{ordinal} = icmp ult i64 %{prefix}.index.{ordinal}, {source_length}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.guard.0.{ordinal} = and i1 %{prefix}.row.valid.0.{ordinal}, %{prefix}.column.valid.{part}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.guard.0a.{ordinal} = and i1 %{prefix}.guard.0.{ordinal}, %{prefix}.row.mul.nooverflow.{ordinal}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.guard.1.{ordinal} = and i1 %{prefix}.guard.0a.{ordinal}, %{prefix}.linear.nooverflow.{ordinal}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.guard.2.{ordinal} = and i1 %{prefix}.guard.1.{ordinal}, %{prefix}.index.nooverflow.{ordinal}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.guard.{ordinal} = and i1 %{prefix}.guard.2.{ordinal}, %{prefix}.index.inbounds.{ordinal}"
+        )
+        .unwrap();
+        let true_label = gfx950_stage_load_true_label(prefix, ordinal);
+        let false_label = gfx950_stage_load_false_label(prefix, ordinal);
+        let merge_label = gfx950_stage_load_merge_label(prefix, ordinal);
+        writeln!(
+            output,
+            "  br i1 %{prefix}.guard.{ordinal}, label %{true_label}, label %{false_label}"
+        )
+        .unwrap();
+        writeln!(output, "{true_label}:").unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.pointer.{ordinal} = getelementptr i8, ptr addrspace(1) {source_data}, i64 %{prefix}.index.{ordinal}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.loaded.true.{ordinal} = load i8, ptr addrspace(1) %{prefix}.pointer.{ordinal}, align 1"
+        )
+        .unwrap();
+        writeln!(output, "  br label %{merge_label}").unwrap();
+        writeln!(output, "{false_label}:").unwrap();
+        writeln!(output, "  br label %{merge_label}").unwrap();
+        writeln!(output, "{merge_label}:").unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.loaded.{ordinal} = phi i8 [ %{prefix}.loaded.true.{ordinal}, %{true_label} ], [ 0, %{false_label} ]"
+        )
+        .unwrap();
+    }
+
+    fn emit_gfx950_stage_store(
+        &self,
+        output: &mut dyn fmt::Write,
+        prefix: &str,
+        storage: &str,
+        part: u32,
+        byte: u32,
+        value: &str,
+    ) {
+        let byte_offset = part * 8 + byte;
+        writeln!(
+            output,
+            "  %{prefix}.lds.offset.{part}.{byte} = add i32 %{prefix}.lds.lane.base, {byte_offset}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  %{prefix}.lds.pointer.{part}.{byte} = getelementptr i8, ptr addrspace(3) {storage}, i32 %{prefix}.lds.offset.{part}.{byte}"
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "  store i8 {value}, ptr addrspace(3) %{prefix}.lds.pointer.{part}.{byte}, align 1"
+        )
+        .unwrap();
+    }
+
+    fn emit_gfx950_lds_transpose_read(
+        &self,
+        output: &mut dyn fmt::Write,
+        operation: &Operation,
+        format: Gfx950LdsTransposeFormatV1,
+        storage: ValueId,
+    ) {
+        let prefix = format!("v{}.transpose.read", operation.results[0].id.0);
+        let storage = self.value(storage).0;
+        self.emit_lane_id(output, &format!("%{prefix}.lane"), WaveWidth::Wave64);
+        writeln!(
+            output,
+            "  %{prefix}.lane.base = mul i32 %{prefix}.lane, {}",
+            format.lane_byte_stride()
+        )
+        .unwrap();
+        let intrinsic = match format {
+            Gfx950LdsTransposeFormatV1::Fp4E2M1 => AmdgcnIntrinsic::DsReadTr4B64,
+            Gfx950LdsTransposeFormatV1::Fp8E4M3 => AmdgcnIntrinsic::DsReadTr8B64,
+        };
+        for part in 0..format.transpose_read_parts() {
+            writeln!(
+                output,
+                "  %{prefix}.offset.{part} = add i32 %{prefix}.lane.base, {}",
+                part * 8
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  %{prefix}.pointer.{part} = getelementptr i8, ptr addrspace(3) {storage}, i32 %{prefix}.offset.{part}"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  %{prefix}.part.{part} = call <2 x i32> @{}(ptr addrspace(3) %{prefix}.pointer.{part})",
+                intrinsic.llvm_name()
+            )
+            .unwrap();
+            for element in 0..2u32 {
+                let result_index = (part * 2 + element) as usize;
+                writeln!(
+                    output,
+                    "  {} = extractelement <2 x i32> %{prefix}.part.{part}, i64 {element}",
+                    value_name(operation.results[result_index].id)
+                )
+                .unwrap();
+            }
+        }
+        for result in operation
+            .results
+            .iter()
+            .skip((format.transpose_read_parts() * 2) as usize)
+        {
+            writeln!(output, "  {} = add i32 0, 0", value_name(result.id)).unwrap();
+        }
+    }
+
     fn emit_wave(&self, output: &mut dyn fmt::Write, result: &str, wave: &WaveOperation) {
         match wave.kind {
             WaveOperationKind::LaneId => self.emit_lane_id(output, result, wave.width),
@@ -7304,6 +8398,101 @@ impl<'a> FunctionLowerer<'a> {
                     AmdgcnIntrinsic::DsBpermute.llvm_name()
                 )
                 .unwrap();
+            }
+            WaveOperationKind::ReduceF32 {
+                value,
+                tile_width,
+                kind,
+            } => {
+                debug_assert_eq!(tile_width, 16);
+                let mut reduced = self.value(value).0.to_owned();
+                self.emit_lane_id(output, &format!("{result}.lane"), wave.width);
+                for (index, distance) in [1, 2, 4, 8].into_iter().enumerate() {
+                    writeln!(
+                        output,
+                        "  {result}.source.{index} = xor i32 {result}.lane, {distance}"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.source.byte.{index} = shl i32 {result}.source.{index}, 2"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.value.bits.{index} = bitcast float {reduced} to i32"
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.remote.bits.{index} = call i32 @{}(i32 {result}.source.byte.{index}, i32 {result}.value.bits.{index})",
+                        AmdgcnIntrinsic::DsBpermute.llvm_name()
+                    )
+                    .unwrap();
+                    writeln!(
+                        output,
+                        "  {result}.remote.{index} = bitcast i32 {result}.remote.bits.{index} to float"
+                    )
+                    .unwrap();
+                    let destination = if index == 3 {
+                        result.to_owned()
+                    } else {
+                        format!("{result}.reduce.{index}")
+                    };
+                    match kind {
+                        WaveF32ReductionKindV1::Sum => writeln!(
+                            output,
+                            "  {destination} = fadd float {reduced}, {result}.remote.{index}"
+                        )
+                        .unwrap(),
+                        WaveF32ReductionKindV1::Maximum => {
+                            writeln!(
+                                output,
+                                "  {result}.less.{index} = fcmp olt float {reduced}, {result}.remote.{index}"
+                            )
+                            .unwrap();
+                            writeln!(
+                                output,
+                                "  {destination} = select i1 {result}.less.{index}, float {result}.remote.{index}, float {reduced}"
+                            )
+                            .unwrap();
+                        }
+                    }
+                    reduced = destination;
+                }
+            }
+            WaveOperationKind::BroadcastF32 {
+                value,
+                source_lane,
+                tile_width,
+            } => {
+                debug_assert_eq!(tile_width, 16);
+                let value = self.value(value).0;
+                let source_lane = self.value(source_lane).0;
+                self.emit_lane_id(output, &format!("{result}.lane"), wave.width);
+                writeln!(output, "  {result}.tile.base = and i32 {result}.lane, -16").unwrap();
+                writeln!(
+                    output,
+                    "  {result}.source = add i32 {result}.tile.base, {source_lane}"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result}.source.byte = shl i32 {result}.source, 2"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result}.value.bits = bitcast float {value} to i32"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "  {result}.bits = call i32 @{}(i32 {result}.source.byte, i32 {result}.value.bits)",
+                    AmdgcnIntrinsic::DsBpermute.llvm_name()
+                )
+                .unwrap();
+                writeln!(output, "  {result} = bitcast i32 {result}.bits to float").unwrap();
             }
         }
     }
@@ -7922,8 +9111,8 @@ fn supported_binary(op: BinaryOp, ty: &Type, target: LoweringTarget) -> bool {
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
             scalar == ScalarType::Bool || supported_integer(scalar)
         }
+        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => supported_integer(scalar),
         BinaryOp::Checked(_) => scalar.is_integer(),
-        _ => false,
     }
 }
 
@@ -8264,6 +9453,18 @@ fn guarded_load_merge_label(block: BlockId, operation: usize) -> String {
     format!("guarded_load_bb{}_op{}_merge", block.0, operation)
 }
 
+fn gfx950_stage_load_true_label(prefix: &str, ordinal: u32) -> String {
+    format!("{prefix}.load.{ordinal}.true")
+}
+
+fn gfx950_stage_load_false_label(prefix: &str, ordinal: u32) -> String {
+    format!("{prefix}.load.{ordinal}.false")
+}
+
+fn gfx950_stage_load_merge_label(prefix: &str, ordinal: u32) -> String {
+    format!("{prefix}.load.{ordinal}.merge")
+}
+
 fn edge_label(predecessor: BlockId, ordinal: usize, target: BlockId) -> String {
     format!("edge_bb{}_{}_bb{}", predecessor.0, ordinal, target.0)
 }
@@ -8351,6 +9552,13 @@ fn binary_opcode(op: BinaryOp, ty: &Type) -> &'static str {
         (BinaryOp::BitAnd, false) => "and",
         (BinaryOp::BitOr, false) => "or",
         (BinaryOp::BitXor, false) => "xor",
+        (BinaryOp::ShiftLeft, false) => "shl",
+        (BinaryOp::ShiftRight, false)
+            if ty.as_scalar().is_some_and(ScalarType::is_signed_integer) =>
+        {
+            "ashr"
+        }
+        (BinaryOp::ShiftRight, false) => "lshr",
         (BinaryOp::Add, true) => "fadd",
         (BinaryOp::Subtract, true) => "fsub",
         (BinaryOp::Multiply, true) => "fmul",
@@ -8520,6 +9728,11 @@ mod tests {
             &Type::Scalar(ScalarType::U32),
             target
         ));
+        assert!(supported_binary(
+            BinaryOp::ShiftLeft,
+            &Type::Scalar(ScalarType::U32),
+            target
+        ));
         assert!(supported_binary(BinaryOp::Divide, &Type::F32, target));
         assert!(!supported_binary(
             BinaryOp::Divide,
@@ -8594,8 +9807,8 @@ mod tests {
                         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
                             scalar == ScalarType::Bool || ordinary_integer(scalar)
                         }
+                        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => ordinary_integer(scalar),
                         BinaryOp::Checked(_) => scalar.is_integer(),
-                        BinaryOp::ShiftLeft | BinaryOp::ShiftRight => false,
                     };
                     assert_eq!(
                         supported_binary(operator, &Type::Scalar(scalar), target),
@@ -8613,6 +9826,18 @@ mod tests {
         ] {
             assert_eq!(binary_opcode(operator, &Type::BOOL), opcode);
         }
+        assert_eq!(
+            binary_opcode(BinaryOp::ShiftLeft, &Type::Scalar(ScalarType::U32)),
+            "shl"
+        );
+        assert_eq!(
+            binary_opcode(BinaryOp::ShiftRight, &Type::Scalar(ScalarType::I32)),
+            "ashr"
+        );
+        assert_eq!(
+            binary_opcode(BinaryOp::ShiftRight, &Type::Scalar(ScalarType::U32)),
+            "lshr"
+        );
     }
 
     #[test]

@@ -41,9 +41,15 @@ static hsa_status_t collect_isa(hsa_isa_t isa, void *opaque) {
   status = hsa_isa_get_info_alt(isa, HSA_ISA_INFO_NAME, (void *)name);
   if (status != HSA_STATUS_SUCCESS)
     return status;
-  static const char prefix[] = "amdgcn-amd-amdhsa--gfx942";
-  if (strncmp(name, prefix, sizeof(prefix) - 1) == 0 &&
-      (name[sizeof(prefix) - 1] == '\0' || name[sizeof(prefix) - 1] == ':')) {
+  static const char gfx942[] = "amdgcn-amd-amdhsa--gfx942";
+  static const char gfx950[] = "amdgcn-amd-amdhsa--gfx950";
+  const bool reviewed_gfx942 =
+      strncmp(name, gfx942, sizeof(gfx942) - 1) == 0 &&
+      (name[sizeof(gfx942) - 1] == '\0' || name[sizeof(gfx942) - 1] == ':');
+  const bool reviewed_gfx950 =
+      strncmp(name, gfx950, sizeof(gfx950) - 1) == 0 &&
+      (name[sizeof(gfx950) - 1] == '\0' || name[sizeof(gfx950) - 1] == ':');
+  if (reviewed_gfx942 || reviewed_gfx950) {
     collection->record->matching_isa_count++;
     if (collection->record->matching_isa_count == 1)
       memcpy(collection->record->isa, name, (size_t)length);

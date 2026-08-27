@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    AccessMode, AddressSpace, Axis, BarrierSemantics, LaunchDomain, MatrixOperation,
-    MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation, SynchronizationScope,
-    TargetCapability, Type, WaveWidth, WorkgroupSize,
+    AccessMode, AddressSpace, Axis, BarrierSemantics, Gfx950LdsTransposeOperationV1, LaunchDomain,
+    MatrixOperation, MemoryIntrinsicOperation, MemoryOrdering, ScalarType, SemanticOperation,
+    SynchronizationScope, TargetCapability, Type, WaveF32ReductionKindV1, WaveWidth, WorkgroupSize,
 };
 
 macro_rules! string_id {
@@ -440,6 +440,7 @@ impl Operation {
                 vec![MemoryEffect::Allocate(AddressSpace::Workgroup)]
             }
             OperationKind::Matrix(matrix) => matrix.memory_effects(),
+            OperationKind::Gfx950LdsTranspose(transpose) => transpose.memory_effects(),
             OperationKind::InlineAssembly(assembly) => assembly.memory_effects(),
             OperationKind::Wave(_) => Vec::new(),
             _ => Vec::new(),
@@ -523,6 +524,7 @@ impl Operation {
                 capabilities
             }
             OperationKind::Matrix(matrix) => matrix.required_capabilities(),
+            OperationKind::Gfx950LdsTranspose(transpose) => transpose.required_capabilities(),
             OperationKind::Wave(wave) => wave.required_capabilities(),
             OperationKind::InlineAssembly(assembly) => assembly.required_capabilities(),
             OperationKind::Call { callee, arguments } => {
@@ -625,6 +627,8 @@ pub enum OperationKind {
     WorkgroupMemory(WorkgroupMemory),
     /// A target-neutral cooperative matrix or matrix-tile operation.
     Matrix(MatrixOperation),
+    /// Exact gfx950 low-precision LDS transpose state transition.
+    Gfx950LdsTranspose(Gfx950LdsTransposeOperationV1),
     /// A width-bound, convergent operation over one physical AMD-style wave.
     Wave(WaveOperation),
     /// Source-bound target assembly whose authority was established by the frontend.
@@ -655,6 +659,7 @@ impl OperationKind {
             }) => Vec::new(),
             Self::MemoryIntrinsic(intrinsic) => intrinsic.operands(),
             Self::Matrix(matrix) => matrix.operands(),
+            Self::Gfx950LdsTranspose(transpose) => transpose.operands(),
             Self::Unary { operand, .. } => vec![*operand],
             Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
             Self::Cast { value, .. } => vec![*value],
@@ -857,11 +862,22 @@ pub const AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE: &str = "fe2o3.amdgpu.target"
 /// The only target authorized by the bounded gfx942 wave/LDS V2 profile.
 pub const AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME: &str = "gfx942:xnack-";
 
+/// The target authorized by the production gfx950 Wave64 profile.
+pub const AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME: &str = "gfx950:xnack-";
+
 /// Returns the exact target binding carried by authenticated gfx942 wave/LDS IR.
 pub fn gfx942_xnack_minus_target_capability() -> TargetCapability {
     TargetCapability::Extension {
         namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
         name: AMDGPU_GFX942_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
+    }
+}
+
+/// Returns the exact target binding carried by authenticated gfx950 IR.
+pub fn gfx950_xnack_minus_target_capability() -> TargetCapability {
+    TargetCapability::Extension {
+        namespace: AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE.to_owned(),
+        name: AMDGPU_GFX950_XNACK_MINUS_TARGET_CAPABILITY_NAME.to_owned(),
     }
 }
 
@@ -1761,7 +1777,11 @@ impl WaveOperation {
             | WaveOperationKind::All { predicate } => vec![predicate],
             WaveOperationKind::ShuffleIndex {
                 value, source_lane, ..
+            }
+            | WaveOperationKind::BroadcastF32 {
+                value, source_lane, ..
             } => vec![value, source_lane],
+            WaveOperationKind::ReduceF32 { value, .. } => vec![value],
         }
     }
 
@@ -1787,6 +1807,19 @@ pub enum WaveOperationKind {
     All { predicate: ValueId },
     /// Read a 32-bit integer from an indexed lane in a static tiled subgroup.
     ShuffleIndex {
+        value: ValueId,
+        source_lane: ValueId,
+        tile_width: u32,
+    },
+    /// Reduces one `f32` value across a fixed contiguous tile and returns the
+    /// same result to every participating lane.
+    ReduceF32 {
+        value: ValueId,
+        tile_width: u32,
+        kind: WaveF32ReductionKindV1,
+    },
+    /// Broadcasts one `f32` value from a tile-local source lane.
+    BroadcastF32 {
         value: ValueId,
         source_lane: ValueId,
         tile_width: u32,

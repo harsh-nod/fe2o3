@@ -21,6 +21,7 @@ use pliron::{
 
 const AFFINE_MAP_KIND_V1: u32 = 1;
 const OPAQUE_MAP_KIND_V1: u32 = 2;
+const GFX950_FP8_SPLIT_K_MAP_KIND_V1: u32 = 3;
 
 /// Stable compiler-derived identity for one tensor-capability value.
 ///
@@ -131,6 +132,8 @@ impl TensorInstructionAttr {
         Self {
             profile_kind: match contract.profile {
                 TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => 1,
+                TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => 4,
+                TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => 5,
                 TensorInstructionProfileV1::IncompatibleWave32 => 2,
                 TensorInstructionProfileV1::Opaque(_) => 3,
             },
@@ -161,6 +164,12 @@ impl TensorInstructionAttr {
             }
             2 if self.profile_identity == 0 => TensorInstructionProfileV1::IncompatibleWave32,
             3 => TensorInstructionProfileV1::Opaque(self.profile_identity),
+            4 if self.profile_identity == 0 => {
+                TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64
+            }
+            5 if self.profile_identity == 0 => {
+                TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
+            }
             _ => return Err(TensorLayoutDialectError::NumericFieldOutOfRange),
         })
     }
@@ -247,6 +256,12 @@ impl TensorFragmentAttr {
                 0,
                 [TensorCoordinateExprV1::new(0, 0, 0); 2],
             ),
+            TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => (
+                GFX950_FP8_SPLIT_K_MAP_KIND_V1,
+                0,
+                0,
+                [TensorCoordinateExprV1::new(0, 0, 0); 2],
+            ),
         };
         let [axis0, axis1] = axes;
         let (multiplicity, broadcast_factor) = match fragment.multiplicity {
@@ -260,6 +275,8 @@ impl TensorFragmentAttr {
             element: match fragment.element {
                 MatrixElement::Bf16 => 1,
                 MatrixElement::F32 => 2,
+                MatrixElement::Fp8E4M3 => 3,
+                MatrixElement::Fp4E2M1 => 4,
             },
             fragment_elements: u32::from(fragment.fragment_elements),
             map_kind,
@@ -280,6 +297,8 @@ impl TensorFragmentAttr {
             packing: match fragment.packing {
                 TensorElementPackingV1::Bf16PairInI32 => 1,
                 TensorElementPackingV1::F32Scalar => 2,
+                TensorElementPackingV1::Fp8FourInI32 => 4,
+                TensorElementPackingV1::Fp4EightInI32 => 5,
                 TensorElementPackingV1::Unsupported(code) => 0x100 + u32::from(code),
             },
             lds_swizzle: match fragment.lds_swizzle {
@@ -331,6 +350,7 @@ impl TensorFragmentAttr {
                 ],
             },
             OPAQUE_MAP_KIND_V1 => TensorSymbolicMapV1::Opaque(self.lane_modulus),
+            GFX950_FP8_SPLIT_K_MAP_KIND_V1 => TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK,
             _ => return Err(TensorLayoutDialectError::UnknownSymbolicMapKind),
         };
         Ok(TensorFragmentLayoutV1 {
@@ -339,6 +359,8 @@ impl TensorFragmentAttr {
             element: match self.element {
                 1 => MatrixElement::Bf16,
                 2 => MatrixElement::F32,
+                3 => MatrixElement::Fp8E4M3,
+                4 => MatrixElement::Fp4E2M1,
                 _ => return Err(TensorLayoutDialectError::UnknownElement),
             },
             fragment_elements: self
@@ -359,6 +381,8 @@ impl TensorFragmentAttr {
             packing: match self.packing {
                 1 => TensorElementPackingV1::Bf16PairInI32,
                 2 => TensorElementPackingV1::F32Scalar,
+                4 => TensorElementPackingV1::Fp8FourInI32,
+                5 => TensorElementPackingV1::Fp4EightInI32,
                 other => TensorElementPackingV1::Unsupported(
                     other
                         .checked_sub(0x100)

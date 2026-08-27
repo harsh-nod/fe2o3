@@ -7,16 +7,17 @@ use crate::{
     AssemblyOperandKind, AssemblyOption, AssemblySourceIdentity, Atomic, AtomicKind, Axis, Barrier,
     BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
     ComparePredicate, Constant, Convergence, Fence, Function, FunctionBody, FunctionId,
-    FunctionRole, IndexKind, InlineAssembly, InlineAssemblyTarget, IntegerSwitchCase,
-    IntrinsicKind, IntrinsicOperation, Kernel, KernelId, LaunchDomain, LaunchExtent, MatrixElement,
-    MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile, MatrixOperation, MatrixOperationKind,
-    MemoryAccess, MemoryOrdering, Module, ModuleId, Operation, OperationKind, PointerType,
-    ScalarType, Signature, SliceType, SwitchCase, SynchronizationScope, TargetCapability,
-    TensorCoordinateExprV1, TensorElementPackingV1, TensorFragmentLayoutV1,
-    TensorInstructionProfileV1, TensorLayoutContractV1, TensorLdsSwizzleV1, TensorMultiplicityV1,
-    TensorOperandRoleV1, TensorSymbolicMapV1, TensorTailMaskV1, Terminator, Type, UnaryOp,
-    ValueDef, ValueId, WaveOperation, WaveOperationKind, WaveWidth, WorkgroupBarrier,
-    WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
+    FunctionRole, Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1,
+    Gfx950LdsTransposeOperationV1, IndexKind, InlineAssembly, InlineAssemblyTarget,
+    IntegerSwitchCase, IntrinsicKind, IntrinsicOperation, Kernel, KernelId, LaunchDomain,
+    LaunchExtent, MatrixElement, MatrixLayout, MatrixLdsProfile, MatrixMultiplyProfile,
+    MatrixOperation, MatrixOperationKind, MemoryAccess, MemoryOrdering, Module, ModuleId,
+    Operation, OperationKind, PointerType, ScalarType, Signature, SliceType, SwitchCase,
+    SynchronizationScope, TargetCapability, TensorCoordinateExprV1, TensorElementPackingV1,
+    TensorFragmentLayoutV1, TensorInstructionProfileV1, TensorLayoutContractV1, TensorLdsSwizzleV1,
+    TensorMultiplicityV1, TensorOperandRoleV1, TensorSymbolicMapV1, TensorTailMaskV1, Terminator,
+    Type, UnaryOp, ValueDef, ValueId, WaveF32ReductionKindV1, WaveOperation, WaveOperationKind,
+    WaveWidth, WorkgroupBarrier, WorkgroupMemory, WorkgroupMemoryExtent, WorkgroupSize,
 };
 
 /// Fixed magic at the start of every canonical kernel IR module.
@@ -35,12 +36,20 @@ pub const KERNEL_IR_VERSION_V5: u16 = 5;
 pub const KERNEL_IR_VERSION_V6: u16 = 6;
 /// Kernel IR V7 adds the full checked tensor-layout instruction contract.
 pub const KERNEL_IR_VERSION_V7: u16 = 7;
+/// Kernel IR V8 adds gfx950 FP8 scaled matrix operations and layouts.
+pub const KERNEL_IR_VERSION_V8: u16 = 8;
+/// Kernel IR V9 adds typed gfx950 attention collectives and LDS transpose operations.
+pub const KERNEL_IR_VERSION_V9: u16 = 9;
 /// Domain separator for identities derived from canonical Kernel IR V5 bytes.
 pub const KERNEL_IR_DOMAIN_V5: &[u8] = b"FE2O3/KERNEL-IR/V5\0";
 /// Domain separator for identities derived from canonical Kernel IR V6 bytes.
 pub const KERNEL_IR_DOMAIN_V6: &[u8] = b"FE2O3/KERNEL-IR/V6\0";
 /// Domain separator for identities derived from canonical Kernel IR V7 bytes.
 pub const KERNEL_IR_DOMAIN_V7: &[u8] = b"FE2O3/KERNEL-IR/V7\0";
+/// Domain separator for identities derived from canonical Kernel IR V8 bytes.
+pub const KERNEL_IR_DOMAIN_V8: &[u8] = b"FE2O3/KERNEL-IR/V8\0";
+/// Domain separator for identities derived from canonical Kernel IR V9 bytes.
+pub const KERNEL_IR_DOMAIN_V9: &[u8] = b"FE2O3/KERNEL-IR/V9\0";
 /// Maximum size of one encoded kernel IR module.
 pub const MAX_MODULE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum UTF-8 byte length of any identifier or extension component.
@@ -249,6 +258,16 @@ pub fn encode_module_v7(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError>
     encode_module(module, KERNEL_IR_VERSION_V7)
 }
 
+/// Encodes a module in the bounded canonical kernel IR V8 wire format.
+pub fn encode_module_v8(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V8)
+}
+
+/// Encodes a module in the bounded canonical kernel IR V9 wire format.
+pub fn encode_module_v9(module: &Module) -> Result<Vec<u8>, KernelIrEncodeError> {
+    encode_module(module, KERNEL_IR_VERSION_V9)
+}
+
 fn encode_module(module: &Module, version: u16) -> Result<Vec<u8>, KernelIrEncodeError> {
     let mut writer = Writer::new(version);
     writer.bytes(&KERNEL_IR_MAGIC_V1)?;
@@ -318,6 +337,16 @@ pub fn decode_module_v6(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
 /// Decodes canonical V1 through V7 bytes using the latest bounded reader.
 pub fn decode_module_v7(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
     decode_module(bytes, KERNEL_IR_VERSION_V7, true)
+}
+
+/// Decodes canonical V1 through V8 bytes using the latest bounded reader.
+pub fn decode_module_v8(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V8, true)
+}
+
+/// Decodes canonical V1 through V9 bytes using the latest bounded reader.
+pub fn decode_module_v9(bytes: &[u8]) -> Result<Module, KernelIrDecodeError> {
+    decode_module(bytes, KERNEL_IR_VERSION_V9, true)
 }
 
 fn decode_module(
@@ -790,6 +819,11 @@ fn encode_operation_kind(
             writer.u8(22)?;
             encode_matrix_operation(writer, matrix)?;
         }
+        OperationKind::Gfx950LdsTranspose(transpose) => {
+            require_v9(writer, "gfx950 LDS transpose operation")?;
+            writer.u8(24)?;
+            encode_gfx950_lds_transpose_operation(writer, transpose)?;
+        }
         OperationKind::InlineAssembly(assembly) => {
             require_v3(writer, "source-bound inline assembly")?;
             writer.u8(21)?;
@@ -883,6 +917,9 @@ fn decode_operation_kind(reader: &mut Reader<'_>) -> Result<OperationKind, Kerne
             fallback: ValueId(reader.u32()?),
             access: decode_memory_access(reader)?,
         },
+        24 if reader.version >= KERNEL_IR_VERSION_V9 => {
+            OperationKind::Gfx950LdsTranspose(decode_gfx950_lds_transpose_operation(reader)?)
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "operation",
@@ -1428,6 +1465,31 @@ fn encode_wave_operation(
             writer.u32(source_lane.0)?;
             writer.u32(tile_width)
         }
+        WaveOperationKind::ReduceF32 {
+            value,
+            tile_width,
+            kind,
+        } => {
+            require_v9(writer, "f32 wave reduction")?;
+            writer.u8(6)?;
+            writer.u32(value.0)?;
+            writer.u32(tile_width)?;
+            writer.u8(match kind {
+                WaveF32ReductionKindV1::Sum => 1,
+                WaveF32ReductionKindV1::Maximum => 2,
+            })
+        }
+        WaveOperationKind::BroadcastF32 {
+            value,
+            source_lane,
+            tile_width,
+        } => {
+            require_v9(writer, "f32 wave broadcast")?;
+            writer.u8(7)?;
+            writer.u32(value.0)?;
+            writer.u32(source_lane.0)?;
+            writer.u32(tile_width)
+        }
     }
 }
 
@@ -1451,6 +1513,25 @@ fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, Kerne
             source_lane: ValueId(reader.u32()?),
             tile_width: reader.u32()?,
         },
+        6 if reader.version >= KERNEL_IR_VERSION_V9 => WaveOperationKind::ReduceF32 {
+            value: ValueId(reader.u32()?),
+            tile_width: reader.u32()?,
+            kind: match reader.u8()? {
+                1 => WaveF32ReductionKindV1::Sum,
+                2 => WaveF32ReductionKindV1::Maximum,
+                tag => {
+                    return Err(KernelIrDecodeError::UnknownTag {
+                        kind: "wave f32 reduction",
+                        tag,
+                    });
+                }
+            },
+        },
+        7 if reader.version >= KERNEL_IR_VERSION_V9 => WaveOperationKind::BroadcastF32 {
+            value: ValueId(reader.u32()?),
+            source_lane: ValueId(reader.u32()?),
+            tile_width: reader.u32()?,
+        },
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "wave operation",
@@ -1459,6 +1540,116 @@ fn decode_wave_operation(reader: &mut Reader<'_>) -> Result<WaveOperation, Kerne
         }
     };
     Ok(WaveOperation {
+        kind,
+        width,
+        active_lanes,
+        convergence,
+    })
+}
+
+fn encode_gfx950_lds_transpose_operation(
+    writer: &mut Writer,
+    transpose: &Gfx950LdsTransposeOperationV1,
+) -> Result<(), KernelIrEncodeError> {
+    writer.u8(wave_width_tag(transpose.width))?;
+    writer.u32(transpose.active_lanes)?;
+    encode_convergence(writer, transpose.convergence)?;
+    let encode_format = |writer: &mut Writer, format| {
+        writer.u8(match format {
+            Gfx950LdsTransposeFormatV1::Fp4E2M1 => 1,
+            Gfx950LdsTransposeFormatV1::Fp8E4M3 => 2,
+        })
+    };
+    match transpose.kind {
+        Gfx950LdsTransposeOperationKindV1::Current { format } => {
+            writer.u8(1)?;
+            encode_format(writer, format)
+        }
+        Gfx950LdsTransposeOperationKindV1::Stage {
+            format,
+            storage,
+            source_slice,
+            offset,
+            rows,
+            columns,
+            stride,
+            token_base,
+            reduction_base,
+        } => {
+            writer.u8(2)?;
+            encode_format(writer, format)?;
+            for value in [
+                storage,
+                source_slice,
+                offset,
+                rows,
+                columns,
+                stride,
+                token_base,
+                reduction_base,
+            ] {
+                writer.u32(value.0)?;
+            }
+            Ok(())
+        }
+        Gfx950LdsTransposeOperationKindV1::Publish { format, storage } => {
+            writer.u8(3)?;
+            encode_format(writer, format)?;
+            writer.u32(storage.0)
+        }
+        Gfx950LdsTransposeOperationKindV1::Read { format, storage } => {
+            writer.u8(4)?;
+            encode_format(writer, format)?;
+            writer.u32(storage.0)
+        }
+    }
+}
+
+fn decode_gfx950_lds_transpose_operation(
+    reader: &mut Reader<'_>,
+) -> Result<Gfx950LdsTransposeOperationV1, KernelIrDecodeError> {
+    let width = decode_wave_width(reader.u8()?)?;
+    let active_lanes = reader.u32()?;
+    let convergence = decode_convergence(reader)?;
+    let decode_format = |reader: &mut Reader<'_>| match reader.u8()? {
+        1 => Ok(Gfx950LdsTransposeFormatV1::Fp4E2M1),
+        2 => Ok(Gfx950LdsTransposeFormatV1::Fp8E4M3),
+        tag => Err(KernelIrDecodeError::UnknownTag {
+            kind: "gfx950 LDS transpose format",
+            tag,
+        }),
+    };
+    let kind = match reader.u8()? {
+        1 => Gfx950LdsTransposeOperationKindV1::Current {
+            format: decode_format(reader)?,
+        },
+        2 => Gfx950LdsTransposeOperationKindV1::Stage {
+            format: decode_format(reader)?,
+            storage: ValueId(reader.u32()?),
+            source_slice: ValueId(reader.u32()?),
+            offset: ValueId(reader.u32()?),
+            rows: ValueId(reader.u32()?),
+            columns: ValueId(reader.u32()?),
+            stride: ValueId(reader.u32()?),
+            token_base: ValueId(reader.u32()?),
+            reduction_base: ValueId(reader.u32()?),
+        },
+        3 => Gfx950LdsTransposeOperationKindV1::Publish {
+            format: decode_format(reader)?,
+            storage: ValueId(reader.u32()?),
+        },
+        4 => Gfx950LdsTransposeOperationKindV1::Read {
+            format: decode_format(reader)?,
+            storage: ValueId(reader.u32()?),
+        },
+        tag => {
+            return Err(KernelIrDecodeError::UnknownTag {
+                kind: "gfx950 LDS transpose operation",
+                tag,
+            });
+        }
+    };
+    Ok(Gfx950LdsTransposeOperationV1 {
         kind,
         width,
         active_lanes,
@@ -1494,6 +1685,19 @@ fn encode_matrix_operation(
             writer.u8(1)?;
             encode_matrix_values(writer, lhs)?;
             encode_matrix_values(writer, rhs)?;
+            encode_matrix_values(writer, accumulator)?;
+            encode_matrix_multiply_profile(writer, *profile)?;
+        }
+        MatrixOperationKind::ScaledMultiplyAccumulate {
+            lhs,
+            rhs,
+            accumulator,
+            profile,
+        } => {
+            require_v8(writer, "gfx950 scaled matrix multiply")?;
+            writer.u8(4)?;
+            encode_matrix_values8(writer, lhs)?;
+            encode_matrix_values8(writer, rhs)?;
             encode_matrix_values(writer, accumulator)?;
             encode_matrix_multiply_profile(writer, *profile)?;
         }
@@ -1546,6 +1750,14 @@ fn decode_matrix_operation(
             values: decode_matrix_values(reader)?,
             profile: decode_matrix_lds_profile(reader)?,
         },
+        4 if reader.version >= KERNEL_IR_VERSION_V8 => {
+            MatrixOperationKind::ScaledMultiplyAccumulate {
+                lhs: decode_matrix_values8(reader)?,
+                rhs: decode_matrix_values8(reader)?,
+                accumulator: decode_matrix_values(reader)?,
+                profile: decode_matrix_multiply_profile(reader)?,
+            }
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "matrix operation",
@@ -1582,6 +1794,14 @@ fn encode_tensor_layout_contract_v1(
 ) -> Result<(), KernelIrEncodeError> {
     match contract.profile {
         TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64 => writer.u8(1)?,
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64 => {
+            require_v8(writer, "gfx950 FP4 tensor instruction profile")?;
+            writer.u8(5)?;
+        }
+        TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64 => {
+            require_v8(writer, "gfx950 FP8 tensor instruction profile")?;
+            writer.u8(4)?;
+        }
         TensorInstructionProfileV1::IncompatibleWave32 => writer.u8(2)?,
         TensorInstructionProfileV1::Opaque(identity) => {
             writer.u8(3)?;
@@ -1612,6 +1832,12 @@ fn decode_tensor_layout_contract_v1(
         1 => TensorInstructionProfileV1::Gfx942MfmaBf16F32M16N16K16Wave64,
         2 => TensorInstructionProfileV1::IncompatibleWave32,
         3 => TensorInstructionProfileV1::Opaque(reader.u32()?),
+        4 if reader.version >= KERNEL_IR_VERSION_V8 => {
+            TensorInstructionProfileV1::Gfx950ScaledMfmaFp8E4M3F32M16N16K128Wave64
+        }
+        5 if reader.version >= KERNEL_IR_VERSION_V8 => {
+            TensorInstructionProfileV1::Gfx950ScaledMfmaFp4E2M1F32M16N16K128Wave64
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "tensor instruction profile",
@@ -1657,7 +1883,7 @@ fn encode_tensor_fragment_layout_v1(
     })?;
     writer.u16(fragment.shape[0])?;
     writer.u16(fragment.shape[1])?;
-    writer.u8(matrix_element_tag(fragment.element))?;
+    encode_matrix_element(writer, fragment.element)?;
     writer.u8(fragment.fragment_elements)?;
     match fragment.mapping {
         TensorSymbolicMapV1::LaneComponentAffine {
@@ -1680,6 +1906,10 @@ fn encode_tensor_fragment_layout_v1(
             writer.u8(2)?;
             writer.u32(identity)?;
         }
+        TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK => {
+            require_v8(writer, "gfx950 FP8 split-K tensor map")?;
+            writer.u8(3)?;
+        }
     }
     match fragment.multiplicity {
         TensorMultiplicityV1::Unique => writer.u8(1)?,
@@ -1691,6 +1921,14 @@ fn encode_tensor_fragment_layout_v1(
     match fragment.packing {
         TensorElementPackingV1::Bf16PairInI32 => writer.u8(1)?,
         TensorElementPackingV1::F32Scalar => writer.u8(2)?,
+        TensorElementPackingV1::Fp4EightInI32 => {
+            require_v8(writer, "gfx950 FP4 tensor packing")?;
+            writer.u8(5)?;
+        }
+        TensorElementPackingV1::Fp8FourInI32 => {
+            require_v8(writer, "gfx950 FP8 tensor packing")?;
+            writer.u8(4)?;
+        }
         TensorElementPackingV1::Unsupported(code) => {
             writer.u8(3)?;
             writer.u8(code)?;
@@ -1722,7 +1960,8 @@ fn decode_tensor_fragment_layout_v1(
         }
     };
     let shape = [reader.u16()?, reader.u16()?];
-    let element = decode_matrix_element(reader.u8()?)?;
+    let element_tag = reader.u8()?;
+    let element = decode_matrix_element_for_version(reader, element_tag)?;
     let fragment_elements = reader.u8()?;
     let mapping = match reader.u8()? {
         1 => {
@@ -1754,6 +1993,9 @@ fn decode_tensor_fragment_layout_v1(
             }
         }
         2 => TensorSymbolicMapV1::Opaque(reader.u32()?),
+        3 if reader.version >= KERNEL_IR_VERSION_V8 => {
+            TensorSymbolicMapV1::Gfx950Fp8M16N16K128SplitK
+        }
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "tensor symbolic map",
@@ -1777,6 +2019,8 @@ fn decode_tensor_fragment_layout_v1(
         1 => TensorElementPackingV1::Bf16PairInI32,
         2 => TensorElementPackingV1::F32Scalar,
         3 => TensorElementPackingV1::Unsupported(reader.u8()?),
+        4 if reader.version >= KERNEL_IR_VERSION_V8 => TensorElementPackingV1::Fp8FourInI32,
+        5 if reader.version >= KERNEL_IR_VERSION_V8 => TensorElementPackingV1::Fp4EightInI32,
         tag => {
             return Err(KernelIrDecodeError::UnknownTag {
                 kind: "tensor element packing",
@@ -1825,6 +2069,24 @@ fn decode_matrix_values(reader: &mut Reader<'_>) -> Result<[ValueId; 4], KernelI
     Ok(values)
 }
 
+fn encode_matrix_values8(
+    writer: &mut Writer,
+    values: &[ValueId; 8],
+) -> Result<(), KernelIrEncodeError> {
+    for value in values {
+        writer.u32(value.0)?;
+    }
+    Ok(())
+}
+
+fn decode_matrix_values8(reader: &mut Reader<'_>) -> Result<[ValueId; 8], KernelIrDecodeError> {
+    let mut values = [ValueId(0); 8];
+    for value in &mut values {
+        *value = ValueId(reader.u32()?);
+    }
+    Ok(values)
+}
+
 fn encode_matrix_multiply_profile(
     writer: &mut Writer,
     profile: MatrixMultiplyProfile,
@@ -1832,20 +2094,27 @@ fn encode_matrix_multiply_profile(
     writer.u16(profile.m)?;
     writer.u16(profile.n)?;
     writer.u16(profile.k)?;
-    writer.u8(matrix_element_tag(profile.input))?;
-    writer.u8(matrix_element_tag(profile.accumulator))?;
+    encode_matrix_element(writer, profile.input)?;
+    encode_matrix_element(writer, profile.accumulator)?;
     writer.u8(wave_width_tag(profile.wave_width))
 }
 
 fn decode_matrix_multiply_profile(
     reader: &mut Reader<'_>,
 ) -> Result<MatrixMultiplyProfile, KernelIrDecodeError> {
+    let m = reader.u16()?;
+    let n = reader.u16()?;
+    let k = reader.u16()?;
+    let input_tag = reader.u8()?;
+    let input = decode_matrix_element_for_version(reader, input_tag)?;
+    let accumulator_tag = reader.u8()?;
+    let accumulator = decode_matrix_element_for_version(reader, accumulator_tag)?;
     Ok(MatrixMultiplyProfile {
-        m: reader.u16()?,
-        n: reader.u16()?,
-        k: reader.u16()?,
-        input: decode_matrix_element(reader.u8()?)?,
-        accumulator: decode_matrix_element(reader.u8()?)?,
+        m,
+        n,
+        k,
+        input,
+        accumulator,
         wave_width: decode_wave_width(reader.u8()?)?,
     })
 }
@@ -1856,7 +2125,7 @@ fn encode_matrix_lds_profile(
 ) -> Result<(), KernelIrEncodeError> {
     writer.u16(profile.rows)?;
     writer.u16(profile.columns)?;
-    writer.u8(matrix_element_tag(profile.element))?;
+    encode_matrix_element(writer, profile.element)?;
     writer.u8(matrix_layout_tag(profile.layout))?;
     writer.u8(profile.fragment_elements)?;
     writer.u8(wave_width_tag(profile.wave_width))
@@ -1865,10 +2134,14 @@ fn encode_matrix_lds_profile(
 fn decode_matrix_lds_profile(
     reader: &mut Reader<'_>,
 ) -> Result<MatrixLdsProfile, KernelIrDecodeError> {
+    let rows = reader.u16()?;
+    let columns = reader.u16()?;
+    let element_tag = reader.u8()?;
+    let element = decode_matrix_element_for_version(reader, element_tag)?;
     Ok(MatrixLdsProfile {
-        rows: reader.u16()?,
-        columns: reader.u16()?,
-        element: decode_matrix_element(reader.u8()?)?,
+        rows,
+        columns,
+        element,
         layout: decode_matrix_layout(reader.u8()?)?,
         fragment_elements: reader.u8()?,
         wave_width: decode_wave_width(reader.u8()?)?,
@@ -2513,10 +2786,40 @@ enum_codec!(assembly_effect_tag, decode_assembly_effect, AssemblyEffect, "inline
 enum_codec!(matrix_element_tag, decode_matrix_element, MatrixElement, "matrix element", {
     MatrixElement::Bf16 => 1,
     MatrixElement::F32 => 2,
+    MatrixElement::Fp8E4M3 => 3,
+    MatrixElement::Fp4E2M1 => 4,
 });
 enum_codec!(matrix_layout_tag, decode_matrix_layout, MatrixLayout, "matrix layout", {
     MatrixLayout::RowMajorXor4 => 1,
 });
+
+fn encode_matrix_element(
+    writer: &mut Writer,
+    element: MatrixElement,
+) -> Result<(), KernelIrEncodeError> {
+    if matches!(element, MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3) {
+        require_v8(writer, "gfx950 low-precision matrix element")?;
+    }
+    writer.u8(matrix_element_tag(element))
+}
+
+fn decode_matrix_element_for_version(
+    reader: &Reader<'_>,
+    tag: u8,
+) -> Result<MatrixElement, KernelIrDecodeError> {
+    if matches!(
+        tag,
+        value if value == matrix_element_tag(MatrixElement::Fp4E2M1)
+            || value == matrix_element_tag(MatrixElement::Fp8E4M3)
+    ) && reader.version < KERNEL_IR_VERSION_V8
+    {
+        return Err(KernelIrDecodeError::UnknownTag {
+            kind: "matrix element",
+            tag,
+        });
+    }
+    decode_matrix_element(tag)
+}
 
 fn require_v2(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V2 {
@@ -2564,6 +2867,28 @@ fn require_v6(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEnco
 
 fn require_v7(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
     if writer.version >= KERNEL_IR_VERSION_V7 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v8(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V8 {
+        Ok(())
+    } else {
+        Err(KernelIrEncodeError::UnsupportedInVersion {
+            version: writer.version,
+            feature,
+        })
+    }
+}
+
+fn require_v9(writer: &Writer, feature: &'static str) -> Result<(), KernelIrEncodeError> {
+    if writer.version >= KERNEL_IR_VERSION_V9 {
         Ok(())
     } else {
         Err(KernelIrEncodeError::UnsupportedInVersion {

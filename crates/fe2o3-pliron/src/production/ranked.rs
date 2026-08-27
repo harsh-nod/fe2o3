@@ -1234,7 +1234,7 @@ fn tensor_layout_result_scalar_v1(
         MatrixElement::F32 => Some(ProductionSemanticScalarTypeV2::Float { bits: 32 }),
         // The semantic scalar model has no BF16 kind yet. Keep such result
         // layouts closed rather than conflating BF16 with IEEE binary16.
-        MatrixElement::Bf16 => None,
+        MatrixElement::Bf16 | MatrixElement::Fp4E2M1 | MatrixElement::Fp8E4M3 => None,
     }
 }
 

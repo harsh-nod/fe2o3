@@ -5,7 +5,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fe2o3_amdgcn_model::{
-    LoweringDiagnosticCode, lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_llvm_ir,
+    LoweringDiagnosticCode, lower_compiler_module_to_gfx950_xnack_minus_llvm_ir,
+    lower_kernel_to_gfx942_xnack_minus_llvm_ir, lower_kernel_to_gfx950_xnack_minus_llvm_ir,
+    lower_kernel_to_llvm_ir,
 };
 use fe2o3_kernel_ir::*;
 
@@ -389,6 +391,84 @@ fn exact_gfx942_xnack_minus(mut module: Module) -> Module {
         .insert(target.clone());
     module.kernels[0].required_capabilities.insert(target);
     module
+}
+
+fn exact_gfx950_xnack_minus(mut module: Module) -> Module {
+    let target = gfx950_xnack_minus_target_capability();
+    let wave = TargetCapability::WaveWidth(WaveWidth::Wave64);
+    module.required_capabilities.insert(target.clone());
+    module.required_capabilities.insert(wave.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(target.clone());
+    module.functions[0]
+        .required_capabilities
+        .insert(wave.clone());
+    module.kernels[0].required_capabilities.insert(target);
+    module.kernels[0].required_capabilities.insert(wave);
+    module
+}
+
+fn gfx950_scaled_mfma_module() -> Module {
+    let parameters = [vec![Type::Scalar(ScalarType::U32); 16], vec![Type::F32; 4]].concat();
+    let matrix = MatrixOperation::scaled_multiply_accumulate_fp8_e4m3(
+        std::array::from_fn(|index| ValueId(index as u32)),
+        std::array::from_fn(|index| ValueId(8 + index as u32)),
+        std::array::from_fn(|index| ValueId(16 + index as u32)),
+    )
+    .with_declared_tensor_layout(
+        TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
+    );
+    let operation = Operation::new(
+        (20..24)
+            .map(|id| ValueDef::new(ValueId(id), Type::F32))
+            .collect(),
+        OperationKind::Matrix(matrix),
+    );
+    let mut function = Function::kernel_entry(
+        "gfx950_scaled_mfma_impl",
+        Signature::new(parameters, vec![]),
+        (0..20).map(ValueId).collect(),
+        vec![BasicBlock {
+            id: BlockId(0),
+            parameters: vec![],
+            operations: vec![operation],
+            terminator: Some(Terminator::Return { values: vec![] }),
+        }],
+    );
+    function.required_capabilities = function.derived_capabilities();
+
+    let mut kernel = Kernel::new(
+        "gfx950_scaled_mfma",
+        "gfx950_scaled_mfma_impl",
+        LaunchDomain::D1 {
+            x: LaunchExtent::Dynamic,
+        },
+    );
+    kernel.workgroup_size = Some(WorkgroupSize::new(64, 1, 1));
+
+    let mut module = Module::new("tests::gfx950_scaled_mfma");
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    exact_gfx950_xnack_minus(module)
+}
+
+fn gfx950_scaled_fp4_mfma_module() -> Module {
+    let mut module = gfx950_scaled_mfma_module();
+    let operation = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[0];
+    let OperationKind::Matrix(matrix) = &mut operation.kind else {
+        panic!("expected scaled matrix operation")
+    };
+    matrix.kind = MatrixOperationKind::ScaledMultiplyAccumulate {
+        lhs: std::array::from_fn(|index| ValueId(index as u32)),
+        rhs: std::array::from_fn(|index| ValueId(8 + index as u32)),
+        accumulator: std::array::from_fn(|index| ValueId(16 + index as u32)),
+        profile: MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64(),
+    };
+    matrix.tensor_layout =
+        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64());
+    module.functions[0].required_capabilities = module.functions[0].derived_capabilities();
+    exact_gfx950_xnack_minus(module)
 }
 
 fn phi_loop_module() -> Module {
@@ -1130,6 +1210,85 @@ fn gfx942_barriers_use_one_workload_neutral_physical_policy() {
         1
     );
     assert!(!llvm.contains("call void @llvm.amdgcn.s.barrier()"));
+}
+
+#[test]
+fn gfx950_exact_lowering_binds_cpu_features_layout_and_physical_barrier() {
+    let module = exact_gfx950_xnack_minus(barrier_only_module(
+        SynchronizationScope::Workgroup,
+        MemoryOrdering::AcquireRelease,
+    ));
+    let llvm = lower_kernel_to_gfx950_xnack_minus_llvm_ir(&module, &KernelId::new("fill")).unwrap();
+    assert!(llvm.contains("target datalayout = \"e-p:64:64-p1:64:64"));
+    assert!(llvm.contains("\"target-cpu\"=\"gfx950\""));
+    assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
+    assert_eq!(
+        llvm.matches("call void asm sideeffect \"s_barrier\", \"\"()")
+            .count(),
+        1
+    );
+
+    let missing_entry = {
+        let mut missing = module.clone();
+        missing.functions[0]
+            .required_capabilities
+            .retain(|capability| {
+                !matches!(
+                    capability,
+                    TargetCapability::Extension { namespace, name }
+                        if namespace == AMDGPU_EXACT_TARGET_CAPABILITY_NAMESPACE
+                            && name == "gfx950:xnack-"
+                )
+            });
+        missing
+    };
+    assert!(
+        lower_kernel_to_gfx950_xnack_minus_llvm_ir(&missing_entry, &KernelId::new("fill")).is_err()
+    );
+    assert!(lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("fill")).is_err());
+}
+
+#[test]
+fn gfx950_full_module_lowers_scaled_fp8_mfma_with_exact_intrinsic_abi() {
+    let module = gfx950_scaled_mfma_module();
+    let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+
+    let intrinsic = "llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32";
+    assert_eq!(llvm.matches(intrinsic).count(), 2, "{llvm}");
+    assert!(llvm.contains(
+        "declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(<8 x i32>, <8 x i32>, <4 x float>, i32 immarg, i32 immarg, i32 immarg, i32, i32 immarg, i32)"
+    ));
+    assert!(llvm.contains(
+        "<8 x i32> %matrix.0.0.lhs.7, <8 x i32> %matrix.0.0.rhs.7, <4 x float> %matrix.0.0.acc.3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0"
+    ));
+    assert_eq!(
+        llvm.matches("extractelement <4 x float> %matrix.0.0.mfma")
+            .count(),
+        4
+    );
+    assert!(llvm.contains("\"target-cpu\"=\"gfx950\""));
+    assert!(llvm.contains("\"target-features\"=\"-wavefrontsize32,+wavefrontsize64,-xnack\""));
+    assert!(
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("gfx950_scaled_mfma"))
+            .is_err()
+    );
+}
+
+#[test]
+fn gfx950_full_module_lowers_scaled_fp4_mfma_with_format_selectors_4_4() {
+    let module = gfx950_scaled_fp4_mfma_module();
+    let llvm = lower_compiler_module_to_gfx950_xnack_minus_llvm_ir(&module).unwrap();
+
+    assert!(llvm.contains(
+        "<8 x i32> %matrix.0.0.lhs.7, <8 x i32> %matrix.0.0.rhs.7, <4 x float> %matrix.0.0.acc.3, i32 4, i32 4, i32 0, i32 0, i32 0, i32 0"
+    ));
+    assert!(
+        !llvm.contains("<4 x float> %matrix.0.0.acc.3, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0")
+    );
+    assert!(
+        lower_kernel_to_gfx942_xnack_minus_llvm_ir(&module, &KernelId::new("gfx950_scaled_mfma"))
+            .is_err()
+    );
 }
 
 #[test]

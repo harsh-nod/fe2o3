@@ -4002,6 +4002,22 @@ void testExactFlashAttentionLlvmBuildIdentity() {
       "Flash LLVM identity drift was misdiagnosed");
 }
 
+void testGfx950RejectsExternalProviders() {
+  Request Injected = makeV2Request(
+      makeInput(InputKind::LlvmBitcode,
+                makeBitcode("gfx950-compiler", "gfx950_entry", std::nullopt,
+                            withCodeObjectVersion(6))),
+      {makeInput(InputKind::LlvmBitcode,
+                 makeBitcode("gfx950-injected-provider", "injected_helper",
+                             std::nullopt, withCodeObjectVersion(6)))},
+      {}, {"gfx950_entry"}, {"gfx950_entry", "injected_helper"}, 6);
+  Injected.Target = "gfx950:xnack-";
+  Response Rejected = requireFailure(Injected, Stage::InputValidation);
+  requireDiagnostic(
+      Rejected,
+      "gfx950 accepts only the measured built-in device-library provider");
+}
+
 } // namespace
 
 int main(int ArgumentCount, char **Arguments) {
@@ -4038,6 +4054,7 @@ int main(int ArgumentCount, char **Arguments) {
   testLldExitPolicy(0);
   testLldExitPolicy(1);
   testExactFlashAttentionLlvmBuildIdentity();
+  testGfx950RejectsExternalProviders();
   testSyntheticOcmlPipeline();
   testExactWorkgroupSyncProfiles();
   testExactMoeTop2V1Profile();

@@ -75,11 +75,13 @@ and 512 UTF-8 bytes per diagnostic name.
 
 Launch and unsafe-assembly declarations use a separate wire domain, so the
 `FrontendUnitV1` bytes above remain unchanged. `KernelFrontendContractV1` has
-magic `FE2O3KF\0`, version 1, a maximum length of 64 bytes, and explicit flags
+magic `FE2O3KF\0`, version 1, a maximum length of 76 bytes, and explicit flags
 for its launch and assembly records. It models:
 
 - optional required and maximum 3D workgroup dimensions, each with a volume no
   larger than 1024;
+- optional nonzero maximum 3D grid dimensions, authenticated only when its
+  append-only launch flag is present;
 - an optional minimum workgroups per compute unit in `1..=64`, valid only with
   maximum dimensions; and
 - a gfx942 assembly declaration with bounded operand, option, and effect bits.

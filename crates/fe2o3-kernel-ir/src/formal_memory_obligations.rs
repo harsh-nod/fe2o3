@@ -665,6 +665,10 @@ pub fn derive_kernel_memory_obligations_from_verified_for_launch(
                     ..
                 } => {}
                 OperationKind::Matrix(matrix) if matrix.memory_effects().is_empty() => {}
+                // The verified gfx950 transpose chain owns its static LDS, accepts only a
+                // read-only global U8 slice, and defines guarded zero-fill for every source
+                // coordinate. It creates no caller-visible write or alias obligation.
+                OperationKind::Gfx950LdsTranspose(_) => {}
                 OperationKind::GuardedLoad { access, .. }
                     if access.address_space == AddressSpace::Private => {}
                 OperationKind::GuardedLoad {

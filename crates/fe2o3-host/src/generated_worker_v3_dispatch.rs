@@ -287,15 +287,17 @@ where
     let implicit = total
         .checked_sub(explicit)
         .ok_or(GeneratedWorkerV3PrepareErrorV1::PhysicalKernarg)?;
-    if implicit != COV6_IMPLICIT_KERNARG_BYTES
-        || packed.len() != explicit
+    if !physical_implicit_kernarg_metadata_matches(
+        explicit,
+        implicit,
+        physical.implicit_argument_offset(),
+        physical.implicit_argument_size(),
+    ) || packed.len() != explicit
         || packed.alignment() != plan.kernarg_alignment()
         || plan.kernarg_size() != u64::from(descriptor.explicit_argument_size())
         || plan.kernarg_alignment() != descriptor.kernarg_segment_alignment()
         || physical.kernarg_segment_size() != total as u64
         || physical.kernarg_segment_alignment() != u64::from(descriptor.kernarg_segment_alignment())
-        || physical.implicit_argument_offset() != Some(explicit as u64)
-        || physical.implicit_argument_size() != implicit as u64
         || resolution.kernarg_segment_size() != total as u64
     {
         return Err(GeneratedWorkerV3PrepareErrorV1::PhysicalKernarg);
@@ -312,6 +314,22 @@ where
         .map_err(|_| GeneratedWorkerV3PrepareErrorV1::PhysicalKernarg)?;
     storage.bytes_mut()[..explicit].copy_from_slice(packed.bytes());
     Ok((storage, implicit))
+}
+
+fn physical_implicit_kernarg_metadata_matches(
+    explicit_byte_len: usize,
+    implicit_byte_len: usize,
+    physical_offset: Option<u64>,
+    physical_size: u64,
+) -> bool {
+    match implicit_byte_len {
+        0 => physical_offset.is_none() && physical_size == 0,
+        COV6_IMPLICIT_KERNARG_BYTES => {
+            u64::try_from(explicit_byte_len).is_ok_and(|explicit| physical_offset == Some(explicit))
+                && physical_size == COV6_IMPLICIT_KERNARG_BYTES as u64
+        }
+        _ => false,
+    }
 }
 
 struct WorkerV3AlignedKernargV1 {
@@ -378,4 +396,35 @@ pub enum GeneratedWorkerV3ArgumentErrorV1 {
     AccessSubstitution {
         argument_index: usize,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn physical_kernarg_admits_only_explicit_only_or_exact_cov6_hidden_metadata() {
+        assert!(physical_implicit_kernarg_metadata_matches(48, 0, None, 0));
+        assert!(physical_implicit_kernarg_metadata_matches(
+            48,
+            COV6_IMPLICIT_KERNARG_BYTES,
+            Some(48),
+            COV6_IMPLICIT_KERNARG_BYTES as u64,
+        ));
+
+        for (implicit, offset, size) in [
+            (0, Some(48), 0),
+            (0, None, COV6_IMPLICIT_KERNARG_BYTES as u64),
+            (1, None, 0),
+            (255, Some(48), 255),
+            (257, Some(48), 257),
+            (COV6_IMPLICIT_KERNARG_BYTES, None, 256),
+            (COV6_IMPLICIT_KERNARG_BYTES, Some(47), 256),
+            (COV6_IMPLICIT_KERNARG_BYTES, Some(48), 0),
+        ] {
+            assert!(!physical_implicit_kernarg_metadata_matches(
+                48, implicit, offset, size,
+            ));
+        }
+    }
 }

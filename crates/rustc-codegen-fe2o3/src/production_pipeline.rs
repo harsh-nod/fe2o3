@@ -43,7 +43,7 @@ pub(crate) enum ProductionPipelineError {
     FormalMemoryAdmission(fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1),
     Geometry(crate::production_geometry_v1::ProductionGeometryErrorV1),
     TargetBinding(fe2o3_kernel_ir::VerificationErrors),
-    Gfx942Lowering(dialect_amdgcn::LoweringErrors),
+    TargetLowering(dialect_amdgcn::LoweringErrors),
     UpstreamLlvmLayoutBinding(String),
     DescriptorEvidence(crate::compiler_descriptor::CompilerDescriptorError),
     SemanticLineage(crate::production_semantic_lineage_v3::ProductionSemanticLineageErrorV3),
@@ -83,10 +83,10 @@ impl fmt::Display for ProductionPipelineError {
                 write!(formatter, "production compilation geometry validation failed: {error}")
             }
             Self::TargetBinding(error) => {
-                write!(formatter, "production compilation gfx942 target binding failed: {error}")
+                write!(formatter, "production compilation AMDGPU target binding failed: {error}")
             }
-            Self::Gfx942Lowering(error) => {
-                write!(formatter, "production compilation gfx942 LLVM lowering failed: {error}")
+            Self::TargetLowering(error) => {
+                write!(formatter, "production compilation AMDGPU LLVM lowering failed: {error}")
             }
             Self::UpstreamLlvmLayoutBinding(error) => {
                 write!(formatter, "production compilation upstream LLVM layout binding failed: {error}")
@@ -126,7 +126,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
             Self::TargetBinding(error) => Some(error),
-            Self::Gfx942Lowering(error) => Some(error),
+            Self::TargetLowering(error) => Some(error),
             Self::DescriptorEvidence(error) => Some(error),
             Self::SemanticLineage(error) => Some(error),
             Self::ProtectedRustcInvocation(error) => Some(error),
@@ -256,8 +256,8 @@ pub(crate) struct FormalMemoryAdmittedProductionCompilation {
 }
 
 /// Move-only production stage retaining formal admission, exact target-bound
-/// Kernel IR, deterministic gfx942 LLVM text, and transaction bindings.
-pub(crate) struct Gfx942LoweredProductionCompilation {
+/// Kernel IR, deterministic exact-target LLVM text, and transaction bindings.
+pub(crate) struct TargetLoweredProductionCompilation {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
     ranked_verification: crate::production_ranked_projection_v1::AuthenticatedRankedVerificationV5,
     target_module: fe2o3_kernel_ir::Module,
@@ -267,8 +267,9 @@ pub(crate) struct Gfx942LoweredProductionCompilation {
 
 /// Private handoff input that can only be constructed by the exact production
 /// target-lowering stage. It grants no publication or artifact authority.
-pub(crate) struct AuthenticatedProductionGfx942Module {
+pub(crate) struct AuthenticatedProductionTargetModule {
     admitted: fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+    target: fe2o3_compiler_ffi::DeviceTargetV1,
     target_module: fe2o3_kernel_ir::Module,
     llvm_ir: String,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
@@ -285,11 +286,12 @@ struct PreparedProductionWorkerPublication {
     prepared: crate::production_worker_handoff::PreparedProductionWorkerHandoff,
 }
 
-impl AuthenticatedProductionGfx942Module {
+impl AuthenticatedProductionTargetModule {
     pub(crate) fn into_parts(
         self,
     ) -> (
         fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1,
+        fe2o3_compiler_ffi::DeviceTargetV1,
         fe2o3_kernel_ir::Module,
         String,
         Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
@@ -297,6 +299,7 @@ impl AuthenticatedProductionGfx942Module {
     ) {
         (
             self.admitted,
+            self.target,
             self.target_module,
             self.llvm_ir,
             self.typed_descriptor_roots,
@@ -325,12 +328,15 @@ impl TargetNeutralProductionCompilation {
 }
 
 impl FormalMemoryAdmittedProductionCompilation {
-    fn lower_gfx942(self) -> Result<Gfx942LoweredProductionCompilation, ProductionPipelineError> {
+    fn lower_production_target(
+        self,
+    ) -> Result<TargetLoweredProductionCompilation, ProductionPipelineError> {
         let Self {
             admitted,
             ranked_verification,
             bindings,
         } = self;
+        let target_profile = bindings.rustc_target.profile();
         let semantic = admitted.semantic_kir().semantic().semantic();
         let [semantic_root] = semantic.roots() else {
             return Err(ProductionPipelineError::Geometry(
@@ -357,11 +363,19 @@ impl FormalMemoryAdmittedProductionCompilation {
             admitted.semantic_kir().module(),
             semantic_function,
             source_launch,
+            target_profile.device_target(),
         )
         .map_err(ProductionPipelineError::Geometry)?;
 
         let mut target_module = admitted.semantic_kir().module().clone();
-        let target = fe2o3_kernel_ir::gfx942_xnack_minus_target_capability();
+        let target = match target_profile {
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
+                fe2o3_kernel_ir::gfx942_xnack_minus_target_capability()
+            }
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
+                fe2o3_kernel_ir::gfx950_xnack_minus_target_capability()
+            }
+        };
         let wave = fe2o3_kernel_ir::TargetCapability::WaveWidth(fe2o3_kernel_ir::WaveWidth::Wave64);
         target_module.required_capabilities.insert(target.clone());
         target_module.required_capabilities.insert(wave.clone());
@@ -385,12 +399,24 @@ impl FormalMemoryAdmittedProductionCompilation {
         entry.required_capabilities.insert(wave);
         fe2o3_kernel_ir::verify_module(&target_module)
             .map_err(ProductionPipelineError::TargetBinding)?;
-        let dialect_llvm_ir =
-            dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(&target_module, &kernel_id)
-                .map_err(ProductionPipelineError::Gfx942Lowering)?;
+        let dialect_llvm_ir = match target_profile {
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
+                dialect_amdgcn::lower_kernel_to_gfx942_xnack_minus_llvm_ir(
+                    &target_module,
+                    &kernel_id,
+                )
+            }
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
+                dialect_amdgcn::lower_kernel_to_gfx950_xnack_minus_llvm_ir(
+                    &target_module,
+                    &kernel_id,
+                )
+            }
+        }
+        .map_err(ProductionPipelineError::TargetLowering)?;
         let llvm_ir = bind_production_upstream_llvm_layout_v1(dialect_llvm_ir)
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
-        Ok(Gfx942LoweredProductionCompilation {
+        Ok(TargetLoweredProductionCompilation {
             admitted,
             ranked_verification,
             target_module,
@@ -412,7 +438,7 @@ fn bind_production_upstream_llvm_layout_v1(dialect_llvm_ir: String) -> Result<St
         || dialect_llvm_ir.matches("target datalayout =").count() != 1
     {
         return Err(
-            "verified gfx942 lowering did not retain one canonical target header".to_owned(),
+            "verified AMDGPU lowering did not retain one canonical target header".to_owned(),
         );
     }
 
@@ -428,9 +454,13 @@ fn bind_production_upstream_llvm_layout_v1(dialect_llvm_ir: String) -> Result<St
     Ok(bound)
 }
 
-impl Gfx942LoweredProductionCompilation {
+impl TargetLoweredProductionCompilation {
     pub(crate) fn module(&self) -> &fe2o3_kernel_ir::Module {
         &self.target_module
+    }
+
+    pub(crate) fn target_name(&self) -> &'static str {
+        self.bindings.rustc_target.profile().device_target()
     }
 
     pub(crate) fn llvm_ir(&self) -> &str {
@@ -516,7 +546,7 @@ impl Gfx942LoweredProductionCompilation {
         self,
     ) -> Result<PreparedProductionWorkerPublication, ProductionPipelineError> {
         eprintln!(
-            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic gfx942:xnack- LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
+            "[rustc-codegen-fe2o3] production compilation lowered {} admitted semantic function(s) into verified target-neutral Kernel IR module `{}` with {} exact block correspondence record(s), then admitted composed formal/ranked memory evidence for a {}-invocation structural witness with {} allocation(s), {} formal access(es), {} ranked dynamic-index discharge(s), {} runtime bounds requirement(s), {} runtime alias requirement(s), and {} inter-invocation conflict(s), and lowered exact target-bound KIR with compiler-selected-or-retained workgroup {:?} to {} byte(s) of deterministic {} LLVM text while retaining {} identity/transaction binding(s); artifact/launch authority {}; preparing exact compiler-module handoff",
             self.semantic_function_count(),
             self.module().id,
             self.correspondence_block_count(),
@@ -529,6 +559,7 @@ impl Gfx942LoweredProductionCompilation {
             self.inter_invocation_conflict_count(),
             self.workgroup_size(),
             self.llvm_ir().len(),
+            self.bindings.rustc_target.profile().device_target(),
             self.retained_identity_and_transaction_binding_count(),
             self.grants_artifact_or_launch_authority(),
         );
@@ -570,8 +601,9 @@ impl Gfx942LoweredProductionCompilation {
             &llvm_ir,
         )
         .map_err(ProductionPipelineError::SemanticLineage)?;
-        let compiler_module = AuthenticatedProductionGfx942Module {
+        let compiler_module = AuthenticatedProductionTargetModule {
             admitted,
+            target: rustc_target.device_target(),
             target_module,
             llvm_ir,
             typed_descriptor_roots,
@@ -785,17 +817,17 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     }
 
     /// Consumes the sole production transaction through exact semantic MIR,
-    /// formal memory admission, and exact gfx942 LLVM lowering.
-    pub(crate) fn lower_gfx942(
+    /// formal memory admission, and exact authenticated-target LLVM lowering.
+    pub(crate) fn lower_production_target(
         self,
-    ) -> Result<Gfx942LoweredProductionCompilation, ProductionPipelineError> {
+    ) -> Result<TargetLoweredProductionCompilation, ProductionPipelineError> {
         let admitted = self.import_semantic_mir()?;
         admitted
             .construct_semantic_middle_end()?
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .admit_formal_memory()?
-            .lower_gfx942()
+            .lower_production_target()
     }
 
     /// Publishes the exact production compiler module into the managed,
@@ -805,7 +837,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         self,
     ) -> Result<fe2o3_artifact_transaction::CompilerModuleHandoffReceiptV3, ProductionPipelineError>
     {
-        self.lower_gfx942()?.publish_worker_handoff()
+        self.lower_production_target()?.publish_worker_handoff()
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -880,16 +912,15 @@ impl<'tcx> ProductionCompilation<'tcx, EquivalentSemanticMirStage> {
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         };
-        let source_rank = typed_root
+        let source_launch = typed_root
             .source_launch()
             .ok_or(ProductionPipelineError::Geometry(
-                crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
-            ))?
-            .rank();
+            crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
+        ))?;
         let ranked =
             crate::production_ranked_projection_v1::project_and_verify_ranked_semantic_mir_v1(
                 semantic_mir,
-                source_rank,
+                source_launch,
                 &bindings.reference_effect_bindings,
             )
             .map_err(ProductionPipelineError::RankedProjection)?;
@@ -1014,9 +1045,9 @@ mod tests {
     fn worker_publication_cannot_bypass_general_pliron_checks() {
         let source = include_str!("production_pipeline.rs");
         let transaction = source
-            .split("pub(crate) fn lower_gfx942(")
+            .split("pub(crate) fn lower_production_target(")
             .nth(1)
-            .expect("gfx942 production transaction")
+            .expect("AMDGPU production transaction")
             .split("pub(crate) fn publish_worker_handoff(")
             .next()
             .expect("bounded transaction body");

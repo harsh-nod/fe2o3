@@ -384,10 +384,10 @@ pub(crate) fn construct_inert_compiler_module_text_for_target_v1(
     })
 }
 
-/// Retains exact gfx942 LLVM text already produced by the move-only
+/// Retains exact target-bound LLVM text already produced by the move-only
 /// production transaction. This path performs no profile recognition,
 /// target rebinding, or second KIR-to-LLVM lowering.
-pub(crate) fn retain_production_gfx942_compiler_module_text_v1(
+pub(crate) fn retain_production_compiler_module_text_v1(
     module: &Module,
     llvm_ir: String,
 ) -> Result<InertCompilerModuleTextV1, CompilerModuleConstructionError> {

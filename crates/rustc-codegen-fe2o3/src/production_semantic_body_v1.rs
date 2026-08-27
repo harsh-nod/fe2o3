@@ -1780,21 +1780,46 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::CollectiveContextCurrent
         | ProductionTerminalExpansionV1::WaveLaneCurrent
         | ProductionTerminalExpansionV1::MatrixContextCurrent
+        | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
+        | ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
+        | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorZero
+        | ProductionTerminalExpansionV1::Gfx950Fp4AccumulatorIntoValues
+        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorZero
+        | ProductionTerminalExpansionV1::Gfx950Fp8AccumulatorIntoValues
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeTileCurrent
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposePublish
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
-        | ProductionTerminalExpansionV1::SubgroupReduceMaxF32 => Some(2),
+        | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
+        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
+        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32 => Some(2),
+        ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32 => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
-        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate => Some(4),
+        ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
+        | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate => Some(4),
+        ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
+        | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2
         | ProductionTerminalExpansionV1::Bf16MatrixBLoadZeroFilledV2
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixALoadM16K128
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBLoadK128N16
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixALoadM16K128
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBLoadK128N16
         | ProductionTerminalExpansionV1::StridedReadView2DLoadOr => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixARowMajor
         | ProductionTerminalExpansionV1::Bf16MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixARowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp4MatrixBRowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixARowMajor
+        | ProductionTerminalExpansionV1::Gfx950Fp8MatrixBRowMajor
         | ProductionTerminalExpansionV1::StridedReadView2DFromSharedSlice => Some(5),
         ProductionTerminalExpansionV1::DisjointSliceGetMut => Some(2),
         ProductionTerminalExpansionV1::ThreadIndexIntoDisjoint
