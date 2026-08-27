@@ -16,19 +16,36 @@ use dialect_kernel::{
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::ops::FuncOp,
     common_traits::{Named, Verify},
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
     operation::{Operation, verify_operation},
+    printable::Printable,
 };
 
 use crate::KernelCheckStatusV1;
 
+/// Maximum aggregate nested blocks inventoried before recursive verification.
 pub const MAX_PLIRON_PROGRESS_BLOCKS_V1: usize = 4_096;
+/// Maximum aggregate successor records inventoried before recursive verification.
 pub const MAX_PLIRON_PROGRESS_EDGES_V1: usize = 16_384;
+/// Maximum aggregate operations below the function root.
 pub const MAX_PLIRON_PROGRESS_OPERATIONS_V1: usize = 65_536;
+/// Maximum aggregate regions inventoried before recursive verification.
+pub const MAX_PLIRON_PROGRESS_REGIONS_V1: usize = 4_096;
+/// Maximum aggregate operation operands inventoried before recursive verification.
+pub const MAX_PLIRON_PROGRESS_OPERANDS_V1: usize = 65_536;
+/// Maximum aggregate operation results inventoried before recursive verification.
+pub const MAX_PLIRON_PROGRESS_RESULTS_V1: usize = 65_536;
+/// Maximum aggregate operation and block attribute entries.
+pub const MAX_PLIRON_PROGRESS_ATTRIBUTES_V1: usize = 65_536;
+/// Maximum aggregate block arguments inventoried before recursive verification.
+pub const MAX_PLIRON_PROGRESS_BLOCK_ARGUMENTS_V1: usize = 65_536;
+/// Maximum operation nesting depth admitted to PLIRON's recursive verifier.
+pub const MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1: usize = 128;
+/// Maximum cumulative work units for inventory, graph construction, and analysis.
 pub const MAX_PLIRON_PROGRESS_WORK_UNITS_V1: usize = 262_144;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,7 +82,7 @@ impl PlironProgressCertificateV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironProgressFindingV1 {
     StructuralPrerequisiteRejected {
-        reason: &'static str,
+        reason: String,
     },
     ResourceLimitExceeded {
         resource: &'static str,
@@ -86,10 +103,12 @@ pub enum PlironProgressFindingV1 {
 impl PlironProgressFindingV1 {
     pub const fn status(&self) -> KernelCheckStatusV1 {
         match self {
-            Self::NonTerminatingCycle { .. } => KernelCheckStatusV1::Rejected,
-            Self::StructuralPrerequisiteRejected { .. }
-            | Self::ResourceLimitExceeded { .. }
-            | Self::ProgressIncomplete { .. } => KernelCheckStatusV1::Incomplete,
+            Self::NonTerminatingCycle { .. } | Self::StructuralPrerequisiteRejected { .. } => {
+                KernelCheckStatusV1::Rejected
+            }
+            Self::ResourceLimitExceeded { .. } | Self::ProgressIncomplete { .. } => {
+                KernelCheckStatusV1::Incomplete
+            }
         }
     }
 }
@@ -107,7 +126,7 @@ impl fmt::Display for PlironProgressFindingV1 {
                 limit,
             } => write!(
                 formatter,
-                "error[FE2O3-PROGRESS-003]: progress analysis has {actual} {resource}, exceeding limit {limit}; help: split the kernel or reduce its control-flow graph"
+                "error[FE2O3-PROGRESS-003]: progress analysis has {actual} {resource}, exceeding limit {limit}; help: simplify or split the kernel so its bounded structural inventory fits the reported resource limit"
             ),
             Self::NonTerminatingCycle {
                 blocks,
@@ -183,115 +202,83 @@ pub fn run_pliron_progress_check_v1(
     context: &Context,
     function: &FuncOp,
 ) -> PlironProgressReportV1 {
-    let blocks = function
-        .get_region(context)
-        .deref(context)
-        .iter(context)
-        .take(MAX_PLIRON_PROGRESS_BLOCKS_V1.saturating_add(1))
-        .collect::<Vec<_>>();
-    if blocks.len() > MAX_PLIRON_PROGRESS_BLOCKS_V1 {
-        return report(PlironProgressFindingV1::ResourceLimitExceeded {
-            resource: "basic blocks",
-            actual: blocks.len(),
-            limit: MAX_PLIRON_PROGRESS_BLOCKS_V1,
-        });
+    match catch_unwind(AssertUnwindSafe(|| {
+        run_pliron_progress_check_inner_v1(context, function)
+    })) {
+        Ok(report) => report,
+        Err(payload) => report(structural_rejection(format!(
+            "bounded structural preflight panicked: {}",
+            panic_detail(payload)
+        ))),
     }
-    let block_indices = blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| (*block, index))
-        .collect::<HashMap<_, _>>();
-    let mut operation_blocks = HashMap::new();
-    let mut edges = vec![Vec::new(); blocks.len()];
-    let mut edge_count = 0_usize;
-    let mut operation_count = 0_usize;
-    for (block_index, block) in blocks.iter().copied().enumerate() {
-        for operation in block.deref(context).iter(context) {
-            operation_count = operation_count.checked_add(1).unwrap_or(usize::MAX);
-            if operation_count > MAX_PLIRON_PROGRESS_OPERATIONS_V1 {
-                return report(PlironProgressFindingV1::ResourceLimitExceeded {
-                    resource: "operations",
-                    actual: operation_count,
-                    limit: MAX_PLIRON_PROGRESS_OPERATIONS_V1,
-                });
-            }
-            operation_blocks.insert(operation, block_index);
-        }
-        let Some(terminator) = block.deref(context).get_terminator(context) else {
-            return report(PlironProgressFindingV1::ProgressIncomplete {
-                blocks: vec![block_index],
-                reason: "the block has no terminator",
-            });
-        };
-        for successor in terminator.deref(context).successors() {
-            let Some(successor) = block_indices.get(&successor).copied() else {
-                return report(PlironProgressFindingV1::ProgressIncomplete {
-                    blocks: vec![block_index],
-                    reason: "a successor is outside the kernel function",
-                });
-            };
-            edge_count += 1;
-            if edge_count > MAX_PLIRON_PROGRESS_EDGES_V1 {
-                return report(PlironProgressFindingV1::ResourceLimitExceeded {
-                    resource: "CFG edges",
-                    actual: edge_count,
-                    limit: MAX_PLIRON_PROGRESS_EDGES_V1,
-                });
-            }
-            edges[block_index].push(successor);
-        }
-    }
+}
 
+fn run_pliron_progress_check_inner_v1(
+    context: &Context,
+    function: &FuncOp,
+) -> PlironProgressReportV1 {
+    let inventory = match bounded_structural_inventory(context, function) {
+        Ok(inventory) => inventory,
+        Err(finding) => return report(finding),
+    };
     let mut work = ProgressWorkBudgetV1::default();
-    let linear_work = operation_count
-        .checked_mul(2)
-        .and_then(|units| {
-            blocks
-                .len()
-                .checked_add(edge_count)
-                .and_then(|graph| graph.checked_mul(8))
-                .and_then(|graph| units.checked_add(graph))
-        })
-        .unwrap_or(usize::MAX);
-    if let Err(finding) = work.charge(linear_work) {
+    if let Err(finding) = work.charge(inventory.verification_work()) {
         return report(finding);
     }
     match catch_unwind(AssertUnwindSafe(|| {
         verify_operation(function.get_operation(), context)
     })) {
         Ok(Ok(())) => {}
-        Ok(Err(_)) => {
-            return report(PlironProgressFindingV1::StructuralPrerequisiteRejected {
-                reason: "the PLIRON verifier rejected the function",
-            });
+        Ok(Err(error)) => {
+            return report(structural_rejection(format!(
+                "the PLIRON verifier rejected the function at {}",
+                bounded_detail(format!("{}", error.disp(context)))
+            )));
         }
-        Err(_) => {
-            return report(PlironProgressFindingV1::StructuralPrerequisiteRejected {
-                reason: "the PLIRON verifier panicked",
-            });
+        Err(payload) => {
+            return report(structural_rejection(format!(
+                "the PLIRON verifier panicked: {}",
+                panic_detail(payload)
+            )));
         }
     }
 
-    let reachable = reachable_blocks(&edges);
-    let predecessors = predecessor_lists(&edges);
-    let definitely_reachable = definitely_reachable_blocks(context, &blocks, &block_indices);
+    let blocks = inventory.root_blocks;
+    let block_indices = blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (*block, index))
+        .collect::<HashMap<_, _>>();
+    let graph = match build_root_graph(context, &blocks, &block_indices) {
+        Ok(graph) => graph,
+        Err(finding) => return report(finding),
+    };
+    let edge_count = graph.edges.iter().map(Vec::len).sum::<usize>();
+    let graph_work = blocks
+        .len()
+        .checked_add(edge_count)
+        .and_then(|units| units.checked_mul(8))
+        .unwrap_or(usize::MAX);
+    if let Err(finding) = work.charge(graph_work) {
+        return report(finding);
+    }
+
+    let reachable = reachable_blocks(&graph.edges);
+    let definitely_reachable = reachable_blocks(&graph.unconditional_edges);
     let mut findings = Vec::new();
     let mut certificates = Vec::new();
-    for mut component in strongly_connected_components(&edges) {
+    for mut component in strongly_connected_components(&graph.edges) {
         component.sort_unstable();
-        let component_work = component
-            .len()
-            .checked_mul(component.len())
-            .unwrap_or(usize::MAX);
+        let component_work = component.len().checked_mul(4).unwrap_or(usize::MAX);
         if let Err(finding) = work.charge(component_work) {
             return report(finding);
         }
-        if !component.iter().any(|block| reachable[*block]) || !is_cycle(&component, &edges) {
+        if !component.iter().any(|block| reachable[*block]) || !is_cycle(&component, &graph.edges) {
             continue;
         }
         let component_members = component.iter().copied().collect::<HashSet<_>>();
         let has_exit = component.iter().any(|block| {
-            edges[*block]
+            graph.edges[*block]
                 .iter()
                 .any(|successor| !component_members.contains(successor))
         });
@@ -314,8 +301,9 @@ pub fn run_pliron_progress_check_v1(
             context,
             &blocks,
             &block_indices,
-            &operation_blocks,
-            &predecessors,
+            &inventory.root_operation_blocks,
+            &graph.predecessors,
+            &graph.incoming,
             &component,
             &component_members,
         ) {
@@ -345,6 +333,262 @@ pub fn run_pliron_progress_check_v1(
     }
 }
 
+#[derive(Default)]
+struct StructuralInventoryV1 {
+    regions: usize,
+    blocks: usize,
+    operations: usize,
+    operands: usize,
+    results: usize,
+    attributes: usize,
+    block_arguments: usize,
+    edges: usize,
+    root_blocks: Vec<Ptr<BasicBlock>>,
+    root_operation_blocks: HashMap<Ptr<Operation>, usize>,
+}
+
+impl StructuralInventoryV1 {
+    fn verification_work(&self) -> usize {
+        self.regions
+            .checked_add(self.blocks)
+            .and_then(|n| n.checked_add(self.operations))
+            .and_then(|n| n.checked_add(self.operands))
+            .and_then(|n| n.checked_add(self.results))
+            .and_then(|n| n.checked_add(self.attributes))
+            .and_then(|n| n.checked_add(self.block_arguments))
+            .and_then(|n| n.checked_add(self.edges))
+            .unwrap_or(usize::MAX)
+    }
+}
+
+fn bounded_structural_inventory(
+    context: &Context,
+    function: &FuncOp,
+) -> Result<StructuralInventoryV1, PlironProgressFindingV1> {
+    let root = function.get_operation();
+    let root_region = {
+        let root_ref = root.try_deref(context).map_err(|error| {
+            structural_rejection(format!(
+                "the function root cannot be borrowed from the supplied context: {}",
+                bounded_detail(format!("{}", error.disp(context)))
+            ))
+        })?;
+        let mut regions = root_ref.regions();
+        let Some(root_region) = regions.next() else {
+            return Err(structural_rejection(
+                "the function root has no body region".to_owned(),
+            ));
+        };
+        root_region
+    };
+    let mut inventory = StructuralInventoryV1::default();
+    let mut pending = vec![(root, 0_usize)];
+    while let Some((operation, depth)) = pending.pop() {
+        if depth > MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1 {
+            return Err(resource_limit(
+                "operation nesting depth",
+                depth,
+                MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1,
+            ));
+        }
+        let operation_ref = operation.try_deref(context).map_err(|error| {
+            structural_rejection(format!(
+                "an operation cannot be borrowed during structural inventory: {}",
+                bounded_detail(format!("{}", error.disp(context)))
+            ))
+        })?;
+        add_count(
+            &mut inventory.operands,
+            operation_ref.get_num_operands(),
+            MAX_PLIRON_PROGRESS_OPERANDS_V1,
+            "operands",
+        )?;
+        add_count(
+            &mut inventory.results,
+            operation_ref.get_num_results(),
+            MAX_PLIRON_PROGRESS_RESULTS_V1,
+            "results",
+        )?;
+        add_count(
+            &mut inventory.attributes,
+            operation_ref.attributes.0.len(),
+            MAX_PLIRON_PROGRESS_ATTRIBUTES_V1,
+            "attributes",
+        )?;
+        add_count(
+            &mut inventory.edges,
+            operation_ref.get_num_successors(),
+            MAX_PLIRON_PROGRESS_EDGES_V1,
+            "CFG edges",
+        )?;
+        for region in operation_ref.regions() {
+            add_count(
+                &mut inventory.regions,
+                1,
+                MAX_PLIRON_PROGRESS_REGIONS_V1,
+                "regions",
+            )?;
+            let is_root_region = region == root_region;
+            let region_ref = region.try_deref(context).map_err(|error| {
+                structural_rejection(format!(
+                    "a region cannot be borrowed during structural inventory: {}",
+                    bounded_detail(format!("{}", error.disp(context)))
+                ))
+            })?;
+            for block in region_ref.iter(context) {
+                add_count(
+                    &mut inventory.blocks,
+                    1,
+                    MAX_PLIRON_PROGRESS_BLOCKS_V1,
+                    "basic blocks",
+                )?;
+                let block_ref = block.try_deref(context).map_err(|error| {
+                    structural_rejection(format!(
+                        "a block cannot be borrowed during structural inventory: {}",
+                        bounded_detail(format!("{}", error.disp(context)))
+                    ))
+                })?;
+                add_count(
+                    &mut inventory.block_arguments,
+                    block_ref.get_num_arguments(),
+                    MAX_PLIRON_PROGRESS_BLOCK_ARGUMENTS_V1,
+                    "block arguments",
+                )?;
+                add_count(
+                    &mut inventory.attributes,
+                    block_ref.attributes.0.len(),
+                    MAX_PLIRON_PROGRESS_ATTRIBUTES_V1,
+                    "attributes",
+                )?;
+                let root_block_index = if is_root_region {
+                    let index = inventory.root_blocks.len();
+                    inventory.root_blocks.push(block);
+                    Some(index)
+                } else {
+                    None
+                };
+                for child in block_ref.iter(context) {
+                    add_count(
+                        &mut inventory.operations,
+                        1,
+                        MAX_PLIRON_PROGRESS_OPERATIONS_V1,
+                        "operations",
+                    )?;
+                    if let Some(index) = root_block_index {
+                        inventory.root_operation_blocks.insert(child, index);
+                    }
+                    pending.push((child, depth.saturating_add(1)));
+                }
+            }
+        }
+    }
+    Ok(inventory)
+}
+
+fn add_count(
+    count: &mut usize,
+    amount: usize,
+    limit: usize,
+    resource: &'static str,
+) -> Result<(), PlironProgressFindingV1> {
+    let actual = count.checked_add(amount).unwrap_or(usize::MAX);
+    if actual > limit {
+        return Err(resource_limit(resource, actual, limit));
+    }
+    *count = actual;
+    Ok(())
+}
+
+fn resource_limit(resource: &'static str, actual: usize, limit: usize) -> PlironProgressFindingV1 {
+    PlironProgressFindingV1::ResourceLimitExceeded {
+        resource,
+        actual,
+        limit,
+    }
+}
+
+fn structural_rejection(reason: String) -> PlironProgressFindingV1 {
+    PlironProgressFindingV1::StructuralPrerequisiteRejected {
+        reason: bounded_detail(reason),
+    }
+}
+
+fn bounded_detail(detail: String) -> String {
+    const MAX_DETAIL_CHARS: usize = 1_024;
+    if detail.chars().count() <= MAX_DETAIL_CHARS {
+        detail
+    } else {
+        detail.chars().take(MAX_DETAIL_CHARS).collect::<String>() + "..."
+    }
+}
+
+fn panic_detail(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        bounded_detail((*message).to_owned())
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        bounded_detail(message.clone())
+    } else {
+        "an untyped panic escaped a Rust IR access boundary".to_owned()
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IncomingEdgeV1 {
+    source: usize,
+    initial: Option<u64>,
+}
+
+struct RootGraphV1 {
+    edges: Vec<Vec<usize>>,
+    unconditional_edges: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    incoming: Vec<Vec<IncomingEdgeV1>>,
+}
+
+fn build_root_graph(
+    context: &Context,
+    blocks: &[Ptr<BasicBlock>],
+    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
+) -> Result<RootGraphV1, PlironProgressFindingV1> {
+    let mut edges = vec![Vec::new(); blocks.len()];
+    let mut unconditional_edges = vec![Vec::new(); blocks.len()];
+    let mut predecessors = vec![Vec::new(); blocks.len()];
+    let mut incoming = vec![Vec::new(); blocks.len()];
+    for (source, block) in blocks.iter().copied().enumerate() {
+        let Some(terminator) = block.deref(context).get_terminator(context) else {
+            return Err(structural_rejection(format!(
+                "block {source} has no registered terminator after structural verification"
+            )));
+        };
+        let operation = Operation::get_op_dyn(terminator, context);
+        let initial = operation
+            .downcast_ref::<BranchArgsOp>()
+            .and_then(|branch| branch.arguments(context).first().copied())
+            .and_then(|value| index_constant(context, value));
+        let is_unconditional = operation.downcast_ref::<BranchOp>().is_some()
+            || operation.downcast_ref::<BranchArgsOp>().is_some();
+        for successor in operation.get_operation().deref(context).successors() {
+            let Some(target) = block_indices.get(&successor).copied() else {
+                return Err(structural_rejection(format!(
+                    "block {source} has a successor outside the function after structural verification"
+                )));
+            };
+            edges[source].push(target);
+            predecessors[target].push(source);
+            incoming[target].push(IncomingEdgeV1 { source, initial });
+            if is_unconditional {
+                unconditional_edges[source].push(target);
+            }
+        }
+    }
+    Ok(RootGraphV1 {
+        edges,
+        unconditional_edges,
+        predecessors,
+        incoming,
+    })
+}
+
 enum CanonicalLoopResultV1 {
     Proved(PlironProgressCertificateV1),
     Inactive,
@@ -361,6 +605,7 @@ fn canonical_positive_induction_loop(
     block_indices: &HashMap<Ptr<BasicBlock>, usize>,
     operation_blocks: &HashMap<Ptr<Operation>, usize>,
     predecessors: &[Vec<usize>],
+    incoming: &[Vec<IncomingEdgeV1>],
     component: &[usize],
     component_members: &HashSet<usize>,
 ) -> CanonicalLoopResultV1 {
@@ -502,9 +747,8 @@ fn canonical_positive_induction_loop(
         if next == latch_induction {
             return zero_step_result(
                 context,
-                blocks,
                 component_members,
-                header,
+                &incoming[*header_index],
                 branch.rhs(context),
                 "the induction variable is unchanged on the backedge",
             );
@@ -536,9 +780,8 @@ fn canonical_positive_induction_loop(
             Some(0) => {
                 return zero_step_result(
                     context,
-                    blocks,
                     component_members,
-                    header,
+                    &incoming[*header_index],
                     branch.rhs(context),
                     "the induction step is zero",
                 );
@@ -574,21 +817,10 @@ fn canonical_positive_induction_loop(
     )
 }
 
-fn predecessor_lists(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    let mut predecessors = vec![Vec::new(); edges.len()];
-    for (source, successors) in edges.iter().enumerate() {
-        for successor in successors {
-            predecessors[*successor].push(source);
-        }
-    }
-    predecessors
-}
-
 fn zero_step_result(
     context: &Context,
-    blocks: &[Ptr<BasicBlock>],
     component_members: &HashSet<usize>,
-    header: Ptr<BasicBlock>,
+    incoming: &[IncomingEdgeV1],
     bound: pliron::value::Value,
     reason: &'static str,
 ) -> CanonicalLoopResultV1 {
@@ -599,31 +831,12 @@ fn zero_step_result(
     };
     let mut saw_predecessor = false;
     let mut saw_unknown = false;
-    for (predecessor_index, predecessor) in blocks.iter().copied().enumerate() {
-        if component_members.contains(&predecessor_index) {
-            continue;
-        }
-        let Some(terminator) = predecessor.deref(context).get_terminator(context) else {
-            continue;
-        };
-        if !terminator
-            .deref(context)
-            .successors()
-            .any(|successor| successor == header)
-        {
+    for edge in incoming {
+        if component_members.contains(&edge.source) {
             continue;
         }
         saw_predecessor = true;
-        let operation = Operation::get_op_dyn(terminator, context);
-        let Some(branch) = operation.downcast_ref::<BranchArgsOp>() else {
-            saw_unknown = true;
-            continue;
-        };
-        let arguments = branch.arguments(context);
-        let Some(initial) = arguments
-            .first()
-            .and_then(|value| index_constant(context, *value))
-        else {
+        let Some(initial) = edge.initial else {
             saw_unknown = true;
             continue;
         };
@@ -673,39 +886,6 @@ fn reachable_blocks(edges: &[Vec<usize>]) -> Vec<bool> {
         }
         reachable[block] = true;
         stack.extend(edges[block].iter().copied());
-    }
-    reachable
-}
-
-fn definitely_reachable_blocks(
-    context: &Context,
-    blocks: &[Ptr<BasicBlock>],
-    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
-) -> Vec<bool> {
-    let mut reachable = vec![false; blocks.len()];
-    if blocks.is_empty() {
-        return reachable;
-    }
-    let mut stack = vec![0];
-    while let Some(block_index) = stack.pop() {
-        if reachable[block_index] {
-            continue;
-        }
-        reachable[block_index] = true;
-        let Some(terminator) = blocks[block_index].deref(context).get_terminator(context) else {
-            continue;
-        };
-        let operation = Operation::get_op_dyn(terminator, context);
-        if operation.downcast_ref::<BranchOp>().is_none()
-            && operation.downcast_ref::<BranchArgsOp>().is_none()
-        {
-            continue;
-        }
-        for successor in operation.get_operation().deref(context).successors() {
-            if let Some(successor) = block_indices.get(&successor) {
-                stack.push(*successor);
-            }
-        }
     }
     reachable
 }

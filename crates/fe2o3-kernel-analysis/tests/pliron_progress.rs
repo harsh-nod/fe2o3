@@ -4,12 +4,18 @@ use dialect_kernel::{
     InvocationIndexOp, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
-    KernelCheckStatusV1, MAX_PLIRON_PROGRESS_OPERATIONS_V1, MAX_PLIRON_PROGRESS_WORK_UNITS_V1,
-    PlironProgressFindingV1, run_pliron_progress_check_v1,
+    KernelCheckStatusV1, MAX_PLIRON_PROGRESS_ATTRIBUTES_V1, MAX_PLIRON_PROGRESS_BLOCK_ARGUMENTS_V1,
+    MAX_PLIRON_PROGRESS_BLOCKS_V1, MAX_PLIRON_PROGRESS_EDGES_V1,
+    MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1, MAX_PLIRON_PROGRESS_OPERANDS_V1,
+    MAX_PLIRON_PROGRESS_OPERATIONS_V1, MAX_PLIRON_PROGRESS_REGIONS_V1,
+    MAX_PLIRON_PROGRESS_RESULTS_V1, MAX_PLIRON_PROGRESS_WORK_UNITS_V1, PlironProgressFindingV1,
+    PlironProgressReportV1, run_pliron_progress_check_v1,
 };
 use pliron::{
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp, types::FunctionType},
+    builtin::{
+        attributes::UnitAttr, op_interfaces::OneRegionInterface, ops::FuncOp, types::FunctionType,
+    },
     context::{Context, Ptr},
     dialect::DialectName,
     op::Op,
@@ -273,11 +279,58 @@ fn malformed_branch_arguments_fail_structural_verification_before_progress() {
     append(context, target, &ret);
 
     let report = run_pliron_progress_check_v1(context, &function);
-    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
     assert!(matches!(
         report.findings(),
         [PlironProgressFindingV1::StructuralPrerequisiteRejected { reason }]
-            if reason.contains("verifier rejected")
+            if reason.contains("verifier rejected") && reason.contains("requires 1 operands")
+    ));
+}
+
+#[test]
+fn missing_terminator_is_a_structural_rejection_with_verifier_detail() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "missing_terminator", 0);
+
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::StructuralPrerequisiteRejected { reason }]
+            if reason.contains("verifier rejected") && reason.contains("terminator")
+    ));
+}
+
+#[test]
+fn foreign_successor_is_a_structural_rejection_not_a_progress_gap() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "foreign_successor", 0);
+    let (other, _) = make_function(context, "other_function", 0);
+    let entry = function.get_entry_block(context);
+    let branch = BranchOp::new(context, other.get_entry_block(context));
+    append(context, entry, &branch);
+
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::StructuralPrerequisiteRejected { reason }]
+            if reason.contains("successor outside the function")
+    ));
+}
+
+#[test]
+fn cross_context_pointer_panic_is_contained_as_a_structural_rejection() {
+    let owner = &mut setup();
+    let (function, _) = make_function(owner, "foreign_context", 0);
+    let context = setup();
+
+    let report = run_pliron_progress_check_v1(&context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::StructuralPrerequisiteRejected { reason }]
+            if reason.contains("cannot be borrowed from the supplied context")
     ));
 }
 
@@ -305,7 +358,7 @@ fn operation_count_rejects_exactly_one_over_the_limit_before_verification() {
 }
 
 #[test]
-fn quadratic_scc_work_is_bounded_before_canonical_path_search() {
+fn large_scc_uses_linear_accounting_and_does_not_regress_to_a_quadratic_rejection() {
     const CYCLE_BLOCKS: usize = 512;
 
     let context = &mut setup();
@@ -337,14 +390,294 @@ fn quadratic_scc_work_is_bounded_before_canonical_path_search() {
     verify_operation(function.get_operation(), context).unwrap();
 
     let report = run_pliron_progress_check_v1(context, &function);
+    assert!(!report.findings().iter().any(|finding| matches!(
+        finding,
+        PlironProgressFindingV1::ResourceLimitExceeded {
+            resource: "work units",
+            ..
+        }
+    )));
+}
+
+fn assert_not_limited_by(report: &PlironProgressReportV1, resource: &str) {
+    assert!(
+        !report.findings().iter().any(|finding| matches!(
+            finding,
+            PlironProgressFindingV1::ResourceLimitExceeded {
+                resource: found,
+                ..
+            } if *found == resource
+        )),
+        "exact boundary unexpectedly rejected: {:?}",
+        report.findings()
+    );
+}
+
+fn assert_one_over(report: &PlironProgressReportV1, resource: &'static str, limit: usize) {
     assert!(matches!(
         report.findings(),
         [PlironProgressFindingV1::ResourceLimitExceeded {
-            resource: "work units",
+            resource: found,
             actual,
-            limit: MAX_PLIRON_PROGRESS_WORK_UNITS_V1,
-        }] if *actual > MAX_PLIRON_PROGRESS_WORK_UNITS_V1
+            limit: found_limit,
+        }] if *found == resource && *actual == limit + 1 && *found_limit == limit
     ));
+}
+
+#[test]
+fn operation_limit_accepts_exactly_the_boundary() {
+    let context = &mut setup();
+    let (function, _) = make_function(context, "operation_limit_exact", 0);
+    let entry = function.get_entry_block(context);
+    for value in 0..MAX_PLIRON_PROGRESS_OPERATIONS_V1 - 1 {
+        let constant = IndexConstantOp::new(context, value as u64);
+        append(context, entry, &constant);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_not_limited_by(&report, "operations");
+}
+
+#[test]
+fn block_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_BLOCKS_V1, false),
+        (MAX_PLIRON_PROGRESS_BLOCKS_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "block_limit", 0);
+        for index in 1..count {
+            block(context, &function, &format!("limit_{index}"));
+        }
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(&report, "basic blocks", MAX_PLIRON_PROGRESS_BLOCKS_V1);
+        } else {
+            assert_not_limited_by(&report, "basic blocks");
+        }
+    }
+}
+
+#[test]
+fn edge_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_EDGES_V1, false),
+        (MAX_PLIRON_PROGRESS_EDGES_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "edge_limit", 0);
+        let entry = function.get_entry_block(context);
+        let ret = ReturnOp::new(context);
+        for _ in 0..count {
+            pliron::operation::Operation::push_successor(ret.get_operation(), context, entry);
+        }
+        append(context, entry, &ret);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(&report, "CFG edges", MAX_PLIRON_PROGRESS_EDGES_V1);
+        } else {
+            assert_not_limited_by(&report, "CFG edges");
+        }
+    }
+}
+
+#[test]
+fn operand_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_OPERANDS_V1, false),
+        (MAX_PLIRON_PROGRESS_OPERANDS_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "operand_limit", 0);
+        let entry = function.get_entry_block(context);
+        let constant = IndexConstantOp::new(context, 0);
+        let ret = ReturnOp::new(context);
+        append(context, entry, &constant);
+        for _ in 0..count {
+            pliron::operation::Operation::push_operand(
+                ret.get_operation(),
+                context,
+                constant.result(context),
+            );
+        }
+        append(context, entry, &ret);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(&report, "operands", MAX_PLIRON_PROGRESS_OPERANDS_V1);
+        } else {
+            assert_not_limited_by(&report, "operands");
+        }
+    }
+}
+
+#[test]
+fn result_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_RESULTS_V1, false),
+        (MAX_PLIRON_PROGRESS_RESULTS_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "result_limit", 0);
+        let entry = function.get_entry_block(context);
+        let ret = ReturnOp::new(context);
+        let index: TypeHandle = IndexType::get(context).into();
+        for _ in 0..count {
+            pliron::operation::Operation::push_result(ret.get_operation(), context, index);
+        }
+        append(context, entry, &ret);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(&report, "results", MAX_PLIRON_PROGRESS_RESULTS_V1);
+        } else {
+            assert_not_limited_by(&report, "results");
+        }
+    }
+}
+
+#[test]
+fn attribute_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_ATTRIBUTES_V1, false),
+        (MAX_PLIRON_PROGRESS_ATTRIBUTES_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "attribute_limit", 0);
+        let entry = function.get_entry_block(context);
+        let ret = ReturnOp::new(context);
+        let existing = function.get_operation().deref(context).attributes.0.len()
+            + entry.deref(context).attributes.0.len();
+        for index in 0..count - existing {
+            ret.get_operation()
+                .deref_mut(context)
+                .attributes
+                .set(format!("limit_{index}").try_into().unwrap(), UnitAttr);
+        }
+        append(context, entry, &ret);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(&report, "attributes", MAX_PLIRON_PROGRESS_ATTRIBUTES_V1);
+        } else {
+            assert_not_limited_by(&report, "attributes");
+        }
+    }
+}
+
+#[test]
+fn block_argument_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_BLOCK_ARGUMENTS_V1, false),
+        (MAX_PLIRON_PROGRESS_BLOCK_ARGUMENTS_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "argument_limit", 0);
+        let index: TypeHandle = IndexType::get(context).into();
+        let argument_block = BasicBlock::new(context, None, vec![index; count]);
+        argument_block.insert_at_back(function.get_region(context), context);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(
+                &report,
+                "block arguments",
+                MAX_PLIRON_PROGRESS_BLOCK_ARGUMENTS_V1,
+            );
+        } else {
+            assert_not_limited_by(&report, "block arguments");
+        }
+    }
+}
+
+#[test]
+fn region_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (count, one_over) in [
+        (MAX_PLIRON_PROGRESS_REGIONS_V1, false),
+        (MAX_PLIRON_PROGRESS_REGIONS_V1 + 1, true),
+    ] {
+        let context = &mut setup();
+        let (function, _) = make_function(context, "region_limit", 0);
+        let entry = function.get_entry_block(context);
+        let ret = ReturnOp::new(context);
+        for _ in 1..count {
+            pliron::operation::Operation::add_region(ret.get_operation(), context);
+        }
+        append(context, entry, &ret);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(&report, "regions", MAX_PLIRON_PROGRESS_REGIONS_V1);
+        } else {
+            assert_not_limited_by(&report, "regions");
+        }
+    }
+}
+
+fn nested_function_chain(context: &mut Context, nested_functions: usize) -> FuncOp {
+    let (root, _) = make_function(context, "nesting_root", 0);
+    let mut parent = root;
+    for depth in 0..nested_functions {
+        let (child, _) = make_function(context, &format!("nested_{depth}"), 0);
+        child
+            .get_operation()
+            .insert_at_back(parent.get_entry_block(context), context);
+        parent = child;
+    }
+    let entry = parent.get_entry_block(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    root
+}
+
+#[test]
+fn nesting_depth_accepts_exactly_the_boundary_and_rejects_one_more() {
+    for (nested, one_over) in [
+        (MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1 - 1, false),
+        (MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1, true),
+    ] {
+        let context = &mut setup();
+        let function = nested_function_chain(context, nested);
+        let report = run_pliron_progress_check_v1(context, &function);
+        if one_over {
+            assert_one_over(
+                &report,
+                "operation nesting depth",
+                MAX_PLIRON_PROGRESS_NESTING_DEPTH_V1,
+            );
+        } else {
+            assert_not_limited_by(&report, "operation nesting depth");
+        }
+    }
+}
+
+fn work_limit_function(context: &mut Context, arguments: usize) -> FuncOp {
+    const CASTS: usize = 65_529;
+    let (function, _) = make_function(context, "work_limit_boundary", arguments);
+    let entry = function.get_entry_block(context);
+    let zero = IndexConstantOp::new(context, 0);
+    append(context, entry, &zero);
+    for _ in 0..CASTS {
+        let cast = IndexUnsignedCastOp::new(context, zero.result(context), 8);
+        append(context, entry, &cast);
+    }
+    let ret = ReturnOp::new(context);
+    append(context, entry, &ret);
+    function
+}
+
+#[test]
+fn cumulative_work_limit_accepts_exactly_the_boundary_and_rejects_one_more() {
+    let context = &mut setup();
+    let function = work_limit_function(context, 8);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(
+        report.is_clean(),
+        "exact {MAX_PLIRON_PROGRESS_WORK_UNITS_V1}-unit boundary failed: {:?}",
+        report.findings()
+    );
+
+    let context = &mut setup();
+    let function = work_limit_function(context, 9);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_one_over(&report, "work units", MAX_PLIRON_PROGRESS_WORK_UNITS_V1);
 }
 
 #[test]
