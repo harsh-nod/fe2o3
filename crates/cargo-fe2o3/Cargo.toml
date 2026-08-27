@@ -51,6 +51,7 @@ syn = { workspace = true, features = ["visit"] }
 [dev-dependencies]
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
 fe2o3-device.workspace = true
+fe2o3-kernel-analysis = { workspace = true, features = ["authenticated-machine-effect"] }
 fe2o3-kernel-ir.workspace = true
 fe2o3-worker-v3-authority.workspace = true
 

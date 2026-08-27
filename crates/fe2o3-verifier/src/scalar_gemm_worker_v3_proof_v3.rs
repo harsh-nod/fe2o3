@@ -19,6 +19,9 @@ use crate::general_gemm_runtime_closure_v2::{
     GeneralGemmRuntimeClosureErrorKindV2, GeneralGemmRuntimeClosureErrorV2,
     GeneralGemmRuntimeProcessOutputV2, GeneralGemmVerusRuntimeClosureLeaseV2,
 };
+use crate::scalar_gemm_worker_v3_executable_binding_v1::{
+    ScalarGemmWorkerV3ExecutableBindingErrorV1, ScalarGemmWorkerV3ExecutableBindingV1,
+};
 use crate::{
     CanonicalGeneratedVerusProofInputV3, Digest, GeneratedVerusProofInputErrorV3,
     GeneratedVerusProofInputIdentityV3, MAX_SCALAR_GEMM_VERUS_OUTPUT_BYTES_V2,
@@ -41,7 +44,7 @@ const KIR_OPERATIONAL_SEMANTICS: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_operational_semantics_v1.rs");
 const KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE: &[u8] =
     include_bytes!("../verus/scalar_gemm_kir_projection_operational_correspondence_v1.rs");
-const EXPECTED_STDOUT: &[u8] = b"verification results:: 52 verified, 0 errors\n";
+const EXPECTED_STDOUT: &[u8] = b"verification results:: 94 verified, 0 errors\n";
 const INPUT_BINDING_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-input-binding-v3\0";
 const OUTPUT_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-output-v3\0";
 const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"fe2o3-scalar-gemm-worker-v3-proof-execution-v3\0";
@@ -53,17 +56,77 @@ struct ScalarGemmKirProofBindingV3 {
     semantic_projection_byte_len: u64,
 }
 
+/// Validated semantic inputs that cannot be executed until exact machine evidence is joined.
+#[derive(Debug)]
+#[must_use = "prepared semantic proof state must be joined to authenticated executable evidence"]
+pub struct PreparedScalarGemmWorkerV3ProofV3 {
+    challenge: [u8; 32],
+    lineage_identity: [u8; 32],
+    generated_host_contract_identity: [u8; 32],
+    compiler_inputs: [InertLineageContentIdentityV3; 5],
+    proof_binding_sha256: [u8; 32],
+    proof_binding_byte_len: u64,
+    canonical_kir_identity: [u8; 32],
+    semantic_projection_identity: [u8; 32],
+    semantic_projection: Vec<u8>,
+}
+
+impl PreparedScalarGemmWorkerV3ProofV3 {
+    pub const fn challenge(&self) -> [u8; 32] {
+        self.challenge
+    }
+
+    pub const fn lineage_identity(&self) -> [u8; 32] {
+        self.lineage_identity
+    }
+
+    pub const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract_identity
+    }
+
+    pub const fn compiler_inputs(&self) -> &[InertLineageContentIdentityV3; 5] {
+        &self.compiler_inputs
+    }
+
+    pub const fn canonical_kir_identity(&self) -> [u8; 32] {
+        self.canonical_kir_identity
+    }
+
+    pub const fn semantic_projection_identity(&self) -> [u8; 32] {
+        self.semantic_projection_identity
+    }
+
+    pub fn semantic_projection(&self) -> &[u8] {
+        &self.semantic_projection
+    }
+
+    pub const fn binds_worker_v3_request_and_lineage(&self) -> bool {
+        true
+    }
+
+    pub const fn can_execute_verus(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_artifact_or_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Exact generated source and identity bindings for one scalar Worker V3 request.
 #[derive(Debug)]
 #[must_use = "generated Worker V3 proof input must be executed by the retained verifier"]
 pub struct ScalarGemmWorkerV3ProofInputV3 {
     challenge: [u8; 32],
+    lineage_identity: [u8; 32],
+    generated_host_contract_identity: [u8; 32],
     compiler_inputs: [InertLineageContentIdentityV3; 5],
     proof_binding_sha256: [u8; 32],
     proof_binding_byte_len: u64,
     canonical_kir_identity: [u8; 32],
     semantic_projection_identity: [u8; 32],
     semantic_projection_byte_len: u64,
+    executable_binding: ScalarGemmWorkerV3ExecutableBindingV1,
     binding_identity: Digest,
     source: CanonicalGeneratedVerusProofInputV3,
 }
@@ -71,6 +134,14 @@ pub struct ScalarGemmWorkerV3ProofInputV3 {
 impl ScalarGemmWorkerV3ProofInputV3 {
     pub const fn challenge(&self) -> [u8; 32] {
         self.challenge
+    }
+
+    pub const fn lineage_identity(&self) -> [u8; 32] {
+        self.lineage_identity
+    }
+
+    pub const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract_identity
     }
 
     pub const fn compiler_inputs(&self) -> &[InertLineageContentIdentityV3; 5] {
@@ -101,6 +172,10 @@ impl ScalarGemmWorkerV3ProofInputV3 {
         self.binding_identity
     }
 
+    pub const fn executable_binding(&self) -> &ScalarGemmWorkerV3ExecutableBindingV1 {
+        &self.executable_binding
+    }
+
     pub const fn source_identity(&self) -> GeneratedVerusProofInputIdentityV3 {
         self.source.identity()
     }
@@ -111,6 +186,12 @@ impl ScalarGemmWorkerV3ProofInputV3 {
 
     /// The generated source commits to the exact request challenge.
     pub const fn binds_worker_v3_challenge(&self) -> bool {
+        true
+    }
+
+    /// The generated source binds the host lineage, exact executable, machine evidence, and both
+    /// retained runtime identities. Authentication remains the production authority's job.
+    pub const fn binds_exact_executable_machine_profile(&self) -> bool {
         true
     }
 
@@ -169,14 +250,22 @@ impl ScalarGemmWorkerV3ProofInputV3 {
     }
 }
 
-/// Builds one canonical request-bound scalar proof harness.
-pub fn build_scalar_gemm_worker_v3_proof_input_v3(
+/// Validates the semantic portion of one scalar request without creating executable proof input.
+pub fn prepare_scalar_gemm_worker_v3_proof_v3(
     challenge: [u8; 32],
+    lineage_identity: [u8; 32],
+    generated_host_contract_identity: [u8; 32],
     association: &ValidatedCompilerProofBindingAssociationV3,
     scalar_kir: &ValidatedScalarGemmCompilerKirV3,
-) -> Result<ScalarGemmWorkerV3ProofInputV3, ScalarGemmWorkerV3ProofInputErrorV3> {
+) -> Result<PreparedScalarGemmWorkerV3ProofV3, ScalarGemmWorkerV3ProofInputErrorV3> {
     if challenge == [0; 32] {
         return Err(ScalarGemmWorkerV3ProofInputErrorV3::ZeroChallenge);
+    }
+    if lineage_identity == [0; 32] {
+        return Err(ScalarGemmWorkerV3ProofInputErrorV3::ZeroLineageIdentity);
+    }
+    if generated_host_contract_identity == [0; 32] {
+        return Err(ScalarGemmWorkerV3ProofInputErrorV3::ZeroGeneratedHostContractIdentity);
     }
     if scalar_kir.proof_binding_receipt_identity() != association.receipt_identity() {
         return Err(ScalarGemmWorkerV3ProofInputErrorV3::AssociationSubstitution);
@@ -207,55 +296,62 @@ pub fn build_scalar_gemm_worker_v3_proof_input_v3(
         return Err(ScalarGemmWorkerV3ProofInputErrorV3::AssociationSubstitution);
     }
     let semantic_projection_identity = *semantic_projection.identity().digest();
-    let semantic_projection_byte_len =
-        u64::try_from(semantic_projection.canonical_token_preimage().len())
-            .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
-    let kir_binding = ScalarGemmKirProofBindingV3 {
-        canonical_kir_identity,
-        semantic_projection_identity,
-        semantic_projection_byte_len,
-    };
-    let generated = generate_source(
+    let semantic_projection = semantic_projection.canonical_token_preimage().to_vec();
+    Ok(PreparedScalarGemmWorkerV3ProofV3 {
         challenge,
+        lineage_identity,
+        generated_host_contract_identity,
         compiler_inputs,
         proof_binding_sha256,
         proof_binding_byte_len,
         canonical_kir_identity,
         semantic_projection_identity,
-        semantic_projection.canonical_token_preimage(),
-    )?;
+        semantic_projection,
+    })
+}
+
+/// Builds the sole executable scalar proof input after machine evidence is available.
+pub fn build_scalar_gemm_worker_v3_proof_input_v3(
+    prepared: PreparedScalarGemmWorkerV3ProofV3,
+    executable_binding: ScalarGemmWorkerV3ExecutableBindingV1,
+) -> Result<ScalarGemmWorkerV3ProofInputV3, ScalarGemmWorkerV3ProofInputErrorV3> {
+    let semantic_projection_byte_len = u64::try_from(prepared.semantic_projection.len())
+        .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
+    let kir_binding = ScalarGemmKirProofBindingV3 {
+        canonical_kir_identity: prepared.canonical_kir_identity,
+        semantic_projection_identity: prepared.semantic_projection_identity,
+        semantic_projection_byte_len,
+    };
+    let generated = generate_source(&prepared, &executable_binding)?;
     let source = CanonicalGeneratedVerusProofInputV3::new(generated)
         .map_err(ScalarGemmWorkerV3ProofInputErrorV3::GeneratedSource)?;
     let binding_identity = input_binding_identity(
-        challenge,
-        &compiler_inputs,
-        proof_binding_sha256,
-        proof_binding_byte_len,
+        &prepared,
         kir_binding,
+        executable_binding.identity(),
         source.identity(),
     );
     Ok(ScalarGemmWorkerV3ProofInputV3 {
-        challenge,
-        compiler_inputs,
-        proof_binding_sha256,
-        proof_binding_byte_len,
-        canonical_kir_identity,
-        semantic_projection_identity,
+        challenge: prepared.challenge,
+        lineage_identity: prepared.lineage_identity,
+        generated_host_contract_identity: prepared.generated_host_contract_identity,
+        compiler_inputs: prepared.compiler_inputs,
+        proof_binding_sha256: prepared.proof_binding_sha256,
+        proof_binding_byte_len: prepared.proof_binding_byte_len,
+        canonical_kir_identity: prepared.canonical_kir_identity,
+        semantic_projection_identity: prepared.semantic_projection_identity,
         semantic_projection_byte_len,
+        executable_binding,
         binding_identity,
         source,
     })
 }
 
 fn generate_source(
-    challenge: [u8; 32],
-    compiler_inputs: [InertLineageContentIdentityV3; 5],
-    proof_binding_sha256: [u8; 32],
-    proof_binding_byte_len: u64,
-    canonical_kir_identity: [u8; 32],
-    semantic_projection_identity: [u8; 32],
-    semantic_projection: &[u8],
+    prepared: &PreparedScalarGemmWorkerV3ProofV3,
+    executable_binding: &ScalarGemmWorkerV3ExecutableBindingV1,
 ) -> Result<Vec<u8>, ScalarGemmWorkerV3ProofInputErrorV3> {
+    let semantic_projection = prepared.semantic_projection();
     let mut generated = String::with_capacity(
         SOURCE_MODEL.len()
             + KIR_PROJECTION_REVIEW.len()
@@ -273,13 +369,27 @@ fn generate_source(
     generated.push_str(
         "pub const FE2O3_PROOF_INPUT_SCHEMA_V3: &str = \"fe2o3.scalar-gemm.worker-v3-proof-input.v3\";\n",
     );
-    push_digest(&mut generated, "FE2O3_WORKER_V3_CHALLENGE_V3", challenge)?;
+    push_digest(
+        &mut generated,
+        "FE2O3_WORKER_V3_CHALLENGE_V3",
+        prepared.challenge,
+    )?;
+    push_digest(
+        &mut generated,
+        "FE2O3_WORKER_V3_LINEAGE_IDENTITY_V1",
+        prepared.lineage_identity,
+    )?;
+    push_digest(
+        &mut generated,
+        "FE2O3_GENERATED_HOST_CONTRACT_IDENTITY_V1",
+        prepared.generated_host_contract_identity,
+    )?;
     for (name, identity) in [
-        ("SEMANTIC_MIR", compiler_inputs[0]),
-        ("MIDDLE_END", compiler_inputs[1]),
-        ("KERNEL_IR", compiler_inputs[2]),
-        ("MIR_TO_KIR_CORRESPONDENCE", compiler_inputs[3]),
-        ("FORMAL_MEMORY", compiler_inputs[4]),
+        ("SEMANTIC_MIR", prepared.compiler_inputs[0]),
+        ("MIDDLE_END", prepared.compiler_inputs[1]),
+        ("KERNEL_IR", prepared.compiler_inputs[2]),
+        ("MIR_TO_KIR_CORRESPONDENCE", prepared.compiler_inputs[3]),
+        ("FORMAL_MEMORY", prepared.compiler_inputs[4]),
     ] {
         push_digest(
             &mut generated,
@@ -296,22 +406,23 @@ fn generate_source(
     push_digest(
         &mut generated,
         "FE2O3_PROOF_BINDING_SHA256_V3",
-        proof_binding_sha256,
+        prepared.proof_binding_sha256,
     )?;
     writeln!(
         generated,
-        "pub const FE2O3_PROOF_BINDING_BYTE_LEN_V3: u64 = {proof_binding_byte_len};"
+        "pub const FE2O3_PROOF_BINDING_BYTE_LEN_V3: u64 = {};",
+        prepared.proof_binding_byte_len
     )
     .map_err(|_| ScalarGemmWorkerV3ProofInputErrorV3::Formatting)?;
     push_digest(
         &mut generated,
         "FE2O3_CANONICAL_KIR_IDENTITY_V5",
-        canonical_kir_identity,
+        prepared.canonical_kir_identity,
     )?;
     push_digest(
         &mut generated,
         "FE2O3_SCALAR_KIR_SEMANTIC_PROJECTION_IDENTITY_V1",
-        semantic_projection_identity,
+        prepared.semantic_projection_identity,
     )?;
     writeln!(
         generated,
@@ -331,6 +442,14 @@ fn generate_source(
     generated.extend_from_slice(KIR_INTEGER_REFINEMENT);
     generated.extend_from_slice(KIR_OPERATIONAL_SEMANTICS);
     generated.extend_from_slice(KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE);
+    executable_binding
+        .append_generated_verus_source(
+            &mut generated,
+            prepared.challenge,
+            prepared.lineage_identity,
+            prepared.generated_host_contract_identity,
+        )
+        .map_err(ScalarGemmWorkerV3ProofInputErrorV3::ExecutableBinding)?;
     Ok(generated)
 }
 
@@ -384,25 +503,26 @@ fn push_digest(
 }
 
 fn input_binding_identity(
-    challenge: [u8; 32],
-    compiler_inputs: &[InertLineageContentIdentityV3; 5],
-    proof_binding_sha256: [u8; 32],
-    proof_binding_byte_len: u64,
+    prepared: &PreparedScalarGemmWorkerV3ProofV3,
     kir_binding: ScalarGemmKirProofBindingV3,
+    executable_binding_identity: Digest,
     source_identity: GeneratedVerusProofInputIdentityV3,
 ) -> Digest {
     let mut digest = Sha256::new();
     digest.update(INPUT_BINDING_DOMAIN_V3);
-    digest.update(challenge);
-    for identity in compiler_inputs {
+    digest.update(prepared.challenge);
+    digest.update(prepared.lineage_identity);
+    digest.update(prepared.generated_host_contract_identity);
+    for identity in &prepared.compiler_inputs {
         digest.update(identity.sha256());
         digest.update(identity.byte_len().to_le_bytes());
     }
-    digest.update(proof_binding_sha256);
-    digest.update(proof_binding_byte_len.to_le_bytes());
+    digest.update(prepared.proof_binding_sha256);
+    digest.update(prepared.proof_binding_byte_len.to_le_bytes());
     digest.update(kir_binding.canonical_kir_identity);
     digest.update(kir_binding.semantic_projection_identity);
     digest.update(kir_binding.semantic_projection_byte_len.to_le_bytes());
+    digest.update(executable_binding_identity.as_bytes());
     digest.update(source_identity.as_bytes());
     Digest::from_bytes(digest.finalize().into())
 }
@@ -443,6 +563,12 @@ impl AuthenticatedScalarGemmWorkerV3ProofV3 {
     }
 
     pub const fn establishes_exact_scalar_gemm_kir_profile(&self) -> bool {
+        true
+    }
+
+    /// Retained Verus checked the exact reviewed HSACO, descriptor, code-range, and static-site
+    /// profile embedded with the authenticated machine execution identities.
+    pub const fn binds_exact_executable_machine_profile(&self) -> bool {
         true
     }
 
@@ -517,6 +643,11 @@ pub fn execute_scalar_gemm_worker_v3_proof_v3(
     if timeout_seconds == 0 || timeout_seconds > MAX_SCALAR_GEMM_VERUS_TIMEOUT_SECONDS_V2 {
         return Err(ScalarGemmWorkerV3ProofErrorV3::new(
             ScalarGemmWorkerV3ProofErrorKindV3::InvalidTimeout,
+        ));
+    }
+    if input.executable_binding.verus_runtime_closure_identity() != runtime.identity().as_bytes() {
+        return Err(ScalarGemmWorkerV3ProofErrorV3::new(
+            ScalarGemmWorkerV3ProofErrorKindV3::RuntimeIdentityMismatch,
         ));
     }
     let deadline = Instant::now()
@@ -597,9 +728,12 @@ fn put_blob(digest: &mut Sha256, bytes: &[u8]) {
 #[non_exhaustive]
 pub enum ScalarGemmWorkerV3ProofInputErrorV3 {
     ZeroChallenge,
+    ZeroLineageIdentity,
+    ZeroGeneratedHostContractIdentity,
     AssociationSubstitution,
     Formatting,
     SemanticProjection(ScalarGemmSemanticProjectionErrorV1),
+    ExecutableBinding(ScalarGemmWorkerV3ExecutableBindingErrorV1),
     GeneratedSource(GeneratedVerusProofInputErrorV3),
 }
 
@@ -613,6 +747,7 @@ impl Error for ScalarGemmWorkerV3ProofInputErrorV3 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::SemanticProjection(error) => Some(error),
+            Self::ExecutableBinding(error) => Some(error),
             Self::GeneratedSource(error) => Some(error),
             _ => None,
         }
@@ -623,6 +758,7 @@ impl Error for ScalarGemmWorkerV3ProofInputErrorV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarGemmWorkerV3ProofErrorKindV3 {
     InvalidTimeout,
+    RuntimeIdentityMismatch,
     TimedOut,
     OutputTooLarge,
     UnexpectedProofResult,
@@ -702,6 +838,12 @@ mod tests {
 
     use super::*;
     use crate::{
+        SCALAR_GEMM_WORKER_V3_CODE_OFFSET_V1, SCALAR_GEMM_WORKER_V3_CODE_SIZE_V1,
+        SCALAR_GEMM_WORKER_V3_FINALIZED_HSACO_BYTES_V1,
+        SCALAR_GEMM_WORKER_V3_FINALIZED_HSACO_SHA256_V1,
+        SCALAR_GEMM_WORKER_V3_LOGICAL_DESCRIPTOR_IDENTITY_V1,
+        SCALAR_GEMM_WORKER_V3_MACHINE_EFFECTS_V1, SCALAR_GEMM_WORKER_V3_RAW_DESCRIPTOR_SHA256_V1,
+        ScalarGemmWorkerV3ExecutableBindingComponentsV1, ScalarGemmWorkerV3MeasuredIdentityV1,
         validate_compiler_proof_binding_association_v3, validate_scalar_gemm_compiler_kir_v3,
     };
 
@@ -771,9 +913,67 @@ mod tests {
         (association, scalar_kir)
     }
 
-    fn input(challenge: [u8; 32]) -> ScalarGemmWorkerV3ProofInputV3 {
+    fn measured(seed: u8, byte_len: u64) -> ScalarGemmWorkerV3MeasuredIdentityV1 {
+        ScalarGemmWorkerV3MeasuredIdentityV1::new([seed; 32], byte_len)
+    }
+
+    fn executable_binding(seed: u8) -> ScalarGemmWorkerV3ExecutableBindingV1 {
+        let request = vec![b'r', seed];
+        let evidence = vec![b'e', seed, 1];
+        let receipt = vec![b'a', seed, 1, 2];
+        ScalarGemmWorkerV3ExecutableBindingV1::new(
+            ScalarGemmWorkerV3ExecutableBindingComponentsV1 {
+                finalized_hsaco: ScalarGemmWorkerV3MeasuredIdentityV1::new(
+                    SCALAR_GEMM_WORKER_V3_FINALIZED_HSACO_SHA256_V1,
+                    SCALAR_GEMM_WORKER_V3_FINALIZED_HSACO_BYTES_V1,
+                ),
+                logical_descriptor_identity: SCALAR_GEMM_WORKER_V3_LOGICAL_DESCRIPTOR_IDENTITY_V1,
+                raw_descriptor_identity: SCALAR_GEMM_WORKER_V3_RAW_DESCRIPTOR_SHA256_V1,
+                machine_execution_challenge: [seed.wrapping_add(1); 32],
+                analyzer_identity: [seed.wrapping_add(2); 32],
+                toolchain_identity: [seed.wrapping_add(3); 32],
+                machine_request_identity: measured(seed.wrapping_add(4), request.len() as u64),
+                machine_evidence_identity: measured(seed.wrapping_add(5), evidence.len() as u64),
+                authenticated_receipt_identity: measured(
+                    seed.wrapping_add(6),
+                    receipt.len() as u64,
+                ),
+                worker_executable_identity: measured(seed.wrapping_add(7), 100),
+                machine_runtime_closure_identity: measured(seed.wrapping_add(8), 200),
+                machine_runtime_mapping_identity: measured(seed.wrapping_add(9), 300),
+                verus_runtime_closure_identity: [seed.wrapping_add(10); 32],
+                entry_code_offset: SCALAR_GEMM_WORKER_V3_CODE_OFFSET_V1,
+                entry_code_size: SCALAR_GEMM_WORKER_V3_CODE_SIZE_V1,
+                effects: SCALAR_GEMM_WORKER_V3_MACHINE_EFFECTS_V1.to_vec(),
+                canonical_machine_request: request,
+                canonical_machine_evidence: evidence,
+                canonical_authenticated_receipt: receipt,
+            },
+        )
+        .unwrap()
+    }
+
+    fn input_with(
+        challenge: [u8; 32],
+        lineage: [u8; 32],
+        host_contract: [u8; 32],
+        machine_seed: u8,
+    ) -> ScalarGemmWorkerV3ProofInputV3 {
         let (association, scalar_kir) = validated(1);
-        build_scalar_gemm_worker_v3_proof_input_v3(challenge, &association, &scalar_kir).unwrap()
+        let prepared = prepare_scalar_gemm_worker_v3_proof_v3(
+            challenge,
+            lineage,
+            host_contract,
+            &association,
+            &scalar_kir,
+        )
+        .unwrap();
+        build_scalar_gemm_worker_v3_proof_input_v3(prepared, executable_binding(machine_seed))
+            .unwrap()
+    }
+
+    fn input(challenge: [u8; 32]) -> ScalarGemmWorkerV3ProofInputV3 {
+        input_with(challenge, [0x71; 32], [0x72; 32], 0x31)
     }
 
     fn output(
@@ -936,10 +1136,35 @@ mod tests {
         );
     }
 
+    fn substitute_generated_executable_constant(
+        source: &mut [u8],
+        name: &[u8],
+        exact: &[u8],
+        replacement: &[u8],
+    ) {
+        assert_eq!(exact.len(), replacement.len());
+        let marker = source
+            .windows(name.len())
+            .position(|window| window == name)
+            .expect("generated executable-binding constant is absent");
+        let declaration_end = source[marker..]
+            .windows(b";\n".len())
+            .position(|window| window == b";\n")
+            .map(|offset| marker + offset)
+            .expect("generated executable-binding declaration is unterminated");
+        let target = source[marker..declaration_end]
+            .windows(exact.len())
+            .position(|window| window == exact)
+            .map(|offset| marker + offset)
+            .expect("generated executable-binding value is absent");
+        source[target..target + exact.len()].copy_from_slice(replacement);
+    }
+
     #[test]
     fn generated_source_binds_challenge_and_every_compiler_axis() {
         let first = input([0x11; 32]);
         assert!(first.binds_worker_v3_challenge());
+        assert!(first.binds_exact_executable_machine_profile());
         assert!(!first.authenticates_verus_execution());
         assert!(!first.establishes_source_to_kir_refinement());
         assert!(first.includes_reviewed_kir_integer_profile_equations());
@@ -956,6 +1181,8 @@ mod tests {
         let source = std::str::from_utf8(first.canonical_source()).unwrap();
         for name in [
             "FE2O3_WORKER_V3_CHALLENGE_V3",
+            "FE2O3_WORKER_V3_LINEAGE_IDENTITY_V1",
+            "FE2O3_GENERATED_HOST_CONTRACT_IDENTITY_V1",
             "FE2O3_SEMANTIC_MIR_SHA256_V3",
             "FE2O3_MIDDLE_END_SHA256_V3",
             "FE2O3_KERNEL_IR_SHA256_V3",
@@ -974,6 +1201,12 @@ mod tests {
             "generated_scalar_kir_projection_decodes_to_exact_ast_v1",
             "generated_scalar_kir_projection_active_refines_integer_model_v1",
             "generated_scalar_kir_projection_inactive_performs_no_store_v1",
+            "FE2O3_FINALIZED_HSACO_SHA256_V1",
+            "FE2O3_RAW_AMDHSA_DESCRIPTOR_SHA256_V1",
+            "FE2O3_CANONICAL_MACHINE_REQUEST_V1",
+            "FE2O3_CANONICAL_MACHINE_EVIDENCE_V1",
+            "FE2O3_CANONICAL_AUTHENTICATED_MACHINE_RECEIPT_V1",
+            "generated_scalar_gemm_worker_v3_executable_binding_matches_reviewed_profile_v1",
         ] {
             assert!(source.contains(name), "generated source omitted {name}");
         }
@@ -981,7 +1214,7 @@ mod tests {
         assert!(source.contains(std::str::from_utf8(KIR_INTEGER_REFINEMENT).unwrap()));
         assert!(
             source
-                .ends_with(std::str::from_utf8(KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE).unwrap())
+                .contains(std::str::from_utf8(KIR_PROJECTION_OPERATIONAL_CORRESPONDENCE).unwrap())
         );
         let challenge_substitution = input([0x12; 32]);
         assert_ne!(
@@ -992,12 +1225,27 @@ mod tests {
             first.binding_identity(),
             challenge_substitution.binding_identity()
         );
+        for substituted in [
+            input_with([0x11; 32], [0x73; 32], [0x72; 32], 0x31),
+            input_with([0x11; 32], [0x71; 32], [0x74; 32], 0x31),
+            input_with([0x11; 32], [0x71; 32], [0x72; 32], 0x32),
+        ] {
+            assert_ne!(first.source_identity(), substituted.source_identity());
+            assert_ne!(first.binding_identity(), substituted.binding_identity());
+        }
 
         let (other_association, other_scalar) = validated(2);
-        let compiler_substitution = build_scalar_gemm_worker_v3_proof_input_v3(
+        let compiler_substitution = prepare_scalar_gemm_worker_v3_proof_v3(
             [0x11; 32],
+            [0x71; 32],
+            [0x72; 32],
             &other_association,
             &other_scalar,
+        )
+        .unwrap();
+        let compiler_substitution = build_scalar_gemm_worker_v3_proof_input_v3(
+            compiler_substitution,
+            executable_binding(0x31),
         )
         .unwrap();
         for index in [0, 1, 3, 4] {
@@ -1024,12 +1272,44 @@ mod tests {
     fn zero_challenge_and_mixed_associations_fail_closed() {
         let (first_association, first_scalar) = validated(1);
         assert!(matches!(
-            build_scalar_gemm_worker_v3_proof_input_v3([0; 32], &first_association, &first_scalar),
+            prepare_scalar_gemm_worker_v3_proof_v3(
+                [0; 32],
+                [1; 32],
+                [2; 32],
+                &first_association,
+                &first_scalar,
+            ),
             Err(ScalarGemmWorkerV3ProofInputErrorV3::ZeroChallenge)
+        ));
+        assert!(matches!(
+            prepare_scalar_gemm_worker_v3_proof_v3(
+                [1; 32],
+                [0; 32],
+                [2; 32],
+                &first_association,
+                &first_scalar,
+            ),
+            Err(ScalarGemmWorkerV3ProofInputErrorV3::ZeroLineageIdentity)
+        ));
+        assert!(matches!(
+            prepare_scalar_gemm_worker_v3_proof_v3(
+                [1; 32],
+                [2; 32],
+                [0; 32],
+                &first_association,
+                &first_scalar,
+            ),
+            Err(ScalarGemmWorkerV3ProofInputErrorV3::ZeroGeneratedHostContractIdentity)
         ));
         let (second_association, _) = validated(2);
         assert!(matches!(
-            build_scalar_gemm_worker_v3_proof_input_v3([1; 32], &second_association, &first_scalar),
+            prepare_scalar_gemm_worker_v3_proof_v3(
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                &second_association,
+                &first_scalar,
+            ),
             Err(ScalarGemmWorkerV3ProofInputErrorV3::AssociationSubstitution)
         ));
     }
@@ -1070,6 +1350,7 @@ mod tests {
         assert!(receipt.authenticates_retained_verus_execution());
         assert!(receipt.binds_worker_v3_challenge());
         assert!(receipt.establishes_exact_scalar_gemm_kir_profile());
+        assert!(receipt.binds_exact_executable_machine_profile());
         assert!(receipt.authenticates_exact_decoded_kir_projection());
         assert!(receipt.authenticates_reviewed_kir_state_machine_refinement());
         assert!(receipt.authenticates_exact_projection_tlv_framing());
@@ -1103,6 +1384,62 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    #[ignore = "requires FE2O3_TEST_VERUS pointing to the pinned Verus launcher"]
+    fn executable_profile_substitutions_fail_verus() {
+        for (suffix, name, exact, replacement) in [
+            (
+                "hsaco-substitution",
+                b"FE2O3_FINALIZED_HSACO_SHA256_V1".as_slice(),
+                b"0xf4".as_slice(),
+                b"0xf5".as_slice(),
+            ),
+            (
+                "descriptor-substitution",
+                b"FE2O3_RAW_AMDHSA_DESCRIPTOR_SHA256_V1".as_slice(),
+                b"0x01".as_slice(),
+                b"0x02".as_slice(),
+            ),
+            (
+                "effect-offset-substitution",
+                b"FE2O3_MACHINE_EFFECT_OFFSETS_V1".as_slice(),
+                b"0x1b0c".as_slice(),
+                b"0x1b0d".as_slice(),
+            ),
+            (
+                "effect-kind-substitution",
+                b"FE2O3_MACHINE_EFFECT_KINDS_V1".as_slice(),
+                b"= [1,".as_slice(),
+                b"= [2,".as_slice(),
+            ),
+            (
+                "effect-width-substitution",
+                b"FE2O3_MACHINE_EFFECT_WIDTHS_V1".as_slice(),
+                b"= [8,".as_slice(),
+                b"= [4,".as_slice(),
+            ),
+        ] {
+            let mut source = input([0x4b; 32]).canonical_source().to_vec();
+            substitute_generated_executable_constant(&mut source, name, exact, replacement);
+            let output = run_pinned_verus(&source, suffix);
+            assert_ne!(
+                output.status.code(),
+                Some(0),
+                "mutated executable profile unexpectedly verified ({suffix}): {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(
+                    "generated_scalar_gemm_worker_v3_executable_binding_matches_reviewed_profile_v1"
+                ) || stderr.contains("postcondition not satisfied")
+                    || stderr.contains("assertion failed")
+                    || stderr.contains("expression simplifies to false"),
+                "unexpected verifier failure for {suffix}:\n{stderr}"
+            );
+        }
     }
 
     #[test]

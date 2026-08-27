@@ -53,16 +53,20 @@ use fe2o3_host::{
     WorkerV3VerificationRequestV1, WorkerV3VerifierV1, admit_recovered_worker_v3_descriptor_v1,
     audit_recovered_worker_v3_verification_v1,
 };
+use fe2o3_kernel_analysis::{
+    AuthenticatedPhysicalMachineEffectLimitsV1, inspect_physical_machine_effect_worker_candidate_v1,
+};
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
     RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
     recover_worker_v3_load_envelope_v1,
 };
 use fe2o3_verifier::{
-    build_scalar_gemm_worker_v3_proof_input_v3, validate_compiler_proof_binding_association_v3,
+    prepare_scalar_gemm_worker_v3_proof_v3, validate_compiler_proof_binding_association_v3,
     validate_scalar_gemm_compiler_kir_v3,
 };
 use fe2o3_worker_v3_authority::{
+    PRODUCTION_SCALAR_GEMM_WORKER_V3_CLOSED_OBLIGATIONS_V1,
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1,
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
     ProductionScalarGemmWorkerV3RequestAuditorV1, ProductionScalarGemmWorkerV3VerifierErrorV1,
@@ -412,24 +416,25 @@ where
                 validate_scalar_gemm_compiler_kir_v3(&proof_binding, receipts.kernel_ir()).expect(
                     "scalar Worker V3 request must retain the exact reviewed canonical KIR",
                 );
-            let proof_input = build_scalar_gemm_worker_v3_proof_input_v3(
+            let prepared = prepare_scalar_gemm_worker_v3_proof_v3(
                 *request.challenge_identity().as_bytes(),
+                *request.lineage_identity().as_bytes(),
+                request.generated_host_contract_identity(),
                 &proof_binding,
                 &scalar_kir,
             )
-            .expect("scalar Worker V3 request must generate exact challenge-bound proof input");
+            .expect("scalar Worker V3 request must prepare exact semantic proof state");
             assert_eq!(
-                proof_input.challenge(),
+                prepared.challenge(),
                 *request.challenge_identity().as_bytes()
             );
-            assert!(proof_input.binds_worker_v3_challenge());
-            assert!(proof_input.includes_reviewed_kir_integer_profile_equations());
-            assert!(proof_input.binds_exhaustive_decoded_kir_projection());
-            assert!(proof_input.includes_reviewed_kir_operational_semantics());
-            assert!(proof_input.binds_exact_projection_tlv_framing());
-            assert!(!proof_input.authenticates_verus_execution());
-            assert!(!proof_input.establishes_source_to_kir_refinement());
-            assert!(!proof_input.grants_artifact_or_runtime_authority());
+            assert_eq!(
+                prepared.lineage_identity(),
+                *request.lineage_identity().as_bytes()
+            );
+            assert!(prepared.binds_worker_v3_request_and_lineage());
+            assert!(!prepared.can_execute_verus());
+            assert!(!prepared.grants_artifact_or_runtime_authority());
         }
         let mut finalized = request.finalized_hsaco_sha256();
         if self.substitute_finalized {
@@ -1571,18 +1576,14 @@ fn production_scalar_request_auditor_validates_exact_deterministic_hsaco_and_kir
 
     assert_ne!(prepared.finalized_hsaco_sha256(), [0; 32]);
     assert_ne!(prepared.finalized_hsaco_length(), 0);
-    assert_ne!(prepared.proof_input().challenge(), [0; 32]);
-    assert!(prepared.proof_input().binds_worker_v3_challenge());
+    assert_ne!(prepared.prepared_proof().challenge(), [0; 32]);
+    assert_ne!(prepared.prepared_proof().lineage_identity(), [0; 32]);
     assert!(
         prepared
-            .proof_input()
-            .binds_exhaustive_decoded_kir_projection()
+            .prepared_proof()
+            .binds_worker_v3_request_and_lineage()
     );
-    assert!(
-        prepared
-            .proof_input()
-            .includes_reviewed_kir_operational_semantics()
-    );
+    assert!(!prepared.prepared_proof().can_execute_verus());
     assert!(!prepared.authenticates_verus_execution());
     assert!(!prepared.can_enter_worker_v3_gate());
     assert!(!prepared.grants_artifact_or_runtime_authority());
@@ -1713,12 +1714,23 @@ fn borrowed_scalar_request_audit_rejects_publication_mutation_during_validation(
 }
 
 #[test]
-#[ignore = "requires exact scalar HSACO and a protected general-GEMM Verus runtime closure"]
+#[ignore = "requires exact scalar HSACO plus protected Verus and machine-effect runtimes"]
 fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
     let hsaco_path = std::env::var_os("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO")
         .expect("FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO is not set");
     let runtime_root = std::env::var_os("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT")
         .expect("FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT is not set");
+    let machine_worker_path = std::env::var_os("FE2O3_MACHINE_EFFECT_NATIVE_WORKER")
+        .expect("FE2O3_MACHINE_EFFECT_NATIVE_WORKER is not set");
+    let machine_limits = AuthenticatedPhysicalMachineEffectLimitsV1::new(
+        Duration::from_secs(180),
+        1024 * 1024,
+        16 * 1024,
+    )
+    .unwrap();
+    let machine_candidate =
+        inspect_physical_machine_effect_worker_candidate_v1(&machine_worker_path, machine_limits)
+            .unwrap();
     let raw_hsaco = fs::read(hsaco_path).unwrap();
     let inspection = fe2o3_hsaco_finalize::inspect_unfinalized(&raw_hsaco).unwrap();
     let kernel_id = inspection
@@ -1740,6 +1752,9 @@ fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
     let mut verifier = ProductionScalarGemmWorkerV3VerifierV1::<scalar_gemm_v1_gpu::Marker>::open(
         runtime_root,
         120,
+        machine_worker_path,
+        machine_candidate.policy(),
+        machine_limits,
     )
     .unwrap();
 
@@ -1758,7 +1773,12 @@ fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
     );
     assert_ne!(audit.finalized_hsaco_sha256(), [0; 32]);
     assert_ne!(audit.finalized_hsaco_length(), 0);
-    assert!(!audit.establishes_proof_executable_binding());
+    assert!(audit.establishes_proof_executable_binding());
+    assert_eq!(
+        audit.closed_authority_obligations(),
+        PRODUCTION_SCALAR_GEMM_WORKER_V3_CLOSED_OBLIGATIONS_V1
+    );
+    assert!(audit.machine_effect().authenticates_analyzer_execution());
     assert!(!audit.can_enter_worker_v3_gate());
     assert!(!audit.grants_artifact_or_runtime_authority());
     let closure = audit.authority_closure();
@@ -1778,6 +1798,7 @@ fn production_verifier_audits_exact_proof_and_preserves_admission_custody() {
     let proof = audit.proof();
     assert!(proof.authenticates_retained_verus_execution());
     assert!(proof.binds_worker_v3_challenge());
+    assert!(proof.binds_exact_executable_machine_profile());
     assert!(proof.establishes_exact_scalar_gemm_kir_profile());
     assert!(proof.establishes_kir_to_integer_model_refinement());
     assert!(!proof.establishes_source_to_kir_refinement());

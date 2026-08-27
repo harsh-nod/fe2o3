@@ -1,7 +1,8 @@
 //! Owned production implementations of the fe2o3 Worker V3 verifier boundary.
 //!
 //! The current scalar GEMM implementation authenticates exact request bytes, final HSACO
-//! structure, and retained request-bound Verus execution. It remains fail-closed until compiler
+//! structure, policy-authenticated upstream-LLVM machine effects, and retained request-bound
+//! Verus execution over one lossless executable binding. It remains fail-closed until compiler
 //! provenance, source/MIR, IEEE-754, emitted-machine, ABI, and complete effect refinements are
 //! mechanically established.
 
@@ -10,12 +11,13 @@
 mod scalar_gemm_gfx942_v1;
 
 pub use scalar_gemm_gfx942_v1::{
+    PRODUCTION_SCALAR_GEMM_WORKER_V3_CLOSED_OBLIGATIONS_V1,
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OBLIGATION_STATUS_V1,
     PRODUCTION_SCALAR_GEMM_WORKER_V3_OPEN_OBLIGATIONS_V1,
     PreparedProductionScalarGemmWorkerV3ProofV1, ProductionScalarGemmWorkerV3AuditV1,
     ProductionScalarGemmWorkerV3AuthenticatedEvidenceV1,
-    ProductionScalarGemmWorkerV3AuthorityClosureV1, ProductionScalarGemmWorkerV3MissingEvidenceV1,
-    ProductionScalarGemmWorkerV3ObligationStatusV1, ProductionScalarGemmWorkerV3OpenObligationV1,
-    ProductionScalarGemmWorkerV3RequestAuditorV1, ProductionScalarGemmWorkerV3VerifierErrorV1,
-    ProductionScalarGemmWorkerV3VerifierV1,
+    ProductionScalarGemmWorkerV3AuthorityClosureV1, ProductionScalarGemmWorkerV3ClosedObligationV1,
+    ProductionScalarGemmWorkerV3MissingEvidenceV1, ProductionScalarGemmWorkerV3ObligationStatusV1,
+    ProductionScalarGemmWorkerV3OpenObligationV1, ProductionScalarGemmWorkerV3RequestAuditorV1,
+    ProductionScalarGemmWorkerV3VerifierErrorV1, ProductionScalarGemmWorkerV3VerifierV1,
 };

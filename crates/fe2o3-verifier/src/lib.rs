@@ -50,6 +50,7 @@ mod scalar_gemm_kir_binding_v3;
 mod scalar_gemm_proof;
 mod scalar_gemm_v1;
 mod scalar_gemm_verus_execution_v2;
+mod scalar_gemm_worker_v3_executable_binding_v1;
 mod scalar_gemm_worker_v3_proof_v3;
 mod static_view_proof;
 
@@ -275,11 +276,23 @@ pub use scalar_gemm_verus_execution_v2::{
     ScalarGemmVerifiedTheoremV2, ScalarGemmVerusExecutionErrorKindV2,
     ScalarGemmVerusExecutionErrorV2, execute_scalar_gemm_verus_proof_v2,
 };
+pub use scalar_gemm_worker_v3_executable_binding_v1::{
+    MAX_SCALAR_GEMM_WORKER_V3_MACHINE_BINDING_BLOB_BYTES_V1, SCALAR_GEMM_WORKER_V3_CODE_OFFSET_V1,
+    SCALAR_GEMM_WORKER_V3_CODE_SIZE_V1, SCALAR_GEMM_WORKER_V3_FINALIZED_HSACO_BYTES_V1,
+    SCALAR_GEMM_WORKER_V3_FINALIZED_HSACO_SHA256_V1,
+    SCALAR_GEMM_WORKER_V3_LOGICAL_DESCRIPTOR_IDENTITY_V1,
+    SCALAR_GEMM_WORKER_V3_MACHINE_EFFECT_COUNT_V1, SCALAR_GEMM_WORKER_V3_MACHINE_EFFECTS_V1,
+    SCALAR_GEMM_WORKER_V3_RAW_DESCRIPTOR_SHA256_V1,
+    ScalarGemmWorkerV3ExecutableBindingComponentsV1, ScalarGemmWorkerV3ExecutableBindingErrorV1,
+    ScalarGemmWorkerV3ExecutableBindingV1, ScalarGemmWorkerV3MachineEffectKindV1,
+    ScalarGemmWorkerV3MachineEffectSiteV1, ScalarGemmWorkerV3MeasuredIdentityV1,
+};
 pub use scalar_gemm_worker_v3_proof_v3::{
-    AuthenticatedScalarGemmWorkerV3ProofV3, ScalarGemmWorkerV3ProofErrorKindV3,
-    ScalarGemmWorkerV3ProofErrorV3, ScalarGemmWorkerV3ProofInputErrorV3,
-    ScalarGemmWorkerV3ProofInputV3, build_scalar_gemm_worker_v3_proof_input_v3,
-    execute_scalar_gemm_worker_v3_proof_v3,
+    AuthenticatedScalarGemmWorkerV3ProofV3, PreparedScalarGemmWorkerV3ProofV3,
+    ScalarGemmWorkerV3ProofErrorKindV3, ScalarGemmWorkerV3ProofErrorV3,
+    ScalarGemmWorkerV3ProofInputErrorV3, ScalarGemmWorkerV3ProofInputV3,
+    build_scalar_gemm_worker_v3_proof_input_v3, execute_scalar_gemm_worker_v3_proof_v3,
+    prepare_scalar_gemm_worker_v3_proof_v3,
 };
 pub use static_view_proof::{
     STATIC_VIEW_PROOF_EVIDENCE_DOMAIN_V1, STATIC_VIEW_PROOF_OBLIGATION_DOMAIN_V1,

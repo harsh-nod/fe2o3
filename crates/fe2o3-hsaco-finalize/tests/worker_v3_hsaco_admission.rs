@@ -340,23 +340,21 @@ fn scalar_fixture_retains_exact_reviewed_kir_for_request_bound_proofs() {
     let scalar_kir =
         fe2o3_verifier::validate_scalar_gemm_compiler_kir_v3(&association, receipts.kernel_ir())
             .expect("scalar fixture must retain the exact reviewed canonical KIR");
-    let proof_input = fe2o3_verifier::build_scalar_gemm_worker_v3_proof_input_v3(
+    let prepared = fe2o3_verifier::prepare_scalar_gemm_worker_v3_proof_v3(
         [0x5a; 32],
+        [0x5b; 32],
+        [0x5c; 32],
         &association,
         &scalar_kir,
     )
-    .expect("scalar fixture must generate request-bound proof input");
+    .expect("scalar fixture must prepare exact request-bound semantic proof state");
 
-    assert_eq!(proof_input.challenge(), [0x5a; 32]);
+    assert_eq!(prepared.challenge(), [0x5a; 32]);
+    assert_eq!(prepared.lineage_identity(), [0x5b; 32]);
     assert!(scalar_kir.establishes_exact_scalar_gemm_kir_profile());
-    assert!(proof_input.binds_worker_v3_challenge());
-    assert!(proof_input.includes_reviewed_kir_integer_profile_equations());
-    assert!(proof_input.binds_exhaustive_decoded_kir_projection());
-    assert!(proof_input.includes_reviewed_kir_operational_semantics());
-    assert!(proof_input.binds_exact_projection_tlv_framing());
-    assert!(!proof_input.authenticates_verus_execution());
-    assert!(!proof_input.establishes_source_to_kir_refinement());
-    assert!(!proof_input.grants_artifact_or_runtime_authority());
+    assert!(prepared.binds_worker_v3_request_and_lineage());
+    assert!(!prepared.can_execute_verus());
+    assert!(!prepared.grants_artifact_or_runtime_authority());
 }
 
 #[test]
