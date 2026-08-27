@@ -222,10 +222,6 @@ impl ValidatedProtectedFirstBuildReplayV2 {
     pub(crate) const fn evidence_identity(self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
         self.evidence_identity
     }
-
-    pub(crate) const fn output_identity(self) -> ContentIdentityV1 {
-        self.output_identity
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

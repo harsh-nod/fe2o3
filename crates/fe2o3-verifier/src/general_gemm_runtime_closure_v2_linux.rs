@@ -537,25 +537,6 @@ pub(super) fn execute_rust_verify(
     )
 }
 
-pub(super) fn execute_generated_rust_verify(
-    runtime: &RetainedRuntimeClosureV2,
-    source: &CanonicalGeneratedVerusProofInputV3,
-    deadline: Instant,
-    output_limit: usize,
-) -> Result<GeneralGemmRuntimeProcessOutputV2, GeneralGemmRuntimeClosureErrorV2> {
-    let sealed = SealedGeneratedProofSourceV3::create(source)?;
-    sealed.revalidate(source)?;
-    let result = execute_rust_verify_common(
-        runtime,
-        &format!("/proc/self/fd/{GENERATED_PROOF_SOURCE_FD}"),
-        Some(&sealed.file),
-        deadline,
-        output_limit,
-    );
-    sealed.revalidate(source)?;
-    result
-}
-
 pub(super) fn execute_functional_refinement_generated_rust_verify(
     runtime: &RetainedRuntimeClosureV2,
     source: &CanonicalGeneratedVerusProofInputV3,

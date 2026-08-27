@@ -1,4 +1,4 @@
-//! Independent raw-HSACO inspection of sealed Worker V2 first-build evidence.
+//! Independent raw-HSACO inspection of sealed Worker V3 first-build evidence.
 //!
 //! This boundary consumes and retains the inert first-build evidence. It is deliberately not
 //! canonical descriptor finalization and grants no publication, loading, or launch authority.
@@ -6,9 +6,7 @@
 use std::{collections::BTreeSet, error::Error, fmt};
 
 use fe2o3_artifact_transaction::{
-    BuildAttempt, CompilerModuleHandoffIdentityV1, CompilerModuleHandoffIdentityV2,
-    CompilerModuleHandoffSlotV2, CompilerModuleHandoffSlotV3,
-    CompilerModuleHandoffTransactionIdentityV3,
+    BuildAttempt, CompilerModuleHandoffSlotV3, CompilerModuleHandoffTransactionIdentityV3,
 };
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_ffi::{
@@ -29,39 +27,20 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ContentIdentityV1, DEVICE_DESCRIPTOR_SECTION_NAME, FinalizationError,
-    FirstBuildWorkerV2IdentityV1, InertDecodedWorkerExchangeV2, InertFirstBuildWorkerV2EvidenceV1,
-    InertProtectedFirstBuildWorkerV2EvidenceV1, InertProtectedFirstBuildWorkerV3EvidenceV1,
-    MAX_WORKER_SYMBOLS, MultiInputLinkPlanV1, ProtectedCompilerHandoffBindingIdentityV3,
-    ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV2IdentityV1,
-    ProtectedFirstBuildWorkerV3IdentityV1, WorkerCompilerFfiEnvelopeIdentityV2,
-    WorkerMeasurementV1, request_construction::decode_link_options,
+    InertDecodedWorkerExchangeV2, InertProtectedFirstBuildWorkerV3EvidenceV1, MAX_WORKER_SYMBOLS,
+    MultiInputLinkPlanV1, ProtectedCompilerHandoffBindingIdentityV3,
+    ProtectedCompilerHandoffExpectationV3, ProtectedFirstBuildWorkerV3IdentityV1,
+    WorkerCompilerFfiEnvelopeIdentityV2, WorkerMeasurementV1,
+    request_construction::decode_link_options,
 };
 
 const PRODUCTION_GFX942_TARGET: &str = "gfx942:xnack-";
 const PRODUCTION_GFX950_TARGET: &str = "gfx950:xnack-";
-const REQUIRED_WORKGROUP_SIZE: [u32; 3] = [256, 1, 1];
-const REQUIRED_MAX_FLAT_WORKGROUP_SIZE: u32 = 256;
 const REQUIRED_WAVEFRONT_SIZE: u32 = 64;
 const POLICY_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-POLICY/V1\0";
 const RESPONSE_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-SEALED-RESPONSE/V1\0";
-const INSPECTION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/WORKER-V2-RAW-HSACO-INSPECTION/V1\0";
-const PROTECTED_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] =
-    b"FE2O3/CLOSURE-PROTECTED-WORKER-V2-RAW-HSACO-INSPECTION/V1\0";
 const PROTECTED_V3_INSPECTION_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/STRICT-V3-PROTECTED-WORKER-RAW-HSACO-INSPECTION/V1\0";
-const PROTECTED_SOURCE_EVIDENCE_DOMAIN_V1: &[u8] =
-    b"FE2O3/PROTECTED-RAW-HSACO/SOURCE-EVIDENCE/V1\0";
-const PROTECTED_ATTEMPT_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/ATTEMPT/V1\0";
-const PROTECTED_HANDOFF_DOMAIN_V2: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/HANDOFF/V2\0";
-const PROTECTED_COMPILER_CLOSURE_DOMAIN_V2: &[u8] =
-    b"FE2O3/PROTECTED-RAW-HSACO/COMPILER-CLOSURE/V2\0";
-const PROTECTED_WORKER_EXCHANGE_DOMAIN_V1: &[u8] =
-    b"FE2O3/PROTECTED-RAW-HSACO/WORKER-REQUEST-RESPONSE/V1\0";
-const PROTECTED_RAW_BYTES_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/EXACT-RAW-BYTES/V1\0";
-const PROTECTED_TARGET_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/TARGET/V1\0";
-const PROTECTED_CODE_OBJECT_VERSION_DOMAIN_V1: &[u8] =
-    b"FE2O3/PROTECTED-RAW-HSACO/CODE-OBJECT-VERSION/V1\0";
-const PROTECTED_POLICY_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/POLICY/V1\0";
 const PROTECTED_DESCRIPTOR_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/AMDHSA-DESCRIPTORS/V1\0";
 const PROTECTED_ABI_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/KERNEL-ABI/V1\0";
 const PROTECTED_RESOURCES_DOMAIN_V1: &[u8] = b"FE2O3/PROTECTED-RAW-HSACO/KERNEL-RESOURCES/V1\0";
@@ -83,7 +62,7 @@ impl ObservedWorkerV2KernelSymbolsV1 {
     }
 }
 
-/// Exact fixed launch properties required from every inspected gfx942 kernel.
+/// Exact fixed launch properties required from every inspected production kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerV2RawLaunchContractV1 {
     required_workgroup_size: [u32; 3],
@@ -91,19 +70,7 @@ pub struct WorkerV2RawLaunchContractV1 {
     wavefront_size: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkerV2RawLaunchDiagnosticProfileV1 {
-    LegacyGfx942G1,
-    ProductionV1,
-}
-
 impl WorkerV2RawLaunchContractV1 {
-    const GFX942_G1: Self = Self {
-        required_workgroup_size: REQUIRED_WORKGROUP_SIZE,
-        max_flat_workgroup_size: REQUIRED_MAX_FLAT_WORKGROUP_SIZE,
-        wavefront_size: REQUIRED_WAVEFRONT_SIZE,
-    };
-
     const PRODUCTION_V1: Self = Self {
         required_workgroup_size: [64, 1, 1],
         max_flat_workgroup_size: 64,
@@ -120,26 +87,6 @@ impl WorkerV2RawLaunchContractV1 {
 
     pub const fn wavefront_size(self) -> u32 {
         self.wavefront_size
-    }
-
-    pub(crate) const fn from_transcript_parts(
-        required_workgroup_size: [u32; 3],
-        max_flat_workgroup_size: u32,
-        wavefront_size: u32,
-    ) -> Option<Self> {
-        if required_workgroup_size[0] == 0
-            || required_workgroup_size[1] == 0
-            || required_workgroup_size[2] == 0
-            || max_flat_workgroup_size == 0
-            || wavefront_size == 0
-        {
-            return None;
-        }
-        Some(Self {
-            required_workgroup_size,
-            max_flat_workgroup_size,
-            wavefront_size,
-        })
     }
 }
 
@@ -220,140 +167,6 @@ pub enum CanonicalDescriptorSectionObservationV1 {
 pub struct SealedWorkerV2ResponseIdentityV1([u8; 32]);
 
 impl SealedWorkerV2ResponseIdentityV1 {
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// Stable identity binding complete first-build lineage, raw bytes, and reconstructed policy.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct InspectedRawWorkerV2HsacoIdentityV1([u8; 32]);
-
-impl InspectedRawWorkerV2HsacoIdentityV1 {
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// Inert evidence that exact sealed Worker V2 output passed independent raw-HSACO inspection.
-///
-/// This retains the consumed first-build evidence. It is not a finalized HSACO, does not
-/// authenticate compiler origin, and cannot publish, load, or launch an artifact.
-#[derive(Debug, Eq, PartialEq)]
-pub struct InspectedRawWorkerV2HsacoV1 {
-    identity: InspectedRawWorkerV2HsacoIdentityV1,
-    response_identity: SealedWorkerV2ResponseIdentityV1,
-    descriptor_section: CanonicalDescriptorSectionObservationV1,
-    policy: WorkerV2RawHsacoPolicyV1,
-    source: InertFirstBuildWorkerV2EvidenceV1,
-}
-
-impl InspectedRawWorkerV2HsacoV1 {
-    pub const fn identity(&self) -> InspectedRawWorkerV2HsacoIdentityV1 {
-        self.identity
-    }
-
-    pub const fn source_evidence_identity(&self) -> FirstBuildWorkerV2IdentityV1 {
-        self.source.identity()
-    }
-
-    pub const fn attempt(&self) -> BuildAttempt {
-        self.source.attempt()
-    }
-
-    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV1 {
-        self.source.handoff_identity()
-    }
-
-    /// Returns the identity of the complete link plan retained by sealed first-build evidence.
-    pub const fn link_plan_identity(&self) -> crate::LinkPlanIdentityV1 {
-        self.source.link_plan_identity()
-    }
-
-    pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
-        self.source.worker_measurement()
-    }
-
-    /// Identity of the complete compiler FFI contract envelope retained from the V2 handoff.
-    pub const fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
-        self.source.compiler_envelope_identity()
-    }
-
-    /// The matching envelope identity sealed into the independently checked Worker V2 response.
-    pub const fn sealed_compiler_envelope_identity(&self) -> WorkerCompilerFfiEnvelopeIdentityV2 {
-        self.source
-            .authorized()
-            .response()
-            .compiler_envelope_identity()
-    }
-
-    /// Returns the sealed request id echoed by the already request-verified V2 response.
-    pub fn sealed_request_id(&self) -> &[u8; 32] {
-        self.source.authorized().response().request_id()
-    }
-
-    /// Returns the sealed request identity echoed by the already request-verified V2 response.
-    pub fn sealed_request_identity(&self) -> &[u8; 32] {
-        self.source.authorized().response().request_identity()
-    }
-
-    pub const fn response_identity(&self) -> SealedWorkerV2ResponseIdentityV1 {
-        self.response_identity
-    }
-
-    pub const fn linked_output_identity(&self) -> ContentIdentityV1 {
-        self.source.output_identity()
-    }
-
-    pub fn exact_bytes(&self) -> &[u8] {
-        self.source.output_bytes()
-    }
-
-    pub const fn target(&self) -> DeviceTargetV1 {
-        self.policy.target()
-    }
-
-    pub const fn code_object_version(&self) -> CodeObjectVersion {
-        self.policy.code_object_version()
-    }
-
-    pub const fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
-        &self.policy
-    }
-
-    pub const fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
-        self.descriptor_section
-    }
-
-    pub const fn canonical_descriptor_finalization_ran(&self) -> bool {
-        false
-    }
-
-    pub const fn authenticates_compiler_origin(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
-/// Stable identity of one closure-protected raw Worker V2 HSACO inspection.
-///
-/// This identity has a distinct transcript from [`InspectedRawWorkerV2HsacoIdentityV1`]. It binds
-/// the exact V2 handoff and complete compiler closure without representing either as V1 evidence.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct InspectedProtectedRawWorkerV2HsacoIdentityV1([u8; 32]);
-
-impl InspectedProtectedRawWorkerV2HsacoIdentityV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -566,174 +379,6 @@ impl InspectedProtectedRawWorkerV3HsacoV1 {
     }
 }
 
-/// Inert closure-protected evidence that exact Worker V2 output passed raw-HSACO inspection.
-///
-/// The exact V2 transaction identity and full compiler closure remain directly inspectable. The
-/// retained plan and bytes are borrow-only restart inputs; this value grants no compiler, link,
-/// publication, loading, or launch authority.
-#[derive(Debug, Eq, PartialEq)]
-pub struct InspectedProtectedRawWorkerV2HsacoV1 {
-    identity: InspectedProtectedRawWorkerV2HsacoIdentityV1,
-    response_identity: SealedWorkerV2ResponseIdentityV1,
-    descriptor_section: CanonicalDescriptorSectionObservationV1,
-    descriptor_observation_preimage: Vec<u8>,
-    abi_observation_preimage: Vec<u8>,
-    resource_observation_preimage: Vec<u8>,
-    policy: WorkerV2RawHsacoPolicyV1,
-    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
-}
-
-impl InspectedProtectedRawWorkerV2HsacoV1 {
-    pub const fn identity(&self) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
-        self.identity
-    }
-
-    /// Identity of the closure-protected first-build evidence consumed by this inspection.
-    pub const fn source_evidence_identity(&self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
-        self.source.identity()
-    }
-
-    /// Schema-neutral name for the protected evidence identity used by restart persistence.
-    pub const fn upstream_evidence_identity(&self) -> ProtectedFirstBuildWorkerV2IdentityV1 {
-        self.source_evidence_identity()
-    }
-
-    pub const fn attempt(&self) -> BuildAttempt {
-        self.source.attempt()
-    }
-
-    pub const fn handoff_slot(&self) -> CompilerModuleHandoffSlotV2 {
-        self.source.slot()
-    }
-
-    pub const fn handoff_identity(&self) -> CompilerModuleHandoffIdentityV2 {
-        self.source.handoff_identity()
-    }
-
-    pub const fn compiler_closure(&self) -> CompilerClosureV2 {
-        self.source.compiler_closure()
-    }
-
-    /// Returns the complete retained link plan for schema-neutral restart persistence.
-    pub const fn plan(&self) -> &MultiInputLinkPlanV1 {
-        self.source.plan()
-    }
-
-    pub const fn link_plan_identity(&self) -> crate::LinkPlanIdentityV1 {
-        self.source.link_plan_identity()
-    }
-
-    pub const fn worker_measurement(&self) -> &WorkerMeasurementV1 {
-        self.source.worker_measurement()
-    }
-
-    pub const fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
-        self.source.compiler_envelope_identity()
-    }
-
-    pub const fn sealed_compiler_envelope_identity(&self) -> WorkerCompilerFfiEnvelopeIdentityV2 {
-        self.source
-            .authorized()
-            .response()
-            .compiler_envelope_identity()
-    }
-
-    pub fn sealed_request_id(&self) -> &[u8; 32] {
-        self.source.authorized().response().request_id()
-    }
-
-    pub fn sealed_request_identity(&self) -> &[u8; 32] {
-        self.source.authorized().response().request_identity()
-    }
-
-    pub const fn response_identity(&self) -> SealedWorkerV2ResponseIdentityV1 {
-        self.response_identity
-    }
-
-    pub const fn linked_output_identity(&self) -> ContentIdentityV1 {
-        self.source.output_identity()
-    }
-
-    /// Borrows the exact inspected raw HSACO bytes for inert persistence or further inspection.
-    pub fn exact_bytes(&self) -> &[u8] {
-        self.source.output_bytes()
-    }
-
-    pub const fn target(&self) -> DeviceTargetV1 {
-        self.policy.target()
-    }
-
-    pub const fn code_object_version(&self) -> CodeObjectVersion {
-        self.policy.code_object_version()
-    }
-
-    pub const fn policy(&self) -> &WorkerV2RawHsacoPolicyV1 {
-        &self.policy
-    }
-
-    pub(crate) const fn source_evidence(&self) -> &InertProtectedFirstBuildWorkerV2EvidenceV1 {
-        &self.source
-    }
-
-    pub(crate) fn descriptor_observation_preimage(&self) -> &[u8] {
-        &self.descriptor_observation_preimage
-    }
-
-    pub(crate) fn abi_observation_preimage(&self) -> &[u8] {
-        &self.abi_observation_preimage
-    }
-
-    pub(crate) fn resource_observation_preimage(&self) -> &[u8] {
-        &self.resource_observation_preimage
-    }
-
-    pub(crate) fn observation_identities(&self) -> ([u8; 32], [u8; 32], [u8; 32]) {
-        (
-            calculate_observation_identity(
-                PROTECTED_DESCRIPTOR_DOMAIN_V1,
-                &self.descriptor_observation_preimage,
-            ),
-            calculate_observation_identity(PROTECTED_ABI_DOMAIN_V1, &self.abi_observation_preimage),
-            calculate_observation_identity(
-                PROTECTED_RESOURCES_DOMAIN_V1,
-                &self.resource_observation_preimage,
-            ),
-        )
-    }
-
-    pub const fn canonical_descriptor_section(&self) -> CanonicalDescriptorSectionObservationV1 {
-        self.descriptor_section
-    }
-
-    pub const fn canonical_descriptor_finalization_ran(&self) -> bool {
-        false
-    }
-
-    pub const fn authenticates_compiler_origin(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_compiler_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_link_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_publication_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_load_authority(&self) -> bool {
-        false
-    }
-
-    pub const fn grants_launch_authority(&self) -> bool {
-        false
-    }
-}
-
 /// Why sealed Worker V2 evidence failed independent raw-HSACO inspection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -763,22 +408,6 @@ pub enum WorkerV2RawHsacoInspectionError {
         expected: Vec<String>,
         actual: Vec<String>,
     },
-    RequiredWorkgroupSizeMismatch {
-        kernel: String,
-        actual: Option<[u32; 3]>,
-    },
-    MaxFlatWorkgroupSizeMismatch {
-        kernel: String,
-        actual: u32,
-    },
-    MetadataWavefrontSizeMismatch {
-        kernel: String,
-        actual: u32,
-    },
-    DescriptorWavefrontSizeMismatch {
-        kernel: String,
-        actual: u32,
-    },
     ProductionV1RequiredWorkgroupSizeMismatch {
         kernel: String,
         actual: Option<[u32; 3]>,
@@ -800,46 +429,6 @@ pub enum WorkerV2RawHsacoInspectionError {
         expected: u32,
     },
     StrictV3DescriptorLaunchContract(&'static str),
-    FlashAttentionV1RequiredWorkgroupSizeMismatch {
-        kernel: String,
-        actual: Option<[u32; 3]>,
-        expected: [u32; 3],
-    },
-    FlashAttentionV1MaxFlatWorkgroupSizeMismatch {
-        kernel: String,
-        actual: u32,
-        expected: u32,
-    },
-    FlashAttentionV1MetadataWavefrontSizeMismatch {
-        kernel: String,
-        actual: u32,
-        expected: u32,
-    },
-    FlashAttentionV1DescriptorWavefrontSizeMismatch {
-        kernel: String,
-        actual: u32,
-        expected: u32,
-    },
-    Wave64CollectivesV1RequiredWorkgroupSizeMismatch {
-        kernel: String,
-        actual: Option<[u32; 3]>,
-        expected: [u32; 3],
-    },
-    Wave64CollectivesV1MaxFlatWorkgroupSizeMismatch {
-        kernel: String,
-        actual: u32,
-        expected: u32,
-    },
-    Wave64CollectivesV1MetadataWavefrontSizeMismatch {
-        kernel: String,
-        actual: u32,
-        expected: u32,
-    },
-    Wave64CollectivesV1DescriptorWavefrontSizeMismatch {
-        kernel: String,
-        actual: u32,
-        expected: u32,
-    },
 }
 
 impl fmt::Display for WorkerV2RawHsacoInspectionError {
@@ -894,22 +483,6 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
                 formatter,
                 "defined raw HSACO symbols mismatch: expected {expected:?}, found {actual:?}"
             ),
-            Self::RequiredWorkgroupSizeMismatch { kernel, actual } => write!(
-                formatter,
-                "kernel {kernel} requires {actual:?}, expected {REQUIRED_WORKGROUP_SIZE:?}"
-            ),
-            Self::MaxFlatWorkgroupSizeMismatch { kernel, actual } => write!(
-                formatter,
-                "kernel {kernel} max flat workgroup is {actual}, expected {REQUIRED_MAX_FLAT_WORKGROUP_SIZE}"
-            ),
-            Self::MetadataWavefrontSizeMismatch { kernel, actual } => write!(
-                formatter,
-                "kernel {kernel} metadata wavefront is {actual}, expected {REQUIRED_WAVEFRONT_SIZE}"
-            ),
-            Self::DescriptorWavefrontSizeMismatch { kernel, actual } => write!(
-                formatter,
-                "kernel {kernel} descriptor wavefront is {actual}, expected {REQUIRED_WAVEFRONT_SIZE}"
-            ),
             Self::ProductionV1RequiredWorkgroupSizeMismatch {
                 kernel,
                 actual,
@@ -948,70 +521,6 @@ impl fmt::Display for WorkerV2RawHsacoInspectionError {
                     "strict V3 descriptor launch contract rejected {field}"
                 )
             }
-            Self::FlashAttentionV1RequiredWorkgroupSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "FlashAttention V1 kernel {kernel} requires {actual:?}, expected {expected:?}"
-            ),
-            Self::FlashAttentionV1MaxFlatWorkgroupSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "FlashAttention V1 kernel {kernel} max flat workgroup is {actual}, expected {expected}"
-            ),
-            Self::FlashAttentionV1MetadataWavefrontSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "FlashAttention V1 kernel {kernel} metadata wavefront is {actual}, expected {expected}"
-            ),
-            Self::FlashAttentionV1DescriptorWavefrontSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "FlashAttention V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
-            ),
-            Self::Wave64CollectivesV1RequiredWorkgroupSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "Wave64 collectives V1 kernel {kernel} requires {actual:?}, expected {expected:?}"
-            ),
-            Self::Wave64CollectivesV1MaxFlatWorkgroupSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "Wave64 collectives V1 kernel {kernel} max flat workgroup is {actual}, expected {expected}"
-            ),
-            Self::Wave64CollectivesV1MetadataWavefrontSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "Wave64 collectives V1 kernel {kernel} metadata wavefront is {actual}, expected {expected}"
-            ),
-            Self::Wave64CollectivesV1DescriptorWavefrontSizeMismatch {
-                kernel,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "Wave64 collectives V1 kernel {kernel} descriptor wavefront is {actual}, expected {expected}"
-            ),
         }
     }
 }
@@ -1025,61 +534,6 @@ impl Error for WorkerV2RawHsacoInspectionError {
     }
 }
 
-/// Consumes sealed first-build evidence and independently inspects its exact raw HSACO output.
-///
-/// No target, symbol, compiler-contract, or launch policy is accepted from the caller. Available
-/// symbol roles are recovered from the exact manifest retained in the first-build evidence.
-pub fn inspect_worker_v2_raw_hsaco_v1(
-    source: InertFirstBuildWorkerV2EvidenceV1,
-) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    inspect_worker_v2_raw_hsaco_with_launch_v1(
-        source,
-        WorkerV2RawLaunchContractV1::GFX942_G1,
-        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1,
-    )
-}
-
-/// Consumes sealed production-v1 evidence under its compiler-owned wave64 launch contract.
-///
-/// This route is closed over the current production compiler profile. The caller cannot supply or
-/// weaken its required 64-thread workgroup or wavefront properties.
-pub fn inspect_production_v1_worker_v2_raw_hsaco_v1(
-    source: InertFirstBuildWorkerV2EvidenceV1,
-) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    inspect_worker_v2_raw_hsaco_with_launch_v1(
-        source,
-        WorkerV2RawLaunchContractV1::PRODUCTION_V1,
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
-    )
-}
-
-/// Consumes closure-protected first-build evidence and inspects its exact raw HSACO output.
-///
-/// This route retains the exact V2 handoff identity and full compiler closure. It is side-by-side
-/// with [`inspect_worker_v2_raw_hsaco_v1`] and never converts protected lineage to V1.
-pub fn inspect_protected_worker_v2_raw_hsaco_v1(
-    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
-) -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
-        source,
-        WorkerV2RawLaunchContractV1::GFX942_G1,
-        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1,
-    )
-}
-
-/// Consumes closure-protected production-v1 evidence under the fixed wave64 launch contract.
-///
-/// The caller cannot supply or weaken the required 64-thread workgroup or wavefront properties.
-pub fn inspect_protected_production_v1_worker_v2_raw_hsaco_v1(
-    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
-) -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
-        source,
-        WorkerV2RawLaunchContractV1::PRODUCTION_V1,
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
-    )
-}
-
 /// Consumes native strict-V3 first-build evidence under its descriptor-bound production contract.
 ///
 /// The complete V3 transaction and outer semantic handoff remain owned by the result. This route
@@ -1091,11 +545,7 @@ pub fn inspect_protected_production_v1_worker_v3_raw_hsaco_v1(
 ) -> Result<InspectedProtectedRawWorkerV3HsacoV1, WorkerV2RawHsacoInspectionError> {
     validate_protected_v3_lineage(&source)?;
     let launch = strict_v3_launch_contract(&source)?;
-    let raw = inspect_worker_v2_raw_hsaco_shared_v1(
-        &source,
-        launch,
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
-    )?;
+    let raw = inspect_worker_v2_raw_hsaco_shared_v1(&source, launch)?;
     let response_identity =
         calculate_response_identity(source.exact_replay().response().canonical_bytes());
     let identity = calculate_protected_v3_inspection_identity(&source, &raw, response_identity);
@@ -1166,102 +616,12 @@ fn strict_v3_kernel_launch_contract(
     })
 }
 
-pub(crate) fn inspect_worker_v2_raw_hsaco_with_launch_v1(
-    source: InertFirstBuildWorkerV2EvidenceV1,
-    launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
-) -> Result<InspectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    validate_lineage(&source)?;
-    let raw = inspect_worker_v2_raw_hsaco_shared_v1(&source, launch, diagnostic_profile)?;
-    let response_identity =
-        calculate_response_identity(source.authorized().response().canonical_bytes());
-    let identity = calculate_inspection_identity(
-        &source,
-        &raw.policy,
-        response_identity,
-        raw.descriptor_section,
-    );
-    Ok(InspectedRawWorkerV2HsacoV1 {
-        identity,
-        response_identity,
-        descriptor_section: raw.descriptor_section,
-        policy: raw.policy,
-        source,
-    })
-}
-
-fn inspect_protected_worker_v2_raw_hsaco_with_launch_v1(
-    source: InertProtectedFirstBuildWorkerV2EvidenceV1,
-    launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
-) -> Result<InspectedProtectedRawWorkerV2HsacoV1, WorkerV2RawHsacoInspectionError> {
-    validate_protected_lineage(&source)?;
-    let raw = inspect_worker_v2_raw_hsaco_shared_v1(&source, launch, diagnostic_profile)?;
-    let response_identity =
-        calculate_response_identity(source.authorized().response().canonical_bytes());
-    let identity = calculate_protected_inspection_identity(&source, &raw, response_identity);
-    Ok(InspectedProtectedRawWorkerV2HsacoV1 {
-        identity,
-        response_identity,
-        descriptor_section: raw.descriptor_section,
-        descriptor_observation_preimage: raw.descriptor_observation_preimage,
-        abi_observation_preimage: raw.abi_observation_preimage,
-        resource_observation_preimage: raw.resource_observation_preimage,
-        policy: raw.policy,
-        source,
-    })
-}
-
 trait RawWorkerV2HsacoSourceV1 {
     fn plan(&self) -> &MultiInputLinkPlanV1;
     fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1;
     fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1;
     fn output_identity(&self) -> ContentIdentityV1;
     fn output_bytes(&self) -> &[u8];
-}
-
-impl RawWorkerV2HsacoSourceV1 for InertFirstBuildWorkerV2EvidenceV1 {
-    fn plan(&self) -> &MultiInputLinkPlanV1 {
-        self.plan()
-    }
-
-    fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
-        self.symbol_manifest()
-    }
-
-    fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
-        self.compiler_envelope_identity()
-    }
-
-    fn output_identity(&self) -> ContentIdentityV1 {
-        self.output_identity()
-    }
-
-    fn output_bytes(&self) -> &[u8] {
-        self.output_bytes()
-    }
-}
-
-impl RawWorkerV2HsacoSourceV1 for InertProtectedFirstBuildWorkerV2EvidenceV1 {
-    fn plan(&self) -> &MultiInputLinkPlanV1 {
-        self.plan()
-    }
-
-    fn symbol_manifest(&self) -> &CompilerModuleSymbolManifestV1 {
-        self.symbol_manifest()
-    }
-
-    fn compiler_envelope_identity(&self) -> CompilerFfiEnvelopeIdentityV1 {
-        self.compiler_envelope_identity()
-    }
-
-    fn output_identity(&self) -> ContentIdentityV1 {
-        self.output_identity()
-    }
-
-    fn output_bytes(&self) -> &[u8] {
-        self.output_bytes()
-    }
 }
 
 impl RawWorkerV2HsacoSourceV1 for InertProtectedFirstBuildWorkerV3EvidenceV1 {
@@ -1300,10 +660,9 @@ pub(crate) struct SharedRawWorkerV2HsacoInspectionV1 {
 fn inspect_worker_v2_raw_hsaco_shared_v1(
     source: &impl RawWorkerV2HsacoSourceV1,
     launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
 ) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV2RawHsacoInspectionError> {
     let target = source.plan().target();
-    if !target_is_supported_for_profile(target, diagnostic_profile) {
+    if !target_is_supported(target) {
         return Err(WorkerV2RawHsacoInspectionError::UnsupportedTarget(
             target.to_string(),
         ));
@@ -1318,7 +677,6 @@ fn inspect_worker_v2_raw_hsaco_shared_v1(
         source.output_identity(),
         source.output_bytes(),
         launch,
-        diagnostic_profile,
     )
 }
 
@@ -1331,9 +689,8 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
     output_identity: ContentIdentityV1,
     exact_bytes: &[u8],
     launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
 ) -> Result<SharedRawWorkerV2HsacoInspectionV1, WorkerV2RawHsacoInspectionError> {
-    if !target_is_supported_for_profile(target, diagnostic_profile) {
+    if !target_is_supported(target) {
         return Err(WorkerV2RawHsacoInspectionError::UnsupportedTarget(
             target.to_string(),
         ));
@@ -1409,7 +766,6 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         if kernel.required_workgroup_size() != Some(launch.required_workgroup_size()) {
             return Err(required_workgroup_size_mismatch(
                 launch,
-                diagnostic_profile,
                 kernel.name(),
                 kernel.required_workgroup_size(),
             ));
@@ -1417,7 +773,6 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         if kernel.max_flat_workgroup_size() != launch.max_flat_workgroup_size() {
             return Err(max_flat_workgroup_size_mismatch(
                 launch,
-                diagnostic_profile,
                 kernel.name(),
                 kernel.max_flat_workgroup_size(),
             ));
@@ -1425,7 +780,6 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         if kernel.wavefront_size() != launch.wavefront_size() {
             return Err(metadata_wavefront_size_mismatch(
                 launch,
-                diagnostic_profile,
                 kernel.name(),
                 kernel.wavefront_size(),
             ));
@@ -1434,7 +788,6 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
         if descriptor_wavefront != launch.wavefront_size() {
             return Err(descriptor_wavefront_size_mismatch(
                 launch,
-                diagnostic_profile,
                 kernel.name(),
                 descriptor_wavefront,
             ));
@@ -1486,285 +839,60 @@ pub(crate) fn inspect_worker_v2_raw_hsaco_preimage_v1(
     })
 }
 
-fn target_is_supported_for_profile(
-    target: DeviceTargetV1,
-    profile: WorkerV2RawLaunchDiagnosticProfileV1,
-) -> bool {
+fn target_is_supported(target: DeviceTargetV1) -> bool {
     let target = target.to_string();
-    if profile == WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 {
-        matches!(
-            target.as_str(),
-            PRODUCTION_GFX942_TARGET | PRODUCTION_GFX950_TARGET
-        )
-    } else {
-        target == PRODUCTION_GFX942_TARGET
-    }
+    matches!(
+        target.as_str(),
+        PRODUCTION_GFX942_TARGET | PRODUCTION_GFX950_TARGET
+    )
 }
 
 fn required_workgroup_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: Option<[u32; 3]>,
 ) -> WorkerV2RawHsacoInspectionError {
-    match diagnostic_profile {
-        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
-            WorkerV2RawHsacoInspectionError::RequiredWorkgroupSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-            }
-        }
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
-            WorkerV2RawHsacoInspectionError::ProductionV1RequiredWorkgroupSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-                expected: launch.required_workgroup_size(),
-            }
-        }
+    WorkerV2RawHsacoInspectionError::ProductionV1RequiredWorkgroupSizeMismatch {
+        kernel: kernel.to_owned(),
+        actual,
+        expected: launch.required_workgroup_size(),
     }
 }
 
 fn max_flat_workgroup_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: u32,
 ) -> WorkerV2RawHsacoInspectionError {
-    match diagnostic_profile {
-        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
-            WorkerV2RawHsacoInspectionError::MaxFlatWorkgroupSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-            }
-        }
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
-            WorkerV2RawHsacoInspectionError::ProductionV1MaxFlatWorkgroupSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-                expected: launch.max_flat_workgroup_size(),
-            }
-        }
+    WorkerV2RawHsacoInspectionError::ProductionV1MaxFlatWorkgroupSizeMismatch {
+        kernel: kernel.to_owned(),
+        actual,
+        expected: launch.max_flat_workgroup_size(),
     }
 }
 
 fn metadata_wavefront_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: u32,
 ) -> WorkerV2RawHsacoInspectionError {
-    match diagnostic_profile {
-        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
-            WorkerV2RawHsacoInspectionError::MetadataWavefrontSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-            }
-        }
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
-            WorkerV2RawHsacoInspectionError::ProductionV1MetadataWavefrontSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-                expected: launch.wavefront_size(),
-            }
-        }
+    WorkerV2RawHsacoInspectionError::ProductionV1MetadataWavefrontSizeMismatch {
+        kernel: kernel.to_owned(),
+        actual,
+        expected: launch.wavefront_size(),
     }
 }
 
 fn descriptor_wavefront_size_mismatch(
     launch: WorkerV2RawLaunchContractV1,
-    diagnostic_profile: WorkerV2RawLaunchDiagnosticProfileV1,
     kernel: &str,
     actual: u32,
 ) -> WorkerV2RawHsacoInspectionError {
-    match diagnostic_profile {
-        WorkerV2RawLaunchDiagnosticProfileV1::LegacyGfx942G1 => {
-            WorkerV2RawHsacoInspectionError::DescriptorWavefrontSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-            }
-        }
-        WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1 => {
-            WorkerV2RawHsacoInspectionError::ProductionV1DescriptorWavefrontSizeMismatch {
-                kernel: kernel.to_owned(),
-                actual,
-                expected: launch.wavefront_size(),
-            }
-        }
+    WorkerV2RawHsacoInspectionError::ProductionV1DescriptorWavefrontSizeMismatch {
+        kernel: kernel.to_owned(),
+        actual,
+        expected: launch.wavefront_size(),
     }
-}
-
-fn validate_lineage(
-    source: &InertFirstBuildWorkerV2EvidenceV1,
-) -> Result<(), WorkerV2RawHsacoInspectionError> {
-    let authorized = source.authorized();
-    let response = authorized.response();
-    if source.attempt() != authorized.attempt() {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "build attempt",
-        ));
-    }
-    if source.handoff_identity() != authorized.handoff_identity() {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "handoff identity",
-        ));
-    }
-    if source.compiler_envelope().target().to_string() != source.plan().target().to_string()
-        || map_compiler_code_object_version(source.compiler_envelope().code_object_version())
-            != decode_link_options(source.plan().options())
-                .map_err(|_| WorkerV2RawHsacoInspectionError::LinkPolicy)?
-                .0
-    {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "compiler envelope target/code-object version",
-        ));
-    }
-    if response.compiler_envelope_identity().as_bytes()
-        != source.compiler_envelope_identity().as_bytes()
-    {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "compiler envelope identity",
-        ));
-    }
-    let directional = source.compiler_envelope().directional_symbols();
-    if !source
-        .symbol_manifest()
-        .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
-        .eq(directional.imports())
-    {
-        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
-    }
-    if !source
-        .symbol_manifest()
-        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
-        .eq(directional.exports())
-    {
-        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
-    }
-    if source.worker_measurement().executable() != authorized.worker_executable()
-        || source.worker_measurement().worker_build_identity() != response.worker_build_identity()
-    {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "worker measurement",
-        ));
-    }
-    let output = response
-        .output()
-        .ok_or(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "missing linked output",
-        ))?;
-    if output.identity() != source.output_identity()
-        || output.request_identity() != response.request_identity()
-        || output.compiler_envelope_identity() != response.compiler_envelope_identity()
-    {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "sealed request/response/output identity",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_protected_lineage(
-    source: &InertProtectedFirstBuildWorkerV2EvidenceV1,
-) -> Result<(), WorkerV2RawHsacoInspectionError> {
-    let bootstrap = source.bootstrap();
-    let authorized = source.authorized();
-    for execution in [bootstrap, authorized] {
-        if source.attempt() != execution.attempt() {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected build attempt",
-            ));
-        }
-        if source.slot() != execution.slot() {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected handoff slot",
-            ));
-        }
-        if source.handoff_identity() != execution.handoff_identity() {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected V2 handoff identity",
-            ));
-        }
-        if source.compiler_closure() != execution.compiler_closure() {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected compiler closure",
-            ));
-        }
-        if source.worker_measurement().executable() != execution.worker_executable()
-            || source.worker_measurement().worker_build_identity()
-                != execution.response().worker_build_identity()
-        {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected worker measurement",
-            ));
-        }
-        if execution.response().compiler_envelope_identity().as_bytes()
-            != source.compiler_envelope_identity().as_bytes()
-        {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected compiler envelope identity",
-            ));
-        }
-    }
-
-    if source.compiler_envelope().target().to_string() != source.plan().target().to_string()
-        || map_compiler_code_object_version(source.compiler_envelope().code_object_version())
-            != decode_link_options(source.plan().options())
-                .map_err(|_| WorkerV2RawHsacoInspectionError::LinkPolicy)?
-                .0
-    {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "protected compiler envelope target/code-object version",
-        ));
-    }
-    let directional = source.compiler_envelope().directional_symbols();
-    if !source
-        .symbol_manifest()
-        .symbols(CompilerModuleSymbolRoleV1::UnresolvedExternalImport)
-        .eq(directional.imports())
-    {
-        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeImportRoleMismatch);
-    }
-    if !source
-        .symbol_manifest()
-        .symbols(CompilerModuleSymbolRoleV1::DeviceFfiExport)
-        .eq(directional.exports())
-    {
-        return Err(WorkerV2RawHsacoInspectionError::CompilerEnvelopeExportRoleMismatch);
-    }
-
-    let bootstrap_response = bootstrap.response();
-    let bootstrap_output =
-        bootstrap_response
-            .output()
-            .ok_or(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "missing protected bootstrap output",
-            ))?;
-    let authorized_response = authorized.response();
-    let authorized_output =
-        authorized_response
-            .output()
-            .ok_or(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "missing protected linked output",
-            ))?;
-    for (response, output) in [
-        (bootstrap_response, bootstrap_output),
-        (authorized_response, authorized_output),
-    ] {
-        if output.identity() != source.output_identity()
-            || output.request_identity() != response.request_identity()
-            || output.compiler_envelope_identity() != response.compiler_envelope_identity()
-        {
-            return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-                "protected sealed request/response/output identity",
-            ));
-        }
-    }
-    if bootstrap_output.bytes() != authorized_output.bytes() {
-        return Err(WorkerV2RawHsacoInspectionError::LineageMismatch(
-            "protected reproducible output bytes",
-        ));
-    }
-    Ok(())
 }
 
 fn validate_protected_v3_lineage(
@@ -2469,64 +1597,6 @@ pub(crate) fn calculate_response_identity_bytes_v1(bytes: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn calculate_inspection_identity(
-    source: &InertFirstBuildWorkerV2EvidenceV1,
-    policy: &WorkerV2RawHsacoPolicyV1,
-    response: SealedWorkerV2ResponseIdentityV1,
-    descriptor_section: CanonicalDescriptorSectionObservationV1,
-) -> InspectedRawWorkerV2HsacoIdentityV1 {
-    let worker = source.worker_measurement();
-    let sealed_response = source.authorized().response();
-    let mut hasher = Sha256::new();
-    hasher.update(INSPECTION_IDENTITY_DOMAIN_V1);
-    hasher.update(source.identity().as_bytes());
-    hash_attempt(&mut hasher, source.attempt());
-    hasher.update(source.handoff_identity().as_bytes());
-    hash_content(&mut hasher, worker.executable());
-    hash_text(&mut hasher, worker.worker_build_identity());
-    hash_text(&mut hasher, worker.llvm_build_identity());
-    hasher.update(sealed_response.request_id());
-    hasher.update(sealed_response.request_identity());
-    hasher.update(response.0);
-    hash_content(&mut hasher, source.output_identity());
-    hash_text(&mut hasher, &policy.target.to_string());
-    hasher.update([code_object_version_tag(policy.code_object_version)]);
-    hasher.update(policy.identity.0);
-    hasher.update([descriptor_section_tag(descriptor_section)]);
-    InspectedRawWorkerV2HsacoIdentityV1(hasher.finalize().into())
-}
-
-fn calculate_protected_inspection_identity(
-    source: &InertProtectedFirstBuildWorkerV2EvidenceV1,
-    raw: &SharedRawWorkerV2HsacoInspectionV1,
-    response: SealedWorkerV2ResponseIdentityV1,
-) -> InspectedProtectedRawWorkerV2HsacoIdentityV1 {
-    InspectedProtectedRawWorkerV2HsacoIdentityV1(calculate_protected_inspection_identity_v2(
-        &ProtectedInspectionIdentityPreimageV2 {
-            source_identity: *source.identity().as_bytes(),
-            attempt: source.attempt(),
-            slot: source.slot(),
-            handoff_identity: source.handoff_identity(),
-            compiler_closure: source.compiler_closure(),
-            worker: source.worker_measurement(),
-            bootstrap_request_bytes: source.bootstrap_request_bytes(),
-            bootstrap_response_bytes: source.bootstrap().response().canonical_bytes(),
-            authorized_request_bytes: source.authorized_request_bytes(),
-            authorized_response_bytes: source.authorized().response().canonical_bytes(),
-            response_identity: response.0,
-            raw_output_identity: source.output_identity(),
-            exact_raw_bytes: source.output_bytes(),
-            target: raw.policy.target,
-            code_object_version: raw.policy.code_object_version,
-            policy_identity: raw.policy.identity.0,
-            descriptor_section: raw.descriptor_section,
-            descriptor_identity: raw.descriptor_identity,
-            abi_identity: raw.abi_identity,
-            resource_identity: raw.resource_identity,
-        },
-    ))
-}
-
 fn calculate_protected_v3_inspection_identity(
     source: &InertProtectedFirstBuildWorkerV3EvidenceV1,
     raw: &SharedRawWorkerV2HsacoInspectionV1,
@@ -2581,102 +1651,6 @@ fn calculate_protected_v3_inspection_identity(
     hasher.update(raw.abi_identity);
     hasher.update(raw.resource_identity);
     InspectedProtectedRawWorkerV3HsacoIdentityV1(hasher.finalize().into())
-}
-
-pub(crate) struct ProtectedInspectionIdentityPreimageV2<'a> {
-    pub(crate) source_identity: [u8; 32],
-    pub(crate) attempt: BuildAttempt,
-    pub(crate) slot: CompilerModuleHandoffSlotV2,
-    pub(crate) handoff_identity: CompilerModuleHandoffIdentityV2,
-    pub(crate) compiler_closure: CompilerClosureV2,
-    pub(crate) worker: &'a WorkerMeasurementV1,
-    pub(crate) bootstrap_request_bytes: &'a [u8],
-    pub(crate) bootstrap_response_bytes: &'a [u8],
-    pub(crate) authorized_request_bytes: &'a [u8],
-    pub(crate) authorized_response_bytes: &'a [u8],
-    pub(crate) response_identity: [u8; 32],
-    pub(crate) raw_output_identity: ContentIdentityV1,
-    pub(crate) exact_raw_bytes: &'a [u8],
-    pub(crate) target: DeviceTargetV1,
-    pub(crate) code_object_version: CodeObjectVersion,
-    pub(crate) policy_identity: [u8; 32],
-    pub(crate) descriptor_section: CanonicalDescriptorSectionObservationV1,
-    pub(crate) descriptor_identity: [u8; 32],
-    pub(crate) abi_identity: [u8; 32],
-    pub(crate) resource_identity: [u8; 32],
-}
-
-pub(crate) fn calculate_protected_inspection_identity_v2(
-    preimage: &ProtectedInspectionIdentityPreimageV2<'_>,
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(PROTECTED_INSPECTION_IDENTITY_DOMAIN_V1);
-    hasher.update(protected_component_identity(
-        PROTECTED_SOURCE_EVIDENCE_DOMAIN_V1,
-        |component| component.update(preimage.source_identity),
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_ATTEMPT_DOMAIN_V1,
-        |component| hash_attempt(component, preimage.attempt),
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_HANDOFF_DOMAIN_V2,
-        |component| {
-            component.update([preimage.slot as u8]);
-            component.update(preimage.handoff_identity.as_bytes());
-        },
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_COMPILER_CLOSURE_DOMAIN_V2,
-        |component| hash_compiler_closure_v2(component, preimage.compiler_closure),
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_WORKER_EXCHANGE_DOMAIN_V1,
-        |component| {
-            let worker = preimage.worker;
-            hash_content(component, worker.executable());
-            hash_text(component, worker.worker_build_identity());
-            hash_text(component, worker.llvm_build_identity());
-            hash_bytes(component, preimage.bootstrap_request_bytes);
-            hash_bytes(component, preimage.bootstrap_response_bytes);
-            hash_bytes(component, preimage.authorized_request_bytes);
-            hash_bytes(component, preimage.authorized_response_bytes);
-            component.update(preimage.response_identity);
-        },
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_RAW_BYTES_DOMAIN_V1,
-        |component| {
-            hash_content(component, preimage.raw_output_identity);
-            hash_bytes(component, preimage.exact_raw_bytes);
-        },
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_TARGET_DOMAIN_V1,
-        |component| hash_text(component, &preimage.target.to_string()),
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_CODE_OBJECT_VERSION_DOMAIN_V1,
-        |component| component.update([code_object_version_tag(preimage.code_object_version)]),
-    ));
-    hasher.update(protected_component_identity(
-        PROTECTED_POLICY_DOMAIN_V1,
-        |component| {
-            component.update(preimage.policy_identity);
-            component.update([descriptor_section_tag(preimage.descriptor_section)]);
-        },
-    ));
-    hasher.update(preimage.descriptor_identity);
-    hasher.update(preimage.abi_identity);
-    hasher.update(preimage.resource_identity);
-    hasher.finalize().into()
-}
-
-fn protected_component_identity(domain: &[u8], update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    update(&mut hasher);
-    hasher.finalize().into()
 }
 
 fn hash_attempt(hasher: &mut Sha256, attempt: BuildAttempt) {
@@ -2772,9 +1746,8 @@ mod exact_production_target_tests {
     #[test]
     fn production_raw_hsaco_admission_accepts_only_canonical_production_targets() {
         for accepted in [PRODUCTION_GFX942_TARGET, PRODUCTION_GFX950_TARGET] {
-            assert!(target_is_supported_for_profile(
-                DeviceTargetV1::parse(accepted).unwrap(),
-                WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+            assert!(target_is_supported(
+                DeviceTargetV1::parse(accepted).unwrap()
             ));
         }
 
@@ -2787,9 +1760,8 @@ mod exact_production_target_tests {
             "gfx950:sramecc+:xnack-",
             "gfx90a:xnack-",
         ] {
-            assert!(!target_is_supported_for_profile(
-                DeviceTargetV1::parse(rejected).unwrap(),
-                WorkerV2RawLaunchDiagnosticProfileV1::ProductionV1,
+            assert!(!target_is_supported(
+                DeviceTargetV1::parse(rejected).unwrap()
             ));
         }
     }
