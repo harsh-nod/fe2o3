@@ -247,6 +247,7 @@ pub enum ProductionSessionErrorV1 {
     RankedWorkgroup(fe2o3_kernel_analysis::PlironWorkgroupMemoryCheckErrorV1),
     RankedSemantic(fe2o3_kernel_analysis::PlironSemanticRefinementCheckErrorV1),
     RankedPassPreservation(fe2o3_kernel_analysis::PlironPassPreservationErrorV1),
+    RankedReportValidation(fe2o3_kernel_analysis::ProductionAnalysisReportValidationErrorV1),
     Operation(OperationHandleError),
 }
 
@@ -291,6 +292,9 @@ impl ProductionSessionErrorV1 {
             }
             Self::RankedPassPreservation(error) => {
                 vec![fe2o3_kernel_analysis::pass_preservation_repair_for_error_v1(error)]
+            }
+            Self::RankedReportValidation(error) => {
+                vec![fe2o3_kernel_analysis::report_validation_repair_for_error_v1(error)]
             }
             _ => Vec::new(),
         }
@@ -338,6 +342,7 @@ impl fmt::Display for ProductionSessionErrorV1 {
             Self::RankedWorkgroup(error) => error.fmt(formatter),
             Self::RankedSemantic(error) => error.fmt(formatter),
             Self::RankedPassPreservation(error) => error.fmt(formatter),
+            Self::RankedReportValidation(error) => error.fmt(formatter),
             Self::Operation(_) => formatter.write_str("production Pliron operation failed"),
         }?;
         for repair in self.repair_hints() {
@@ -361,6 +366,7 @@ impl Error for ProductionSessionErrorV1 {
             Self::RankedWorkgroup(error) => Some(error),
             Self::RankedSemantic(error) => Some(error),
             Self::RankedPassPreservation(error) => Some(error),
+            Self::RankedReportValidation(error) => Some(error),
             _ => None,
         }
     }

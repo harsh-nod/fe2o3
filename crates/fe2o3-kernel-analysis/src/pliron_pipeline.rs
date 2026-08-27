@@ -10,11 +10,16 @@ use crate::pliron_hierarchical_ownership::require_pliron_hierarchical_ownership_
 use crate::pliron_ir_identity::LivePlironStructuralIdentityProviderV1;
 use crate::pliron_launch_contract::require_pliron_launch_contract_before_lowering_v1;
 use crate::pliron_pass_contract::{
-    PlironPassPreservationErrorV1, PlironPassPreservationReportV1,
+    PlironPassContractSessionV1, PlironPassPreservationErrorV1, PlironPassPreservationReportV1,
     begin_production_pliron_pass_contract_session_v1,
 };
 use crate::pliron_race::require_pliron_ranked_race_freedom_with_analyses_v1;
 use crate::pliron_ranked_bounds::require_pliron_ranked_bounds_with_analyses_v1;
+use crate::pliron_report_validation::{
+    ProductionAnalysisReportValidationErrorV1, ProductionAnalysisReportValidationSessionV1,
+    ProductionAnalysisReportValidationV1, SealedProductionAnalysisReportV1,
+    begin_production_analysis_report_validation_v1,
+};
 use crate::pliron_semantic_refinement::require_pliron_semantic_refinement_with_analyses_v1;
 use crate::pliron_tensor_layout::require_pliron_tensor_layout_with_analyses_v1;
 use crate::pliron_workgroup_memory::require_pliron_workgroup_memory_with_analyses_v1;
@@ -232,6 +237,17 @@ pub fn pass_preservation_repair_for_error_v1(
         action,
         KernelCheckRepairApplicabilityV1::Manual,
         message,
+    )
+}
+
+pub fn report_validation_repair_for_error_v1(
+    _error: &ProductionAnalysisReportValidationErrorV1,
+) -> KernelCheckRepairV1 {
+    KernelCheckRepairV1::new(
+        KernelCheckPassKindV1::Structural,
+        KernelCheckRepairActionV1::PreservePassSemantics,
+        KernelCheckRepairApplicabilityV1::Manual,
+        "compiler maintainer: discard the report and rerun the fixed analysis sequence on the exact live PLIRON checkpoint with the sealed implementation and configuration",
     )
 }
 
@@ -530,6 +546,7 @@ pub struct ProductionPlironPreloweringReportV2 {
     workgroup: PlironWorkgroupMemoryReportV1,
     semantics: PlironSemanticRefinementReportV1,
     preservation: PlironPassPreservationReportV1,
+    report_validation: ProductionAnalysisReportValidationV1,
 }
 
 impl ProductionPlironPreloweringReportV2 {
@@ -581,6 +598,13 @@ impl ProductionPlironPreloweringReportV2 {
         &self.preservation
     }
 
+    /// Provenance/integrity result and the explicit independent-witness gaps
+    /// for the eight reports. This is separate from [`Self::status`]: a clean
+    /// policy result is useful diagnostics but is not proof authority.
+    pub const fn report_validation(&self) -> &ProductionAnalysisReportValidationV1 {
+        &self.report_validation
+    }
+
     pub fn status(&self) -> KernelCheckStatusV1 {
         self.target_contract
             .as_ref()
@@ -626,6 +650,7 @@ pub enum ProductionPlironPreloweringErrorV2 {
     Workgroup(PlironWorkgroupMemoryCheckErrorV1),
     Semantic(PlironSemanticRefinementCheckErrorV1),
     Preservation(PlironPassPreservationErrorV1),
+    ReportValidation(ProductionAnalysisReportValidationErrorV1),
 }
 
 impl ProductionPlironPreloweringErrorV2 {
@@ -646,6 +671,9 @@ impl ProductionPlironPreloweringErrorV2 {
             Self::Preservation(error) => {
                 return vec![pass_preservation_repair_for_error_v1(error)];
             }
+            Self::ReportValidation(error) => {
+                return vec![report_validation_repair_for_error_v1(error)];
+            }
         };
         vec![kernel_check_repair_for_pass_v1(repair)]
     }
@@ -664,6 +692,7 @@ impl fmt::Display for ProductionPlironPreloweringErrorV2 {
             Self::Workgroup(error) => error.fmt(formatter),
             Self::Semantic(error) => error.fmt(formatter),
             Self::Preservation(error) => error.fmt(formatter),
+            Self::ReportValidation(error) => error.fmt(formatter),
         }?;
         write_repairs(formatter, &self.repair_hints())
     }
@@ -682,6 +711,7 @@ impl Error for ProductionPlironPreloweringErrorV2 {
             Self::Workgroup(error) => Some(error),
             Self::Semantic(error) => Some(error),
             Self::Preservation(error) => Some(error),
+            Self::ReportValidation(error) => Some(error),
         }
     }
 }
@@ -725,6 +755,31 @@ pub fn require_production_pliron_checks_with_atomic_and_target_before_lowering_v
     )
 }
 
+fn run_and_record_production_analysis_stage_v1<T, E>(
+    context: &Context,
+    function: &FuncOp,
+    preservation: &mut PlironPassContractSessionV1<LivePlironStructuralIdentityProviderV1<'_>>,
+    validation: &mut ProductionAnalysisReportValidationSessionV1<'_>,
+    pass: KernelCheckPassKindV1,
+    execute: impl FnOnce() -> Result<T, E>,
+) -> Result<Result<T, E>, ProductionPlironPreloweringErrorV2>
+where
+    T: SealedProductionAnalysisReportV1,
+{
+    let result = preservation
+        .run_contiguous_pass(pass, execute)
+        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?;
+    if let Ok(report) = &result {
+        let checkpoint = preservation
+            .last_checkpoint()
+            .map_err(ProductionPlironPreloweringErrorV2::Preservation)?;
+        validation
+            .record(context, function, checkpoint, report)
+            .map_err(ProductionPlironPreloweringErrorV2::ReportValidation)?;
+    }
+    Ok(result)
+}
+
 fn require_production_pliron_checks_v2(
     context: &Context,
     function: &FuncOp,
@@ -739,64 +794,98 @@ fn require_production_pliron_checks_v2(
     let provider = LivePlironStructuralIdentityProviderV1::new(context, function);
     let mut preservation = begin_production_pliron_pass_contract_session_v1(provider)
         .map_err(ProductionPlironPreloweringErrorV2::Preservation)?;
-    let tensor_layout = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
-            require_pliron_tensor_layout_with_analyses_v1(context, function, &mut analyses)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::TensorLayout)?;
-    let bounds = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::MemoryBounds, || {
-            require_pliron_ranked_bounds_with_analyses_v1(context, function, &mut analyses)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::Bounds)?;
-    let atomics = preservation
-        .run_contiguous_pass(
-            KernelCheckPassKindV1::AtomicLegality,
-            || match atomic_target {
-                Some(target) => require_pliron_atomic_legality_with_target_before_lowering_v1(
-                    context, function, target,
-                ),
-                None => require_pliron_atomic_legality_before_lowering_v1(context, function),
-            },
-        )
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::Atomic)?;
-    let race = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::RaceFreedom, || {
-            require_pliron_ranked_race_freedom_with_analyses_v1(context, function, &mut analyses)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::Race)?;
-    let ownership = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::HierarchicalOwnership, || {
-            require_pliron_hierarchical_ownership_with_analyses_v1(context, function, &mut analyses)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::Ownership)?;
-    let barriers = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::BarrierConvergence, || {
-            require_pliron_barrier_convergence_with_analyses_v1(context, function, &mut analyses)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::Barrier)?;
-    let workgroup = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::WorkgroupMemory, || {
-            require_pliron_workgroup_memory_with_analyses_v1(context, function, &mut analyses)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(ProductionPlironPreloweringErrorV2::Workgroup)?;
-    let semantics = preservation
-        .run_contiguous_pass(KernelCheckPassKindV1::SemanticRefinement, || {
+    let mut report_validation = begin_production_analysis_report_validation_v1(
+        context,
+        function,
+        atomic_target,
+        preservation.validation_handle(),
+    );
+    let tensor_layout = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::TensorLayout,
+        || require_pliron_tensor_layout_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::TensorLayout)?;
+    let bounds = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::MemoryBounds,
+        || require_pliron_ranked_bounds_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::Bounds)?;
+    let atomics = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::AtomicLegality,
+        || match atomic_target {
+            Some(target) => require_pliron_atomic_legality_with_target_before_lowering_v1(
+                context, function, target,
+            ),
+            None => require_pliron_atomic_legality_before_lowering_v1(context, function),
+        },
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::Atomic)?;
+    let race = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::RaceFreedom,
+        || require_pliron_ranked_race_freedom_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::Race)?;
+    let ownership = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::HierarchicalOwnership,
+        || require_pliron_hierarchical_ownership_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::Ownership)?;
+    let barriers = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::BarrierConvergence,
+        || require_pliron_barrier_convergence_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::Barrier)?;
+    let workgroup = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::WorkgroupMemory,
+        || require_pliron_workgroup_memory_with_analyses_v1(context, function, &mut analyses),
+    )?
+    .map_err(ProductionPlironPreloweringErrorV2::Workgroup)?;
+    let semantics = run_and_record_production_analysis_stage_v1(
+        context,
+        function,
+        &mut preservation,
+        &mut report_validation,
+        KernelCheckPassKindV1::SemanticRefinement,
+        || {
             require_pliron_semantic_refinement_with_analyses_v1(context, function, &mut analyses)
                 .map_err(Box::new)
-        })
-        .map_err(ProductionPlironPreloweringErrorV2::Preservation)?
-        .map_err(|error| ProductionPlironPreloweringErrorV2::Semantic(*error))?;
+        },
+    )?
+    .map_err(|error| ProductionPlironPreloweringErrorV2::Semantic(*error))?;
     let preservation = preservation
         .finish()
         .map_err(ProductionPlironPreloweringErrorV2::Preservation)?;
+    let report_validation = report_validation
+        .finish_validation(&preservation)
+        .map_err(ProductionPlironPreloweringErrorV2::ReportValidation)?;
     Ok(ProductionPlironPreloweringReportV2 {
         target_contract,
         tensor_layout,
@@ -808,6 +897,7 @@ fn require_production_pliron_checks_v2(
         workgroup,
         semantics,
         preservation,
+        report_validation,
     })
 }
 

@@ -99,12 +99,57 @@ impl PlironPassPreservationCertificateV1 {
     }
 }
 
+/// Crate-private custody handle shared with the report-validation session.
+/// Public labels cannot construct it because acceptance also requires pointer
+/// identity of the private custody allocation.
+pub(crate) struct PlironPassValidationHandleV1 {
+    custody: Arc<()>,
+    input_identity: PlironStructuralIdentityLabelV1,
+}
+
+impl PlironPassValidationHandleV1 {
+    pub(crate) fn same_custody(&self, checkpoint: &PlironPassCheckpointTokenV1) -> bool {
+        Arc::ptr_eq(&self.custody, &checkpoint.custody)
+    }
+
+    pub(crate) fn same_report_custody(&self, report: &PlironPassPreservationReportV1) -> bool {
+        Arc::ptr_eq(&self.custody, &report.custody)
+    }
+
+    pub(crate) const fn input_identity(&self) -> PlironStructuralIdentityLabelV1 {
+        self.input_identity
+    }
+}
+
+/// Unforgeable compiler checkpoint minted only after exact post-pass byte
+/// comparison succeeds. It is small; canonical bytes remain in the provider
+/// lineage and are retained once at session completion.
+pub(crate) struct PlironPassCheckpointTokenV1 {
+    custody: Arc<()>,
+    position: usize,
+    pass: KernelCheckPassKindV1,
+    identity: PlironStructuralIdentityLabelV1,
+}
+
+impl PlironPassCheckpointTokenV1 {
+    pub(crate) const fn position(&self) -> usize {
+        self.position
+    }
+    pub(crate) const fn pass(&self) -> KernelCheckPassKindV1 {
+        self.pass
+    }
+    pub(crate) const fn identity(&self) -> PlironStructuralIdentityLabelV1 {
+        self.identity
+    }
+}
+
 /// Immutable report issued only after the complete fixed sequence is checked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlironPassPreservationReportV1 {
     input_identity: PlironStructuralIdentityLabelV1,
     output_identity: PlironStructuralIdentityLabelV1,
     exact_output_identity: Arc<[u8]>,
+    custody: Arc<()>,
     certificates: Vec<PlironPassPreservationCertificateV1>,
 }
 
@@ -296,6 +341,7 @@ struct PendingPassV1<S> {
 
 pub(crate) struct PlironPassContractSessionV1<P: PlironStructuralIdentityProviderV1> {
     provider: P,
+    custody: Arc<()>,
     input_identity: PlironStructuralIdentityLabelV1,
     lineage: Option<P::Snapshot>,
     lineage_identity: PlironStructuralIdentityLabelV1,
@@ -310,6 +356,7 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
         let input_identity = provider.label(&input);
         Ok(Self {
             provider,
+            custody: Arc::new(()),
             input_identity,
             lineage: Some(input),
             lineage_identity: input_identity,
@@ -354,6 +401,37 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
         let result = execute();
         self.end_pass(pass)?;
         Ok(result)
+    }
+
+    pub(crate) fn validation_handle(&self) -> PlironPassValidationHandleV1 {
+        PlironPassValidationHandleV1 {
+            custody: Arc::clone(&self.custody),
+            input_identity: self.input_identity,
+        }
+    }
+
+    /// Returns the most recently completed exact checkpoint. The token is
+    /// issued only by this sealed session after [`Self::end_pass`] succeeds.
+    pub(crate) fn last_checkpoint(
+        &self,
+    ) -> Result<PlironPassCheckpointTokenV1, PlironPassPreservationErrorV1> {
+        let position =
+            self.next
+                .checked_sub(1)
+                .ok_or(PlironPassPreservationErrorV1::InvalidSessionState {
+                    detail: "no completed pass checkpoint is available",
+                })?;
+        let certificate = self.certificates.get(position).ok_or(
+            PlironPassPreservationErrorV1::InvalidSessionState {
+                detail: "the completed pass certificate is absent",
+            },
+        )?;
+        Ok(PlironPassCheckpointTokenV1 {
+            custody: Arc::clone(&self.custody),
+            position,
+            pass: certificate.pass,
+            identity: certificate.identity,
+        })
     }
 
     fn require_pass_can_begin(
@@ -471,6 +549,7 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
             input_identity: self.input_identity,
             output_identity: self.lineage_identity,
             exact_output_identity,
+            custody: self.custody,
             certificates: self.certificates,
         })
     }

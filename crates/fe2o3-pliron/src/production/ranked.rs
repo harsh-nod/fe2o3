@@ -4166,6 +4166,9 @@ fn production_pipeline_check_error(
         ProductionPlironPreloweringErrorV2::Preservation(error) => {
             ProductionSessionErrorV1::RankedPassPreservation(error)
         }
+        ProductionPlironPreloweringErrorV2::ReportValidation(error) => {
+            ProductionSessionErrorV1::RankedReportValidation(error)
+        }
     }
 }
 
