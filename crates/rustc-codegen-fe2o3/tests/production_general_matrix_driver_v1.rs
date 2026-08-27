@@ -79,7 +79,7 @@ fn safe_dynamic_matrix_kernel_uses_the_single_production_pipeline() {
     );
     assert!(
         stderr.contains(
-            "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942 LLVM;"
+            "fe2o3 production extraction: Rust -> semantic MIR -> ranked PLIRON -> Kernel IR -> composed formal/ranked memory -> gfx942:xnack- LLVM;"
         )
             && stderr.contains("semantic function(s)")
             && stderr.contains("correspondence block(s)")

@@ -11021,7 +11021,9 @@ fn lower_kernel_parameter_type(
     let declaration = types
         .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
         .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
-    if !matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_)) {
+    if disjoint_slice_element(callables, ty).is_some()
+        || !matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_))
+    {
         return lower_parameter_type(types, callables, ty);
     }
     authenticated_global_mut_pointer_parameter(types, function, argument, ty).ok_or_else(|| {
