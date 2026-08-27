@@ -912,7 +912,19 @@ mod tests {
         )
         .unwrap();
         assert!(admitted.image.write_all_at(&[0; 32], 0).is_err());
-        admitted.validate(&policy).unwrap();
+        let current_snapshot = FileSnapshotV1::inspect(
+            &admitted.image,
+            IssuerAdmissionErrorKindV1::KeyInspect,
+            "issuer signing-key image",
+        )
+        .unwrap();
+        match admitted.validate(&policy) {
+            Ok(()) => assert_eq!(current_snapshot, admitted.snapshot),
+            Err(error) => {
+                assert_ne!(current_snapshot, admitted.snapshot);
+                assert_eq!(error.kind(), IssuerAdmissionErrorKindV1::KeyChanged);
+            }
+        }
     }
 
     #[test]
