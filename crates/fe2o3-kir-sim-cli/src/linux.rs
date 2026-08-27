@@ -10,8 +10,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use fe2o3_kernel_ir::{
-    AccessMode, FunctionId, ScalarType, VerifiedCanonicalKernelIrErrorV7,
-    VerifiedCanonicalKernelIrV7,
+    AccessMode, FunctionId, MAX_SIMULATION_BUNDLE_BYTES_V1, ScalarType,
+    VerifiedCanonicalKernelIrErrorV7, VerifiedCanonicalKernelIrV7, VerifiedSimulationBundleV1,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
@@ -33,7 +33,8 @@ use sha2::{Digest, Sha256};
 
 use crate::schema::{ErrorKind, Stage};
 
-const USAGE: &str = "usage: fe2o3-kir-sim --kir-v7 PATH --request PATH [--output PATH]";
+const USAGE: &str =
+    "usage: fe2o3-kir-sim (--kir-v7 PATH | --bundle PATH) --request PATH [--output PATH]";
 const REQUEST_SCHEMA: &str = "fe2o3-simulation-request-v1";
 const RESULT_SCHEMA: &str = "fe2o3-simulation-result-v1";
 const ERROR_SCHEMA: &str = "fe2o3-simulation-error-v1";
@@ -84,6 +85,7 @@ enum UnsupportedFeatureCode {
 #[serde(rename_all = "snake_case")]
 enum InputCode {
     KirV7,
+    SimulationBundle,
     Request,
     DebugSidecar,
 }
@@ -362,9 +364,15 @@ fn bounded_error_message(mut message: String) -> String {
 
 #[derive(Debug, Eq, PartialEq)]
 struct Options {
-    kir_v7: OsString,
+    program: ProgramInput,
     request: OsString,
     output: Option<OsString>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ProgramInput {
+    KirV7(OsString),
+    Bundle(OsString),
 }
 
 #[derive(Debug)]
@@ -839,12 +847,11 @@ pub(crate) fn run_captured_kir_v7(
 ) -> ExitCode {
     let result = run_with_captured_kir(
         canonical_kir_v7,
-        Options {
-            kir_v7: OsString::new(),
-            request,
-            output,
-        },
+        Path::new(&request),
         expected_request,
+        output,
+        SimulationTargetV1::amdgpu_64(),
+        None,
     );
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -890,12 +897,31 @@ pub(crate) fn load_debug_simulation_input_v1(
             InputCode::KirV7,
             "canonical KIR V7",
         )?;
-        load_admitted_input(&kir, Path::new(&request), None)
+        load_admitted_input(
+            &kir,
+            Path::new(&request),
+            None,
+            SimulationTargetV1::amdgpu_64(),
+            None,
+        )
     })();
     result.map_err(|failure: Failure| crate::SimulationInputErrorV1 {
         stage: serialized_tag(failure.0.stage),
         code: serialized_tag(failure.0.kind),
         message: failure.0.message.clone(),
+    })
+}
+
+pub(crate) fn load_debug_simulation_bundle_v1(
+    bundle: OsString,
+    request: OsString,
+) -> Result<crate::AdmittedSimulationBundleInputV1, crate::SimulationInputErrorV1> {
+    load_admitted_bundle(Path::new(&bundle), Path::new(&request)).map_err(|failure: Failure| {
+        crate::SimulationInputErrorV1 {
+            stage: serialized_tag(failure.0.stage),
+            code: serialized_tag(failure.0.kind),
+            message: failure.0.message.clone(),
+        }
     })
 }
 
@@ -925,26 +951,51 @@ fn serialized_tag(value: impl Serialize) -> String {
 
 fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
     let options = parse_options(arguments)?;
-    let kir = secure_read(
-        Path::new(&options.kir_v7),
-        MAX_KIR_BYTES,
-        InputCode::KirV7,
-        "canonical KIR V7",
-    )?;
-    run_with_captured_kir(&kir, options, None)
+    match options.program {
+        ProgramInput::KirV7(path) => {
+            let kir = secure_read(
+                Path::new(&path),
+                MAX_KIR_BYTES,
+                InputCode::KirV7,
+                "canonical KIR V7",
+            )?;
+            run_with_captured_kir(
+                &kir,
+                Path::new(&options.request),
+                None,
+                options.output,
+                SimulationTargetV1::amdgpu_64(),
+                None,
+            )
+        }
+        ProgramInput::Bundle(path) => {
+            let admitted = load_admitted_bundle(Path::new(&path), Path::new(&options.request))?;
+            run_with_admitted_input(admitted.input, options.output)
+        }
+    }
 }
 
 fn run_with_captured_kir(
     kir: &[u8],
-    options: Options,
+    request: &Path,
     expected_request: Option<crate::SimulationRequestIdentityV1>,
+    output: Option<OsString>,
+    target: SimulationTargetV1,
+    bundle_subject: Option<[u8; 32]>,
 ) -> Result<(), Failure> {
-    let input = load_admitted_input(kir, Path::new(&options.request), expected_request)?;
+    let input = load_admitted_input(kir, request, expected_request, target, bundle_subject)?;
+    run_with_admitted_input(input, output)
+}
+
+fn run_with_admitted_input(
+    input: crate::AdmittedSimulationInputV1,
+    output: Option<OsString>,
+) -> Result<(), Failure> {
     let execution = input
         .module
         .simulate(
             &input.request,
-            SimulationTargetV1::amdgpu_64(),
+            input.simulation_target,
             input.simulation_limits,
         )
         .map_err(|error| match error {
@@ -953,9 +1004,71 @@ fn run_with_captured_kir(
         })?;
     drop(input);
     let maximum = measure_success_bytes(&execution)?;
-    match options.output {
+    match output {
         Some(path) => publish_transactionally(Path::new(&path), &execution, maximum),
         None => write_success_stdout(&execution, maximum),
+    }
+}
+
+fn load_admitted_bundle(
+    bundle_path: &Path,
+    request: &Path,
+) -> Result<crate::AdmittedSimulationBundleInputV1, Failure> {
+    let bytes = secure_read(
+        bundle_path,
+        MAX_SIMULATION_BUNDLE_BYTES_V1,
+        InputCode::SimulationBundle,
+        "simulation bundle V1",
+    )?;
+    let bundle = VerifiedSimulationBundleV1::from_canonical_bytes(bytes).map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V1 is invalid: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    bundle.revalidate().map_err(|error| {
+        Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            format!(
+                "simulation bundle V1 failed revalidation: {}",
+                bounded_display(&error)
+            ),
+        )
+    })?;
+    let target = simulation_target_for_bundle(bundle.target())?;
+    let input = load_admitted_input(
+        bundle.canonical_kir_v7(),
+        request,
+        None,
+        target,
+        Some(*bundle.subject_identity()),
+    )?;
+    if input.kir_sha256 != *bundle.canonical_kir_v7_identity().digest()
+        || u64::try_from(bundle.canonical_kir_v7().len()).ok()
+            != Some(bundle.canonical_kir_v7_identity().canonical_length())
+    {
+        return Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleRejected,
+            "simulation bundle KIR identity changed during admission",
+        ));
+    }
+    Ok(crate::AdmittedSimulationBundleInputV1 { input, bundle })
+}
+
+fn simulation_target_for_bundle(target: &str) -> Result<SimulationTargetV1, Failure> {
+    match target {
+        "gfx942:xnack-" | "gfx950:xnack-" => Ok(SimulationTargetV1::amdgpu_64()),
+        _ => Err(Failure::input(
+            InputCode::SimulationBundle,
+            ErrorKind::SimulationBundleTargetUnsupported,
+            "simulation bundle target has no exact V1 CPU simulation profile",
+        )),
     }
 }
 
@@ -963,6 +1076,8 @@ fn load_admitted_input(
     kir: &[u8],
     request: &Path,
     expected_request: Option<crate::SimulationRequestIdentityV1>,
+    target: SimulationTargetV1,
+    bundle_subject: Option<[u8; 32]>,
 ) -> Result<crate::AdmittedSimulationInputV1, Failure> {
     if kir.len() > MAX_KIR_BYTES {
         return Err(Failure::input(
@@ -1017,13 +1132,15 @@ fn load_admitted_input(
             ),
         )
     })?;
-    let request = prepare_request(document)?;
+    let request = prepare_request_for_target(document, target)?;
     Ok(crate::AdmittedSimulationInputV1 {
         kir_sha256: *admitted.identity().digest(),
         request_sha256: Sha256::digest(&request_bytes).into(),
         module: admitted,
         request,
         simulation_limits: limits,
+        simulation_target: target,
+        simulation_bundle_subject: bundle_subject,
     })
 }
 
@@ -1049,12 +1166,15 @@ const fn cli_simulation_limits() -> SimulationLimitsV1 {
 
 fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, Failure> {
     let mut kir_v7 = None;
+    let mut bundle = None;
     let mut request = None;
     let mut output = None;
     let mut arguments = arguments.peekable();
     while let Some(argument) = arguments.next() {
         let (slot, name) = if argument == OsStr::new("--kir-v7") {
             (&mut kir_v7, "--kir-v7")
+        } else if argument == OsStr::new("--bundle") {
+            (&mut bundle, "--bundle")
         } else if argument == OsStr::new("--request") {
             (&mut request, "--request")
         } else if argument == OsStr::new("--output") {
@@ -1081,14 +1201,26 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             ));
         }
     }
-    Ok(Options {
-        kir_v7: kir_v7.ok_or_else(|| {
-            Failure::new(
+    let program = match (kir_v7, bundle) {
+        (Some(path), None) => ProgramInput::KirV7(path),
+        (None, Some(path)) => ProgramInput::Bundle(path),
+        (None, None) => {
+            return Err(Failure::new(
                 Stage::Arguments,
                 ErrorKind::InvalidCommandLine,
-                format!("--kir-v7 is required; {USAGE}"),
-            )
-        })?,
+                format!("exactly one of --kir-v7 or --bundle is required; {USAGE}"),
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(Failure::new(
+                Stage::Arguments,
+                ErrorKind::InvalidCommandLine,
+                format!("--kir-v7 and --bundle are mutually exclusive; {USAGE}"),
+            ));
+        }
+    };
+    Ok(Options {
+        program,
         request: request.ok_or_else(|| {
             Failure::new(
                 Stage::Arguments,
@@ -1228,6 +1360,13 @@ fn same_input_snapshot(left: &rustix::fs::Stat, right: &rustix::fs::Stat) -> boo
 }
 
 fn prepare_request(document: RequestDocument) -> Result<SimulationRequestV1, Failure> {
+    prepare_request_for_target(document, SimulationTargetV1::amdgpu_64())
+}
+
+fn prepare_request_for_target(
+    document: RequestDocument,
+    target: SimulationTargetV1,
+) -> Result<SimulationRequestV1, Failure> {
     if document.schema != REQUEST_SCHEMA {
         return Err(Failure::new(
             Stage::Request,
@@ -1243,7 +1382,6 @@ fn prepare_request(document: RequestDocument) -> Result<SimulationRequestV1, Fai
         ));
     }
 
-    let target = SimulationTargetV1::amdgpu_64();
     let mut total_buffer_bytes = 0_usize;
     let mut backing_ids = HashSet::new();
     backing_ids
@@ -2649,7 +2787,10 @@ mod tests {
             .into_iter(),
         )
         .unwrap();
-        assert_eq!(options.kir_v7, OsString::from("kernel"));
+        assert_eq!(
+            options.program,
+            ProgramInput::KirV7(OsString::from("kernel"))
+        );
         assert_eq!(options.request, OsString::from("request"));
         assert_eq!(options.output, Some(OsString::from("output")));
     }
@@ -2983,6 +3124,20 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(failure.0.kind, ErrorKind::InputChanged);
+
+        let changed_bundle = directory.path().join("changed.fe2sim");
+        fs::write(&changed_bundle, b"before").unwrap();
+        let mutate = changed_bundle.clone();
+        let failure = secure_read_with_hook(
+            &changed_bundle,
+            16,
+            InputCode::SimulationBundle,
+            "simulation bundle",
+            move || fs::write(mutate, b"after-is-longer").unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(failure.0.kind, ErrorKind::InputChanged);
+        assert_eq!(failure.0.input, Some(InputCode::SimulationBundle));
     }
 
     #[test]

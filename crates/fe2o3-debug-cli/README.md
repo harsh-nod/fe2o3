@@ -6,6 +6,15 @@ arrive on standard input and one `fe2o3-debug-response-v1` line is written for
 each request. `--protocol jsonl` is accepted explicitly and is the only V1
 transport.
 
+`fe2o3-debug sim --bundle KERNEL.fe2sim --request REQUEST.json` securely
+decodes and revalidates the authority-free compiler simulation bundle, then
+uses only its exact embedded KIR V7 and target. `--bundle` and `--kir-v7` are
+mutually exclusive. An embedded debug map is admitted from those same captured
+bundle bytes and labeled `compiler_bundle_bound`; callers cannot override it
+with `--source-map`. This label proves exact bundle content association only,
+not compiler execution, source authorship, hardware observation, or authority.
+When a bundle has no map, source features remain typed `unavailable`.
+
 The simulator exposes work-item, logical wave, workgroup, KIR operation, SSA,
 allocation-relative memory, barrier, and committed-memory observations. Reverse
 navigation is deterministic transcript replay; forward stepping includes
@@ -24,9 +33,12 @@ record.
 `--source-map MAP --source-bundle-subject SUBJECT` admits a strict, bounded
 `fe2o3-debug-source-map-v1` sidecar. Both options are required together. The
 map binds the canonical KIR digest and length plus a non-circular
-compiler-bundle subject identity. Admission binds those exact bytes to the
-complete simulation configuration identity and the backend rechecks that
-binding before use.
+compiler-bundle subject identity. The wire map binds these compile-time facts
+only. Admission derives the complete runtime simulation configuration from the
+admitted request and wave width, then the backend rechecks that internal
+binding before use. Bundle sessions additionally bind the verified bundle
+subject, which commits the exact target. A reusable compiler map must not claim
+a future request or wave configuration.
 Files are content identities and display paths only; the debugger never opens
 a source path from the map. KIR/source resolution, source breakpoints, and
 source stepping return distinct absent, eliminated, and many-to-one states.

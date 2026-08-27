@@ -39,6 +39,39 @@ linking, loading, or launch. It is not a protected publication occurrence. The
 output is created new with mode `0600`; an existing path, including a symlink,
 is rejected.
 
+## Simulate and debug the bundle
+
+Prepare the same strict request document used by the raw KIR simulator, then
+consume the bundle directly:
+
+```text
+fe2o3-kir-sim \
+  --bundle "$PWD/my-kernel.fe2sim" \
+  --request "$PWD/request.json"
+
+fe2o3-debug sim \
+  --bundle "$PWD/my-kernel.fe2sim" \
+  --request "$PWD/request.json" \
+  --protocol jsonl
+```
+
+Both commands use the existing hardened regular-file boundary, reject
+oversize/change/substitution, strictly decode and revalidate the complete
+bundle, map its exact target, and admit only its embedded verified KIR V7. They
+do not recompile, re-lower, load, launch, or fall back to a different route.
+`--bundle` is mutually exclusive with raw `--kir-v7`.
+
+When a future compiler bundle contains its bounded debug map, `fe2o3-debug`
+passes the exact payload, verified simulation-bundle subject, and committed map
+identity through the compiler-bundle admission API. Source locations are then
+labeled `compiler_bundle_bound`, which means exact content association, not
+protected compiler-execution authentication. The map wire contains only its
+compile-time bundle subject and KIR identity. Request and logical wave width
+remain runtime inputs; their configuration identity is derived internally and
+rechecked before the map is bound. Bundle session identities also commit the
+verified bundle subject and therefore its exact target. The current exporter
+still emits no map, so source inspection is typed unavailable for its bundles.
+
 ## Exact identities and bounds
 
 Bundle V1 is a strict binary wire with a hard maximum of the 16 MiB KIR bound,
@@ -71,8 +104,8 @@ The complete bundle identity additionally commits the optional debug-map
 bytes. Decoding re-verifies canonical V7, independently re-encodes V8 from the
 same semantics, rederives the kernel ABI and both identities, and rejects
 truncation, trailing bytes, unknown flags, zero identities, and substitution.
-`VerifiedSimulationBundleV1::canonical_kir_v7()` exposes the exact bytes for
-the existing `fe2o3-kir-sim` request path.
+`VerifiedSimulationBundleV1::canonical_kir_v7()` exposes the exact bytes used
+by direct `--bundle` admission in `fe2o3-kir-sim` and `fe2o3-debug`.
 
 A valid bundle proves exact local bundle content. It does not authenticate
 compiler execution, source authorship, or provenance and grants no proof,

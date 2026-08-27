@@ -248,6 +248,7 @@ impl SimulationDebugMapV1 {
             return Err(SimulationBundleErrorV1::InvalidDebugMapLength);
         }
         let identity = debug_map_identity(&canonical_bytes);
+        require_nonzero("debug map", &identity)?;
         Ok(Self {
             canonical_bytes,
             identity,
@@ -463,9 +464,15 @@ impl VerifiedSimulationBundleV1 {
         }
         if debug_length > MAX_SIMULATION_DEBUG_MAP_BYTES_V1
             || (flags & FLAGS_DEBUG_MAP_PRESENT == 0) != (debug_length == 0)
-            || (debug_length == 0) != (claimed_debug_identity == [0; 32])
         {
             return Err(SimulationBundleErrorV1::InvalidDebugMapLength);
+        }
+        if debug_length == 0 {
+            if claimed_debug_identity != [0; 32] {
+                return Err(SimulationBundleErrorV1::InvalidDebugMapLength);
+            }
+        } else {
+            require_nonzero("debug map", &claimed_debug_identity)?;
         }
         let kir_length = usize::try_from(claimed_kir_length)
             .map_err(|_| SimulationBundleErrorV1::InvalidKernelIrLength)?;
@@ -650,6 +657,15 @@ impl VerifiedSimulationBundleV1 {
         self.debug_map_range
             .as_ref()
             .map(|range| &self.canonical_bytes[range.clone()])
+    }
+
+    /// Returns the identity committed for the exact embedded debug-map bytes.
+    ///
+    /// Bundle decoding has already compared this rederived identity with the
+    /// header commitment. The identity authenticates bundle content
+    /// association only, not compiler execution or source authorship.
+    pub fn debug_map_identity(&self) -> Option<[u8; 32]> {
+        self.debug_map().map(debug_map_identity)
     }
 
     pub const fn debug_map_schema(&self) -> Option<&'static str> {
@@ -1164,6 +1180,8 @@ mod tests {
             decoded.debug_map_schema(),
             Some(SIMULATION_DEBUG_MAP_SCHEMA_V1)
         );
+        assert_eq!(decoded.debug_map_identity(), bundle.debug_map_identity());
+        assert!(decoded.debug_map_identity().is_some());
         assert!(!decoded.canonical_kir_v7().is_empty());
         assert!(!decoded.grants_proof_authority());
         assert!(!decoded.grants_artifact_authority());
@@ -1276,6 +1294,13 @@ mod tests {
             ])
             .is_err()
         );
+        let debug = SimulationDebugMapV1::from_unverified_canonical_bytes(b"map".to_vec()).unwrap();
+        let mut zero_debug_identity = bundle(Some(debug)).into_canonical_bytes();
+        zero_debug_identity[260..292].fill(0);
+        assert!(matches!(
+            VerifiedSimulationBundleV1::from_canonical_bytes(zero_debug_identity),
+            Err(SimulationBundleErrorV1::ZeroIdentity("debug map"))
+        ));
         let baseline = bundle(None).into_canonical_bytes();
         assert!(
             VerifiedSimulationBundleV1::from_canonical_bytes(

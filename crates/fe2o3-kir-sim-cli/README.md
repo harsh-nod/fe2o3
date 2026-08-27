@@ -4,12 +4,21 @@ fe2o3-kir-sim is the standalone, Linux-only command-line boundary for bounded
 deterministic CPU execution of exact verified canonical Kernel IR V7:
 
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json
+    fe2o3-kir-sim --bundle kernel.fe2sim --request request.json
     fe2o3-kir-sim --kir-v7 kernel.kir --request request.json --output result.json
 
 It does not link or initialize HSA, HIP, KFD, ROCm, or a GPU. Simulation is an
 observation only. It grants no source-refinement, proof, compiler, artifact,
 load, launch, GPU-equivalence, race-freedom, timing, performance, or performance
 prediction authority.
+
+`--bundle` and `--kir-v7` are mutually exclusive. Bundle admission securely
+captures one bounded regular file, strictly decodes and revalidates
+`VerifiedSimulationBundleV1`, maps its exact admitted gfx942/gfx950 target to
+the CPU target profile, and executes only its embedded canonical V7 bytes. It
+never re-lowers source, invokes a compiler, launches hardware, or falls back
+between execution modes. A separately supplied request retains the same strict
+16 MiB boundary and preflight checks as raw KIR.
 
 The versioned `tutorial/fill-v1` known-answer fixture is directly runnable:
 
@@ -90,7 +99,7 @@ scheduler, and exact canonical KIR. Every failure is stable
 fe2o3-simulation-error-v1 JSON on stderr. Parsing failures use closed application
 codes selected from private structural markers, while other malformed JSON is
 classified by serde's closed syntax/data categories. Input failures identify
-kir_v7 or request. Dynamic failures include exact invocation hierarchy and Kernel IR
+kir_v7, simulation_bundle, or request. Dynamic failures include exact invocation hierarchy and Kernel IR
 site coordinates; overlong function identities carry an explicit bounded
 prefix, original byte count, and truncation flag. Unsupported preflight failures
 report exact total/emitted/truncated counts and a deterministic

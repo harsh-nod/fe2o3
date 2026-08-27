@@ -7,7 +7,10 @@ mod schema;
 use std::path::Path;
 use std::process::ExitCode;
 
-use fe2o3_kir_sim::{AdmittedSimulationModuleV1, SimulationLimitsV1, SimulationRequestV1};
+use fe2o3_kernel_ir::VerifiedSimulationBundleV1;
+use fe2o3_kir_sim::{
+    AdmittedSimulationModuleV1, SimulationLimitsV1, SimulationRequestV1, SimulationTargetV1,
+};
 
 /// Exact, strictly parsed simulator inputs admitted through the standalone
 /// command's hardened file boundary.
@@ -16,8 +19,75 @@ pub struct AdmittedSimulationInputV1 {
     pub module: AdmittedSimulationModuleV1,
     pub request: SimulationRequestV1,
     pub simulation_limits: SimulationLimitsV1,
+    simulation_target: SimulationTargetV1,
+    /// Present only when admission retained a verified simulation-bundle
+    /// subject. Debugger configuration identities bind this exact subject.
+    simulation_bundle_subject: Option<[u8; 32]>,
     pub kir_sha256: [u8; 32],
     pub request_sha256: [u8; 32],
+}
+
+impl AdmittedSimulationInputV1 {
+    pub const fn simulation_target(&self) -> SimulationTargetV1 {
+        self.simulation_target
+    }
+
+    pub const fn simulation_bundle_subject(&self) -> Option<[u8; 32]> {
+        self.simulation_bundle_subject
+    }
+}
+
+/// Strictly decoded bundle custody plus its exact admitted simulation input.
+///
+/// The verified bundle remains authority-free. Keeping it intact prevents a
+/// caller from substituting loose target, subject, or debug-map identities
+/// after admission.
+#[derive(Debug)]
+pub struct AdmittedSimulationBundleInputV1 {
+    input: AdmittedSimulationInputV1,
+    bundle: VerifiedSimulationBundleV1,
+}
+
+impl AdmittedSimulationBundleInputV1 {
+    pub fn input(&self) -> &AdmittedSimulationInputV1 {
+        &self.input
+    }
+
+    pub fn bundle(&self) -> &VerifiedSimulationBundleV1 {
+        &self.bundle
+    }
+
+    pub fn into_parts(self) -> (AdmittedSimulationInputV1, VerifiedSimulationBundleV1) {
+        (self.input, self.bundle)
+    }
+
+    pub const fn grants_proof_authority(&self) -> bool {
+        self.bundle.grants_proof_authority()
+    }
+
+    pub const fn grants_artifact_authority(&self) -> bool {
+        self.bundle.grants_artifact_authority()
+    }
+
+    pub const fn grants_compiler_authority(&self) -> bool {
+        self.bundle.grants_compiler_authority()
+    }
+
+    pub const fn grants_hardware_authority(&self) -> bool {
+        self.bundle.grants_hardware_authority()
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        self.bundle.grants_load_authority()
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        self.bundle.grants_launch_authority()
+    }
+
+    pub const fn authenticates_compiler_execution(&self) -> bool {
+        self.bundle.authenticates_compiler_execution()
+    }
 }
 
 /// Bounded failure returned while securely loading debugger simulator inputs.
@@ -180,6 +250,31 @@ pub fn load_debug_simulation_input_v1(
             stage: "platform".to_owned(),
             code: "unsupported_platform".to_owned(),
             message: "fe2o3 debugger simulation input admission requires Linux".to_owned(),
+        })
+    }
+}
+
+/// Securely captures and strictly admits one complete simulation bundle plus
+/// its separately bounded request. The exact embedded KIR V7 and target are
+/// used directly; this path never lowers, compiles, launches, or falls back.
+pub fn load_debug_simulation_bundle_v1(
+    bundle: &Path,
+    request: &Path,
+) -> Result<AdmittedSimulationBundleInputV1, SimulationInputErrorV1> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_simulation_bundle_v1(
+            bundle.as_os_str().to_owned(),
+            request.as_os_str().to_owned(),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (bundle, request);
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger simulation bundle admission requires Linux".to_owned(),
         })
     }
 }

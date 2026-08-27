@@ -28,12 +28,12 @@ use fe2o3_kir_sim::{
 };
 use fe2o3_kir_sim_cli::{
     AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
-    load_debug_simulation_input_v1,
+    load_debug_simulation_bundle_v1, load_debug_simulation_input_v1,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim --kir-v7 PATH --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]";
+const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = "fe2o3-debug-source-map-v1";
@@ -41,11 +41,17 @@ pub const MAX_SOURCE_MAP_BYTES_V1: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 struct OptionsV1 {
-    kir_v7: PathBuf,
+    program: ProgramInputV1,
     request: PathBuf,
     source_map: Option<PathBuf>,
     source_bundle_subject: Option<OpaqueIdentityV1>,
     wave_width: DebugWaveWidthV1,
+}
+
+#[derive(Debug)]
+enum ProgramInputV1 {
+    KirV7(PathBuf),
+    Bundle(PathBuf),
 }
 
 #[derive(Debug, Deserialize)]
@@ -1258,11 +1264,27 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let admitted = match load_debug_simulation_input_v1(&options.kir_v7, &options.request) {
-        Ok(input) => input,
-        Err(error) => {
-            write_input_error(&error);
-            return ExitCode::FAILURE;
+    let (admitted, bundle) = match &options.program {
+        ProgramInputV1::KirV7(path) => {
+            match load_debug_simulation_input_v1(path, &options.request) {
+                Ok(input) => (input, None),
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        ProgramInputV1::Bundle(path) => {
+            match load_debug_simulation_bundle_v1(path, &options.request) {
+                Ok(admitted) => {
+                    let (input, bundle) = admitted.into_parts();
+                    (input, Some(bundle))
+                }
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            }
         }
     };
     let source_map = match (&options.source_map, options.source_bundle_subject) {
@@ -1274,11 +1296,7 @@ pub fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            let configuration = configuration_identity(
-                admitted.kir_sha256,
-                admitted.request_sha256,
-                options.wave_width,
-            );
+            let configuration = configuration_identity_for_input(&admitted, options.wave_width);
             match admit_source_map_v1(&bytes, &admitted, configuration, expected_subject) {
                 Ok(map) => Some(map),
                 Err(message) => {
@@ -1290,6 +1308,45 @@ pub fn main() -> ExitCode {
         (None, None) => None,
         _ => unreachable!("argument parser requires source-map options as a pair"),
     };
+    if let Some(bundle) = bundle.as_ref()
+        && let Some(map) = bundle.debug_map()
+    {
+        let subject = OpaqueIdentityV1::new(*bundle.subject_identity())
+            .expect("a verified simulation bundle subject is nonzero");
+        let map_identity = OpaqueIdentityV1::new(
+            bundle
+                .debug_map_identity()
+                .expect("a verified present debug map has an identity"),
+        )
+        .expect("a verified present debug map identity is nonzero");
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+        let mut reader = BufReader::new(stdin.lock());
+        let mut writer = BufWriter::new(stdout.lock());
+        return match run_admitted_jsonl_with_compiler_source_map_v1(
+            admitted,
+            options.wave_width,
+            map,
+            subject,
+            map_identity,
+            &mut reader,
+            &mut writer,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(CompilerBundleDebugRunErrorV1::SourceMap(message)) => {
+                write_bootstrap_error("source_map", "bundle_source_map_rejected", &message);
+                ExitCode::FAILURE
+            }
+            Err(CompilerBundleDebugRunErrorV1::Backend(message)) => {
+                write_bootstrap_error("backend", "simulation_capture_failed", &message);
+                ExitCode::FAILURE
+            }
+            Err(CompilerBundleDebugRunErrorV1::ProtocolStream(message)) => {
+                write_bootstrap_error("output", "protocol_stream_failed", &message);
+                ExitCode::FAILURE
+            }
+        };
+    }
     let backend =
         match SimulatorBackendV1::new_with_source_map(admitted, options.wave_width, source_map) {
             Ok(backend) => backend,
@@ -1317,6 +1374,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
         return Err(USAGE.to_owned());
     }
     let mut kir_v7 = None;
+    let mut bundle = None;
     let mut request = None;
     let mut source_map = None;
     let mut source_bundle_subject = None;
@@ -1328,6 +1386,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             .ok_or_else(|| format!("option {option:?} requires a value; {USAGE}"))?;
         if option == OsStr::new("--kir-v7") {
             set_once(&mut kir_v7, PathBuf::from(value), "--kir-v7")?;
+        } else if option == OsStr::new("--bundle") {
+            set_once(&mut bundle, PathBuf::from(value), "--bundle")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
         } else if option == OsStr::new("--source-map") {
@@ -1368,8 +1428,27 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             "--source-map and --source-bundle-subject must be supplied together; {USAGE}"
         ));
     }
+    let program = match (kir_v7, bundle) {
+        (Some(path), None) => ProgramInputV1::KirV7(path),
+        (None, Some(path)) => ProgramInputV1::Bundle(path),
+        (None, None) => {
+            return Err(format!(
+                "exactly one of --kir-v7 or --bundle is required; {USAGE}"
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "--kir-v7 and --bundle are mutually exclusive; {USAGE}"
+            ));
+        }
+    };
+    if matches!(program, ProgramInputV1::Bundle(_)) && source_map.is_some() {
+        return Err(format!(
+            "--source-map and --source-bundle-subject cannot override an admitted bundle; {USAGE}"
+        ));
+    }
     Ok(OptionsV1 {
-        kir_v7: kir_v7.ok_or_else(|| format!("--kir-v7 is required; {USAGE}"))?,
+        program,
         request: request.ok_or_else(|| format!("--request is required; {USAGE}"))?,
         source_map,
         source_bundle_subject,
@@ -1420,7 +1499,7 @@ pub fn run_admitted_jsonl_with_source_map_v1<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
 ) -> Result<(), String> {
-    let configuration = configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+    let configuration = configuration_identity_for_input(&input, wave_width);
     let source_map = admit_source_map_v1(
         source_map_bytes,
         &input,
@@ -1430,6 +1509,30 @@ pub fn run_admitted_jsonl_with_source_map_v1<R: BufRead, W: Write>(
     let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))?;
     run_jsonl_v1(backend, reader, writer)
 }
+
+/// Typed failure from a compiler-bundle-bound debugger session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CompilerBundleDebugRunErrorV1 {
+    /// The exact embedded map failed its bundle/KIR/content admission.
+    SourceMap(String),
+    /// Deterministic simulator capture or source-catalog binding failed.
+    Backend(String),
+    /// The bounded JSONL request/response stream failed after admission.
+    ProtocolStream(String),
+}
+
+impl std::fmt::Display for CompilerBundleDebugRunErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::SourceMap(message) | Self::Backend(message) | Self::ProtocolStream(message) => {
+                message
+            }
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for CompilerBundleDebugRunErrorV1 {}
 
 /// Runs with map bytes obtained from a compiler-bundle decode transaction.
 /// `verified_bundle_subject` and `committed_map_identity` must come from that
@@ -1442,8 +1545,14 @@ pub fn run_admitted_jsonl_with_compiler_source_map_v1<R: BufRead, W: Write>(
     committed_map_identity: OpaqueIdentityV1,
     reader: &mut R,
     writer: &mut W,
-) -> Result<(), String> {
-    let configuration = configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+) -> Result<(), CompilerBundleDebugRunErrorV1> {
+    if input.simulation_bundle_subject() != Some(verified_bundle_subject.as_bytes()) {
+        return Err(CompilerBundleDebugRunErrorV1::SourceMap(
+            "compiler-bundle source map subject is not retained by the admitted bundle input"
+                .to_owned(),
+        ));
+    }
+    let configuration = configuration_identity_for_input(&input, wave_width);
     let source_map = admit_source_map_with_provenance_v1(
         source_map_bytes,
         &input,
@@ -1451,9 +1560,11 @@ pub fn run_admitted_jsonl_with_compiler_source_map_v1<R: BufRead, W: Write>(
         verified_bundle_subject,
         Some(committed_map_identity),
         SourceMapProvenanceV1::CompilerBundleBound,
-    )?;
-    let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))?;
-    run_jsonl_v1(backend, reader, writer)
+    )
+    .map_err(CompilerBundleDebugRunErrorV1::SourceMap)?;
+    let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))
+        .map_err(CompilerBundleDebugRunErrorV1::Backend)?;
+    run_jsonl_v1(backend, reader, writer).map_err(CompilerBundleDebugRunErrorV1::ProtocolStream)
 }
 
 fn run_jsonl_v1<R: BufRead, W: Write>(
@@ -1582,7 +1693,7 @@ impl SimulatorBackendV1 {
         let run = capture_debugger_run_v1(
             &input.module,
             &input.request,
-            SimulationTargetV1::amdgpu_64(),
+            input.simulation_target(),
             input.simulation_limits,
             capture_limits,
             debugger_limits,
@@ -1592,8 +1703,7 @@ impl SimulatorBackendV1 {
             return Err(error.to_string());
         }
         let failed_execution = matches!(run.execution, Err(SimulationErrorV1::Execution(_)));
-        let configuration_identity =
-            configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+        let configuration_identity = configuration_identity_for_input(&input, wave_width);
         let mut session = DebugSessionV1::new(run.transcript);
         let mut source_map_provenance = None;
         let source_map_identity = if let Some(source_map) = source_map {
@@ -3640,6 +3750,21 @@ fn configuration_identity(
     nonzero_identity(digest.finalize().into())
 }
 
+fn configuration_identity_for_input(
+    input: &AdmittedSimulationInputV1,
+    wave_width: DebugWaveWidthV1,
+) -> OpaqueIdentityV1 {
+    let base = configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+    let Some(bundle_subject) = input.simulation_bundle_subject() else {
+        return base;
+    };
+    let mut digest = Sha256::new();
+    digest.update(b"fe2o3-debug-sim-bundle-config-v1\0");
+    digest.update(base.as_bytes());
+    digest.update(bundle_subject);
+    nonzero_identity(digest.finalize().into())
+}
+
 fn source_span_for_step(
     inspection: DebugInspectionV1<DebugSourceResolutionV1>,
     absent_is_error: bool,
@@ -3786,7 +3911,10 @@ mod tests {
             .map(OsString::from),
         )
         .unwrap();
-        assert_eq!(options.kir_v7, PathBuf::from("kernel.kir"));
+        assert!(matches!(
+            options.program,
+            ProgramInputV1::KirV7(ref path) if path == &PathBuf::from("kernel.kir")
+        ));
         assert_eq!(options.request, PathBuf::from("request.json"));
         assert_eq!(options.wave_width, DebugWaveWidthV1::Wave32);
 

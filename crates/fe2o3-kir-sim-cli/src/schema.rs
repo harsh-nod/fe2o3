@@ -27,6 +27,8 @@ pub(crate) enum ErrorKind {
     InputAllocationFailed,
     InputReadFailed,
     InputChanged,
+    SimulationBundleRejected,
+    SimulationBundleTargetUnsupported,
     RequestJsonSyntax,
     RequestJsonDuplicateField,
     RequestJsonUnknownField,
