@@ -27,6 +27,7 @@ pub const INERT_SEMANTIC_MIR_VERSION_V4: u16 = 4;
 pub const INERT_SEMANTIC_MIR_VERSION_V5: u16 = 5;
 pub const INERT_SEMANTIC_MIR_VERSION_V6: u16 = 6;
 pub const INERT_SEMANTIC_MIR_VERSION_V7: u16 = 7;
+pub const INERT_SEMANTIC_MIR_VERSION_V8: u16 = 8;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -41,6 +42,7 @@ pub enum SemanticMirWireVersionV1 {
     V5,
     V6,
     V7,
+    V8,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -52,6 +54,7 @@ impl SemanticMirWireVersionV1 {
             Self::V5 => INERT_SEMANTIC_MIR_VERSION_V5,
             Self::V6 => INERT_SEMANTIC_MIR_VERSION_V6,
             Self::V7 => INERT_SEMANTIC_MIR_VERSION_V7,
+            Self::V8 => INERT_SEMANTIC_MIR_VERSION_V8,
         }
     }
 
@@ -63,6 +66,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V5 => Some(Self::V5),
             INERT_SEMANTIC_MIR_VERSION_V6 => Some(Self::V6),
             INERT_SEMANTIC_MIR_VERSION_V7 => Some(Self::V7),
+            INERT_SEMANTIC_MIR_VERSION_V8 => Some(Self::V8),
             _ => None,
         }
     }
@@ -5013,6 +5017,15 @@ impl SemanticF32MathFunctionV1 {
     }
 }
 
+/// Exact conversion implemented by the authenticated `fe2o3_device::Bf16` API.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticBf16ConversionKindV1 {
+    FromBits,
+    ToBits,
+    FromF32RoundTiesEven,
+    ToF32,
+}
+
 /// Associative operation used by one convergent subgroup reduction.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticSubgroupReductionKindV1 {
@@ -5123,6 +5136,12 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     MathF32 {
         context: SemanticTypeIdV1,
         function: SemanticF32MathFunctionV1,
+    },
+    /// Converts between physical `u16`, `Bf16`, and `f32` without exposing the ADT body.
+    Bf16Conversion {
+        kind: SemanticBf16ConversionKindV1,
+        input: SemanticTypeIdV1,
+        output: SemanticTypeIdV1,
     },
     /// Creates compiler-issued authority for target-neutral subgroup collectives.
     CollectiveContextCurrent {
@@ -5767,7 +5786,8 @@ impl InertSemanticMirRequestV1 {
     /// models containing checked arithmetic select V3, models retaining
     /// authenticated source ownership select V4, and models using generic
     /// checked read views select V5. Production import uses
-    /// [`Self::admit_exact_v5`] so both ownership and read effects are bound.
+    /// [`Self::admit_current_production`] pins the least current production
+    /// schema that represents the request.
     pub fn admit(
         self,
         limits: SemanticMirLimitsV1,
@@ -5834,8 +5854,16 @@ impl InertSemanticMirRequestV1 {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V7, limits)
     }
 
-    /// Selects V5 for the existing production surface and V6 only when a typed
-    /// gfx950 collective or LDS transpose intrinsic requires it.
+    /// Admits under the exact closed V8 schema that adds authenticated BF16 conversions.
+    pub fn admit_exact_v8(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V8, limits)
+    }
+
+    /// Selects V5 for the baseline production surface, V6/V7 for their typed
+    /// extensions, and V8 when authenticated BF16 conversions are present.
     pub fn admit_current_production(
         self,
         limits: SemanticMirLimitsV1,
@@ -7362,6 +7390,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::FabsF32
         | SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
+        | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
         | SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::WorkgroupReduceSum { .. }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { .. }
@@ -7566,6 +7595,37 @@ fn compiler_intrinsic_signature_matches(
                     scalar_type(request, output),
                     Some(SemanticScalarTypeV1::Float { bits: 32 })
                 )
+        }
+        SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+            kind,
+            input,
+            output: intrinsic_output,
+        } => {
+            inputs.as_ref() == [input]
+                && output == intrinsic_output
+                && match kind {
+                    SemanticBf16ConversionKindV1::FromBits => {
+                        is_unsigned_integer_with_bits(request, input, 16)
+                            && bf16_storage_type_matches(request, intrinsic_output)
+                    }
+                    SemanticBf16ConversionKindV1::ToBits => {
+                        bf16_storage_type_matches(request, input)
+                            && is_unsigned_integer_with_bits(request, intrinsic_output, 16)
+                    }
+                    SemanticBf16ConversionKindV1::FromF32RoundTiesEven => {
+                        matches!(
+                            scalar_type(request, input),
+                            Some(SemanticScalarTypeV1::Float { bits: 32 })
+                        ) && bf16_storage_type_matches(request, intrinsic_output)
+                    }
+                    SemanticBf16ConversionKindV1::ToF32 => {
+                        bf16_storage_type_matches(request, input)
+                            && matches!(
+                                scalar_type(request, intrinsic_output),
+                                Some(SemanticScalarTypeV1::Float { bits: 32 })
+                            )
+                    }
+                }
         }
         SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context } => {
             inputs.is_empty() && output == context
@@ -12658,6 +12718,34 @@ fn is_unsigned_integer_with_bits(
     )
 }
 
+fn bf16_storage_type_matches(request: &InertSemanticMirRequestV1, ty: SemanticTypeIdV1) -> bool {
+    let Some(declaration) = request.types.get(ty.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(aggregate) = &declaration.shape else {
+        return false;
+    };
+    let [bits] = aggregate.fields() else {
+        return false;
+    };
+    let Some(bits_declaration) = request.types.get(bits.0 as usize) else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout.details() else {
+        return false;
+    };
+    is_unsigned_integer_with_bits(request, *bits, 16)
+        && declaration.layout.size_bytes() == Some(2)
+        && declaration.layout.alignment_bytes() == 2
+        && !declaration.layout.is_uninhabited()
+        && bits_declaration.layout.size_bytes() == Some(2)
+        && bits_declaration.layout.alignment_bytes() == 2
+        && !bits_declaration.layout.is_uninhabited()
+        && declaration.layout.backend_repr() == bits_declaration.layout.backend_repr()
+        && layout.field_offsets() == [0]
+        && layout.padding().is_empty()
+}
+
 fn is_gfx942_vtable_metadata_result(
     request: &InertSemanticMirRequestV1,
     ty: SemanticTypeIdV1,
@@ -14311,6 +14399,10 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::MathF32 { context, .. } => {
             pending.push_back(context);
         }
+        SemanticCompilerIntrinsicOperationV1::Bf16Conversion { input, output, .. } => {
+            pending.push_back(input);
+            pending.push_back(output);
+        }
         SemanticCompilerIntrinsicOperationV1::CollectiveContextCurrent { context }
         | SemanticCompilerIntrinsicOperationV1::SubgroupReduceF32 { context, .. }
         | SemanticCompilerIntrinsicOperationV1::Gfx950SubgroupContextCurrent { context }
@@ -15040,6 +15132,17 @@ fn encode_request(
 }
 
 fn minimum_wire_version(request: &InertSemanticMirRequestV1) -> SemanticMirWireVersionV1 {
+    if request.callables.iter().any(|callable| {
+        matches!(
+            callable,
+            SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. },
+                ..
+            }
+        )
+    }) {
+        return SemanticMirWireVersionV1::V8;
+    }
     if request.functions.iter().any(|function| {
         matches!(
             &function.export,
@@ -16276,6 +16379,21 @@ fn encode_compiler_intrinsic_operation(
                 SemanticF32MathFunctionV1::Log10 => 12,
             })
         }
+        SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+            kind,
+            input,
+            output,
+        } => {
+            writer.u8(55)?;
+            writer.u8(match kind {
+                SemanticBf16ConversionKindV1::FromBits => 0,
+                SemanticBf16ConversionKindV1::ToBits => 1,
+                SemanticBf16ConversionKindV1::FromF32RoundTiesEven => 2,
+                SemanticBf16ConversionKindV1::ToF32 => 3,
+            })?;
+            writer.u32(input.0)?;
+            writer.u32(output.0)
+        }
         SemanticCompilerIntrinsicOperationV1::ColdPath => writer.u8(31),
         SemanticCompilerIntrinsicOperationV1::WaveLaneCurrent { lane, wave_width } => {
             writer.u8(32)?;
@@ -17501,6 +17619,159 @@ mod private_tests {
             layout,
             shape,
         )
+    }
+
+    fn bf16_signature_fixture(
+        bf16_layout: SemanticTypeLayoutV1,
+        bf16_shape: SemanticTypeShapeV1,
+    ) -> (InertSemanticMirRequestV1, [SemanticTypeIdV1; 3]) {
+        let u16_id = SemanticTypeIdV1::from_index(0);
+        let bf16_id = SemanticTypeIdV1::from_index(1);
+        let f32_id = SemanticTypeIdV1::from_index(2);
+        let u16_backend = SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 16, 2),
+            SemanticScalarValidityRangeV1::new(0, u128::from(u16::MAX)),
+        ));
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([90; 32])),
+            vec![
+                test_type(
+                    91,
+                    SemanticTypeLayoutV1::new_with_backend_repr(Some(2), 2, u16_backend, false)
+                        .unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                        signed: false,
+                        bits: 16,
+                    }),
+                ),
+                test_type(92, bf16_layout, bf16_shape),
+                test_type(
+                    93,
+                    SemanticTypeLayoutV1::new_with_backend_repr(
+                        Some(4),
+                        4,
+                        SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                            SemanticBackendPrimitiveV1::float(32, 4),
+                            SemanticScalarValidityRangeV1::new(0, u128::from(u32::MAX)),
+                        )),
+                        false,
+                    )
+                    .unwrap(),
+                    SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 }),
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        (request, [u16_id, bf16_id, f32_id])
+    }
+
+    fn bf16_layout_for_test(backend: SemanticBackendReprV1) -> SemanticTypeLayoutV1 {
+        SemanticTypeLayoutV1::aggregate_with_backend_repr(
+            Some(2),
+            2,
+            backend,
+            false,
+            SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn bf16_abi_for_test(
+        input: SemanticTypeIdV1,
+        output: SemanticTypeIdV1,
+    ) -> SemanticFunctionAbiV1 {
+        let value = |ty| SemanticAbiValueV1::new(ty, SemanticAbiPassModeV1::Ignore);
+        SemanticFunctionAbiV1::new(
+            SemanticAbiIdentityV1::from_sha256([94; 32]),
+            SemanticLayoutIdentityV1::from_sha256([95; 32]),
+            SemanticCanonAbiV1::Rust,
+            false,
+            false,
+            vec![value(input)],
+            value(output),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn bf16_conversion_signatures_require_exact_storage_and_direction() {
+        let backend = SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 16, 2),
+            SemanticScalarValidityRangeV1::new(0, u128::from(u16::MAX)),
+        ));
+        let (request, [u16_id, bf16_id, f32_id]) = bf16_signature_fixture(
+            bf16_layout_for_test(backend),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![SemanticTypeIdV1::from_index(0)]).unwrap(),
+            ),
+        );
+        for (kind, input, output) in [
+            (SemanticBf16ConversionKindV1::FromBits, u16_id, bf16_id),
+            (SemanticBf16ConversionKindV1::ToBits, bf16_id, u16_id),
+            (
+                SemanticBf16ConversionKindV1::FromF32RoundTiesEven,
+                f32_id,
+                bf16_id,
+            ),
+            (SemanticBf16ConversionKindV1::ToF32, bf16_id, f32_id),
+        ] {
+            assert!(compiler_intrinsic_signature_matches(
+                &request,
+                SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                    kind,
+                    input,
+                    output,
+                },
+                &bf16_abi_for_test(input, output),
+            ));
+            assert!(!compiler_intrinsic_signature_matches(
+                &request,
+                SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                    kind,
+                    input,
+                    output,
+                },
+                &bf16_abi_for_test(output, input),
+            ));
+        }
+
+        let (memory_request, [u16_id, bf16_id, _]) = bf16_signature_fixture(
+            bf16_layout_for_test(SemanticBackendReprV1::memory(true)),
+            SemanticTypeShapeV1::Aggregate(
+                SemanticAggregateTypeV1::new(vec![SemanticTypeIdV1::from_index(0)]).unwrap(),
+            ),
+        );
+        assert!(!compiler_intrinsic_signature_matches(
+            &memory_request,
+            SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind: SemanticBf16ConversionKindV1::FromBits,
+                input: u16_id,
+                output: bf16_id,
+            },
+            &bf16_abi_for_test(u16_id, bf16_id),
+        ));
+
+        let (scalar_request, [u16_id, bf16_id, _]) = bf16_signature_fixture(
+            SemanticTypeLayoutV1::new_with_backend_repr(Some(2), 2, backend, false).unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 16,
+            }),
+        );
+        assert!(!compiler_intrinsic_signature_matches(
+            &scalar_request,
+            SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind: SemanticBf16ConversionKindV1::ToBits,
+                input: bf16_id,
+                output: u16_id,
+            },
+            &bf16_abi_for_test(bf16_id, u16_id),
+        ));
     }
 
     fn gfx950_mfma_signature_matches(

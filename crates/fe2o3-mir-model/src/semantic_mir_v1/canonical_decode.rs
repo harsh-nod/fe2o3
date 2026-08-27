@@ -190,6 +190,14 @@ impl AdmittedInertSemanticMirV1 {
         Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V7))
     }
 
+    /// Decodes bytes canonical specifically under the closed V8 BF16 conversion schema.
+    pub fn decode_exact_v8_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_for_schema(bytes, limits, Some(SemanticMirWireVersionV1::V8))
+    }
+
     fn decode_for_schema(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -207,6 +215,7 @@ impl AdmittedInertSemanticMirV1 {
         let request = decoder.request()?;
         decoder.finish()?;
         let admitted = match expected_wire_version {
+            Some(SemanticMirWireVersionV1::V8) => request.admit_exact_v8(limits)?,
             Some(SemanticMirWireVersionV1::V7) => request.admit_exact_v7(limits)?,
             Some(SemanticMirWireVersionV1::V6) => request.admit_exact_v6(limits)?,
             Some(SemanticMirWireVersionV1::V5) => request.admit_exact_v5(limits)?,
@@ -1438,7 +1447,9 @@ impl<'a> CanonicalDecoderV1<'a> {
     fn compiler_intrinsic(
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
-        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V6 {
+        let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V8 {
+            55
+        } else if self.wire_version >= SemanticMirWireVersionV1::V6 {
             54
         } else if self.wire_version >= SemanticMirWireVersionV1::V5 {
             44
@@ -1756,6 +1767,17 @@ impl<'a> CanonicalDecoderV1<'a> {
                 raw_parts: SemanticTypeIdV1(self.u32()?),
                 element_storage: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
+            },
+            55 => SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind: match self.tagged("BF16 conversion kind", 3)? {
+                    0 => SemanticBf16ConversionKindV1::FromBits,
+                    1 => SemanticBf16ConversionKindV1::ToBits,
+                    2 => SemanticBf16ConversionKindV1::FromF32RoundTiesEven,
+                    3 => SemanticBf16ConversionKindV1::ToF32,
+                    _ => unreachable!(),
+                },
+                input: SemanticTypeIdV1(self.u32()?),
+                output: SemanticTypeIdV1(self.u32()?),
             },
             _ => unreachable!(),
         })
@@ -2446,6 +2468,21 @@ mod tests {
 
         let mut reencoder = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
         encode(&mut reencoder, &decoded).unwrap();
+        assert_eq!(reencoder.finish(), encoded);
+    }
+
+    fn v8_compiler_intrinsic_round_trip(operation: SemanticCompilerIntrinsicOperationV1) {
+        let mut writer = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+        encode_compiler_intrinsic_operation(&mut writer, operation).unwrap();
+        let encoded = writer.finish();
+        let mut decoder = CanonicalDecoderV1::new(&encoded, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V8;
+        let decoded = decoder.compiler_intrinsic().unwrap();
+        decoder.finish().unwrap();
+        assert_eq!(decoded, operation);
+
+        let mut reencoder = CanonicalWriterV1::new(HARD_MAX_CANONICAL_BYTES_V1);
+        encode_compiler_intrinsic_operation(&mut reencoder, decoded).unwrap();
         assert_eq!(reencoder.finish(), encoded);
     }
 
@@ -3319,6 +3356,24 @@ mod tests {
                 operation,
                 |writer, value| encode_compiler_intrinsic_operation(writer, *value),
                 |decoder| decoder.compiler_intrinsic(),
+            );
+        }
+    }
+
+    #[test]
+    fn every_bf16_conversion_variant_round_trips_only_under_v8() {
+        for kind in [
+            SemanticBf16ConversionKindV1::FromBits,
+            SemanticBf16ConversionKindV1::ToBits,
+            SemanticBf16ConversionKindV1::FromF32RoundTiesEven,
+            SemanticBf16ConversionKindV1::ToF32,
+        ] {
+            v8_compiler_intrinsic_round_trip(
+                SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                    kind,
+                    input: SemanticTypeIdV1::from_index(0),
+                    output: SemanticTypeIdV1::from_index(1),
+                },
             );
         }
     }

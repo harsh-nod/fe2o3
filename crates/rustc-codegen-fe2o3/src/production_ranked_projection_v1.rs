@@ -6137,6 +6137,7 @@ fn compiler_intrinsic_is_pure_total_scalar_dependency_v1(
         operation,
         SemanticCompilerIntrinsicOperationV1::FabsF32
             | SemanticCompilerIntrinsicOperationV1::MathF32 { .. }
+            | SemanticCompilerIntrinsicOperationV1::Bf16Conversion { .. }
             | SemanticCompilerIntrinsicOperationV1::Bf16MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp4MatrixViewRowMajor { .. }
             | SemanticCompilerIntrinsicOperationV1::Gfx950Fp8MatrixViewRowMajor { .. }
@@ -19844,6 +19845,24 @@ mod tests {
             ProductionRankedOperationV1::DeterministicJoin { dependencies, .. }
                 if dependencies.contains(&ProductionRankedValueV1::Local(invocation))
         )));
+    }
+
+    #[test]
+    fn authenticated_bf16_conversions_are_pure_total_scalar_dependencies() {
+        for kind in [
+            fe2o3_mir_model::semantic_mir_v1::SemanticBf16ConversionKindV1::FromBits,
+            fe2o3_mir_model::semantic_mir_v1::SemanticBf16ConversionKindV1::ToBits,
+            fe2o3_mir_model::semantic_mir_v1::SemanticBf16ConversionKindV1::FromF32RoundTiesEven,
+            fe2o3_mir_model::semantic_mir_v1::SemanticBf16ConversionKindV1::ToF32,
+        ] {
+            assert!(compiler_intrinsic_is_pure_total_scalar_dependency_v1(
+                &SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                    kind,
+                    input: SCALAR_TYPE,
+                    output: SCALAR_TYPE,
+                }
+            ));
+        }
     }
 
     #[test]

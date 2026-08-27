@@ -2363,6 +2363,14 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
         ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
+        ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
+            91 + match conversion {
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits => 1,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven => 2,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32 => 3,
+            }
+        }
     }
 }
 
@@ -2496,6 +2504,23 @@ mod tests {
         assert_eq!(
             gfx950_collectives_and_lds_transpose,
             [76, 77, 78, 79, 80, 81, 82, 83, 84, 85]
+        );
+        assert_eq!(
+            [
+                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits,
+                )),
+                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits,
+                )),
+                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven,
+                )),
+                terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Bf16Conversion(
+                    crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
+                )),
+            ],
+            [91, 92, 93, 94]
         );
     }
 

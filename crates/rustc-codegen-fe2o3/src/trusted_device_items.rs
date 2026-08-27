@@ -127,6 +127,8 @@ pub(crate) struct RejectedTrustedProvider {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TrustedHalfOperation {
+    FromBits(NarrowFloatFormat),
+    ToBits(NarrowFloatFormat),
     FromF32(NarrowFloatFormat),
     ToF32(NarrowFloatFormat),
     WidenedBinary {
@@ -2132,6 +2134,10 @@ impl TrustedHalfOperation {
         use NarrowFloatFormat::{Bf16, F16};
         use WidenedFloatBinaryOp::{Add, Divide, Multiply, Subtract};
         match self {
+            Self::FromBits(F16) => "fe2o3_device::F16::from_bits",
+            Self::FromBits(Bf16) => "fe2o3_device::Bf16::from_bits",
+            Self::ToBits(F16) => "fe2o3_device::F16::to_bits",
+            Self::ToBits(Bf16) => "fe2o3_device::Bf16::to_bits",
             Self::FromF32(F16) => "fe2o3_device::F16::from_f32",
             Self::FromF32(Bf16) => "fe2o3_device::Bf16::from_f32",
             Self::ToF32(F16) => "fe2o3_device::F16::to_f32",
@@ -2212,6 +2218,18 @@ fn classify_half_operation(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedHalf
     }
 
     match (value, name) {
+        (DeviceValueDiagnosticItem::F16, "from_bits") => {
+            Some(TrustedHalfOperation::FromBits(NarrowFloatFormat::F16))
+        }
+        (DeviceValueDiagnosticItem::Bf16, "from_bits") => {
+            Some(TrustedHalfOperation::FromBits(NarrowFloatFormat::Bf16))
+        }
+        (DeviceValueDiagnosticItem::F16, "to_bits") => {
+            Some(TrustedHalfOperation::ToBits(NarrowFloatFormat::F16))
+        }
+        (DeviceValueDiagnosticItem::Bf16, "to_bits") => {
+            Some(TrustedHalfOperation::ToBits(NarrowFloatFormat::Bf16))
+        }
         (DeviceValueDiagnosticItem::F16, "from_f32") => {
             Some(TrustedHalfOperation::FromF32(NarrowFloatFormat::F16))
         }
@@ -2249,7 +2267,7 @@ mod tests {
     use super::{
         CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
         ReviewedProviderSemanticDefinitionV1, TrustedAmdGpuDiagnosticOperation,
-        TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedHalfOperation,
         WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
         exact_provider_compiler_definition_path_v1, pinned_core_semantic_terminal_identity_v1,
@@ -3029,6 +3047,23 @@ mod tests {
         ];
         for item in half_math_items {
             assert!(!item.canonical_path().is_empty());
+        }
+
+        for operation in [
+            TrustedHalfOperation::FromBits(fe2o3_kernel_ir::NarrowFloatFormat::F16),
+            TrustedHalfOperation::FromBits(fe2o3_kernel_ir::NarrowFloatFormat::Bf16),
+            TrustedHalfOperation::ToBits(fe2o3_kernel_ir::NarrowFloatFormat::F16),
+            TrustedHalfOperation::ToBits(fe2o3_kernel_ir::NarrowFloatFormat::Bf16),
+            TrustedHalfOperation::FromF32(fe2o3_kernel_ir::NarrowFloatFormat::F16),
+            TrustedHalfOperation::FromF32(fe2o3_kernel_ir::NarrowFloatFormat::Bf16),
+            TrustedHalfOperation::ToF32(fe2o3_kernel_ir::NarrowFloatFormat::F16),
+            TrustedHalfOperation::ToF32(fe2o3_kernel_ir::NarrowFloatFormat::Bf16),
+        ] {
+            assert!(
+                !TrustedDeviceItem::HalfOperation(operation)
+                    .canonical_path()
+                    .is_empty()
+            );
         }
 
         let markers = HALF_MATH_DIAGNOSTIC_ITEMS

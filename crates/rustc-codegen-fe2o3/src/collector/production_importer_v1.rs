@@ -3,21 +3,24 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use dialect_amdgcn::DeviceValueDiagnosticItem;
 use fe2o3_mir_model::semantic_mir_v1::{
     AdmittedInertSemanticMirV1, HARD_MAX_FUNCTIONS_V1, HARD_MAX_ROOTS_V1,
-    InertSemanticMirRequestV1, SemanticCallableDeclV1, SemanticCallableIdV1,
-    SemanticCompilerIntrinsicIdentityV1, SemanticCompilerIntrinsicOperationV1,
-    SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1, SemanticFunctionAbiV1,
-    SemanticFunctionIdV1, SemanticFunctionIdentityV1, SemanticFunctionRoleV1,
-    SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1, SemanticKernelEntryV1,
-    SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1, SemanticKernelSourceContractV1,
-    SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
-    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
-    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMirErrorV1,
-    SemanticMirLimitsV1, SemanticMirResourceV1, SemanticNonBodyCallableBindingV1,
-    SemanticReachableAssemblyV1, SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1,
-    SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
-    SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
+    InertSemanticMirRequestV1, SemanticBf16ConversionKindV1, SemanticCallableDeclV1,
+    SemanticCallableIdV1, SemanticCompilerIntrinsicIdentityV1,
+    SemanticCompilerIntrinsicOperationV1, SemanticDisjointIndexSpaceV1, SemanticF32MathFunctionV1,
+    SemanticFunctionAbiV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
+    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticKernelBindingIdentityV1,
+    SemanticKernelEntryV1, SemanticKernelLaunchBoundsV1, SemanticKernelResourceContractV1,
+    SemanticKernelSourceContractV1, SemanticLinkSymbolV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaAccumulatorDistributionV1, SemanticMfmaOperandContractV1,
+    SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1,
+    SemanticMfmaStorageLayoutV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
+    SemanticNonBodyCallableBindingV1, SemanticReachableAssemblyV1, SemanticScalarTypeV1,
+    SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1,
+    SemanticUnsafeAssemblyDeclarationV1, SemanticUnsafeAssemblyTargetV1,
+    SemanticWorkgroupDimensionsV1,
 };
 use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::{Symbol, sym};
@@ -39,6 +42,7 @@ use crate::production_semantic_fn_abi_v1::{
     ConstructedSemanticFunctionAbisV1, ProductionSemanticFnAbiErrorV1,
     construct_production_semantic_fn_abis_v1,
 };
+use crate::production_semantic_terminal_v1::ProductionBf16ConversionV1;
 use crate::production_semantic_types_v1::{
     ProductionSemanticTypeErrorV1, construct_production_semantic_types_v1,
 };
@@ -967,6 +971,62 @@ fn terminal_operation_v1<'tcx>(
             Ok(SemanticCompilerIntrinsicOperationV1::MathF32 {
                 context: pointer_pointee_v1(types, inputs[0])?,
                 function: semantic_f32_math_function_v1(function),
+            })
+        }
+        ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
+            if inputs.len() != 1 || rust_inputs.len() != 1 {
+                return Err(body_owner_table_mismatch_v1("BF16 conversion arity"));
+            }
+            let input = inputs[0];
+            let rust_input = rust_inputs[0];
+            let rust_is_bf16 = |ty| {
+                rust_is_trusted_adt_v1(
+                    tcx,
+                    ty,
+                    TrustedDeviceItem::DeviceValue(DeviceValueDiagnosticItem::Bf16),
+                )
+            };
+            let rust_is_u16 = |ty: Ty<'tcx>| matches!(ty.kind(), TyKind::Uint(UintTy::U16));
+            let rust_is_f32 = |ty: Ty<'tcx>| matches!(ty.kind(), TyKind::Float(FloatTy::F32));
+            let (kind, valid) = match conversion {
+                ProductionBf16ConversionV1::FromBits => (
+                    SemanticBf16ConversionKindV1::FromBits,
+                    rust_is_u16(rust_input)
+                        && rust_is_bf16(rust_output)
+                        && semantic_u16_type_v1(types, input)
+                        && semantic_bf16_storage_type_v1(types, output),
+                ),
+                ProductionBf16ConversionV1::ToBits => (
+                    SemanticBf16ConversionKindV1::ToBits,
+                    rust_is_bf16(rust_input)
+                        && rust_is_u16(rust_output)
+                        && semantic_bf16_storage_type_v1(types, input)
+                        && semantic_u16_type_v1(types, output),
+                ),
+                ProductionBf16ConversionV1::FromF32RoundTiesEven => (
+                    SemanticBf16ConversionKindV1::FromF32RoundTiesEven,
+                    rust_is_f32(rust_input)
+                        && rust_is_bf16(rust_output)
+                        && semantic_f32_type_v1(types, input)
+                        && semantic_bf16_storage_type_v1(types, output),
+                ),
+                ProductionBf16ConversionV1::ToF32 => (
+                    SemanticBf16ConversionKindV1::ToF32,
+                    rust_is_bf16(rust_input)
+                        && rust_is_f32(rust_output)
+                        && semantic_bf16_storage_type_v1(types, input)
+                        && semantic_f32_type_v1(types, output),
+                ),
+            };
+            if !valid {
+                return Err(body_owner_table_mismatch_v1(
+                    "authenticated BF16 conversion ABI",
+                ));
+            }
+            Ok(SemanticCompilerIntrinsicOperationV1::Bf16Conversion {
+                kind,
+                input,
+                output,
             })
         }
         ProductionTerminalExpansionV1::CollectiveContextCurrent
@@ -2315,6 +2375,55 @@ fn single_const_u32_v1(instance: Instance<'_>) -> Option<u32> {
     values.next().is_none().then_some(value)
 }
 
+fn semantic_u16_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    types.get(ty.index() as usize).is_some_and(|declaration| {
+        matches!(
+            declaration.shape(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 16,
+            })
+        )
+    })
+}
+
+fn semantic_f32_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    types.get(ty.index() as usize).is_some_and(|declaration| {
+        matches!(
+            declaration.shape(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float { bits: 32 })
+        )
+    })
+}
+
+fn semantic_bf16_storage_type_v1(types: &[SemanticTypeDeclV1], ty: SemanticTypeIdV1) -> bool {
+    let Some(declaration) = types.get(ty.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
+        return false;
+    };
+    let [bits] = aggregate.fields() else {
+        return false;
+    };
+    let Some(bits_declaration) = types.get(bits.index() as usize) else {
+        return false;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
+        return false;
+    };
+    semantic_u16_type_v1(types, *bits)
+        && declaration.layout().size_bytes() == Some(2)
+        && declaration.layout().alignment_bytes() == 2
+        && !declaration.layout().is_uninhabited()
+        && bits_declaration.layout().size_bytes() == Some(2)
+        && bits_declaration.layout().alignment_bytes() == 2
+        && !bits_declaration.layout().is_uninhabited()
+        && declaration.layout().backend_repr() == bits_declaration.layout().backend_repr()
+        && layout.field_offsets() == [0]
+        && layout.padding().is_empty()
+}
+
 fn single_const_u64_v1(instance: Instance<'_>) -> Option<u64> {
     let mut values = instance
         .args
@@ -3211,6 +3320,14 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
         ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
+        ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
+            91 + match conversion {
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits => 1,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven => 2,
+                crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32 => 3,
+            }
+        }
     }
 }
 
