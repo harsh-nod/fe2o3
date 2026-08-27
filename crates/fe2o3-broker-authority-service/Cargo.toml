@@ -13,11 +13,13 @@ fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
 fe2o3-external-anchor-protocol.workspace = true
 fe2o3-host-link-closure = { path = "../fe2o3-host-link-closure" }
+fe2o3-runtime-protocol.workspace = true
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 libc.workspace = true
 rustix = { workspace = true, features = ["process", "rand"] }
 sha2.workspace = true
+zeroize = "=1.9.0"
 
 [dev-dependencies]
-ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 serde = "=1.0.229"
 tempfile = "=3.21.0"
