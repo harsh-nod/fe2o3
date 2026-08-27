@@ -203,6 +203,26 @@ pub fn pass_preservation_repair_for_error_v1(
             KernelCheckRepairActionV1::PreservePassSemantics,
             "compiler maintainer: remove the persistent structural mutation from the named analysis pass; a transforming pass must instead re-enter correctness verification under a separately validated semantic-refinement contract",
         ),
+        PlironPassPreservationErrorV1::MutationAttempted {
+            pass: Some(pass), ..
+        }
+        | PlironPassPreservationErrorV1::MutationEpochUnavailable {
+            pass: Some(pass), ..
+        } => (
+            *pass,
+            KernelCheckRepairActionV1::PreservePassSemantics,
+            "compiler maintainer: make the named analysis stage use immutable PLIRON queries only; move transformations before verification and restart the fixed pipeline from a fresh snapshot",
+        ),
+        PlironPassPreservationErrorV1::StaleMutationEpoch { pass, .. } => (
+            *pass,
+            KernelCheckRepairActionV1::PreservePassSemantics,
+            "compiler maintainer: discard stale analysis capabilities and restart the complete fixed pipeline from the current verified PLIRON identity",
+        ),
+        PlironPassPreservationErrorV1::AnalysisPanicked { pass } => (
+            *pass,
+            KernelCheckRepairActionV1::PreservePassSemantics,
+            "compiler maintainer: replace the panic in the named analysis stage with a typed fail-closed diagnostic and rerun the fixed pipeline",
+        ),
         PlironPassPreservationErrorV1::IdentityUnavailable { source_code, .. }
             if *source_code == "FE2O3-PRESERVE-001" =>
         {
@@ -910,10 +930,16 @@ mod tests {
     };
     use fe2o3_kernel_ir::TensorLayoutContractV1;
     use pliron::{
-        builtin::{ops::FuncOp, types::FunctionType},
+        builtin::{
+            attributes::UnitAttr,
+            ops::FuncOp,
+            types::{FunctionType, IntegerType, Signedness},
+        },
         context::Context,
         dialect::DialectName,
         op::Op,
+        operation::Operation,
+        r#type::Typed,
     };
 
     use super::*;
@@ -1045,6 +1071,194 @@ mod tests {
         assert!(rendered.contains("analysis-only pass TensorLayout"));
         assert!(rendered.contains("FE2O3-PRESERVE-010"));
         assert!(rendered.contains("FE2O3-FIX-PASS-PRESERVATION"));
+    }
+
+    fn assert_transient_mutation(
+        error: &PlironPassPreservationErrorV1,
+        pass: KernelCheckPassKindV1,
+    ) {
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::MutationAttempted {
+                pass: Some(observed),
+                ..
+            } if *observed == pass
+        ));
+        assert_eq!(error.code(), "FE2O3-PRESERVE-020");
+        let repair = pass_preservation_repair_for_error_v1(error);
+        assert_eq!(repair.pass(), pass);
+        assert_eq!(
+            repair.action(),
+            KernelCheckRepairActionV1::PreservePassSemantics
+        );
+    }
+
+    #[test]
+    fn restored_attributes_and_operation_structure_are_rejected() {
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "restored_attribute");
+        let key = "transient_test_attribute".try_into().unwrap();
+        let operation = ret.get_operation();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                let original = operation.deref(context).attributes.clone();
+                operation
+                    .deref_mut(context)
+                    .attributes
+                    .set(key, UnitAttr::new());
+                operation.deref_mut(context).attributes = original;
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "restored_operation_kind");
+        let different_kind = IndexConstantOp::new(context, 9);
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                different_kind
+                    .get_operation()
+                    .insert_before(context, ret.get_operation());
+                different_kind.get_operation().unlink(context);
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+    }
+
+    #[test]
+    fn restored_value_type_and_cfg_successor_are_rejected() {
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "restored_value_type");
+        let constant = IndexConstantOp::new(context, 1);
+        constant
+            .get_operation()
+            .insert_before(context, ret.get_operation());
+        let value = constant.get_operation().deref(context).get_result(0);
+        let original_type = value.get_type(context);
+        let alternate_type: pliron::r#type::TypeHandle =
+            IntegerType::get(context, 32, Signedness::Signless).into();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                value.set_type(context, alternate_type);
+                value.set_type(context, original_type);
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "restored_cfg");
+        let entry = function.get_entry_block(context);
+        let terminator = ret.get_operation();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                Operation::push_successor(terminator, context, entry);
+                assert_eq!(Operation::pop_successor(terminator, context), entry);
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+    }
+
+    #[test]
+    fn failed_mutable_borrow_and_mutation_before_error_are_rejected() {
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "failed_mutable_borrow");
+        let operation = ret.get_operation();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                let read = operation.deref(context);
+                assert!(operation.try_deref_mut(context).is_err());
+                drop(read);
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "mutation_before_error");
+        let operation = ret.get_operation();
+        let key = "restored_before_error".try_into().unwrap();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                let original = operation.deref(context).attributes.clone();
+                operation
+                    .deref_mut(context)
+                    .attributes
+                    .set(key, UnitAttr::new());
+                operation.deref_mut(context).attributes = original;
+                Err::<(), _>("analysis rejected after restoring its mutation")
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::TensorLayout);
+    }
+
+    #[test]
+    fn read_only_stage_is_clean_and_later_mutation_has_exact_stage_attribution() {
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "stage_attribution");
+        let operation = ret.get_operation();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+
+        preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                assert_eq!(operation.deref(context).get_num_results(), 0);
+                Ok::<_, ()>(())
+            })
+            .expect("read-only stage preserves the epoch")
+            .unwrap();
+
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::MemoryBounds, || {
+                let original = operation.deref(context).attributes.clone();
+                operation.deref_mut(context).attributes = original.clone();
+                operation.deref_mut(context).attributes = original;
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert_transient_mutation(&error, KernelCheckPassKindV1::MemoryBounds);
+
+        let context = &mut setup();
+        let (function, ret) = valid_tensor_function(context, "stale_capability");
+        let operation = ret.get_operation();
+        let provider = LivePlironStructuralIdentityProviderV1::new(context, &function);
+        let mut preservation = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || Ok::<_, ()>(()))
+            .unwrap()
+            .unwrap();
+
+        let original = operation.deref(context).attributes.clone();
+        operation.deref_mut(context).attributes = original.clone();
+        operation.deref_mut(context).attributes = original;
+        let error = preservation
+            .run_contiguous_pass(KernelCheckPassKindV1::MemoryBounds, || Ok::<_, ()>(()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::StaleMutationEpoch {
+                pass: KernelCheckPassKindV1::MemoryBounds,
+                ..
+            }
+        ));
+        assert_eq!(error.code(), "FE2O3-PRESERVE-021");
+        let repair = pass_preservation_repair_for_error_v1(&error);
+        assert_eq!(repair.pass(), KernelCheckPassKindV1::MemoryBounds);
     }
 
     #[test]

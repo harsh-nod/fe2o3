@@ -1,11 +1,21 @@
 //! Sealed structural-preservation contracts for the production PLIRON pipeline.
 //!
 //! A declaration states what a pass is allowed to do. Only exact identity
-//! comparison around the actual pass can certify that the declaration held.
-//! Pre/post comparison detects retained structural mutations; it does not rule
-//! out transient mutate-then-restore behavior or prove an analysis report sound.
+//! comparison plus PLIRON's monotonic context mutation-attempt epoch around the
+//! actual pass can certify that the declaration held. The epoch detects
+//! transient mutate-then-restore attempts while snapshots retain precise diffs.
+//!
+//! The production session is crate-private, admits only the fixed eight stages,
+//! and operates on the identity module's closed operation/type/attribute set.
+//! Unsafe code is denied in this crate; safe PLIRON mutation routes are owned by
+//! the pinned fork and epoch-instrumented before mutable access or insertion.
+//! This enforces IR immutability but does not prove an analysis result sound.
 
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
+};
 
 use crate::KernelCheckPassKindV1;
 
@@ -87,6 +97,7 @@ impl PlironStructuralIdentityLabelV1 {
 pub struct PlironPassPreservationCertificateV1 {
     pass: KernelCheckPassKindV1,
     identity: PlironStructuralIdentityLabelV1,
+    mutation_epoch: u64,
 }
 
 impl PlironPassPreservationCertificateV1 {
@@ -96,6 +107,10 @@ impl PlironPassPreservationCertificateV1 {
 
     pub const fn identity(&self) -> PlironStructuralIdentityLabelV1 {
         self.identity
+    }
+
+    pub const fn mutation_epoch(&self) -> u64 {
+        self.mutation_epoch
     }
 }
 
@@ -151,6 +166,8 @@ pub struct PlironPassPreservationReportV1 {
     exact_output_identity: Arc<[u8]>,
     custody: Arc<()>,
     certificates: Vec<PlironPassPreservationCertificateV1>,
+    input_mutation_epoch: u64,
+    output_mutation_epoch: u64,
 }
 
 impl PlironPassPreservationReportV1 {
@@ -166,14 +183,23 @@ impl PlironPassPreservationReportV1 {
         &self.certificates
     }
 
+    pub const fn input_mutation_epoch(&self) -> u64 {
+        self.input_mutation_epoch
+    }
+
+    pub const fn output_mutation_epoch(&self) -> u64 {
+        self.output_mutation_epoch
+    }
+
     pub fn is_exact_identity(&self) -> bool {
         self.input_identity == self.output_identity
+            && self.input_mutation_epoch == self.output_mutation_epoch
             && self.certificates.len() == MAX_PLIRON_PASS_CONTRACTS_V1
             && self.exact_output_identity.len() == self.output_identity.canonical_len()
-            && self
-                .certificates
-                .iter()
-                .all(|certificate| certificate.identity == self.output_identity)
+            && self.certificates.iter().all(|certificate| {
+                certificate.identity == self.output_identity
+                    && certificate.mutation_epoch == self.output_mutation_epoch
+            })
     }
 
     /// Compares retained canonical bytes. Digest labels are never used as the
@@ -186,6 +212,19 @@ impl PlironPassPreservationReportV1 {
         true
     }
 
+    pub const fn detects_transient_mutation_attempts(&self) -> bool {
+        true
+    }
+
+    pub const fn enforces_analysis_only_ir_immutability(&self) -> bool {
+        true
+    }
+
+    pub const fn grants_analysis_result_soundness_authority(&self) -> bool {
+        false
+    }
+
+    /// Compatibility query. Use the two explicit authority queries above.
     pub const fn grants_read_only_or_analysis_soundness_authority(&self) -> bool {
         false
     }
@@ -214,6 +253,23 @@ pub enum PlironPassPreservationErrorV1 {
         source_code: &'static str,
         detail: String,
     },
+    MutationAttempted {
+        pass: Option<KernelCheckPassKindV1>,
+        before: u64,
+        after: u64,
+    },
+    StaleMutationEpoch {
+        pass: KernelCheckPassKindV1,
+        expected: u64,
+        observed: u64,
+    },
+    MutationEpochUnavailable {
+        pass: Option<KernelCheckPassKindV1>,
+        detail: String,
+    },
+    AnalysisPanicked {
+        pass: KernelCheckPassKindV1,
+    },
     IdentityUnavailable {
         source_code: &'static str,
         detail: String,
@@ -230,6 +286,10 @@ impl PlironPassPreservationErrorV1 {
             Self::OmittedPassDeclaration { .. } => "FE2O3-PRESERVE-024",
             Self::StructuralIdentityChanged { .. } => "FE2O3-PRESERVE-025",
             Self::StaleInputIdentity { .. } => "FE2O3-PRESERVE-026",
+            Self::MutationAttempted { .. } => "FE2O3-PRESERVE-020",
+            Self::StaleMutationEpoch { .. } => "FE2O3-PRESERVE-021",
+            Self::MutationEpochUnavailable { .. } => "FE2O3-PRESERVE-023",
+            Self::AnalysisPanicked { .. } => "FE2O3-PRESERVE-027",
             Self::IdentityUnavailable { .. } => "FE2O3-PRESERVE-028",
             Self::InvalidSessionState { .. } => "FE2O3-PRESERVE-029",
         }
@@ -268,6 +328,48 @@ impl fmt::Display for PlironPassPreservationErrorV1 {
                 formatter,
                 "analysis-only pass {pass:?} received stale input; error[{source_code}]: {detail}"
             ),
+            Self::MutationAttempted {
+                pass,
+                before,
+                after,
+            } => {
+                if let Some(pass) = pass {
+                    write!(
+                        formatter,
+                        "analysis-only pass {pass:?} attempted PLIRON mutation (context epoch {before} -> {after}); help: use only immutable analysis queries in this stage"
+                    )
+                } else {
+                    write!(
+                        formatter,
+                        "compiler-owned PLIRON identity handling attempted mutation (context epoch {before} -> {after}); help: keep snapshot and report construction read-only"
+                    )
+                }
+            }
+            Self::StaleMutationEpoch {
+                pass,
+                expected,
+                observed,
+            } => write!(
+                formatter,
+                "analysis-only pass {pass:?} received a stale mutation capability (expected context epoch {expected}, observed {observed}); help: restart the fixed pipeline from a fresh structural snapshot"
+            ),
+            Self::MutationEpochUnavailable { pass, detail } => {
+                if let Some(pass) = pass {
+                    write!(
+                        formatter,
+                        "analysis-only pass {pass:?} cannot observe the PLIRON mutation epoch: {detail}; help: rebuild the context before verification"
+                    )
+                } else {
+                    write!(
+                        formatter,
+                        "PLIRON mutation epoch is unavailable: {detail}; help: rebuild the context before verification"
+                    )
+                }
+            }
+            Self::AnalysisPanicked { pass } => write!(
+                formatter,
+                "analysis-only pass {pass:?} panicked; help: repair the pass so it returns a typed fail-closed diagnostic"
+            ),
             Self::IdentityUnavailable {
                 source_code,
                 detail,
@@ -293,6 +395,18 @@ pub(crate) enum IdentityCaptureFailureV1 {
     },
 }
 
+pub(crate) struct MutationEpochCaptureFailureV1 {
+    detail: String,
+}
+
+impl MutationEpochCaptureFailureV1 {
+    pub(crate) fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+        }
+    }
+}
+
 pub(crate) struct IdentityComparisonFailureV1 {
     code: &'static str,
     detail: String,
@@ -312,6 +426,7 @@ impl IdentityComparisonFailureV1 {
 pub(crate) trait PlironStructuralIdentityProviderV1 {
     type Snapshot;
 
+    fn mutation_epoch(&self) -> Result<u64, MutationEpochCaptureFailureV1>;
     fn capture(&mut self) -> Result<Self::Snapshot, IdentityCaptureFailureV1>;
     fn label(&self, snapshot: &Self::Snapshot) -> PlironStructuralIdentityLabelV1;
     fn require_exact_identity(
@@ -337,6 +452,7 @@ fn identity_error(error: IdentityCaptureFailureV1) -> PlironPassPreservationErro
 struct PendingPassV1<S> {
     pass: KernelCheckPassKindV1,
     before: S,
+    mutation_epoch: u64,
 }
 
 pub(crate) struct PlironPassContractSessionV1<P: PlironStructuralIdentityProviderV1> {
@@ -348,11 +464,32 @@ pub(crate) struct PlironPassContractSessionV1<P: PlironStructuralIdentityProvide
     next: usize,
     pending: Option<PendingPassV1<P::Snapshot>>,
     certificates: Vec<PlironPassPreservationCertificateV1>,
+    input_mutation_epoch: u64,
+    lineage_mutation_epoch: u64,
 }
 
 impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
     fn new(mut provider: P) -> Result<Self, PlironPassPreservationErrorV1> {
+        let input_mutation_epoch = provider.mutation_epoch().map_err(|error| {
+            PlironPassPreservationErrorV1::MutationEpochUnavailable {
+                pass: None,
+                detail: error.detail,
+            }
+        })?;
         let input = provider.capture().map_err(identity_error)?;
+        let after_capture = provider.mutation_epoch().map_err(|error| {
+            PlironPassPreservationErrorV1::MutationEpochUnavailable {
+                pass: None,
+                detail: error.detail,
+            }
+        })?;
+        if after_capture != input_mutation_epoch {
+            return Err(PlironPassPreservationErrorV1::MutationAttempted {
+                pass: None,
+                before: input_mutation_epoch,
+                after: after_capture,
+            });
+        }
         let input_identity = provider.label(&input);
         Ok(Self {
             provider,
@@ -363,6 +500,8 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
             next: 0,
             pending: None,
             certificates: Vec::with_capacity(MAX_PLIRON_PASS_CONTRACTS_V1),
+            input_mutation_epoch,
+            lineage_mutation_epoch: input_mutation_epoch,
         })
     }
 
@@ -372,9 +511,11 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
         revalidate_input: bool,
     ) -> Result<(), PlironPassPreservationErrorV1> {
         self.require_pass_can_begin(pass)?;
+        let mutation_epoch = self.observe_mutation_epoch(Some(pass))?;
         let expected = self.take_lineage()?;
-        let before = if revalidate_input {
+        let before = if revalidate_input || mutation_epoch != self.lineage_mutation_epoch {
             let before = self.capture()?;
+            let after_capture = self.observe_mutation_epoch(Some(pass))?;
             if let Err(mismatch) = self.provider.require_exact_identity(&expected, &before) {
                 return Err(PlironPassPreservationErrorV1::StaleInputIdentity {
                     pass,
@@ -382,11 +523,29 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
                     detail: mismatch.detail,
                 });
             }
+            if after_capture != mutation_epoch {
+                return Err(PlironPassPreservationErrorV1::MutationAttempted {
+                    pass: Some(pass),
+                    before: mutation_epoch,
+                    after: after_capture,
+                });
+            }
+            if mutation_epoch != self.lineage_mutation_epoch {
+                return Err(PlironPassPreservationErrorV1::StaleMutationEpoch {
+                    pass,
+                    expected: self.lineage_mutation_epoch,
+                    observed: mutation_epoch,
+                });
+            }
             before
         } else {
             expected
         };
-        self.pending = Some(PendingPassV1 { pass, before });
+        self.pending = Some(PendingPassV1 {
+            pass,
+            before,
+            mutation_epoch,
+        });
         Ok(())
     }
 
@@ -398,9 +557,12 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
         execute: impl FnOnce() -> Result<T, E>,
     ) -> Result<Result<T, E>, PlironPassPreservationErrorV1> {
         self.begin_pass(pass, false)?;
-        let result = execute();
+        let result = catch_unwind(AssertUnwindSafe(execute));
         self.end_pass(pass)?;
-        Ok(result)
+        match result {
+            Ok(result) => Ok(result),
+            Err(_) => Err(PlironPassPreservationErrorV1::AnalysisPanicked { pass }),
+        }
     }
 
     pub(crate) fn validation_handle(&self) -> PlironPassValidationHandleV1 {
@@ -491,6 +653,7 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
                 detail: format!("post-pass structural identity is unavailable: {detail}"),
             },
         })?;
+        let after_mutation_epoch = self.observe_mutation_epoch(Some(pass))?;
         if let Err(mismatch) = self
             .provider
             .require_exact_identity(&pending.before, &after)
@@ -501,13 +664,36 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
                 detail: mismatch.detail,
             });
         }
+        if after_mutation_epoch != pending.mutation_epoch {
+            return Err(PlironPassPreservationErrorV1::MutationAttempted {
+                pass: Some(pass),
+                before: pending.mutation_epoch,
+                after: after_mutation_epoch,
+            });
+        }
         let identity = self.provider.label(&after);
-        self.certificates
-            .push(PlironPassPreservationCertificateV1 { pass, identity });
+        self.certificates.push(PlironPassPreservationCertificateV1 {
+            pass,
+            identity,
+            mutation_epoch: after_mutation_epoch,
+        });
         self.lineage = Some(after);
         self.lineage_identity = identity;
+        self.lineage_mutation_epoch = after_mutation_epoch;
         self.next = self.next.saturating_add(1);
         Ok(())
+    }
+
+    fn observe_mutation_epoch(
+        &self,
+        pass: Option<KernelCheckPassKindV1>,
+    ) -> Result<u64, PlironPassPreservationErrorV1> {
+        self.provider.mutation_epoch().map_err(|error| {
+            PlironPassPreservationErrorV1::MutationEpochUnavailable {
+                pass,
+                detail: error.detail,
+            }
+        })
     }
 
     fn capture(&mut self) -> Result<P::Snapshot, PlironPassPreservationErrorV1> {
@@ -533,6 +719,14 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
                 pass: contract.pass(),
             });
         }
+        let output_mutation_epoch = self.observe_mutation_epoch(None)?;
+        if output_mutation_epoch != self.lineage_mutation_epoch {
+            return Err(PlironPassPreservationErrorV1::MutationAttempted {
+                pass: None,
+                before: self.lineage_mutation_epoch,
+                after: output_mutation_epoch,
+            });
+        }
         let output =
             self.lineage
                 .take()
@@ -551,6 +745,8 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
             exact_output_identity,
             custody: self.custody,
             certificates: self.certificates,
+            input_mutation_epoch: self.input_mutation_epoch,
+            output_mutation_epoch,
         })
     }
 }
@@ -567,14 +763,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::VecDeque;
+    use std::{cell::Cell, collections::VecDeque, rc::Rc};
 
     struct ScriptedIdentityProviderV1 {
         snapshots: VecDeque<Result<Vec<u8>, IdentityCaptureFailureV1>>,
+        mutation_epoch: Rc<Cell<u64>>,
+        epoch_unavailable: Rc<Cell<bool>>,
     }
 
     impl PlironStructuralIdentityProviderV1 for ScriptedIdentityProviderV1 {
         type Snapshot = Vec<u8>;
+
+        fn mutation_epoch(&self) -> Result<u64, MutationEpochCaptureFailureV1> {
+            if self.epoch_unavailable.get() {
+                Err(MutationEpochCaptureFailureV1::new(
+                    "scripted epoch exhausted",
+                ))
+            } else {
+                Ok(self.mutation_epoch.get())
+            }
+        }
 
         fn capture(&mut self) -> Result<Self::Snapshot, IdentityCaptureFailureV1> {
             self.snapshots
@@ -618,9 +826,23 @@ mod tests {
     }
 
     fn provider(values: &[u8]) -> ScriptedIdentityProviderV1 {
-        ScriptedIdentityProviderV1 {
-            snapshots: values.iter().map(|value| Ok(vec![*value; 4])).collect(),
-        }
+        provider_with_epoch(values).0
+    }
+
+    fn provider_with_epoch(
+        values: &[u8],
+    ) -> (ScriptedIdentityProviderV1, Rc<Cell<u64>>, Rc<Cell<bool>>) {
+        let mutation_epoch = Rc::new(Cell::new(0));
+        let epoch_unavailable = Rc::new(Cell::new(false));
+        (
+            ScriptedIdentityProviderV1 {
+                snapshots: values.iter().map(|value| Ok(vec![*value; 4])).collect(),
+                mutation_epoch: Rc::clone(&mutation_epoch),
+                epoch_unavailable: Rc::clone(&epoch_unavailable),
+            },
+            mutation_epoch,
+            epoch_unavailable,
+        )
     }
 
     #[test]
@@ -679,10 +901,17 @@ mod tests {
         let report = session.finish().unwrap();
         assert!(report.is_exact_identity());
         assert!(report.detects_persistent_structural_mutation());
+        assert!(report.detects_transient_mutation_attempts());
+        assert!(report.enforces_analysis_only_ir_immutability());
+        assert!(!report.grants_analysis_result_soundness_authority());
         assert!(!report.grants_read_only_or_analysis_soundness_authority());
         assert_eq!(report.certificates().len(), 8);
         assert_eq!(report.input_identity().canonical_len(), 4);
         assert!(report.exactly_matches_retained_output(&report.clone()));
+        let mut stale_certificate = report.clone();
+        stale_certificate.certificates[3].mutation_epoch += 1;
+        assert!(!stale_certificate.is_exact_identity());
+
         assert_eq!(
             report
                 .certificates()
@@ -720,6 +949,8 @@ mod tests {
                 snapshots: (0..=MAX_PLIRON_PASS_CONTRACTS_V1)
                     .map(|_| Ok(snapshot.clone()))
                     .collect(),
+                mutation_epoch: Rc::new(Cell::new(0)),
+                epoch_unavailable: Rc::new(Cell::new(false)),
             };
             let mut session = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
             for contract in PRODUCTION_PLIRON_PASS_CONTRACTS_V1 {
@@ -755,6 +986,8 @@ mod tests {
                 source_code: "FE2O3-PRESERVE-002",
                 detail: "error[FE2O3-PRESERVE-002]: canonical identity is too large".to_owned(),
             })]),
+            mutation_epoch: Rc::new(Cell::new(0)),
+            epoch_unavailable: Rc::new(Cell::new(false)),
         };
         let error = begin_production_pliron_pass_contract_session_v1(provider)
             .err()
@@ -770,6 +1003,8 @@ mod tests {
                     detail: "unsupported post-pass operation".to_owned(),
                 }),
             ]),
+            mutation_epoch: Rc::new(Cell::new(0)),
+            epoch_unavailable: Rc::new(Cell::new(false)),
         };
         let mut session = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
         let error = session
@@ -784,5 +1019,91 @@ mod tests {
             }
         ));
         assert!(error.to_string().contains("post-pass structural identity"));
+    }
+
+    #[test]
+    fn transient_mutation_and_mutation_before_error_are_rejected() {
+        let (provider, epoch, _) = provider_with_epoch(&[1, 1]);
+        let mut session = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = session
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                epoch.set(epoch.get() + 2);
+                Ok::<_, ()>(())
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::MutationAttempted {
+                pass: Some(KernelCheckPassKindV1::TensorLayout),
+                before: 0,
+                after: 2,
+            }
+        ));
+        assert_eq!(error.code(), "FE2O3-PRESERVE-020");
+
+        let (provider, epoch, _) = provider_with_epoch(&[1, 1]);
+        let mut session = begin_production_pliron_pass_contract_session_v1(provider).unwrap();
+        let error = session
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || {
+                epoch.set(epoch.get() + 1);
+                Err::<(), _>("analysis rejected after mutation")
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::MutationAttempted {
+                pass: Some(KernelCheckPassKindV1::TensorLayout),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn stale_epoch_panics_and_epoch_exhaustion_fail_closed() {
+        let (stale_provider, epoch, _) = provider_with_epoch(&[1, 1, 1]);
+        let mut session = begin_production_pliron_pass_contract_session_v1(stale_provider).unwrap();
+        session
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || Ok::<_, ()>(()))
+            .unwrap()
+            .unwrap();
+        epoch.set(1);
+        let error = session
+            .run_contiguous_pass(KernelCheckPassKindV1::MemoryBounds, || Ok::<_, ()>(()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::StaleMutationEpoch {
+                pass: KernelCheckPassKindV1::MemoryBounds,
+                expected: 0,
+                observed: 1,
+            }
+        ));
+        assert_eq!(error.code(), "FE2O3-PRESERVE-021");
+
+        let mut panicking =
+            begin_production_pliron_pass_contract_session_v1(provider(&[1, 1])).unwrap();
+        let error = panicking
+            .run_contiguous_pass(KernelCheckPassKindV1::TensorLayout, || -> Result<(), ()> {
+                panic!("analysis panic")
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::AnalysisPanicked {
+                pass: KernelCheckPassKindV1::TensorLayout,
+            }
+        ));
+        assert_eq!(error.code(), "FE2O3-PRESERVE-027");
+
+        let (provider, _, unavailable) = provider_with_epoch(&[1]);
+        unavailable.set(true);
+        let error = begin_production_pliron_pass_contract_session_v1(provider)
+            .err()
+            .expect("exhausted mutation epoch rejects session construction");
+        assert!(matches!(
+            error,
+            PlironPassPreservationErrorV1::MutationEpochUnavailable { pass: None, .. }
+        ));
+        assert_eq!(error.code(), "FE2O3-PRESERVE-023");
     }
 }
