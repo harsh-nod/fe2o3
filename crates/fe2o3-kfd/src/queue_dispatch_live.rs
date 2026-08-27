@@ -16,14 +16,16 @@ use fe2o3_aql::{
 };
 
 use super::{
-    ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1, QueueExceptionWaitObservationV1,
+    ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
+    KfdTargetRuntimeDebugQueueV1, QueueExceptionWaitObservationV1,
 };
-use crate::CheckedGfx942XnackMinusDevice;
+use crate::queue_linux::LinuxKfdRuntimeEnabledV1;
 use crate::shared_memory::{
     ExecutableGttV1, GttGpuAccessibleExecutableV1, GttGpuAccessibleMutableV1,
     HostVisibleCoherentGttV1, KernargGttV1, SharedGttAllocationV1, SharedGttMappedResourceFactsV1,
     SharedGttMemorySessionV1,
 };
+use crate::{CheckedGfx942XnackMinusDevice, KfdTargetRuntimeDebugTokenV1, KfdWithAdmittedUapi};
 
 const KERNEL_DESCRIPTOR_BYTES: u64 = 64;
 const POINTER_BYTES: usize = 8;
@@ -359,12 +361,89 @@ pub unsafe fn execute_gfx942_kfd_dispatch_unchecked_v1(
     request: Gfx942KfdDispatchRequestV1,
 ) -> Result<Gfx942KfdDispatchResultV1, Gfx942KfdDispatchErrorV1> {
     let timeout_milliseconds = request.timeout_milliseconds;
-    let (mut session, mut resources) = device
+    let (session, resources) = device
         .create_compute_aql_queue_with(AQL_MIN_RING_BYTES_V1, move |memory| {
             prepare_dispatch_resources(memory, request)
         })
         .map_err(Gfx942KfdDispatchErrorV1::Preparation)?;
 
+    execute_prepared_dispatch(
+        session,
+        resources,
+        timeout_milliseconds,
+        move |session, resources| {
+            session.destroy_with(move |memory| release_dispatch_resources(memory, resources))
+        },
+    )
+}
+
+/// Executes the same one-shot dispatch transaction while carrying target-side
+/// debug-runtime ownership through the existing queue and teardown path.
+///
+/// The caller-facing safety obligations are identical to
+/// [`execute_gfx942_kfd_dispatch_unchecked_v1`]. The linear target token is
+/// consumed so pre-handoff rejection can disable normally while event/queue
+/// lifecycle mutation cannot duplicate or reanimate runtime authority.
+///
+/// # Safety
+///
+/// The caller must satisfy every exact code-image, ABI, memory-effect, alias,
+/// geometry, and completion obligation documented by
+/// [`execute_gfx942_kfd_dispatch_unchecked_v1`] for this request. The process
+/// must terminate after every returned error.
+pub unsafe fn execute_gfx942_kfd_debug_target_dispatch_unchecked_v1(
+    mut token: KfdTargetRuntimeDebugTokenV1,
+    device: CheckedGfx942XnackMinusDevice,
+    request: Gfx942KfdDispatchRequestV1,
+) -> Result<Gfx942KfdDispatchResultV1, Gfx942KfdDispatchErrorV1> {
+    let (runtime, runtime_control) = token.queue_handoff_slots();
+    execute_gfx942_kfd_debug_target_dispatch_with_runtime_unchecked_v1(
+        device,
+        request,
+        runtime,
+        runtime_control,
+    )
+}
+
+fn execute_gfx942_kfd_debug_target_dispatch_with_runtime_unchecked_v1(
+    device: CheckedGfx942XnackMinusDevice,
+    request: Gfx942KfdDispatchRequestV1,
+    runtime: &mut Option<LinuxKfdRuntimeEnabledV1>,
+    runtime_control: &mut Option<KfdWithAdmittedUapi>,
+) -> Result<Gfx942KfdDispatchResultV1, Gfx942KfdDispatchErrorV1> {
+    let timeout_milliseconds = request.timeout_milliseconds;
+    let (session, resources) = device
+        .create_compute_aql_queue_for_debug_target_with(
+            AQL_MIN_RING_BYTES_V1,
+            move |memory| prepare_dispatch_resources(memory, request),
+            runtime,
+            runtime_control,
+        )
+        .map_err(Gfx942KfdDispatchErrorV1::Preparation)?;
+
+    execute_prepared_dispatch(
+        session,
+        resources,
+        timeout_milliseconds,
+        move |session, resources| {
+            let mut teardown = KfdTargetRuntimeDebugQueueV1::new(session).destroy()?;
+            teardown.finish_with(move |memory| release_dispatch_resources(memory, resources))
+        },
+    )
+}
+
+fn execute_prepared_dispatch(
+    mut session: ComputeAqlQueueSessionV1,
+    mut resources: PreparedDispatchResourcesV1,
+    timeout_milliseconds: u32,
+    teardown: impl FnOnce(
+        ComputeAqlQueueSessionV1,
+        PreparedDispatchResourcesV1,
+    ) -> Result<
+        (ComputeAqlQueueDestroyedV1, Vec<Gfx942KfdDispatchBufferV1>),
+        ComputeAqlQueueSessionErrorV1,
+    >,
+) -> Result<Gfx942KfdDispatchResultV1, Gfx942KfdDispatchErrorV1> {
     let packet = resources
         .packet
         .take()
@@ -416,9 +495,8 @@ pub unsafe fn execute_gfx942_kfd_dispatch_unchecked_v1(
         }
     };
 
-    let (destroyed, buffers) = session
-        .destroy_with(move |memory| release_dispatch_resources(memory, resources))
-        .map_err(Gfx942KfdDispatchErrorV1::Teardown)?;
+    let (destroyed, buffers) =
+        teardown(session, resources).map_err(Gfx942KfdDispatchErrorV1::Teardown)?;
     Ok(Gfx942KfdDispatchResultV1 {
         buffers,
         packet_id,

@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use std::os::unix::process::CommandExt;
 
 use fe2o3_kfd::{
-    DEFAULT_KFD_PATH, KfdAdapterError, KfdDebugExceptionInfoV1, KfdDebugSessionErrorV1,
-    KfdDebugSessionPlanV1, KfdLiveDebugSessionErrorV1, KfdLiveDebugSessionV1,
-    KfdTargetRuntimeDebugTokenV1,
+    DEFAULT_KFD_PATH, DeviceSelector, KfdAdapterError, KfdDebugExceptionInfoV1,
+    KfdDebugSessionErrorV1, KfdDebugSessionPlanV1, KfdLiveDebugSessionErrorV1,
+    KfdLiveDebugSessionV1, KfdTargetRuntimeDebugTokenV1, OpenedKfd,
 };
 use fe2o3_kfd_uapi::{
     KfdDebugExceptionMaskV1, KfdDebugRuntimeStateV1, KfdDebugTrapExceptionCodeV1,
@@ -134,6 +134,39 @@ fn continue_tracee(child: &Child) {
     );
 }
 
+fn continue_group_stopped_tracee(child: &Child) {
+    // SAFETY: the test owns the ptrace-stopped child. Injecting SIGCONT both
+    // advances ptrace and clears the process-wide SIGSTOP state.
+    let result = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            child.id() as libc::pid_t,
+            std::ptr::null_mut::<libc::c_void>(),
+            libc::SIGCONT as usize as *mut libc::c_void,
+        )
+    };
+    assert_eq!(
+        result,
+        0,
+        "PTRACE_CONT(SIGCONT) failed: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
+fn stop_tracee_process_leader() {
+    let pid = std::process::id() as libc::pid_t;
+    // SAFETY: tgkill receives the current process and leader task IDs and a
+    // fixed signal. Targeting the leader makes the ptrace wait identity stable
+    // even though libtest runs the helper body on a worker thread.
+    let result = unsafe { libc::syscall(libc::SYS_tgkill, pid, pid, libc::SIGSTOP) };
+    assert_eq!(
+        result,
+        0,
+        "tgkill(SIGSTOP) failed: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
 fn detach_tracee(child: &Child) {
     // SAFETY: the test owns a ptrace-stopped child. SIGCONT is an integer
     // signal operand, encoded in ptrace's untyped data slot, which clears the
@@ -175,21 +208,20 @@ fn acknowledge_runtime_state(
         KfdDebugExceptionMaskV1::from_code(KfdDebugTrapExceptionCodeV1::ProcessRuntime);
     loop {
         let _ = session.drain_notifications(1_024).unwrap();
-        if let Some(event) = session.query_event(KfdDebugExceptionMaskV1::NONE).unwrap() {
-            if event
+        if let Some(event) = session.query_event(KfdDebugExceptionMaskV1::NONE).unwrap()
+            && event
                 .exceptions()
                 .contains(KfdDebugTrapExceptionCodeV1::ProcessRuntime)
-            {
-                let info = session
-                    .query_exception_info(0, KfdDebugTrapExceptionCodeV1::ProcessRuntime, true)
-                    .unwrap();
-                assert!(matches!(
-                    info,
-                    KfdDebugExceptionInfoV1::Runtime(runtime) if runtime.state() == expected
-                ));
-                session.acknowledge_runtime_transition(event).unwrap();
-                return;
-            }
+        {
+            let info = session
+                .query_exception_info(0, KfdDebugTrapExceptionCodeV1::ProcessRuntime, true)
+                .unwrap();
+            assert!(matches!(
+                info,
+                KfdDebugExceptionInfoV1::Runtime(runtime) if runtime.state() == expected
+            ));
+            session.acknowledge_runtime_transition(event).unwrap();
+            return;
         }
         assert!(
             Instant::now() < deadline,
@@ -207,10 +239,29 @@ fn live_target_helper() {
     if std::env::var_os(HELPER_ENV).is_none() {
         return;
     }
+    let unique_id = fe2o3_kfd::topology::discover_default_topology()
+        .unwrap()
+        .topology()
+        .gpu_nodes()
+        .first()
+        .expect("MI300X live validation requires one GPU")
+        .unique_id();
+    let device = OpenedKfd::open_default()
+        .unwrap()
+        .admit_uapi()
+        .unwrap()
+        .bind_gfx942_xnack_minus(DeviceSelector::UniqueId(unique_id))
+        .unwrap();
     let token = KfdTargetRuntimeDebugTokenV1::enable_current_process().unwrap();
-    token.finish().unwrap();
+    let queue = token.create_compute_aql_queue(device, 4096).unwrap();
+    assert_eq!(queue.observation().queue_id(), 0);
+    stop_tracee_process_leader();
+    let teardown = queue.destroy().unwrap();
+    stop_tracee_process_leader();
+    let destroyed = teardown.finish().unwrap();
+    assert_eq!(destroyed.queue_id(), 0);
     // Give the debugger a live, stopped target while it disables debug-trap.
-    assert_eq!(unsafe { libc::raise(libc::SIGSTOP) }, 0);
+    stop_tracee_process_leader();
 }
 
 #[test]
@@ -282,6 +333,24 @@ fn mi300x_ptrace_runtime_handshake_and_typed_gate() {
 
     continue_tracee(child.child());
     acknowledge_runtime_state(&mut session, KfdDebugRuntimeStateV1::Enabled, deadline);
+    wait_for_stop(child.child(), deadline);
+    let queues = session
+        .queue_snapshot(KfdDebugExceptionMaskV1::NONE)
+        .unwrap();
+    assert_eq!(queues.len(), 1);
+    assert_eq!(queues[0].queue_id(), 0);
+    assert_eq!(queues[0].ring_size(), 4096);
+
+    continue_group_stopped_tracee(child.child());
+    wait_for_stop(child.child(), deadline);
+    assert!(
+        session
+            .queue_snapshot(KfdDebugExceptionMaskV1::NONE)
+            .unwrap()
+            .is_empty()
+    );
+
+    continue_group_stopped_tracee(child.child());
     acknowledge_runtime_state(&mut session, KfdDebugRuntimeStateV1::Disabled, deadline);
     wait_for_stop(child.child(), deadline);
     session.finish().unwrap();

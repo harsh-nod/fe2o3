@@ -341,6 +341,27 @@ live on the selected MI300X while publishing zero packets and performing zero
 MMIO stores. It also forks to confirm the doorbell and all eight shadow VMAs
 are absent in the child. It accepts one unique ID or `--all`; the latter uses a
 separate process and queue lifecycle for every topology GPU.
+
+A debugger-enabled target can consume `KfdTargetRuntimeDebugTokenV1` into the
+same native queue session. The token's admitted control descriptor remains
+private while the checked device retains its independent VM/queue descriptor;
+both are process-bound and neither is exported. Runtime authority leaves the
+token before event or queue lifecycle mutation, so no later failure can run the
+token's no-queue disable path. `KfdTargetRuntimeDebugQueueV1::destroy` returns a
+linear teardown owner that disables the runtime only after confirmed queue and
+event destruction. The unsafe one-shot debug-target dispatch entry point reuses
+the existing request preparation, queue, AQL submission, completion, and
+resource teardown transaction. Its safety and process-termination obligations
+are identical to the ordinary unsafe dispatch entry point; it is not a second
+queue or launch implementation.
+
+The serial live validation ptrace-attaches a child, acknowledges target runtime
+enable, observes the real 4 KiB KFD queue through the bounded debugger snapshot,
+observes its removal after queue/event destruction, acknowledges runtime
+disable, and completes bounded detach/reap. It does not qualify wave/register
+state, source debugging, target-memory access, kernel execution under the
+debugger, timing, or performance.
+
 `kfd-compute-aql-queue-policy` links the default
 production closure for the no-ROCm ELF audit.
 

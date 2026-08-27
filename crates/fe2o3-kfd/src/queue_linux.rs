@@ -330,12 +330,16 @@ impl LinuxKfdRuntimeEnabledV1 {
         self.check_binding(kfd, opener_pid)
     }
 
-    pub(crate) fn validate_queue_live(
+    pub(crate) fn validate_queue_live_process(
         &self,
-        kfd: BorrowedFd<'_>,
         opener_pid: u32,
     ) -> Result<(), LinuxDoorbellErrorV1> {
-        self.check_binding(kfd, opener_pid)?;
+        if opener_pid != std::process::id() || self.binding.opener_pid != opener_pid {
+            return Err(LinuxDoorbellErrorV1::ProcessChanged);
+        }
+        if !self.active || self.poisoned || self.gate.is_none() {
+            return Err(LinuxDoorbellErrorV1::Runtime("linear runtime state"));
+        }
         if self.phase != KfdRuntimeLifecyclePhaseV1::QueueLive {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "runtime does not own one live queue",
@@ -853,9 +857,7 @@ impl LinuxCwsrShadowPagesV1 {
         destroyed: LinuxDestroyedQueueExceptionEventV1,
         runtime: LinuxKfdRuntimeDisabledV1,
     ) -> Result<LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1> {
-        if !self.matches(destroyed.binding)
-            || runtime.binding.opener_pid != self.binding.opener_pid
-            || runtime.binding.raw_fd != self.binding.raw_fd
+        if !self.matches(destroyed.binding) || runtime.binding.opener_pid != self.binding.opener_pid
         {
             return Err(LinuxDoorbellErrorV1::Shadow("destroyed event substitution"));
         }
@@ -922,7 +924,6 @@ impl LinuxCwsrShadowsReadyForReleaseV1 {
             || !gate_is_held
             || self.shadows.binding.opener_pid != std::process::id()
             || self.runtime.binding.opener_pid != self.shadows.binding.opener_pid
-            || self.runtime.binding.raw_fd != self.shadows.binding.raw_fd
         {
             Err(LinuxDoorbellErrorV1::Shadow("release state"))
         } else {

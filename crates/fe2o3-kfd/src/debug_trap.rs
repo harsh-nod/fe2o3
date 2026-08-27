@@ -26,7 +26,7 @@ use fe2o3_kfd_uapi::{
 };
 
 pub const KFD_DEBUG_SESSION_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-kfd-debug-session-foundation-v1\n",
+    "profile=fe2o3-kfd-debug-session-foundation-r2-v1\n",
     "uapi=linux-kfd-debug-trap-1.18-x86_64-le-v1\n",
     "uapi_sha256=16c606b26960c5386198d48c595b248164ba273d1b3e9032736707f5f0336e1d\n",
     "target=ptrace-owned-process,pid-nonzero,not-self\n",
@@ -37,13 +37,15 @@ pub const KFD_DEBUG_SESSION_FOUNDATION_MANIFEST_V1: &str = concat!(
     "ownership=session-retains-suspended-queues,watches,and-restorable-process-settings\n",
     "cleanup=resume,clear-watch,normal-launch,restore-override,restore-flags,disable\n",
     "live=ptrace-parent-status-sandwich,pidfd-retained-and-revalidated,exact-uapi-owned-kfd,nonblocking-owned-notifier\n",
-    "target_runtime=separate-current-process-owned-runtime-enable-mode1-r_debug0-no-ttmp-no-capabilities\n",
+    "target_runtime=separate-current-process-owned-runtime-enable-mode1-r_debug0-no-ttmp-no-capabilities;consuming-handoff-to-existing-native-queue-and-one-shot-dispatch\n",
+    "target_queue=separate-current-process-admitted-control-and-device-vm-descriptors,linear-runtime-queue-event-disable-order,no-clone-send-sync-fd-address-or-mmio-export\n",
+    "target_queue_failure=authority-transferred-before-event-and-create-lifecycle-mutation;no-post-handoff-restoration;event-shadow-create-indeterminate-and-publication-failures-require-process-termination\n",
     "missing=target-memory,wave-register-cwsr-decoder,source-map\n",
     "authority=owned-live-session-and-redacted-observation;no-fd-pointer-or-target-address-export\n",
 );
 
 pub const KFD_DEBUG_SESSION_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "c57670bb8234c6149f6188861da580dc53dc6c62e22e3088b582e5195fafefb7";
+    "48b7159c5a8589831dec38cba358cc5d15029fbcef4398e49905dbc884c0b7c6";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KfdDebugPlanErrorV1 {
@@ -1021,6 +1023,7 @@ type LinuxDebugTrapSessionEngineV1 =
 pub enum KfdTargetRuntimeDebugErrorV1 {
     Kfd(crate::KfdAdapterError),
     RuntimeTransition(String),
+    Queue(crate::ComputeAqlQueueSessionErrorV1),
     AlreadyFinished,
 }
 
@@ -1031,6 +1034,7 @@ impl fmt::Display for KfdTargetRuntimeDebugErrorV1 {
             Self::RuntimeTransition(source) => {
                 write!(formatter, "KFD runtime-debug transition failed: {source}")
             }
+            Self::Queue(source) => write!(formatter, "KFD debug-target queue failed: {source}"),
             Self::AlreadyFinished => formatter.write_str("KFD runtime-debug token is finished"),
         }
     }
@@ -1040,6 +1044,7 @@ impl std::error::Error for KfdTargetRuntimeDebugErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Kfd(source) => Some(source),
+            Self::Queue(source) => Some(source),
             _ => None,
         }
     }
@@ -1063,13 +1068,14 @@ impl From<crate::queue_linux::LinuxDoorbellErrorV1> for KfdTargetRuntimeDebugErr
 /// This token is independent from [`KfdLiveDebugSessionV1`], which must live in
 /// the ptrace-parent debugger process. When a debugger is already enabled, both
 /// enable and disable wait for its `PROCESS_RUNTIME` acknowledgement. No user
-/// queue may exist before enable, and no queue may be created through this
-/// target-only token.
+/// queue may exist before enable. Consuming handoff to a checked device creates
+/// the existing generic native queue without exposing either descriptor.
 #[must_use = "explicit finish reports the target runtime-disable result"]
 pub struct KfdTargetRuntimeDebugTokenV1 {
     runtime: Option<crate::queue_linux::LinuxKfdRuntimeEnabledV1>,
-    kfd: crate::KfdWithAdmittedUapi,
+    kfd: Option<crate::KfdWithAdmittedUapi>,
     opener_pid: u32,
+    thread_bound: PhantomData<Rc<()>>,
 }
 
 impl fmt::Debug for KfdTargetRuntimeDebugTokenV1 {
@@ -1092,8 +1098,9 @@ impl KfdTargetRuntimeDebugTokenV1 {
         )?;
         Ok(Self {
             runtime: Some(runtime),
-            kfd,
+            kfd: Some(kfd),
             opener_pid,
+            thread_bound: PhantomData,
         })
     }
 
@@ -1101,12 +1108,47 @@ impl KfdTargetRuntimeDebugTokenV1 {
         self.runtime.is_some()
     }
 
+    /// Transfers this runtime authority into the one existing native queue.
+    /// A failure before lifecycle handoff performs the ordinary explicit
+    /// no-queue runtime disable. Every failure after event/queue ownership
+    /// transfers is terminal and requires process termination.
+    pub fn create_compute_aql_queue(
+        mut self,
+        device: crate::CheckedGfx942XnackMinusDevice,
+        ring_bytes: u32,
+    ) -> Result<crate::KfdTargetRuntimeDebugQueueV1, KfdTargetRuntimeDebugErrorV1> {
+        let session = device
+            .create_compute_aql_queue_for_debug_target(ring_bytes, &mut self.runtime, &mut self.kfd)
+            .map_err(KfdTargetRuntimeDebugErrorV1::Queue)?;
+        if self.runtime.is_some() || self.kfd.is_some() {
+            return Err(KfdTargetRuntimeDebugErrorV1::Queue(
+                crate::ComputeAqlQueueSessionErrorV1::Contract(
+                    "runtime handoff did not consume exact ownership",
+                ),
+            ));
+        }
+        Ok(crate::KfdTargetRuntimeDebugQueueV1::new(session))
+    }
+
+    pub(crate) fn queue_handoff_slots(
+        &mut self,
+    ) -> (
+        &mut Option<crate::queue_linux::LinuxKfdRuntimeEnabledV1>,
+        &mut Option<crate::KfdWithAdmittedUapi>,
+    ) {
+        (&mut self.runtime, &mut self.kfd)
+    }
+
     fn disable(&mut self) -> Result<(), KfdTargetRuntimeDebugErrorV1> {
         let runtime = self
             .runtime
             .take()
             .ok_or(KfdTargetRuntimeDebugErrorV1::AlreadyFinished)?;
-        let disabled = runtime.disable_debug_target(self.kfd.opened.fd.as_fd(), self.opener_pid)?;
+        let kfd = self
+            .kfd
+            .as_ref()
+            .ok_or(KfdTargetRuntimeDebugErrorV1::AlreadyFinished)?;
+        let disabled = runtime.disable_debug_target(kfd.opened.fd.as_fd(), self.opener_pid)?;
         disabled.complete();
         Ok(())
     }

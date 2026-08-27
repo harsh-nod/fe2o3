@@ -64,8 +64,11 @@ pub use queue::{
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDispatchBufferV1,
     Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
     Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
+    KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
-    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, execute_gfx942_kfd_dispatch_unchecked_v1,
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
+    execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

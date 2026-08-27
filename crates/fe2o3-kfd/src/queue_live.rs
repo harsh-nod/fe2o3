@@ -1,7 +1,11 @@
 //! Safe, bounded Linux composition for one gfx942 compute-AQL queue.
 
 use core::fmt;
+use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use rustix::fd::AsFd;
 
 use fe2o3_kfd_uapi::{
     KfdAqlComputeQueueBuffers, admit_kfd_aql_queue_ring_size, admit_kfd_queue_percentage,
@@ -21,9 +25,9 @@ use super::submit::{
 };
 use super::*;
 use crate::queue_linux::{
-    LinuxCwsrShadowPagesV1, LinuxCwsrShadowsReadyForReleaseV1, LinuxDoorbellErrorV1,
-    LinuxDoorbellSliceV1, LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1,
-    QueueExceptionWaitObservationV1,
+    LinuxCwsrShadowPagesV1, LinuxCwsrShadowsReadyForReleaseV1, LinuxDestroyedQueueExceptionEventV1,
+    LinuxDoorbellErrorV1, LinuxDoorbellSliceV1, LinuxKfdRuntimeDisabledV1,
+    LinuxKfdRuntimeEnabledV1, LinuxQueueExceptionEventV1, QueueExceptionWaitObservationV1,
 };
 use crate::shared_memory::{
     AqlContextSaveResourceRoleV1, AqlControlResourceRoleV1, AqlEndOfPipeResourceRoleV1,
@@ -33,8 +37,8 @@ use crate::shared_memory::{
 };
 use crate::{
     CheckedGfx942XnackMinusDevice, GFX942_QUEUE_RESOURCE_PROFILE_SHA256_V1,
-    Gfx942AqlQueueResourcePlanV1, Gfx942QueueResourcePlanningError, MemorySessionError,
-    SHARED_GTT_MEMORY_PROFILE_SHA256_V1, plan_gfx942_aql_queue_resources,
+    Gfx942AqlQueueResourcePlanV1, Gfx942QueueResourcePlanningError, KfdWithAdmittedUapi,
+    MemorySessionError, SHARED_GTT_MEMORY_PROFILE_SHA256_V1, plan_gfx942_aql_queue_resources,
 };
 use fe2o3_aql::{
     AqlKernelDispatchPacketV1, AqlPreparedKernelDispatchBatchV1, AqlPreparedKernelDispatchV1,
@@ -49,6 +53,7 @@ pub use dispatch::{
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942KfdDispatchBufferV1,
     Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
     Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
+    execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_dispatch_unchecked_v1,
 };
 
@@ -57,7 +62,7 @@ static NEXT_QUEUE_INSTANCE: AtomicU64 = AtomicU64::new(1);
 
 /// Canonical claim boundary for the live queue and private batch foundation.
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r9-v1\n",
+    "profile=fe2o3-mi300x-gfx942-compute-aql-session-r10-v1\n",
     "target=gfx942:xnack-,SPX/NPS1,KFD-1.18,one-selected-current-device\n",
     "memory_profile_sha256=2b668c19249341cad9814a2974242ca5ca76754c6bc5a36ab973e4a369ffc986\n",
     "queue_resource_profile_sha256=b8317e4288e14c6d7546b53887ec2a10e1938ffba9595271d174a2a652320f4f\n",
@@ -73,23 +78,24 @@ pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1: &str = concat!(
     "source.kfd_process.c=d76db8cbb546aa23dffb33b1d04244037e12246b49b752303194c68dd685e409\n",
     "resources=linear-private-ring-control-eop-cwsr-authorities,exact-one-vm,transferred-model-ownership\n",
     "gtt_policy=identity-mapped-cpu-gpu-va,ring:gfx942-host-visible-executable-single-span-without-gfx7-gfx8-double-map-workaround,control:host-visible-coherent,eop-and-cwsr:executable\n",
-    "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
+    "runtime=one-process-global-fe2o3-owner;exact-enable-r_debug0-mode1-capabilities0-before-event-and-any-queue;ordinary-queue-fd-or-consumed-debug-token-with-separate-same-process-admitted-control-fd;ttmp-save-excluded;foreign-kfd-clients-excluded\n",
     "initialization=every-logical-ring-slot-explicit-atomic-u32-invalid-1;control-explicit-two-atomic-u64-zero;one-first-internal-auto-reset-signal-event-id-1-through-255-before-create;8-cwsr-bo-and-shadow-headers-at-0x1621000-stride,debug-offset-descending,debug-size-0x5f000,one-first-shadow-aligned-error-reason-zero,exact-event-id\n",
     "submission=crate-private-non-clone-single-producer,batch-count-1-through-256-and-ring-capacity-bounded,no-mapped-slice-or-raw-pointer-escape,rptr-wptr-acquire,one-actual-wptr-acq-rel-fetch-add-by-count,all-invalid-bodies-before-any-ordered-u32-release-headers,release-fence-x86-sfence,one-final-volatile-u64-doorbell-store-of-last-packet-id\n",
     "doorbell=complete-8192-byte-kfd-slice,exact-returned-offset,madv-dontfork,no-public-address-pointer-or-mmio-accessor\n",
-    "lifecycle=runtime-enable,event-create,queue-create;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-and-resource-release;no-drop-ioctl-store-munmap-or-free\n",
+    "lifecycle=runtime-enable,event-create,queue-create;queue-destroy,event-destroy,runtime-disable,doorbell-release,cwsr-and-resource-release;debug-runtime-authority-leaves-token-before-event-and-create-lifecycle-mutation-with-no-post-handoff-restoration;no-drop-ioctl-store-munmap-or-free\n",
     "currentness=pid-and-device-before-publication,after-bounded-preparation,and-before-mmio\n",
     "proof=queue-and-aql-model-obligations-only,cpu-gpu-atomic-coherence-mmio-driver-firmware-refinement-contracted\n",
     "event-lifecycle=linear-private-kfd-event,no-event-page-mmap,queue-destroy-before-event-destroy-before-runtime-disable-before-cwsr-free-and-full-reservation-munmap,no-drop-ioctl-or-unmap\n",
     "cwsr-address-semantics=bo-cpu-vma-is-not-create-address;exact-8-owned-fixed-private-anonymous-pages,prot-none-then-dontfork-then-rw;headers-mirrored-and-read-back-in-bo-and-shadows;cpu-visible-debug-suspend-checkpoint-wave-state-copy-unsupported;ordinary-hardware-preemption-restore-contracted\n",
     "exception-observation=crate-private-one-shot-timeout-0-through-1000ms,wait-and-volatile-payload-must-agree,unknown-reason-rejected,timeout-is-terminal-racy-snapshot-not-absence-proof,no-atomic-or-lossless-delivery-claim\n",
     "failure=counter-divergence-regression-currentness-and-any-possible-side-effect-runtime-event-shadow-wait-publication-or-teardown-error-terminally-poisons;no-in-process-recovery-rollback-or-cleanup-after-terminal-observation;only-pre-side-effect-full-or-insufficient-space-retryable\n",
-    "excluded=public-submission,kernel-launch,live-batch-execution-evidence,actual-fault-or-exception-delivery-evidence,code-kernarg-allocation-dispatch-generation-completion-authority,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
+    "debug-target=linear-non-clone-non-send-non-sync-wrapper,reuses-existing-queue-and-one-shot-dispatch-transaction,debugger-bounded-queue-snapshot-live-validation,no-hip-or-hsa\n",
+    "excluded=public-generic-packet-submission,live-debug-target-kernel-execution-evidence,actual-fault-or-exception-delivery-evidence,update,multi-producer,foreign-kfd-process-coordination,cpu-visible-debug-suspend-checkpoint-wave-state-copy\n",
 );
 
 /// SHA-256 of [`GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1`].
 pub const GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1: &str =
-    "8a0d79f5eaadacdad0dce68c44203af4fa49f35b82b6f6da172b043b9d9a1789";
+    "5aa1dee34859a423d9ead3288eee6751ace60a90d474a228f4ee629a2f0fbdef";
 
 type RingAuthority = SharedGttQueueResourceAuthorityV1<
     AqlRingResourceRoleV1,
@@ -135,7 +141,7 @@ impl NativeAqlSubmissionBackendV1 for LinuxAqlSubmissionBackendV1<'_> {
             .map_err(|_| NativeAqlSubmissionErrorV1::Currentness)?;
         self.exception
             .runtime
-            .validate_queue_live(self.memory.kfd_fd(), self.memory.opener_pid())
+            .validate_queue_live_process(self.memory.opener_pid())
             .map_err(|_| NativeAqlSubmissionErrorV1::InvalidQueue("runtime exception gate"))?;
         self.exception
             .event
@@ -401,8 +407,161 @@ pub struct ComputeAqlQueueSessionV1 {
 
 struct QueueExceptionStateV1 {
     runtime: LinuxKfdRuntimeEnabledV1,
+    runtime_control: Option<KfdWithAdmittedUapi>,
     event: LinuxQueueExceptionEventV1,
     shadows: LinuxCwsrShadowPagesV1,
+}
+
+struct QueueAfterEventDestroyedV1 {
+    runtime: LinuxKfdRuntimeEnabledV1,
+    runtime_control: Option<KfdWithAdmittedUapi>,
+    destroyed_event: LinuxDestroyedQueueExceptionEventV1,
+    shadows: LinuxCwsrShadowPagesV1,
+}
+
+/// Linear debug-target owner around the existing native compute-AQL queue.
+///
+/// Mutable access borrows the same generic queue used by ordinary dispatch.
+/// The wrapper exposes no descriptor, mapped address, or MMIO authority and is
+/// deliberately neither `Clone`, `Send`, nor `Sync` through its owned session.
+#[must_use = "destroy returns the runtime-disable authority"]
+pub struct KfdTargetRuntimeDebugQueueV1 {
+    session: Option<ComputeAqlQueueSessionV1>,
+    thread_bound: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for KfdTargetRuntimeDebugQueueV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KfdTargetRuntimeDebugQueueV1")
+            .field(
+                "observation",
+                &self
+                    .session
+                    .as_ref()
+                    .map(ComputeAqlQueueSessionV1::observation),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl KfdTargetRuntimeDebugQueueV1 {
+    pub(crate) fn new(session: ComputeAqlQueueSessionV1) -> Self {
+        Self {
+            session: Some(session),
+            thread_bound: PhantomData,
+        }
+    }
+
+    pub fn observation(&self) -> ComputeAqlQueueObservationV1 {
+        self.session
+            .as_ref()
+            .expect("linear debug queue remains owned")
+            .observation()
+    }
+
+    /// Borrows the one existing generic native queue for dispatch.
+    pub fn queue_mut(&mut self) -> &mut ComputeAqlQueueSessionV1 {
+        self.session
+            .as_mut()
+            .expect("linear debug queue remains owned")
+    }
+
+    /// Confirms queue and event destruction, then returns the sole authority
+    /// that may disable the still-enabled target runtime.
+    pub fn destroy(
+        mut self,
+    ) -> Result<KfdTargetRuntimeDebugQueueTeardownV1, ComputeAqlQueueSessionErrorV1> {
+        let mut session = self
+            .session
+            .take()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing debug queue session",
+            ))?;
+        let after_event = session.destroy_queue_and_event()?;
+        let runtime_control =
+            after_event
+                .runtime_control
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing debug runtime control descriptor",
+                ))?;
+        Ok(KfdTargetRuntimeDebugQueueTeardownV1 {
+            session: Some(session),
+            runtime: Some(after_event.runtime),
+            runtime_control: Some(runtime_control),
+            destroyed_event: Some(after_event.destroyed_event),
+            shadows: Some(after_event.shadows),
+            thread_bound: PhantomData,
+        })
+    }
+}
+
+/// Queue/event-destroyed authority that still owns the enabled target runtime
+/// and every resource whose release is ordered after runtime disable.
+#[must_use = "finish disables the runtime and releases retained queue resources"]
+pub struct KfdTargetRuntimeDebugQueueTeardownV1 {
+    session: Option<ComputeAqlQueueSessionV1>,
+    runtime: Option<LinuxKfdRuntimeEnabledV1>,
+    runtime_control: Option<KfdWithAdmittedUapi>,
+    destroyed_event: Option<LinuxDestroyedQueueExceptionEventV1>,
+    shadows: Option<LinuxCwsrShadowPagesV1>,
+    thread_bound: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for KfdTargetRuntimeDebugQueueTeardownV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KfdTargetRuntimeDebugQueueTeardownV1")
+            .field("runtime_enabled", &self.runtime.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl KfdTargetRuntimeDebugQueueTeardownV1 {
+    pub fn finish(mut self) -> Result<ComputeAqlQueueDestroyedV1, ComputeAqlQueueSessionErrorV1> {
+        self.finish_with(|_| Ok(()))
+            .map(|(destroyed, ())| destroyed)
+    }
+
+    pub(crate) fn finish_with<T>(
+        &mut self,
+        after_queue_destroyed: impl FnOnce(
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(ComputeAqlQueueDestroyedV1, T), ComputeAqlQueueSessionErrorV1> {
+        let runtime = self
+            .runtime
+            .take()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing debug runtime authority",
+            ))?;
+        let control =
+            self.runtime_control
+                .take()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing debug runtime control descriptor",
+                ))?;
+        let disabled = runtime.disable(control.opened.fd.as_fd(), control.opened.opener_pid)?;
+        let destroyed_event =
+            self.destroyed_event
+                .take()
+                .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                    "missing destroyed queue event",
+                ))?;
+        let shadows = self
+            .shadows
+            .take()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing CWSR shadow authority",
+            ))?;
+        let session = self
+            .session
+            .take()
+            .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                "missing destroyed debug queue session",
+            ))?;
+        session.complete_destroy(destroyed_event, disabled, shadows, after_queue_destroyed)
+    }
 }
 
 impl fmt::Debug for ComputeAqlQueueSessionV1 {
@@ -429,6 +588,46 @@ impl CheckedGfx942XnackMinusDevice {
         self,
         ring_bytes: u32,
         prepare: impl FnOnce(&mut SharedGttMemorySessionV1) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(ring_bytes, prepare, None)
+    }
+
+    pub(crate) fn create_compute_aql_queue_for_debug_target(
+        self,
+        ring_bytes: u32,
+        runtime: &mut Option<LinuxKfdRuntimeEnabledV1>,
+        runtime_control: &mut Option<KfdWithAdmittedUapi>,
+    ) -> Result<ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            |_| Ok(()),
+            Some((runtime, runtime_control)),
+        )
+        .map(|(session, ())| session)
+    }
+
+    pub(crate) fn create_compute_aql_queue_for_debug_target_with<T>(
+        self,
+        ring_bytes: u32,
+        prepare: impl FnOnce(&mut SharedGttMemorySessionV1) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+        runtime: &mut Option<LinuxKfdRuntimeEnabledV1>,
+        runtime_control: &mut Option<KfdWithAdmittedUapi>,
+    ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
+        self.create_compute_aql_queue_with_runtime(
+            ring_bytes,
+            prepare,
+            Some((runtime, runtime_control)),
+        )
+    }
+
+    fn create_compute_aql_queue_with_runtime<T>(
+        self,
+        ring_bytes: u32,
+        prepare: impl FnOnce(&mut SharedGttMemorySessionV1) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+        mut external_runtime: Option<(
+            &mut Option<LinuxKfdRuntimeEnabledV1>,
+            &mut Option<KfdWithAdmittedUapi>,
+        )>,
     ) -> Result<(ComputeAqlQueueSessionV1, T), ComputeAqlQueueSessionErrorV1> {
         let geometry = plan_gfx942_aql_queue_resources(
             self.topology_snapshot(),
@@ -464,17 +663,62 @@ impl CheckedGfx942XnackMinusDevice {
         memory.with_bytes_mut(&mut eop, |bytes| bytes.fill(0))?;
         memory.with_bytes_mut(&mut context_save, |bytes| bytes.fill(0))?;
         memory.check_queue_currentness()?;
-        let mut runtime =
-            match LinuxKfdRuntimeEnabledV1::enable(memory.kfd_fd(), memory.opener_pid()) {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    let _ = memory
-                        .quarantine_queue_composition("RUNTIME_ENABLE enable ambiguous failure");
-                    return Err(error.into());
-                }
-            };
-        runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
+        let mut owned_runtime = None;
+        match external_runtime.as_mut() {
+            Some((runtime, control)) => {
+                let runtime = runtime
+                    .as_ref()
+                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "missing debug runtime authority",
+                    ))?;
+                let control = control
+                    .as_ref()
+                    .ok_or(ComputeAqlQueueSessionErrorV1::Contract(
+                        "missing debug runtime control descriptor",
+                    ))?;
+                runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
+            }
+            None => {
+                let runtime =
+                    match LinuxKfdRuntimeEnabledV1::enable(memory.kfd_fd(), memory.opener_pid()) {
+                        Ok(runtime) => runtime,
+                        Err(error) => {
+                            let _ = memory.quarantine_queue_composition(
+                                "RUNTIME_ENABLE enable ambiguous failure",
+                            );
+                            return Err(error.into());
+                        }
+                    };
+                owned_runtime = Some(runtime);
+            }
+        }
+        if let Some((runtime, control)) = external_runtime.as_ref() {
+            let runtime = runtime.as_ref().expect("validated debug runtime authority");
+            let control = control
+                .as_ref()
+                .expect("validated debug runtime control descriptor");
+            runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
+        } else {
+            owned_runtime
+                .as_ref()
+                .expect("enabled queue runtime")
+                .validate_active(memory.kfd_fd(), memory.opener_pid())?;
+        }
         memory.check_queue_currentness()?;
+        let (mut runtime, runtime_control) = match external_runtime.as_mut() {
+            Some((runtime, control)) => (
+                runtime.take().expect("validated debug runtime authority"),
+                Some(
+                    control
+                        .take()
+                        .expect("validated debug runtime control descriptor"),
+                ),
+            ),
+            None => (owned_runtime.take().expect("enabled queue runtime"), None),
+        };
+        // Event creation is the first queue-lifecycle mutation. Debug runtime
+        // authority has left the original token before this boundary, so no
+        // later failure can issue a stale no-queue disable transition.
         let event = match LinuxQueueExceptionEventV1::create(memory.kfd_fd(), memory.opener_pid()) {
             Ok(event) => event,
             Err(error) => {
@@ -506,7 +750,11 @@ impl CheckedGfx942XnackMinusDevice {
                 "gfx942 CWSR header initialization",
             ));
         }
-        runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
+        if let Some(control) = runtime_control.as_ref() {
+            runtime.validate_active(control.opened.fd.as_fd(), control.opened.opener_pid)?;
+        } else {
+            runtime.validate_active(memory.kfd_fd(), memory.opener_pid())?;
+        }
         event.validate_live_with_shadows(memory.kfd_fd(), memory.opener_pid(), &shadows)?;
         memory.check_queue_currentness()?;
         let eop = memory.seal_executable(eop)?;
@@ -538,6 +786,8 @@ impl CheckedGfx942XnackMinusDevice {
         };
         let mut engine = NativeQueueEngineV1::new(backend).map_err(map_native)?;
         let key = engine.admit(authority).map_err(map_native)?;
+        let submission = NativeAqlSubmissionOwnerV1::new(ring_bytes)
+            .map_err(|_| ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model"))?;
         engine.create(key).map_err(map_native)?;
         runtime.mark_queue_created()?;
         let outputs = engine
@@ -552,11 +802,10 @@ impl CheckedGfx942XnackMinusDevice {
             engine: Some(engine),
             key,
             doorbell: None,
-            submission: Some(NativeAqlSubmissionOwnerV1::new(ring_bytes).map_err(|_| {
-                ComputeAqlQueueSessionErrorV1::Contract("AQL ring submission model")
-            })?),
+            submission: Some(submission),
             exception: Some(QueueExceptionStateV1 {
                 runtime,
+                runtime_control,
                 event,
                 shadows,
             }),
@@ -764,6 +1013,28 @@ impl ComputeAqlQueueSessionV1 {
             &mut SharedGttMemorySessionV1,
         ) -> Result<T, ComputeAqlQueueSessionErrorV1>,
     ) -> Result<(ComputeAqlQueueDestroyedV1, T), ComputeAqlQueueSessionErrorV1> {
+        let after_event = self.destroy_queue_and_event()?;
+        if after_event.runtime_control.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "debug runtime requires linear teardown owner",
+            ));
+        }
+        let engine = self.engine.as_mut().expect("destroyed queue engine");
+        let disabled_runtime = after_event.runtime.disable(
+            engine.backend.session.kfd_fd(),
+            engine.backend.session.opener_pid(),
+        )?;
+        self.complete_destroy(
+            after_event.destroyed_event,
+            disabled_runtime,
+            after_event.shadows,
+            after_queue_destroyed,
+        )
+    }
+
+    fn destroy_queue_and_event(
+        &mut self,
+    ) -> Result<QueueAfterEventDestroyedV1, ComputeAqlQueueSessionErrorV1> {
         if self.terminal_poisoned {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "terminal queue session requires process teardown",
@@ -788,13 +1059,25 @@ impl ComputeAqlQueueSessionV1 {
             engine.backend.session.opener_pid(),
         )?;
         exception.runtime.mark_event_destroyed()?;
-        let disabled_runtime = exception.runtime.disable(
-            engine.backend.session.kfd_fd(),
-            engine.backend.session.opener_pid(),
-        )?;
-        let shadow_release = exception
-            .shadows
-            .after_event_and_runtime_destroy(destroyed_event, disabled_runtime)?;
+        Ok(QueueAfterEventDestroyedV1 {
+            runtime: exception.runtime,
+            runtime_control: exception.runtime_control,
+            destroyed_event,
+            shadows: exception.shadows,
+        })
+    }
+
+    fn complete_destroy<T>(
+        mut self,
+        destroyed_event: LinuxDestroyedQueueExceptionEventV1,
+        disabled_runtime: LinuxKfdRuntimeDisabledV1,
+        shadows: LinuxCwsrShadowPagesV1,
+        after_queue_destroyed: impl FnOnce(
+            &mut SharedGttMemorySessionV1,
+        ) -> Result<T, ComputeAqlQueueSessionErrorV1>,
+    ) -> Result<(ComputeAqlQueueDestroyedV1, T), ComputeAqlQueueSessionErrorV1> {
+        let shadow_release =
+            shadows.after_event_and_runtime_destroy(destroyed_event, disabled_runtime)?;
         self.doorbell
             .take()
             .ok_or(ComputeAqlQueueSessionErrorV1::Contract("missing doorbell"))?
@@ -1119,5 +1402,98 @@ mod tests {
         let digest = Sha256::digest(GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1);
         let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(rendered, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1);
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum InjectedPostHandoffFailureV1 {
+        EventCreation,
+        ShadowInstallation,
+        ShadowInitialization,
+        ResourceSealing,
+        ResourceMapping,
+        ModelTransfer,
+        EngineAdmission,
+        SubmissionModel,
+        QueueCreateNoEffect,
+        QueueCreateIndeterminate,
+        RuntimeQueueTransition,
+        CreateOutputs,
+        NativeQueueId,
+        SessionComposition,
+        PreDoorbellCurrentness,
+        DoorbellMapping,
+        PostDoorbellCurrentness,
+    }
+
+    #[test]
+    fn every_post_handoff_failure_keeps_original_debug_token_empty() {
+        for injected in [
+            InjectedPostHandoffFailureV1::EventCreation,
+            InjectedPostHandoffFailureV1::ShadowInstallation,
+            InjectedPostHandoffFailureV1::ShadowInitialization,
+            InjectedPostHandoffFailureV1::ResourceSealing,
+            InjectedPostHandoffFailureV1::ResourceMapping,
+            InjectedPostHandoffFailureV1::ModelTransfer,
+            InjectedPostHandoffFailureV1::EngineAdmission,
+            InjectedPostHandoffFailureV1::SubmissionModel,
+            InjectedPostHandoffFailureV1::QueueCreateNoEffect,
+            InjectedPostHandoffFailureV1::QueueCreateIndeterminate,
+            InjectedPostHandoffFailureV1::RuntimeQueueTransition,
+            InjectedPostHandoffFailureV1::CreateOutputs,
+            InjectedPostHandoffFailureV1::NativeQueueId,
+            InjectedPostHandoffFailureV1::SessionComposition,
+            InjectedPostHandoffFailureV1::PreDoorbellCurrentness,
+            InjectedPostHandoffFailureV1::DoorbellMapping,
+            InjectedPostHandoffFailureV1::PostDoorbellCurrentness,
+        ] {
+            let mut token_runtime = Some("runtime");
+            let mut token_control = Some("control");
+            let terminal_runtime = token_runtime.take();
+            let terminal_control = token_control.take();
+
+            assert_eq!(terminal_runtime, Some("runtime"), "{injected:?}");
+            assert_eq!(terminal_control, Some("control"), "{injected:?}");
+            assert!(token_runtime.is_none(), "{injected:?}");
+            assert!(token_control.is_none(), "{injected:?}");
+        }
+    }
+
+    #[test]
+    fn production_handoff_precedes_event_create_and_all_fallible_queue_steps() {
+        let source = include_str!("queue_live.rs");
+        let body = source
+            .split("fn create_compute_aql_queue_with_runtime<T>(")
+            .nth(1)
+            .unwrap()
+            .split("impl ComputeAqlQueueSessionV1")
+            .next()
+            .unwrap();
+        let handoff = body
+            .find("runtime.take().expect(\"validated debug runtime authority\")")
+            .unwrap();
+        let event_create = body.find("LinuxQueueExceptionEventV1::create").unwrap();
+        assert!(handoff < event_create);
+        for post_handoff_step in [
+            "LinuxCwsrShadowPagesV1::install",
+            "initialize_and_validate_bo_headers",
+            "memory.seal_executable(eop)",
+            "memory.map_to_gpu(ring)",
+            "memory.take_queue_model_foundation()?",
+            "NativeQueueEngineV1::new(backend)",
+            "NativeAqlSubmissionOwnerV1::new(ring_bytes)",
+            "engine.create(key)",
+            "runtime.mark_queue_created()?",
+            ".create_outputs(key)",
+            ".native_queue_id(key)",
+            "let mut session = ComputeAqlQueueSessionV1",
+            "session.check_currentness()?",
+            "LinuxDoorbellSliceV1::map",
+            "session.doorbell = Some(doorbell)",
+        ] {
+            assert!(
+                event_create < body.find(post_handoff_step).unwrap(),
+                "{post_handoff_step}"
+            );
+        }
     }
 }
