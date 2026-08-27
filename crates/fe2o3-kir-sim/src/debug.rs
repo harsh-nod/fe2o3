@@ -2,7 +2,7 @@ use fe2o3_kernel_ir::{AccessMode, AddressSpace, BlockId, ScalarType, ValueId};
 use std::error::Error;
 use std::fmt;
 
-use crate::{ScalarBitsV1, SimulationInvocationV1};
+use crate::{ScalarBitsV1, SimulationInvocationV1, SimulationScheduleIdentityV1};
 
 pub const MAX_DEBUG_FRAMES_PER_CHECKPOINT_V1: usize = 4_096;
 pub const MAX_DEBUG_VALUES_PER_CHECKPOINT_V1: usize = 1_000_000;
@@ -236,9 +236,19 @@ pub enum SimulationDebugRecordKindV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationDebugRecordV1 {
     pub ordinal: u64,
+    /// Semantic CPU schedule and realized runnable-decision prefix for this record.
+    pub schedule: SimulationDebugScheduleV1,
     pub invocation: SimulationInvocationV1,
     pub site: SimulationDebugSiteV1,
     pub kind: SimulationDebugRecordKindV1,
+}
+
+/// Schedule provenance attached to one live debugger observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SimulationDebugScheduleV1 {
+    pub identity: SimulationScheduleIdentityV1,
+    /// Zero-based runnable-invocation decision that produced this observation.
+    pub decision_ordinal: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

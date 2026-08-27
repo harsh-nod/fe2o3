@@ -23,16 +23,19 @@ use crate::resident::{
     partitioned_bool_vec_storage_bytes, partitioned_geometric_vec_bytes, reserved_bool_vec_bytes,
     reserved_hash_map_bytes, reserved_vec_bytes,
 };
+use crate::schedule::{PreparedScheduleV1, SchedulePrepareErrorV1};
 use crate::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, EventPolicyV1,
     NoopSimulationDebugSinkV1, ScalarBitsV1, SharedBufferV1, SimulationArgumentV1,
     SimulationDebugAllocationV1, SimulationDebugBarrierActionV1, SimulationDebugBindingV1,
     SimulationDebugCaptureLimitsV1, SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1,
     SimulationDebugFrameV1, SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1,
-    SimulationDebugRecordV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
-    SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
-    SimulationInvocationV1, SimulationLimitsV1, SimulationPlanV1, SimulationPreflightErrorV1,
-    SimulationRequestV1, SimulationSiteV1, SimulationTargetV1,
+    SimulationDebugRecordV1, SimulationDebugScheduleV1, SimulationDebugSinkControlV1,
+    SimulationDebugSinkV1, SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1,
+    SimulationDebugValueV1, SimulationInvocationV1, SimulationLimitsV1, SimulationPlanV1,
+    SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleCoverageV1,
+    SimulationScheduleIdentityV1, SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1,
+    SimulationScheduleRequestV1, SimulationSiteV1, SimulationTargetV1,
 };
 
 /// Ephemeral execution event kind. This is an in-process adapter, not a durable trace schema.
@@ -130,15 +133,6 @@ pub struct SimulationEventSiteV1 {
     pub operation: Option<u32>,
 }
 
-/// Stable scheduler used by this deterministic observation profile.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SimulationScheduleIdentityV1 {
-    /// Workgroup Z/Y/X, then local Z/Y/X, with each invocation run to completion.
-    WorkgroupMajorLocalZyxSerialV1,
-    /// Workgroup Z/Y/X and local Z/Y/X, cooperatively yielding at workgroup barriers.
-    WorkgroupMajorLocalZyxCooperativeV1,
-}
-
 /// Bounded result of cross-invocation global-memory conflict assessment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SimulationConflictAssessmentV1 {
@@ -220,6 +214,9 @@ pub struct SimulationExecutionV1 {
     steps_executed: u64,
     events_emitted: u64,
     schedule: SimulationScheduleIdentityV1,
+    schedule_transcript_identity: [u8; 32],
+    schedule_coverage: SimulationScheduleCoverageV1,
+    schedule_records: Vec<SimulationScheduleRecordV1>,
     conflict_assessment: SimulationConflictAssessmentV1,
 }
 
@@ -287,6 +284,21 @@ impl SimulationExecutionV1 {
 
     pub const fn schedule(&self) -> SimulationScheduleIdentityV1 {
         self.schedule
+    }
+
+    /// Returns the exact identity of the realized semantic CPU ordering.
+    pub const fn schedule_transcript_identity(&self) -> &[u8; 32] {
+        &self.schedule_transcript_identity
+    }
+
+    /// Returns complete runnable-decision and cooperative-barrier coverage.
+    pub const fn schedule_coverage(&self) -> SimulationScheduleCoverageV1 {
+        self.schedule_coverage
+    }
+
+    /// Returns the bounded record when this run explicitly requested recording.
+    pub fn schedule_record(&self) -> Option<&SimulationScheduleRecordV1> {
+        self.schedule_records.first()
     }
 
     pub const fn conflict_assessment(&self) -> &SimulationConflictAssessmentV1 {
@@ -462,6 +474,15 @@ pub enum SimulationExecutionErrorKindV1 {
     WorkgroupSchedulerNoProgress {
         phase: u64,
     },
+    ScheduleDecisionLimit {
+        actual: usize,
+        limit: usize,
+    },
+    ScheduleResidentLimit {
+        actual: usize,
+        limit: usize,
+    },
+    ScheduleReplay(SimulationScheduleReplayErrorV1),
     ReachedUnreachable,
     InternalInvariant(&'static str),
     EventSinkFailure(SimulationEventSinkErrorV1),
@@ -521,6 +542,39 @@ impl AdmittedSimulationModuleV1 {
         self.simulate_with_sink(request, target, limits, &mut sink)
     }
 
+    /// Runs with an explicit bounded schedule recording or exact replay policy.
+    ///
+    /// This controls deterministic CPU semantic ordering only. It does not model
+    /// GPU scheduling, timing, performance, or physical wave execution.
+    pub fn simulate_scheduled(
+        &self,
+        request: &SimulationRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight(request, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        let mut debug_sink = NoopSimulationDebugSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: Some(schedule),
+            },
+            &mut event_sink,
+            &mut debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
     /// Runs with bounded ephemeral event delivery after complete preflight succeeds.
     pub fn simulate_with_sink(
         &self,
@@ -571,6 +625,38 @@ impl AdmittedSimulationModuleV1 {
                 policy: request.events,
                 plan,
                 debug_capture: capture,
+                schedule: None,
+            },
+            &mut event_sink,
+            debug_sink,
+        )
+        .map_err(SimulationErrorV1::Execution)
+    }
+
+    /// Runs a scheduled simulation with independent bounded debug snapshots.
+    pub fn simulate_debugged_scheduled_with_sink(
+        &self,
+        request: &SimulationRequestV1,
+        target: SimulationTargetV1,
+        limits: SimulationLimitsV1,
+        schedule: SimulationScheduleRequestV1<'_>,
+        capture: SimulationDebugCaptureLimitsV1,
+        debug_sink: &mut impl SimulationDebugSinkV1,
+    ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+        let plan = self
+            .preflight(request, target, limits)
+            .map_err(SimulationErrorV1::Preflight)?;
+        let mut event_sink = NoopSimulationEventSinkV1;
+        execute(
+            self,
+            request,
+            ExecutionConfiguration {
+                target,
+                limits,
+                policy: request.events,
+                plan,
+                debug_capture: capture,
+                schedule: Some(schedule),
             },
             &mut event_sink,
             debug_sink,
@@ -599,6 +685,7 @@ impl AdmittedSimulationModuleV1 {
                 policy,
                 plan,
                 debug_capture: SimulationDebugCaptureLimitsV1::disabled(),
+                schedule: None,
             },
             sink,
             &mut debug_sink,
@@ -1028,6 +1115,8 @@ struct Engine<'a, S> {
     debug_sink: &'a mut dyn SimulationDebugSinkV1,
     debug_records: u64,
     debug_delivery_stopped: bool,
+    schedule_identity: SimulationScheduleIdentityV1,
+    schedule_decision: u64,
     steps: u64,
     events: u64,
     reserved_event_closures: u64,
@@ -1460,6 +1549,10 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         let module_index = self.function_module_indices[site.function];
         let record = SimulationDebugRecordV1 {
             ordinal: self.debug_records,
+            schedule: SimulationDebugScheduleV1 {
+                identity: self.schedule_identity,
+                decision_ordinal: self.schedule_decision,
+            },
             invocation,
             site: SimulationDebugSiteV1 {
                 function_ordinal: module_index,
@@ -2218,18 +2311,19 @@ fn build_execution_indices<'a>(
     ))
 }
 
-struct ExecutionConfiguration {
+struct ExecutionConfiguration<'a> {
     target: SimulationTargetV1,
     limits: SimulationLimitsV1,
     policy: EventPolicyV1,
     plan: SimulationPlanV1,
     debug_capture: SimulationDebugCaptureLimitsV1,
+    schedule: Option<SimulationScheduleRequestV1<'a>>,
 }
 
 fn execute(
     admitted: &AdmittedSimulationModuleV1,
     request: &SimulationRequestV1,
-    configuration: ExecutionConfiguration,
+    configuration: ExecutionConfiguration<'_>,
     sink: &mut impl SimulationEventSinkV1,
     debug_sink: &mut impl SimulationDebugSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationExecutionErrorV1> {
@@ -2239,7 +2333,27 @@ fn execute(
         policy,
         plan,
         debug_capture,
+        schedule,
     } = configuration;
+    let workgroup_participants = usize::try_from(plan.workgroup[0])
+        .ok()
+        .and_then(|x| x.checked_mul(plan.workgroup[1] as usize))
+        .and_then(|xy| xy.checked_mul(plan.workgroup[2] as usize))
+        .ok_or_else(|| {
+            top_level_error(SimulationExecutionErrorKindV1::InternalInvariant(
+                "preflighted workgroup participant count",
+            ))
+        })?;
+    let mut schedule = PreparedScheduleV1::prepare(
+        schedule,
+        admitted.identity,
+        request,
+        target,
+        limits,
+        &plan,
+        workgroup_participants,
+    )
+    .map_err(|error| top_level_error(schedule_prepare_error(error)))?;
     let indices =
         build_execution_indices(&admitted.module, &plan.reachable_function_indices, target)?;
     let actual_index_resident_bytes =
@@ -2305,6 +2419,8 @@ fn execute(
         debug_sink,
         debug_records: 0,
         debug_delivery_stopped: !debug_capture.is_enabled(),
+        schedule_identity: schedule.identity(),
+        schedule_decision: 0,
         steps: 0,
         events: 0,
         reserved_event_closures: 0,
@@ -2331,15 +2447,6 @@ fn execute(
     let mut invocations = 0_u64;
     let mut workgroups = 0_u64;
     let mut scheduled_slots = 0_u64;
-    let workgroup_participants = usize::try_from(plan.workgroup[0])
-        .ok()
-        .and_then(|x| x.checked_mul(plan.workgroup[1] as usize))
-        .and_then(|xy| xy.checked_mul(plan.workgroup[2] as usize))
-        .ok_or_else(|| {
-            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                "preflighted workgroup participant count",
-            ))
-        })?;
     let mut machines = Vec::new();
     machines
         .try_reserve_exact(workgroup_participants)
@@ -2349,6 +2456,7 @@ fn execute(
         for group_y in 0..plan.workgroup_count[1] {
             for group_x in 0..plan.workgroup_count[0] {
                 workgroups += 1;
+                schedule.begin_workgroup();
                 machines.clear();
                 for local_z in 0..plan.workgroup[2] {
                     for local_y in 0..plan.workgroup[1] {
@@ -2393,12 +2501,24 @@ fn execute(
                     invocations == 0,
                 )?;
                 debug_assert_eq!(begun, machines.len());
-                if let Err(mut error) = execute_workgroup_machines(
-                    &mut engine,
-                    &mut machines,
-                    &invocation_site,
-                    &mut invocations,
-                ) {
+                let execution = if schedule.uses_canonical_order() {
+                    execute_workgroup_machines(
+                        &mut engine,
+                        &mut machines,
+                        &invocation_site,
+                        &mut invocations,
+                        &mut schedule,
+                    )
+                } else {
+                    execute_scheduled_workgroup_machines(
+                        &mut engine,
+                        &mut machines,
+                        &invocation_site,
+                        &mut invocations,
+                        &mut schedule,
+                    )
+                };
+                if let Err(mut error) = execution {
                     abort_workgroup(
                         &mut engine,
                         &mut machines,
@@ -2437,6 +2557,9 @@ fn execute(
     let arguments = copy_back_arguments(&engine.memory, &request.arguments)?;
     let shared_buffers = copy_back_shared_buffers(&engine.memory, &request.shared_buffers)?;
     let conflict_assessment = engine.conflict_assessment();
+    let schedule = schedule
+        .finish(plan.workgroups, admitted.identity, request, target, limits)
+        .map_err(|error| engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error)))?;
     Ok(SimulationExecutionV1 {
         identity: admitted.identity,
         arguments,
@@ -2446,9 +2569,29 @@ fn execute(
         scheduled_slots_visited: scheduled_slots,
         steps_executed: engine.steps,
         events_emitted: engine.events,
-        schedule: SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+        schedule: schedule.identity,
+        schedule_transcript_identity: schedule.transcript_identity,
+        schedule_coverage: schedule.coverage,
+        schedule_records: schedule.records,
         conflict_assessment,
     })
+}
+
+fn schedule_prepare_error(error: SchedulePrepareErrorV1) -> SimulationExecutionErrorKindV1 {
+    match error {
+        SchedulePrepareErrorV1::DecisionLimit { actual, limit } => {
+            SimulationExecutionErrorKindV1::ScheduleDecisionLimit { actual, limit }
+        }
+        SchedulePrepareErrorV1::ResidentLimit { actual, limit } => {
+            SimulationExecutionErrorKindV1::ScheduleResidentLimit { actual, limit }
+        }
+        SchedulePrepareErrorV1::AllocationFailure => {
+            SimulationExecutionErrorKindV1::AllocationFailure
+        }
+        SchedulePrepareErrorV1::Replay(error) => {
+            SimulationExecutionErrorKindV1::ScheduleReplay(error)
+        }
+    }
 }
 
 fn begin_workgroup_invocations<'a>(
@@ -2489,6 +2632,7 @@ fn execute_workgroup_machines<'a>(
     machines: &mut [InvocationMachine<'a>],
     invocation_site: &CompactSite,
     invocations: &mut u64,
+    schedule: &mut PreparedScheduleV1<'_>,
 ) -> Result<(), SimulationExecutionErrorV1> {
     let mut phase = 0_u64;
     loop {
@@ -2499,6 +2643,10 @@ fn execute_workgroup_machines<'a>(
         let mut first_exit = None;
 
         for machine in machines.iter_mut().filter(|machine| !machine.completed) {
+            schedule
+                .selected(machine.invocation, phase)
+                .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
+            engine.schedule_decision = schedule.current_decision() - 1;
             engine.invocation = Some(machine.invocation);
             match machine.advance_until_yield(engine, phase)? {
                 MachineYield::Complete => {
@@ -2601,6 +2749,7 @@ fn execute_workgroup_machines<'a>(
             phase,
             participants,
         );
+        schedule.barrier_released();
         engine.publish_workgroup();
         phase = phase.checked_add(1).ok_or_else(|| {
             engine.at(
@@ -2611,6 +2760,190 @@ fn execute_workgroup_machines<'a>(
             )
         })?;
     }
+}
+
+#[inline(never)]
+fn execute_scheduled_workgroup_machines<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    machines: &mut [InvocationMachine<'a>],
+    invocation_site: &CompactSite,
+    invocations: &mut u64,
+    schedule: &mut PreparedScheduleV1<'_>,
+) -> Result<(), SimulationExecutionErrorV1> {
+    let mut phase = 0_u64;
+    loop {
+        let mut arrivals = 0_usize;
+        let mut completed = 0_usize;
+        let mut first_arrival: Option<(SimulationInvocationV1, CompactSite, &WorkgroupBarrier)> =
+            None;
+        let mut first_exit = None;
+        let workgroup = machines
+            .first()
+            .ok_or_else(|| {
+                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "workgroup contained no live invocations",
+                ))
+            })?
+            .invocation
+            .workgroup;
+        let order = schedule
+            .take_order(
+                machines.len(),
+                |index| machines[index].invocation,
+                |index| machines[index].completed,
+                workgroup,
+                phase,
+            )
+            .map_err(|error| {
+                engine.invocation = None;
+                engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error))
+            })?;
+        for index in order.iter().copied() {
+            let machine = &mut machines[index];
+            schedule
+                .selected(machine.invocation, phase)
+                .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
+            engine.schedule_decision = schedule.current_decision() - 1;
+            advance_workgroup_machine(
+                engine,
+                machine,
+                invocation_site,
+                invocations,
+                phase,
+                &mut arrivals,
+                &mut completed,
+                &mut first_arrival,
+                &mut first_exit,
+            )?;
+        }
+        schedule.restore_order(order);
+
+        if completed == machines.len() {
+            return Ok(());
+        }
+        if completed != 0 && arrivals != 0 {
+            let (waiting, _, _) = first_arrival.as_ref().ok_or_else(|| {
+                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "barrier arrival accounting",
+                ))
+            })?;
+            return Err(
+                engine.fail(SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
+                    DivergentWorkgroupBarrierV1 {
+                        phase,
+                        waiting: (*waiting).into(),
+                        exited: first_exit
+                            .ok_or_else(|| {
+                                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                                    "barrier exit accounting",
+                                ))
+                            })?
+                            .into(),
+                    },
+                )),
+            );
+        }
+        if arrivals != machines.len() {
+            return Err(
+                engine.fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase })
+            );
+        }
+        let (representative, site, _) = first_arrival.ok_or_else(|| {
+            engine.fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase })
+        })?;
+        let participants = u32::try_from(arrivals).map_err(|_| {
+            engine.at(
+                site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "preflighted workgroup participants fit u32",
+                ),
+            )
+        })?;
+        engine.invocation = Some(representative);
+        engine.event(
+            &site,
+            SimulationEventKindV1::WorkgroupBarrierRelease {
+                phase,
+                participants,
+            },
+        )?;
+        engine.debug_barrier(
+            site,
+            SimulationDebugBarrierActionV1::Release,
+            phase,
+            participants,
+        );
+        schedule.barrier_released();
+        engine.publish_workgroup();
+        phase = phase.checked_add(1).ok_or_else(|| {
+            engine.at(
+                site,
+                SimulationExecutionErrorKindV1::StepLimit {
+                    limit: engine.limits.max_steps,
+                },
+            )
+        })?;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_workgroup_machine<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    machine: &mut InvocationMachine<'a>,
+    invocation_site: &CompactSite,
+    invocations: &mut u64,
+    phase: u64,
+    arrivals: &mut usize,
+    completed: &mut usize,
+    first_arrival: &mut Option<(SimulationInvocationV1, CompactSite, &'a WorkgroupBarrier)>,
+    first_exit: &mut Option<SimulationInvocationV1>,
+) -> Result<(), SimulationExecutionErrorV1> {
+    engine.invocation = Some(machine.invocation);
+    match machine.advance_until_yield(engine, phase)? {
+        MachineYield::Complete => {
+            engine.end_lifecycle(
+                invocation_site,
+                SimulationEventKindV1::InvocationEnd {
+                    outcome: SimulationExecutionOutcomeV1::Completed,
+                },
+            )?;
+            *invocations = invocations.checked_add(1).ok_or_else(|| {
+                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "completed invocation count overflow",
+                ))
+            })?;
+            *completed += 1;
+            first_exit.get_or_insert(machine.invocation);
+        }
+        MachineYield::Barrier(arrival) => {
+            if let Some((_, expected_site, expected_barrier)) = first_arrival.as_ref() {
+                if *expected_site != arrival.site || *expected_barrier != arrival.barrier {
+                    let site_mismatch = *expected_site != arrival.site;
+                    let semantics_mismatch = *expected_barrier != arrival.barrier;
+                    let mismatch = match (site_mismatch, semantics_mismatch) {
+                        (true, true) => WorkgroupBarrierMismatchV1::SiteAndSemantics,
+                        (true, false) => WorkgroupBarrierMismatchV1::Site,
+                        (false, true) => WorkgroupBarrierMismatchV1::Semantics,
+                        (false, false) => unreachable!(),
+                    };
+                    return Err(engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(
+                            MismatchedWorkgroupBarrierV1 {
+                                phase,
+                                expected: engine.materialize_event_site(*expected_site),
+                                mismatch,
+                            },
+                        ),
+                    ));
+                }
+            } else {
+                *first_arrival = Some((machine.invocation, arrival.site, arrival.barrier));
+            }
+            *arrivals += 1;
+        }
+    }
+    Ok(())
 }
 
 fn abort_workgroup<'a>(

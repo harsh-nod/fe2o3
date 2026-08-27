@@ -1721,6 +1721,13 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { .. } => {
             ErrorKind::ExecutionWorkgroupSchedulerNoProgress
         }
+        SimulationExecutionErrorKindV1::ScheduleDecisionLimit { .. } => {
+            ErrorKind::ExecutionScheduleDecisionLimit
+        }
+        SimulationExecutionErrorKindV1::ScheduleResidentLimit { .. } => {
+            ErrorKind::ExecutionScheduleResidentLimit
+        }
+        SimulationExecutionErrorKindV1::ScheduleReplay(_) => ErrorKind::ExecutionScheduleReplay,
         SimulationExecutionErrorKindV1::ReachedUnreachable => {
             ErrorKind::ExecutionReachedUnreachable
         }
@@ -1879,7 +1886,7 @@ fn write_success<W: Write + ?Sized>(
     write_lower_hex(writer, execution.identity().digest(), false)?;
     write!(
         writer,
-        "\",\"canonical_bytes\":{}}},\"counts\":{{\"arguments\":{},\"shared_buffers\":{},\"invocations_executed\":{},\"workgroups_visited\":{},\"scheduled_slots_visited\":{},\"steps_executed\":{},\"events_emitted\":{}}},\"schedule\":{{\"identity\":\"{}\"}},\"conflict_assessment\":",
+        "\",\"canonical_bytes\":{}}},\"counts\":{{\"arguments\":{},\"shared_buffers\":{},\"invocations_executed\":{},\"workgroups_visited\":{},\"scheduled_slots_visited\":{},\"steps_executed\":{},\"events_emitted\":{}}},\"schedule\":{{\"identity\":\"{}\",\"transcript_sha256\":\"",
         execution.identity().canonical_length(),
         execution.arguments().len(),
         execution.shared_buffers().len(),
@@ -1889,6 +1896,15 @@ fn write_success<W: Write + ?Sized>(
         execution.steps_executed(),
         execution.events_emitted(),
         schedule_name(execution.schedule()),
+    )?;
+    write_lower_hex(writer, execution.schedule_transcript_identity(), false)?;
+    let coverage = execution.schedule_coverage();
+    write!(
+        writer,
+        "\",\"coverage\":{{\"decisions\":{},\"workgroups\":{},\"barrier_releases\":{},\"complete\":true}}}},\"conflict_assessment\":",
+        coverage.decisions(),
+        coverage.workgroups(),
+        coverage.barrier_releases(),
     )?;
     write_conflict_assessment(writer, execution.conflict_assessment())?;
     writer.write_all(b",\"arguments\":[")?;
@@ -1917,6 +1933,9 @@ const fn schedule_name(schedule: SimulationScheduleIdentityV1) -> &'static str {
         }
         SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1 => {
             "workgroup_major_local_zyx_cooperative_v1"
+        }
+        SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1 => {
+            "workgroup_major_seeded_runnable_cooperative_v1"
         }
     }
 }

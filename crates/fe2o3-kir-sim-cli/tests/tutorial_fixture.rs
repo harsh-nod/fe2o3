@@ -70,6 +70,14 @@ fn committed_tutorial_fixture_is_canonical_and_reproducible() {
         "workgroup_major_local_zyx_cooperative_v1"
     );
     assert_eq!(
+        result["schedule"]["transcript_sha256"],
+        "a9c2892473af3eeeda6466fbaebd03672800cea54738ae80528863abd491acf3"
+    );
+    assert_eq!(result["schedule"]["coverage"]["decisions"], 4);
+    assert_eq!(result["schedule"]["coverage"]["workgroups"], 1);
+    assert_eq!(result["schedule"]["coverage"]["barrier_releases"], 0);
+    assert_eq!(result["schedule"]["coverage"]["complete"], true);
+    assert_eq!(
         result["conflict_assessment"]["status"],
         "no_conflicts_observed"
     );

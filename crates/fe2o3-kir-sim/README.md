@@ -50,6 +50,27 @@ cross-invocation global-memory conflict assessment. A conflict or an incomplete
 assessment is machine-readable. Even a clean observation is not a proof of race
 freedom or a model of GPU scheduling.
 
+The ordinary `simulate` paths retain the canonical cooperative order. Opt-in
+`simulate_scheduled` and `simulate_debugged_scheduled_with_sink` calls can
+record either that order or a deterministic seeded order. A schedule decision
+selects one currently runnable invocation by exact logical workgroup and local
+coordinates for one cooperative barrier phase. Seeded ordering uses a frozen
+SplitMix64 permutation within each phase; workgroups remain in canonical Z/Y/X
+order. It is a CPU semantic exploration order, not an approximation of GPU
+wave, workgroup, or compute-unit scheduling.
+
+A successful recording returns an opaque `SimulationScheduleRecordV1`. The
+record and every result expose a SHA-256 transcript identity plus exact decision,
+workgroup, and barrier-release coverage. Replay binds the record to the exact
+canonical KIR identity, selected kernel, launch, target layout, arguments,
+shared buffers, event policy, and resource limits. It validates every decision
+against the currently runnable local identities and rejects context drift,
+missing or trailing decisions, duplicate or unavailable locals, phase drift,
+coverage drift, and transcript corruption. Decision retention has an explicit
+caller bound, a fixed hard cap, fallible reservation, and resident-byte
+admission. Unrecorded canonical execution retains no decision vector and never
+fails a legacy run because of the recording bound.
+
 Before any mutable execution state is created, preflight visits the complete
 call graph reachable from the selected kernel, checks target-specific constants,
 SSA frame size, and statically known acyclic call depth. Recursive internal
@@ -145,3 +166,7 @@ typed values. Snapshot collections are either complete or carry an explicit
 unavailable reason; they are never silently partial. A debug sink can stop its
 own delivery without stopping or changing simulation. Debug records are
 separate from the stable `SimulationEventV1` adapter and Semantic Trace V1.
+Each debug record also names the semantic schedule and zero-based runnable
+decision that produced it. This is ordering provenance only; neither a record,
+replay, seeded variation, nor conflict-free observation establishes GPU
+scheduling, timing, performance, performance prediction, or race freedom.

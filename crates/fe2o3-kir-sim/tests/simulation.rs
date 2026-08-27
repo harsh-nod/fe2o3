@@ -10,12 +10,15 @@ use fe2o3_kernel_ir::{
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, BufferArgumentV1, BufferBackingIdV1, BufferViewArgumentV1,
     EventPolicyV1, MAX_REPORTED_UNSUPPORTED_FINDINGS_V1,
-    MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1, ScalarBitsV1, SharedBufferV1,
-    SimulationAdmissionErrorV1, SimulationArgumentV1, SimulationConflictAssessmentV1,
-    SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1, SimulationEventSinkV1,
-    SimulationEventV1, SimulationExecutionErrorKindV1, SimulationExecutionOutcomeV1,
-    SimulationLimitsV1, SimulationPreflightErrorV1, SimulationRequestV1,
-    SimulationScheduleIdentityV1, SimulationTargetV1, UnsupportedFeatureV1,
+    MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1, MAX_SCHEDULE_DECISIONS_V1, ScalarBitsV1,
+    SharedBufferV1, SimulationAdmissionErrorV1, SimulationArgumentV1,
+    SimulationConflictAssessmentV1, SimulationDebugCaptureLimitsV1, SimulationDebugRecordV1,
+    SimulationDebugSinkControlV1, SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1,
+    SimulationEventSinkControlV1, SimulationEventSinkV1, SimulationEventV1,
+    SimulationExecutionErrorKindV1, SimulationExecutionOutcomeV1, SimulationLimitsV1,
+    SimulationPreflightErrorV1, SimulationRequestV1, SimulationScheduleIdentityV1,
+    SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1, SimulationTargetV1,
+    UnsupportedFeatureV1,
 };
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -85,6 +88,16 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 
 #[derive(Default)]
 struct Collector(Vec<SimulationEventV1>);
+
+#[derive(Default)]
+struct DebugCollector(Vec<SimulationDebugRecordV1>);
+
+impl SimulationDebugSinkV1 for DebugCollector {
+    fn record(&mut self, record: SimulationDebugRecordV1) -> SimulationDebugSinkControlV1 {
+        self.0.push(record);
+        SimulationDebugSinkControlV1::Continue
+    }
+}
 
 impl SimulationEventSinkV1 for Collector {
     fn record(
@@ -3978,4 +3991,273 @@ fn guarded_load_has_the_same_inline_resident_cost_as_load() {
         guarded.admitted_resident_bytes(),
         ordinary.admitted_resident_bytes()
     );
+}
+
+#[test]
+fn canonical_schedule_recording_preserves_legacy_execution_exactly() {
+    let admitted = admitted(helper_barrier_exchange_module());
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [10, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 10]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let legacy = admitted.simulate(&request, target, limits).unwrap();
+    let recorded = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::RecordCanonical { max_decisions: 64 },
+        )
+        .unwrap();
+
+    assert_eq!(recorded.arguments(), legacy.arguments());
+    assert_eq!(recorded.shared_buffers(), legacy.shared_buffers());
+    assert_eq!(recorded.steps_executed(), legacy.steps_executed());
+    assert_eq!(recorded.conflict_assessment(), legacy.conflict_assessment());
+    assert_eq!(recorded.schedule(), legacy.schedule());
+    assert_eq!(
+        recorded.schedule_transcript_identity(),
+        legacy.schedule_transcript_identity()
+    );
+    assert_eq!(recorded.schedule_coverage().decisions(), 20);
+    assert_eq!(recorded.schedule_coverage().workgroups(), 3);
+    assert_eq!(recorded.schedule_coverage().barrier_releases(), 3);
+    assert!(recorded.schedule_coverage().is_complete());
+
+    let record = recorded.schedule_record().expect("explicit record");
+    assert_eq!(record.decisions().len(), 20);
+    assert_eq!(record.decisions()[0].workgroup(), [0, 0, 0]);
+    assert_eq!(record.decisions()[0].phase(), 0);
+    assert_eq!(record.decisions()[0].local(), [0, 0, 0]);
+    assert_eq!(record.decisions()[8].workgroup(), [1, 0, 0]);
+    assert_eq!(record.decisions()[16].workgroup(), [2, 0, 0]);
+    assert!(
+        record.decisions()[16..]
+            .iter()
+            .all(|decision| decision.local()[0] < 2)
+    );
+}
+
+#[test]
+fn seeded_schedule_is_deterministic_and_replays_helper_barriers_and_partial_groups() {
+    let admitted = admitted(helper_barrier_exchange_module());
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [10, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 10]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let run = |seed| {
+        admitted
+            .simulate_scheduled(
+                &request,
+                target,
+                limits,
+                SimulationScheduleRequestV1::RecordSeeded {
+                    seed,
+                    max_decisions: 64,
+                },
+            )
+            .unwrap()
+    };
+    let first = run(0x5eed);
+    let same = run(0x5eed);
+    let different = run(0x5eee);
+
+    assert_eq!(first.schedule_record(), same.schedule_record());
+    assert_ne!(first.schedule_record(), different.schedule_record());
+    assert_eq!(
+        first.schedule(),
+        SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1
+    );
+    assert_eq!(
+        words(first.buffer(0).unwrap().bytes()),
+        vec![0, 0, 0, 0, 4, 4, 4, 4, 8, 8]
+    );
+
+    let record = first.schedule_record().unwrap();
+    let replayed = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(record),
+        )
+        .unwrap();
+    assert_eq!(replayed.arguments(), first.arguments());
+    assert_eq!(replayed.schedule(), first.schedule());
+    assert_eq!(
+        replayed.schedule_transcript_identity(),
+        first.schedule_transcript_identity()
+    );
+    assert_eq!(replayed.schedule_coverage(), first.schedule_coverage());
+    assert!(replayed.schedule_record().is_none());
+}
+
+#[test]
+fn debug_records_expose_seeded_semantic_schedule_and_decision_prefix() {
+    let admitted = admitted(helper_barrier_exchange_module());
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [4, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 4]))],
+    );
+    let mut debug = DebugCollector::default();
+    let execution = admitted
+        .simulate_debugged_scheduled_with_sink(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordSeeded {
+                seed: 7,
+                max_decisions: 16,
+            },
+            SimulationDebugCaptureLimitsV1::new(16, 256, 16, 1_024).unwrap(),
+            &mut debug,
+        )
+        .unwrap();
+
+    assert!(!debug.0.is_empty());
+    assert!(debug.0.iter().all(|record| {
+        record.schedule.identity
+            == SimulationScheduleIdentityV1::WorkgroupMajorSeededRunnableCooperativeV1
+            && record.schedule.decision_ordinal < execution.schedule_coverage().decisions()
+    }));
+    assert!(debug.0.windows(2).all(|records| {
+        records[0].schedule.decision_ordinal <= records[1].schedule.decision_ordinal
+    }));
+}
+
+#[test]
+fn schedule_replay_rejects_stale_inputs_and_limits_before_execution() {
+    let admitted = admitted(helper_barrier_exchange_module());
+    let request = SimulationRequestV1::new(
+        "lds_exchange",
+        [4, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[u32::MAX; 4]))],
+    );
+    let target = SimulationTargetV1::amdgpu_64();
+    let limits = SimulationLimitsV1::default();
+    let recorded = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::RecordCanonical { max_decisions: 16 },
+        )
+        .unwrap();
+    let record = recorded.schedule_record().unwrap();
+
+    let stale_request = SimulationRequestV1::new(
+        "lds_exchange",
+        [4, 1, 1],
+        [4, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0; 4]))],
+    );
+    for result in [
+        admitted.simulate_scheduled(
+            &stale_request,
+            target,
+            limits,
+            SimulationScheduleRequestV1::Replay(record),
+        ),
+        admitted.simulate_scheduled(
+            &request,
+            target,
+            SimulationLimitsV1 {
+                max_events: limits.max_events - 1,
+                ..limits
+            },
+            SimulationScheduleRequestV1::Replay(record),
+        ),
+    ] {
+        assert!(matches!(
+            result,
+            Err(SimulationErrorV1::Execution(
+                fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                    invocation: None,
+                    site: None,
+                    kind: SimulationExecutionErrorKindV1::ScheduleReplay(
+                        SimulationScheduleReplayErrorV1::ContextMismatch
+                    ),
+                    ..
+                }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn schedule_record_bounds_are_fail_closed_without_changing_default_step_failures() {
+    let admitted = admitted(empty_kernel_module(
+        "empty_schedule",
+        Signature::new(vec![], vec![]),
+        vec![],
+    ));
+    let request = SimulationRequestV1::new("empty_schedule", [4, 1, 1], [4, 1, 1], vec![]);
+    let target = SimulationTargetV1::amdgpu_64();
+
+    let oversized = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordCanonical {
+                max_decisions: MAX_SCHEDULE_DECISIONS_V1 + 1,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        oversized,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            invocation: None,
+            kind: SimulationExecutionErrorKindV1::ScheduleDecisionLimit { .. },
+            ..
+        })
+    ));
+
+    let too_short = admitted
+        .simulate_scheduled(
+            &request,
+            target,
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::RecordCanonical { max_decisions: 1 },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        too_short,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::ScheduleDecisionLimit {
+                actual: 2,
+                limit: 1
+            },
+            ..
+        })
+    ));
+
+    let legacy = admitted
+        .simulate(
+            &request,
+            target,
+            SimulationLimitsV1 {
+                max_steps: 2,
+                ..SimulationLimitsV1::default()
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        legacy,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::StepLimit { limit: 2 },
+            ..
+        })
+    ));
 }

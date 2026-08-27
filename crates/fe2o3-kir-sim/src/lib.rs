@@ -6,6 +6,7 @@ mod execute;
 mod model;
 mod preflight;
 mod resident;
+mod schedule;
 
 pub use debug::{
     MAX_DEBUG_ALLOCATIONS_PER_CHECKPOINT_V1, MAX_DEBUG_FRAMES_PER_CHECKPOINT_V1,
@@ -15,8 +16,8 @@ pub use debug::{
     SimulationDebugCaptureLimitsErrorV1, SimulationDebugCaptureLimitsV1,
     SimulationDebugCheckpointPhaseV1, SimulationDebugCollectionV1, SimulationDebugFrameV1,
     SimulationDebugMemoryAccessV1, SimulationDebugRecordKindV1, SimulationDebugRecordV1,
-    SimulationDebugSinkControlV1, SimulationDebugSinkV1, SimulationDebugSiteV1,
-    SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
+    SimulationDebugScheduleV1, SimulationDebugSinkControlV1, SimulationDebugSinkV1,
+    SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
 };
 pub use execute::{
     DivergentWorkgroupBarrierV1, MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1,
@@ -24,8 +25,8 @@ pub use execute::{
     SimulationEventSinkControlV1, SimulationEventSinkErrorV1, SimulationEventSinkV1,
     SimulationEventSiteV1, SimulationEventV1, SimulationExecutionErrorKindV1,
     SimulationExecutionErrorV1, SimulationExecutionOutcomeV1, SimulationExecutionV1,
-    SimulationMemoryConflictV1, SimulationObservationFailureV1, SimulationScheduleIdentityV1,
-    WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
+    SimulationMemoryConflictV1, SimulationObservationFailureV1, WorkgroupBarrierMismatchV1,
+    WorkgroupParticipantV1,
 };
 pub use model::{
     AdmittedSimulationModuleV1, BufferArgumentErrorV1, BufferArgumentV1, BufferBackingIdV1,
@@ -38,4 +39,9 @@ pub use preflight::{
     MAX_REPORTED_UNSUPPORTED_FINDINGS_V1, MAX_REPORTED_UNSUPPORTED_IDENTIFIER_BYTES_V1,
     SimulationPlanV1, SimulationPreflightErrorV1, UnsupportedFeatureV1,
     UnsupportedSimulationReportV1, UnsupportedSimulationSiteV1,
+};
+pub use schedule::{
+    MAX_SCHEDULE_DECISIONS_V1, SimulationScheduleCoverageV1, SimulationScheduleDecisionV1,
+    SimulationScheduleIdentityV1, SimulationScheduleRecordV1, SimulationScheduleReplayErrorV1,
+    SimulationScheduleRequestV1,
 };

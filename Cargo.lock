@@ -1085,6 +1085,7 @@ name = "fe2o3-kir-sim"
 version = "0.1.0"
 dependencies = [
  "fe2o3-kernel-ir",
+ "sha2 0.11.0",
 ]
 
 [[package]]

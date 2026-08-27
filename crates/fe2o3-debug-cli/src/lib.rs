@@ -3733,6 +3733,11 @@ mod tests {
     ) -> SimulationDebugRecordV1 {
         SimulationDebugRecordV1 {
             ordinal,
+            schedule: fe2o3_kir_sim::SimulationDebugScheduleV1 {
+                identity:
+                    fe2o3_kir_sim::SimulationScheduleIdentityV1::WorkgroupMajorLocalZyxCooperativeV1,
+                decision_ordinal: ordinal,
+            },
             invocation: SimulationInvocationV1 {
                 global: [u64::from(lane), 0, 0],
                 workgroup: [0, 0, 0],
