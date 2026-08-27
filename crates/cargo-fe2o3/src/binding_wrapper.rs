@@ -63,7 +63,6 @@ const HSACO_DIR_ENV: &str = "FE2O3_HSACO_DIR";
 const TARGET_ENV: &str = "FE2O3_TARGET";
 const BUILD_SESSION_ENV: &str = "FE2O3_BUILD_SESSION_V1";
 const BUILD_ATTEMPT_ENV: &str = "FE2O3_BUILD_ATTEMPT_V1";
-const CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1: &str = "FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1";
 const QUALIFICATION_RELEASE_ACTION_ENV: &str = "FE2O3_PROTECTED_RELEASE_ACTION_V1";
 const CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2: &str = "FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2";
 const QUALIFICATION_CODEGEN_BACKEND_SHA256_ENV_V1: &str =
@@ -556,28 +555,6 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     };
     if let Some(managed) = managed_attempt {
         if status.success() {
-            #[cfg(feature = "compiler-handoff-observation-test-only")]
-            if let Some(request) = managed.compiler_handoff_observation.as_ref() {
-                let observation = if managed.has_configured_work() {
-                    Err(
-                        "test-only compiler-handoff observation cannot replace a configured build consumer"
-                            .to_owned(),
-                    )
-                } else {
-                    crate::compiler_handoff_observation::publish_and_wait_for_consumption(
-                        request,
-                        &managed.output_dir,
-                        &managed.producer,
-                        managed.attempt,
-                    )
-                };
-                if let Err(primary) = observation {
-                    let cleanup =
-                        fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
-                            .err();
-                    return Err(BindingWrapperError::ManagedCompletion { primary, cleanup });
-                }
-            }
             complete_managed_attempt(managed, parent_rustc_invocation_custody)?;
         } else if let Err(cleanup) =
             fail_build_attempt(&managed.output_dir, &managed.producer, managed.attempt)
@@ -609,22 +586,6 @@ fn configure_build_observation_environment(
     command: &mut Command,
     observation: Option<CompileBuildObservationV2>,
 ) {
-    #[cfg(feature = "compiler-handoff-observation-test-only")]
-    let metadata_mutation = std::env::var_os(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1);
-    #[cfg(not(feature = "compiler-handoff-observation-test-only"))]
-    let metadata_mutation: Option<OsString> = None;
-    configure_build_observation_environment_with_test_mutation(
-        command,
-        observation,
-        metadata_mutation.as_deref(),
-    );
-}
-
-fn configure_build_observation_environment_with_test_mutation(
-    command: &mut Command,
-    observation: Option<CompileBuildObservationV2>,
-    metadata_mutation: Option<&OsStr>,
-) {
     if let Some(observation) = observation {
         command.env(CRATE_BINDING_ID_ENV_V1, observation.crate_binding.to_hex());
         // This digest is an exact build observation, not a semantic admission identity.
@@ -635,14 +596,6 @@ fn configure_build_observation_environment_with_test_mutation(
     } else {
         command.env_remove(CRATE_BINDING_ID_ENV_V1);
         command.env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
-    }
-    match metadata_mutation {
-        Some(mutation) => {
-            command.env(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1, mutation);
-        }
-        None => {
-            command.env_remove(CARGO_METADATA_MUTATION_TEST_ONLY_ENV_V1);
-        }
     }
 }
 
@@ -1046,7 +999,6 @@ fn managed_reviewed_child_environment(name: &OsStr) -> bool {
             | b"FE2O3_HSACO_DIR"
             | b"FE2O3_BUILD_ATTEMPT_V1"
             | b"FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2"
-            | b"FE2O3_CARGO_METADATA_MUTATION_TEST_ONLY_V1"
             | b"FE2O3_CODEGEN_BACKEND_BUILD_OBSERVATION_V2"
             | b"FE2O3_QUALIFICATION_CODEGEN_BACKEND_SHA256_V1"
             | b"FE2O3_WORKER_CONFIG_BUILD_OBSERVATION_V2"
@@ -1428,8 +1380,6 @@ struct ManagedAttempt {
     attempt: BuildAttempt,
     compile_environment_profile: Option<BuildCompileEnvironmentProfileV1>,
     production_build: ManagedProductionBuild,
-    #[cfg(feature = "compiler-handoff-observation-test-only")]
-    compiler_handoff_observation: Option<crate::compiler_handoff_observation::Request>,
 }
 
 struct ManagedProductionAttempt {
@@ -1533,11 +1483,6 @@ enum CompletionFailure {
 }
 
 impl ManagedAttempt {
-    #[cfg(feature = "compiler-handoff-observation-test-only")]
-    fn has_configured_work(&self) -> bool {
-        true
-    }
-
     fn is_managed_recovery(&self) -> bool {
         if matches!(
             &self.production_build,
@@ -1613,16 +1558,6 @@ fn prepare_production_managed_attempt(
     output_dir: &Path,
     compiler_capabilities: &CompilerCapabilities,
 ) -> Result<ManagedAttempt, BindingWrapperError> {
-    #[cfg(feature = "compiler-handoff-observation-test-only")]
-    let compiler_handoff_observation = {
-        let ordered_metadata = ordered_rustc_codegen_metadata_v1(compile)?;
-        crate::compiler_handoff_observation::Request::for_compile(
-            compile.crate_name(),
-            compile.source_path(),
-            &ordered_metadata,
-        )
-        .map_err(BindingWrapperError::BuildObservation)?
-    };
     let compile_environment_profile = build_config.compile_environment_profile(
         compile.crate_name(),
         compile.source_path(),
@@ -1666,8 +1601,6 @@ fn prepare_production_managed_attempt(
         attempt,
         compile_environment_profile,
         production_build,
-        #[cfg(feature = "compiler-handoff-observation-test-only")]
-        compiler_handoff_observation,
     };
     if let Some(guard) = begin_attempt_guard.as_mut() {
         guard.disarm();

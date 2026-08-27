@@ -4796,6 +4796,29 @@ mod tests {
     }
 
     #[test]
+    fn retired_intent_sizes_and_current_size_collisions_fail_closed() {
+        // Frozen sizes from the removed V1/V2 intent wires. Keeping the values local makes this a
+        // rejection fixture, not a dependency on either retired protocol implementation.
+        for retired_size in [616, 842] {
+            assert!(matches!(
+                WorkerV3PublicationIntentRecordV1::decode_canonical(&vec![0; retired_size]),
+                Err(WorkerV3PublicationIntentCodecErrorV1::NoncanonicalLength {
+                    actual,
+                    expected: MAX_WORKER_V3_PUBLICATION_INTENT_RECORD_BYTES_V1,
+                }) if actual == retired_size
+            ));
+        }
+
+        assert_eq!(
+            WorkerV3PublicationIntentRecordV1::decode_canonical(&vec![
+                0;
+                MAX_WORKER_V3_PUBLICATION_INTENT_RECORD_BYTES_V1
+            ]),
+            Err(WorkerV3PublicationIntentCodecErrorV1::ChecksumMismatch)
+        );
+    }
+
+    #[test]
     fn codec_rejects_mutated_plan_commitment_and_duplicate_output_hash() {
         let encoded = record().encode_canonical().unwrap();
         let plan_commitment_offset = RECORD_MAGIC_V1.len() + 2 + 32 + 8 + 16 + 32 + 32;
@@ -5211,19 +5234,5 @@ mod tests {
         drop(file);
         drop(output);
         fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn v1_and_v2_worker_intent_wires_cannot_decode_as_worker_v3() {
-        let v1_sized = vec![0; super::super::worker_v2_publication_intent::MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES];
-        let v2_sized = vec![0; super::super::worker_v2_publication_intent::MAX_WORKER_V2_PUBLICATION_INTENT_RECORD_BYTES_V2];
-        assert!(matches!(
-            WorkerV3PublicationIntentRecordV1::decode_canonical(&v1_sized),
-            Err(WorkerV3PublicationIntentCodecErrorV1::NoncanonicalLength { .. })
-        ));
-        assert!(matches!(
-            WorkerV3PublicationIntentRecordV1::decode_canonical(&v2_sized),
-            Err(WorkerV3PublicationIntentCodecErrorV1::NoncanonicalLength { .. })
-        ));
     }
 }

@@ -2,24 +2,23 @@
 mod test_process;
 
 use fe2o3_artifact_transaction::{
-    AtomicPublicationIdentityV1, BuildAttempt, BuildInvocation, BuildSession,
+    AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationErrorV3,
+    AttemptScopedHsacoPublicationResultV3, BuildAttempt, BuildInvocation, BuildSession,
     CanonicalLinkRequestIdentityV1, DurableLinkPublicationPlanV1, FinalizationIdentityV1,
     FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1,
     MAX_WORKER_V3_PUBLICATION_INTENT_OUTPUT_BYTES_V1, PackageIdentityV1, PinnedWorkerIdentityV1,
     ProducerIdentity, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
     ValidatedResponseIdentityV1, VerifiedWorkerV3PublicationAuthorityV1,
-    WorkerV2PublicationIntentOutcomeV1, WorkerV3FinalizerReplayAttachmentsV1,
-    WorkerV3PublicationBindingV1, WorkerV3PublicationIntentBoundaryV1,
-    WorkerV3PublicationIntentCodecErrorV1, WorkerV3PublicationIntentErrorV1,
-    WorkerV3PublicationIntentFaultPointV1, WorkerV3PublicationIntentFaultTimingV1,
-    WorkerV3PublicationIntentInvalidReasonV1, WorkerV3PublicationIntentOptionsV1,
-    WorkerV3PublicationIntentOutcomeV1, WorkerV3PublicationIntentScavengeOutcomeV1,
-    begin_build_attempt, clear_worker_v3_publication_intent_v1,
-    persist_worker_v2_publication_intent_v1, persist_worker_v3_publication_intent_v1,
+    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationBindingV1,
+    WorkerV3PublicationIntentBoundaryV1, WorkerV3PublicationIntentCodecErrorV1,
+    WorkerV3PublicationIntentErrorV1, WorkerV3PublicationIntentFaultPointV1,
+    WorkerV3PublicationIntentFaultTimingV1, WorkerV3PublicationIntentInvalidReasonV1,
+    WorkerV3PublicationIntentOptionsV1, WorkerV3PublicationIntentOutcomeV1,
+    WorkerV3PublicationIntentScavengeOutcomeV1, begin_build_attempt,
+    clear_worker_v3_publication_intent_v1, persist_worker_v3_publication_intent_v1,
     persist_worker_v3_publication_intent_v1_with_options, producer_package_identity_v1,
-    publish_exact_hsaco_evidence_for_attempt_v1, publish_exact_hsaco_evidence_for_attempt_v2,
-    publish_exact_hsaco_evidence_for_attempt_v3, recover_worker_v2_publication_intent_v1,
-    recover_worker_v3_publication_intent_v1, resume_worker_v3_publication_intent_retirement_v1,
+    publish_exact_hsaco_evidence_for_attempt_v3, recover_worker_v3_publication_intent_v1,
+    resume_worker_v3_publication_intent_retirement_v1,
     scavenge_worker_v3_publication_intent_occurrence_v1,
     scavenge_worker_v3_publication_intent_occurrence_v1_with_options,
 };
@@ -140,6 +139,135 @@ fn compiler_closure(seed: u8) -> CompilerClosureV2 {
         [seed.wrapping_add(5); 32],
     )
     .unwrap()
+}
+
+const ATTEMPT_REGISTRY: &str = ".fe2o3-attempts-v1";
+const RETIRED_RECEIPT_V1_BYTES: usize = 7 * 32;
+const RETIRED_COMPILER_CLOSURE_V2_BYTES: usize = (6 * 32) + 2 + 32;
+
+fn receipt_tag_offset(bytes: &[u8]) -> usize {
+    let mut offset = b"FE2O3-ATTEMPTS-V1\0".len() + 8 + 4;
+    let source_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+    offset += 2 + source_len;
+    let crate_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+    offset += 2 + crate_len;
+    offset + 32 + 8 + 16 + 1
+}
+
+fn rewrite_current_receipt_as_retired(output: &Path, tag: u8) {
+    let path = output.join(ATTEMPT_REGISTRY);
+    let mut bytes = fs::read(&path).unwrap();
+    let tag_offset = receipt_tag_offset(&bytes);
+    assert_eq!(
+        bytes[tag_offset], 6,
+        "fixture requires a completed V3 receipt"
+    );
+    let payload = match tag {
+        2 => RETIRED_RECEIPT_V1_BYTES,
+        4 => RETIRED_RECEIPT_V1_BYTES + RETIRED_COMPILER_CLOSURE_V2_BYTES,
+        _ => panic!("not a completed retired receipt tag: {tag}"),
+    };
+    bytes[tag_offset] = tag;
+    bytes.truncate(tag_offset + 1 + payload);
+    fs::write(path, bytes).unwrap();
+}
+
+fn corrupt_retired_receipt_plan_commitment(output: &Path) {
+    let path = output.join(ATTEMPT_REGISTRY);
+    let mut bytes = fs::read(&path).unwrap();
+    let tag_offset = receipt_tag_offset(&bytes);
+    assert!(matches!(bytes[tag_offset], 2 | 4));
+    let plan_offset = tag_offset + 1 + 3 * 32;
+    bytes[plan_offset] ^= 1;
+    fs::write(path, bytes).unwrap();
+}
+
+fn publish_current_then_install_retired_receipt(
+    output_dir: &Path,
+    owner: &ProducerIdentity,
+    attempt: BuildAttempt,
+    publication_plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    closure: CompilerClosureV2,
+    exact_output: &[u8],
+    retired_tag: u8,
+) -> Result<AttemptScopedHsacoPublicationResultV3, AttemptScopedHsacoPublicationErrorV3> {
+    let intent = recover_worker_v3_publication_intent_v1(output_dir, owner, attempt)
+        .expect("retired-receipt fixture requires a current V3 intent");
+    let output_sha256 = digest(exact_output);
+    let binding = WorkerV3PublicationBindingV1::new(
+        closure,
+        intent.record().identity().as_bytes(),
+        [0xd1; 32],
+        [0xd2; 32],
+        [0xd3; 32],
+        [0xd4; 32],
+        *publication_plan.linked_output().as_bytes(),
+        exact_output.len() as u64,
+        output_sha256,
+        exact_output.len() as u64,
+    )
+    .unwrap();
+    // SAFETY: this storage test uses an inert binding fixture only to create canonical current
+    // publication bytes, then rewrites the receipt into a retired wire fixture. It grants no load
+    // or launch authority.
+    let authority = unsafe {
+        VerifiedWorkerV3PublicationAuthorityV1::from_authenticated_finalizer_replay_unchecked(
+            binding,
+        )
+    };
+    let result = publish_exact_hsaco_evidence_for_attempt_v3(
+        output_dir,
+        owner,
+        attempt,
+        publication_plan,
+        upstream,
+        authority,
+        exact_output,
+    )?;
+    rewrite_current_receipt_as_retired(output_dir, retired_tag);
+    Ok(result)
+}
+
+fn publish_retired_v1_receipt_fixture(
+    output_dir: &Path,
+    owner: &ProducerIdentity,
+    attempt: BuildAttempt,
+    publication_plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    exact_output: &[u8],
+) -> Result<AttemptScopedHsacoPublicationResultV3, AttemptScopedHsacoPublicationErrorV3> {
+    publish_current_then_install_retired_receipt(
+        output_dir,
+        owner,
+        attempt,
+        publication_plan,
+        upstream,
+        compiler_closure(0xc0),
+        exact_output,
+        2,
+    )
+}
+
+fn publish_retired_v2_receipt_fixture(
+    output_dir: &Path,
+    owner: &ProducerIdentity,
+    attempt: BuildAttempt,
+    publication_plan: DurableLinkPublicationPlanV1,
+    upstream: UpstreamCodeObjectEvidenceIdentityV1,
+    closure: CompilerClosureV2,
+    exact_output: &[u8],
+) -> Result<AttemptScopedHsacoPublicationResultV3, AttemptScopedHsacoPublicationErrorV3> {
+    publish_current_then_install_retired_receipt(
+        output_dir,
+        owner,
+        attempt,
+        publication_plan,
+        upstream,
+        closure,
+        exact_output,
+        4,
+    )
 }
 
 fn intent_entry(output: &Path, suffix: &str) -> PathBuf {
@@ -325,7 +453,7 @@ fn current_retirement_stays_blocked_after_an_exact_v1_receipt() {
     )
     .unwrap();
 
-    publish_exact_hsaco_evidence_for_attempt_v1(
+    publish_retired_v1_receipt_fixture(
         &output_dir,
         &owner,
         attempt,
@@ -374,7 +502,7 @@ fn current_retirement_stays_blocked_after_an_exact_protected_v2_receipt() {
         output.to_vec(),
     )
     .unwrap();
-    publish_exact_hsaco_evidence_for_attempt_v2(
+    publish_retired_v2_receipt_fixture(
         &output_dir,
         &owner,
         attempt,
@@ -487,7 +615,7 @@ fn current_redo_intent_stays_replayable_after_backend_publication() {
         &fs::read(redo).unwrap(),
     )
     .unwrap();
-    publish_exact_hsaco_evidence_for_attempt_v1(
+    publish_retired_v1_receipt_fixture(
         &output_dir,
         &owner,
         attempt,
@@ -521,16 +649,16 @@ fn current_retirement_stays_blocked_with_a_receipt_for_another_plan() {
         output.to_vec(),
     )
     .unwrap();
-    let other_plan = receipted_plan(&owner, attempt, output, 19);
-    publish_exact_hsaco_evidence_for_attempt_v1(
+    publish_retired_v1_receipt_fixture(
         &output_dir,
         &owner,
         attempt,
-        other_plan,
+        intent_plan,
         UpstreamCodeObjectEvidenceIdentityV1::from_bytes([20; 32]),
         output,
     )
     .unwrap();
+    corrupt_retired_receipt_plan_commitment(&output_dir);
 
     assert!(matches!(
         clear_worker_v3_publication_intent_v1(
@@ -561,7 +689,7 @@ fn current_retirement_touches_no_protocol_names_before_load_readiness() {
         output.to_vec(),
     )
     .unwrap();
-    publish_exact_hsaco_evidence_for_attempt_v1(
+    publish_retired_v1_receipt_fixture(
         &output_dir,
         &owner,
         attempt,
@@ -647,7 +775,7 @@ fn every_retirement_boundary_is_restart_safe() {
             output.clone(),
         )
         .unwrap();
-        publish_exact_hsaco_evidence_for_attempt_v1(
+        publish_retired_v1_receipt_fixture(
             &output_dir,
             &owner,
             attempt,
@@ -751,7 +879,7 @@ fn durable_marker_resumes_after_identity_owner_process_is_lost() {
             output.to_vec(),
         )
         .unwrap();
-        publish_exact_hsaco_evidence_for_attempt_v2(
+        publish_retired_v2_receipt_fixture(
             &output_dir,
             &owner,
             attempt,
@@ -826,7 +954,7 @@ fn marker_only_resume_cleans_quarantined_attachment_and_terminal_marker() {
                 output.clone(),
             )
             .unwrap();
-            publish_exact_hsaco_evidence_for_attempt_v1(
+            publish_retired_v1_receipt_fixture(
                 &output_dir,
                 &owner,
                 attempt,
@@ -903,7 +1031,7 @@ fn marker_only_resume_does_not_start_canonical_retirement() {
         output.to_vec(),
     )
     .unwrap();
-    publish_exact_hsaco_evidence_for_attempt_v1(
+    publish_retired_v1_receipt_fixture(
         &output_dir,
         &owner,
         attempt,
@@ -927,53 +1055,6 @@ fn marker_only_resume_does_not_start_canonical_retirement() {
         ),
         Err(WorkerV3PublicationIntentErrorV1::ReceiptNotDurable)
     ));
-}
-
-#[test]
-fn exact_v2_and_v3_intents_coexist_without_wire_or_namespace_cross_use() {
-    let temp = TestDirectory::new();
-    let output_dir = temp.output();
-    let producer = producer(10);
-    let attempt = begin(&output_dir, &producer, 11);
-    let output = b"same exact finalized output";
-    let plan = plan(attempt, output, 12);
-    let upstream = UpstreamCodeObjectEvidenceIdentityV1::from_bytes([0x44; 32]);
-
-    assert_eq!(
-        persist_worker_v2_publication_intent_v1(
-            &output_dir,
-            &producer,
-            attempt,
-            plan,
-            upstream,
-            output,
-        )
-        .unwrap()
-        .outcome(),
-        WorkerV2PublicationIntentOutcomeV1::Persisted
-    );
-    persist_worker_v3_publication_intent_v1(
-        &output_dir,
-        &producer,
-        attempt,
-        plan,
-        replay(b"V3-only transcript"),
-        output.to_vec(),
-    )
-    .unwrap();
-
-    assert_eq!(
-        recover_worker_v2_publication_intent_v1(&output_dir, &producer, attempt)
-            .unwrap()
-            .exact_output(),
-        output
-    );
-    assert_eq!(
-        recover_worker_v3_publication_intent_v1(&output_dir, &producer, attempt)
-            .unwrap()
-            .finalizer_replay_transcript(),
-        b"V3-only transcript"
-    );
 }
 
 #[test]
@@ -1274,7 +1355,7 @@ fn successor_scavenge_resumes_an_interrupted_receipt_bound_retirement() {
         output.to_vec(),
     )
     .unwrap();
-    publish_exact_hsaco_evidence_for_attempt_v2(
+    publish_retired_v2_receipt_fixture(
         &output_dir,
         &owner,
         stale,
@@ -1701,7 +1782,7 @@ fn recovery_remains_inert_after_the_exact_backend_claim_is_durable() {
         output.to_vec(),
     )
     .unwrap();
-    publish_exact_hsaco_evidence_for_attempt_v1(
+    publish_retired_v1_receipt_fixture(
         &output_dir,
         &producer,
         attempt,

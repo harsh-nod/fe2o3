@@ -9,7 +9,6 @@ rust-version.workspace = true
 description = "Cargo subcommand for fe2o3."
 
 [features]
-compiler-handoff-observation-test-only = []
 application-handoff-adversarial-fixture = []
 application-handoff-fault-injection-test-only = []
 worker-v3-host-consumer-fixture = ["dep:fe2o3-host", "fe2o3-host/hardware-test-hooks"]

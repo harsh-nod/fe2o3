@@ -12,8 +12,6 @@ mod capability_broker;
 mod cargo_binding_trampoline;
 mod cargo_invocation_boundary;
 mod clean;
-#[cfg(feature = "compiler-handoff-observation-test-only")]
-mod compiler_handoff_observation;
 mod compiler_toolchain;
 mod example_manifest;
 mod generation;

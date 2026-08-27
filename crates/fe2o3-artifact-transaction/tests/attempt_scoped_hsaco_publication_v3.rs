@@ -1,28 +1,21 @@
 use fe2o3_artifact_transaction::{
     AtomicPublicationIdentityV1, AttemptScopedHsacoPublicationBoundaryV2,
-    AttemptScopedHsacoPublicationErrorV1, AttemptScopedHsacoPublicationErrorV2,
     AttemptScopedHsacoPublicationErrorV3, AttemptScopedHsacoPublicationFaultPointV2,
     AttemptScopedHsacoPublicationFaultTimingV2, AttemptScopedHsacoPublicationOptionsV2,
     AttemptScopedHsacoPublicationOutcomeV3, BackendPublicationReceiptValidationErrorV3,
     BuildAttempt, BuildInvocation, BuildSession, CanonicalLinkRequestIdentityV1,
     DurableJournalBoundaryV1, DurableJournalStageV1, DurableLinkPublicationError,
-    DurableLinkPublicationFaultPointV1, DurableLinkPublicationOptionsV1,
-    DurableLinkPublicationPlanV1, DurablePublishedClaimReacquisitionErrorV3,
-    DurablePublishedHsacoClaimV3, FinalizationIdentityV1, FinalizedOutputIdentityV1,
-    KernelSetIdentityV1, LinkPublicationScopeV1, LinkedOutputIdentityV1, PackageIdentityV1,
-    PersistedBackendReceiptV3, PinnedWorkerIdentityV1, ProducerIdentity, TargetIdentityV1,
-    UpstreamCodeObjectEvidenceIdentityV1, ValidatedResponseIdentityV1,
-    VerifiedWorkerV3PublicationAuthorityV1, WorkerV3FinalizerReplayAttachmentsV1,
-    WorkerV3PublicationBindingV1, begin_build_attempt, finish_build_attempt,
-    persist_worker_v3_publication_intent_v1, publish_exact_hsaco_evidence_for_attempt_v1,
-    publish_exact_hsaco_evidence_for_attempt_v1_with_options,
-    publish_exact_hsaco_evidence_for_attempt_v2,
-    publish_exact_hsaco_evidence_for_attempt_v2_with_options,
+    DurableLinkPublicationFaultPointV1, DurableLinkPublicationPlanV1,
+    DurablePublishedClaimReacquisitionErrorV3, DurablePublishedHsacoClaimV3,
+    FinalizationIdentityV1, FinalizedOutputIdentityV1, KernelSetIdentityV1, LinkPublicationScopeV1,
+    LinkedOutputIdentityV1, PackageIdentityV1, PersistedBackendReceiptV3, PinnedWorkerIdentityV1,
+    ProducerIdentity, TargetIdentityV1, UpstreamCodeObjectEvidenceIdentityV1,
+    ValidatedResponseIdentityV1, VerifiedWorkerV3PublicationAuthorityV1,
+    WorkerV3FinalizerReplayAttachmentsV1, WorkerV3PublicationBindingV1, begin_build_attempt,
+    finish_build_attempt, persist_worker_v3_publication_intent_v1,
     publish_exact_hsaco_evidence_for_attempt_v3,
     publish_exact_hsaco_evidence_for_attempt_v3_with_options,
-    reacquire_current_hsaco_publication_lease_v3, read_backend_publication_receipt_v1,
-    read_backend_publication_receipt_v2, read_backend_publication_receipt_v3,
-    recover_published_hsaco_claim_for_attempt_v1, recover_published_hsaco_claim_for_attempt_v2,
+    reacquire_current_hsaco_publication_lease_v3, read_backend_publication_receipt_v3,
     recover_published_hsaco_claim_for_attempt_v3, validate_backend_publication_receipt_v3,
 };
 use fe2o3_build_authority::CompilerClosureV2;
@@ -312,6 +305,40 @@ fn registry_bytes(output: &Path) -> Vec<u8> {
     fs::read(output.join(ATTEMPT_REGISTRY)).unwrap()
 }
 
+const RETIRED_RECEIPT_V1_BYTES: usize = 7 * 32;
+const RETIRED_COMPILER_CLOSURE_V2_BYTES: usize = (6 * 32) + 2 + 32;
+const RETIRED_RECEIPT_V2_BYTES: usize =
+    RETIRED_RECEIPT_V1_BYTES + RETIRED_COMPILER_CLOSURE_V2_BYTES;
+
+fn receipt_tag_offset(bytes: &[u8]) -> usize {
+    let mut offset = b"FE2O3-ATTEMPTS-V1\0".len() + 8 + 4;
+    let source_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+    offset += 2 + source_len;
+    let crate_len = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+    offset += 2 + crate_len;
+    offset + 32 + 8 + 16 + 1
+}
+
+fn install_retired_receipt_fixture(output: &Path, tag: u8, canonical_length: bool) -> Vec<u8> {
+    let mut bytes = registry_bytes(output);
+    let tag_offset = receipt_tag_offset(&bytes);
+    assert_eq!(
+        bytes[tag_offset], 7,
+        "fixture must start from a pending V3 receipt"
+    );
+    let retired_payload = match tag {
+        2 | 3 => RETIRED_RECEIPT_V1_BYTES,
+        4 | 5 => RETIRED_RECEIPT_V2_BYTES,
+        _ => panic!("not a retired receipt tag: {tag}"),
+    };
+    bytes[tag_offset] = tag;
+    if canonical_length {
+        bytes.truncate(tag_offset + 1 + retired_payload);
+    }
+    fs::write(output.join(ATTEMPT_REGISTRY), &bytes).unwrap();
+    bytes
+}
+
 fn pending_v3_fixture(
     case: &str,
     seed: u8,
@@ -523,312 +550,112 @@ fn exact_retry_reconciles_pending_and_final_receipt_commit_boundaries() {
 }
 
 #[test]
-fn v1_and_v2_pending_and_final_receipts_never_enter_v3_apis() {
-    for final_receipt in [false, true] {
-        let v1_temp = TestDirectory::new();
-        let v1_output = v1_temp.output();
-        let v1_owner = producer("cross_v1", "/src/v1-into-v3.rs");
-        let seed = if final_receipt { 0x42 } else { 0x41 };
-        let v1_attempt = begin(&v1_output, &v1_owner, seed);
-        let v1_bytes = b"V1 state presented to strict Worker V3";
-        let v1_plan = plan(v1_attempt, scope(0x43), 0x44, v1_bytes);
-        let v1_binding =
-            persist_intent_and_binding(&v1_output, &v1_owner, v1_attempt, v1_plan, 0x50, v1_bytes);
-        if final_receipt {
-            drop(
-                publish_exact_hsaco_evidence_for_attempt_v1(
-                    &v1_output,
-                    &v1_owner,
-                    v1_attempt,
-                    v1_plan,
-                    upstream(v1_plan),
-                    v1_bytes,
-                )
-                .unwrap(),
-            );
-        } else {
-            let point = before_planned_redo();
-            assert!(matches!(
-                publish_exact_hsaco_evidence_for_attempt_v1_with_options(
-                    &v1_output,
-                    &v1_owner,
-                    v1_attempt,
-                    v1_plan,
-                    upstream(v1_plan),
-                    v1_bytes,
-                    DurableLinkPublicationOptionsV1::inject_crash(point),
-                ),
-                Err(AttemptScopedHsacoPublicationErrorV1::PublicationInterrupted(
-                    DurableLinkPublicationError::InjectedCrash { point: actual }
-                )) if actual == point
-            ));
-        }
-        let v1_registry = registry_bytes(&v1_output);
-        assert!(matches!(
-            read_backend_publication_receipt_v3(&v1_output, &v1_owner, v1_attempt),
-            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&v1_output), v1_registry);
-        assert!(matches!(
-            publish_v3(
-                &v1_output, &v1_owner, v1_attempt, v1_plan, v1_binding, v1_bytes,
-            ),
-            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&v1_output), v1_registry);
-
-        let v1_donor = TestDirectory::new();
-        let v1_donor_attempt = begin(&v1_donor.output(), &v1_owner, seed);
-        assert_eq!(v1_donor_attempt, v1_attempt);
-        let v1_donor_binding = persist_intent_and_binding(
-            &v1_donor.output(),
-            &v1_owner,
-            v1_donor_attempt,
-            v1_plan,
-            0x50,
-            v1_bytes,
-        );
-        assert_eq!(v1_donor_binding, v1_binding);
-        let v3_receipt = publish_v3(
-            &v1_donor.output(),
-            &v1_owner,
-            v1_donor_attempt,
-            v1_plan,
-            v1_donor_binding,
-            v1_bytes,
-        )
-        .unwrap()
-        .receipt();
-        assert!(matches!(
-            recover_published_hsaco_claim_for_attempt_v3(
-                &v1_output,
-                &v1_owner,
-                v1_attempt,
-                v1_plan,
-                upstream(v1_plan),
-                v1_binding,
-                v3_receipt,
-            ),
-            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&v1_output), v1_registry);
-
-        let v2_temp = TestDirectory::new();
-        let v2_output = v2_temp.output();
-        let v2_owner = producer("cross_v2", "/src/v2-into-v3.rs");
-        let v2_attempt = begin(&v2_output, &v2_owner, seed);
-        let v2_bytes = b"V2 state presented to strict Worker V3";
-        let v2_plan = plan(v2_attempt, scope(0x53), 0x54, v2_bytes);
-        let closure = compiler_closure(0x60);
-        let v2_binding =
-            persist_intent_and_binding(&v2_output, &v2_owner, v2_attempt, v2_plan, 0x70, v2_bytes);
-        if final_receipt {
-            drop(
-                publish_exact_hsaco_evidence_for_attempt_v2(
-                    &v2_output,
-                    &v2_owner,
-                    v2_attempt,
-                    v2_plan,
-                    upstream(v2_plan),
-                    closure,
-                    v2_bytes,
-                )
-                .unwrap(),
-            );
-        } else {
-            let point = before_planned_redo();
-            assert!(matches!(
-                publish_exact_hsaco_evidence_for_attempt_v2_with_options(
-                    &v2_output,
-                    &v2_owner,
-                    v2_attempt,
-                    v2_plan,
-                    upstream(v2_plan),
-                    closure,
-                    v2_bytes,
-                    AttemptScopedHsacoPublicationOptionsV2::inject_durable_crash(point),
-                ),
-                Err(AttemptScopedHsacoPublicationErrorV2::PublicationInterrupted(
-                    DurableLinkPublicationError::InjectedCrash { point: actual }
-                )) if actual == point
-            ));
-        }
-        let v2_registry = registry_bytes(&v2_output);
-        assert!(matches!(
-            read_backend_publication_receipt_v3(&v2_output, &v2_owner, v2_attempt),
-            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&v2_output), v2_registry);
-        assert!(matches!(
-            publish_v3(
-                &v2_output, &v2_owner, v2_attempt, v2_plan, v2_binding, v2_bytes,
-            ),
-            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&v2_output), v2_registry);
-
-        let v2_donor = TestDirectory::new();
-        let v2_donor_attempt = begin(&v2_donor.output(), &v2_owner, seed);
-        assert_eq!(v2_donor_attempt, v2_attempt);
-        let v2_donor_binding = persist_intent_and_binding(
-            &v2_donor.output(),
-            &v2_owner,
-            v2_donor_attempt,
-            v2_plan,
-            0x70,
-            v2_bytes,
-        );
-        assert_eq!(v2_donor_binding, v2_binding);
-        let v3_receipt = publish_v3(
-            &v2_donor.output(),
-            &v2_owner,
-            v2_donor_attempt,
-            v2_plan,
-            v2_donor_binding,
-            v2_bytes,
-        )
-        .unwrap()
-        .receipt();
-        assert!(matches!(
-            recover_published_hsaco_claim_for_attempt_v3(
-                &v2_output,
-                &v2_owner,
-                v2_attempt,
-                v2_plan,
-                upstream(v2_plan),
-                v2_binding,
-                v3_receipt,
-            ),
-            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&v2_output), v2_registry);
-    }
-}
-
-#[test]
-fn v3_pending_and_final_receipts_never_enter_v1_or_v2_apis() {
-    for final_receipt in [false, true] {
+fn retired_v1_and_v2_receipt_tags_never_enter_v3_apis() {
+    for tag in [2_u8, 3, 4, 5] {
         let temp = TestDirectory::new();
         let output = temp.output();
-        let owner = producer("cross_v3", "/src/v3-into-older-schemas.rs");
-        let seed = if final_receipt { 0x82 } else { 0x81 };
-        let attempt = begin(&output, &owner, seed);
-        let bytes = b"strict Worker V3 state presented to V1 and V2";
-        let publication_plan = plan(attempt, scope(0x83), 0x84, bytes);
+        let owner = producer("retired_receipt", "/src/retired-receipt.rs");
+        let attempt = begin(&output, &owner, tag);
+        let bytes = b"retired receipt presented to strict Worker V3";
+        let publication_plan = plan(attempt, scope(0x43), 0x44, bytes);
         let publication_binding =
-            persist_intent_and_binding(&output, &owner, attempt, publication_plan, 0x90, bytes);
-        if final_receipt {
-            drop(
-                publish_v3(
-                    &output,
-                    &owner,
-                    attempt,
-                    publication_plan,
-                    publication_binding,
-                    bytes,
-                )
-                .unwrap(),
-            );
-        } else {
-            interrupt_v3_with_pending_receipt(
+            persist_intent_and_binding(&output, &owner, attempt, publication_plan, 0x50, bytes);
+        interrupt_v3_with_pending_receipt(
+            &output,
+            &owner,
+            attempt,
+            publication_plan,
+            publication_binding,
+            bytes,
+        );
+        let retired_registry = install_retired_receipt_fixture(&output, tag, true);
+
+        assert!(matches!(
+            read_backend_publication_receipt_v3(&output, &owner, attempt),
+            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
+        ));
+        assert_eq!(registry_bytes(&output), retired_registry);
+        assert!(matches!(
+            publish_v3(
                 &output,
                 &owner,
                 attempt,
                 publication_plan,
                 publication_binding,
                 bytes,
-            );
-        }
-        let registry = registry_bytes(&output);
-
-        assert!(read_backend_publication_receipt_v1(&output, &owner, attempt).is_err());
-        assert_eq!(registry_bytes(&output), registry);
-        assert!(matches!(
-            publish_exact_hsaco_evidence_for_attempt_v1(
-                &output,
-                &owner,
-                attempt,
-                publication_plan,
-                upstream(publication_plan),
-                bytes,
             ),
-            Err(AttemptScopedHsacoPublicationErrorV1::Attempt(_))
+            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
         ));
-        assert_eq!(registry_bytes(&output), registry);
+        assert_eq!(registry_bytes(&output), retired_registry);
 
-        let v1_donor = TestDirectory::new();
-        let v1_donor_attempt = begin(&v1_donor.output(), &owner, seed);
-        assert_eq!(v1_donor_attempt, attempt);
-        let v1_receipt = publish_exact_hsaco_evidence_for_attempt_v1(
-            &v1_donor.output(),
+        let donor = TestDirectory::new();
+        let donor_attempt = begin(&donor.output(), &owner, tag);
+        assert_eq!(donor_attempt, attempt);
+        let donor_binding = persist_intent_and_binding(
+            &donor.output(),
             &owner,
-            v1_donor_attempt,
+            donor_attempt,
             publication_plan,
-            upstream(publication_plan),
+            0x50,
             bytes,
-        )
-        .unwrap()
-        .receipt();
-        assert!(
-            recover_published_hsaco_claim_for_attempt_v1(
-                &output,
-                &owner,
-                attempt,
-                publication_plan,
-                upstream(publication_plan),
-                v1_receipt,
-            )
-            .is_err()
         );
-        assert_eq!(registry_bytes(&output), registry);
-
-        let closure = compiler_closure(0xa0);
-        assert!(matches!(
-            read_backend_publication_receipt_v2(&output, &owner, attempt),
-            Err(AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&output), registry);
-        assert!(matches!(
-            publish_exact_hsaco_evidence_for_attempt_v2(
-                &output,
-                &owner,
-                attempt,
-                publication_plan,
-                upstream(publication_plan),
-                closure,
-                bytes,
-            ),
-            Err(AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
-        ));
-        assert_eq!(registry_bytes(&output), registry);
-
-        let v2_donor = TestDirectory::new();
-        let v2_donor_attempt = begin(&v2_donor.output(), &owner, seed);
-        assert_eq!(v2_donor_attempt, attempt);
-        let v2_receipt = publish_exact_hsaco_evidence_for_attempt_v2(
-            &v2_donor.output(),
+        let receipt = publish_v3(
+            &donor.output(),
             &owner,
-            v2_donor_attempt,
+            donor_attempt,
             publication_plan,
-            upstream(publication_plan),
-            closure,
+            donor_binding,
             bytes,
         )
         .unwrap()
         .receipt();
         assert!(matches!(
-            recover_published_hsaco_claim_for_attempt_v2(
+            recover_published_hsaco_claim_for_attempt_v3(
                 &output,
                 &owner,
                 attempt,
                 publication_plan,
                 upstream(publication_plan),
-                closure,
-                v2_receipt,
+                publication_binding,
+                receipt,
             ),
-            Err(AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
+            Err(AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)
         ));
-        assert_eq!(registry_bytes(&output), registry);
+        assert_eq!(registry_bytes(&output), retired_registry);
+    }
+}
+
+#[test]
+fn retired_receipt_size_collisions_fail_as_malformed_without_mutation() {
+    for tag in [2_u8, 3, 4, 5] {
+        let temp = TestDirectory::new();
+        let output = temp.output();
+        let owner = producer("retired_collision", "/src/retired-collision.rs");
+        let attempt = begin(&output, &owner, tag.wrapping_add(0x20));
+        let bytes = b"noncanonical retired receipt size";
+        let publication_plan = plan(attempt, scope(0x63), 0x64, bytes);
+        let binding =
+            persist_intent_and_binding(&output, &owner, attempt, publication_plan, 0x70, bytes);
+        interrupt_v3_with_pending_receipt(
+            &output,
+            &owner,
+            attempt,
+            publication_plan,
+            binding,
+            bytes,
+        );
+        let malformed = install_retired_receipt_fixture(&output, tag, false);
+
+        assert!(matches!(
+            read_backend_publication_receipt_v3(&output, &owner, attempt),
+            Err(AttemptScopedHsacoPublicationErrorV3::Attempt(_))
+        ));
+        assert_eq!(registry_bytes(&output), malformed);
+        assert!(matches!(
+            publish_v3(&output, &owner, attempt, publication_plan, binding, bytes,),
+            Err(AttemptScopedHsacoPublicationErrorV3::Attempt(_))
+        ));
+        assert_eq!(registry_bytes(&output), malformed);
     }
 }
 

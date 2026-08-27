@@ -6377,11 +6377,6 @@ mod tests {
                 .contains("observation-only attempt"),
             "{generic_completion}"
         );
-        assert!(crate::read_backend_publication_receipt_v1(&temp.0, &producer, attempt).is_err());
-        assert!(matches!(
-            crate::read_backend_publication_receipt_v2(&temp.0, &producer, attempt),
-            Err(crate::AttemptScopedHsacoPublicationErrorV2::IncompatibleReceiptVersion)
-        ));
         assert!(matches!(
             crate::read_backend_publication_receipt_v3(&temp.0, &producer, attempt),
             Err(crate::AttemptScopedHsacoPublicationErrorV3::IncompatibleReceiptVersion)

@@ -196,7 +196,7 @@ impl SimulationObservationReceiptV1 {
 /// memory-safety, or launch-safety admission. In particular, `upstream_evidence_identity` records
 /// an identity supplied by the caller; this crate does not validate the evidence behind it.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct BackendPublicationReceiptV1 {
+pub(crate) struct BackendPublicationReceiptV1 {
     attempt_identity: [u8; 32],
     producer_identity: [u8; 32],
     scope_identity: [u8; 32],
@@ -226,41 +226,6 @@ impl BackendPublicationReceiptV1 {
             publication_identity,
         }
     }
-
-    /// Returns the canonical identity of the exact build attempt.
-    pub const fn attempt_identity(self) -> [u8; 32] {
-        self.attempt_identity
-    }
-
-    /// Returns the canonical identity of the producer source and crate name.
-    pub const fn producer_identity(self) -> [u8; 32] {
-        self.producer_identity
-    }
-
-    /// Returns the canonical package, kernel-set, and target scope identity.
-    pub const fn scope_identity(self) -> [u8; 32] {
-        self.scope_identity
-    }
-
-    /// Returns the commitment to every field in the durable publication plan.
-    pub const fn plan_commitment(self) -> [u8; 32] {
-        self.plan_commitment
-    }
-
-    /// Returns the caller-supplied upstream evidence identity.
-    pub const fn upstream_evidence_identity(self) -> [u8; 32] {
-        self.upstream_evidence_identity
-    }
-
-    /// Returns the SHA-256 identity of the exact finalized bytes.
-    pub const fn finalized_output_identity(self) -> [u8; 32] {
-        self.finalized_output_identity
-    }
-
-    /// Returns the atomic publication identity committed by the durable plan.
-    pub const fn publication_identity(self) -> [u8; 32] {
-        self.publication_identity
-    }
 }
 
 /// Durable protected provenance bound to one successful exact-byte backend publication.
@@ -269,7 +234,7 @@ impl BackendPublicationReceiptV1 {
 /// does not authenticate a compiler, prove artifact semantics, authorize publication, or grant
 /// load or launch authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BackendPublicationReceiptV2 {
+pub(crate) struct BackendPublicationReceiptV2 {
     attempt_identity: [u8; 32],
     producer_identity: [u8; 32],
     scope_identity: [u8; 32],
@@ -302,71 +267,6 @@ impl BackendPublicationReceiptV2 {
             publication_identity,
             compiler_closure,
         }
-    }
-
-    /// Returns the V2-domain identity of the exact build attempt.
-    pub const fn attempt_identity(self) -> [u8; 32] {
-        self.attempt_identity
-    }
-
-    /// Returns the V2-domain identity of the producer source and crate name.
-    pub const fn producer_identity(self) -> [u8; 32] {
-        self.producer_identity
-    }
-
-    /// Returns the V2-domain package, kernel-set, and target scope identity.
-    pub const fn scope_identity(self) -> [u8; 32] {
-        self.scope_identity
-    }
-
-    /// Returns the commitment to every field in the durable publication plan.
-    pub const fn plan_commitment(self) -> [u8; 32] {
-        self.plan_commitment
-    }
-
-    /// Returns the caller-supplied upstream evidence identity.
-    pub const fn upstream_evidence_identity(self) -> [u8; 32] {
-        self.upstream_evidence_identity
-    }
-
-    /// Returns the SHA-256 identity of the exact finalized bytes.
-    pub const fn finalized_output_identity(self) -> [u8; 32] {
-        self.finalized_output_identity
-    }
-
-    /// Returns the atomic publication identity committed by the durable plan.
-    pub const fn publication_identity(self) -> [u8; 32] {
-        self.publication_identity
-    }
-
-    /// Returns the complete canonical compiler-closure preimage.
-    pub const fn compiler_closure(self) -> CompilerClosureV2 {
-        self.compiler_closure
-    }
-
-    /// Receipt evidence does not authorize a compiler invocation.
-    pub const fn grants_compiler_authority(self) -> bool {
-        false
-    }
-
-    /// Receipt evidence does not prove artifact correctness or provenance.
-    pub const fn grants_proof_authority(self) -> bool {
-        false
-    }
-
-    /// Receipt evidence does not authorize artifact publication.
-    pub const fn grants_publication_authority(self) -> bool {
-        false
-    }
-
-    /// Receipt evidence does not authorize HSA loading.
-    pub const fn grants_load_authority(self) -> bool {
-        false
-    }
-
-    /// Receipt evidence does not authorize kernel launch.
-    pub const fn grants_launch_authority(self) -> bool {
-        false
     }
 }
 
@@ -1077,42 +977,6 @@ impl AttemptRegistry {
         Ok(())
     }
 
-    pub(crate) fn claim_backend_with_pending_receipt(
-        &mut self,
-        stable_source: &str,
-        attempt: BuildAttempt,
-        receipt: BackendPublicationReceiptV1,
-    ) -> Result<(), AttemptCodecError> {
-        let record = self.exact_record_mut(stable_source, attempt)?;
-        if record.backend_receipt.is_some() {
-            return Err(AttemptCodecError::BackendAlreadySeen);
-        }
-        if record.phase != AttemptPhase::Building {
-            return Err(AttemptCodecError::InvalidTransition);
-        }
-        record.phase = AttemptPhase::BackendClaimed;
-        record.backend_receipt = Some(BackendReceiptV1::PendingProvenance(receipt));
-        Ok(())
-    }
-
-    pub(crate) fn claim_backend_with_pending_receipt_v2(
-        &mut self,
-        stable_source: &str,
-        attempt: BuildAttempt,
-        receipt: BackendPublicationReceiptV2,
-    ) -> Result<(), AttemptCodecError> {
-        let record = self.exact_record_mut(stable_source, attempt)?;
-        if record.backend_receipt.is_some() {
-            return Err(AttemptCodecError::BackendAlreadySeen);
-        }
-        if record.phase != AttemptPhase::Building {
-            return Err(AttemptCodecError::InvalidTransition);
-        }
-        record.phase = AttemptPhase::BackendClaimed;
-        record.backend_receipt = Some(BackendReceiptV1::PendingProvenanceV2(receipt));
-        Ok(())
-    }
-
     pub(crate) fn claim_backend_with_pending_receipt_v3(
         &mut self,
         stable_source: &str,
@@ -1160,42 +1024,6 @@ impl AttemptRegistry {
         }
         record.backend_receipt = Some(BackendReceiptV1::SimulationObservation(receipt));
         Ok(())
-    }
-
-    pub(crate) fn record_backend_publication_receipt(
-        &mut self,
-        stable_source: &str,
-        attempt: BuildAttempt,
-        receipt: BackendPublicationReceiptV1,
-    ) -> Result<(), AttemptCodecError> {
-        let record = self.exact_record_mut(stable_source, attempt)?;
-        match record.backend_receipt {
-            Some(BackendReceiptV1::PendingProvenance(pending)) if pending == receipt => {
-                record.backend_receipt = Some(BackendReceiptV1::Provenance(receipt));
-                Ok(())
-            }
-            Some(BackendReceiptV1::Provenance(existing)) if existing == receipt => Ok(()),
-            Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
-            None => Err(AttemptCodecError::InvalidTransition),
-        }
-    }
-
-    pub(crate) fn record_backend_publication_receipt_v2(
-        &mut self,
-        stable_source: &str,
-        attempt: BuildAttempt,
-        receipt: BackendPublicationReceiptV2,
-    ) -> Result<(), AttemptCodecError> {
-        let record = self.exact_record_mut(stable_source, attempt)?;
-        match record.backend_receipt {
-            Some(BackendReceiptV1::PendingProvenanceV2(pending)) if pending == receipt => {
-                record.backend_receipt = Some(BackendReceiptV1::ProvenanceV2(receipt));
-                Ok(())
-            }
-            Some(BackendReceiptV1::ProvenanceV2(existing)) if existing == receipt => Ok(()),
-            Some(_) => Err(AttemptCodecError::BackendAlreadySeen),
-            None => Err(AttemptCodecError::InvalidTransition),
-        }
     }
 
     pub(crate) fn record_backend_publication_receipt_v3(
@@ -1903,18 +1731,6 @@ mod tests {
         registry.encode().unwrap()
     }
 
-    fn provenance_receipt(seed: u8) -> BackendPublicationReceiptV1 {
-        BackendPublicationReceiptV1::new(
-            [seed; 32],
-            [seed.wrapping_add(1); 32],
-            [seed.wrapping_add(2); 32],
-            [seed.wrapping_add(3); 32],
-            [seed.wrapping_add(4); 32],
-            [seed.wrapping_add(5); 32],
-            [seed.wrapping_add(6); 32],
-        )
-    }
-
     fn compiler_closure(seed: u8) -> CompilerClosureV2 {
         CompilerClosureV2::new(
             [seed; 32],
@@ -1925,19 +1741,6 @@ mod tests {
             [seed.wrapping_add(5); 32],
         )
         .unwrap()
-    }
-
-    fn provenance_receipt_v2(seed: u8) -> BackendPublicationReceiptV2 {
-        BackendPublicationReceiptV2::new(
-            [seed; 32],
-            [seed.wrapping_add(1); 32],
-            [seed.wrapping_add(2); 32],
-            [seed.wrapping_add(3); 32],
-            [seed.wrapping_add(4); 32],
-            [seed.wrapping_add(5); 32],
-            [seed.wrapping_add(6); 32],
-            compiler_closure(seed.wrapping_add(7)),
-        )
     }
 
     fn worker_v3_publication_binding(seed: u8) -> WorkerV3PublicationBindingV1 {
@@ -1976,80 +1779,6 @@ mod tests {
             .position(|window| window == attempt_identity)
             .expect("receipt attempt identity")
             - 1
-    }
-
-    #[test]
-    fn v1_pending_and_final_receipt_registry_goldens_are_stable() {
-        let mut registry = AttemptRegistry::default();
-        let attempt = start(&mut registry, "path:a", SESSION_A);
-        registry.transition_building("path:a", attempt).unwrap();
-        let receipt = provenance_receipt(0x30);
-        registry
-            .claim_backend_with_pending_receipt("path:a", attempt, receipt)
-            .unwrap();
-        let pending = registry.encode().unwrap();
-        registry
-            .record_backend_publication_receipt("path:a", attempt, receipt)
-            .unwrap();
-        let final_receipt = registry.encode().unwrap();
-        assert_eq!(
-            crate::encode_hex(&pending),
-            "4645324f332d415454454d5054532d5631000100000000000000010000000600706174683a610c006b65726e656c5f63726174651111111111111111111111111111111111111111111111111111111111111111010000000000000000112233445566778899aabbccddeeff04033030303030303030303030303030303030303030303030303030303030303030313131313131313131313131313131313131313131313131313131313131313132323232323232323232323232323232323232323232323232323232323232323333333333333333333333333333333333333333333333333333333333333333343434343434343434343434343434343434343434343434343434343434343435353535353535353535353535353535353535353535353535353535353535353636363636363636363636363636363636363636363636363636363636363636"
-        );
-        assert_eq!(
-            crate::encode_hex(&final_receipt),
-            "4645324f332d415454454d5054532d5631000100000000000000010000000600706174683a610c006b65726e656c5f63726174651111111111111111111111111111111111111111111111111111111111111111010000000000000000112233445566778899aabbccddeeff04023030303030303030303030303030303030303030303030303030303030303030313131313131313131313131313131313131313131313131313131313131313132323232323232323232323232323232323232323232323232323232323232323333333333333333333333333333333333333333333333333333333333333333343434343434343434343434343434343434343434343434343434343434343435353535353535353535353535353535353535353535353535353535353535353636363636363636363636363636363636363636363636363636363636363636"
-        );
-        assert_eq!(
-            AttemptRegistry::decode(&pending).unwrap().encode().unwrap(),
-            pending
-        );
-        assert_eq!(
-            AttemptRegistry::decode(&final_receipt)
-                .unwrap()
-                .encode()
-                .unwrap(),
-            final_receipt
-        );
-    }
-
-    #[test]
-    fn v2_registry_tags_and_payload_bytes_remain_unchanged() {
-        let mut registry = AttemptRegistry::default();
-        let attempt = start(&mut registry, "path:v2", SESSION_A);
-        registry.transition_building("path:v2", attempt).unwrap();
-        let receipt = provenance_receipt_v2(0x30);
-        registry
-            .claim_backend_with_pending_receipt_v2("path:v2", attempt, receipt)
-            .unwrap();
-
-        let pending = registry.encode().unwrap();
-        let tag_offset = receipt_tag_offset(&pending, receipt.attempt_identity());
-        assert_eq!(pending[tag_offset], 5);
-        let mut expected_payload = Vec::new();
-        for identity in [
-            receipt.attempt_identity(),
-            receipt.producer_identity(),
-            receipt.scope_identity(),
-            receipt.plan_commitment(),
-            receipt.upstream_evidence_identity(),
-            receipt.finalized_output_identity(),
-            receipt.publication_identity(),
-        ] {
-            expected_payload.extend_from_slice(&identity);
-        }
-        push_compiler_closure_v2(&mut expected_payload, receipt.compiler_closure());
-        assert_eq!(&pending[tag_offset + 1..], expected_payload);
-        assert_eq!(AttemptRegistry::decode(&pending).unwrap(), registry);
-
-        registry
-            .record_backend_publication_receipt_v2("path:v2", attempt, receipt)
-            .unwrap();
-        let completed = registry.encode().unwrap();
-        let mut expected_completed = pending;
-        expected_completed[tag_offset] = 4;
-        assert_eq!(completed, expected_completed);
-        assert_eq!(AttemptRegistry::decode(&completed).unwrap(), registry);
     }
 
     #[test]
@@ -2463,50 +2192,6 @@ mod tests {
                     .windows(6)
                     .position(|window| window == b"path:z")
                     .unwrap()
-        );
-    }
-
-    #[test]
-    fn provenance_receipt_roundtrips_and_only_exact_pending_receipt_completes() {
-        let mut registry = AttemptRegistry::default();
-        let attempt = start(&mut registry, "path:receipt", SESSION_A);
-        registry
-            .transition_building("path:receipt", attempt)
-            .unwrap();
-        let receipt = provenance_receipt(0x30);
-        registry
-            .claim_backend_with_pending_receipt("path:receipt", attempt, receipt)
-            .unwrap();
-
-        let pending_bytes = registry.encode().unwrap();
-        assert_eq!(AttemptRegistry::decode(&pending_bytes).unwrap(), registry);
-        assert_eq!(
-            registry.mark_completed("path:receipt", attempt),
-            Err(AttemptCodecError::InvalidTransition)
-        );
-        assert_eq!(
-            registry.record_backend_publication_receipt(
-                "path:receipt",
-                attempt,
-                provenance_receipt(0x31),
-            ),
-            Err(AttemptCodecError::BackendAlreadySeen)
-        );
-
-        registry
-            .record_backend_publication_receipt("path:receipt", attempt, receipt)
-            .unwrap();
-        let completed_bytes = registry.encode().unwrap();
-        assert_ne!(pending_bytes, completed_bytes);
-        assert_eq!(pending_bytes.len(), completed_bytes.len());
-        assert_eq!(AttemptRegistry::decode(&completed_bytes).unwrap(), registry);
-        registry.mark_completed("path:receipt", attempt).unwrap();
-        assert_eq!(
-            registry
-                .record_exact("path:receipt", attempt)
-                .unwrap()
-                .backend_receipt,
-            Some(BackendReceiptV1::Provenance(receipt))
         );
     }
 

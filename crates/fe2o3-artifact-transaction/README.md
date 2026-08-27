@@ -177,16 +177,6 @@ checksum, and the record's archive hash. The returned record and bytes remain in
 not authenticate transcript origin, assign semantic content identities, or grant publication,
 loading, or launch authority.
 
-The remaining integration blocker is in the higher-level finalizer API. On the assigned
-`9ca3226635` base, `InertProtectedFirstBuildWorkerV3EvidenceV1` owns complete bootstrap/replay
-request byte vectors and canonical response owners; it does not expose a public compact transcript
-codec that can reconstruct or stream-hash those canonical wires from the stored components.
-`516a101b8e` factors private replay-validation and identity seams, `8385253bf4` supplies raw-HSACO
-derivation, and newer public main supplies zero-copy outer-wire ownership extraction. This branch is
-intentionally not rebased onto those higher-level changes. A public bounded transcript
-constructor/decoder/replayer is still required before this storage foundation can be wired into
-production without recreating complete canonical request/response aggregates.
-
 ## Retained service directory
 
 `RetainedDurableDirectoryV1` is the lower-level descriptor-only mechanism used by the W1 durable
@@ -200,8 +190,8 @@ multiple writers, authenticate checksums, or prevent same-host rollback.
 
 ## Durable published claims
 
-`AttemptScopedHsacoPublicationResultV1::published_claim` returns a
-`DurablePublishedHsacoClaimV1`. The claim is inert, cloneable data intended for persistence in a
+`AttemptScopedHsacoPublicationResultV3::published_claim` returns a
+`DurablePublishedHsacoClaimV3`. The claim is inert, cloneable data intended for persistence in a
 later cross-process bundle. Its canonical encoding binds:
 
 - the complete `DurableLinkPublicationPlanV1`;
@@ -209,7 +199,7 @@ later cross-process bundle. Its canonical encoding binds:
 - the publication-time output-directory, canonical-record, and artifact file identities; and
 - the exact artifact length, finalized digest, generation, scope, and publication identities.
 
-`reacquire_current_hsaco_publication_lease_v1` opens the configured output directory, takes its
+`reacquire_current_hsaco_publication_lease_v3` opens the configured output directory, takes its
 exclusive lock without blocking, and checks the decoded claim, durable attempt receipt and owner,
 complete plan, current scope generation, directory identity, canonical record, and
 content-addressed artifact. Success returns a fresh non-`Clone`
