@@ -174,7 +174,7 @@ impl fmt::Display for RankedRaceFindingV1 {
                 value,
             } => write!(
                 formatter,
-                "error[FE2O3-RACE-002]: cannot prove race freedom at block {block} op {operation}; access dimension {dimension} has unresolved index {value}; help: express the address as checked affine index arithmetic with explicit extent guards, or retain a compiler-validated value and success edge whose semantics the race analysis supports",
+                "error[FE2O3-RACE-002]: cannot prove race freedom at block {block} op {operation}; access dimension {dimension} has unresolved index {value}; checked structured index markers are currently incomplete because they carry no independently validated success/value contract; help: express the address with explicit affine index operations plus finite no-wrap and extent guards",
             ),
             Self::EffectInstanceLimitExceeded { actual, limit } => write!(
                 formatter,

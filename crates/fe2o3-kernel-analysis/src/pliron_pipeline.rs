@@ -160,7 +160,7 @@ pub fn kernel_check_repair_for_pass_v1(pass: KernelCheckPassKindV1) -> KernelChe
         ),
         KernelCheckPassKindV1::RaceFreedom => (
             KernelCheckRepairActionV1::PartitionOrSynchronizeAccess,
-            "map every conflicting write to an injective affine coordinate over all active invocation axes and retain finite guards needed to prove no integer wrap; otherwise provide an explicit compiler-validated success/value contract, use a legal atomic, or establish the required synchronization edge",
+            "map every conflicting write to an injective affine coordinate over all active invocation axes and retain finite guards needed to prove no integer wrap; otherwise use a legal atomic or establish the required synchronization edge",
         ),
         KernelCheckPassKindV1::HierarchicalOwnership => (
             KernelCheckRepairActionV1::CorrectHierarchyOwnership,

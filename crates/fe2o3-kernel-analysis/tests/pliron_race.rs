@@ -879,9 +879,11 @@ fn checked_tiled_marker_shape_cannot_replace_validity_and_success_proofs() {
             report.findings(),
             [RankedRaceFindingV1::UnresolvedIndex { .. }]
         ));
-        assert!(report.findings()[0].to_string().contains(
-            "help: express the address as checked affine index arithmetic with explicit extent guards"
-        ));
+        assert!(
+            report.findings()[0]
+                .to_string()
+                .contains("checked structured index markers are currently incomplete")
+        );
     }
 }
 
