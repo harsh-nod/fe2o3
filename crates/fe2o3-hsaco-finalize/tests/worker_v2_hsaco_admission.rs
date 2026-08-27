@@ -43,6 +43,7 @@ const TEXT_SECTION_INDEX: usize = 3;
 const STRTAB_SECTION_INDEX: usize = 4;
 const SYMTAB_SECTION_INDEX: usize = 5;
 const SHSTRTAB_SECTION_INDEX: usize = 6;
+const TARGET: &str = "gfx942:xnack-";
 
 #[derive(Clone, Copy)]
 struct FixtureOptions<'a> {
@@ -63,7 +64,7 @@ struct FixtureOptions<'a> {
 impl FixtureOptions<'static> {
     fn valid() -> Self {
         Self {
-            target: "gfx942",
+            target: TARGET,
             code_object_version: 4,
             entry: "vecadd",
             descriptor: "vecadd.kd",
@@ -147,7 +148,7 @@ fn consumes_sealed_evidence_and_returns_inert_raw_inspection() {
     assert_eq!(inspected.linked_output_identity(), linked_output);
     assert_eq!(inspected.exact_bytes(), original);
     assert!(linked_output.matches(inspected.exact_bytes()));
-    assert_eq!(inspected.target().to_string(), "gfx942");
+    assert_eq!(inspected.target().to_string(), TARGET);
     assert_eq!(
         inspected.canonical_descriptor_section(),
         CanonicalDescriptorSectionObservationV1::Missing
@@ -161,6 +162,25 @@ fn consumes_sealed_evidence_and_returns_inert_raw_inspection() {
     assert_ne!(inspected.identity().as_bytes(), &[0; 32]);
     assert_ne!(inspected.response_identity().as_bytes(), &[0; 32]);
     assert_ne!(inspected.policy().identity().as_bytes(), &[0; 32]);
+}
+
+#[test]
+fn rejects_a_coherent_bare_gfx942_plan_before_hsaco_parsing() {
+    let fixture = fixture(FixtureOptions {
+        target: "gfx942",
+        ..FixtureOptions::valid()
+    });
+    let error = inspect_worker_v2_raw_hsaco_v1(evidence_for_target(
+        fixture.bytes,
+        "vecadd",
+        "vecadd.kd",
+        "gfx942",
+    ))
+    .unwrap_err();
+    assert_eq!(
+        error,
+        WorkerV2RawHsacoInspectionError::UnsupportedTarget("gfx942".to_owned())
+    );
 }
 
 #[test]
@@ -488,6 +508,15 @@ fn evidence(
     manifest_entry: &str,
     manifest_descriptor: &str,
 ) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
+    evidence_for_target(bytes, manifest_entry, manifest_descriptor, TARGET)
+}
+
+fn evidence_for_target(
+    bytes: Vec<u8>,
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    target: &str,
+) -> fe2o3_hsaco_finalize::InertFirstBuildWorkerV2EvidenceV1 {
     let directory = TestDirectory::new();
     let producer = ProducerIdentity::from_codegen(
         "worker_v2_hsaco_admission_fixture",
@@ -501,7 +530,7 @@ fn evidence(
         BuildSession::from_bytes([0x92; 16]),
     )
     .unwrap();
-    let handoff = compiler_handoff(&bytes, manifest_entry, manifest_descriptor);
+    let handoff = compiler_handoff_for_target(&bytes, manifest_entry, manifest_descriptor, target);
     publish_compiler_module_handoff_v1(&directory.0, &producer, attempt, handoff.canonical_bytes())
         .unwrap();
     let consumed = consume_compiler_module_handoff_v1(&directory.0, &producer, attempt).unwrap();
@@ -608,8 +637,17 @@ fn compiler_handoff(
     manifest_entry: &str,
     manifest_descriptor: &str,
 ) -> CompilerModuleHandoffV2 {
+    compiler_handoff_for_target(bytes, manifest_entry, manifest_descriptor, TARGET)
+}
+
+fn compiler_handoff_for_target(
+    bytes: &[u8],
+    manifest_entry: &str,
+    manifest_descriptor: &str,
+    target: &str,
+) -> CompilerModuleHandoffV2 {
     const PAYLOAD_MARKER: &[u8] = b"FE2O3/TEST-HSACO-PAYLOAD/V1\0";
-    let target = CompilerDeviceTargetV1::parse("gfx942").unwrap();
+    let parsed_target = CompilerDeviceTargetV1::parse(target).unwrap();
     let manifest = CompilerModuleSymbolManifestV1::new([
         (CompilerModuleSymbolRoleV1::KernelEntry, manifest_entry),
         (
@@ -620,13 +658,13 @@ fn compiler_handoff(
     ])
     .unwrap();
     let mut envelope =
-        CompilerFfiEnvelopeBuilderV1::new(target, CompilerCodeObjectVersion::V6, 1).unwrap();
-    envelope.push(compiler_contract()).unwrap();
+        CompilerFfiEnvelopeBuilderV1::new(parsed_target, CompilerCodeObjectVersion::V6, 1).unwrap();
+    envelope.push(compiler_contract_for_target(target)).unwrap();
     let mut module = PAYLOAD_MARKER.to_vec();
     module.extend_from_slice(bytes);
     CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmBitcode,
-        target,
+        parsed_target,
         CompilerCodeObjectVersion::V6,
         envelope.finish().unwrap(),
         manifest,
@@ -635,7 +673,7 @@ fn compiler_handoff(
     .unwrap()
 }
 
-fn compiler_contract() -> CompilerFfiContractV1 {
+fn compiler_contract_for_target(target: &str) -> CompilerFfiContractV1 {
     const ABI: &str = "C(u32[size=4,align=4])->u32[size=4,align=4]";
     let semantic_identity = [0x53; 32];
     let semantic_text = semantic_identity
@@ -647,7 +685,7 @@ fn compiler_contract() -> CompilerFfiContractV1 {
         symbol: "ffi_export",
         calling_convention: "C",
         code_object_version: 6,
-        target: "gfx942",
+        target,
         physical_abi: ABI,
         effects: "none",
         semantic_identity: &semantic_text,
@@ -656,7 +694,7 @@ fn compiler_contract() -> CompilerFfiContractV1 {
         derive_device_ffi_contract_id_v1(fields),
         DeviceFfiDirectionV1::Export,
         CompilerFfiLinkRoleV1::RequiresCompilerModuleDefinition,
-        CompilerDeviceTargetV1::parse("gfx942").unwrap(),
+        CompilerDeviceTargetV1::parse(target).unwrap(),
         CompilerCodeObjectVersion::V6,
         CompilerFfiSourceOwnerV1::new(
             "admission_fixture",

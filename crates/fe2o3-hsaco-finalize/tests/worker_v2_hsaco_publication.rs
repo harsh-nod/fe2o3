@@ -25,8 +25,8 @@ use fe2o3_hsaco_finalize::{
     WorkerExecutionLimitsV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerV2HsacoPublicationRouteV1, execute_protected_reproducible_first_build_worker_v2,
     execute_reproducible_first_build_worker_v2, finalize_inspected_protected_worker_v2_hsaco_v2,
-    finalize_inspected_worker_v2_hsaco_v1, inspect_protected_worker_v2_raw_hsaco_v1,
-    inspect_worker_v2_raw_hsaco_v1,
+    finalize_inspected_worker_v2_hsaco_v1, inspect_production_v1_worker_v2_raw_hsaco_v1,
+    inspect_protected_worker_v2_raw_hsaco_v1, inspect_worker_v2_raw_hsaco_v1,
 };
 use fe2o3_kernel_descriptor::{
     BlockSizeV1, BuildEvidenceV1, CanonicalCodeObjectDigest, CodeObjectVersion, CompilerIdentityV1,
@@ -41,6 +41,25 @@ use reserved_fe2o3_symbols::{
 };
 
 include!("fixtures/worker_v2_hsaco_test_support.rs");
+
+const GFX942_TARGET: &str = "gfx942:xnack-";
+const GFX950_TARGET: &str = "gfx950:xnack-";
+
+fn canonical_fixture_options() -> FixtureOptions<'static> {
+    FixtureOptions {
+        target: GFX942_TARGET,
+        ..FixtureOptions::valid()
+    }
+}
+
+fn production_fixture_options(target: &'static str) -> FixtureOptions<'static> {
+    FixtureOptions {
+        target,
+        required_workgroup_size: [64, 1, 1],
+        max_flat_workgroup_size: 64,
+        ..FixtureOptions::valid()
+    }
+}
 
 struct TestDirectory(PathBuf);
 
@@ -83,7 +102,7 @@ struct PublishedIdentities {
 fn protected_raw_preparation_exposes_exact_v2_restart_inputs() {
     let directory = TestDirectory::new();
     let producer = publication_producer("tests/protected-raw-preparation.rs");
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let closure = publication_compiler_closure(0x21);
     let slot = CompilerModuleHandoffSlotV2::GeneralGemmReference;
     let inspected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
@@ -144,8 +163,8 @@ fn protected_raw_preparation_exposes_exact_v2_restart_inputs() {
 fn protected_finalized_preparation_retains_raw_and_exact_canonical_snapshots() {
     let directory = TestDirectory::new();
     let producer = publication_producer("tests/protected-finalized-preparation.rs");
-    let table = publication_descriptor_table("gfx942", "vecadd", "vecadd.kd");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = publication_descriptor_table(GFX942_TARGET, "vecadd", "vecadd.kd");
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw_bytes = fixture.bytes.clone();
     let closure = publication_compiler_closure(0x31);
     let slot = CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly;
@@ -215,7 +234,7 @@ fn protected_domains_reject_v1_aliasing_and_bind_every_closure_role() {
     let protected_directory = TestDirectory::new();
     let ordinary_directory = TestDirectory::new();
     let producer = publication_producer("tests/protected-v1-domain-separation.rs");
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let protected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
         &protected_directory,
         &producer,
@@ -237,7 +256,7 @@ fn protected_domains_reject_v1_aliasing_and_bind_every_closure_role() {
         fixture.bytes,
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
     ))
@@ -276,14 +295,14 @@ fn protected_domains_reject_v1_aliasing_and_bind_every_closure_role() {
 fn typed_bridge_publishes_exact_inspected_bytes_and_recovers_exact_retry() {
     let directory = TestDirectory::new();
     let producer = publication_producer("tests/typed-bridge-success.rs");
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let evidence = publication_evidence(
         &directory,
         &producer,
         fixture.bytes.clone(),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
     );
@@ -368,8 +387,8 @@ fn typed_bridge_publishes_exact_inspected_bytes_and_recovers_exact_retry() {
 fn finalized_bridge_publishes_only_canonical_bytes_and_retries_exact_plan() {
     let directory = TestDirectory::new();
     let producer = publication_producer("tests/finalized-typed-bridge.rs");
-    let table = publication_descriptor_table("gfx942", "vecadd", "vecadd.kd");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = publication_descriptor_table(GFX942_TARGET, "vecadd", "vecadd.kd");
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
     let raw_bytes = fixture.bytes.clone();
     let evidence = publication_evidence(
         &directory,
@@ -377,7 +396,7 @@ fn finalized_bridge_publishes_only_canonical_bytes_and_retries_exact_plan() {
         raw_bytes.clone(),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
     );
@@ -495,8 +514,8 @@ fn raw_and_finalized_publication_have_domain_separated_receipts() {
     let raw_directory = TestDirectory::new();
     let finalized_directory = TestDirectory::new();
     let producer = publication_producer("tests/raw-final-domain-separation.rs");
-    let table = publication_descriptor_table("gfx942", "vecadd", "vecadd.kd");
-    let fixture = fixture_with_descriptor_table(FixtureOptions::valid(), Some(&table));
+    let table = publication_descriptor_table(GFX942_TARGET, "vecadd", "vecadd.kd");
+    let fixture = fixture_with_descriptor_table(canonical_fixture_options(), Some(&table));
 
     let raw_evidence = publication_evidence(
         &raw_directory,
@@ -504,7 +523,7 @@ fn raw_and_finalized_publication_have_domain_separated_receipts() {
         fixture.bytes.clone(),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
     );
@@ -526,7 +545,7 @@ fn raw_and_finalized_publication_have_domain_separated_receipts() {
         fixture.bytes.clone(),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
     );
@@ -590,10 +609,10 @@ fn raw_and_finalized_publication_have_domain_separated_receipts() {
 fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
     let base = publish_finalized_identities(
         "tests/finalized-lineage.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         0xb1,
@@ -604,11 +623,11 @@ fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
         FixtureOptions {
             entry: "vecsub",
             descriptor: "vecsub.kd",
-            ..FixtureOptions::valid()
+            ..production_fixture_options(GFX942_TARGET)
         },
         "vecsub",
         "vecsub.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         0xb1,
@@ -619,13 +638,10 @@ fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
 
     let target = publish_finalized_identities(
         "tests/finalized-lineage.rs",
-        FixtureOptions {
-            target: "gfx942:xnack-",
-            ..FixtureOptions::valid()
-        },
+        production_fixture_options(GFX950_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942:xnack-",
+        GFX950_TARGET,
         0x53,
         "fixture-llvm-v1",
         0xb1,
@@ -636,10 +652,10 @@ fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
 
     let worker = publish_finalized_identities(
         "tests/finalized-lineage.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v2",
         0xb1,
@@ -650,10 +666,10 @@ fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
 
     let attempt = publish_finalized_identities(
         "tests/finalized-lineage.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         0xc1,
@@ -663,10 +679,10 @@ fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
 
     let producer = publish_finalized_identities(
         "tests/finalized-other-producer.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         0xb1,
@@ -677,10 +693,10 @@ fn finalized_plan_binds_kernel_target_worker_attempt_and_producer() {
 
     let changed_bytes = publish_finalized_identities_with_output_mutation(
         "tests/finalized-lineage.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         0xb1,
@@ -722,20 +738,20 @@ fn producer_package_helper_is_domain_separated_and_non_authoritative() {
 fn every_mutated_lineage_changes_its_derived_identity_chain() {
     let base = publish_identities(
         "tests/identity-base.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         false,
     );
     let package = publish_identities(
         "tests/identity-other-source.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         false,
@@ -748,11 +764,11 @@ fn every_mutated_lineage_changes_its_derived_identity_chain() {
         FixtureOptions {
             entry: "vecsub",
             descriptor: "vecsub.kd",
-            ..FixtureOptions::valid()
+            ..production_fixture_options(GFX942_TARGET)
         },
         "vecsub",
         "vecsub.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         false,
@@ -763,10 +779,10 @@ fn every_mutated_lineage_changes_its_derived_identity_chain() {
 
     let envelope = publish_identities(
         "tests/identity-base.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x54,
         "fixture-llvm-v1",
         false,
@@ -778,13 +794,10 @@ fn every_mutated_lineage_changes_its_derived_identity_chain() {
 
     let target = publish_identities(
         "tests/identity-base.rs",
-        FixtureOptions {
-            target: "gfx942:xnack-",
-            ..FixtureOptions::valid()
-        },
+        production_fixture_options(GFX950_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942:xnack-",
+        GFX950_TARGET,
         0x53,
         "fixture-llvm-v1",
         false,
@@ -795,10 +808,10 @@ fn every_mutated_lineage_changes_its_derived_identity_chain() {
 
     let worker = publish_identities(
         "tests/identity-base.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v2",
         false,
@@ -810,10 +823,10 @@ fn every_mutated_lineage_changes_its_derived_identity_chain() {
 
     let output = publish_identities(
         "tests/identity-base.rs",
-        FixtureOptions::valid(),
+        production_fixture_options(GFX942_TARGET),
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         true,
@@ -831,14 +844,14 @@ fn prepared_publication_rejects_a_different_producer_before_backend_claim() {
     let directory = TestDirectory::new();
     let producer = publication_producer("tests/producer-bound.rs");
     let other = publication_producer("tests/producer-impostor.rs");
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let evidence = publication_evidence(
         &directory,
         &producer,
         fixture.bytes,
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
     );
@@ -859,7 +872,7 @@ fn request_identity_binds_the_explicit_retained_link_plan_identity() {
     let first_directory = TestDirectory::new();
     let second_directory = TestDirectory::new();
     let producer = publication_producer("tests/link-plan-bound.rs");
-    let first_bytes = fixture(FixtureOptions::valid()).bytes;
+    let first_bytes = fixture(canonical_fixture_options()).bytes;
     let second_bytes = first_bytes.clone();
     let first = publication_evidence_with_link_option(
         &first_directory,
@@ -867,7 +880,7 @@ fn request_identity_binds_the_explicit_retained_link_plan_identity() {
         first_bytes,
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         Some("2"),
@@ -878,7 +891,7 @@ fn request_identity_binds_the_explicit_retained_link_plan_identity() {
         second_bytes,
         "vecadd",
         "vecadd.kd",
-        "gfx942",
+        GFX942_TARGET,
         0x53,
         "fixture-llvm-v1",
         Some("3"),
@@ -938,7 +951,7 @@ fn publish_identities(
         semantic_seed,
         llvm_identity,
     );
-    let inspected = inspect_worker_v2_raw_hsaco_v1(evidence).unwrap();
+    let inspected = inspect_production_v1_worker_v2_raw_hsaco_v1(evidence).unwrap();
     let prepared =
         fe2o3_hsaco_finalize::prepare_worker_v2_hsaco_publication_v1(&producer, inspected).unwrap();
     let published = fe2o3_hsaco_finalize::publish_prepared_worker_v2_hsaco_v1(
@@ -1034,7 +1047,12 @@ fn publish_finalized_identities_inner(
 ) -> PublishedIdentities {
     let directory = TestDirectory::new();
     let producer = publication_producer(source);
-    let table = publication_descriptor_table(compiler_target, manifest_entry, manifest_descriptor);
+    let table = publication_descriptor_table_for_options(
+        compiler_target,
+        manifest_entry,
+        manifest_descriptor,
+        options,
+    );
     let mut fixture = fixture_with_descriptor_table(options, Some(&table));
     if mutate_output {
         fixture.bytes[fixture.text_offset] ^= 1;
@@ -1051,9 +1069,10 @@ fn publish_finalized_identities_inner(
         invocation_seed,
         session_seed,
     );
-    let finalized =
-        finalize_inspected_worker_v2_hsaco_v1(inspect_worker_v2_raw_hsaco_v1(evidence).unwrap())
-            .unwrap();
+    let finalized = finalize_inspected_worker_v2_hsaco_v1(
+        inspect_production_v1_worker_v2_raw_hsaco_v1(evidence).unwrap(),
+    )
+    .unwrap();
     let prepared = fe2o3_hsaco_finalize::prepare_finalized_worker_v2_hsaco_publication_v1(
         &producer, finalized,
     )
@@ -1087,7 +1106,7 @@ fn publish_finalized_identities_inner(
 fn protected_raw_plan_identities(closure: CompilerClosureV2) -> PublishedIdentities {
     let directory = TestDirectory::new();
     let producer = publication_producer("tests/protected-closure-mutations.rs");
-    let fixture = fixture(FixtureOptions::valid());
+    let fixture = fixture(canonical_fixture_options());
     let inspected = inspect_protected_worker_v2_raw_hsaco_v1(protected_publication_evidence(
         &directory,
         &producer,
@@ -1144,7 +1163,7 @@ fn protected_publication_evidence(
         BuildSession::from_bytes([session_seed; 16]),
     )
     .unwrap();
-    let handoff = publication_compiler_handoff(&bytes, "vecadd", "vecadd.kd", "gfx942", 0x53);
+    let handoff = publication_compiler_handoff(&bytes, "vecadd", "vecadd.kd", GFX942_TARGET, 0x53);
     publish_compiler_module_handoff_in_slot_v2(
         &directory.0,
         producer,
@@ -1315,6 +1334,31 @@ fn publication_evidence_with_link_option_and_attempt(
 }
 
 fn publication_descriptor_table(target: &str, entry: &str, descriptor: &str) -> Vec<u8> {
+    publication_descriptor_table_with_launch(target, entry, descriptor, [256, 1, 1], 256)
+}
+
+fn publication_descriptor_table_for_options(
+    target: &str,
+    entry: &str,
+    descriptor: &str,
+    options: FixtureOptions<'_>,
+) -> Vec<u8> {
+    publication_descriptor_table_with_launch(
+        target,
+        entry,
+        descriptor,
+        options.required_workgroup_size,
+        options.max_flat_workgroup_size,
+    )
+}
+
+fn publication_descriptor_table_with_launch(
+    target: &str,
+    entry: &str,
+    descriptor: &str,
+    required_workgroup_size: [u32; 3],
+    max_flat_workgroup_size: u32,
+) -> Vec<u8> {
     let source = SourceTypeRecordV1::new(SourceTypeDescriptorV1::shared_slice(ScalarTypeV1::F32));
     let layout =
         DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::shared_slice(ScalarTypeV1::F32));
@@ -1329,9 +1373,16 @@ fn publication_descriptor_table(target: &str, entry: &str, descriptor: &str) -> 
         KernelAbiLayoutV1::new(16, 272, 8).unwrap(),
         LaunchConstraintsV1::new(
             1,
-            BlockSizeV1::Exact(DimensionsV1::new(256, 1, 1).unwrap()),
+            BlockSizeV1::Exact(
+                DimensionsV1::new(
+                    required_workgroup_size[0],
+                    required_workgroup_size[1],
+                    required_workgroup_size[2],
+                )
+                .unwrap(),
+            ),
             DimensionsV1::new(u32::MAX, 1, 1).unwrap(),
-            256,
+            max_flat_workgroup_size,
             0,
             64 * 1024,
         )

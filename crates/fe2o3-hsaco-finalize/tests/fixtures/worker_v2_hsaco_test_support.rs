@@ -2660,6 +2660,7 @@ fn target_flags(target: &str) -> u32 {
         "gfx942" => 0x54c,
         "gfx942:xnack-" => 0x64c,
         "gfx950" => 0x54f,
+        "gfx950:xnack-" => 0x64f,
         _ => panic!("unsupported test target"),
     }
 }
