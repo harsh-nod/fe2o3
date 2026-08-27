@@ -836,7 +836,8 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
 mod tests {
     use dialect_gpu::{ExecutionDomainAttr, ExecutionLayoutOp};
     use dialect_kernel::{
-        DIALECT_NAME, ReturnOp, TensorConvergenceAttr, TensorLayoutOp, register_dialect,
+        DIALECT_NAME, InvocationIndexOp, ReturnOp, TensorConvergenceAttr, TensorLayoutOp,
+        register_dialect,
     };
     use fe2o3_kernel_ir::TensorLayoutContractV1;
     use fe2o3_pliron_owner_core::ensure_context_identity;
@@ -891,6 +892,7 @@ mod tests {
                 ExecutionDomainAttr::FullPhysicalWorkgroups,
             )
             .get_operation(),
+            InvocationIndexOp::new(context, 0, 64).get_operation(),
             TensorLayoutOp::new(
                 context,
                 &TensorLayoutContractV1::gfx942_mfma_bf16_f32_m16n16k16_wave64(),

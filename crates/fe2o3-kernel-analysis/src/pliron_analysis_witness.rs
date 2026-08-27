@@ -16,6 +16,7 @@ use std::{
     fmt,
 };
 
+use dialect_gpu::ExecutionLayoutOp;
 use dialect_kernel::{
     DYNAMIC_EXTENT, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, InvocationIndexOp,
     RankedAccessOp, ranked_view_type,
@@ -23,6 +24,7 @@ use dialect_kernel::{
 use fe2o3_pliron_owner_core::{ContextIdentity, require_context_identity};
 use pliron::{
     builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    common_traits::Verify,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
@@ -608,8 +610,23 @@ fn raw_launch_extents(
     block: Ptr<pliron::basic_block::BasicBlock>,
 ) -> Result<Vec<u64>, String> {
     let mut by_dimension = BTreeMap::<usize, u64>::new();
+    let mut execution_layout = None;
     for operation in block.deref(context).iter(context) {
         let operation = Operation::get_op_dyn(operation, context);
+        if let Some(layout) = operation.downcast_ref::<ExecutionLayoutOp>() {
+            if execution_layout.is_some() {
+                return Err("bounds witness V1 found more than one gpu.execution_layout".to_owned());
+            }
+            if layout.verify(context).is_err() {
+                return Err("bounds witness V1 found a malformed gpu.execution_layout".to_owned());
+            }
+            let Some(global_extents) = layout.global_extents(context) else {
+                return Err("bounds witness V1 found a malformed gpu.execution_layout".to_owned());
+            };
+            execution_layout = Some(global_extents);
+            continue;
+        }
+
         let Some(invocation) = operation.downcast_ref::<InvocationIndexOp>() else {
             continue;
         };
@@ -627,14 +644,43 @@ fn raw_launch_extents(
                 "bounds witness V1 cannot enumerate dynamic launch dimension {dimension}"
             ));
         }
-        if let Some(previous) = by_dimension.insert(dimension, extent)
-            && previous != extent
-        {
+        if by_dimension.insert(dimension, extent).is_some() {
             return Err(format!(
-                "bounds witness V1 found inconsistent launch extents {previous} and {extent} for dimension {dimension}"
+                "bounds witness V1 found duplicate invocation dimension {dimension}"
             ));
         }
     }
+
+    if let Some(layout_extents) = execution_layout {
+        for (dimension, layout_extent) in layout_extents.into_iter().enumerate() {
+            if layout_extent == DYNAMIC_EXTENT {
+                return Err(format!(
+                    "bounds witness V1 cannot enumerate dynamic gpu.execution_layout axis {dimension}"
+                ));
+            }
+            match by_dimension.get(&dimension) {
+                Some(invocation_extent) if *invocation_extent == layout_extent => {}
+                Some(invocation_extent) => {
+                    return Err(format!(
+                        "bounds witness V1 invocation dimension {dimension} extent {invocation_extent} is inconsistent with gpu.execution_layout extent {layout_extent}"
+                    ));
+                }
+                None if layout_extent > 1 => {
+                    return Err(format!(
+                        "bounds witness V1 gpu.execution_layout has active axis {dimension} extent {layout_extent} without an invocation dimension"
+                    ));
+                }
+                None => {}
+            }
+        }
+        if let Some((dimension, _)) = by_dimension.range(3..).next() {
+            return Err(format!(
+                "bounds witness V1 invocation dimension {dimension} is outside the three-dimensional gpu.execution_layout"
+            ));
+        }
+        return Ok(layout_extents.to_vec());
+    }
+
     let dimension_count = by_dimension
         .last_key_value()
         .map_or(0, |(dimension, _)| dimension + 1);
@@ -898,6 +944,55 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
         (stage, stage.witness().clone())
     }
 
+    fn replay_with_clean_bounds_report(
+        context: &mut Context,
+        source: &str,
+    ) -> Result<
+        SupportedWitnessBuildV1<BoundsPresburgerWitnessV1>,
+        ProductionAnalysisWitnessValidationErrorV1,
+    > {
+        // The clean report is intentionally from a distinct valid subject.
+        // These tests exercise the independent witness replay boundary, not
+        // the primary bounds verifier that issued that report.
+        let safe = parse_function(context);
+        let safe_report = require_production_pliron_checks_before_lowering_v2(context, &safe)
+            .expect("safe bounds report");
+        let candidate = parse_source(context, source);
+        build_bounds_presburger_witness(context, &candidate, safe_report.bounds())
+    }
+
+    fn expect_incomplete_bounds_replay(
+        replay: Result<
+            SupportedWitnessBuildV1<BoundsPresburgerWitnessV1>,
+            ProductionAnalysisWitnessValidationErrorV1,
+        >,
+        expected_reason: &str,
+    ) {
+        match replay {
+            Ok(SupportedWitnessBuildV1::Incomplete(reason)) => assert!(
+                reason.contains(expected_reason),
+                "incomplete reason {reason:?} did not contain {expected_reason:?}"
+            ),
+            Ok(SupportedWitnessBuildV1::Complete(_)) => {
+                panic!("hostile bounds replay must never be Complete")
+            }
+            Err(error) => panic!("expected Incomplete bounds replay, got rejection: {error}"),
+        }
+    }
+
+    fn affine_source_with_execution_layout(name: &str, global: [u64; 3]) -> String {
+        let [global_x, global_y, global_z] = global;
+        let layout = format!(
+            "    gpu.execution_layout () [] [gpu_execution_grid_identity: gpu.grid_identity 7, gpu_execution_global_x: gpu.execution_extent {global_x}, gpu_execution_global_y: gpu.execution_extent {global_y}, gpu_execution_global_z: gpu.execution_extent {global_z}, gpu_execution_workgroup_x: gpu.execution_extent {global_x}, gpu_execution_workgroup_y: gpu.execution_extent {global_y}, gpu_execution_workgroup_z: gpu.execution_extent {global_z}, gpu_execution_subgroup_size: gpu.subgroup_size 4, gpu_execution_domain: gpu.execution_domain FullPhysicalWorkgroups]: <() -> ()>;"
+        );
+        SAFE_AFFINE
+            .replace("@bounds_witness_safe", &format!("@{name}"))
+            .replace(
+                "  ^entry_block1v1():",
+                &format!("  ^entry_block1v1():\n{layout}"),
+            )
+    }
+
     #[test]
     fn affine_bounds_witness_replays_every_access_dimension() {
         let context = &mut setup();
@@ -1061,5 +1156,171 @@ builtin.func @bounds_witness_safe: builtin.function <() -> ()>
                 ..
             }) if invocation == vec![7]
         ));
+    }
+
+    #[test]
+    fn matching_execution_layout_preserves_the_supported_fragment() {
+        let context = &mut setup();
+        let source = affine_source_with_execution_layout("bounds_witness_layout_match", [8, 1, 1]);
+        let replay = replay_with_clean_bounds_report(context, &source)
+            .expect("matching layout is replayable");
+        let SupportedWitnessBuildV1::Complete(witness) = replay else {
+            panic!("matching static execution layout must remain supported")
+        };
+
+        assert_eq!(witness.obligations.len(), 1);
+        assert_eq!(witness.obligations[0].checked_invocations, 8);
+    }
+
+    #[test]
+    fn execution_layout_must_agree_with_invocation_inventory() {
+        let context = &mut setup();
+        let source =
+            affine_source_with_execution_layout("bounds_witness_layout_mismatch", [4, 1, 1]);
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, &source),
+            "inconsistent with gpu.execution_layout",
+        );
+    }
+
+    #[test]
+    fn execution_layout_active_axes_require_invocation_dimensions() {
+        let context = &mut setup();
+        let source =
+            affine_source_with_execution_layout("bounds_witness_missing_active_axis", [8, 4, 1]);
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, &source),
+            "active axis 1 extent 4 without an invocation dimension",
+        );
+    }
+
+    #[test]
+    fn duplicate_execution_layout_records_are_incomplete() {
+        let context = &mut setup();
+        let source =
+            affine_source_with_execution_layout("bounds_witness_duplicate_layout", [8, 1, 1]);
+        let layout = source
+            .lines()
+            .find(|line| line.contains("gpu.execution_layout"))
+            .expect("layout line");
+        let source = source.replacen(layout, &format!("{layout}\n{layout}"), 1);
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, &source),
+            "more than one gpu.execution_layout",
+        );
+    }
+
+    #[test]
+    fn malformed_execution_layout_is_incomplete() {
+        let context = &mut setup();
+        let source =
+            affine_source_with_execution_layout("bounds_witness_malformed_layout", [8, 1, 1])
+                .replace("gpu.subgroup_size 4", "gpu.subgroup_size 3");
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, &source),
+            "malformed gpu.execution_layout",
+        );
+    }
+
+    #[test]
+    fn zero_or_dynamic_invocation_extent_cannot_vacuously_complete() {
+        let context = &mut setup();
+        let source = SAFE_AFFINE
+            .replace("@bounds_witness_safe", "@bounds_witness_zero_invocations")
+            .replace("kernel.launch_extent 8", "kernel.launch_extent 0")
+            .replace("kernel.index_value 1", "kernel.index_value 99")
+            .replace("kernel.access (v0, v5)", "kernel.access (v0, v3)");
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, &source),
+            "cannot enumerate dynamic launch dimension 0",
+        );
+    }
+
+    #[test]
+    fn zero_divisors_are_incomplete_for_divide_and_remainder() {
+        for (name, operator) in [
+            ("bounds_witness_divide_zero", "Divide"),
+            ("bounds_witness_remainder_zero", "Remainder"),
+        ] {
+            let context = &mut setup();
+            let source = SAFE_AFFINE
+                .replace("@bounds_witness_safe", &format!("@{name}"))
+                .replace("kernel.index_value 2", "kernel.index_value 0")
+                .replace(
+                    "kernel.index_binary_kind Multiply",
+                    &format!("kernel.index_binary_kind {operator}"),
+                )
+                .replace("kernel.access (v0, v5)", "kernel.access (v0, v4)");
+
+            expect_incomplete_bounds_replay(
+                replay_with_clean_bounds_report(context, &source),
+                "divisor is zero",
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_invocation_dimensions_cannot_self_certify() {
+        let context = &mut setup();
+        let source = SAFE_AFFINE
+            .replace("@bounds_witness_safe", "@bounds_witness_duplicate_dimension")
+            .replace(
+                "    v2 = kernel.index_constant",
+                "    v6 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 8]: <() -> (kernel.index )>;\n    v2 = kernel.index_constant",
+            );
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, &source),
+            "duplicate invocation dimension 0",
+        );
+    }
+
+    #[test]
+    fn unresolved_index_definition_is_incomplete() {
+        let context = &mut setup();
+        let source = r#"
+builtin.func @bounds_witness_unresolved: builtin.function <(kernel.index ) -> ()>
+{
+  ^entry_block1v1(unresolved_v0: kernel.index ):
+    v1 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[16]>)>;
+    v2 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 8]: <() -> (kernel.index )>;
+    kernel.access (v1, unresolved_v0) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[16]>, kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}
+"#;
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, source),
+            "block arguments are outside the V1 raw-index fragment",
+        );
+    }
+
+    #[test]
+    fn cumulative_multi_access_multi_dimension_work_is_capped() {
+        let context = &mut setup();
+        let source = r#"
+builtin.func @bounds_witness_cumulative_cap: builtin.function <() -> ()>
+{
+  ^entry_block1v1():
+    v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Global]: <() -> (kernel.ranked_view <32,false,[16,16]>)>;
+    v1 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 65536]: <() -> (kernel.index )>;
+    v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 16]: <() -> (kernel.index )>;
+    v3 = kernel.index_binary (v1, v2) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
+    kernel.access (v0, v3, v3) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[16,16]>, kernel.index , kernel.index ) -> ()>;
+    kernel.access (v0, v3, v3) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[16,16]>, kernel.index , kernel.index ) -> ()>;
+    kernel.access (v0, v3, v3) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <32,false,[16,16]>, kernel.index , kernel.index ) -> ()>;
+    kernel.return () [] []: <() -> ()>
+}
+"#;
+
+        expect_incomplete_bounds_replay(
+            replay_with_clean_bounds_report(context, source),
+            "raw-index evaluation exceeded its deterministic work cap",
+        );
     }
 }
