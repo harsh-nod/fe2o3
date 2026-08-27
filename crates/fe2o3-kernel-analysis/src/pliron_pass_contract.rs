@@ -120,6 +120,7 @@ impl PlironPassPreservationCertificateV1 {
 pub(crate) struct PlironPassValidationHandleV1 {
     custody: Arc<()>,
     input_identity: PlironStructuralIdentityLabelV1,
+    input_mutation_epoch: u64,
 }
 
 impl PlironPassValidationHandleV1 {
@@ -134,6 +135,10 @@ impl PlironPassValidationHandleV1 {
     pub(crate) const fn input_identity(&self) -> PlironStructuralIdentityLabelV1 {
         self.input_identity
     }
+
+    pub(crate) const fn input_mutation_epoch(&self) -> u64 {
+        self.input_mutation_epoch
+    }
 }
 
 /// Unforgeable compiler checkpoint minted only after exact post-pass byte
@@ -144,6 +149,7 @@ pub(crate) struct PlironPassCheckpointTokenV1 {
     position: usize,
     pass: KernelCheckPassKindV1,
     identity: PlironStructuralIdentityLabelV1,
+    mutation_epoch: u64,
 }
 
 impl PlironPassCheckpointTokenV1 {
@@ -155,6 +161,9 @@ impl PlironPassCheckpointTokenV1 {
     }
     pub(crate) const fn identity(&self) -> PlironStructuralIdentityLabelV1 {
         self.identity
+    }
+    pub(crate) const fn mutation_epoch(&self) -> u64 {
+        self.mutation_epoch
     }
 }
 
@@ -569,6 +578,7 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
         PlironPassValidationHandleV1 {
             custody: Arc::clone(&self.custody),
             input_identity: self.input_identity,
+            input_mutation_epoch: self.input_mutation_epoch,
         }
     }
 
@@ -593,6 +603,7 @@ impl<P: PlironStructuralIdentityProviderV1> PlironPassContractSessionV1<P> {
             position,
             pass: certificate.pass,
             identity: certificate.identity,
+            mutation_epoch: certificate.mutation_epoch,
         })
     }
 

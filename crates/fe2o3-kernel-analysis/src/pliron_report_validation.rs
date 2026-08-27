@@ -129,6 +129,7 @@ pub struct ProductionAnalysisCheckpointV1 {
     position: usize,
     pass: KernelCheckPassKindV1,
     identity: PlironStructuralIdentityLabelV1,
+    mutation_epoch: u64,
 }
 
 impl ProductionAnalysisCheckpointV1 {
@@ -143,6 +144,11 @@ impl ProductionAnalysisCheckpointV1 {
     /// Diagnostic label only. Validation never accepts label equality.
     pub const fn identity_label(self) -> PlironStructuralIdentityLabelV1 {
         self.identity
+    }
+
+    /// Monotonic context epoch sealed into this exact pass checkpoint.
+    pub const fn mutation_epoch(self) -> u64 {
+        self.mutation_epoch
     }
 }
 
@@ -568,6 +574,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
             position: checkpoint_token.position(),
             pass: checkpoint_token.pass(),
             identity: checkpoint_token.identity(),
+            mutation_epoch: checkpoint_token.mutation_epoch(),
         };
         Ok(BoundProductionAnalysisReportV1 {
             checkpoint_token,
@@ -634,6 +641,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
         if bound.submitted_checkpoint.position != issued_position
             || bound.submitted_checkpoint.pass != bound.checkpoint_token.pass()
             || bound.submitted_checkpoint.identity != bound.checkpoint_token.identity()
+            || bound.submitted_checkpoint.mutation_epoch != bound.checkpoint_token.mutation_epoch()
         {
             return Err(
                 ProductionAnalysisReportValidationErrorV1::CheckpointMetadataTampered { position },
@@ -713,6 +721,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
         }
         let manifest_matches = self.preservation.same_report_custody(preservation)
             && self.preservation.input_identity() == preservation.input_identity()
+            && self.preservation.input_mutation_epoch() == preservation.input_mutation_epoch()
             && preservation.certificates().len() == PRODUCTION_ANALYSIS_REPORT_COUNT_V1
             && preservation.is_exact_identity()
             && self
@@ -724,6 +733,7 @@ impl<'a> ProductionAnalysisReportValidationSessionV1<'a> {
                     stage.checkpoint.position == position
                         && stage.checkpoint.pass == certificate.pass()
                         && stage.checkpoint.identity == certificate.identity()
+                        && stage.checkpoint.mutation_epoch == certificate.mutation_epoch()
                 })
             && preservation
                 .certificates()
@@ -816,7 +826,8 @@ mod tests {
     use super::*;
     use crate::pliron_ir_identity::BuiltIdentityV1;
     use crate::pliron_pass_contract::{
-        IdentityCaptureFailureV1, IdentityComparisonFailureV1, PlironStructuralIdentityProviderV1,
+        IdentityCaptureFailureV1, IdentityComparisonFailureV1, MutationEpochCaptureFailureV1,
+        PlironStructuralIdentityProviderV1,
     };
     use crate::{
         LivePlironStructuralIdentityProviderV1, PlironPassContractSessionV1,
@@ -1071,6 +1082,18 @@ mod tests {
         ));
 
         let (_preservation, mut validation, mut bound) = first_bound(context, &function);
+        bound.submitted_checkpoint.mutation_epoch =
+            bound.submitted_checkpoint.mutation_epoch.wrapping_add(1);
+        assert!(matches!(
+            validation.accept(context, &function, &bound),
+            Err(
+                ProductionAnalysisReportValidationErrorV1::CheckpointMetadataTampered {
+                    position: 0
+                }
+            )
+        ));
+
+        let (_preservation, mut validation, mut bound) = first_bound(context, &function);
         bound.implementation = ProductionAnalysisImplementationV1::PlironRankedBoundsV1;
         assert!(matches!(
             validation.accept(context, &function, &bound),
@@ -1216,6 +1239,10 @@ mod tests {
 
     impl PlironStructuralIdentityProviderV1 for CountingProvider<'_> {
         type Snapshot = BuiltIdentityV1;
+
+        fn mutation_epoch(&self) -> Result<u64, MutationEpochCaptureFailureV1> {
+            self.inner.mutation_epoch()
+        }
 
         fn capture(&mut self) -> Result<Self::Snapshot, IdentityCaptureFailureV1> {
             self.captures.set(self.captures.get() + 1);
