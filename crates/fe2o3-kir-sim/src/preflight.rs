@@ -60,6 +60,7 @@ pub enum UnsupportedFeatureV1 {
     DynamicWorkgroupMemory,
     Matrix,
     Wave,
+    Gfx950LdsTranspose,
     InlineAssembly,
     UnsupportedScalarOperation,
     TargetConstantOutOfRange,
@@ -1579,6 +1580,9 @@ fn scan_operation(
         }
         OperationKind::Matrix(_) => reject!(UnsupportedFeatureV1::Matrix),
         OperationKind::Wave(_) => reject!(UnsupportedFeatureV1::Wave),
+        OperationKind::Gfx950LdsTranspose(_) => {
+            reject!(UnsupportedFeatureV1::Gfx950LdsTranspose)
+        }
         OperationKind::InlineAssembly(_) => reject!(UnsupportedFeatureV1::InlineAssembly),
     }
     Ok(())
@@ -2064,6 +2068,65 @@ mod tests {
         assert_eq!(
             report.findings()[0].feature,
             UnsupportedFeatureV1::NonScalarMemory
+        );
+    }
+
+    #[test]
+    fn gfx950_lds_transpose_has_an_explicit_unsupported_classification() {
+        let function = Function::kernel_entry(
+            "gfx950_transpose",
+            fe2o3_kernel_ir::Signature::new(vec![], vec![]),
+            vec![],
+            vec![],
+        );
+        let operation = Operation::new(
+            vec![fe2o3_kernel_ir::ValueDef::new(
+                ValueId(0),
+                Type::pointer(
+                    Type::Scalar(ScalarType::U8),
+                    AddressSpace::Workgroup,
+                    AccessMode::ReadWrite,
+                ),
+            )],
+            OperationKind::Gfx950LdsTranspose(
+                fe2o3_kernel_ir::Gfx950LdsTransposeOperationV1::full(
+                    fe2o3_kernel_ir::Gfx950LdsTransposeOperationKindV1::Current {
+                        format: fe2o3_kernel_ir::Gfx950LdsTransposeFormatV1::Fp8E4M3,
+                    },
+                ),
+            ),
+        );
+        let value_types = HashMap::new();
+        let mut findings = UnsupportedCollectorV1::new().unwrap();
+        let mut pending = Vec::new();
+        let mut discovered = vec![true];
+        let mut discovered_count = 1;
+
+        scan_operation(
+            &function,
+            BlockId(0),
+            0,
+            &operation,
+            &value_types,
+            &Module::new("gfx950_transpose"),
+            &HashMap::new(),
+            &mut pending,
+            &mut discovered,
+            &mut discovered_count,
+            1,
+            &mut findings,
+            SimulationTargetV1::amdgpu_64(),
+        )
+        .unwrap();
+
+        let report = findings.finish().unwrap();
+        assert_eq!(report.total_findings(), 1);
+        assert_eq!(report.findings()[0].function.as_str(), "gfx950_transpose");
+        assert_eq!(report.findings()[0].block, Some(BlockId(0)));
+        assert_eq!(report.findings()[0].operation, Some(0));
+        assert_eq!(
+            report.findings()[0].feature,
+            UnsupportedFeatureV1::Gfx950LdsTranspose
         );
     }
 

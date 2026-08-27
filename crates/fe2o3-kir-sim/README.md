@@ -61,9 +61,9 @@ scheduler; exact compiler stack-frame sizes are diagnostic measurements, not a
 stable ABI.
 Floating-point operations, external calls, generic barriers, atomics, fences,
 dynamic or non-scalar workgroup memory, wave operations, matrix operations,
-memory intrinsics, and inline assembly are rejected by this profile. Workgroup
-barriers do not simulate physical waves, atomics, cache behavior, timing, or
-performance.
+gfx950 LDS transpose operations, memory intrinsics, and inline assembly are
+rejected by this profile. Workgroup barriers do not simulate physical waves,
+atomics, cache behavior, timing, or performance.
 
 Callers consume an exact V7 owner with `AdmittedSimulationModuleV1::admit`, then
 provide an explicit target, resource limits, launch shape, and typed scalar or
