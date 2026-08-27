@@ -971,6 +971,23 @@ makeExactWorkgroupSyncTextIr(ExactWorkgroupSyncProfileForTesting Profile) {
   return std::move(*Result);
 }
 
+std::vector<uint8_t> withoutExactWorkgroupSyncMarkers(
+    std::vector<uint8_t> Compiler,
+    ExactWorkgroupSyncProfileForTesting Profile) {
+  StringRef Prefix =
+      Profile == ExactWorkgroupSyncProfileForTesting::LdsReduction
+          ? ".fe2o3.wg-lds"
+          : ".fe2o3.wg-atomic";
+  StringRef Text(reinterpret_cast<const char *>(Compiler.data()),
+                 Compiler.size());
+  std::string Marker = (Twine("\nmodule asm \".section ") + Prefix).str();
+  size_t Position = Text.find(Marker);
+  require(Position != StringRef::npos,
+          "exact workgroup-sync fixture omitted its profile marker");
+  Compiler.resize(Position);
+  return Compiler;
+}
+
 std::string replaceExactText(StringRef Source, StringRef Expected,
                              StringRef Replacement) {
   size_t Position = Source.find(Expected);
@@ -1198,8 +1215,18 @@ Response requireFailureWithPolicy(const Request &RequestValue,
   Response Result =
       executeWithUnauthenticatedGfx942DeviceLibraryPolicyForTesting(
           RequestValue, Policy);
-  require(!Result.LinkedOutput,
-          "rejected synthetic OCML request returned output bytes");
+  if (Result.LinkedOutput) {
+    errs() << "unexpected synthetic OCML success: target="
+           << RequestValue.Target << " cov="
+           << static_cast<unsigned>(RequestValue.CodeObjectVersion)
+           << " imports=";
+    for (const std::string &Symbol : RequestValue.ImportSymbols)
+      errs() << Symbol << ',';
+    errs() << '\n';
+    for (const std::string &Diagnostic : Result.Diagnostics)
+      errs() << Diagnostic << '\n';
+    fail("rejected synthetic OCML request returned output bytes");
+  }
   if (Result.FailureStage != ExpectedStage) {
     for (const std::string &Diagnostic : Result.Diagnostics)
       errs() << Diagnostic << '\n';
@@ -3319,6 +3346,26 @@ void testExactWorkgroupSyncProfiles() {
     requireDiagnostic(First, ProfileValue == Profile::LdsReduction
                                  ? "explicit_kernarg_size=32 kernarg_size=288"
                                  : "explicit_kernarg_size=40 kernarg_size=296");
+
+    if (ProfileValue == Profile::ScopedAtomic) {
+      Request Generic = makeV2Request(
+          makeInput(InputKind::LlvmTextIr,
+                    withoutExactWorkgroupSyncMarkers(
+                        makeExactWorkgroupSyncTextIr(ProfileValue),
+                        ProfileValue)),
+          {}, {}, {}, SymbolList, 6);
+      Generic.Target = "gfx942:xnack-";
+      Generic.LinkOptions = {OptimizationLevel::O2, true, true};
+      Response GenericResponse = runSuccess(Generic, Symbols);
+      require(!llvm::any_of(
+                  GenericResponse.Diagnostics,
+                  [](const std::string &Diagnostic) {
+                    return StringRef(Diagnostic).contains(
+                        "scoped_atomic_v1_profile");
+                  }),
+              "unmarked production-style module entered a legacy exact profile");
+      requireDiagnostic(GenericResponse, "post_link.check=metadata status=ok");
+    }
 
     Request WrongTarget = Exact;
     WrongTarget.Target = "gfx942:xnack+";

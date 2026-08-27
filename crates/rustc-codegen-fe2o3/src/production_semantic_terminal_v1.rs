@@ -8,7 +8,7 @@ use dialect_amdgcn::DeviceMathDiagnosticItem;
 use fe2o3_kernel_ir::F32MathFunction;
 use fe2o3_mir_model::semantic_mir_v1::SemanticAxisV1;
 
-use crate::trusted_device_items::{self, TrustedDeviceItem};
+use crate::trusted_device_items::{self, TrustedAmdGpuDiagnosticOperation, TrustedDeviceItem};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProductionTerminalExpansionV1 {
@@ -76,6 +76,8 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     Gfx950LdsTransposePublish,
     Gfx950LdsTransposeReadB4,
     Gfx950LdsTransposeReadB8,
+    /// Terminates the current lane by executing the target's canonical trap instruction.
+    Trap,
     /// Rust's effect-free hint that the current path is unlikely to execute.
     ColdPath,
 }
@@ -84,6 +86,16 @@ pub(crate) enum ProductionTerminalExpansionV1 {
 pub(crate) enum ProductionSemanticTerminalRuleV1 {
     Expand(ProductionTerminalExpansionV1),
     Reject(TrustedDeviceItem),
+}
+
+pub(crate) const fn is_traversed_atomic_view_v1(item: TrustedDeviceItem) -> bool {
+    matches!(
+        item,
+        TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
+            | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
+            | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic
+            | TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic
+    )
 }
 
 impl ProductionSemanticTerminalRuleV1 {
@@ -304,6 +316,9 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::Gfx950LdsTransposeReadB8 => {
                 Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8)
+            }
+            TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap) => {
+                Self::Expand(ProductionTerminalExpansionV1::Trap)
             }
             unsupported => Self::Reject(unsupported),
         }
@@ -528,6 +543,9 @@ impl ProductionSemanticTerminalRuleV1 {
             Self::Expand(ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8) => {
                 TrustedDeviceItem::Gfx950LdsTransposeReadB8
             }
+            Self::Expand(ProductionTerminalExpansionV1::Trap) => {
+                TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap)
+            }
             Self::Expand(ProductionTerminalExpansionV1::ColdPath) => {
                 panic!("core compiler intrinsics are not trusted device items")
             }
@@ -538,7 +556,10 @@ impl ProductionSemanticTerminalRuleV1 {
 
 pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<ProductionSemanticTerminalRuleV1> {
     trusted_device_items::classify(tcx, def_id)
-        .map(ProductionSemanticTerminalRuleV1::from_trusted_device_item)
+        .and_then(|item| {
+            (!is_traversed_atomic_view_v1(item))
+                .then(|| ProductionSemanticTerminalRuleV1::from_trusted_device_item(item))
+        })
         .or_else(|| {
             let intrinsic = tcx.intrinsic(def_id)?;
             (intrinsic.name == sym::cold_path).then_some(ProductionSemanticTerminalRuleV1::Expand(
@@ -771,6 +792,10 @@ mod tests {
                 ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate,
             ),
             (
+                TrustedDeviceItem::AmdGpuDiagnostic(TrustedAmdGpuDiagnosticOperation::Trap),
+                ProductionTerminalExpansionV1::Trap,
+            ),
+            (
                 TrustedDeviceItem::ThreadIndexCheckedTiled2D,
                 ProductionTerminalExpansionV1::ThreadIndexCheckedTiled2d,
             ),
@@ -801,14 +826,22 @@ mod tests {
             TrustedDeviceItem::MemoryVolatileStore,
             TrustedDeviceItem::MemoryCopyNonOverlapping,
             TrustedDeviceItem::MemoryCopyOneNonOverlapping,
+        ] {
+            let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
+            assert_eq!(rule, ProductionSemanticTerminalRuleV1::Reject(item));
+            assert_eq!(rule.trusted_device_item(), item);
+        }
+    }
+
+    #[test]
+    fn standard_atomic_views_are_traversed_instead_of_hidden_by_a_terminal() {
+        for item in [
             TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic,
             TrustedDeviceItem::DeviceGlobalMutPtrI64AsAtomic,
         ] {
-            let rule = ProductionSemanticTerminalRuleV1::from_trusted_device_item(item);
-            assert_eq!(rule, ProductionSemanticTerminalRuleV1::Reject(item));
-            assert_eq!(rule.trusted_device_item(), item);
+            assert!(is_traversed_atomic_view_v1(item));
         }
     }
 }

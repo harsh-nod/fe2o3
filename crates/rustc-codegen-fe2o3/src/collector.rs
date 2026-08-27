@@ -3313,6 +3313,9 @@ impl<'tcx> DeviceCollector<'tcx> {
                     .skip_binder()
                     .safety()
                     == Safety::Unsafe
+                    && !crate::production_rustc_intrinsic_v1::is_reviewed_core_unsafe_atomic_function_v1(
+                        self.tcx, function.instance,
+                    )
                 {
                     return Err(CollectError {
                         message: format!(
@@ -3333,7 +3336,40 @@ impl<'tcx> DeviceCollector<'tcx> {
                     });
                 }
 
+                if crate::trusted_device_items::classify(self.tcx, function.instance.def_id())
+                    .is_some_and(
+                        crate::production_semantic_terminal_v1::is_traversed_atomic_view_v1,
+                    )
+                    || crate::production_rustc_intrinsic_v1::is_reviewed_device_global_mut_ptr_as_raw_v1(
+                        self.tcx,
+                        function.instance,
+                    )
+                {
+                    continue;
+                }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    if crate::production_rustc_intrinsic_v1::is_reviewed_core_function_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
+                    match crate::trusted_device_items::authenticate_reviewed_safe_external_helper_v1(
+                        self.tcx,
+                        function.instance.def_id(),
+                    ) {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(detail) => {
+                            return Err(CollectError {
+                                message: format!(
+                                    "ordinary production kernel `{logical_name}` rejected reviewed external helper `{}`: {detail}; reachable call chain: {}",
+                                    self.instance_label(function.instance),
+                                    chain(),
+                                ),
+                            });
+                        }
+                    }
                     return Err(CollectError {
                         message: format!(
                             "ordinary production kernel `{logical_name}` cannot authenticate the absence of user-provided unsafe blocks in external helper `{}`: cross-crate HIR is unavailable and optimized MIR does not retain unsafe-block syntax; reachable call chain: {}",
@@ -3453,8 +3489,48 @@ impl<'tcx> DeviceCollector<'tcx> {
             TypingEnv::fully_monomorphized(),
             EarlyBinder::bind(*args),
         );
+        let resolved = match Instance::try_resolve(
+            self.tcx,
+            TypingEnv::fully_monomorphized(),
+            *def_id,
+            normalized_args,
+        ) {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => {
+                return Err(self.reachable_error(
+                    caller,
+                    "direct device callee could not be resolved to a concrete rustc instance",
+                    Some(self.tcx.def_path_str(*def_id)),
+                ));
+            }
+            Err(_) => {
+                return Err(self.reachable_error(
+                    caller,
+                    "direct device callee normalization failed",
+                    Some(self.tcx.def_path_str(*def_id)),
+                ));
+            }
+        };
+        let normalized_intrinsic = if self.purpose.is_production()
+            && crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
+                .is_none()
+        {
+            crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved).map_err(|error| {
+                self.reachable_error(
+                    caller,
+                    &format!("unsupported rustc compiler intrinsic: {error}"),
+                    Some(self.instance_label(resolved)),
+                )
+            })?
+        } else {
+            None
+        };
         if self.purpose.is_production()
+            && normalized_intrinsic.is_none()
             && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
+            && !crate::production_rustc_intrinsic_v1::is_reviewed_core_unsafe_atomic_function_v1(
+                self.tcx, resolved,
+            )
         {
             let caller_identity = self.instance_identity(*caller);
             self.reachable_unsafe_calls
@@ -3465,26 +3541,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         let marked_contract = crate::device_ffi::contract_assertion_for_def(self.tcx, *def_id)
             .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
         if marked_contract.is_some() {
-            let instance = Instance::try_resolve(
-                self.tcx,
-                TypingEnv::fully_monomorphized(),
-                *def_id,
-                normalized_args,
-            )
-            .map_err(|_| {
-                self.reachable_error(
-                    caller,
-                    "device FFI declaration normalization failed",
-                    Some(self.tcx.def_path_str(*def_id)),
-                )
-            })?
-            .ok_or_else(|| {
-                self.reachable_error(
-                    caller,
-                    "device FFI declaration did not resolve to a concrete instance",
-                    Some(self.tcx.def_path_str(*def_id)),
-                )
-            })?;
+            let instance = resolved;
             let contract =
                 crate::device_ffi::contract_for_instance(self.tcx, instance, &self.expected_target)
                     .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?
@@ -3530,11 +3587,26 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         // Only an exact rustc diagnostic-item identity may terminate
         // collection without traversing the callee body.
-        if crate::trusted_device_items::classify(self.tcx, *def_id).is_some() {
+        let registered_terminal = if self.purpose.is_production() {
+            crate::production_semantic_terminal_v1::classify(self.tcx, *def_id).is_some()
+        } else {
+            crate::trusted_device_items::classify(self.tcx, *def_id).is_some()
+        };
+        if registered_terminal {
             if self.verbose {
                 eprintln!(
                     "[collector] stopping at trusted device item {}",
                     self.tcx.def_path_str(*def_id)
+                );
+            }
+            return Ok(());
+        }
+
+        if normalized_intrinsic.is_some() {
+            if self.verbose {
+                eprintln!(
+                    "[collector] stopping at normalized rustc intrinsic {}",
+                    self.tcx.def_path_str(resolved.def_id())
                 );
             }
             return Ok(());
@@ -3555,31 +3627,6 @@ impl<'tcx> DeviceCollector<'tcx> {
                 ));
             }
         }
-
-        let args = normalized_args;
-
-        let resolved = match Instance::try_resolve(
-            self.tcx,
-            TypingEnv::fully_monomorphized(),
-            *def_id,
-            args,
-        ) {
-            Ok(Some(resolved)) => resolved,
-            Ok(None) => {
-                return Err(self.reachable_error(
-                    caller,
-                    "direct device callee could not be resolved to a concrete rustc instance",
-                    Some(self.tcx.def_path_str(*def_id)),
-                ));
-            }
-            Err(_) => {
-                return Err(self.reachable_error(
-                    caller,
-                    "direct device callee normalization failed",
-                    Some(self.tcx.def_path_str(*def_id)),
-                ));
-            }
-        };
 
         let identity = self.instance_identity(resolved);
         let caller_identity = self.instance_identity(*caller);

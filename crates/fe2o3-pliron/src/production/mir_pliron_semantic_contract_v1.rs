@@ -1452,12 +1452,14 @@ fn count(value: usize) -> Result<u64, ProductionMirPlironSemanticContractErrorV1
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_finite_loop_v1, require_overflow_free_static_latch_v1};
+    use super::require_overflow_free_static_latch_v1;
     use crate::{
         ProductionConstructionV1, ProductionRankedBlockV1, ProductionRankedKernelV1,
         ProductionRankedOperationV1, ProductionRankedTerminatorV1, ProductionRankedValueIdV1,
-        ProductionRankedValueV1, ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+        ProductionRankedValueV1, ProductionSessionErrorV1, ProductionSessionLimitsV1,
+        compile_ranked_kernel_for_lowering_v1,
     };
+    use fe2o3_kernel_analysis::PlironProgressFindingV1;
 
     #[test]
     fn static_loop_latch_requires_an_overflow_free_final_transition() {
@@ -1474,7 +1476,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_static_loop_with_overflowing_latch_is_rejected_by_canonical_extraction() {
+    fn production_compilation_rejects_static_loop_with_overflowing_latch() {
         let lower = ProductionRankedValueIdV1::new(0);
         let upper = ProductionRankedValueIdV1::new(1);
         let step = ProductionRankedValueIdV1::new(2);
@@ -1545,14 +1547,22 @@ mod tests {
         )
         .unwrap();
         let construction = ProductionConstructionV1::ranked_kernel("module", kernel).unwrap();
-        let ranked = compile_ranked_kernel_for_lowering_v1(
+        let error = compile_ranked_kernel_for_lowering_v1(
             construction,
             ProductionSessionLimitsV1::default(),
         )
-        .unwrap();
-        assert_eq!(
-            canonical_finite_loop_v1(&ranked, 1, 2).err(),
-            Some("the final increasing-loop latch transition can overflow u64"),
-        );
+        .unwrap_err();
+        let crate::ProductionRankedCompileErrorV1::Session(
+            ProductionSessionErrorV1::RankedSemantic(error),
+        ) = error
+        else {
+            panic!("expected semantic progress rejection");
+        };
+        assert!(matches!(
+            error.report().progress().findings(),
+            [PlironProgressFindingV1::ProgressIncomplete { blocks, reason }]
+                if blocks == &[1, 2]
+                    && *reason == "the largest guarded induction value plus the step can overflow u64"
+        ));
     }
 }

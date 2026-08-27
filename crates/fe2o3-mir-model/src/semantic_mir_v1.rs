@@ -1526,6 +1526,7 @@ pub enum SemanticPointerMetadataV1 {
 pub struct SemanticPointerTypeV1 {
     pointee: SemanticTypeIdV1,
     kind: SemanticPointerKindV1,
+    /// Source pointer/reference mutability. Raw-pointer mutability is not ownership authority.
     mutability: SemanticMutabilityV1,
     address_space: u32,
     pointer_width_bits: u16,
@@ -5043,6 +5044,8 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
     WorkgroupIndex(SemanticAxisV1),
     WorkgroupDimension(SemanticAxisV1),
     GridDimension(SemanticAxisV1),
+    /// Executes the target's canonical trap instruction and never returns.
+    Trap,
     WorkgroupBarrier,
     WaveBarrier,
     FabsF32,
@@ -7255,6 +7258,7 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::Trap
         | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -7402,6 +7406,13 @@ fn compiler_intrinsic_signature_matches(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_) => {
             inputs.is_empty() && is_unsigned_integer_with_bits(request, output, 32)
+        }
+        SemanticCompilerIntrinsicOperationV1::Trap => {
+            inputs.is_empty()
+                && matches!(
+                    request.types[output.0 as usize].shape,
+                    SemanticTypeShapeV1::Never
+                )
         }
         SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
@@ -12074,8 +12085,6 @@ fn validate_rvalue(
                             && input.address_space == output.address_space
                             && input.pointer_width_bits == output.pointer_width_bits
                             && input.metadata == output.metadata
-                            && !(input.mutability == SemanticMutabilityV1::Immutable
-                                && output.mutability == SemanticMutabilityV1::Mutable)
                             && (input.metadata == SemanticPointerMetadataV1::None
                                 || input.pointee == output.pointee)
                     }),
@@ -13930,6 +13939,7 @@ fn enqueue_compiler_intrinsic_type_references(
         | SemanticCompilerIntrinsicOperationV1::WorkgroupIndex(_)
         | SemanticCompilerIntrinsicOperationV1::WorkgroupDimension(_)
         | SemanticCompilerIntrinsicOperationV1::GridDimension(_)
+        | SemanticCompilerIntrinsicOperationV1::Trap
         | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -15571,6 +15581,7 @@ fn encode_compiler_intrinsic_operation(
             writer.u8(3)?;
             encode_axis(writer, axis)
         }
+        SemanticCompilerIntrinsicOperationV1::Trap => writer.u8(41),
         SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => writer.u8(4),
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
@@ -17207,6 +17218,56 @@ mod private_tests {
         assert!(compare_exchange_failure_allowed(
             SemanticAtomicOrderingV1::AcquireRelease,
             SemanticAtomicOrderingV1::Acquire,
+        ));
+    }
+
+    #[test]
+    fn trap_intrinsic_requires_a_zero_argument_never_returning_rust_abi() {
+        let never = SemanticTypeIdV1::from_index(0);
+        let unit = SemanticTypeIdV1::from_index(1);
+        let request = InertSemanticMirRequestV1::new(
+            SemanticTargetDataLayoutV1::gfx942(SemanticLayoutIdentityV1::from_sha256([3; 32])),
+            vec![
+                test_type(
+                    1,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Never,
+                ),
+                test_type(
+                    2,
+                    SemanticTypeLayoutV1::new(Some(0), 1).unwrap(),
+                    SemanticTypeShapeV1::Unit,
+                ),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let abi = |output| {
+            SemanticFunctionAbiV1::new(
+                SemanticAbiIdentityV1::from_sha256([4; 32]),
+                SemanticLayoutIdentityV1::from_sha256([5; 32]),
+                SemanticCanonAbiV1::Rust,
+                false,
+                false,
+                vec![],
+                SemanticAbiValueV1::new(output, SemanticAbiPassModeV1::Ignore),
+            )
+            .unwrap()
+        };
+
+        assert!(compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::Trap,
+            &abi(never),
+        ));
+        assert!(!compiler_intrinsic_signature_matches(
+            &request,
+            SemanticCompilerIntrinsicOperationV1::Trap,
+            &abi(unit),
         ));
     }
 

@@ -178,6 +178,9 @@ pub enum RustSourceTypeShapeV1 {
         element: RustScalarElementTypeV1,
         index_space: RustDisjointIndexSpaceV1,
     },
+    GlobalMutPointer {
+        pointee: RustScalarElementTypeV1,
+    },
 }
 
 impl RustSourceTypeShapeV1 {
@@ -199,10 +202,15 @@ impl RustSourceTypeShapeV1 {
         }
     }
 
+    pub const fn global_mut_pointer(pointee: RustScalarElementTypeV1) -> Self {
+        Self::GlobalMutPointer { pointee }
+    }
+
     pub const fn element(self) -> RustScalarElementTypeV1 {
         match self {
             Self::Scalar { scalar } => scalar,
             Self::SharedSlice { element } | Self::DisjointSlice { element, .. } => element,
+            Self::GlobalMutPointer { pointee } => pointee,
         }
     }
 }
@@ -589,6 +597,17 @@ fn validate_source_semantics(
         return validate_scalar_semantics(scalar, abi_class, size, abi_alignment, components);
     }
 
+    if let RustSourceTypeShapeV1::GlobalMutPointer { pointee } = source_type {
+        return validate_global_mut_pointer_semantics(
+            pointee,
+            abi_class,
+            pointer_width,
+            size,
+            abi_alignment,
+            components,
+        );
+    }
+
     let width = pointer_width.bytes();
     let expected_size = width
         .checked_mul(2)
@@ -606,6 +625,9 @@ fn validate_source_semantics(
         RustSourceTypeShapeV1::SharedSlice { element } => (element, RustPointerMutabilityV1::Const),
         RustSourceTypeShapeV1::DisjointSlice { element, .. } => {
             (element, RustPointerMutabilityV1::Mut)
+        }
+        RustSourceTypeShapeV1::GlobalMutPointer { .. } => {
+            unreachable!("global pointer source types return before slice validation")
         }
     };
     if abi_class != RustcAbiClassV1::ScalarPair {
@@ -639,6 +661,43 @@ fn validate_source_semantics(
     {
         return Err(RustLayoutEvidenceError::SemanticMismatch(
             "slice length is not a pointer-width usize after the data pointer",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_global_mut_pointer_semantics(
+    pointee: RustScalarElementTypeV1,
+    abi_class: RustcAbiClassV1,
+    pointer_width: PointerWidth,
+    size: u64,
+    abi_alignment: u32,
+    components: &[RustPhysicalComponentV1],
+) -> Result<(), RustLayoutEvidenceError> {
+    let width = pointer_width.bytes();
+    if abi_class != RustcAbiClassV1::Scalar {
+        return Err(RustLayoutEvidenceError::SemanticMismatch(
+            "rustc ABI class does not match the global mutable pointer source type",
+        ));
+    }
+    if size != width || u64::from(abi_alignment) != width {
+        return Err(RustLayoutEvidenceError::SemanticMismatch(
+            "global mutable pointer size or alignment is inconsistent with pointer width",
+        ));
+    }
+    if components
+        != [RustPhysicalComponentV1 {
+            offset: 0,
+            size: width,
+            abi_alignment,
+            kind: RustPhysicalComponentKindV1::Pointer {
+                mutability: RustPointerMutabilityV1::Mut,
+                pointee,
+            },
+        }]
+    {
+        return Err(RustLayoutEvidenceError::SemanticMismatch(
+            "global mutable pointer component does not match its source type",
         ));
     }
     Ok(())
@@ -696,6 +755,10 @@ fn encode_source_type(source_type: RustSourceTypeShapeV1) -> Vec<u8> {
             writer.u8(2);
             writer.u8(scalar_tag(element));
             encode_index_space(&mut writer, index_space);
+        }
+        RustSourceTypeShapeV1::GlobalMutPointer { pointee } => {
+            writer.u8(4);
+            writer.u8(scalar_tag(pointee));
         }
     }
     writer.finish()

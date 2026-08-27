@@ -14,6 +14,7 @@ use std::{
     num::NonZeroU64,
 };
 
+use fe2o3_kernel_analysis::PlironAtomicTargetContextV1;
 use fe2o3_pliron_owner_core::{ContextIdentity, DialectRegistration, NameError};
 
 use super::{
@@ -388,6 +389,7 @@ impl Error for ProductionSessionErrorV1 {
 /// ```
 pub struct ProductionPlironSessionV1 {
     inner: PlironSession,
+    atomic_target: Option<PlironAtomicTargetContextV1>,
     limits: ProductionSessionLimitsV1,
     registered: BTreeMap<StageIdentityV1, ProductionConstructionV1>,
     construction_names: BTreeSet<String>,
@@ -407,6 +409,7 @@ impl ProductionPlironSessionV1 {
         let inner = PlironSession::new(limits.shell(), registrations)?;
         Ok(Self {
             inner,
+            atomic_target: None,
             limits,
             registered: BTreeMap::new(),
             construction_names: BTreeSet::new(),
@@ -416,6 +419,11 @@ impl ProductionPlironSessionV1 {
             next_root: NonZeroU64::new(1),
             poisoned: false,
         })
+    }
+
+    pub(super) fn bind_atomic_target(&mut self, target: PlironAtomicTargetContextV1) {
+        debug_assert!(self.registered.is_empty() && self.constructed_roots.is_empty());
+        self.atomic_target = Some(target);
     }
 
     pub const fn manifest(&self) -> &ContextManifest {

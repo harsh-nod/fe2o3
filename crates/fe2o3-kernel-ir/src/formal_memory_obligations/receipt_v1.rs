@@ -446,7 +446,7 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), FormalMemoryReceiptErrorV1> {
                 field: "access and allocation address space",
             });
         }
-        if record.2 == memory_access_kind_tag(FormalMemoryAccessKind::Write)
+        if record.2 != memory_access_kind_tag(FormalMemoryAccessKind::Read)
             && allocation.access_mode == access_mode_tag(AccessMode::ReadOnly)
         {
             return Err(FormalMemoryReceiptErrorV1::AccessViolation {
@@ -571,11 +571,13 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), FormalMemoryReceiptErrorV1> {
                 field: "inter-invocation conflict allocation and access locations",
             });
         }
-        if left_access.kind == memory_access_kind_tag(FormalMemoryAccessKind::Read)
-            && right_access.kind == memory_access_kind_tag(FormalMemoryAccessKind::Read)
+        if (left_access.kind == memory_access_kind_tag(FormalMemoryAccessKind::Read)
+            && right_access.kind == memory_access_kind_tag(FormalMemoryAccessKind::Read))
+            || (left_access.kind == memory_access_kind_tag(FormalMemoryAccessKind::Atomic)
+                && right_access.kind == memory_access_kind_tag(FormalMemoryAccessKind::Atomic))
         {
             return Err(FormalMemoryReceiptErrorV1::InvalidConflict {
-                field: "read/read access pair",
+                field: "non-conflicting access pair",
             });
         }
     }
@@ -939,12 +941,13 @@ const fn memory_access_kind_tag(kind: FormalMemoryAccessKind) -> u8 {
     match kind {
         FormalMemoryAccessKind::Read => 1,
         FormalMemoryAccessKind::Write => 2,
+        FormalMemoryAccessKind::Atomic => 3,
     }
 }
 
 fn decode_memory_access_kind(tag: u8) -> Result<(), FormalMemoryReceiptErrorV1> {
     match tag {
-        1 | 2 => Ok(()),
+        1..=3 => Ok(()),
         _ => Err(FormalMemoryReceiptErrorV1::UnknownTag {
             kind: "formal memory access kind",
             tag,
@@ -1717,13 +1720,15 @@ mod tests {
     }
 
     #[test]
-    fn conflict_pairs_must_include_a_write() {
-        assert_rejected(
-            |value| value.accesses[0].kind = FormalMemoryAccessKind::Read,
-            FormalMemoryReceiptErrorV1::InvalidConflict {
-                field: "read/read access pair",
-            },
-        );
+    fn conflict_pairs_must_be_potentially_conflicting() {
+        for kind in [FormalMemoryAccessKind::Read, FormalMemoryAccessKind::Atomic] {
+            assert_rejected(
+                |value| value.accesses[0].kind = kind,
+                FormalMemoryReceiptErrorV1::InvalidConflict {
+                    field: "non-conflicting access pair",
+                },
+            );
+        }
     }
 
     #[test]

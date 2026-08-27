@@ -264,8 +264,10 @@ fn source_argument_ownership_v1(
         TyKind::Ref(_, _, Mutability::Mut) => SemanticSourceArgumentOwnershipV1::UniqueBorrow,
         TyKind::RawPtr(..) => SemanticSourceArgumentOwnershipV1::RawPointer,
         TyKind::Adt(definition, _)
-            if trusted_device_items::classify(tcx, definition.did())
-                == Some(TrustedDeviceItem::DisjointSlice) =>
+            if matches!(
+                trusted_device_items::classify(tcx, definition.did()),
+                Some(TrustedDeviceItem::DisjointSlice | TrustedDeviceItem::DeviceGlobalMutPtr)
+            ) =>
         {
             SemanticSourceArgumentOwnershipV1::ExclusiveOwner
         }

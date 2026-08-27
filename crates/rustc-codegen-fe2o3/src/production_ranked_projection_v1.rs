@@ -26,12 +26,13 @@ use fe2o3_lower_mir_kernel::{
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
     SemanticAssertMessageV1, SemanticAtomicAccessV1, SemanticAtomicOrderingV1,
-    SemanticAtomicScopeV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBorrowKindV1,
-    SemanticCallableDeclV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDirectTailCallV1, SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1,
-    SemanticFunctionRoleV1, SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1,
-    SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
+    SemanticAtomicScopeV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1, SemanticBinaryOpV1,
+    SemanticBlockIdV1, SemanticBorrowKindV1, SemanticCallableDeclV1, SemanticCallableIdV1,
+    SemanticCastKindV1, SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1,
+    SemanticConstantValueV1, SemanticDirectCallV1, SemanticDirectTailCallV1,
+    SemanticDisjointIndexSpaceV1, SemanticFunctionDeclV1, SemanticFunctionRoleV1,
+    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
+    SemanticMfmaAccumulatorContractV1, SemanticMfmaAccumulatorDistributionV1,
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticOperandV1,
     SemanticPlaceV1, SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1,
@@ -47,6 +48,8 @@ use fe2o3_mir_model::{
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
+use fe2o3_pliron::compile_ranked_kernel_for_lowering_v1;
 use fe2o3_pliron::{
     ProductionConstructionV1, ProductionCooperativeTensorBindingV1, ProductionOverflowContractV2,
     ProductionRankedBlockV1, ProductionRankedCompileErrorV1, ProductionRankedKernelErrorV1,
@@ -55,7 +58,7 @@ use fe2o3_pliron::{
     ProductionSemanticCastV2, ProductionSemanticComparisonV2, ProductionSemanticExpressionV2,
     ProductionSemanticLoadV2, ProductionSemanticMirErrorV1, ProductionSemanticMirOwnerV1,
     ProductionSemanticScalarTypeV2, ProductionSemanticUnaryOpV2, ProductionSessionErrorV1,
-    ProductionSessionLimitsV1, compile_ranked_kernel_for_lowering_v1,
+    ProductionSessionLimitsV1, compile_ranked_kernel_for_gfx942_lowering_v1,
 };
 
 const ROOT_NAME_V1: &str = "semantic_safety_module";
@@ -398,6 +401,7 @@ struct AllocationContractV1 {
     allocation_origin: u64,
     noalias_class: u64,
     writable: bool,
+    singleton_object: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -475,8 +479,14 @@ impl ProjectedSemanticBlockV1 {
         })
     }
 
-    fn has_concurrent_memory_access(&self) -> bool {
+    fn requires_invocation_index(&self) -> bool {
         self.items.iter().any(|item| match item {
+            ProjectedBlockItemV1::Effect {
+                operation:
+                    ProductionRankedOperationV1::AtomicAccess { .. }
+                    | ProductionRankedOperationV1::AtomicValueAccess { .. },
+                ..
+            } => false,
             ProjectedBlockItemV1::Effect {
                 source: Some(source),
                 ..
@@ -1039,7 +1049,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     }
     if projected_blocks
         .iter()
-        .any(ProjectedSemanticBlockV1::has_concurrent_memory_access)
+        .any(ProjectedSemanticBlockV1::requires_invocation_index)
         && !entry_operations.iter().any(|operation| {
             matches!(
                 operation,
@@ -1063,6 +1073,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
     let reference_writes =
         projected_reference_gpu_writes_v2(semantic.types(), function, &blocks, &sources)?;
     let access_sources = production_access_sources(&blocks, &sources)?;
+    let system_coherent_allocations = intrinsic
+        .local_contracts
+        .allocations
+        .iter()
+        .flatten()
+        .filter(|contract| contract.singleton_object)
+        .map(|contract| contract.allocation_origin)
+        .collect::<Vec<_>>();
     let kernel = ProductionRankedKernelV1::new(
         function_name(root_function)?,
         bounds_checks.argument_count,
@@ -1076,12 +1094,16 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         let ranked_ir = format_ranked_cfg(function_name(root_function)?, kernel.blocks())?;
         let construction = ProductionConstructionV1::ranked_kernel(ROOT_NAME_V1, kernel)
             .map_err(ProductionRankedProjectionErrorV1::Construction)?;
-        compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
-            .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
-                error,
-                ranked_ir,
-                access_sources: sources,
-            })?
+        compile_ranked_kernel_for_gfx942_lowering_v1(
+            construction,
+            ProductionSessionLimitsV1::default(),
+            system_coherent_allocations,
+        )
+        .map_err(|error| ProductionRankedProjectionErrorV1::Compile {
+            error,
+            ranked_ir,
+            access_sources: sources,
+        })?
     } else {
         let reserved_reference_values =
             reserved_reference_values.ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -3888,7 +3910,7 @@ fn project_intrinsic_contracts(
     let LocalProvenanceV1 {
         stable_argument_origins,
         allocation_origins,
-    } = local_provenance_v1(function)?;
+    } = local_provenance_v1(types, function)?;
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let capability_effects = project_authenticated_capabilities_v1(
         callables,
@@ -7861,10 +7883,25 @@ fn source_execution_layout_v1(
     let workgroup_extents = required.map(u64::from);
     let max_grid = source_launch.max_grid();
     let max_grid = [max_grid.x(), max_grid.y(), max_grid.z()].map(u64::from);
+    let dynamic_grid_limits = match (architecture, source_rank) {
+        (SemanticTargetArchitectureV1::AmdGpuGfx942, 1) => [u32::MAX, 1, 1],
+        (SemanticTargetArchitectureV1::AmdGpuGfx942, 2) => [u32::MAX, u32::MAX, 1],
+        (SemanticTargetArchitectureV1::AmdGpuGfx942, 3) => {
+            [u32::MAX, u32::from(u16::MAX), u32::from(u16::MAX)]
+        }
+        _ => {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "authenticated launch rank has no production grid-limit profile",
+            ));
+        }
+    };
     let mut global_extents = [1_u64; 3];
     for axis in 0..usize::from(source_rank) {
-        global_extents[axis] =
-            checked_finite_global_extent_v1(max_grid[axis], workgroup_extents[axis])?;
+        global_extents[axis] = checked_global_extent_v1(
+            max_grid[axis],
+            workgroup_extents[axis],
+            u64::from(dynamic_grid_limits[axis]),
+        )?;
     }
     let subgroup_size = match architecture {
         SemanticTargetArchitectureV1::AmdGpuGfx942 => 64,
@@ -7886,11 +7923,12 @@ fn source_execution_layout_v1(
     })
 }
 
-fn checked_finite_global_extent_v1(
+fn checked_global_extent_v1(
     max_grid: u64,
     required_workgroup: u64,
+    dynamic_grid_limit: u64,
 ) -> Result<u64, ProductionRankedProjectionErrorV1> {
-    if max_grid == u64::from(u32::MAX) {
+    if max_grid == dynamic_grid_limit {
         return Ok(DYNAMIC_EXTENT);
     }
     max_grid
@@ -7901,6 +7939,7 @@ fn checked_finite_global_extent_v1(
 }
 
 fn local_provenance_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
 ) -> Result<LocalProvenanceV1, ProductionRankedProjectionErrorV1> {
     let definitions = local_definition_counts(function);
@@ -7947,7 +7986,9 @@ fn local_provenance_v1(
             };
 
             let allocation_source = match assignment.value().kind() {
-                SemanticRvalueKindV1::Use(operand) => simple_operand_local(operand),
+                SemanticRvalueKindV1::Use(operand) => {
+                    allocation_operand_local_v1(types, function, operand)
+                }
                 SemanticRvalueKindV1::Cast {
                     kind: SemanticCastKindV1::Pointer,
                     operand,
@@ -8107,9 +8148,10 @@ fn borrowed_allocation_local_v1(
 
 #[cfg(test)]
 fn local_stable_argument_origins(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
 ) -> Result<Vec<Option<u32>>, ProductionRankedProjectionErrorV1> {
-    Ok(local_provenance_v1(function)?.stable_argument_origins)
+    Ok(local_provenance_v1(types, function)?.stable_argument_origins)
 }
 
 fn local_allocation_contracts(
@@ -8167,10 +8209,17 @@ fn local_allocation_contracts(
             first_pointer_noalias,
             allocation_origin,
         );
+        let singleton_object = matches!(
+            source_ownership[argument_index],
+            SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+        ) && matches!(type_decl.layout().backend_repr(), SemanticBackendReprV1::Scalar(scalar) if matches!(scalar.primitive(), SemanticBackendPrimitiveV1::Pointer { .. }));
         arguments[argument_index] = Some(authenticated_source_allocation_contract_v1(
             source_ownership[argument_index],
             pointee.kind(),
-            abi_contract,
+            AllocationContractV1 {
+                singleton_object,
+                ..abi_contract
+            },
         )?);
     }
     Ok(origins
@@ -8202,6 +8251,7 @@ fn authenticated_source_allocation_contract_v1(
                 allocation_origin: abi_contract.allocation_origin,
                 noalias_class: abi_contract.allocation_origin + 1,
                 writable: true,
+                singleton_object: abi_contract.singleton_object,
             }
         }
         SemanticSourceArgumentOwnershipV1::SharedBorrow
@@ -8251,6 +8301,7 @@ fn allocation_contract_from_pointee(
         allocation_origin,
         noalias_class,
         writable,
+        singleton_object: false,
     }
 }
 
@@ -10417,6 +10468,31 @@ fn simple_operand_local(operand: &SemanticOperandV1) -> Option<SemanticLocalIdV1
         .map(SemanticPlaceV1::local)
 }
 
+fn allocation_operand_local_v1(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    operand: &SemanticOperandV1,
+) -> Option<SemanticLocalIdV1> {
+    let place = transparent_operand_place(operand)?;
+    if place.projections().is_empty() {
+        return Some(place.local());
+    }
+    let source = function.locals().get(place.local().index() as usize)?;
+    let source_type = types.get(source.ty().index() as usize)?;
+    let result_type = types.get(place.ty().index() as usize)?;
+    let SemanticBackendReprV1::Scalar(source_scalar) = source_type.layout().backend_repr() else {
+        return None;
+    };
+    matches!(
+        source_scalar.primitive(),
+        SemanticBackendPrimitiveV1::Pointer { .. }
+    )
+    .then_some(())
+    .filter(|_| source_type.abi_properties().first_pointee().is_some())
+    .filter(|_| matches!(result_type.shape(), SemanticTypeShapeV1::Pointer(_)))
+    .map(|_| place.local())
+}
+
 fn simple_call_destination(
     call: &SemanticDirectCallV1,
 ) -> Result<SemanticLocalIdV1, ProductionRankedProjectionErrorV1> {
@@ -11416,29 +11492,98 @@ fn project_rvalue_reads(
             next_value,
             ranked_ir,
         ),
-        SemanticRvalueKindV1::Borrow { place, .. }
-        | SemanticRvalueKindV1::AddressOf { place, .. }
-        | SemanticRvalueKindV1::Length(place)
-        | SemanticRvalueKindV1::Discriminant(place) => project_place_access(
-            types,
-            function,
-            block_index,
-            bounds_checks,
-            place,
-            AccessKindAttr::Read,
-            PlaceAccessRequirementV1::IfMemory,
-            source,
-            constants,
-            local_contracts,
-            guarded_accesses,
-            guarded_sites,
-            projected_views,
-            operations,
-            sources,
-            next_value,
-            ranked_ir,
-        ),
+        SemanticRvalueKindV1::AddressOf { place, .. }
+        | SemanticRvalueKindV1::Borrow { place, .. } => {
+            project_address_formation(types, function, place, local_contracts)
+        }
+        SemanticRvalueKindV1::Length(place) | SemanticRvalueKindV1::Discriminant(place) => {
+            project_place_access(
+                types,
+                function,
+                block_index,
+                bounds_checks,
+                place,
+                AccessKindAttr::Read,
+                PlaceAccessRequirementV1::IfMemory,
+                source,
+                constants,
+                local_contracts,
+                guarded_accesses,
+                guarded_sites,
+                projected_views,
+                operations,
+                sources,
+                next_value,
+                ranked_ir,
+            )
+        }
     }
+}
+
+fn project_address_formation(
+    types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    place: &SemanticPlaceV1,
+    local_contracts: &ProjectionLocalContractsV1,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    let local_index = place.local().index() as usize;
+    let local = function.locals().get(local_index).ok_or(
+        ProductionRankedProjectionErrorV1::Unsupported(
+            "an address formation with an out-of-range local",
+        ),
+    )?;
+    if place.projections().is_empty() {
+        // Taking the address of a MIR local creates a private address and does
+        // not observe the value stored in that local.
+        return Ok(());
+    }
+
+    let mut current = local.ty();
+    let mut crossed_dereference = false;
+    for (projection_index, projection) in place.projections().iter().enumerate() {
+        match projection.kind() {
+            SemanticProjectionKindV1::Dereference if projection_index == 0 => {
+                let ty = types.get(current.index() as usize).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "an address formation with an out-of-range type",
+                    ),
+                )?;
+                let SemanticTypeShapeV1::Pointer(pointer) = ty.shape() else {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "an address formation whose dereferenced type is not a pointer",
+                    ));
+                };
+                memory_space(pointer.address_space())?;
+                crossed_dereference = true;
+            }
+            SemanticProjectionKindV1::Field(_)
+            | SemanticProjectionKindV1::Downcast(_)
+            | SemanticProjectionKindV1::OpaqueCast
+            | SemanticProjectionKindV1::Subtype => {}
+            SemanticProjectionKindV1::Dereference
+            | SemanticProjectionKindV1::Index(_)
+            | SemanticProjectionKindV1::ConstantIndex { .. }
+            | SemanticProjectionKindV1::Subslice { .. } => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "indexed address formation before exact bounds-only projection",
+                ));
+            }
+        }
+        current = projection.result_type();
+    }
+
+    if crossed_dereference {
+        debug_assert_eq!(reborrowed_allocation_local_v1(place), Some(place.local()));
+        local_contracts
+            .allocations
+            .get(local_index)
+            .copied()
+            .flatten()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "address formation lacks authenticated allocation provenance",
+            ))?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11729,12 +11874,23 @@ fn project_place_access_with_atomic(
             }
         }
     }
-    if indices.is_empty() {
-        if crosses_memory_boundary {
+    if indices.is_empty() && crosses_memory_boundary {
+        let singleton = matches!(dereferenced_memory_space, Some(MemorySpaceAttr::Global))
+            && local_contracts
+                .allocations
+                .get(place.local().index() as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|contract| contract.singleton_object);
+        if !singleton {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a dereferenced memory access without a ranked index projection",
             ));
         }
+        shape.push(1);
+        indices.push(ProjectedIndexV1::Constant(0));
+    }
+    if indices.is_empty() {
         if requirement == PlaceAccessRequirementV1::ExplicitMemory {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "an explicit memory operation without a ranked index projection",
@@ -11780,6 +11936,7 @@ fn project_place_access_with_atomic(
                 allocation_origin: identity,
                 noalias_class: identity,
                 writable: true,
+                singleton_object: false,
             }
         }
         MemorySpaceAttr::Workgroup => unreachable!(),
@@ -12804,6 +12961,14 @@ mod tests {
     fn audit_function(
         function: &SemanticFunctionDeclV1,
     ) -> Result<AuditOutput, ProductionRankedProjectionErrorV1> {
+        let local_contracts = synthetic_local_contracts(function);
+        audit_function_with_local_contracts(function, &local_contracts)
+    }
+
+    fn audit_function_with_local_contracts(
+        function: &SemanticFunctionDeclV1,
+        local_contracts: &ProjectionLocalContractsV1,
+    ) -> Result<AuditOutput, ProductionRankedProjectionErrorV1> {
         let types = projection_types();
         let constants = constant_locals(function);
         let mut operations = Vec::new();
@@ -12812,7 +12977,6 @@ mod tests {
         let mut guarded_sites = Vec::new();
         let mut next_value = 0;
         let mut ranked_ir = String::new();
-        let local_contracts = synthetic_local_contracts(function);
         for (block_index, basic_block) in function.blocks().iter().enumerate() {
             for semantic_statement in basic_block.statements() {
                 project_statement_accesses(
@@ -12822,7 +12986,7 @@ mod tests {
                     &[],
                     semantic_statement,
                     &constants,
-                    &local_contracts,
+                    local_contracts,
                     &[],
                     &mut guarded_sites,
                     &mut projected_views,
@@ -12841,7 +13005,7 @@ mod tests {
                 basic_block.terminator().kind(),
                 basic_block.terminator().source(),
                 &constants,
-                &local_contracts,
+                local_contracts,
                 &[],
                 &mut guarded_sites,
                 &mut projected_views,
@@ -12872,6 +13036,7 @@ mod tests {
                         allocation_origin: identity,
                         noalias_class: identity,
                         writable: true,
+                        singleton_object: false,
                     })
                 })
                 .collect(),
@@ -14207,8 +14372,18 @@ mod tests {
             (1, [128, 1, 1], [u32::MAX, 1, 1], [0, 1, 1]),
             (2, [64, 1, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
             (2, [8, 8, 1], [u32::MAX, u32::MAX, 1], [0, 0, 1]),
-            (3, [64, 1, 1], [1024, 1024, 1024], [65_536, 1024, 1024]),
-            (3, [4, 4, 4], [1024, 1024, 1024], [4096, 4096, 4096]),
+            (
+                3,
+                [64, 1, 1],
+                [u32::MAX, u32::from(u16::MAX), u32::from(u16::MAX)],
+                [0, 0, 0],
+            ),
+            (
+                3,
+                [4, 4, 4],
+                [u32::MAX, u32::from(u16::MAX), u32::from(u16::MAX)],
+                [0, 0, 0],
+            ),
         ] {
             let dimensions = SemanticWorkgroupDimensionsV1::new(workgroup).unwrap();
             let launch =
@@ -14308,7 +14483,7 @@ mod tests {
             ))
         ));
         assert!(matches!(
-            checked_finite_global_extent_v1(u64::MAX, 2),
+            checked_global_extent_v1(u64::MAX, 2, u64::from(u32::MAX)),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
                 "authenticated finite grid extent overflows u64"
             ))
@@ -14509,6 +14684,94 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_singleton_pointer_projects_a_rank_one_atomic_object() {
+        let function = projection_function(vec![block(
+            97,
+            vec![statement(SemanticStatementKindV1::AtomicRmw(
+                SemanticAtomicRmwV1::new(
+                    scalar_place(),
+                    dereferenced_place(),
+                    constant(1),
+                    SemanticAtomicRmwOpV1::Add,
+                    atomic_access(),
+                ),
+            ))],
+            SemanticTerminatorKindV1::Return,
+        )]);
+        let mut contracts = synthetic_local_contracts(&function);
+        contracts.allocations[3].as_mut().unwrap().singleton_object = true;
+        let (operations, sources, _) =
+            audit_function_with_local_contracts(&function, &contracts).unwrap();
+        assert_eq!(
+            access_kinds(&operations),
+            vec![AccessKindAttr::AtomicReadModifyWrite]
+        );
+        assert_eq!(sources.len(), 1);
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::ViewInSpace {
+                shape,
+                memory_space: MemorySpaceAttr::Global,
+                ..
+            } if shape == &[1]
+        )));
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::AtomicAccess {
+                kind: AccessKindAttr::AtomicReadModifyWrite,
+                ordering: AtomicOrderingAttr::Relaxed,
+                scope: AtomicScopeAttr::Agent,
+                indices,
+                ..
+            } if indices.len() == 1
+        )));
+
+        let hostile = synthetic_local_contracts(&function);
+        assert_unsupported(
+            audit_function_with_local_contracts(&function, &hostile),
+            "a dereferenced memory access without a ranked index projection",
+        );
+    }
+
+    #[test]
+    fn compatible_atomic_effect_does_not_require_an_invocation_derived_coordinate() {
+        let effect_source = ProjectedEffectSourceV1 {
+            access: AccessKindAttr::AtomicReadModifyWrite,
+            memory_space: MemorySpaceAttr::Global,
+            source: SemanticSourceProvenanceV1::unavailable(),
+            semantic_site: None,
+        };
+        let atomic = ProjectedSemanticBlockV1 {
+            items: vec![ProjectedBlockItemV1::Effect {
+                operation: ProductionRankedOperationV1::AtomicAccess {
+                    kind: AccessKindAttr::AtomicReadModifyWrite,
+                    ordering: AtomicOrderingAttr::Relaxed,
+                    scope: AtomicScopeAttr::System,
+                    view: ProductionRankedValueV1::Argument(0),
+                    indices: vec![ProductionRankedValueV1::Argument(1)],
+                },
+                source: Some(effect_source),
+            }],
+        };
+        assert!(!atomic.requires_invocation_index());
+
+        let ordinary = ProjectedSemanticBlockV1 {
+            items: vec![ProjectedBlockItemV1::Effect {
+                operation: ProductionRankedOperationV1::Access {
+                    kind: AccessKindAttr::Write,
+                    view: ProductionRankedValueV1::Argument(0),
+                    indices: vec![ProductionRankedValueV1::Argument(1)],
+                },
+                source: Some(ProjectedEffectSourceV1 {
+                    access: AccessKindAttr::Write,
+                    ..effect_source
+                }),
+            }],
+        };
+        assert!(ordinary.requires_invocation_index());
+    }
+
+    #[test]
     fn atomic_compare_exchange_projects_both_candidates_and_address_effects() {
         let (operations, sources, _) = audit_statements(vec![statement(
             SemanticStatementKindV1::AtomicCompareExchange(SemanticAtomicCompareExchangeV1::new(
@@ -14615,6 +14878,50 @@ mod tests {
             ))]),
             "a dereferenced memory access without a ranked index projection",
         );
+    }
+
+    #[test]
+    fn transparent_address_formation_is_zero_effect_and_requires_allocation_provenance() {
+        let address_local = SemanticLocalIdV1::from_index(4);
+        let source = dereferenced_place();
+        for value in [
+            SemanticRvalueKindV1::AddressOf {
+                mutability: SemanticMutabilityV1::Mutable,
+                place: source.clone(),
+            },
+            SemanticRvalueKindV1::Borrow {
+                kind: SemanticBorrowKindV1::Mutable,
+                place: source.clone(),
+            },
+        ] {
+            let address = statement(SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                SemanticPlaceV1::new(address_local, vec![], POINTER_TYPE).unwrap(),
+                SemanticRvalueV1::new(POINTER_TYPE, value),
+            )));
+            let function = projection_function_with_locals(
+                vec![block(31, vec![address], SemanticTerminatorKindV1::Return)],
+                vec![
+                    local(20, SCALAR_TYPE, SemanticLocalRoleV1::Return),
+                    local(21, ARRAY_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(22, SCALAR_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(23, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                    local(24, POINTER_TYPE, SemanticLocalRoleV1::Temporary),
+                ],
+            );
+            let contracts = synthetic_local_contracts(&function);
+            let (operations, sources, ranked_ir) =
+                audit_function_with_local_contracts(&function, &contracts).unwrap();
+            assert!(operations.is_empty());
+            assert!(sources.is_empty());
+            assert!(ranked_ir.is_empty());
+
+            let mut hostile_contracts = synthetic_local_contracts(&function);
+            hostile_contracts.allocations[3] = None;
+            assert_unsupported(
+                audit_function_with_local_contracts(&function, &hostile_contracts),
+                "address formation lacks authenticated allocation provenance",
+            );
+        }
     }
 
     #[test]
@@ -14914,6 +15221,7 @@ mod tests {
             allocation_origin: 1,
             noalias_class: 1,
             writable: false,
+            singleton_object: false,
         }
     }
 
@@ -14999,6 +15307,7 @@ mod tests {
                 allocation_origin: 3,
                 noalias_class: 1,
                 writable: false,
+                singleton_object: false,
             },
             rows: ProjectedReadValueV1::Constant(7),
             columns: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(2)),
@@ -15174,6 +15483,7 @@ mod tests {
             allocation_origin: 2,
             noalias_class: 1,
             writable: false,
+            singleton_object: false,
         };
         let effects = bind_capability_read_effects_to_call_blocks_v1(
             &function,
@@ -16276,7 +16586,7 @@ mod tests {
             ],
         );
         let definitions = local_definition_counts(&function);
-        let origins = local_stable_argument_origins(&function).unwrap();
+        let origins = local_stable_argument_origins(&projection_types(), &function).unwrap();
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
         let mut operations = Vec::new();
@@ -16382,7 +16692,7 @@ mod tests {
             ],
         );
 
-        let provenance = local_provenance_v1(&function).unwrap();
+        let provenance = local_provenance_v1(&projection_types(), &function).unwrap();
         assert_eq!(
             provenance.stable_argument_origins,
             vec![None, Some(0), Some(0), Some(0), None, Some(0)]
@@ -16439,7 +16749,7 @@ mod tests {
             ],
         );
 
-        let provenance = local_provenance_v1(&function).unwrap();
+        let provenance = local_provenance_v1(&projection_types(), &function).unwrap();
         assert_eq!(
             provenance.allocation_origins,
             vec![None, Some(0), Some(0), None]
@@ -16484,9 +16794,12 @@ mod tests {
         };
 
         assert_eq!(
-            local_provenance_v1(&build(SemanticSourceArgumentOwnershipV1::ExclusiveOwner))
-                .unwrap()
-                .allocation_origins,
+            local_provenance_v1(
+                &projection_types(),
+                &build(SemanticSourceArgumentOwnershipV1::ExclusiveOwner),
+            )
+            .unwrap()
+            .allocation_origins,
             vec![None, Some(0), Some(0)]
         );
         for ownership in [
@@ -16497,7 +16810,7 @@ mod tests {
             SemanticSourceArgumentOwnershipV1::Unspecified,
         ] {
             assert_eq!(
-                local_provenance_v1(&build(ownership))
+                local_provenance_v1(&projection_types(), &build(ownership))
                     .unwrap()
                     .allocation_origins,
                 vec![None, Some(0), None]
@@ -18553,6 +18866,7 @@ mod tests {
             allocation_origin: 1,
             noalias_class: 1,
             writable: false,
+            singleton_object: false,
         });
         let (switches, _, _) = deterministic_scalar_switch_projection_with_allocations(
             &[],
@@ -19015,7 +19329,7 @@ mod tests {
         ProductionRankedProjectionErrorV1,
     > {
         let constants = constant_locals(function);
-        let origins = local_stable_argument_origins(function).unwrap();
+        let origins = local_stable_argument_origins(&projection_types(), function).unwrap();
         let definitions = local_definition_counts(function);
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
@@ -19065,7 +19379,7 @@ mod tests {
     fn dynamic_parameter_induction_projects_to_legal_ranked_ssa_edges() {
         let function = uniform_induction_function(SemanticLocalRoleV1::Argument(0));
         let constants = constant_locals(&function);
-        let origins = local_stable_argument_origins(&function).unwrap();
+        let origins = local_stable_argument_origins(&projection_types(), &function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;
@@ -19521,7 +19835,7 @@ mod tests {
     fn lane_derived_induction_bound_cannot_mint_uniform_control() {
         let function = uniform_induction_function(SemanticLocalRoleV1::Temporary);
         let constants = constant_locals(&function);
-        let origins = local_stable_argument_origins(&function).unwrap();
+        let origins = local_stable_argument_origins(&projection_types(), &function).unwrap();
         let definitions = local_definition_counts(&function);
         let mut arguments = vec![None; function.locals().len()];
         let mut next_argument = 1;

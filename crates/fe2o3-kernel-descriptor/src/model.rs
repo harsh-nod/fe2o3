@@ -253,6 +253,7 @@ pub(crate) enum DescriptorKind {
     Scalar,
     SharedSlice,
     DisjointSlice,
+    GlobalMutPointer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -283,6 +284,13 @@ impl SourceTypeDescriptorV1 {
         }
     }
 
+    pub const fn global_mut_pointer(pointee: ScalarTypeV1) -> Self {
+        Self {
+            kind: DescriptorKind::GlobalMutPointer,
+            element: pointee,
+        }
+    }
+
     pub const fn scalar_type(&self) -> ScalarTypeV1 {
         self.element
     }
@@ -297,6 +305,10 @@ impl SourceTypeDescriptorV1 {
 
     pub const fn is_disjoint_slice(&self) -> bool {
         matches!(self.kind, DescriptorKind::DisjointSlice)
+    }
+
+    pub const fn is_global_mut_pointer(&self) -> bool {
+        matches!(self.kind, DescriptorKind::GlobalMutPointer)
     }
 }
 
@@ -328,6 +340,17 @@ impl DeviceLayoutDescriptorV1 {
 
     pub const fn disjoint_slice(element: ScalarTypeV1) -> Self {
         Self::slice(DescriptorKind::DisjointSlice, element)
+    }
+
+    pub const fn global_mut_pointer(pointee: ScalarTypeV1) -> Self {
+        Self {
+            kind: DescriptorKind::GlobalMutPointer,
+            element: pointee,
+            size: 8,
+            alignment: 8,
+            pointer_width: 8,
+            length_width: 0,
+        }
     }
 
     const fn slice(kind: DescriptorKind, element: ScalarTypeV1) -> Self {
@@ -603,6 +626,32 @@ impl LogicalArgumentV1 {
             AliasSemantics::Exclusive,
             pointer_offset,
         )
+    }
+
+    pub fn global_mut_pointer(
+        source_index: u16,
+        name: ValidName,
+        source_type: &SourceTypeRecordV1,
+        device_layout: &DeviceLayoutRecordV1,
+        pointer_offset: u32,
+    ) -> Result<Self, ValidationError> {
+        require_matching_descriptors(source_type, device_layout, DescriptorKind::GlobalMutPointer)?;
+        let value = Self {
+            source_index,
+            name,
+            source_type: source_type.identity,
+            device_layout: device_layout.identity,
+            ownership: OwnershipSemantics::UniqueBorrow,
+            access: AccessMode::ReadWrite,
+            alias: AliasSemantics::Exclusive,
+            components: vec![PhysicalAbiComponentV1::global_pointer(
+                pointer_offset,
+                AccessMode::ReadWrite,
+                AliasSemantics::Exclusive,
+            )],
+        };
+        value.validate_local()?;
+        Ok(value)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1293,6 +1342,9 @@ fn validate_argument_against_records(
         DescriptorKind::DisjointSlice => {
             DeviceLayoutDescriptorV1::disjoint_slice(source_type.descriptor.element)
         }
+        DescriptorKind::GlobalMutPointer => {
+            DeviceLayoutDescriptorV1::global_mut_pointer(source_type.descriptor.element)
+        }
     };
     if layout.descriptor != expected_layout {
         return Err(ValidationError::InvalidArgument(
@@ -1306,6 +1358,7 @@ fn validate_argument_against_records(
         }
         DescriptorKind::SharedSlice => validate_shared_slice_argument(argument),
         DescriptorKind::DisjointSlice => validate_disjoint_slice_argument(argument),
+        DescriptorKind::GlobalMutPointer => validate_global_mut_pointer_argument(argument),
     }
 }
 
@@ -1356,6 +1409,32 @@ fn validate_disjoint_slice_argument(argument: &LogicalArgumentV1) -> Result<(), 
         ));
     }
     validate_slice_components(argument)
+}
+
+fn validate_global_mut_pointer_argument(
+    argument: &LogicalArgumentV1,
+) -> Result<(), ValidationError> {
+    if argument.ownership != OwnershipSemantics::UniqueBorrow
+        || argument.access != AccessMode::ReadWrite
+        || argument.alias != AliasSemantics::Exclusive
+        || argument.components.len() != 1
+    {
+        return Err(ValidationError::InvalidArgument(
+            "global mutable pointer must be one exclusive read-write borrow",
+        ));
+    }
+    let pointer = &argument.components[0];
+    let expected = PhysicalAbiComponentV1::global_pointer(
+        pointer.offset,
+        AccessMode::ReadWrite,
+        AliasSemantics::Exclusive,
+    );
+    if *pointer != expected {
+        return Err(ValidationError::InvalidPhysicalAbi(
+            "global mutable pointer component is not canonical",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_slice_components(argument: &LogicalArgumentV1) -> Result<(), ValidationError> {

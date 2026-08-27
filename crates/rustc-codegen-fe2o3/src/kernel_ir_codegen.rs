@@ -26,8 +26,9 @@ use fe2o3_kernel_ir::{
     FunctionBody, IntrinsicOperation, KernelId, MemoryAccess, ValueDef, ValueId, WorkgroupSize,
 };
 use fe2o3_kernel_ir::{
-    F32MathFunction, F32MathImplementation, FloatOperation, FunctionRole, Module, Operation,
-    OperationKind, TargetCapability, Terminator, Type, verify_module,
+    AmdGpuDiagnosticOperation, F32MathFunction, F32MathImplementation, FloatOperation,
+    FunctionRole, Module, Operation, OperationKind, TargetCapability, Terminator, Type,
+    verify_module,
 };
 #[cfg(all(test, feature = "qualification-oracles-test-only"))]
 use sha2::{Digest as _, Sha256};
@@ -441,6 +442,7 @@ fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClo
         .filter(|function| {
             function.role == FunctionRole::ExternalImport
                 && FloatOperation::from_intrinsic_id(&function.id).is_none()
+                && AmdGpuDiagnosticOperation::from_intrinsic_id(&function.id).is_none()
         })
         .map(|function| function.id.as_str().to_string())
         .collect::<Vec<_>>();
@@ -457,6 +459,27 @@ fn compiler_module_symbol_closure_v1(module: &Module) -> CompilerModuleSymbolClo
         internal_helpers,
         device_ffi_exports,
         external_declarations,
+    }
+}
+
+#[cfg(test)]
+mod production_symbol_closure_tests {
+    use super::*;
+    use fe2o3_kernel_ir::{Function, Signature};
+
+    #[test]
+    fn gfx942_diagnostic_intrinsics_are_not_link_imports() {
+        let mut module = Module::new("tests::diagnostic_symbol_closure");
+        module
+            .functions
+            .push(AmdGpuDiagnosticOperation::Trap.declaration());
+        module.functions.push(Function::external_import(
+            "real_device_import",
+            Signature::new(vec![], vec![]),
+        ));
+
+        let symbols = compiler_module_symbol_closure_v1(&module);
+        assert_eq!(symbols.external_declarations, ["real_device_import"]);
     }
 }
 

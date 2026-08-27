@@ -50,6 +50,7 @@ pub(crate) enum ProductionPipelineError {
     RustcLineageMismatch,
     ProtectedRustcInvocation(ProtectedRustcInvocationErrorV1),
     ExtractionCannotPublish,
+    WorkerHandoffExtractionRequiresExtractionCustody,
     WorkerHandoff(crate::production_worker_handoff::ProductionWorkerHandoffError),
     StrictV3Publication(fe2o3_artifact_transaction::CompilerModuleHandoffErrorV3),
 }
@@ -105,6 +106,9 @@ impl fmt::Display for ProductionPipelineError {
             Self::ExtractionCannotPublish => formatter.write_str(
                 "production extraction custody cannot publish a compiler-module handoff",
             ),
+            Self::WorkerHandoffExtractionRequiresExtractionCustody => formatter.write_str(
+                "inert compiler-module extraction requires extraction-only custody",
+            ),
             Self::WorkerHandoff(error) => {
                 write!(formatter, "production compilation compiler-module handoff failed: {error}")
             }
@@ -135,8 +139,9 @@ impl std::error::Error for ProductionPipelineError {
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
             | Self::RustcLineageMismatch
-            | Self::UpstreamLlvmLayoutBinding(_) => None,
-            Self::ExtractionCannotPublish => None,
+            | Self::UpstreamLlvmLayoutBinding(_)
+            | Self::ExtractionCannotPublish
+            | Self::WorkerHandoffExtractionRequiresExtractionCustody => None,
         }
     }
 }
@@ -187,6 +192,10 @@ impl ProductionCompilerCustody {
 
     fn has_publication_attempt(&self) -> bool {
         matches!(self, Self::ProtectedV3 { .. })
+    }
+
+    fn is_extraction_only(&self) -> bool {
+        matches!(self, Self::ExtractionOnly)
     }
 
     fn into_publication_custody(
@@ -540,6 +549,49 @@ impl TargetLoweredProductionCompilation {
 
     pub(crate) fn grants_artifact_or_launch_authority(&self) -> bool {
         false
+    }
+
+    pub(crate) fn into_inert_worker_handoff_for_extraction(
+        self,
+    ) -> Result<fe2o3_compiler_ffi::CompilerModuleHandoffV2, ProductionPipelineError> {
+        let Self {
+            admitted,
+            ranked_verification: _,
+            target_module,
+            llvm_ir,
+            bindings,
+        } = self;
+        let AuthenticatedProductionBindings {
+            rustc_identity_inventory,
+            rustc_preflight_plan,
+            rustc_target,
+            reference_effect_bindings: _,
+            typed_descriptor_roots,
+            transaction,
+        } = bindings;
+        if rustc_preflight_plan.rustc_identity_inventory_sha256()
+            != rustc_identity_inventory.sha256()
+        {
+            return Err(ProductionPipelineError::RustcLineageMismatch);
+        }
+        if !transaction.compiler_custody.is_extraction_only() {
+            return Err(ProductionPipelineError::WorkerHandoffExtractionRequiresExtractionCustody);
+        }
+        let compiler_module = AuthenticatedProductionTargetModule {
+            admitted,
+            target: rustc_target.device_target(),
+            target_module,
+            llvm_ir,
+            typed_descriptor_roots,
+            compiler_ffi_envelope: transaction.compiler_ffi_envelope,
+        };
+        let prepared =
+            crate::production_worker_handoff::prepare_production_worker_handoff(compiler_module)
+                .map_err(ProductionPipelineError::WorkerHandoff)?;
+        let (handoff, _) = prepared
+            .into_validated_parts()
+            .map_err(ProductionPipelineError::WorkerHandoff)?;
+        Ok(handoff)
     }
 
     fn prepare_worker_handoff(

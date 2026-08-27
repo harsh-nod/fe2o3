@@ -107,6 +107,7 @@ fn parse_type_record(reader: &mut Reader<'_>) -> Result<SourceTypeRecordV1, Deco
         DescriptorKind::Scalar => SourceTypeDescriptorV1::scalar(element),
         DescriptorKind::SharedSlice => SourceTypeDescriptorV1::shared_slice(element),
         DescriptorKind::DisjointSlice => SourceTypeDescriptorV1::disjoint_slice(element),
+        DescriptorKind::GlobalMutPointer => SourceTypeDescriptorV1::global_mut_pointer(element),
     };
     Ok(SourceTypeRecordV1::from_wire(identity, descriptor)?)
 }
@@ -133,6 +134,7 @@ fn parse_layout_record(reader: &mut Reader<'_>) -> Result<DeviceLayoutRecordV1, 
         DescriptorKind::Scalar => DeviceLayoutDescriptorV1::scalar(element),
         DescriptorKind::SharedSlice => DeviceLayoutDescriptorV1::shared_slice(element),
         DescriptorKind::DisjointSlice => DeviceLayoutDescriptorV1::disjoint_slice(element),
+        DescriptorKind::GlobalMutPointer => DeviceLayoutDescriptorV1::global_mut_pointer(element),
     };
     if descriptor != expected {
         return Err(crate::ValidationError::InvalidArgument(
@@ -341,6 +343,7 @@ fn parse_descriptor_kind(tag: u8) -> Result<DescriptorKind, DecodeError> {
         1 => Ok(DescriptorKind::Scalar),
         2 => Ok(DescriptorKind::SharedSlice),
         3 => Ok(DescriptorKind::DisjointSlice),
+        4 => Ok(DescriptorKind::GlobalMutPointer),
         _ => Err(DecodeError::UnknownTag {
             kind: "type descriptor",
             tag: u16::from(tag),

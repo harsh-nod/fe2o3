@@ -5219,6 +5219,31 @@ impl<'a> FunctionLowerer<'a> {
                         },
                     );
                 }
+                Type::Pointer(pointer)
+                    if self.kernel.is_some()
+                        && pointer.address_space == KernelAddressSpace::Global
+                        && supported_memory_type(&pointer.pointee, self.target) =>
+                {
+                    self.bindings.insert(
+                        value,
+                        ValueBinding::Value {
+                            llvm_name: format!("%arg{index}"),
+                            ty: ty.clone(),
+                        },
+                    );
+                }
+                Type::Pointer(pointer) => {
+                    let code = if pointer.address_space != KernelAddressSpace::Global {
+                        LoweringDiagnosticCode::UnsupportedAddressSpace
+                    } else {
+                        LoweringDiagnosticCode::UnsupportedType
+                    };
+                    return Err(LoweringErrors::one(
+                        location,
+                        code,
+                        format!("unsupported kernel parameter {index}: {ty:?}"),
+                    ));
+                }
                 Type::Slice(slice)
                     if self.kernel.is_some()
                         && slice.address_space == KernelAddressSpace::Global
@@ -6849,6 +6874,13 @@ impl<'a> FunctionLowerer<'a> {
             .map(|(index, ty)| match ty {
                 Type::Scalar(scalar) => Ok(format!("{} %arg{index}", llvm_scalar(*scalar))),
                 Type::Pointer(_) if self.kernel.is_none() => {
+                    Ok(format!("{} %arg{index}", llvm_type(ty)))
+                }
+                Type::Pointer(pointer)
+                    if self.kernel.is_some()
+                        && pointer.address_space == KernelAddressSpace::Global
+                        && supported_memory_type(&pointer.pointee, self.target) =>
+                {
                     Ok(format!("{} %arg{index}", llvm_type(ty)))
                 }
                 Type::Slice(_) if self.target == LoweringTarget::Gfx942TiledGemmLdsV1 => {

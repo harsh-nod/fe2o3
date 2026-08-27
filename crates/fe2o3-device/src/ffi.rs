@@ -52,6 +52,7 @@ macro_rules! const_pointer {
                 }
             }
 
+            #[inline(always)]
             pub const fn as_raw(self) -> *const T {
                 self.pointer
             }
@@ -89,6 +90,7 @@ macro_rules! mut_pointer {
                 }
             }
 
+            #[inline(always)]
             pub const fn as_raw(self) -> *mut T {
                 self.pointer
             }

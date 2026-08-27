@@ -31,6 +31,7 @@ use crate::production_semantic_body_v1::{
     ProductionSemanticBodyRequestOwnerV1, ProductionSemanticCallableOwnerEntryV1,
     ProductionSemanticDirectCallBindingV1, ProductionSemanticFunctionExportV1,
     ProductionSemanticFunctionIdentitiesV1, ProductionSemanticLocalBindingV1,
+    ProductionSemanticNormalizedRustcIntrinsicRecipeV1,
     ProductionSemanticTerminalExpansionRecipeV1, ProductionSemanticTypeBindingV1,
     construct_production_semantic_body_v1,
 };
@@ -532,6 +533,20 @@ fn construct_complete_request_v1<'tcx>(
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let normalized_intrinsics = plan
+            .normalized_intrinsic_producers()
+            .iter()
+            .filter(|recipe| recipe.caller == function_id)
+            .map(|recipe| {
+                ProductionSemanticNormalizedRustcIntrinsicRecipeV1::new(
+                    recipe.caller,
+                    recipe.block,
+                    recipe.instance,
+                    recipe.element_type,
+                    recipe.operation,
+                )
+            })
+            .collect::<Vec<_>>();
         functions.push(
             construct_production_semantic_body_v1(
                 ProductionSemanticBodyInputV1 {
@@ -556,6 +571,7 @@ fn construct_complete_request_v1<'tcx>(
                     entry: body.entry,
                     direct_calls: &direct_calls,
                     terminal_expansions: &terminal_expansions,
+                    normalized_intrinsics: &normalized_intrinsics,
                 },
                 &mut body_owner,
             )
@@ -822,6 +838,13 @@ fn terminal_operation_v1<'tcx>(
                 && matches!(rust_output.kind(), TyKind::Uint(UintTy::U32)) =>
         {
             Ok(SemanticCompilerIntrinsicOperationV1::GridDimension(axis))
+        }
+        ProductionTerminalExpansionV1::Trap
+            if inputs.is_empty()
+                && rust_inputs.is_empty()
+                && matches!(rust_output.kind(), TyKind::Never) =>
+        {
+            Ok(SemanticCompilerIntrinsicOperationV1::Trap)
         }
         ProductionTerminalExpansionV1::WorkgroupBarrier
             if inputs.is_empty()
@@ -2140,6 +2163,7 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::Gfx950LdsTransposePublish
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
+        | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath
         | ProductionTerminalExpansionV1::WorkgroupBarrier => {
             Err(body_owner_table_mismatch_v1("terminal callable ABI"))
@@ -2984,7 +3008,8 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::Gfx950LdsTransposePublish => 83,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
-        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 86,
+        ProductionTerminalExpansionV1::Trap => 86,
+        ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate => 87,
     }
 }
 

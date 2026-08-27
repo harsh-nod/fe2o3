@@ -18,10 +18,9 @@ const _: CoreAtomicDefaultScope = CORE_ATOMIC_DEFAULT_SCOPE;
     launch(required = [64, 1, 1], max = [64, 1, 1])
 )]
 pub fn scoped_atomic_add_u32_v1(values: &[u32], eligible: &[u32], target: DeviceGlobalMutPtr<u32>) {
-    let lane = thread::thread_idx_x() as usize;
+    let lane = thread::index_1d().get();
     if values.len() != 64 || eligible.len() != 64 || lane >= 64 {
         fe2o3_device::trap();
-        return;
     }
     if eligible[lane] != 0 {
         target

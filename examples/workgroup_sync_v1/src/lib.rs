@@ -1,5 +1,6 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
+#![cfg_attr(target_arch = "amdgpu", no_std)]
 
 //! Source, oracle, and formal contracts for two fixed wave64 synchronization profiles.
 //!
@@ -7,11 +8,16 @@
 //! exact compiler profiles, artifacts, and protected runtime paths remain
 //! separate evidence phases.
 
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod contract;
+#[cfg(feature = "lds-kernel")]
 pub mod kernel;
+#[cfg(feature = "scoped-atomic-kernel")]
 pub mod scoped_atomic;
+#[cfg(not(target_arch = "amdgpu"))]
 pub mod vectors;
 
+#[cfg(not(target_arch = "amdgpu"))]
 pub use contract::{
     ATOMIC_ADDRESS_SPACE_V1, ATOMIC_ORDERING_V1, ATOMIC_SCOPE_V1, AtomicAddressSpaceV1,
     AtomicComparisonErrorV1, AtomicLaneV1, AtomicOrderingV1, AtomicProfileErrorV1, AtomicProfileV1,
@@ -20,8 +26,10 @@ pub use contract::{
     canonical_atomic_profile_v1, canonical_reduction_trace_v1, compare_atomic_output_v1,
     compare_reduction_output_v1, lds_reduction_oracle_v1,
 };
+#[cfg(feature = "lds-kernel")]
 pub use kernel::{
     LDS_REDUCTION_COMPILER_PROFILE_REGISTERED_V1, LDS_REDUCTION_WORKGROUP_V1,
     SCOPED_ATOMIC_COMPILER_PROFILE_REGISTERED_V1,
 };
+#[cfg(not(target_arch = "amdgpu"))]
 pub use vectors::{AtomicVectorV1, ReductionVectorV1, atomic_vectors_v1, reduction_vectors_v1};

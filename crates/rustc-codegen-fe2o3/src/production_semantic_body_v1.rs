@@ -9,34 +9,36 @@ use std::collections::HashMap;
 use std::fmt;
 
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticBasicBlockV1,
-    SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1, SemanticBorrowKindV1,
-    SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
-    SemanticCheckedBinaryRvalueV1, SemanticConstGenericArgumentsIdentityV1,
-    SemanticConstantBytesV1, SemanticConstantV1, SemanticConstantValueV1,
-    SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1, SemanticFunctionAbiV1,
-    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticFunctionIdentityV1,
-    SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
+    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAssignmentV1, SemanticAtomicRmwV1,
+    SemanticBasicBlockV1, SemanticBinaryOpV1, SemanticBlockIdV1, SemanticBlockIdentityV1,
+    SemanticBorrowKindV1, SemanticCallDestinationV1, SemanticCallableIdV1, SemanticCastKindV1,
+    SemanticCheckedBinaryOpV1, SemanticCheckedBinaryRvalueV1,
+    SemanticConstGenericArgumentsIdentityV1, SemanticConstantBytesV1, SemanticConstantV1,
+    SemanticConstantValueV1, SemanticControlFlowEdgeV1, SemanticDirectCallV1, SemanticEdgeRoleV1,
+    SemanticFunctionAbiV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
+    SemanticFunctionIdentityV1, SemanticFunctionRoleV1, SemanticGenericTypeArgumentsIdentityV1,
     SemanticItemDefinitionIdentityV1, SemanticKernelEntryV1, SemanticLinkSymbolV1,
     SemanticLocalDeclV1, SemanticLocalIdV1, SemanticLocalIdentityV1, SemanticLocalRoleV1,
     SemanticMemoryLoadV1, SemanticMirErrorV1, SemanticMirLimitsV1, SemanticMirResourceV1,
-    SemanticMonomorphizationIdentityV1, SemanticOperandV1, SemanticPlaceV1,
+    SemanticMonomorphizationIdentityV1, SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1,
     SemanticProjectionKindV1, SemanticProjectionV1, SemanticRvalueKindV1, SemanticRvalueV1,
     SemanticScalarValueV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
     SemanticStatementV1, SemanticSwitchTargetV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1,
     SemanticTerminatorV1, SemanticTypeIdV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1,
     SemanticUncheckedBinaryRvalueV1, SemanticUnwindActionV1, SemanticVolatilityV1,
 };
+use rustc_hir::Mutability;
 use rustc_middle::mir::interpret::GlobalAlloc;
 use rustc_middle::mir::{
     AggregateKind, AssertKind, BinOp, Body, BorrowKind, CastKind, ConstValue, MutBorrowKind,
-    NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, RETURN_PLACE, Rvalue,
-    START_BLOCK, StatementKind, TerminatorKind, UnOp, UnwindAction,
+    NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, RETURN_PLACE, RawPtrKind,
+    Rvalue, START_BLOCK, StatementKind, TerminatorKind, UnOp, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf};
 use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
 
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
+use crate::production_rustc_intrinsic_v1::ProductionRustcIntrinsicOperationV1;
 use crate::production_semantic_terminal_v1::ProductionTerminalExpansionV1;
 
 const MAX_ERROR_COMPONENT_CHARS_V1: usize = 512;
@@ -185,6 +187,33 @@ impl<'tcx> ProductionSemanticTerminalExpansionRecipeV1<'tcx> {
             rustc_block,
             expected_callee,
             expansion,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx> {
+    caller: SemanticFunctionIdV1,
+    rustc_block: u32,
+    expected_callee: Instance<'tcx>,
+    expected_element_type: Ty<'tcx>,
+    operation: ProductionRustcIntrinsicOperationV1,
+}
+
+impl<'tcx> ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx> {
+    pub(crate) const fn new(
+        caller: SemanticFunctionIdV1,
+        rustc_block: u32,
+        expected_callee: Instance<'tcx>,
+        expected_element_type: Ty<'tcx>,
+        operation: ProductionRustcIntrinsicOperationV1,
+    ) -> Self {
+        Self {
+            caller,
+            rustc_block,
+            expected_callee,
+            expected_element_type,
+            operation,
         }
     }
 }
@@ -377,6 +406,8 @@ pub(crate) struct ProductionSemanticBodyInputV1<'a, 'tcx> {
     pub(crate) entry: SemanticBlockIdV1,
     pub(crate) direct_calls: &'a [ProductionSemanticDirectCallBindingV1<'tcx>],
     pub(crate) terminal_expansions: &'a [ProductionSemanticTerminalExpansionRecipeV1<'tcx>],
+    pub(crate) normalized_intrinsics:
+        &'a [ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx>],
 }
 
 #[derive(Debug)]
@@ -541,17 +572,23 @@ struct BodyProducerV1<'a, 'owner, 'tcx> {
     blocks_by_semantic: Vec<&'a ProductionSemanticBlockBindingV1>,
     direct_calls_by_raw: Vec<Option<&'a ProductionSemanticDirectCallBindingV1<'tcx>>>,
     terminal_expansions_by_raw: Vec<Option<&'a ProductionSemanticTerminalExpansionRecipeV1<'tcx>>>,
+    normalized_intrinsics_by_raw:
+        Vec<Option<&'a ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx>>>,
     consumed_direct_calls: Vec<bool>,
     consumed_terminal_expansions: Vec<bool>,
+    consumed_normalized_intrinsics: Vec<bool>,
     owner: &'owner mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 }
 
 type DirectCallTableV1<'a, 'tcx> = Vec<Option<&'a ProductionSemanticDirectCallBindingV1<'tcx>>>;
 type TerminalExpansionTableV1<'a, 'tcx> =
     Vec<Option<&'a ProductionSemanticTerminalExpansionRecipeV1<'tcx>>>;
+type NormalizedIntrinsicTableV1<'a, 'tcx> =
+    Vec<Option<&'a ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx>>>;
 type CallTablesV1<'a, 'tcx> = (
     DirectCallTableV1<'a, 'tcx>,
     TerminalExpansionTableV1<'a, 'tcx>,
+    NormalizedIntrinsicTableV1<'a, 'tcx>,
 );
 
 pub(crate) fn construct_production_semantic_body_v1<'a, 'owner, 'tcx>(
@@ -622,19 +659,26 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         {
             return Err(table("entry block binding"));
         }
-        let (direct_calls_by_raw, terminal_expansions_by_raw) = build_call_tables_v1(
-            input.function,
-            input.body.basic_blocks.len(),
-            input.direct_calls,
-            input.terminal_expansions,
-            owner,
-        )?;
+        let (direct_calls_by_raw, terminal_expansions_by_raw, normalized_intrinsics_by_raw) =
+            build_call_tables_v1(
+                input.function,
+                input.body.basic_blocks.len(),
+                input.direct_calls,
+                input.terminal_expansions,
+                input.normalized_intrinsics,
+                owner,
+            )?;
         let consumed_direct_calls = try_filled_vec_v1(
             input.body.basic_blocks.len(),
             false,
             SemanticMirResourceV1::Blocks,
         )?;
         let consumed_terminal_expansions = try_filled_vec_v1(
+            input.body.basic_blocks.len(),
+            false,
+            SemanticMirResourceV1::Blocks,
+        )?;
+        let consumed_normalized_intrinsics = try_filled_vec_v1(
             input.body.basic_blocks.len(),
             false,
             SemanticMirResourceV1::Blocks,
@@ -651,8 +695,10 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             blocks_by_semantic,
             direct_calls_by_raw,
             terminal_expansions_by_raw,
+            normalized_intrinsics_by_raw,
             consumed_direct_calls,
             consumed_terminal_expansions,
+            consumed_normalized_intrinsics,
             owner,
         })
     }
@@ -697,10 +743,19 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
             if binding.statement_sources.len() != data.statements.len() {
                 return Err(table("statement source table"));
             }
+            let has_normalized_intrinsic = self
+                .normalized_intrinsics_by_raw
+                .get(raw_index)
+                .is_some_and(Option::is_some);
+            let semantic_statement_count = data
+                .statements
+                .len()
+                .checked_add(usize::from(has_normalized_intrinsic))
+                .ok_or_else(|| table("statement source table"))?;
             self.owner
-                .charge(SemanticMirResourceV1::Statements, data.statements.len())?;
+                .charge(SemanticMirResourceV1::Statements, semantic_statement_count)?;
             let mut statements =
-                try_vec_v1(data.statements.len(), SemanticMirResourceV1::Statements)?;
+                try_vec_v1(semantic_statement_count, SemanticMirResourceV1::Statements)?;
             for (statement_index, statement) in data.statements.iter().enumerate() {
                 self.work()?;
                 let index =
@@ -716,7 +771,17 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 unsupported("basic block without a terminator", Some(raw_block), None)
             })?;
             self.work()?;
-            let kind = self.construct_terminator(raw_block, &terminator.kind)?;
+            let kind = if has_normalized_intrinsic {
+                let (statement, terminator) =
+                    self.construct_normalized_intrinsic(raw_block, &terminator.kind)?;
+                statements.push(SemanticStatementV1::new(
+                    binding.terminator_source,
+                    statement,
+                ));
+                terminator
+            } else {
+                self.construct_terminator(raw_block, &terminator.kind)?
+            };
             blocks.push(SemanticBasicBlockV1::new(
                 binding.identity,
                 binding.source,
@@ -878,9 +943,20 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 }
                 SemanticRvalueKindV1::aggregate(SemanticAggregateKindV1::Array, semantic_operands)?
             }
-            Rvalue::RawPtr(..) => {
-                return Err(unsupported("RawPtr rvalue", block, statement));
-            }
+            Rvalue::RawPtr(kind, place) => SemanticRvalueKindV1::AddressOf {
+                mutability: match kind {
+                    RawPtrKind::Const => SemanticMutabilityV1::Immutable,
+                    RawPtrKind::Mut => SemanticMutabilityV1::Mutable,
+                    RawPtrKind::FakeForPtrMetadata => {
+                        return Err(unsupported(
+                            "fake raw pointer for metadata rvalue",
+                            block,
+                            statement,
+                        ));
+                    }
+                },
+                place: self.construct_place(*place, block, statement)?,
+            },
             Rvalue::Cast(kind, operand, _) => SemanticRvalueKindV1::Cast {
                 kind: match kind {
                     CastKind::IntToInt | CastKind::FloatToInt => SemanticCastKindV1::Integer,
@@ -1139,6 +1215,180 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 Err(unsupported("InlineAsm terminator", block, None))
             }
         }
+    }
+
+    fn construct_normalized_intrinsic(
+        &mut self,
+        raw_block: u32,
+        terminator: &TerminatorKind<'tcx>,
+    ) -> Result<(SemanticStatementKindV1, SemanticTerminatorKindV1), ProductionSemanticBodyErrorV1>
+    {
+        let block = Some(raw_block);
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            target,
+            unwind,
+            ..
+        } = terminator
+        else {
+            return Err(table("normalized intrinsic table"));
+        };
+        if args.len() != 2 {
+            return Err(unsupported(
+                "normalized atomic intrinsic with unexpected call arity",
+                block,
+                None,
+            ));
+        }
+        let Some(target) = *target else {
+            return Err(unsupported(
+                "normalized atomic intrinsic without a return edge",
+                block,
+                None,
+            ));
+        };
+        if !matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) {
+            return Err(unsupported(
+                "normalized atomic intrinsic with executable unwind edge",
+                block,
+                None,
+            ));
+        }
+
+        self.owner
+            .charge(SemanticMirResourceV1::CallArguments, args.len())?;
+        let resolved = resolve_direct_call_v1(self.tcx, self.instance, self.body, func)
+            .map_err(|construct| unsupported(construct, block, None))?;
+        let classification = crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved)
+            .map_err(|error| {
+                unsupported(
+                    format!("unsupported rustc compiler intrinsic: {error}"),
+                    block,
+                    None,
+                )
+            })?
+            .ok_or_else(|| table("normalized intrinsic table"))?;
+        let index = usize::try_from(raw_block).map_err(|_| table("normalized intrinsic table"))?;
+        let recipe = self
+            .normalized_intrinsics_by_raw
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or_else(|| table("normalized intrinsic table"))?;
+        if recipe.caller != self.function
+            || recipe.expected_callee != resolved
+            || recipe.expected_element_type != classification.element_type
+            || recipe.operation != classification.operation
+            || self.direct_calls_by_raw[index].is_some()
+            || self.terminal_expansions_by_raw[index].is_some()
+        {
+            return Err(table("normalized intrinsic table"));
+        }
+
+        let expected = normalize_type_v1(self.tcx, self.instance, recipe.expected_element_type)
+            .map_err(|_| {
+                unsupported(
+                    "normalized atomic element type failed monomorphic normalization",
+                    block,
+                    None,
+                )
+            })?;
+        if expected != recipe.expected_element_type {
+            return Err(table("normalized intrinsic element type"));
+        }
+        let destination_type = normalize_type_v1(
+            self.tcx,
+            self.instance,
+            destination.ty(&self.body.local_decls, self.tcx).ty,
+        )
+        .map_err(|_| {
+            unsupported(
+                "normalized atomic destination type failed monomorphic normalization",
+                block,
+                None,
+            )
+        })?;
+        let address_type = normalize_type_v1(
+            self.tcx,
+            self.instance,
+            args[0].node.ty(&self.body.local_decls, self.tcx),
+        )
+        .map_err(|_| {
+            unsupported(
+                "normalized atomic address type failed monomorphic normalization",
+                block,
+                None,
+            )
+        })?;
+        let value_type = normalize_type_v1(
+            self.tcx,
+            self.instance,
+            args[1].node.ty(&self.body.local_decls, self.tcx),
+        )
+        .map_err(|_| {
+            unsupported(
+                "normalized atomic value type failed monomorphic normalization",
+                block,
+                None,
+            )
+        })?;
+        let TyKind::RawPtr(pointee, Mutability::Mut) = *address_type.kind() else {
+            return Err(unsupported(
+                "normalized atomic address is not a mutable raw pointer",
+                block,
+                None,
+            ));
+        };
+        if pointee != expected || value_type != expected || destination_type != expected {
+            return Err(unsupported(
+                "normalized atomic address, value, and destination types do not agree",
+                block,
+                None,
+            ));
+        }
+
+        let address_operand = self.construct_operand(&args[0].node, block, None)?;
+        let address_base = match address_operand {
+            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place,
+            SemanticOperandV1::Constant(_) => {
+                return Err(unsupported(
+                    "normalized atomic address is not a place operand",
+                    block,
+                    None,
+                ));
+            }
+        };
+        self.owner.charge(SemanticMirResourceV1::Projections, 1)?;
+        let projection_count = address_base
+            .projections()
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| table("normalized atomic address projection"))?;
+        let mut projections = try_vec_v1(projection_count, SemanticMirResourceV1::Projections)?;
+        projections.extend_from_slice(address_base.projections());
+        let element_type = self.type_id(expected, block, None)?;
+        projections.push(SemanticProjectionV1::new(
+            SemanticProjectionKindV1::Dereference,
+            element_type,
+        )?);
+        let address = SemanticPlaceV1::new(address_base.local(), projections, element_type)?;
+        let destination = self.construct_place(*destination, block, None)?;
+        let value = self.construct_operand(&args[1].node, block, None)?;
+        let (operation, access) = recipe.operation.atomic_rmw();
+
+        self.consumed_normalized_intrinsics[index] = true;
+        Ok((
+            SemanticStatementKindV1::AtomicRmw(SemanticAtomicRmwV1::new(
+                destination,
+                address,
+                value,
+                operation,
+                access,
+            )),
+            SemanticTerminatorKindV1::Goto(self.edge(SemanticEdgeRoleV1::Goto, target.index())?),
+        ))
     }
 
     fn construct_operand(
@@ -1407,7 +1657,9 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 return Err(table("terminal expansion table"));
             }
             self.consumed_terminal_expansions[index] = true;
-            if self.direct_calls_by_raw[index].is_some() {
+            if self.direct_calls_by_raw[index].is_some()
+                || self.normalized_intrinsics_by_raw[index].is_some()
+            {
                 return Err(table("call binding table"));
             }
             self.owner.terminal_callable(resolved, expansion)
@@ -1422,7 +1674,9 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                 return Err(table("direct-call binding table"));
             }
             self.consumed_direct_calls[index] = true;
-            if self.terminal_expansions_by_raw[index].is_some() {
+            if self.terminal_expansions_by_raw[index].is_some()
+                || self.normalized_intrinsics_by_raw[index].is_some()
+            {
                 return Err(table("call binding table"));
             }
             self.owner.defined_callable(resolved)
@@ -1438,6 +1692,11 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
         for (index, recipe) in self.terminal_expansions_by_raw.iter().enumerate() {
             if recipe.is_some() && !self.consumed_terminal_expansions[index] {
                 return Err(table("unused terminal expansion recipe"));
+            }
+        }
+        for (index, recipe) in self.normalized_intrinsics_by_raw.iter().enumerate() {
+            if recipe.is_some() && !self.consumed_normalized_intrinsics[index] {
+                return Err(table("unused normalized intrinsic recipe"));
             }
         }
         Ok(())
@@ -1600,10 +1859,13 @@ fn build_call_tables_v1<'a, 'tcx>(
     block_count: usize,
     direct_calls: &'a [ProductionSemanticDirectCallBindingV1<'tcx>],
     terminal_expansions: &'a [ProductionSemanticTerminalExpansionRecipeV1<'tcx>],
+    normalized_intrinsics: &'a [ProductionSemanticNormalizedRustcIntrinsicRecipeV1<'tcx>],
     owner: &mut ProductionSemanticBodyRequestOwnerV1<'tcx>,
 ) -> Result<CallTablesV1<'a, 'tcx>, ProductionSemanticBodyErrorV1> {
     let mut direct_by_raw = try_filled_vec_v1(block_count, None, SemanticMirResourceV1::Blocks)?;
     let mut terminal_by_raw = try_filled_vec_v1(block_count, None, SemanticMirResourceV1::Blocks)?;
+    let mut normalized_by_raw =
+        try_filled_vec_v1(block_count, None, SemanticMirResourceV1::Blocks)?;
     for binding in direct_calls {
         owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
         if binding.caller != function {
@@ -1628,14 +1890,27 @@ fn build_call_tables_v1<'a, 'tcx>(
             "terminal expansion table",
         )?;
     }
-    if direct_by_raw
-        .iter()
-        .zip(&terminal_by_raw)
-        .any(|(direct, terminal)| direct.is_some() && terminal.is_some())
-    {
-        return Err(table("call binding table"));
+    for recipe in normalized_intrinsics {
+        owner.charge(SemanticMirResourceV1::ValidationWork, 1)?;
+        if recipe.caller != function {
+            return Err(table("normalized intrinsic table"));
+        }
+        insert_sparse_binding_v1(
+            &mut normalized_by_raw,
+            recipe.rustc_block,
+            recipe,
+            "normalized intrinsic table",
+        )?;
     }
-    Ok((direct_by_raw, terminal_by_raw))
+    for index in 0..block_count {
+        let bindings = usize::from(direct_by_raw[index].is_some())
+            + usize::from(terminal_by_raw[index].is_some())
+            + usize::from(normalized_by_raw[index].is_some());
+        if bindings > 1 {
+            return Err(table("call binding table"));
+        }
+    }
+    Ok((direct_by_raw, terminal_by_raw, normalized_by_raw))
 }
 
 fn insert_dense_binding_v1<'a, T>(
@@ -1783,6 +2058,7 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent
         | ProductionTerminalExpansionV1::Gfx950SubgroupCurrent
         | ProductionTerminalExpansionV1::ThreadIndex1d
+        | ProductionTerminalExpansionV1::Trap
         | ProductionTerminalExpansionV1::ColdPath => Some(0),
         ProductionTerminalExpansionV1::ThreadIndexGet
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
