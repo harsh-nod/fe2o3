@@ -417,7 +417,8 @@ retired `qualification_worker_v2` option and verifies lifetime retention,
 private fields, non-cloneable arguments, hidden pointers, and one-shot dispatch
 against the V3 API. The vecadd example has no embedded
 execution feature; it type-checks the V3 `Arguments` surface and fails closed
-before runtime dispatch until a production verifier is supplied.
+before runtime dispatch until the production verifier's remaining authority
+obligations close.
 
 The Cargo V3 vertical suite builds a dedicated V3-only static consumer. Its
 dependency graph contains `fe2o3-host/default` and
@@ -429,6 +430,27 @@ cargo test --locked -p cargo-fe2o3 \
   --features worker-v3-envelope-integration-test-only \
   --test worker_v3_load_envelope_vertical -- --test-threads=1
 ```
+
+The exact scalar production-audit lane additionally runs the authenticated
+upstream-LLVM machine worker before generating Verus source. It requires a
+caller-reviewed worker policy and the protected runtime closure; candidate
+inspection in this command is test/deployment tooling only:
+
+```text
+FE2O3_GFX942_SCALAR_GEMM_V3_RAW_HSACO=/path/to/raw-gfx942.hsaco \
+FE2O3_GENERAL_GEMM_RUNTIME_CLOSURE_V2_ROOT=/opt/fe2o3/verus-runtime-v2/VERSION \
+FE2O3_MACHINE_EFFECT_NATIVE_WORKER=/path/to/fe2o3-llvm-link-worker \
+cargo test --locked -p cargo-fe2o3 \
+  --features worker-v3-envelope-integration-test-only \
+  --test worker_v3_load_envelope_vertical \
+  production_verifier_audits_exact_proof_and_preserves_admission_custody \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+This lane proves retained proof/executable identity binding only. It must also
+assert that six authority obligations remain and that publication, load, and
+launch authority are false. See
+[`gfx942-scalar-worker-v3-proof-executable-binding-v1.md`](gfx942-scalar-worker-v3-proof-executable-binding-v1.md).
 
 ## Guard tests
 

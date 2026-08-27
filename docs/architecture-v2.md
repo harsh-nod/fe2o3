@@ -126,9 +126,14 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   authority only for a joined, move-only invocation constructed from an
   authenticated Worker V3 executable, macro-generated arguments, retained
   current publication, runtime preparation, and the same checked device. A
-  scalar-GEMM test passes this path with a synthetic verifier. No reviewed
-  production verifier exists yet, so ordinary generated application execution
-  remains fail-closed.
+  scalar-GEMM test passes this path with a synthetic verifier. The exact scalar
+  production auditor now owns one authenticated machine worker and one retained
+  Verus runtime and binds their lossless request/evidence/receipt bytes to the
+  final HSACO, descriptor, challenge, lineage, host contract, and reviewed
+  physical effects. That closes only `ProofExecutableBinding`; six compiler,
+  refinement, ABI, and effect obligations remain. No implementation can yet
+  return Worker V3 launch authority, so ordinary generated application
+  execution remains fail-closed.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,

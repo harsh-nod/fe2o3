@@ -465,8 +465,10 @@ load or launch authority.
 6. **Worker V3/KFD execution:** the source-bound artifact enters the sole
    application/verifier graph and pure-Rust KFD packet submission path. The
    joined invocation, canonical inherited-application transition, and numerical
-   scalar-GEMM KFD replay are implemented; the production verifier and a full
-   inherited application hardware run without external injection remain.
+   scalar-GEMM KFD replay are implemented. The exact scalar production auditor
+   closes its proof/executable identity obligation; its six remaining authority
+   obligations and a full inherited application hardware run without external
+   injection remain.
 7. **Selector convergence:** all exact-profile production selectors are gone,
    default kernel compilation uses the one transaction, and unsupported code
    fails without fallback.

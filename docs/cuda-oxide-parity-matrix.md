@@ -581,8 +581,9 @@ The detailed dependencies and exit criteria are in
   expose safe `prepare(...).launch(...)`; the example contains no raw parameter
   pack, artifact pathname, or unsafe user launch. The generic Worker V3 path
   generates manifest-checked preparation and dispatch, and the production
-  publication/admission/load state machines exist. The missing production verifier prevents authenticated
-  compiler/proof/effect evidence from reaching that safe SPI. The generated-safe
+  publication/admission/load state machines exist. The production verifier's
+  open authority obligations prevent authenticated compiler/proof/effect
+  evidence from reaching that safe SPI. The generated-safe
   MI300X alpha/zeta harness used fake authority and has been deleted. Broad
   generated launch coverage and production authority remain incomplete, so the
   row remains Partial.
@@ -608,8 +609,10 @@ The detailed dependencies and exit criteria are in
   mode now persists a measured upstream envelope-input capsule and reconstructs
   the exact canonical envelope across restart. The production Worker V3 handoff
   revalidates the durable publication; the Worker V2 host recovery route is
-  deleted. No production verifier yet authenticates compiler, proof, or effect
-  evidence and promotes it into generated dispatch.
+  deleted. The bounded scalar production auditor authenticates one exact
+  proof/executable identity join, but no production authority yet authenticates
+  the complete compiler, ABI, refinement, or effect evidence and promotes it
+  into generated dispatch.
   This is not general compiler production, all-target loading, or machine-code
   refinement evidence.
 - Supplemental rows S04 and S05: bounded `DeviceCopy`, pinned-memory, event,

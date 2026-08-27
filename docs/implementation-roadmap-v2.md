@@ -473,22 +473,30 @@ earlier authority transition.
    with a synthetic verifier. The canonical inherited-application API now
    derives the kernel from its generated type and consumes the Cargo handoff,
    verifier, generated arguments, current publication, and checked device into
-   that invocation. A production verifier, generated-application adoption, and
-   replay without external HSACO injection remain open.
+   that invocation. The exact scalar production auditor now closes only its
+   proof/executable identity obligation; production authority,
+   generated-application adoption, and replay without external HSACO injection
+   remain open.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
-   closed call graph and physical memory sites. Production admission must still
-   authenticate extraction from each final payload and bind it to compiler ABI
-   and effect evidence. Hardware success remains an independent evidence class.
+   closed call graph and physical memory sites. The scalar-GEMM production
+   auditor now authenticates the caller-pinned worker, runtime closure,
+   analyzer, and upstream-LLVM toolchain while retaining the exact request,
+   evidence, and receipt. Compiler ABI and end-to-end effect refinement remain
+   open. Hardware success remains an independent evidence class.
 9. **Implemented bounded foundation: alpha/zeta source proofs and proof
    records.** Mechanical source-model proofs, negative mutations, freshness,
    and executable-evidence records exist. They do not give Rust source an
-   operational semantics, establish compiler/machine refinement, or bind
-   production proof authority to the final payload.
-10. **Production verification authentication.** Implement a
-   `WorkerV3VerifierV1` only from reviewed immutable compiler,
-   Verus/solver, proof-to-executable, Rust-layout, and machine-effect records.
-   Every digest, identity, mutation, and stale-replay edge must fail closed.
+   operational semantics or establish compiler/machine refinement. The exact
+   scalar-GEMM path now binds retained Verus execution to one authenticated
+   final-payload machine occurrence, closing only `ProofExecutableBinding`.
+10. **Production verification authentication, in progress.** The reviewed
+   scalar auditor now joins immutable Verus/solver and machine-effect records
+   and rejects executable-profile substitutions. It remains non-authoritative
+   until authenticated compiler execution, source/MIR-to-KIR refinement,
+   IEEE-754 agreement, emitted-machine refinement, Rust layout, and end-to-end
+   effect records close the six remaining obligations. Every digest, identity,
+   mutation, and stale-replay edge must continue to fail closed.
 11. **Implemented API foundation: split mutable views.** Safe two-way and
    guarded three-way splits yield simultaneous non-overlapping mutable views
    while retaining parent identity and exact allocation-relative intervals.

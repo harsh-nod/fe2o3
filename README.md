@@ -9,6 +9,7 @@ incomplete, while bounded `gfx942` vertical slices exercise the compiler,
 artifact, runtime, and proof boundaries described below. See the
 [living v2 architecture](docs/architecture-v2.md),
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
+[gfx942 scalar Worker V3 proof/executable binding](docs/gfx942-scalar-worker-v3-proof-executable-binding-v1.md),
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
@@ -68,6 +69,18 @@ MI300X, the exact scalar-GEMM lane executes this joined path and passes its CPU
 oracle, completion writeback, and canaries. That test intentionally uses a
 synthetic verifier and externally injected HSACO, so it validates composition
 and hardware behavior without claiming production proof authority.
+
+The exact scalar-GEMM production auditor now also joins an independently
+authenticated upstream-LLVM machine analysis to its retained Verus input. The
+generated source binds the Worker V3 challenge, lineage and host contract; the
+compiler/KIR identities; the exact final HSACO and descriptors; all 19 reviewed
+machine-effect sites; and the lossless machine request, evidence and receipt.
+Pinned Verus accepts the exact source with `94 verified, 0 errors` and rejects
+one-at-a-time HSACO, descriptor, effect-offset, effect-kind, and effect-width
+substitutions. This closes only the bounded `ProofExecutableBinding`
+obligation. Six compiler provenance, semantic refinement, floating-point,
+machine refinement, ABI, and end-to-end effect obligations remain open, so the
+auditor still cannot authorize publication, loading, or launch.
 
 ## CUDA-Oxide status
 
@@ -595,8 +608,11 @@ is complete, and the recorded runs grant no current production authority.
   buffers, fixups, effects, and completion custody. The joined invocation
   transition promotes these only after an authenticated Worker V3 executable,
   current publication, exact artifact, geometry, and checked device all match.
-  A reviewed production verifier is still needed to replace the test verifier
-  and make this sole runtime path reachable by ordinary applications.
+  The reviewed scalar production auditor now closes the exact
+  proof/executable identity join, but cannot implement Worker V3 launch
+  authority until its six remaining compiler, refinement, ABI, and effect
+  obligations close. The synthetic verifier therefore remains confined to
+  tests and ordinary applications still fail closed.
 
   The rustc path recognizes only the exact alpha/zeta MIR shapes and lowers
   their trusted thread index, `Option`-guarded `DisjointSlice::get_mut`, slice
