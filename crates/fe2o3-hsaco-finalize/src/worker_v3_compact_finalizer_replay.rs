@@ -840,6 +840,7 @@ pub enum ProtectedWorkerV3CompactFinalizerReplayErrorV1 {
     Truncated,
     TrailingBytes,
     Identity,
+    RetiredHandoffSlot { tag: u8 },
     Worker,
     Limits,
     OutputBound,
@@ -867,6 +868,9 @@ impl fmt::Display for ProtectedWorkerV3CompactFinalizerReplayErrorV1 {
             Self::Truncated => formatter.write_str("truncated compact Worker V3 replay"),
             Self::TrailingBytes => formatter.write_str("trailing compact Worker V3 replay bytes"),
             Self::Identity => formatter.write_str("invalid compact Worker V3 replay identity"),
+            Self::RetiredHandoffSlot { tag } => {
+                write!(formatter, "retired compiler handoff slot tag {tag}")
+            }
             Self::Worker => formatter.write_str("invalid compact Worker V3 worker measurement"),
             Self::Limits => formatter.write_str("invalid compact Worker V3 execution limits"),
             Self::OutputBound => formatter.write_str("invalid compact Worker V3 output bound"),
@@ -1264,9 +1268,10 @@ fn decode_handoff_slot_v3(
     value: u8,
 ) -> Result<CompilerModuleHandoffSlotV3, ProtectedWorkerV3CompactFinalizerReplayErrorV1> {
     match value {
-        0 => Ok(CompilerModuleHandoffSlotV3::Default),
-        1 => Ok(CompilerModuleHandoffSlotV3::GeneralGemmReference),
-        2 => Ok(CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly),
+        0 => Ok(CompilerModuleHandoffSlotV3::Production),
+        tag @ (1 | 2) => {
+            Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::RetiredHandoffSlot { tag })
+        }
         _ => Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::Identity),
     }
 }
@@ -1502,7 +1507,7 @@ mod tests {
         encode_compact_replay_v2(
             FinalizedProtectedWorkerV3HsacoIdentityV1::from_test_bytes([1; 32]),
             [2; 32],
-            CompilerModuleHandoffSlotV3::GeneralGemmReference,
+            CompilerModuleHandoffSlotV3::Production,
             CompilerModuleHandoffTransactionIdentityV3::from_bytes([3; 32]),
             &worker,
             limits,
@@ -1559,7 +1564,7 @@ mod tests {
         assert_eq!(replay.source_evidence_identity(), &[2; 32]);
         assert_eq!(
             replay.handoff_slot(),
-            CompilerModuleHandoffSlotV3::GeneralGemmReference
+            CompilerModuleHandoffSlotV3::Production
         );
         assert_eq!(replay.transaction_identity().as_bytes(), &[3; 32]);
         assert!(!replay.authenticates_compiler_origin());
@@ -1577,9 +1582,19 @@ mod tests {
     }
 
     #[test]
-    fn compact_v2_rejects_unknown_slot_and_zero_transaction_identity() {
+    fn compact_v2_rejects_retired_unknown_slots_and_zero_transaction_identity() {
         let bytes = valid_v2_bytes();
         let slot_offset = COMPACT_REPLAY_MAGIC_V2.len() + 2 + 2 * 32;
+
+        for tag in [1, 2] {
+            let mut retired_slot = bytes.clone();
+            retired_slot[slot_offset] = tag;
+            reseal_v2(&mut retired_slot);
+            assert_eq!(
+                ProtectedWorkerV3CompactFinalizerReplayV2::decode_canonical(&retired_slot),
+                Err(ProtectedWorkerV3CompactFinalizerReplayErrorV1::RetiredHandoffSlot { tag })
+            );
+        }
 
         let mut unknown_slot = bytes.clone();
         unknown_slot[slot_offset] = u8::MAX;

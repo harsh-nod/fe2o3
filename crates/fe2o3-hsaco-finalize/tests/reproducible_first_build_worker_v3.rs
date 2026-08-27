@@ -369,7 +369,7 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
     let (attempt, receipt, consumed) = consumed(
         &directory,
         0x61,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x11,
     );
@@ -392,7 +392,7 @@ fn consumed_v3_executes_natively_and_retains_every_exact_axis() {
 
     let expected = evidence.binding().expectation();
     assert_eq!(expected.attempt(), attempt);
-    assert_eq!(expected.slot(), CompilerModuleHandoffSlotV3::Default);
+    assert_eq!(expected.slot(), CompilerModuleHandoffSlotV3::Production);
     assert_eq!(expected.transaction_identity(), transaction);
     assert_eq!(expected.receipt_byte_len(), receipt_byte_len);
     assert_eq!(expected.outer_handoff_identity(), outer_identity);
@@ -477,7 +477,7 @@ fn deterministic_preflight_completes_before_transaction_consumption() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         &handoff,
     )
     .unwrap();
@@ -503,7 +503,7 @@ fn deterministic_preflight_completes_before_transaction_consumption() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         handoff.identity(),
     )
     .unwrap();
@@ -529,7 +529,7 @@ fn deterministic_preflight_rejects_same_length_foreign_handoff_for_receipt() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         &expected,
     )
     .unwrap();
@@ -566,7 +566,7 @@ fn deterministic_preflight_rejection_leaves_transaction_unconsumed() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         &handoff,
     )
     .unwrap();
@@ -594,7 +594,7 @@ fn deterministic_preflight_rejection_leaves_transaction_unconsumed() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         handoff.identity(),
     )
     .unwrap();
@@ -634,20 +634,20 @@ fn invocation_tamper_and_final_commitment_splice_fail_before_worker_execution() 
 }
 
 #[test]
-fn attempt_slot_transaction_capsule_closure_and_nested_module_change_all_v3_identities() {
+fn attempt_transaction_capsule_closure_and_nested_module_change_all_v3_identities() {
     let first_directory = TestDirectory::new();
     let second_directory = TestDirectory::new();
     let (_, first_receipt, first) = consumed(
         &first_directory,
         0x71,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x51,
     );
     let (_, second_receipt, second) = consumed(
         &second_directory,
         0x72,
-        CompilerModuleHandoffSlotV3::GeneralGemmReference,
+        CompilerModuleHandoffSlotV3::Production,
         0x40,
         0x52,
     );
@@ -679,7 +679,14 @@ fn attempt_slot_transaction_capsule_closure_and_nested_module_change_all_v3_iden
     let first_expected = first.binding().expectation();
     let second_expected = second.binding().expectation();
     assert_ne!(first_expected.attempt(), second_expected.attempt());
-    assert_ne!(first_expected.slot(), second_expected.slot());
+    assert_eq!(
+        first_expected.slot(),
+        CompilerModuleHandoffSlotV3::Production
+    );
+    assert_eq!(
+        second_expected.slot(),
+        CompilerModuleHandoffSlotV3::Production
+    );
     assert_ne!(
         first_expected.transaction_identity(),
         second_expected.transaction_identity()
@@ -717,12 +724,12 @@ fn attempt_slot_transaction_capsule_closure_and_nested_module_change_all_v3_iden
 }
 
 #[test]
-fn parent_attempt_slot_transaction_outer_and_closure_substitutions_fail_closed() {
+fn parent_attempt_transaction_outer_and_closure_substitutions_fail_closed() {
     let expected_directory = TestDirectory::new();
     let (_, expected_receipt, expected_consumed) = consumed(
         &expected_directory,
         0x73,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x53,
     );
@@ -732,7 +739,7 @@ fn parent_attempt_slot_transaction_outer_and_closure_substitutions_fail_closed()
     let (_, _, attempt_substitution) = consumed(
         &attempt_directory,
         0x74,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x53,
     );
@@ -754,37 +761,11 @@ fn parent_attempt_slot_transaction_outer_and_closure_substitutions_fail_closed()
         ))
     ));
 
-    let slot_directory = TestDirectory::new();
-    let (_, _, slot_substitution) = consumed(
-        &slot_directory,
-        0x73,
-        CompilerModuleHandoffSlotV3::GeneralGemmReference,
-        0x20,
-        0x53,
-    );
-    assert!(matches!(
-        execute_protected_reproducible_first_build_worker_v3(
-            slot_substitution,
-            expected_receipt,
-            expected_closure,
-            &pinned(),
-            vec![provider()],
-            options(),
-            WorkerOutputConstraintsV1::new(4096).unwrap(),
-            limits(),
-        ),
-        Err(ProtectedFirstBuildWorkerV3Error::Binding(
-            ProtectedCompilerHandoffBindingErrorV3::RelationshipMismatch {
-                field: "parent V3 slot"
-            }
-        ))
-    ));
-
     let outer_directory = TestDirectory::new();
     let (_, outer_receipt, outer_substitution) = consumed(
         &outer_directory,
         0x73,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x40,
         0x54,
     );
@@ -811,7 +792,7 @@ fn parent_attempt_slot_transaction_outer_and_closure_substitutions_fail_closed()
     let (_, _, closure_substitution) = consumed(
         &closure_directory,
         0x73,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x40,
         0x54,
     );
@@ -841,14 +822,14 @@ fn identical_v3_inputs_produce_deterministic_execution_evidence() {
     let (_, first_receipt, first) = consumed(
         &first_directory,
         0x75,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x55,
     );
     let (_, second_receipt, second) = consumed(
         &second_directory,
         0x75,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x55,
     );
@@ -904,14 +885,14 @@ fn execution_limits_are_retained_and_change_only_the_complete_evidence_identity(
     let (_, first_receipt, first) = consumed(
         &first_directory,
         0x7a,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x5a,
     );
     let (_, second_receipt, second) = consumed(
         &second_directory,
         0x7a,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         0x20,
         0x5a,
     );
@@ -960,7 +941,7 @@ fn consumed_transaction_cannot_be_replayed_and_v3_entry_has_no_legacy_parameter(
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         &handoff,
     )
     .unwrap();
@@ -968,7 +949,7 @@ fn consumed_transaction_cannot_be_replayed_and_v3_entry_has_no_legacy_parameter(
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         handoff.identity(),
     )
     .unwrap();
@@ -978,7 +959,7 @@ fn consumed_transaction_cannot_be_replayed_and_v3_entry_has_no_legacy_parameter(
             &directory.0,
             &producer(),
             attempt,
-            CompilerModuleHandoffSlotV3::Default,
+            CompilerModuleHandoffSlotV3::Production,
             handoff.identity(),
         ),
         Err(CompilerModuleHandoffErrorV3::AlreadyConsumed)
@@ -1001,7 +982,7 @@ fn consumed_transaction_cannot_be_replayed_and_v3_entry_has_no_legacy_parameter(
             &v2_directory.0,
             &producer(),
             v2_attempt,
-            CompilerModuleHandoffSlotV3::Default,
+            CompilerModuleHandoffSlotV3::Production,
             handoff.identity(),
         ),
         Err(CompilerModuleHandoffErrorV3::NotPublished)
@@ -1050,7 +1031,7 @@ fn configured_upstream_llvm_worker_executes_the_native_v3_path() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         &handoff,
     )
     .unwrap();
@@ -1058,7 +1039,7 @@ fn configured_upstream_llvm_worker_executes_the_native_v3_path() {
         &directory.0,
         &producer(),
         attempt,
-        CompilerModuleHandoffSlotV3::Default,
+        CompilerModuleHandoffSlotV3::Production,
         handoff.identity(),
     )
     .unwrap();

@@ -889,7 +889,6 @@ mod v3_tests {
         assert_axis!(source_evidence_identity, digest(3));
         assert_axis!(binding_identity, digest(4));
         assert_axis!(attempt, attempt(2));
-        assert_axis!(slot, CompilerModuleHandoffSlotV3::GeneralGemmReference);
         assert_axis!(transaction_identity, digest(5));
         assert_axis!(receipt_byte_len, 101);
         assert_axis!(outer_handoff_sha256, digest(6));
@@ -978,7 +977,7 @@ mod v3_tests {
             source_evidence_identity: digest(0x02),
             binding_identity: digest(0x03),
             attempt: attempt(1),
-            slot: CompilerModuleHandoffSlotV3::Default,
+            slot: CompilerModuleHandoffSlotV3::Production,
             transaction_identity: digest(0x04),
             receipt_byte_len: 100,
             outer_handoff_sha256: digest(0x05),

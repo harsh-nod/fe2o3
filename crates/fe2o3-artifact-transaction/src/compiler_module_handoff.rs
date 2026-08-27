@@ -63,21 +63,15 @@ static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 /// the two V1 constants equal.
 pub const MAX_COMPILER_MODULE_HANDOFF_BYTES: usize = (64 * 1024 * 1024) + (512 * 1024) + 128 + 83;
 
-/// Closed attempt-local transport slot for one compiler module handoff.
+/// Closed attempt-local transport slot for one production compiler module handoff.
 ///
-/// The default value preserves the original single-module protocol. The two
-/// general-GEMM values let one rustc process transfer the independently built
-/// reference and vectorized schedules while retaining one build attempt and
-/// one non-Clone frontend correspondence.
+/// Tag zero preserves the original single-module wire and identity contract.
+/// Historical workload-specific tags are retired and cannot be constructed.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum CompilerModuleHandoffSlotV1 {
-    /// Original one-module transport slot.
-    Default = 0,
-    /// Issue #138 reference wave64 XOR4 schedule.
-    GeneralGemmReference = 1,
-    /// Issue #138 A-only BF16 vector-transfer schedule.
-    GeneralGemmVectorizedAOnly = 2,
+    /// Sole workload-neutral production transport slot.
+    Production = 0,
 }
 
 /// SHA-256 identity of exact bytes committed by a holder of the named cooperative attempt.
@@ -598,14 +592,10 @@ impl HandoffSchema for HandoffV1Schema {
     const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
     const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
     const VALIDATE_RECORD_DURING_RECOVERY: bool = false;
-    const ALL_SLOTS: &'static [Self::Slot] = &[
-        CompilerModuleHandoffSlotV1::Default,
-        CompilerModuleHandoffSlotV1::GeneralGemmReference,
-        CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly,
-    ];
+    const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV1::Production];
 
     fn default_slot() -> Self::Slot {
-        CompilerModuleHandoffSlotV1::Default
+        CompilerModuleHandoffSlotV1::Production
     }
 
     fn slot_tag(slot: Self::Slot) -> u8 {
@@ -945,7 +935,7 @@ fn publish_with_hooks(
         output_dir,
         producer,
         attempt,
-        CompilerModuleHandoffSlotV1::Default,
+        CompilerModuleHandoffSlotV1::Production,
         handoff_bytes,
         hooks,
     )
@@ -1107,7 +1097,7 @@ fn consume_with_hooks(
         output_dir,
         producer,
         attempt,
-        CompilerModuleHandoffSlotV1::Default,
+        CompilerModuleHandoffSlotV1::Production,
         hooks,
     )
 }
@@ -2023,16 +2013,15 @@ mod protected_v2 {
         + (7 * 8)
         + 32;
 
-    /// Closed attempt-local transport slot for a closure-protected compiler module handoff.
+    /// Closed workload-neutral slot for a closure-protected compiler module handoff.
+    ///
+    /// Tag zero preserves the original wire and identity contract. Historical
+    /// workload-specific tags are retired and cannot be constructed.
     #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
     #[repr(u8)]
     pub enum CompilerModuleHandoffSlotV2 {
-        /// Original one-module transport slot.
-        Default = 0,
-        /// Issue #138 reference wave64 XOR4 schedule.
-        GeneralGemmReference = 1,
-        /// Issue #138 A-only BF16 vector-transfer schedule.
-        GeneralGemmVectorizedAOnly = 2,
+        /// Sole workload-neutral production transport slot.
+        Production = 0,
     }
 
     /// SHA-256 commitment to a V2 closure, slot, attempt, producer, and exact module bytes.
@@ -2356,14 +2345,10 @@ mod protected_v2 {
         const DECODE_WORKING_SET_FIXED_BYTES: usize = 0;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_COMPILER_MODULE_HANDOFF_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
-        const ALL_SLOTS: &'static [Self::Slot] = &[
-            CompilerModuleHandoffSlotV2::Default,
-            CompilerModuleHandoffSlotV2::GeneralGemmReference,
-            CompilerModuleHandoffSlotV2::GeneralGemmVectorizedAOnly,
-        ];
+        const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV2::Production];
 
         fn default_slot() -> Self::Slot {
-            CompilerModuleHandoffSlotV2::Default
+            CompilerModuleHandoffSlotV2::Production
         }
 
         fn slot_tag(slot: Self::Slot) -> u8 {
@@ -2487,7 +2472,7 @@ mod protected_v2 {
             output_dir,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV2::Default,
+            CompilerModuleHandoffSlotV2::Production,
             compiler_closure,
             handoff_bytes,
             hooks,
@@ -2533,7 +2518,7 @@ mod protected_v2 {
             output_dir,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV2::Default,
+            CompilerModuleHandoffSlotV2::Production,
             compiler_closure,
             hooks,
         )
@@ -2634,8 +2619,9 @@ mod protected_v2 {
         use std::thread;
 
         #[test]
-        fn v2_schema_has_exactly_three_slots() {
-            assert_eq!(HandoffV2Schema::ALL_SLOTS.len(), 3);
+        fn v2_schema_has_exactly_one_production_slot() {
+            assert_eq!(HandoffV2Schema::ALL_SLOTS.len(), 1);
+            assert_eq!(CompilerModuleHandoffSlotV2::Production as u8, 0);
         }
 
         struct TestDirectory(PathBuf);
@@ -2712,7 +2698,7 @@ mod protected_v2 {
                     hex(&slot_identity(
                         producer_id,
                         attempt,
-                        CompilerModuleHandoffSlotV1::Default
+                        CompilerModuleHandoffSlotV1::Production
                     ))
                 ))
         }
@@ -2760,7 +2746,7 @@ mod protected_v2 {
                 publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, module)
                     .unwrap();
             assert_eq!(receipt.attempt(), attempt);
-            assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV2::Default);
+            assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV2::Production);
             assert_eq!(receipt.compiler_closure(), closure);
             assert_eq!(receipt.length(), module.len());
             assert!(!receipt.grants_publication_authority());
@@ -2770,7 +2756,7 @@ mod protected_v2 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV2::Default,
+                CompilerModuleHandoffSlotV2::Production,
             );
             let record_bytes = fs::read(slot.join(READY_ENTRY)).unwrap();
             let record = HandoffRecordV2::decode(&record_bytes).unwrap();
@@ -2796,7 +2782,7 @@ mod protected_v2 {
             let consumed =
                 consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure).unwrap();
             assert_eq!(consumed.attempt(), attempt);
-            assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV2::Default);
+            assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV2::Production);
             assert_eq!(consumed.compiler_closure(), closure);
             assert_eq!(consumed.identity(), receipt.identity());
             assert_eq!(consumed.bytes(), module);
@@ -2812,13 +2798,17 @@ mod protected_v2 {
         }
 
         #[test]
-        fn identity_binds_closure_slot_attempt_producer_and_module_bytes() {
+        fn identity_binds_closure_attempt_producer_and_module_bytes() {
             let temp = TestDirectory::new();
             let primary_producer = producer("binding");
             let other_producer = producer("binding_other");
             let attempt = begin(&temp.0, &primary_producer, 32);
             let producer_id = producer_identity_v2(&primary_producer);
-            let slot = slot_identity_v2(producer_id, attempt, CompilerModuleHandoffSlotV2::Default);
+            let slot = slot_identity_v2(
+                producer_id,
+                attempt,
+                CompilerModuleHandoffSlotV2::Production,
+            );
             let compiler_closure = closure(21);
             let baseline =
                 handoff_identity_v2(producer_id, slot, attempt, compiler_closure, b"module");
@@ -2828,20 +2818,6 @@ mod protected_v2 {
                 handoff_identity_v2(
                     producer_identity_v2(&other_producer),
                     slot,
-                    attempt,
-                    compiler_closure,
-                    b"module"
-                )
-            );
-            assert_ne!(
-                baseline,
-                handoff_identity_v2(
-                    producer_id,
-                    slot_identity_v2(
-                        producer_id,
-                        attempt,
-                        CompilerModuleHandoffSlotV2::GeneralGemmReference
-                    ),
                     attempt,
                     compiler_closure,
                     b"module"
@@ -2871,59 +2847,6 @@ mod protected_v2 {
             assert_ne!(
                 baseline,
                 handoff_identity_v2(producer_id, slot, attempt, compiler_closure, b"module!")
-            );
-        }
-
-        #[test]
-        fn named_slot_record_cannot_be_replayed_as_default() {
-            let temp = TestDirectory::new();
-            let producer = producer("slot_binding");
-            let attempt = begin(&temp.0, &producer, 33);
-            let closure = closure(31);
-            let module = b"same module";
-            let default =
-                publish_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure, module)
-                    .unwrap();
-            let named = publish_compiler_module_handoff_in_slot_v2(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV2::GeneralGemmReference,
-                closure,
-                module,
-            )
-            .unwrap();
-            assert_ne!(default.identity(), named.identity());
-
-            let default_slot = slot_path_v2(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV2::Default,
-            );
-            let named_slot = slot_path_v2(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV2::GeneralGemmReference,
-            );
-            fs::remove_file(default_slot.join(READY_ENTRY)).unwrap();
-            fs::copy(named_slot.join(READY_ENTRY), default_slot.join(READY_ENTRY)).unwrap();
-            assert!(matches!(
-                consume_compiler_module_handoff_v2(&temp.0, &producer, attempt, closure),
-                Err(CompilerModuleHandoffErrorV2::InvalidSlot { .. })
-            ));
-            assert_eq!(
-                consume_compiler_module_handoff_in_slot_v2(
-                    &temp.0,
-                    &producer,
-                    attempt,
-                    CompilerModuleHandoffSlotV2::GeneralGemmReference,
-                    closure,
-                )
-                .unwrap()
-                .bytes(),
-                module
             );
         }
 
@@ -2972,7 +2895,7 @@ mod protected_v2 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV2::Default,
+                    CompilerModuleHandoffSlotV2::Production,
                 );
                 match attack {
                     "payload" => fs::write(slot.join(PAYLOAD_ENTRY), b"changed!").unwrap(),
@@ -3009,7 +2932,7 @@ mod protected_v2 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV2::Default,
+                CompilerModuleHandoffSlotV2::Production,
             );
             rewrite_ready_record(&slot, |bytes| {
                 let offset = closure_offset();
@@ -3037,7 +2960,7 @@ mod protected_v2 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV2::Default,
+                    CompilerModuleHandoffSlotV2::Production,
                 );
                 rewrite_ready_record(&slot, |bytes| match attack {
                     "record-version" => bytes[RECORD_MAGIC_V2.len()..RECORD_MAGIC_V2.len() + 2]
@@ -3075,7 +2998,7 @@ mod protected_v2 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV2::Default,
+                    CompilerModuleHandoffSlotV2::Production,
                 );
                 assert_ne!(v1_slot, v2_slot);
                 assert!(
@@ -3355,16 +3278,15 @@ mod semantic_v3 {
         MAX_COMPILER_MODULE_HANDOFF_BYTES_V3 + V3_DECODE_FIXED_BYTES;
     const STREAM_BUFFER_BYTES_V3: usize = 16 * 1024;
 
-    /// Closed attempt-local transport slot for one strict semantic V3 handoff.
+    /// Closed workload-neutral slot for one strict semantic V3 handoff.
+    ///
+    /// Tag zero preserves the original wire and identity contract. Historical
+    /// workload-specific tags are retired and cannot be constructed.
     #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
     #[repr(u8)]
     pub enum CompilerModuleHandoffSlotV3 {
-        /// Original one-module transport slot.
-        Default = 0,
-        /// Issue #138 reference wave64 XOR4 schedule.
-        GeneralGemmReference = 1,
-        /// Issue #138 A-only BF16 vector-transfer schedule.
-        GeneralGemmVectorizedAOnly = 2,
+        /// Sole workload-neutral production transport slot.
+        Production = 0,
     }
 
     /// Domain-separated transaction identity for exact V3 bytes and bindings.
@@ -3897,7 +3819,7 @@ mod semantic_v3 {
             output_dir,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV3::Default,
+            CompilerModuleHandoffSlotV3::Production,
             handoff,
             &mut NoFaults,
         )
@@ -3929,7 +3851,7 @@ mod semantic_v3 {
             output_dir,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV3::Default,
+            CompilerModuleHandoffSlotV3::Production,
         )
     }
 
@@ -3967,7 +3889,7 @@ mod semantic_v3 {
             output_dir,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV3::Default,
+            CompilerModuleHandoffSlotV3::Production,
             handoff,
         )
     }
@@ -4034,7 +3956,7 @@ mod semantic_v3 {
             output_dir,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV3::Default,
+            CompilerModuleHandoffSlotV3::Production,
             expected_handoff_identity,
             &mut NoFaults,
         )
@@ -4145,14 +4067,10 @@ mod semantic_v3 {
         const DECODE_WORKING_SET_FIXED_BYTES: usize = V3_DECODE_FIXED_BYTES;
         const MAX_DECODE_WORKING_SET_BYTES: usize = MAX_V3_DECODE_WORKING_SET_BYTES;
         const VALIDATE_RECORD_DURING_RECOVERY: bool = true;
-        const ALL_SLOTS: &'static [Self::Slot] = &[
-            CompilerModuleHandoffSlotV3::Default,
-            CompilerModuleHandoffSlotV3::GeneralGemmReference,
-            CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
-        ];
+        const ALL_SLOTS: &'static [Self::Slot] = &[CompilerModuleHandoffSlotV3::Production];
 
         fn default_slot() -> Self::Slot {
-            CompilerModuleHandoffSlotV3::Default
+            CompilerModuleHandoffSlotV3::Production
         }
 
         fn slot_tag(slot: Self::Slot) -> u8 {
@@ -4833,8 +4751,9 @@ mod semantic_v3 {
         };
 
         #[test]
-        fn v3_schema_has_exactly_three_slots() {
-            assert_eq!(HandoffV3Schema::ALL_SLOTS.len(), 3);
+        fn v3_schema_has_exactly_one_production_slot() {
+            assert_eq!(HandoffV3Schema::ALL_SLOTS.len(), 1);
+            assert_eq!(CompilerModuleHandoffSlotV3::Production as u8, 0);
         }
         use fe2o3_rustc_invocation::{
             CompileEnvironmentV2, RustcInvocationDescriptorV2, RustcInvocationDescriptorV3,
@@ -4913,7 +4832,7 @@ mod semantic_v3 {
                 output_dir,
                 producer,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
                 handoff,
             )
         }
@@ -5152,7 +5071,7 @@ mod semantic_v3 {
             let receipt =
                 publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
             assert_eq!(receipt.attempt(), attempt);
-            assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV3::Default);
+            assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV3::Production);
             assert_eq!(receipt.handoff_identity(), expected_identity);
             assert_eq!(receipt.length(), expected_bytes.len());
             assert!(!receipt.grants_compiler_authority());
@@ -5162,7 +5081,7 @@ mod semantic_v3 {
             let slot_id = slot_identity_for::<HandoffV3Schema>(
                 producer_id,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
             );
             let binding = HandoffBindingV3::from(expected_identity);
             let generation = attempt.generation().to_le_bytes();
@@ -5210,49 +5129,31 @@ mod semantic_v3 {
             let temp = TestDirectory::new();
             let producer = producer("recover_receipt_v3");
             let attempt = begin(&temp.0, &producer, 31);
-            let default_handoff = outer(131);
-            let default =
-                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &default_handoff)
-                    .unwrap();
-            let named_handoff = outer(132);
-            let named = publish_compiler_module_handoff_in_slot_v3(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-                &named_handoff,
-            )
-            .unwrap();
+            let handoff = outer(131);
+            let receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
 
-            let recovered_default =
+            let recovered =
                 recover_compiler_module_handoff_receipt_v3(&temp.0, &producer, attempt).unwrap();
-            let recovered_named = recover_compiler_module_handoff_receipt_in_slot_v3(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-            )
-            .unwrap();
-            assert_eq!(recovered_default, default);
-            assert_eq!(recovered_named, named);
+            assert_eq!(recovered, receipt);
             assert_eq!(
                 recover_compiler_module_handoff_receipt_v3(&temp.0, &producer, attempt).unwrap(),
-                default
+                receipt
             );
-            assert!(!recovered_default.grants_compiler_authority());
-            assert!(!recovered_default.grants_publication_authority());
+            assert!(!recovered.grants_compiler_authority());
+            assert!(!recovered.grants_publication_authority());
 
-            for slot in [
-                CompilerModuleHandoffSlotV3::Default,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-            ] {
-                let path = slot_path(&temp.0, &producer, attempt, slot);
-                assert!(path.join(READY_ENTRY).is_file());
-                assert!(path.join(PAYLOAD_ENTRY).is_file());
-                assert!(!path.join(CONSUMED_ENTRY).exists());
-            }
+            let path = slot_path(
+                &temp.0,
+                &producer,
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+            );
+            assert!(path.join(READY_ENTRY).is_file());
+            assert!(path.join(PAYLOAD_ENTRY).is_file());
+            assert!(!path.join(CONSUMED_ENTRY).exists());
 
-            let lease = acquire_currentness(&temp.0, &producer, recovered_default);
+            let lease = acquire_currentness(&temp.0, &producer, recovered);
             revalidate_currentness(&lease);
         }
 
@@ -5276,15 +5177,6 @@ mod semantic_v3 {
             let handoff = outer(133);
             publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
 
-            assert!(matches!(
-                recover_compiler_module_handoff_receipt_in_slot_v3(
-                    &temp.0,
-                    &producer,
-                    attempt,
-                    CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
-                ),
-                Err(CompilerModuleHandoffErrorV3::NotPublished)
-            ));
             let wrong_producer = ProducerIdentity::from_codegen(
                 "recover_bindings_wrong_crate_v3",
                 Some(Path::new("/src/semantic-kernel.rs")),
@@ -5353,7 +5245,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                 );
 
                 match mutation {
@@ -5447,7 +5339,7 @@ mod semantic_v3 {
                         &temp.0,
                         &producer,
                         attempt,
-                        CompilerModuleHandoffSlotV3::Default,
+                        CompilerModuleHandoffSlotV3::Production,
                         &handoff,
                         &mut FailAt(point),
                     )
@@ -5473,44 +5365,7 @@ mod semantic_v3 {
         }
 
         #[test]
-        fn receipt_recovery_rejects_replay_symlink_and_replacement() {
-            let replay = TestDirectory::new();
-            let replay_producer = producer("recover_replay_v3");
-            let replay_attempt = begin(&replay.0, &replay_producer, 50);
-            let replay_handoff = outer(150);
-            publish_compiler_module_handoff_v3(
-                &replay.0,
-                &replay_producer,
-                replay_attempt,
-                &replay_handoff,
-            )
-            .unwrap();
-            let source = slot_path(
-                &replay.0,
-                &replay_producer,
-                replay_attempt,
-                CompilerModuleHandoffSlotV3::Default,
-            );
-            let destination = slot_path(
-                &replay.0,
-                &replay_producer,
-                replay_attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-            );
-            fs::create_dir(&destination).unwrap();
-            fs::set_permissions(&destination, fs::Permissions::from_mode(0o700)).unwrap();
-            fs::rename(source.join(PAYLOAD_ENTRY), destination.join(PAYLOAD_ENTRY)).unwrap();
-            fs::rename(source.join(READY_ENTRY), destination.join(READY_ENTRY)).unwrap();
-            assert!(matches!(
-                recover_compiler_module_handoff_receipt_in_slot_v3(
-                    &replay.0,
-                    &replay_producer,
-                    replay_attempt,
-                    CompilerModuleHandoffSlotV3::GeneralGemmReference,
-                ),
-                Err(CompilerModuleHandoffErrorV3::InvalidSlot { .. })
-            ));
-
+        fn receipt_recovery_rejects_symlink_and_replacement() {
             for attack in ["ready-symlink", "slot-copy"] {
                 let temp = TestDirectory::new();
                 let producer = producer(&format!("recover_{}_v3", attack.replace('-', "_")));
@@ -5521,7 +5376,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                 );
                 match attack {
                     "ready-symlink" => {
@@ -5637,7 +5492,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                     &handoff,
                     || {
                         let output = PinnedOutput::open_existing(&temp.0).unwrap();
@@ -5682,7 +5537,7 @@ mod semantic_v3 {
             let consumed =
                 consume_compiler_module_handoff_with_currentness_v3(&lease, token).unwrap();
             assert_eq!(consumed.attempt(), attempt);
-            assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV3::Default);
+            assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV3::Production);
             assert_eq!(consumed.handoff_identity(), receipt.handoff_identity());
             assert_eq!(
                 consumed.transaction_identity(),
@@ -5718,44 +5573,6 @@ mod semantic_v3 {
         }
 
         #[test]
-        fn token_and_lease_from_different_v3_slots_never_combine() {
-            let temp = TestDirectory::new();
-            let producer = producer("cross_publication_token_v3");
-            let attempt = begin(&temp.0, &producer, 16);
-            let handoff = outer(113);
-            let reference = publish_in_slot_with_currentness(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-                &handoff,
-            )
-            .into_current_lease();
-            let vectorized = publish_in_slot_with_currentness(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
-                &handoff,
-            )
-            .into_current_lease();
-
-            let wrong_token = acquire_token(&reference);
-            assert!(matches!(
-                vectorized.validate_current_token(&wrong_token),
-                Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
-            ));
-            assert!(matches!(
-                consume_compiler_module_handoff_with_currentness_v3(&vectorized, wrong_token),
-                Err(CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken)
-            ));
-
-            let token = acquire_token(&reference);
-            consume_compiler_module_handoff_with_currentness_v3(&reference, token).unwrap();
-            revalidate_currentness(&vectorized);
-        }
-
-        #[test]
         fn currentness_rejects_file_tamper_and_file_or_directory_replacement() {
             for (seed, mutation) in [
                 (17, "payload-tamper"),
@@ -5773,7 +5590,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                 );
 
                 match mutation {
@@ -6012,7 +5829,7 @@ mod semantic_v3 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
             );
             let required = handoff.canonical_bytes().len() * V3_DECODE_WORKING_SET_MULTIPLIER
                 + V3_DECODE_FIXED_BYTES;
@@ -6022,7 +5839,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                     handoff.identity().into(),
                     required - 1,
                     &mut NoFaults,
@@ -6051,7 +5868,7 @@ mod semantic_v3 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
             );
             let ready = slot.join(READY_ENTRY);
             let original_record = fs::read(&ready).unwrap();
@@ -6089,7 +5906,7 @@ mod semantic_v3 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
             );
             let mut tampered = handoff.canonical_bytes().to_vec();
             tampered[0] ^= 1;
@@ -6115,7 +5932,7 @@ mod semantic_v3 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
             );
             let mut tampered = original.clone();
             tampered[0] ^= 1;
@@ -6147,7 +5964,7 @@ mod semantic_v3 {
                 &temp.0,
                 &producer,
                 attempt,
-                CompilerModuleHandoffSlotV3::Default,
+                CompilerModuleHandoffSlotV3::Production,
             );
             let ready = slot.join(READY_ENTRY);
             let mut record =
@@ -6167,53 +5984,6 @@ mod semantic_v3 {
                 Err(CompilerModuleHandoffErrorV3::WrongHandoffIdentity)
             ));
             assert!(slot.join(READY_ENTRY).exists());
-        }
-
-        #[test]
-        fn named_v3_slots_are_independent_and_slot_bound() {
-            let temp = TestDirectory::new();
-            let producer = producer("named_slots_v3");
-            let attempt = begin(&temp.0, &producer, 9);
-            let handoff = outer(81);
-            let reference = publish_compiler_module_handoff_in_slot_v3(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-                &handoff,
-            )
-            .unwrap();
-            let vectorized = publish_compiler_module_handoff_in_slot_v3(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
-                &handoff,
-            )
-            .unwrap();
-            assert_ne!(
-                reference.transaction_identity(),
-                vectorized.transaction_identity()
-            );
-
-            let first = consume_compiler_module_handoff_in_slot_v3(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmReference,
-                handoff.identity(),
-            )
-            .unwrap();
-            let second = consume_compiler_module_handoff_in_slot_v3(
-                &temp.0,
-                &producer,
-                attempt,
-                CompilerModuleHandoffSlotV3::GeneralGemmVectorizedAOnly,
-                handoff.identity(),
-            )
-            .unwrap();
-            assert_eq!(first.bytes(), handoff.canonical_bytes());
-            assert_eq!(second.bytes(), handoff.canonical_bytes());
         }
 
         #[test]
@@ -6303,7 +6073,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                     handoff.identity(),
                     &mut FailAt(FaultPoint::PayloadValidated),
                 )
@@ -6322,7 +6092,7 @@ mod semantic_v3 {
                     &temp.0,
                     &producer,
                     attempt,
-                    CompilerModuleHandoffSlotV3::Default,
+                    CompilerModuleHandoffSlotV3::Production,
                     handoff.identity(),
                     &mut FailAt(FaultPoint::ConsumedRenamed),
                 )
@@ -6400,7 +6170,7 @@ mod tests {
             path,
             producer,
             attempt,
-            CompilerModuleHandoffSlotV1::Default,
+            CompilerModuleHandoffSlotV1::Production,
         )
     }
 
@@ -6436,7 +6206,7 @@ mod tests {
         let module = b"exact compiler module";
         let receipt =
             publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, module).unwrap();
-        assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV1::Default);
+        assert_eq!(receipt.slot(), CompilerModuleHandoffSlotV1::Production);
         assert_eq!(receipt.identity().as_bytes(), &sha256(module));
         assert_eq!(receipt.length(), module.len());
         assert!(!receipt.grants_publication_authority());
@@ -6463,7 +6233,7 @@ mod tests {
         }
 
         let consumed = consume_compiler_module_handoff_v1(&temp.0, &producer, attempt).unwrap();
-        assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV1::Default);
+        assert_eq!(consumed.slot(), CompilerModuleHandoffSlotV1::Production);
         assert_eq!(consumed.bytes(), module);
         assert_eq!(consumed.identity(), receipt.identity());
         assert!(!consumed.grants_publication_authority());
@@ -6481,82 +6251,6 @@ mod tests {
             publish_compiler_module_handoff_v1(&temp.0, &producer, attempt, module),
             Err(CompilerModuleHandoffErrorV1::AlreadyConsumed)
         ));
-    }
-
-    #[test]
-    fn two_general_gemm_slots_transfer_independent_modules_under_one_attempt() {
-        let temp = TestDirectory::new();
-        let producer = producer("general_gemm");
-        let attempt = begin(&temp.0, &producer, 41);
-        let reference_slot = CompilerModuleHandoffSlotV1::GeneralGemmReference;
-        let vector_slot = CompilerModuleHandoffSlotV1::GeneralGemmVectorizedAOnly;
-
-        let reference = publish_compiler_module_handoff_in_slot_v1(
-            &temp.0,
-            &producer,
-            attempt,
-            reference_slot,
-            b"reference module",
-        )
-        .unwrap();
-        assert_eq!(reference.slot(), reference_slot);
-        assert_ne!(
-            slot_path_for(&temp.0, &producer, attempt, reference_slot),
-            slot_path_for(&temp.0, &producer, attempt, vector_slot)
-        );
-        let consumed_reference =
-            consume_compiler_module_handoff_in_slot_v1(&temp.0, &producer, attempt, reference_slot)
-                .unwrap();
-        assert_eq!(consumed_reference.slot(), reference_slot);
-        assert_eq!(consumed_reference.bytes(), b"reference module");
-        assert!(matches!(
-            consume_compiler_module_handoff_in_slot_v1(&temp.0, &producer, attempt, reference_slot,),
-            Err(CompilerModuleHandoffErrorV1::AlreadyConsumed)
-        ));
-
-        let vector = publish_compiler_module_handoff_in_slot_v1(
-            &temp.0,
-            &producer,
-            attempt,
-            vector_slot,
-            b"vectorized module",
-        )
-        .unwrap();
-        assert_eq!(vector.slot(), vector_slot);
-        let consumed_vector =
-            consume_compiler_module_handoff_in_slot_v1(&temp.0, &producer, attempt, vector_slot)
-                .unwrap();
-        assert_eq!(consumed_vector.slot(), vector_slot);
-        assert_eq!(consumed_vector.bytes(), b"vectorized module");
-        assert_ne!(consumed_reference.identity(), consumed_vector.identity());
-        assert_eq!(consumed_reference.attempt(), consumed_vector.attempt());
-    }
-
-    #[test]
-    fn named_slot_cannot_be_replayed_through_the_default_api() {
-        let temp = TestDirectory::new();
-        let producer = producer("general_gemm_slot_substitution");
-        let attempt = begin(&temp.0, &producer, 42);
-        publish_compiler_module_handoff_in_slot_v1(
-            &temp.0,
-            &producer,
-            attempt,
-            CompilerModuleHandoffSlotV1::GeneralGemmReference,
-            b"reference module",
-        )
-        .unwrap();
-        assert!(matches!(
-            consume_compiler_module_handoff_v1(&temp.0, &producer, attempt),
-            Err(CompilerModuleHandoffErrorV1::NotPublished)
-        ));
-        let consumed = consume_compiler_module_handoff_in_slot_v1(
-            &temp.0,
-            &producer,
-            attempt,
-            CompilerModuleHandoffSlotV1::GeneralGemmReference,
-        )
-        .unwrap();
-        assert_eq!(consumed.bytes(), b"reference module");
     }
 
     #[test]
@@ -6696,7 +6390,8 @@ mod tests {
 
     #[test]
     fn handoff_schema_slot_cardinality_is_exact() {
-        assert_eq!(HandoffV1Schema::ALL_SLOTS.len(), 3);
+        assert_eq!(HandoffV1Schema::ALL_SLOTS.len(), 1);
+        assert_eq!(CompilerModuleHandoffSlotV1::Production as u8, 0);
         assert_eq!(SimulationKernelIrHandoffSchemaV1::ALL_SLOTS.len(), 1);
     }
 

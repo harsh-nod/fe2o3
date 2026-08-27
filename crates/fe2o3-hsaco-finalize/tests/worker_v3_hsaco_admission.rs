@@ -146,7 +146,7 @@ enum DescriptorLineageMutation {
 impl EvidenceConfig {
     const BASE: Self = Self {
         attempt_seed: 0x61,
-        slot: CompilerModuleHandoffSlotV3::Default,
+        slot: CompilerModuleHandoffSlotV3::Production,
         invocation_seed: 0x20,
         module_seed: 0x11,
         optimization: "2",
@@ -681,13 +681,6 @@ fn invocation_closure_transaction_plan_and_worker_axes_cannot_be_dropped() {
             ..EvidenceConfig::BASE
         },
     );
-    let changed_slot = inspected(
-        fixture(),
-        EvidenceConfig {
-            slot: CompilerModuleHandoffSlotV3::GeneralGemmReference,
-            ..EvidenceConfig::BASE
-        },
-    );
     let changed_invocation = inspected(
         fixture(),
         EvidenceConfig {
@@ -719,7 +712,6 @@ fn invocation_closure_transaction_plan_and_worker_axes_cannot_be_dropped() {
 
     for changed in [
         &changed_attempt,
-        &changed_slot,
         &changed_invocation,
         &changed_module,
         &changed_plan,
@@ -734,12 +726,6 @@ fn invocation_closure_transaction_plan_and_worker_axes_cannot_be_dropped() {
         base.transaction_identity(),
         changed_attempt.transaction_identity()
     );
-    assert_ne!(base.handoff_slot(), changed_slot.handoff_slot());
-    assert_ne!(
-        base.transaction_identity(),
-        changed_slot.transaction_identity()
-    );
-    assert_ne!(base.binding_identity(), changed_slot.binding_identity());
     assert_ne!(
         base.binding_expectation().invocation_digest(),
         changed_invocation.binding_expectation().invocation_digest()
