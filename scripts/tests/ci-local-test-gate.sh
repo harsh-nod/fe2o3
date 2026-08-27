@@ -933,6 +933,10 @@ assert_equals \
   'cargo run --locked -p fe2o3-kfd --features live-validation --example kfd-compute-aql-queue -- --all' \
   "$(step_command hardware-kfd-compute-aql-queue)" \
   'hardware smoke did not exercise KFD AQL queue ownership on every device'
+assert_equals \
+  'cargo test --locked -p fe2o3-debug-cli --features live-validation --test hardware_v2_live -- --test-threads=1' \
+  "$(step_command hardware-kfd-debug-protocol-v2)" \
+  'hardware smoke did not exercise the KFD hardware debugger V2 protocol'
 for retired_hardware_step in \
   hardware-cargo-fe2o3-bootstrap \
   hardware-hip-device-properties-build \

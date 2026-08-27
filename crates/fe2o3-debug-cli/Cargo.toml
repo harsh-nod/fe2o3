@@ -7,8 +7,14 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Agent-native standalone debugger for deterministic fe2o3 KIR simulation."
 
+[features]
+default = []
+live-validation = ["fe2o3-kfd/live-validation"]
+
 [dependencies]
 fe2o3-debug-protocol.workspace = true
+fe2o3-kfd.workspace = true
+fe2o3-kfd-uapi.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-kir-debugger.workspace = true
 fe2o3-kir-sim.workspace = true
@@ -16,6 +22,7 @@ fe2o3-kir-sim-cli.workspace = true
 serde.workspace = true
 serde_json = "1"
 sha2.workspace = true
+libc.workspace = true
 
 [[bin]]
 name = "fe2o3-debug"

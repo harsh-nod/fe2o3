@@ -1062,6 +1062,9 @@ run_hardware_smoke() {
   run_step hardware-kfd-compute-aql-queue \
     cargo run --locked -p fe2o3-kfd --features live-validation \
       --example kfd-compute-aql-queue -- --all
+  run_step hardware-kfd-debug-protocol-v2 \
+    cargo test --locked -p fe2o3-debug-cli --features live-validation \
+      --test hardware_v2_live -- --test-threads=1
   if [[ -n "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO:-}" || \
         -n "${FE2O3_KFD_DIAGNOSTIC_UNIQUE_ID:-}" ]]; then
     if [[ -z "${FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO:-}" || \

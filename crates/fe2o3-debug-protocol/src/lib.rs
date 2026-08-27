@@ -2,10 +2,12 @@
 #![doc = include_str!("../README.md")]
 
 mod codec;
+mod hardware_v2;
 mod model;
 
 pub use codec::{
     ProtocolCodecErrorV1, decode_request_line_v1, decode_response_line_v1, encode_response_line_v1,
     read_request_line_v1,
 };
+pub use hardware_v2::*;
 pub use model::*;

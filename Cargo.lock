@@ -832,9 +832,12 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-debug-protocol",
  "fe2o3-kernel-ir",
+ "fe2o3-kfd",
+ "fe2o3-kfd-uapi",
  "fe2o3-kir-debugger",
  "fe2o3-kir-sim",
  "fe2o3-kir-sim-cli",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.11.0",

@@ -64,3 +64,27 @@ Frames are not reconstructed from names or UI fixtures. Source variables,
 hardware registers, hardware wave state, and KFD dispatch control remain typed
 `unavailable`; no value is fabricated. KIR, request, and sidecar files use the
 hardened regular-file capture boundary shared with `fe2o3-kir-sim`.
+
+## KFD hardware protocol V2
+
+`fe2o3-debug hardware -- PROGRAM [ARG...]` launches that exact argument vector
+as a ptraced child and exposes a separate bounded
+`fe2o3-hardware-debug-request-v2` JSONL protocol on standard input. The
+coordinator retains the target pidfd, owns the KFD debug-trap session on its
+spawning task, and kills and boundedly reaps the launch-owned target on EOF,
+protocol/output failure, or `terminate`. It invokes no shell, HIP, or HSA.
+
+V2 provides redacted device and queue snapshots, bounded exception events,
+and queue suspend/resume after the target enables its KFD debug runtime.
+Runtime transition events are recorded and acknowledged internally so the
+target-side KFD handshake can proceed. Device and queue identifiers are
+session-local generation/ordinal pairs; the wire never contains a PID,
+descriptor, native KFD identifier, target virtual address, or target argv.
+Control revision and asynchronous observation sequence are independent.
+
+The hardware protocol does not provide wave or lane state, register or CWSR
+decode, stack/source/KIR sites, stepping, replay, breakpoints, values, target
+memory, semantic trace, address watch, or dispatch submission. These
+capabilities are explicitly reported unavailable and are never inferred from
+the CPU simulator. The hardware path observes KFD state only; it does not
+claim timing, performance prediction, race freedom, or GPU scheduling detail.

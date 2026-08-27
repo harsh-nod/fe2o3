@@ -84,3 +84,22 @@ The backend remains responsible for bounding simulator steps, trace events,
 session resident memory, checkpoints, total commands, and device/runtime
 resources. Those are execution concerns and are deliberately not granted by
 this inert wire crate.
+
+## Hardware V2
+
+The separate `fe2o3-hardware-debug-request-v2` and response schemas describe
+only KFD-observed hardware state. They do not extend or reinterpret the frozen
+simulator V1 protocol. V2 pages redacted device/queue snapshots and exception
+events, and controls queue suspend/resume plus termination. A control revision
+orders mutation while a separate observation sequence orders asynchronous KFD
+events. Device and queue identities are session-local generation/ordinal
+pairs, so a refreshed snapshot rejects stale control identities.
+
+Hardware V2 is bounded to 64 KiB requests, 1 MiB responses, 256 page/control
+items, 4,096 retained events, one million commands, and a one-second event
+wait. Errors state whether an operation had no,
+committed, partial, or indeterminate effect; indeterminate backend mutation is
+terminal. The schema has no PID, file descriptor, native KFD identifier,
+target address, or argv field. It explicitly reports wave/lane/register/CWSR,
+stack/source/KIR, stepping/replay/breakpoints/values, target memory, semantic
+trace, address watch, and dispatch submission unavailable.

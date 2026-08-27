@@ -1,5 +1,10 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(unsafe_code)]
+mod hardware_linux_v2;
+mod hardware_v2;
 
 use std::collections::BTreeMap;
 use std::env;
@@ -33,7 +38,7 @@ use fe2o3_kir_sim_cli::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]";
+const USAGE: &str = "usage: fe2o3-debug sim (--kir-v7 PATH | --bundle PATH) --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]\n       fe2o3-debug hardware -- PROGRAM [ARG...]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
 pub const SOURCE_MAP_SCHEMA_V1: &str = "fe2o3-debug-source-map-v1";
@@ -1257,7 +1262,26 @@ struct BootstrapErrorV1<'a> {
 }
 
 pub fn main() -> ExitCode {
-    let options = match parse_options(env::args_os().skip(1)) {
+    let arguments: Vec<_> = env::args_os().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|value| value == OsStr::new("hardware"))
+    {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            return hardware_linux_v2::run(arguments.into_iter().skip(1));
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        {
+            write_bootstrap_error(
+                "arguments",
+                "hardware_debugger_unavailable",
+                "hardware debugging requires Linux x86_64 and the KFD UAPI",
+            );
+            return ExitCode::FAILURE;
+        }
+    }
+    let options = match parse_options(arguments.into_iter()) {
         Ok(options) => options,
         Err(message) => {
             write_bootstrap_error("arguments", "invalid_command_line", &message);
