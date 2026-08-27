@@ -8,11 +8,11 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, BasicBlock, BlockId, Function, Kernel, LaunchDomain, LaunchExtent,
-    MAX_SIMULATION_BUNDLE_BYTES_V1, Module, ScalarType, Signature,
-    SimulationCompilerExecutionBindingV1, SimulationDebugMapV1, SimulationProductionKirIdentityV1,
-    SimulationSourceLineageV1, Terminator, Type, ValueId, VerifiedCanonicalKernelIrV7,
-    VerifiedCanonicalKernelIrV8, VerifiedSimulationBundleV1,
+    AccessMode, AddressSpace, BasicBlock, BlockId, DebugSourceMapDocumentV1, DebugSourceMapFileV1,
+    Function, Kernel, LaunchDomain, LaunchExtent, MAX_SIMULATION_BUNDLE_BYTES_V1, Module,
+    PreparedSimulationBundleV1, ScalarType, Signature, SimulationCompilerExecutionBindingV1,
+    SimulationProductionKirIdentityV1, SimulationSourceLineageV1, Terminator, Type, ValueId,
+    VerifiedCanonicalKernelIrV7, VerifiedCanonicalKernelIrV8,
 };
 use fe2o3_kir_sim::MAX_PERSISTED_SCHEDULE_BYTES_V1;
 use sha2::{Digest, Sha256};
@@ -88,7 +88,7 @@ fn simulation_bundle(target: &str) -> Vec<u8> {
     simulation_bundle_with_debug_map(target, None)
 }
 
-fn simulation_bundle_with_debug_map(target: &str, debug_map: Option<&[u8]>) -> Vec<u8> {
+fn simulation_bundle_with_debug_map(target: &str, debug_source: Option<&[u8]>) -> Vec<u8> {
     let module = noop_with_buffer_module();
     let production = VerifiedCanonicalKernelIrV8::from_module(module.clone()).unwrap();
     let production_identity = SimulationProductionKirIdentityV1::v8(
@@ -96,18 +96,35 @@ fn simulation_bundle_with_debug_map(target: &str, debug_map: Option<&[u8]>) -> V
         production.identity().canonical_length(),
     )
     .unwrap();
-    VerifiedSimulationBundleV1::new(
+    let prepared = PreparedSimulationBundleV1::new(
         SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
         SimulationSourceLineageV1::new([1; 32], 11, [2; 32], 22).unwrap(),
         production_identity,
         target,
         VerifiedCanonicalKernelIrV7::from_module(module).unwrap(),
-        debug_map.map(|bytes| {
-            SimulationDebugMapV1::from_unverified_canonical_bytes(bytes.to_vec()).unwrap()
-        }),
     )
-    .unwrap()
-    .into_canonical_bytes()
+    .unwrap();
+    let bundle = if let Some(source) = debug_source {
+        let source_identity: [u8; 32] = Sha256::digest(source).into();
+        let document = DebugSourceMapDocumentV1::new(
+            prepared.debug_source_map_binding(),
+            vec![
+                DebugSourceMapFileV1::new(
+                    source_identity,
+                    u64::try_from(source.len()).unwrap(),
+                    "schedule-test.rs".to_owned(),
+                )
+                .unwrap(),
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        prepared.finalize_with_source_map(document).unwrap()
+    } else {
+        prepared.finalize_without_source_map().unwrap()
+    };
+    bundle.into_canonical_bytes()
 }
 
 fn write_success_fixture(directory: &TestDirectory) -> (PathBuf, PathBuf) {
