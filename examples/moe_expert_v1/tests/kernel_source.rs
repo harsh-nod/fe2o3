@@ -42,9 +42,12 @@ fn source_contains_two_ordinary_attributed_kernels_without_macro_facades() {
             .lines()
             .any(|line| line.trim_start().starts_with("macro_rules!"))
     );
-    assert!(source.contains("gfx942_lds_bf16_tile_pair_m16x16_v1"));
     assert!(source.contains("DeviceMatrix::current"));
-    assert!(source.contains("gfx942_publish_lds_bf16_tile_pair_m16x16_v1"));
+    assert!(source.contains("activation_matrix.load_m16k16"));
+    assert!(source.contains("weight_matrix.load_k16n16"));
+    assert!(source.contains("activation_fragment,"));
+    assert!(source.contains("weight_fragment,"));
+    assert!(!source.contains("lds_bf16_tile_pair"));
     assert!(source.contains("thread_index.checked_block::<16, 4>()"));
     assert_eq!(source.matches("output.get_block_mut").count(), 4);
     assert!(!source.contains("output.get_mut_at"));

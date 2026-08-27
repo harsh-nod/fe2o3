@@ -30,8 +30,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x14, 0x77, 0xc0, 0x54, 0x64, 0xeb, 0x06, 0xe8, 0xa3, 0x01, 0x67, 0x0a, 0x6f, 0x98, 0xf6, 0xe0,
-    0x5c, 0x3b, 0xc3, 0x02, 0x19, 0xfc, 0xfb, 0x03, 0x0f, 0x95, 0x7e, 0x37, 0x9a, 0x98, 0x91, 0x8c,
+    0xe7, 0xe7, 0x2d, 0xf5, 0x80, 0x1b, 0x99, 0x39, 0xce, 0x30, 0x77, 0xf9, 0xef, 0x88, 0x48, 0x1b,
+    0x09, 0x84, 0x84, 0xf1, 0x62, 0x0d, 0x90, 0xa2, 0x48, 0xa8, 0xd2, 0x2d, 0x45, 0x4d, 0xb2, 0x68,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -247,8 +247,6 @@ pub(crate) enum TrustedDeviceItem {
     WaveLane,
     Wave64,
     WaveLaneCurrent,
-    Gfx942LdsBf16TilePairM16x16,
-    Gfx942LdsBf16TilePairPublishM16x16,
     LdsTile16x16WriteMfmaBf16,
     LdsTile16x16ReadMfmaBf16,
     WorkgroupSyncthreads,
@@ -751,16 +749,6 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::WaveLaneCurrent,
         "fe2o3_device_wave_lane_current",
         "fe2o3_device::WaveLane::current",
-    ),
-    (
-        TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
-        "fe2o3_device_gfx942_lds_bf16_tile_pair_m16x16_v1",
-        "fe2o3_device::gfx942_lds_bf16_tile_pair_m16x16_v1",
-    ),
-    (
-        TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
-        "fe2o3_device_gfx942_lds_bf16_tile_pair_publish_v1",
-        "fe2o3_device::gfx942_publish_lds_bf16_tile_pair_m16x16_v1",
     ),
     (
         TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
@@ -1476,12 +1464,6 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::WaveLane => "fe2o3_device::wave::WaveLane",
         TrustedDeviceItem::Wave64 => "fe2o3_device::wave::Wave64",
         TrustedDeviceItem::WaveLaneCurrent => "fe2o3_device::wave::{impl#4}::current",
-        TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16 => {
-            "fe2o3_device::tensor::gfx942_lds_bf16_tile_pair_m16x16_v1"
-        }
-        TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16 => {
-            "fe2o3_device::tensor::gfx942_publish_lds_bf16_tile_pair_m16x16_v1"
-        }
         TrustedDeviceItem::LdsTile16x16WriteMfmaBf16 => {
             "fe2o3_device::tensor::{impl#16}::write_mfma_fragment"
         }
@@ -1648,8 +1630,6 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::WaveLane
             | TrustedDeviceItem::Wave64
             | TrustedDeviceItem::WaveLaneCurrent
-            | TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16
-            | TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16
             | TrustedDeviceItem::LdsTile16x16WriteMfmaBf16
             | TrustedDeviceItem::LdsTile16x16ReadMfmaBf16
             | TrustedDeviceItem::WorkgroupSyncthreads
@@ -2570,6 +2550,29 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_device_source_excludes_retired_exact_profile_allocators() {
+        let source_root = Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT);
+        let mut files = Vec::new();
+        super::collect_reviewed_source_files(source_root, &mut files).unwrap();
+        let retired = [
+            b"gfx942_lds_bf16_tile_pair_m16x16_v1".as_slice(),
+            b"gfx942_publish_lds_bf16_tile_pair_m16x16_v1".as_slice(),
+        ];
+
+        for file in files {
+            let bytes = fs::read(&file).unwrap();
+            for symbol in retired {
+                assert!(
+                    !bytes.windows(symbol.len()).any(|window| window == symbol),
+                    "retired exact-profile allocator `{}` reentered reviewed device source `{}`",
+                    String::from_utf8_lossy(symbol),
+                    file.display(),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn safe_execution_provider_validation_rejects_source_substitution() {
         let exact = semantic_definition(
             "wave::{impl#4}::current",
@@ -2925,8 +2928,6 @@ mod tests {
             TrustedDeviceItem::WaveLane,
             TrustedDeviceItem::Wave64,
             TrustedDeviceItem::WaveLaneCurrent,
-            TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
-            TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
             TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
             TrustedDeviceItem::LdsTile16x16ReadMfmaBf16,
             TrustedDeviceItem::WorkgroupSyncthreads,
@@ -3063,8 +3064,6 @@ mod tests {
             TrustedDeviceItem::Gfx942Wave64ReduceSum,
             TrustedDeviceItem::Gfx942WorkgroupReduceSum,
             TrustedDeviceItem::WaveLaneCurrent,
-            TrustedDeviceItem::Gfx942LdsBf16TilePairM16x16,
-            TrustedDeviceItem::Gfx942LdsBf16TilePairPublishM16x16,
             TrustedDeviceItem::LdsTile16x16WriteMfmaBf16,
             TrustedDeviceItem::LdsTile16x16ReadMfmaBf16,
             TrustedDeviceItem::WorkgroupSyncthreads,

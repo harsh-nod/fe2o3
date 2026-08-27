@@ -1,9 +1,7 @@
 use fe2o3_device::{
     Bf16MfmaAMatrix, Bf16MfmaBMatrix, DeviceMatrix, DynamicLds,
     F32AccumulatorFragment, Gfx942Collectives, Invocation3D, SubgroupTile, Wave64,
-    WaveLane, Workgroup, WorkgroupCollectiveScratch, WorkgroupLdsScope,
-    gfx942_lds_bf16_tile_pair_m16x16_v1,
-    gfx942_publish_lds_bf16_tile_pair_m16x16_v1, sync,
+    WaveLane, Workgroup, WorkgroupCollectiveScratch, WorkgroupLdsScope, sync,
 };
 
 fn safe_execution_surface(lhs_bits: &[u16], rhs_bits: &[u16]) {
@@ -26,15 +24,9 @@ fn safe_execution_surface(lhs_bits: &[u16], rhs_bits: &[u16]) {
     let rhs_view = Bf16MfmaBMatrix::row_major(rhs_bits, 0, 16, 16, 16).unwrap();
     let lhs_fragment = lhs_view.load_m16k16(&lane, 0, 0);
     let rhs_fragment = rhs_view.load_k16n16(&lane, 0, 0);
-    let (mut lhs, mut rhs) = gfx942_lds_bf16_tile_pair_m16x16_v1();
-    lhs.write_mfma_fragment(&lane, lhs_fragment);
-    rhs.write_mfma_fragment(&lane, rhs_fragment);
-    let (lhs, rhs) = gfx942_publish_lds_bf16_tile_pair_m16x16_v1(lhs, rhs);
-    let lhs = lhs.read_mfma_fragment(&lane);
-    let rhs = rhs.read_mfma_fragment(&lane);
     let matrix = DeviceMatrix::current();
     let accumulator = F32AccumulatorFragment::zero(&lane);
-    let _ = matrix.multiply_accumulate(lhs, rhs, accumulator);
+    let _ = matrix.multiply_accumulate(lhs_fragment, rhs_fragment, accumulator);
 }
 
 fn main() {

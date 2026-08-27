@@ -425,15 +425,6 @@ pub struct MfmaLdsTile16x16<'workgroup, Role, State = LdsUninitialized, StorageL
 impl<'workgroup, Role: sealed::OperandRole, State>
     MfmaLdsTile16x16<'workgroup, Role, State, MfmaLdsXor4>
 {
-    #[cfg(test)]
-    fn from_tile(tile: LdsTile16x16<'workgroup, Bf16, State>) -> Self {
-        Self {
-            tile,
-            _role: PhantomData,
-            _storage_layout: PhantomData,
-        }
-    }
-
     pub const fn len(&self) -> usize {
         TILE_ELEMENTS
     }
@@ -441,26 +432,6 @@ impl<'workgroup, Role: sealed::OperandRole, State>
     pub const fn is_empty(&self) -> bool {
         false
     }
-}
-
-/// Issues the exact pair of static BF16 LDS tiles used by the bounded gfx942
-/// tiled-GEMM Slice 1 profile.
-///
-/// This is a compiler intrinsic, not a general allocator. The fe2o3 compiler
-/// may recognize it only in the authenticated `gfx942:xnack-`, WG64 Slice 1
-/// source profile. Recognition creates two distinct 512-byte, 16-byte-aligned
-/// workgroup allocations. Unsupported compilation and host execution trap.
-///
-/// The compiler issues this pair only for the exact authenticated Slice 1
-/// kernel. The returned linear capabilities cannot be duplicated in safe Rust.
-#[doc(hidden)]
-#[inline(never)]
-#[rustc_diagnostic_item = "fe2o3_device_gfx942_lds_bf16_tile_pair_m16x16_v1"]
-pub fn gfx942_lds_bf16_tile_pair_m16x16_v1<'workgroup>() -> (
-    MfmaLdsTile16x16<'workgroup, MfmaOperandA>,
-    MfmaLdsTile16x16<'workgroup, MfmaOperandB>,
-) {
-    unreachable!("static BF16 LDS tile pairs must be issued by the fe2o3 compiler")
 }
 
 impl<'workgroup, T: LdsElement, State> LdsTile16x16<'workgroup, T, State> {
@@ -541,25 +512,6 @@ impl<'workgroup, Role: sealed::OperandRole>
     ) {
         self.tile.write_wave_fragment(lane, fragment.into_array())
     }
-}
-
-/// Publishes a completely initialized BF16 LDS tile pair.
-///
-/// Authenticated lowering proves that every lane wrote its four disjoint
-/// elements in both tiles and inserts the required workgroup barrier. The
-/// consuming typestate transition makes initialized reads unavailable before
-/// that proof. Unsupported lowering and host execution trap.
-#[inline(never)]
-#[rustc_diagnostic_item = "fe2o3_device_gfx942_lds_bf16_tile_pair_publish_v1"]
-pub fn gfx942_publish_lds_bf16_tile_pair_m16x16_v1<'workgroup>(
-    lhs: MfmaLdsTile16x16<'workgroup, MfmaOperandA, LdsUninitialized>,
-    rhs: MfmaLdsTile16x16<'workgroup, MfmaOperandB, LdsUninitialized>,
-) -> (
-    MfmaLdsTile16x16<'workgroup, MfmaOperandA, LdsInitialized>,
-    MfmaLdsTile16x16<'workgroup, MfmaOperandB, LdsInitialized>,
-) {
-    let _ = (lhs, rhs);
-    unreachable!("initialized BF16 LDS tile pairs must be published by authenticated lowering")
 }
 
 impl<'workgroup, Role: sealed::OperandRole>
@@ -771,9 +723,8 @@ mod tests {
     }
 
     #[test]
-    fn intrinsic_stub_fails_closed_on_host() {
+    fn matrix_intrinsic_stub_fails_closed_on_host() {
         assert!(catch_unwind(DeviceMatrix::current).is_err());
-        assert!(catch_unwind(gfx942_lds_bf16_tile_pair_m16x16_v1).is_err());
         let matrix = DeviceMatrix::for_host_test();
         let bits = [0_u16; TILE_ELEMENTS];
         let a = Bf16MfmaAMatrix::row_major(&bits, 0, 16, 16, 16).unwrap();
@@ -785,42 +736,6 @@ mod tests {
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
                 matrix.multiply_accumulate(lhs, rhs, accumulator)
-            }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn lds_tile_publish_fails_closed_on_host() {
-        let mut lhs_storage = [Bf16::ZERO; TILE_ELEMENTS];
-        let mut rhs_storage = [Bf16::ZERO; TILE_ELEMENTS];
-        let mut lhs_scope = WorkgroupLdsScope::for_host_test();
-        let mut rhs_scope = WorkgroupLdsScope::for_host_test();
-        let lhs = unsafe {
-            DynamicLds::<Bf16>::from_host_parts_for_test(
-                &mut lhs_scope,
-                lhs_storage.as_mut_ptr().cast(),
-                size_of::<[Bf16; TILE_ELEMENTS]>(),
-            )
-            .unwrap()
-        };
-        let rhs = unsafe {
-            DynamicLds::<Bf16>::from_host_parts_for_test(
-                &mut rhs_scope,
-                rhs_storage.as_mut_ptr().cast(),
-                size_of::<[Bf16; TILE_ELEMENTS]>(),
-            )
-            .unwrap()
-        };
-        let lhs = MfmaLdsTile16x16::<MfmaOperandA>::from_tile(
-            LdsTile16x16::try_from_dynamic(lhs).ok().unwrap(),
-        );
-        let rhs = MfmaLdsTile16x16::<MfmaOperandB>::from_tile(
-            LdsTile16x16::try_from_dynamic(rhs).ok().unwrap(),
-        );
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                gfx942_publish_lds_bf16_tile_pair_m16x16_v1(lhs, rhs)
             }))
             .is_err()
         );

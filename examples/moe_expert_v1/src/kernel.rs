@@ -6,9 +6,8 @@
 #![allow(missing_docs)] // V1 generated typed-kernel modules lack rustdoc.
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice,
-    F32AccumulatorFragment, Index1D, Wave64, WaveLane, gfx942_lds_bf16_tile_pair_m16x16_v1,
-    gfx942_publish_lds_bf16_tile_pair_m16x16_v1, kernel, thread,
+    Bf16MfmaAMatrix, Bf16MfmaBMatrix, Blocked, DeviceMatrix, DisjointSlice, F32AccumulatorFragment,
+    Index1D, Wave64, WaveLane, kernel, thread,
 };
 
 use crate::contract::{
@@ -66,16 +65,13 @@ pub fn moe_expert_gemm_bf16_m16_n16_k16_v1(
     };
     let activation_fragment = activation_matrix.load_m16k16(&lane, 0, 0);
     let weight_fragment = weight_matrix.load_k16n16(&lane, 0, 0);
-    let (mut activation_lds, mut weight_lds) = gfx942_lds_bf16_tile_pair_m16x16_v1();
-    activation_lds.write_mfma_fragment(&lane, activation_fragment);
-    weight_lds.write_mfma_fragment(&lane, weight_fragment);
-    let (activation_lds, weight_lds) =
-        gfx942_publish_lds_bf16_tile_pair_m16x16_v1(activation_lds, weight_lds);
-    let lhs = activation_lds.read_mfma_fragment(&lane);
-    let rhs = weight_lds.read_mfma_fragment(&lane);
     let matrix = DeviceMatrix::current();
     let result = matrix
-        .multiply_accumulate(lhs, rhs, F32AccumulatorFragment::zero(&lane))
+        .multiply_accumulate(
+            activation_fragment,
+            weight_fragment,
+            F32AccumulatorFragment::zero(&lane),
+        )
         .into_values();
     let Some(output_block) = thread_index.checked_block::<16, 4>() else {
         fe2o3_device::trap();
