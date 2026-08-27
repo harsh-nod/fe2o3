@@ -538,8 +538,7 @@ for core_step in \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
   device-copy-derive-ui \
-  s09-debug-checker \
-  s09-debug-ci-guard; do
+  s09-debug-checker; do
   assert_step_count "${core_step}" 1 \
     "generic core did not run ${core_step} exactly once"
 done
@@ -949,19 +948,6 @@ done
 assert_step_count hardware-smoke 0 \
   'hardware smoke retained the selector-free manifest runner'
 unset FE2O3_ALLOW_GPU_SMOKE FE2O3_TARGET
-
-STEP_NAMES=()
-STEP_COMMANDS=()
-export FE2O3_S09_EVIDENCE_DIR="${TIMEOUT_TEST_ROOT}/s09-evidence"
-if run_s09_debug_hardware 2>/dev/null; then
-  printf '%s\n' 'retired S09 hardware lane unexpectedly ran' >&2
-  exit 1
-fi
-assert_step_count s09-cargo-fe2o3-bootstrap 0 \
-  'retired S09 hardware lane built cargo-fe2o3'
-assert_step_count s09-debug-hardware 0 \
-  'retired S09 hardware lane invoked its legacy runtime'
-unset FE2O3_S09_EVIDENCE_DIR
 
 STEP_NAMES=()
 STEP_COMMANDS=()

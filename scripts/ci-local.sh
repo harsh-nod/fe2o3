@@ -139,7 +139,6 @@ Commands:
   verus           Run positive and negative Verus proof fixtures; requires Verus
   rocm-compile    Run bounded production ROCm compiler checks; requires ROCm
   hardware-smoke  Run guarded KFD hardware checks; requires MI300X and opt-in
-  s09-debug-hardware  Retired until Worker V3/KFD debug evidence is available
 EOF
 }
 
@@ -692,7 +691,6 @@ run_auxiliary_tests() {
   run_step device-copy-derive-ui \
     cargo test --locked -p fe2o3-core --test device_copy_derive_ui
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
-  run_step s09-debug-ci-guard bash scripts/tests/s09-debug-ci.sh
 }
 
 run_shard_policy() {
@@ -1077,12 +1075,6 @@ run_hardware_smoke() {
   fi
 }
 
-run_s09_debug_hardware() {
-  printf '%s\n' \
-    'S09 hardware evidence is retired until debug HSACO generation uses the production Worker V3 and KFD runtime paths' >&2
-  return 2
-}
-
 run_parity_production_immutable() {
   run_step parity-production-immutable \
     bash scripts/tests/parity-production-immutable-ingest.sh
@@ -1121,7 +1113,6 @@ main() {
     verus) run_verus ;;
     rocm-compile) run_rocm_compile ;;
     hardware-smoke) run_hardware_smoke ;;
-    s09-debug-hardware) run_s09_debug_hardware ;;
     -h | --help | help) usage ;;
     *)
       usage >&2

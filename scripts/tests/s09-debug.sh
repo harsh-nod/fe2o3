@@ -517,6 +517,5 @@ rg -Fq -- '--fsize="${TOOL_OUTPUT_LIMIT_BYTES}:${TOOL_OUTPUT_LIMIT_BYTES}"' "${R
 expect_fail rg -q -- '--command|command-file|FE2O3_.*DEBUG.*COMMAND' "${RUNNER}"
 expect_fail "${RUNNER}"
 PYTHONDONTWRITEBYTECODE=1 python3 "${ROOT}/scripts/tests/s09-raw-transcript-guard.py"
-python3 "${ROOT}/scripts/tests/s09-debug-policy.py"
 
 printf 'S09 debug checker tests passed\n'

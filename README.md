@@ -717,8 +717,7 @@ is complete, and the recorded runs grant no current production authority.
   authenticate the compiler or runner, install production trust, materialize
   tuple/array runtime values at the fixed stop, cover optimized or general
   debugging, or provide a safety proof. Rows 45 and 46 and supplemental row S09
-  are therefore `Partial`. See the
-  [S09 pilot contract](docs/s09-source-debug-pilot-v1.md).
+  are therefore `Partial`; only the bounded transcript checker is retained.
 
 ### Not yet integrated
 
