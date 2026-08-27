@@ -122,8 +122,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   image, kernarg, initial buffer bytes and declared effects, pointer fixups,
   geometry, resources, timeout, KFD mechanics manifest, and checked GPU unique
   ID. The SHA-pinned LDS diagnostic passes this gate on MI300X using a manually
-  asserted unsafe authority. No production Worker V3 implementation exists yet,
-  so generated application execution remains fail-closed.
+  asserted unsafe authority. `fe2o3-host` now privately implements that
+  authority only for a joined, move-only invocation constructed from an
+  authenticated Worker V3 executable, macro-generated arguments, retained
+  current publication, runtime preparation, and the same checked device. A
+  scalar-GEMM test passes this path with a synthetic verifier. No reviewed
+  production verifier exists yet, so ordinary generated application execution
+  remains fail-closed.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,
@@ -318,7 +323,7 @@ continue to point downward according to the machine-checked
 | `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, or load/launch authority |
 | `fe2o3-pliron-scalar-add-v1` | Feature-free exact backend-fixture source/lineage, repository policy and authority, Worker execution join, and scalar finalization; qualification-only sealed one-shot HSA consumer | General backend selection, Rust-source extraction, reusable approval authority, or general runtime policy |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
-| `fe2o3-host` | Generated Worker V3 arguments, verifier admission, argument ownership, and the HSA-backed migration implementation | MIR inspection, target lowering, or permanent launch authority |
+| `fe2o3-host` | Generated Worker V3 arguments, verifier admission, argument ownership, the private joined KFD invocation authority, and the HSA-backed migration implementation | MIR inspection, target lowering, verifier proof production, or raw launch authority |
 | `fe2o3-runtime` | Sole safe pure-KFD composition boundary, invocation identity, authority matching, effect-preserving completed buffers, and terminal execution policy | Constructing Worker V3 proof authority or accepting caller-asserted descriptive identities |
 | `fe2o3-core` | HIP resource wrappers, streams, events, buffers, and capability observations; raw module and launch mechanics are private to crate tests | Kernel type discovery or downstream raw launch authority |
 | `fe2o3-host-api` | Inert target-neutral compile/admit/load/dispatch/wait records | Executing those operations or authenticating authority |
@@ -567,13 +572,13 @@ RecoveredWorkerV3PinnedDescriptorV1
         v
 AuthenticatedWorkerV3ExecutableV1<K>
         + generated host-memory arguments + geometry
+        + CheckedGfx942XnackMinusDevice
         |
         v
-invocation-specific Worker V3 KFD authority
-        + PreparedGfx942RuntimeDispatchV1
+GeneratedWorkerV3KfdInvocation<'allocation, K>
         |
         v
-execute_authorized_gfx942_runtime_dispatch_v1
+GeneratedWorkerV3KfdInvocation::execute
         |
         v
 completed buffers after queue teardown
@@ -597,15 +602,18 @@ The concrete type names may evolve, but these ownership rules do not:
    explicitly little-endian, leaves pointer fields zero until KFD allocation,
    derives fixup offsets from the admitted physical components, and retains
    exclusive output borrows through validated completion. It cannot be
-   substituted for the HSA specialization and grants no execution authority.
+   substituted for the HSA specialization and grants no execution authority by
+   itself; only the joined transition can construct the private runtime
+   authority.
 4. The runtime initializes only the loader-inspected implicit COV6 region and
    verifies the complete kernarg size/alignment, selected descriptor, and
    static-plus-dynamic resources. It knows no Rust signature; the generated
    invocation and Worker V3 authority must independently name the same complete
    address-free contract.
-5. Preparation brands geometry and packed bytes with kernel, executable,
-   context, ABI, and launch-contract identities. Values from another entry or
-   load generation are not interchangeable even when their bytes match.
+5. Preparation binds geometry and packed bytes to the exact kernel, executable,
+   ABI, launch contract, retained publication generation, and checked KFD
+   device. Values from another entry, publication, or device are not
+   interchangeable even when their bytes match.
 6. Dispatch consumes launch authority, publishes one AQL packet, and releases
    resources only after quiescence. The executable cannot unload while a
    prepared or submitted invocation is live.

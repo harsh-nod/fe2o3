@@ -61,6 +61,14 @@ than a production Worker V3 decision. It establishes native KFD/AQL mechanics
 and the runtime identity join only; production executable evidence must still
 enter through the Worker V3 application and verifier.
 
+The generated host boundary now joins an authenticated Worker V3 executable,
+macro-generated address-free arguments, exact current artifact custody,
+geometry, and one checked KFD device into a private move-only invocation. On
+MI300X, the exact scalar-GEMM lane executes this joined path and passes its CPU
+oracle, completion writeback, and canaries. That test intentionally uses a
+synthetic verifier and externally injected HSACO, so it validates composition
+and hardware behavior without claiming production proof authority.
+
 ## CUDA-Oxide status
 
 Against the pinned cuda-oxide baseline, the evidence ledger currently records
@@ -544,9 +552,13 @@ is complete, and the recorded runs grant no current production authority.
   gate. `#[kernel(typed)]` now also emits a type-sealed, borrow-retaining KFD
   argument implementation: it encodes host scalars and slices into owned
   runtime buffers, emits zero pointer placeholders plus descriptor-derived KFD
-  fixups, and applies mutable results only after checked completion. This bridge
-  deliberately grants no launch authority. The production verifier,
-  invocation-specific authority join, and application handoff remain open.
+  fixups, and applies mutable results only after checked completion.
+  `AuthenticatedWorkerV3ExecutableV1::prepare_generated_kfd_invocation` now
+  consumes authenticated evidence, those generated arguments, current artifact
+  custody, geometry, and one checked device into a private move-only authority;
+  no raw request or authority can be extracted. The scalar-GEMM hardware lane
+  passes through this joined path with a synthetic verifier. The production
+  verifier and KFD-native application handoff remain open.
 - `DeviceBuffer::view`, `view_mut`, and `split_at_mut` produce checked,
   borrow-typed contiguous regions while retaining the parent allocation
   identity, context, base address, full extent, and selected region. Splitting
@@ -575,11 +587,12 @@ is complete, and the recorded runs grant no current production authority.
   host-memory KFD capabilities; compile-fail tests reject substitution between
   the routes. Both retain source borrows and reconstruct the same named ABI.
   The HSA specialization still provides migration dispatch. The KFD
-  specialization produces only descriptor-validated address-free arguments,
-  buffers, fixups, effects, and completion custody. Production verifier and
-  invocation-authorization implementations are still needed to promote
-  compiler, Verus/proof, effect, geometry, artifact, and checked-device evidence
-  into the sole runtime path.
+  specialization produces descriptor-validated address-free arguments,
+  buffers, fixups, effects, and completion custody. The joined invocation
+  transition promotes these only after an authenticated Worker V3 executable,
+  current publication, exact artifact, geometry, and checked device all match.
+  A reviewed production verifier is still needed to replace the test verifier
+  and make this sole runtime path reachable by ordinary applications.
 
   The rustc path recognizes only the exact alpha/zeta MIR shapes and lowers
   their trusted thread index, `Option`-guarded `DisjointSlice::get_mut`, slice
@@ -657,10 +670,11 @@ is complete, and the recorded runs grant no current production authority.
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
   Production Worker V3 verification authority remains open. Generated
-  host-memory KFD packing is present but non-authoritative; it must be joined to
-  the exact current artifact, geometry, effects, checked device, and verifier
-  decision before the HSA-backed route can be deleted and the application
-  pipeline can be called production-complete.
+  host-memory KFD packing is now joined to the exact current artifact, geometry,
+  effects, checked device, and authenticated verifier decision by a private,
+  move-only invocation authority. The MI300X scalar-GEMM test uses an explicitly
+  synthetic verifier, so the HSA-backed migration route cannot be deleted and
+  the application pipeline is not yet production-complete.
 - Linux-only rustc and codegen-backend primitives use descriptor-backed procfs
   paths. The external Cargo path copies the backend into a rehashed, immutable
   sealed memfd and installs it after a compile-shaped managed wrapper

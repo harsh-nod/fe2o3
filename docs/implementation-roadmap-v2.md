@@ -37,10 +37,15 @@ harness. Neither path has current load or launch authority. See
 The direct pure-Rust KFD packet mechanics and invocation-specific runtime
 authority gate are now implemented and measured with the exact LDS artifact.
 The measurement uses a manually asserted unsafe diagnostic authority, not the
-production verifier. The next major gates are:
+production verifier. A second MI300X lane authenticates the exact scalar-GEMM
+Worker V3 artifact with an explicitly synthetic test verifier, joins it to
+macro-generated host-memory arguments and one checked KFD device, executes the
+move-only invocation, and validates numerical output, completion writeback, and
+canaries. This closes the production-shaped composition boundary without
+claiming production verification. The next major gates are:
 
-1. join this exact artifact and compiler-generated host-memory invocation to
-   the Worker V3 application and production verifier, then expose the existing
+1. implement the reviewed production Worker V3 verifier, replace inherited HIP
+   device observation with checked KFD identity, and expose the existing
    pure-Rust KFD transition through one public build/publish/run command;
 2. general race, alias, address-space, bounds, and barrier-convergence proof
    obligations with Verus-consumable evidence;
@@ -460,9 +465,12 @@ earlier authority transition.
    physical ABI, currentness, and marker facts. Cargo transfers only pinned
    read-only descriptors. The separate recovered Worker V2 host admission and
    launch bridge are deleted. The pure-KFD runtime now has one safe,
-   invocation-specific authority transition and a measured unsafe-diagnostic
-   replay. A production verifier, generated host-memory invocation adapter, and
-   MI300X replay without external HSACO injection remain open.
+   invocation-specific authority transition, compiler-generated host-memory
+   invocation adapter, and measured unsafe-diagnostic replay. The generated
+   adapter and authenticated Worker V3 executable now join into one private,
+   move-only KFD invocation, and an exact scalar-GEMM replay passes on MI300X
+   with a synthetic verifier. A production verifier, KFD-native application
+   custody, and replay without external HSACO injection remain open.
 8. **Implemented bounded foundation: physical machine effects.** Canonical
    records and an exact `gfx942` alpha/zeta LLVM Object/MC analysis path model a
    closed call graph and physical memory sites. Production admission must still
@@ -712,11 +720,13 @@ reviewed runtime adapter, durable lease reacquisition, Cargo
 publication of the canonical load envelope, V3-only production descriptor
 handoff, and safe split mutable views already exist. The recovered Worker V2
 host route is deleted. Still missing is a production `WorkerV3VerifierV1` that
-can promote the carried evidence into invocation-specific pure-KFD launch
-custody. The runtime authority gate and compiler-generated host-memory KFD
-argument preparation now exist, but the prepared invocation does not yet bind
-those arguments to the exact current HSACO, geometry, effects, checked device,
-and application handoff or construct runtime authority.
+can authenticate the carried evidence before invocation-specific pure-KFD
+launch custody is created. The runtime authority gate and compiler-generated
+host-memory KFD preparation now bind the exact current HSACO, geometry, effects,
+checked device, and authenticated decision into one private move-only
+invocation. The existing hardware proof uses a synthetic verifier and the
+recovered admission still carries inherited HIP device observation, so
+application custody is not yet KFD-native.
 Bounded machine-effect and Verus proof records are not production-bound to
 compiler origin and the exact artifact. These are the ordered critical
 milestones above; feature and architecture breadth follows them.
