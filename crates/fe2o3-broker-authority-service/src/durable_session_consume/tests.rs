@@ -38,7 +38,7 @@ use crate::{
     BrokerHostOutputObservationV1, BrokerOwnedHostLinkExecutionV1, BrokerReservedHostLinkSessionV1,
     BrokerSessionErrorKindV1, BrokerSessionIdV1, BrokerSessionMachineV1, BrokerSessionNonceV1,
     BrokerSessionStageV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
-    ProtectedBrokerServiceAdmissionV1,
+    ProtectedServiceAdmissionV1,
 };
 
 const RECORD_BOUNDARIES: [RetainedDurableRecordBoundaryV1; 7] = [
@@ -401,7 +401,7 @@ fn current_process_pidfd() -> OwnedFd {
     unsafe { OwnedFd::from_raw_fd(descriptor as i32) }
 }
 
-fn real_test_admission(directory: &TempDir) -> (ProtectedBrokerServiceAdmissionV1, OwnedFd) {
+fn real_test_admission(directory: &TempDir) -> (ProtectedServiceAdmissionV1, OwnedFd) {
     let (service_peer, client_peer) = socketpair(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,
@@ -416,13 +416,12 @@ fn real_test_admission(directory: &TempDir) -> (ProtectedBrokerServiceAdmissionV
     )
     .unwrap();
     let live = LiveClientPidfdIdentityV1::admit(current_process_pidfd(), expected).unwrap();
-    let admission =
-        ProtectedBrokerServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
-            File::open(directory.path()).unwrap().into(),
-            service_peer,
-            live,
-        )
-        .unwrap();
+    let admission = ProtectedServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
+        File::open(directory.path()).unwrap().into(),
+        service_peer,
+        live,
+    )
+    .unwrap();
     (admission, client_peer)
 }
 

@@ -85,7 +85,7 @@ use fe2o3_host_link_closure::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::ProtectedBrokerServiceAdmissionV1;
+use crate::ProtectedServiceAdmissionV1;
 
 /// Fixed semantic authority marker for every session-machine value.
 pub const BROKER_SESSION_MACHINE_AUTHORITY_V1: &str = "none";
@@ -704,7 +704,7 @@ impl fmt::Debug for BrokerCompletedHostLinkV1 {
 /// }
 /// ```
 pub struct BrokerSessionMachineV1 {
-    core: SessionCoreV1<ProtectedBrokerServiceAdmissionV1, AdmittedHostOutputV1>,
+    core: SessionCoreV1<ProtectedServiceAdmissionV1, AdmittedHostOutputV1>,
 }
 
 impl fmt::Debug for BrokerSessionMachineV1 {
@@ -749,7 +749,7 @@ impl BrokerSessionMachineV1 {
     /// claim, without exposing that identity through this API.
     pub fn reserve(
         &mut self,
-        admission: ProtectedBrokerServiceAdmissionV1,
+        admission: ProtectedServiceAdmissionV1,
         reservation: BrokerSessionReservationV1,
     ) -> Result<BrokerHostLinkPermitV1, BrokerSessionMachineErrorV1> {
         self.core.require_reservation_capacity()?;
@@ -767,7 +767,7 @@ impl BrokerSessionMachineV1 {
     /// after reservation or reused to validate more than one grant.
     pub fn reserve_prepared_link(
         mut self,
-        admission: ProtectedBrokerServiceAdmissionV1,
+        admission: ProtectedServiceAdmissionV1,
         session_id: BrokerSessionIdV1,
         nonce: BrokerSessionNonceV1,
         prepared: PreparedHostLinkTranscriptV4,

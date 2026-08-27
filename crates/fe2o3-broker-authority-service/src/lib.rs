@@ -1,4 +1,4 @@
-//! Protected-service admission foundation for future broker authority.
+//! Protected-service admission and broker-session foundation.
 //!
 //! This crate is deliberately inert: [`BROKER_AUTHORITY_SERVICE_AUTHORITY_V1`] is `"none"`.
 //! Admission retains a supervisor-supplied directory file description, a connected unnamed Unix
@@ -10,8 +10,9 @@
 //!
 //! The held pidfd removes numeric-PID reuse ambiguity for the retained process identity and is
 //! polled for point-in-time liveness. The admission also captures the exact Linux procfs
-//! `starttime` tick field for that pidfd target and revalidates it before and after liveness checks,
-//! so a Broker V4 claim must match both PID and start time. `waitid(P_PIDFD, WNOWAIT)` supplements
+//! `starttime` tick field for that pidfd target and revalidates it before and after liveness checks.
+//! Broker V4 uses that generic process binding to require both PID and start time.
+//! `waitid(P_PIDFD, WNOWAIT)` supplements
 //! polling for waitable children and never reaps. Exact PID binding first requests the 64-byte
 //! `PIDFD_GET_INFO` v0 ABI.
 //! Only `ENOTTY` or `EINVAL` from that exact request dispatches to a fail-closed, 4096-byte
@@ -35,17 +36,17 @@
 //! The admission object is neither `Clone` nor `Copy`:
 //!
 //! ```compile_fail
-//! use fe2o3_broker_authority_service::ProtectedBrokerServiceAdmissionV1;
+//! use fe2o3_broker_authority_service::ProtectedServiceAdmissionV1;
 //!
 //! fn require_clone<T: Clone>() {}
-//! require_clone::<ProtectedBrokerServiceAdmissionV1>();
+//! require_clone::<ProtectedServiceAdmissionV1>();
 //! ```
 //!
 //! ```compile_fail
-//! use fe2o3_broker_authority_service::ProtectedBrokerServiceAdmissionV1;
+//! use fe2o3_broker_authority_service::ProtectedServiceAdmissionV1;
 //!
 //! fn require_copy<T: Copy>() {}
-//! require_copy::<ProtectedBrokerServiceAdmissionV1>();
+//! require_copy::<ProtectedServiceAdmissionV1>();
 //! ```
 //!
 //! The live-client token is also move-only, has no raw descriptor API, and implements no Serde
@@ -109,6 +110,39 @@ mod durable_session_consume;
 mod linux;
 #[cfg(target_os = "linux")]
 mod session;
+
+#[cfg(target_os = "linux")]
+pub use durable_session_consume::{
+    BROKER_DURABLE_SESSION_AUTHORITY_V1, BrokerDurableFaultPointV1, BrokerDurableOptionsV1,
+    BrokerDurableOutcomeV1, BrokerDurableRecordStageV1, BrokerDurableRecoveryV1,
+    BrokerDurableSessionErrorV1, BrokerDurableSessionTransactionV1,
+    BrokerRecoveredPreparedSessionV1, DurableBrokerPublicationPlanV1,
+    MAX_BROKER_DURABLE_OUTPUT_BYTES_V1, MAX_BROKER_DURABLE_RECORD_BYTES_V1,
+    inspect_durable_broker_session_v1, prepare_durable_broker_session_v1,
+    prepare_durable_broker_session_v1_with_options, recover_durable_broker_session_v1,
+    recover_durable_broker_session_v1_with_options, recover_prepared_durable_broker_session_v1,
+};
+#[cfg(target_os = "linux")]
+pub use linux::{
+    AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
+    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
+};
+#[cfg(target_os = "linux")]
+pub use session::{
+    BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1, BROKER_SESSION_CAPACITY_V1,
+    BROKER_SESSION_MACHINE_AUTHORITY_V1, BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1,
+    BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerCompletedHostLinkV1,
+    BrokerHostLinkPermitV1, BrokerHostLinkPollV1, BrokerHostOutputObservationV1,
+    BrokerOwnedHostLinkExecutionV1, BrokerReservedHostLinkSessionV1, BrokerSessionErrorKindV1,
+    BrokerSessionIdV1, BrokerSessionMachineErrorV1, BrokerSessionMachineV1, BrokerSessionNonceV1,
+    BrokerSessionObservationV1, BrokerSessionReservationV1, BrokerSessionStageV1,
+    CommittedBrokerPublicationV1, DurablePublicationPlanIdentityV1,
+    completed_broker_transcript_digest_v1,
+};
+
+/// This foundation grants no independent tool approval, persistence, publication, or GPU authority.
+pub const BROKER_AUTHORITY_SERVICE_AUTHORITY_V1: &str = "none";
+
 #[cfg(test)]
 mod test_process_execution {
     use std::io;
@@ -130,35 +164,3 @@ mod test_process_execution {
         spawn(command)?.wait_with_output()
     }
 }
-
-#[cfg(target_os = "linux")]
-pub use durable_session_consume::{
-    BROKER_DURABLE_SESSION_AUTHORITY_V1, BrokerDurableFaultPointV1, BrokerDurableOptionsV1,
-    BrokerDurableOutcomeV1, BrokerDurableRecordStageV1, BrokerDurableRecoveryV1,
-    BrokerDurableSessionErrorV1, BrokerDurableSessionTransactionV1,
-    BrokerRecoveredPreparedSessionV1, DurableBrokerPublicationPlanV1,
-    MAX_BROKER_DURABLE_OUTPUT_BYTES_V1, MAX_BROKER_DURABLE_RECORD_BYTES_V1,
-    inspect_durable_broker_session_v1, prepare_durable_broker_session_v1,
-    prepare_durable_broker_session_v1_with_options, recover_durable_broker_session_v1,
-    recover_durable_broker_session_v1_with_options, recover_prepared_durable_broker_session_v1,
-};
-#[cfg(target_os = "linux")]
-pub use linux::{
-    AdmissionErrorKindV1, BrokerAuthorityServiceAdmissionErrorV1, ExpectedClientProcessIdentityV1,
-    LiveClientPidfdIdentityV1, ProtectedBrokerServiceAdmissionV1,
-};
-#[cfg(target_os = "linux")]
-pub use session::{
-    BROKER_LINK_RESERVATION_DIGEST_DOMAIN_V1, BROKER_SESSION_CAPACITY_V1,
-    BROKER_SESSION_MACHINE_AUTHORITY_V1, BROKER_V4_COMPLETED_TRANSCRIPT_DIGEST_DOMAIN_V1,
-    BrokerAnchorModeV1, BrokerAnchorPreparedSessionV1, BrokerCompletedHostLinkV1,
-    BrokerHostLinkPermitV1, BrokerHostLinkPollV1, BrokerHostOutputObservationV1,
-    BrokerOwnedHostLinkExecutionV1, BrokerReservedHostLinkSessionV1, BrokerSessionErrorKindV1,
-    BrokerSessionIdV1, BrokerSessionMachineErrorV1, BrokerSessionMachineV1, BrokerSessionNonceV1,
-    BrokerSessionObservationV1, BrokerSessionReservationV1, BrokerSessionStageV1,
-    CommittedBrokerPublicationV1, DurablePublicationPlanIdentityV1,
-    completed_broker_transcript_digest_v1,
-};
-
-/// This foundation grants no independent tool approval, persistence, publication, or GPU authority.
-pub const BROKER_AUTHORITY_SERVICE_AUTHORITY_V1: &str = "none";
