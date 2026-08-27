@@ -7,7 +7,8 @@ use fe2o3_kernel_ir::{
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
     DebugKirIdentityV1, DebugNavigationV1, DebugPredicateV1, DebugScopeSelectorV1, DebugSessionV1,
-    DebugSiteSelectorV1, DebugSourceCatalogV1, DebugTranscriptCompletenessV1, DebugWatchAccessV1,
+    DebugSiteSelectorV1, DebugSourceCatalogV1, DebugSourceFileV1, DebugSourceResolutionV1,
+    DebugSourceSiteV1, DebugSourceSpanV1, DebugTranscriptCompletenessV1, DebugWatchAccessV1,
     DebugWatchpointV1, DebugWaveWidthV1, DebuggerLimitsV1, capture_debugger_run_v1,
 };
 use fe2o3_kir_sim::{
@@ -435,6 +436,72 @@ fn source_catalog_requires_the_exact_canonical_kir_identity() {
 
     let exact = DebugSourceCatalogV1::new(identity, vec![], vec![]).unwrap();
     session.bind_source_catalog(&admitted, exact).unwrap();
+}
+
+#[test]
+fn source_catalog_distinguishes_absent_eliminated_and_many_to_one() {
+    let run = run();
+    let identity = run.transcript.identity();
+    let site = run.transcript.records()[0].site;
+    let file = [3; 32];
+    let span = |byte_start, byte_end| DebugSourceSpanV1 {
+        file,
+        byte_start,
+        byte_end,
+        line: 1,
+        column: u32::try_from(byte_start + 1).unwrap(),
+    };
+    let catalog = DebugSourceCatalogV1::new_with_eliminated(
+        identity,
+        vec![DebugSourceFileV1 {
+            identity: file,
+            byte_len: 64,
+            display_path: "fixture.rs".to_owned(),
+        }],
+        vec![DebugSourceSiteV1 {
+            site,
+            spans: vec![span(0, 4), span(8, 12)],
+        }],
+        vec![span(16, 20)],
+    )
+    .unwrap();
+    assert_eq!(
+        catalog.resolve_site(site),
+        DebugSourceResolutionV1::ManyToOne
+    );
+    assert!(matches!(
+        catalog.resolve_source(file, 0, 4),
+        DebugSourceResolutionV1::Resolved { site: actual, .. } if actual == site
+    ));
+    assert_eq!(
+        catalog.resolve_source(file, 0, 12),
+        DebugSourceResolutionV1::ManyToOne
+    );
+    assert_eq!(
+        catalog.resolve_source(file, 16, 20),
+        DebugSourceResolutionV1::Eliminated
+    );
+    assert_eq!(
+        catalog.resolve_source(file, 24, 28),
+        DebugSourceResolutionV1::Absent
+    );
+
+    assert!(
+        DebugSourceCatalogV1::new_with_eliminated(
+            identity,
+            vec![DebugSourceFileV1 {
+                identity: file,
+                byte_len: 64,
+                display_path: "fixture.rs".to_owned(),
+            }],
+            vec![DebugSourceSiteV1 {
+                site,
+                spans: vec![span(0, 4), span(0, 4)],
+            }],
+            vec![],
+        )
+        .is_err()
+    );
 }
 
 #[test]

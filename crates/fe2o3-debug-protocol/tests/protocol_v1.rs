@@ -174,6 +174,102 @@ fn frame_aware_step_granularities_have_closed_wire_tags() {
 }
 
 #[test]
+fn source_resolution_and_stack_queries_are_closed_and_versioned() {
+    let resolve = br#"{"operation":"resolve_source","schema":"fe2o3-debug-request-v1","request_id":1,"expected_revision":4,"site":{"function_ordinal":0,"block_ordinal":0,"point":{"kind":"operation","operation_ordinal":2}}}
+"#;
+    let request = decode_request_line_v1(resolve, ProtocolLimitsV1::default()).unwrap();
+    assert_eq!(request.operation(), DebugOperationNameV1::ResolveSource);
+
+    let stack = br#"{"operation":"inspect_stack","schema":"fe2o3-debug-request-v1","request_id":2,"expected_revision":4,"scope":{"level":"lane","workgroup":[0,0,0],"wave":0,"lane":0},"page":{"limit":8}}
+"#;
+    let request = decode_request_line_v1(stack, ProtocolLimitsV1::default()).unwrap();
+    assert_eq!(request.operation(), DebugOperationNameV1::InspectStack);
+
+    for hostile in [
+        br#"{"operation":"inspect_stack","schema":"fe2o3-debug-request-v1","request_id":2,"expected_revision":4,"scope":{"level":"dispatch"},"page":{"limit":8},"extra":1}
+"#.as_slice(),
+        br#"{"operation":"inspect_stack","schema":"fe2o3-debug-request-v1","request_id":2,"request_id":3,"expected_revision":4,"scope":{"level":"dispatch"},"page":{"limit":8}}
+"#.as_slice(),
+        br#"{"operation":"inspect_stack","schema":"fe2o3-debug-request-v1","request_id":2,"expected_revision":4,"scope":{"level":"dispatch"},"page":null}
+"#.as_slice(),
+    ] {
+        assert_eq!(
+            decode_request_line_v1(hostile, ProtocolLimitsV1::default()).unwrap_err(),
+            ProtocolCodecErrorV1::InvalidJson
+        );
+    }
+}
+
+#[test]
+fn source_provenance_and_stack_availability_round_trip_without_addresses() {
+    let response = DebugResponseV1::Ok {
+        schema: ResponseSchemaV1::V1,
+        request_id: 3,
+        operation: DebugOperationNameV1::InspectStack,
+        session: simulation_session(4, SessionStateV1::Stopped),
+        result: Box::new(DebugResultV1::Stack {
+            snapshot: DebugSnapshotAnchorV1 {
+                cursor: simulation_session(4, SessionStateV1::Stopped).cursor,
+                scope: ExecutionScopeV1::Dispatch,
+                site: Some(SemanticSiteViewV1 {
+                    kir: KirSiteV1 {
+                        function_ordinal: 0,
+                        block_ordinal: 0,
+                        point: KirSitePointV1::Operation {
+                            operation_ordinal: 2,
+                        },
+                    },
+                    source: SourceSiteAvailabilityV1::Resolved {
+                        location: SourceLocationV1 {
+                            map_identity: identity(4),
+                            provenance: SourceMapProvenanceV1::CompilerBundleAuthenticated,
+                            file_identity: identity(5),
+                            byte_start: 7,
+                            byte_end: 12,
+                        },
+                    },
+                }),
+                frame: None,
+                occurrence: None,
+            },
+            frames: vec![StackFrameV1 {
+                frame: 1,
+                function_ordinal: 0,
+                block_ordinal: 0,
+                next_operation: Some(3),
+                values: StackValuesAvailabilityV1::Unavailable {
+                    reason: ValueUnavailableReasonV1::Truncated,
+                },
+            }],
+            next_cursor: None,
+        }),
+    };
+    let encoded = encode_response_line_v1(&response, ProtocolLimitsV1::default()).unwrap();
+    let text = std::str::from_utf8(&encoded).unwrap();
+    assert!(text.contains("compiler_bundle_authenticated"));
+    assert!(!text.contains("address"));
+    assert_eq!(
+        decode_response_line_v1(&encoded, ProtocolLimitsV1::default()).unwrap(),
+        response
+    );
+
+    let mut duplicate = response;
+    let DebugResponseV1::Ok { result, .. } = &mut duplicate else {
+        unreachable!()
+    };
+    let DebugResultV1::Stack { frames, .. } = result.as_mut() else {
+        unreachable!()
+    };
+    frames.push(frames[0]);
+    assert!(matches!(
+        encode_response_line_v1(&duplicate, ProtocolLimitsV1::default()),
+        Err(ProtocolCodecErrorV1::Validation(
+            ProtocolValidationErrorV1::DuplicateIdentity("stack frames")
+        ))
+    ));
+}
+
+#[test]
 fn reader_consumes_exactly_one_frame_and_detects_partial_eof() {
     let first = br#"{"operation":"get_state","schema":"fe2o3-debug-request-v1","request_id":1,"expected_revision":0}
 "#;

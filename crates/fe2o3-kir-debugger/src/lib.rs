@@ -1342,6 +1342,34 @@ impl DebugSessionV1 {
                 DebugInspectionUnavailableV1::SourceUnavailable,
             ))
     }
+
+    pub fn resolve_source_site(
+        &self,
+        site: SimulationDebugSiteV1,
+    ) -> DebugInspectionV1<DebugSourceResolutionV1> {
+        self.source_catalog
+            .as_ref()
+            .map(|catalog| DebugInspectionV1::Available(catalog.resolve_site(site)))
+            .unwrap_or(DebugInspectionV1::Unavailable(
+                DebugInspectionUnavailableV1::SourceNotBound,
+            ))
+    }
+
+    pub fn resolve_source_location(
+        &self,
+        file: [u8; 32],
+        byte_start: u64,
+        byte_end: u64,
+    ) -> DebugInspectionV1<DebugSourceResolutionV1> {
+        self.source_catalog
+            .as_ref()
+            .map(|catalog| {
+                DebugInspectionV1::Available(catalog.resolve_source(file, byte_start, byte_end))
+            })
+            .unwrap_or(DebugInspectionV1::Unavailable(
+                DebugInspectionUnavailableV1::SourceNotBound,
+            ))
+    }
 }
 
 fn breakpoint_base_matches(
@@ -1419,18 +1447,39 @@ pub struct DebugSourceSiteV1 {
     pub spans: Vec<DebugSourceSpanV1>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DebugSourceResolutionV1 {
+    Resolved {
+        site: SimulationDebugSiteV1,
+        span: DebugSourceSpanV1,
+    },
+    Absent,
+    Eliminated,
+    ManyToOne,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugSourceCatalogV1 {
     identity: DebugKirIdentityV1,
     files: Vec<DebugSourceFileV1>,
     sites: Vec<DebugSourceSiteV1>,
+    eliminated: Vec<DebugSourceSpanV1>,
 }
 
 impl DebugSourceCatalogV1 {
     pub fn new(
         identity: DebugKirIdentityV1,
+        files: Vec<DebugSourceFileV1>,
+        sites: Vec<DebugSourceSiteV1>,
+    ) -> Result<Self, DebuggerErrorV1> {
+        Self::new_with_eliminated(identity, files, sites, Vec::new())
+    }
+
+    pub fn new_with_eliminated(
+        identity: DebugKirIdentityV1,
         mut files: Vec<DebugSourceFileV1>,
         mut sites: Vec<DebugSourceSiteV1>,
+        mut eliminated: Vec<DebugSourceSpanV1>,
     ) -> Result<Self, DebuggerErrorV1> {
         if identity.digest == [0; 32]
             || identity.canonical_len == 0
@@ -1460,9 +1509,20 @@ impl DebugSourceCatalogV1 {
         {
             return Err(DebuggerErrorV1::InvalidSourceCatalog);
         }
+        for site in &mut sites {
+            site.spans.sort_unstable_by_key(source_span_key);
+            if site.spans.windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err(DebuggerErrorV1::InvalidSourceCatalog);
+            }
+        }
+        eliminated.sort_unstable_by_key(source_span_key);
+        if eliminated.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(DebuggerErrorV1::InvalidSourceCatalog);
+        }
         let Some(span_count) = sites
             .iter()
             .try_fold(0_usize, |count, site| count.checked_add(site.spans.len()))
+            .and_then(|count| count.checked_add(eliminated.len()))
         else {
             return Err(DebuggerErrorV1::InvalidSourceCatalog);
         };
@@ -1471,22 +1531,22 @@ impl DebugSourceCatalogV1 {
         }
         for site in &sites {
             for span in &site.spans {
-                let Ok(file) = files.binary_search_by_key(&span.file, |file| file.identity) else {
-                    return Err(DebuggerErrorV1::InvalidSourceCatalog);
-                };
-                if span.byte_start >= span.byte_end
-                    || span.byte_end > files[file].byte_len
-                    || span.line == 0
-                    || span.column == 0
-                {
+                if !source_span_valid(&files, *span) {
                     return Err(DebuggerErrorV1::InvalidSourceCatalog);
                 }
             }
+        }
+        if eliminated
+            .iter()
+            .any(|span| !source_span_valid(&files, *span))
+        {
+            return Err(DebuggerErrorV1::InvalidSourceCatalog);
         }
         Ok(Self {
             identity,
             files,
             sites,
+            eliminated,
         })
     }
 
@@ -1500,6 +1560,61 @@ impl DebugSourceCatalogV1 {
 
     pub fn sites(&self) -> &[DebugSourceSiteV1] {
         &self.sites
+    }
+
+    pub fn eliminated(&self) -> &[DebugSourceSpanV1] {
+        &self.eliminated
+    }
+
+    pub fn resolve_site(&self, site: SimulationDebugSiteV1) -> DebugSourceResolutionV1 {
+        let Ok(index) = self
+            .sites
+            .binary_search_by_key(&site_key(site), |entry| site_key(entry.site))
+        else {
+            return DebugSourceResolutionV1::Absent;
+        };
+        match self.sites[index].spans.as_slice() {
+            [span] => DebugSourceResolutionV1::Resolved { site, span: *span },
+            [] => DebugSourceResolutionV1::Absent,
+            _ => DebugSourceResolutionV1::ManyToOne,
+        }
+    }
+
+    pub fn resolve_source(
+        &self,
+        file: [u8; 32],
+        byte_start: u64,
+        byte_end: u64,
+    ) -> DebugSourceResolutionV1 {
+        let Ok(file_index) = self
+            .files
+            .binary_search_by_key(&file, |entry| entry.identity)
+        else {
+            return DebugSourceResolutionV1::Absent;
+        };
+        if byte_start >= byte_end || byte_end > self.files[file_index].byte_len {
+            return DebugSourceResolutionV1::Absent;
+        }
+        let overlaps = |span: &DebugSourceSpanV1| {
+            span.file == file && span.byte_start < byte_end && byte_start < span.byte_end
+        };
+        let mut found = None;
+        for entry in &self.sites {
+            for span in entry.spans.iter().filter(|span| overlaps(span)) {
+                if found.is_some() {
+                    return DebugSourceResolutionV1::ManyToOne;
+                }
+                found = Some((entry.site, *span));
+            }
+        }
+        if let Some((site, span)) = found {
+            return DebugSourceResolutionV1::Resolved { site, span };
+        }
+        if self.eliminated.iter().any(overlaps) {
+            DebugSourceResolutionV1::Eliminated
+        } else {
+            DebugSourceResolutionV1::Absent
+        }
     }
 
     fn validate_sites(&self, module: &AdmittedSimulationModuleV1) -> Result<(), DebuggerErrorV1> {
@@ -1531,6 +1646,28 @@ impl DebugSourceCatalogV1 {
         }
         Ok(())
     }
+}
+
+fn source_span_key(span: &DebugSourceSpanV1) -> ([u8; 32], u64, u64, u32, u32) {
+    (
+        span.file,
+        span.byte_start,
+        span.byte_end,
+        span.line,
+        span.column,
+    )
+}
+
+fn source_span_valid(files: &[DebugSourceFileV1], span: DebugSourceSpanV1) -> bool {
+    files
+        .binary_search_by_key(&span.file, |file| file.identity)
+        .ok()
+        .is_some_and(|index| {
+            span.byte_start < span.byte_end
+                && span.byte_end <= files[index].byte_len
+                && span.line > 0
+                && span.column > 0
+        })
 }
 
 fn site_key(site: SimulationDebugSiteV1) -> (usize, u32, u32) {

@@ -33,8 +33,9 @@ protocol error.
 
 The closed V1 operation set is capability discovery, state inspection,
 breakpoint and watchpoint management, continue, pause, forward/reverse step,
-seek/replay, hierarchy inspection, value inspection, allocation-relative
-memory reads, event queries, bounded trace export, and termination.
+seek/replay, hierarchy inspection, source resolution, captured-stack
+inspection, value inspection, allocation-relative memory reads, event queries,
+bounded trace export, and termination.
 
 Stepping has explicit event, operation, frame-aware over/out, memory, barrier,
 lane, wave, workgroup, and source granularities. A backend must report source stepping unavailable
@@ -42,6 +43,15 @@ without an authenticated semantic map. Simulator wave scopes are labeled
 `logical_visualization`; only a real hardware collector may emit
 `hardware_observed`. Hardware replay is a new dispatch and must not be exposed
 as reverse execution of the original dispatch.
+
+Resolved source locations carry a closed provenance class. `caller_bound`
+means the map and expected subject were supplied through a low-level external
+admission boundary; it is not compiler authenticity.
+`compiler_bundle_authenticated` is reserved for exact map bytes whose digest
+and subject were verified by the compiler-owned bundle decode transaction.
+Absent, optimized-out, and many-to-one mappings remain typed unavailable
+states. Stack frames are captured backend facts with one-based identities and
+typed value availability, never name-derived or UI-synthesized frames.
 
 Breakpoint predicates are a closed, bounded AST of typed value operands,
 constant bits, comparisons, and boolean composition. Arbitrary expression

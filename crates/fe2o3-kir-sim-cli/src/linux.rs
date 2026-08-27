@@ -85,6 +85,7 @@ enum UnsupportedFeatureCode {
 enum InputCode {
     KirV7,
     Request,
+    DebugSidecar,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -892,6 +893,23 @@ pub(crate) fn load_debug_simulation_input_v1(
         load_admitted_input(&kir, Path::new(&request), None)
     })();
     result.map_err(|failure: Failure| crate::SimulationInputErrorV1 {
+        stage: serialized_tag(failure.0.stage),
+        code: serialized_tag(failure.0.kind),
+        message: failure.0.message.clone(),
+    })
+}
+
+pub(crate) fn load_debug_sidecar_v1(
+    path: OsString,
+    maximum: usize,
+) -> Result<Vec<u8>, crate::SimulationInputErrorV1> {
+    secure_read(
+        Path::new(&path),
+        maximum,
+        InputCode::DebugSidecar,
+        "debug sidecar",
+    )
+    .map_err(|failure| crate::SimulationInputErrorV1 {
         stage: serialized_tag(failure.0.stage),
         code: serialized_tag(failure.0.kind),
         message: failure.0.message.clone(),

@@ -12,10 +12,12 @@ use fe2o3_debug_protocol::*;
 use fe2o3_kernel_ir::{AddressSpace, ScalarType, ValueId};
 use fe2o3_kir_debugger::{
     DebugBreakpointV1, DebugHitConditionV1, DebugInspectionUnavailableV1, DebugInspectionV1,
-    DebugNavigationV1, DebugPredicateV1, DebugScopeSelectorV1, DebugSessionV1, DebugSiteSelectorV1,
-    DebugStopReasonV1, DebugStopV1, DebugTerminalFaultV1, DebugTranscriptCompletenessV1,
-    DebugTranscriptTruncationV1, DebugWatchAccessV1, DebugWatchpointV1, DebugWaveWidthV1,
-    DebuggerLimitsV1, capture_debugger_run_v1, hierarchy_for_invocation_v1,
+    DebugKirIdentityV1, DebugNavigationV1, DebugPredicateV1, DebugScopeSelectorV1, DebugSessionV1,
+    DebugSiteSelectorV1, DebugSourceCatalogV1, DebugSourceFileV1, DebugSourceResolutionV1,
+    DebugSourceSiteV1, DebugSourceSpanV1, DebugStopReasonV1, DebugStopV1, DebugTerminalFaultV1,
+    DebugTranscriptCompletenessV1, DebugTranscriptTruncationV1, DebugWatchAccessV1,
+    DebugWatchpointV1, DebugWaveWidthV1, DebuggerLimitsV1, capture_debugger_run_v1,
+    hierarchy_for_invocation_v1,
 };
 use fe2o3_kir_sim::{
     AdmittedSimulationModuleV1, ScalarBitsV1, SimulationDebugBarrierActionV1,
@@ -25,21 +27,89 @@ use fe2o3_kir_sim::{
     SimulationTargetV1,
 };
 use fe2o3_kir_sim_cli::{
-    AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_simulation_input_v1,
+    AdmittedSimulationInputV1, SimulationInputErrorV1, load_debug_sidecar_v1,
+    load_debug_simulation_input_v1,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const USAGE: &str =
-    "usage: fe2o3-debug sim --kir-v7 PATH --request PATH [--protocol jsonl] [--wave-width 32|64]";
+const USAGE: &str = "usage: fe2o3-debug sim --kir-v7 PATH --request PATH [--source-map PATH --source-bundle-subject ID] [--protocol jsonl] [--wave-width 32|64]";
 const MAX_SESSION_COMMANDS_V1: u64 = 1_000_000;
 const TRACE_HEADER_SCHEMA_V1: &str = "fe2o3-debug-trace-v1";
+pub const SOURCE_MAP_SCHEMA_V1: &str = "fe2o3-debug-source-map-v1";
+pub const MAX_SOURCE_MAP_BYTES_V1: usize = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 struct OptionsV1 {
     kir_v7: PathBuf,
     request: PathBuf,
+    source_map: Option<PathBuf>,
+    source_bundle_subject: Option<OpaqueIdentityV1>,
     wave_width: DebugWaveWidthV1,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMapDocumentV1 {
+    schema: SourceMapSchemaV1,
+    binding: SourceMapBindingV1,
+    files: Vec<SourceMapFileV1>,
+    sites: Vec<SourceMapSiteV1>,
+    eliminated: Vec<SourceMapSpanV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+enum SourceMapSchemaV1 {
+    #[serde(rename = "fe2o3-debug-source-map-v1")]
+    V1,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMapBindingV1 {
+    bundle_subject_identity: OpaqueIdentityV1,
+    canonical_kir: SourceMapKirIdentityV1,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMapKirIdentityV1 {
+    digest: OpaqueIdentityV1,
+    canonical_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMapFileV1 {
+    identity: OpaqueIdentityV1,
+    byte_len: u64,
+    display_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMapSiteV1 {
+    site: KirSiteV1,
+    spans: Vec<SourceMapSpanV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceMapSpanV1 {
+    file_identity: OpaqueIdentityV1,
+    byte_start: u64,
+    byte_end: u64,
+    line: u32,
+    column: u32,
+}
+
+#[derive(Debug)]
+struct AdmittedSourceMapV1 {
+    identity: OpaqueIdentityV1,
+    bundle_subject_identity: OpaqueIdentityV1,
+    configuration_identity: OpaqueIdentityV1,
+    provenance: SourceMapProvenanceV1,
+    catalog: DebugSourceCatalogV1,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -52,7 +122,7 @@ enum ConvertErrorV1 {
     Invalid(&'static str),
 }
 
-fn simulator_capabilities() -> Vec<CapabilityViewV1> {
+fn simulator_capabilities(source_map_bound: bool) -> Vec<CapabilityViewV1> {
     use CapabilityAvailabilityV1::{Available, Unavailable};
     use CapabilityUnavailableReasonV1::{
         LogicalVisualizationOnly, NotExposedByBackend, NotRepresented, RequiresAuthenticatedMap,
@@ -61,7 +131,20 @@ fn simulator_capabilities() -> Vec<CapabilityViewV1> {
     vec![
         capability(HierarchyInspection, Available, None),
         capability(KirSites, Available, None),
-        capability(SourceSites, Unavailable, Some(RequiresAuthenticatedMap)),
+        capability(
+            SourceSites,
+            if source_map_bound {
+                Available
+            } else {
+                Unavailable
+            },
+            if source_map_bound {
+                None
+            } else {
+                Some(RequiresAuthenticatedMap)
+            },
+        ),
+        capability(CallStack, Available, None),
         capability(Breakpoints, Available, None),
         capability(Watchpoints, Available, None),
         capability(ForwardStep, Available, None),
@@ -95,6 +178,174 @@ const fn capability(
         name,
         availability,
         reason,
+    }
+}
+
+fn admit_source_map_v1(
+    bytes: &[u8],
+    input: &AdmittedSimulationInputV1,
+    configuration_identity: OpaqueIdentityV1,
+    expected_bundle_subject: OpaqueIdentityV1,
+) -> Result<AdmittedSourceMapV1, String> {
+    admit_source_map_with_provenance_v1(
+        bytes,
+        input,
+        configuration_identity,
+        expected_bundle_subject,
+        None,
+        SourceMapProvenanceV1::CallerBound,
+    )
+}
+
+fn admit_source_map_with_provenance_v1(
+    bytes: &[u8],
+    input: &AdmittedSimulationInputV1,
+    configuration_identity: OpaqueIdentityV1,
+    expected_bundle_subject: OpaqueIdentityV1,
+    expected_map_identity: Option<OpaqueIdentityV1>,
+    provenance: SourceMapProvenanceV1,
+) -> Result<AdmittedSourceMapV1, String> {
+    if bytes.is_empty() || bytes.len() > MAX_SOURCE_MAP_BYTES_V1 {
+        return Err(format!(
+            "source map must contain 1 to {MAX_SOURCE_MAP_BYTES_V1} bytes"
+        ));
+    }
+    let map_identity = debug_source_map_identity_v1(bytes)?;
+    if expected_map_identity.is_some_and(|expected| expected != map_identity) {
+        return Err("source map identity does not match the compiler bundle commitment".to_owned());
+    }
+    let document: SourceMapDocumentV1 = serde_json::from_slice(bytes).map_err(|error| {
+        format!(
+            "source map JSON is invalid at line {} column {}",
+            error.line(),
+            error.column()
+        )
+    })?;
+    let _schema = document.schema;
+    if document.binding.bundle_subject_identity != expected_bundle_subject {
+        return Err(
+            "source map bundle subject identity does not match the expected subject".to_owned(),
+        );
+    }
+    let canonical_len = input.module.identity().canonical_length();
+    if document.binding.canonical_kir.digest.as_bytes() != input.kir_sha256
+        || document.binding.canonical_kir.canonical_bytes != canonical_len
+    {
+        return Err(format!(
+            "source map canonical KIR identity does not match admitted digest {} length {canonical_len}",
+            hex_bytes(&input.kir_sha256)
+        ));
+    }
+    let files = document
+        .files
+        .into_iter()
+        .map(|file| DebugSourceFileV1 {
+            identity: file.identity.as_bytes(),
+            byte_len: file.byte_len,
+            display_path: file.display_path,
+        })
+        .collect();
+    let mut sites = Vec::new();
+    sites
+        .try_reserve_exact(document.sites.len())
+        .map_err(|_| "source map site allocation failed".to_owned())?;
+    for site in document.sites {
+        sites.push(DebugSourceSiteV1 {
+            site: source_map_site(&input.module, site.site)?,
+            spans: site.spans.into_iter().map(source_map_span).collect(),
+        });
+    }
+    let catalog = DebugSourceCatalogV1::new_with_eliminated(
+        DebugKirIdentityV1 {
+            digest: input.kir_sha256,
+            canonical_len,
+        },
+        files,
+        sites,
+        document
+            .eliminated
+            .into_iter()
+            .map(source_map_span)
+            .collect(),
+    )
+    .map_err(|error| format!("source map catalog is invalid: {error}"))?;
+    Ok(AdmittedSourceMapV1 {
+        identity: map_identity,
+        bundle_subject_identity: document.binding.bundle_subject_identity,
+        configuration_identity,
+        provenance,
+        catalog,
+    })
+}
+
+/// Computes the exact identity committed by a compiler simulation bundle for
+/// one canonical source-map payload.
+pub fn debug_source_map_identity_v1(bytes: &[u8]) -> Result<OpaqueIdentityV1, String> {
+    const DOMAIN: &[u8] = b"FE2O3/SIMULATION-DEBUG-MAP/V1\0";
+    if bytes.is_empty() || bytes.len() > MAX_SOURCE_MAP_BYTES_V1 {
+        return Err(format!(
+            "source map must contain 1 to {MAX_SOURCE_MAP_BYTES_V1} bytes"
+        ));
+    }
+    let mut digest = Sha256::new();
+    digest.update(
+        u32::try_from(DOMAIN.len())
+            .expect("source map domain length fits u32")
+            .to_le_bytes(),
+    );
+    digest.update(DOMAIN);
+    digest.update(
+        u64::try_from(bytes.len())
+            .map_err(|_| "source map length does not fit u64".to_owned())?
+            .to_le_bytes(),
+    );
+    digest.update(bytes);
+    Ok(nonzero_identity(digest.finalize().into()))
+}
+
+fn source_map_site(
+    module: &AdmittedSimulationModuleV1,
+    site: KirSiteV1,
+) -> Result<fe2o3_kir_sim::SimulationDebugSiteV1, String> {
+    let KirSitePointV1::Operation { operation_ordinal } = site.point else {
+        return Err("source map sites must identify KIR operations".to_owned());
+    };
+    let function_ordinal = usize::try_from(site.function_ordinal)
+        .map_err(|_| "source map function ordinal does not fit this host".to_owned())?;
+    let function = module
+        .module()
+        .functions
+        .get(function_ordinal)
+        .ok_or_else(|| "source map function ordinal is unknown".to_owned())?;
+    let body = function
+        .body
+        .as_ref()
+        .ok_or_else(|| "source map function has no body".to_owned())?;
+    let block_ordinal = usize::try_from(site.block_ordinal)
+        .map_err(|_| "source map block ordinal does not fit this host".to_owned())?;
+    let block = body
+        .blocks
+        .get(block_ordinal)
+        .ok_or_else(|| "source map block ordinal is unknown".to_owned())?;
+    let operation = u32::try_from(operation_ordinal)
+        .map_err(|_| "source map operation ordinal exceeds KIR V7".to_owned())?;
+    if block.operations.get(operation as usize).is_none() {
+        return Err("source map operation ordinal is unknown".to_owned());
+    }
+    Ok(fe2o3_kir_sim::SimulationDebugSiteV1 {
+        function_ordinal,
+        block: block.id,
+        operation,
+    })
+}
+
+fn source_map_span(span: SourceMapSpanV1) -> DebugSourceSpanV1 {
+    DebugSourceSpanV1 {
+        file: span.file_identity.as_bytes(),
+        byte_start: span.byte_start,
+        byte_end: span.byte_end,
+        line: span.line,
+        column: span.column,
     }
 }
 
@@ -1014,13 +1265,39 @@ pub fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let backend = match SimulatorBackendV1::new(admitted, options.wave_width) {
-        Ok(backend) => backend,
-        Err(message) => {
-            write_bootstrap_error("backend", "simulation_capture_failed", &message);
-            return ExitCode::FAILURE;
+    let source_map = match (&options.source_map, options.source_bundle_subject) {
+        (Some(path), Some(expected_subject)) => {
+            let bytes = match load_debug_sidecar_v1(path, MAX_SOURCE_MAP_BYTES_V1) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    write_input_error(&error);
+                    return ExitCode::FAILURE;
+                }
+            };
+            let configuration = configuration_identity(
+                admitted.kir_sha256,
+                admitted.request_sha256,
+                options.wave_width,
+            );
+            match admit_source_map_v1(&bytes, &admitted, configuration, expected_subject) {
+                Ok(map) => Some(map),
+                Err(message) => {
+                    write_bootstrap_error("source_map", "source_map_rejected", &message);
+                    return ExitCode::FAILURE;
+                }
+            }
         }
+        (None, None) => None,
+        _ => unreachable!("argument parser requires source-map options as a pair"),
     };
+    let backend =
+        match SimulatorBackendV1::new_with_source_map(admitted, options.wave_width, source_map) {
+            Ok(backend) => backend,
+            Err(message) => {
+                write_bootstrap_error("backend", "simulation_capture_failed", &message);
+                return ExitCode::FAILURE;
+            }
+        };
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = BufReader::new(stdin.lock());
@@ -1041,6 +1318,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
     }
     let mut kir_v7 = None;
     let mut request = None;
+    let mut source_map = None;
+    let mut source_bundle_subject = None;
     let mut protocol_seen = false;
     let mut wave_width = DebugWaveWidthV1::Wave64;
     while let Some(option) = arguments.next() {
@@ -1051,6 +1330,22 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             set_once(&mut kir_v7, PathBuf::from(value), "--kir-v7")?;
         } else if option == OsStr::new("--request") {
             set_once(&mut request, PathBuf::from(value), "--request")?;
+        } else if option == OsStr::new("--source-map") {
+            set_once(&mut source_map, PathBuf::from(value), "--source-map")?;
+        } else if option == OsStr::new("--source-bundle-subject") {
+            let value = value
+                .to_str()
+                .ok_or_else(|| format!("--source-bundle-subject must be UTF-8; {USAGE}"))?;
+            let quoted = serde_json::to_string(value)
+                .map_err(|_| format!("invalid --source-bundle-subject; {USAGE}"))?;
+            let identity: OpaqueIdentityV1 = serde_json::from_str(&quoted).map_err(|_| {
+                format!("--source-bundle-subject must be 64 lowercase hex digits; {USAGE}")
+            })?;
+            set_once(
+                &mut source_bundle_subject,
+                identity,
+                "--source-bundle-subject",
+            )?;
         } else if option == OsStr::new("--protocol") {
             if protocol_seen || value != OsStr::new("jsonl") {
                 return Err(format!(
@@ -1068,9 +1363,16 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<OptionsV1,
             return Err(format!("unknown option {option:?}; {USAGE}"));
         }
     }
+    if source_map.is_some() != source_bundle_subject.is_some() {
+        return Err(format!(
+            "--source-map and --source-bundle-subject must be supplied together; {USAGE}"
+        ));
+    }
     Ok(OptionsV1 {
         kir_v7: kir_v7.ok_or_else(|| format!("--kir-v7 is required; {USAGE}"))?,
         request: request.ok_or_else(|| format!("--request is required; {USAGE}"))?,
+        source_map,
+        source_bundle_subject,
         wave_width,
     })
 }
@@ -1107,6 +1409,50 @@ pub fn run_admitted_jsonl_v1<R: BufRead, W: Write>(
     writer: &mut W,
 ) -> Result<(), String> {
     let backend = SimulatorBackendV1::new(input, wave_width)?;
+    run_jsonl_v1(backend, reader, writer)
+}
+
+pub fn run_admitted_jsonl_with_source_map_v1<R: BufRead, W: Write>(
+    input: AdmittedSimulationInputV1,
+    wave_width: DebugWaveWidthV1,
+    source_map_bytes: &[u8],
+    expected_bundle_subject: OpaqueIdentityV1,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), String> {
+    let configuration = configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+    let source_map = admit_source_map_v1(
+        source_map_bytes,
+        &input,
+        configuration,
+        expected_bundle_subject,
+    )?;
+    let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))?;
+    run_jsonl_v1(backend, reader, writer)
+}
+
+/// Runs with map bytes obtained from a compiler-bundle decode transaction.
+/// `verified_bundle_subject` and `committed_map_identity` must come from that
+/// transaction, not from the map document or command-line input.
+pub fn run_admitted_jsonl_with_compiler_source_map_v1<R: BufRead, W: Write>(
+    input: AdmittedSimulationInputV1,
+    wave_width: DebugWaveWidthV1,
+    source_map_bytes: &[u8],
+    verified_bundle_subject: OpaqueIdentityV1,
+    committed_map_identity: OpaqueIdentityV1,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), String> {
+    let configuration = configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+    let source_map = admit_source_map_with_provenance_v1(
+        source_map_bytes,
+        &input,
+        configuration,
+        verified_bundle_subject,
+        Some(committed_map_identity),
+        SourceMapProvenanceV1::CompilerBundleAuthenticated,
+    )?;
+    let backend = SimulatorBackendV1::new_with_source_map(input, wave_width, Some(source_map))?;
     run_jsonl_v1(backend, reader, writer)
 }
 
@@ -1204,6 +1550,8 @@ struct SimulatorBackendV1 {
     session: DebugSessionV1,
     wave_width: DebugWaveWidthV1,
     configuration_identity: OpaqueIdentityV1,
+    source_map_identity: Option<OpaqueIdentityV1>,
+    source_map_provenance: Option<SourceMapProvenanceV1>,
     revision: u64,
     command_count: u64,
     terminated: bool,
@@ -1218,6 +1566,14 @@ struct SimulatorBackendV1 {
 
 impl SimulatorBackendV1 {
     fn new(input: AdmittedSimulationInputV1, wave_width: DebugWaveWidthV1) -> Result<Self, String> {
+        Self::new_with_source_map(input, wave_width, None)
+    }
+
+    fn new_with_source_map(
+        input: AdmittedSimulationInputV1,
+        wave_width: DebugWaveWidthV1,
+        source_map: Option<AdmittedSourceMapV1>,
+    ) -> Result<Self, String> {
         let capture_limits =
             SimulationDebugCaptureLimitsV1::new(64, 4_096, 16_384, 16 * 1024 * 1024)
                 .map_err(|error| error.to_string())?;
@@ -1238,11 +1594,29 @@ impl SimulatorBackendV1 {
         let failed_execution = matches!(run.execution, Err(SimulationErrorV1::Execution(_)));
         let configuration_identity =
             configuration_identity(input.kir_sha256, input.request_sha256, wave_width);
+        let mut session = DebugSessionV1::new(run.transcript);
+        let mut source_map_provenance = None;
+        let source_map_identity = if let Some(source_map) = source_map {
+            if source_map.configuration_identity != configuration_identity {
+                return Err("source map configuration identity changed before binding".to_owned());
+            }
+            let _externally_bound_subject = source_map.bundle_subject_identity;
+            let identity = source_map.identity;
+            source_map_provenance = Some(source_map.provenance);
+            session
+                .bind_source_catalog(&input.module, source_map.catalog)
+                .map_err(|error| format!("source map binding failed: {error}"))?;
+            Some(identity)
+        } else {
+            None
+        };
         Ok(Self {
             module: input.module,
-            session: DebugSessionV1::new(run.transcript),
+            session,
             wave_width,
             configuration_identity,
+            source_map_identity,
+            source_map_provenance,
             revision: 0,
             command_count: 0,
             terminated: false,
@@ -1409,7 +1783,7 @@ impl SimulatorBackendV1 {
                 request_id,
                 DebugOperationNameV1::DiscoverCapabilities,
                 DebugResultV1::Capabilities {
-                    capabilities: simulator_capabilities(),
+                    capabilities: simulator_capabilities(self.source_map_identity.is_some()),
                 },
             ),
             DebugRequestV1::GetState { request_id, .. } => self.ok(
@@ -1475,6 +1849,15 @@ impl SimulatorBackendV1 {
                 page,
                 ..
             } => self.inspect_scope(request_id, scope, include_children, page),
+            DebugRequestV1::ResolveSource {
+                request_id, site, ..
+            } => self.resolve_source(request_id, site),
+            DebugRequestV1::InspectStack {
+                request_id,
+                scope,
+                page,
+                ..
+            } => self.inspect_stack(request_id, scope, page),
             DebugRequestV1::InspectValues {
                 request_id,
                 scope,
@@ -1764,12 +2147,71 @@ impl SimulatorBackendV1 {
                     predicate,
                 )
             }
-            BreakpointKindV1::Source { .. } => {
-                return Err(ConvertErrorV1::Unavailable(
-                    DebugCapabilityNameV1::SourceSites,
-                    CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
-                    "source breakpoints require an exact-KIR authenticated source map",
-                ));
+            BreakpointKindV1::Source { source } => {
+                let Some(map_identity) = self.source_map_identity else {
+                    return Err(ConvertErrorV1::Unavailable(
+                        DebugCapabilityNameV1::SourceSites,
+                        CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                        "source breakpoints require an exact-KIR bound source map",
+                    ));
+                };
+                if source.map_identity != map_identity {
+                    return Err(ConvertErrorV1::Unavailable(
+                        DebugCapabilityNameV1::SourceSites,
+                        CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                        "source breakpoint map identity is stale or belongs to another map",
+                    ));
+                }
+                if Some(source.provenance) != self.source_map_provenance {
+                    return Err(ConvertErrorV1::Unavailable(
+                        DebugCapabilityNameV1::SourceSites,
+                        CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                        "source breakpoint provenance does not match the bound map",
+                    ));
+                }
+                let resolution = self.session.resolve_source_location(
+                    source.file_identity.as_bytes(),
+                    source.byte_start,
+                    source.byte_end,
+                );
+                let DebugInspectionV1::Available(resolution) = resolution else {
+                    return Err(ConvertErrorV1::Unavailable(
+                        DebugCapabilityNameV1::SourceSites,
+                        CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+                        "source map is not bound to this debugger session",
+                    ));
+                };
+                let DebugSourceResolutionV1::Resolved { site, .. } = resolution else {
+                    let (reason, detail) = match resolution {
+                        DebugSourceResolutionV1::Absent => (
+                            CapabilityUnavailableReasonV1::Absent,
+                            "source location is absent from the bound map",
+                        ),
+                        DebugSourceResolutionV1::Eliminated => (
+                            CapabilityUnavailableReasonV1::OptimizedOut,
+                            "source location was eliminated before canonical KIR",
+                        ),
+                        DebugSourceResolutionV1::ManyToOne => (
+                            CapabilityUnavailableReasonV1::ManyToOne,
+                            "source location does not resolve to one exact KIR operation",
+                        ),
+                        DebugSourceResolutionV1::Resolved { .. } => unreachable!(),
+                    };
+                    return Err(ConvertErrorV1::Unavailable(
+                        DebugCapabilityNameV1::SourceSites,
+                        reason,
+                        detail,
+                    ));
+                };
+                (
+                    DebugSiteSelectorV1 {
+                        function_ordinal: Some(site.function_ordinal),
+                        block: Some(site.block),
+                        operation: Some(site.operation),
+                        phase: Some(SimulationDebugCheckpointPhaseV1::BeforeOperation),
+                    },
+                    DebugPredicateV1::True,
+                )
             }
             BreakpointKindV1::Barrier { .. } => {
                 return Err(ConvertErrorV1::Unavailable(
@@ -2036,13 +2478,13 @@ impl SimulatorBackendV1 {
         count: u32,
         focus: Option<ExecutionScopeSelectorV1>,
     ) -> DebugResponseV1 {
-        if granularity == StepGranularityV1::Source {
+        if granularity == StepGranularityV1::Source && self.source_map_identity.is_none() {
             return self.unavailable(
                 request_id,
                 DebugOperationNameV1::Step,
                 DebugCapabilityNameV1::SourceSites,
                 CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
-                "source stepping requires an exact-KIR authenticated source map",
+                "source stepping requires an exact-KIR bound source map",
             );
         }
         if direction == StepDirectionV1::Reverse
@@ -2065,6 +2507,19 @@ impl SimulatorBackendV1 {
         let mut navigation = DebugNavigationV1::Beginning;
         for _ in 0..count {
             navigation = match (direction, granularity) {
+                (_, StepGranularityV1::Source) => match self.step_source(direction, &scope) {
+                    Ok(navigation) => navigation,
+                    Err((reason, detail)) => {
+                        restore_cursor(&mut self.session, saved);
+                        return self.unavailable(
+                            request_id,
+                            DebugOperationNameV1::Step,
+                            DebugCapabilityNameV1::SourceSites,
+                            reason,
+                            detail,
+                        );
+                    }
+                },
                 (StepDirectionV1::Forward, StepGranularityV1::Over) => {
                     self.session.step_over(&scope)
                 }
@@ -2089,6 +2544,67 @@ impl SimulatorBackendV1 {
             }
         }
         self.finish_control(request_id, DebugOperationNameV1::Step, before, navigation)
+    }
+
+    fn step_source(
+        &mut self,
+        direction: StepDirectionV1,
+        scope: &DebugScopeSelectorV1,
+    ) -> Result<DebugNavigationV1, (CapabilityUnavailableReasonV1, &'static str)> {
+        let baseline = self
+            .session
+            .current()
+            .map(|current| {
+                source_span_for_step(self.session.resolve_source_site(current.site), true)
+            })
+            .transpose()?
+            .flatten();
+        let records = self.session.transcript().records();
+        let cursor = self.session.cursor_record_index();
+        let inspect = |index: usize| -> Result<bool, _> {
+            let record = &records[index];
+            if !scope.matches(record.invocation, self.wave_width) {
+                return Ok(false);
+            }
+            match source_span_for_step(self.session.resolve_source_site(record.site), false)? {
+                Some(span) => Ok(baseline.is_none_or(|baseline| span != baseline)),
+                None => Ok(false),
+            }
+        };
+        let candidate = match direction {
+            StepDirectionV1::Forward => {
+                let start = cursor.map_or(0, |index| index.saturating_add(1));
+                let mut found = None;
+                for index in start..records.len() {
+                    if inspect(index)? {
+                        found = Some(index);
+                        break;
+                    }
+                }
+                found
+            }
+            StepDirectionV1::Reverse => {
+                let Some(start) = cursor.and_then(|index| index.checked_sub(1)) else {
+                    return Ok(self.session.seek_entry());
+                };
+                let mut found = None;
+                for index in (0..=start).rev() {
+                    if inspect(index)? {
+                        found = Some(index);
+                        break;
+                    }
+                }
+                found
+            }
+        };
+        Ok(if let Some(index) = candidate {
+            self.session.seek_record_index(index)
+        } else {
+            match direction {
+                StepDirectionV1::Forward => self.session.seek_record_index(records.len()),
+                StepDirectionV1::Reverse => self.session.seek_entry(),
+            }
+        })
     }
 
     fn step_filtered(
@@ -2410,6 +2926,155 @@ impl SimulatorBackendV1 {
             scopes,
             self.wave_width,
         )
+    }
+
+    fn resolve_source(&self, request_id: u64, kir: KirSiteV1) -> DebugResponseV1 {
+        let site = match source_map_site(&self.module, kir) {
+            Ok(site) => site,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::ResolveSource),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidRequest,
+                    &message,
+                );
+            }
+        };
+        self.ok(
+            request_id,
+            DebugOperationNameV1::ResolveSource,
+            DebugResultV1::Source {
+                site: SemanticSiteViewV1 {
+                    kir,
+                    source: self.source_availability(site),
+                },
+            },
+        )
+    }
+
+    fn inspect_stack(
+        &self,
+        request_id: u64,
+        scope: ExecutionScopeSelectorV1,
+        page: PageRequestV1,
+    ) -> DebugResponseV1 {
+        let Some(record) = self.session.current() else {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectStack,
+                DebugCapabilityNameV1::CallStack,
+                CapabilityUnavailableReasonV1::NotCaptured,
+                "the current cursor has no captured checkpoint stack",
+            );
+        };
+        if !convert_scope_selector(scope).matches(record.invocation, self.wave_width) {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectStack,
+                DebugCapabilityNameV1::CallStack,
+                CapabilityUnavailableReasonV1::OutsideCaptureScope,
+                "the requested scope is not the current replay invocation",
+            );
+        }
+        let frames = match self.session.stack() {
+            DebugInspectionV1::Available(frames) => frames,
+            DebugInspectionV1::Unavailable(DebugInspectionUnavailableV1::Stack(_)) => {
+                return self.unavailable(
+                    request_id,
+                    DebugOperationNameV1::InspectStack,
+                    DebugCapabilityNameV1::CallStack,
+                    CapabilityUnavailableReasonV1::Truncated,
+                    "the checkpoint stack exceeded its capture bound",
+                );
+            }
+            DebugInspectionV1::Unavailable(_) => {
+                return self.unavailable(
+                    request_id,
+                    DebugOperationNameV1::InspectStack,
+                    DebugCapabilityNameV1::CallStack,
+                    CapabilityUnavailableReasonV1::NotCaptured,
+                    "call stacks are captured only at operation checkpoints",
+                );
+            }
+        };
+        let query_bytes = serde_json::to_vec(&(scope, self.cursor_sequence())).unwrap_or_default();
+        let query = self.query_identity(b"inspect-stack", &query_bytes);
+        let (start, end, next_cursor) = match page_bounds(page, query, frames.len()) {
+            Ok(bounds) => bounds,
+            Err(message) => {
+                return self.error(
+                    Some(request_id),
+                    Some(DebugOperationNameV1::InspectStack),
+                    DebugErrorStageV1::Protocol,
+                    DebugErrorCodeV1::InvalidCursor,
+                    message,
+                );
+            }
+        };
+        let Some(views) = frames[start..end]
+            .iter()
+            .map(|frame| self.stack_frame_view(frame))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return self.error(
+                Some(request_id),
+                Some(DebugOperationNameV1::InspectStack),
+                DebugErrorStageV1::Backend,
+                DebugErrorCodeV1::BackendFailure,
+                "a captured stack frame does not belong to the admitted KIR module",
+            );
+        };
+        let Some(snapshot) = self.current_anchor(None) else {
+            return self.unavailable(
+                request_id,
+                DebugOperationNameV1::InspectStack,
+                DebugCapabilityNameV1::CallStack,
+                CapabilityUnavailableReasonV1::NotCaptured,
+                "the current cursor has no captured checkpoint anchor",
+            );
+        };
+        self.ok(
+            request_id,
+            DebugOperationNameV1::InspectStack,
+            DebugResultV1::Stack {
+                snapshot,
+                frames: views,
+                next_cursor,
+            },
+        )
+    }
+
+    fn stack_frame_view(&self, frame: &SimulationDebugFrameV1) -> Option<StackFrameV1> {
+        let function = self.module.module().functions.get(frame.function_ordinal)?;
+        let block_ordinal = function
+            .body
+            .as_ref()?
+            .blocks
+            .iter()
+            .position(|block| block.id == frame.block)?;
+        let values = match &frame.values {
+            SimulationDebugCollectionV1::Captured(values) => StackValuesAvailabilityV1::Captured {
+                value_count: u64::try_from(values.len()).ok()?,
+            },
+            SimulationDebugCollectionV1::Unavailable { reason, .. } => {
+                StackValuesAvailabilityV1::Unavailable {
+                    reason: match reason {
+                        fe2o3_kir_sim::SimulationDebugUnavailableReasonV1::NotCaptured => {
+                            ValueUnavailableReasonV1::NotCaptured
+                        }
+                        _ => ValueUnavailableReasonV1::Truncated,
+                    },
+                }
+            }
+        };
+        Some(StackFrameV1 {
+            frame: u64::from(frame.depth).checked_add(1)?,
+            function_ordinal: u64::try_from(frame.function_ordinal).ok()?,
+            block_ordinal: u64::try_from(block_ordinal).ok()?,
+            next_operation: frame.next_operation.map(u64::from),
+            values,
+        })
     }
 
     fn inspect_values(
@@ -2865,6 +3530,53 @@ impl SimulatorBackendV1 {
         })
     }
 
+    fn source_availability(
+        &self,
+        site: fe2o3_kir_sim::SimulationDebugSiteV1,
+    ) -> SourceSiteAvailabilityV1 {
+        let Some(map_identity) = self.source_map_identity else {
+            return SourceSiteAvailabilityV1::Unavailable {
+                reason: SourceSiteUnavailableReasonV1::RequiresAuthenticatedMap,
+            };
+        };
+        let Some(provenance) = self.source_map_provenance else {
+            return SourceSiteAvailabilityV1::Unavailable {
+                reason: SourceSiteUnavailableReasonV1::RequiresAuthenticatedMap,
+            };
+        };
+        match self.session.resolve_source_site(site) {
+            DebugInspectionV1::Available(DebugSourceResolutionV1::Resolved { span, .. }) => {
+                SourceSiteAvailabilityV1::Resolved {
+                    location: SourceLocationV1 {
+                        map_identity,
+                        provenance,
+                        file_identity: nonzero_identity(span.file),
+                        byte_start: span.byte_start,
+                        byte_end: span.byte_end,
+                    },
+                }
+            }
+            DebugInspectionV1::Available(DebugSourceResolutionV1::Absent) => {
+                SourceSiteAvailabilityV1::Unavailable {
+                    reason: SourceSiteUnavailableReasonV1::Absent,
+                }
+            }
+            DebugInspectionV1::Available(DebugSourceResolutionV1::Eliminated) => {
+                SourceSiteAvailabilityV1::Unavailable {
+                    reason: SourceSiteUnavailableReasonV1::OptimizedOut,
+                }
+            }
+            DebugInspectionV1::Available(DebugSourceResolutionV1::ManyToOne) => {
+                SourceSiteAvailabilityV1::Unavailable {
+                    reason: SourceSiteUnavailableReasonV1::ManyToOne,
+                }
+            }
+            DebugInspectionV1::Unavailable(_) => SourceSiteAvailabilityV1::Unavailable {
+                reason: SourceSiteUnavailableReasonV1::RequiresAuthenticatedMap,
+            },
+        }
+    }
+
     fn current_anchor(&self, frame: Option<u64>) -> Option<DebugSnapshotAnchorV1> {
         let record = self.session.current()?;
         if !matches!(record.kind, SimulationDebugRecordKindV1::Checkpoint { .. }) {
@@ -2875,9 +3587,7 @@ impl SimulatorBackendV1 {
             scope: protocol_scope_for_invocation(record.invocation, self.wave_width)?,
             site: self.protocol_site(record).map(|kir| SemanticSiteViewV1 {
                 kir,
-                source: SourceSiteAvailabilityV1::Unavailable {
-                    reason: SourceSiteUnavailableReasonV1::RequiresAuthenticatedMap,
-                },
+                source: self.source_availability(record.site),
             }),
             frame,
             occurrence: frame.map(|_| 1),
@@ -2930,6 +3640,36 @@ fn configuration_identity(
     nonzero_identity(digest.finalize().into())
 }
 
+fn source_span_for_step(
+    inspection: DebugInspectionV1<DebugSourceResolutionV1>,
+    absent_is_error: bool,
+) -> Result<Option<DebugSourceSpanV1>, (CapabilityUnavailableReasonV1, &'static str)> {
+    match inspection {
+        DebugInspectionV1::Available(DebugSourceResolutionV1::Resolved { span, .. }) => {
+            Ok(Some(span))
+        }
+        DebugInspectionV1::Available(DebugSourceResolutionV1::Absent) if !absent_is_error => {
+            Ok(None)
+        }
+        DebugInspectionV1::Available(DebugSourceResolutionV1::Absent) => Err((
+            CapabilityUnavailableReasonV1::Absent,
+            "the current KIR site is absent from the bound source map",
+        )),
+        DebugInspectionV1::Available(DebugSourceResolutionV1::Eliminated) => Err((
+            CapabilityUnavailableReasonV1::OptimizedOut,
+            "source stepping reached a site eliminated before canonical KIR",
+        )),
+        DebugInspectionV1::Available(DebugSourceResolutionV1::ManyToOne) => Err((
+            CapabilityUnavailableReasonV1::ManyToOne,
+            "source stepping reached a KIR site with no unique source location",
+        )),
+        DebugInspectionV1::Unavailable(_) => Err((
+            CapabilityUnavailableReasonV1::RequiresAuthenticatedMap,
+            "source stepping requires a bound source map",
+        )),
+    }
+}
+
 fn nonzero_identity(mut bytes: [u8; 32]) -> OpaqueIdentityV1 {
     if bytes == [0; 32] {
         bytes[31] = 1;
@@ -2954,6 +3694,37 @@ fn bounded_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_path(relative: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("crate is in workspace/crates")
+            .join(relative)
+    }
+
+    fn fill_input() -> AdmittedSimulationInputV1 {
+        load_debug_simulation_input_v1(
+            &fixture_path("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir"),
+            &fixture_path("crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json"),
+        )
+        .expect("admit fill fixture")
+    }
+
+    fn fill_source_map() -> Vec<u8> {
+        std::fs::read(fixture_path(
+            "crates/fe2o3-debug-cli/tutorial/fill-v1/source-map.json",
+        ))
+        .expect("read source map fixture")
+    }
+
+    fn fixture_subject() -> OpaqueIdentityV1 {
+        nonzero_identity([
+            0xe5, 0x84, 0x49, 0x7b, 0x14, 0x6b, 0x0d, 0xf9, 0x5a, 0x63, 0xa7, 0x89, 0x0e, 0x00,
+            0x3c, 0xd8, 0xed, 0xf2, 0xce, 0x9d, 0xfb, 0x45, 0xdf, 0xda, 0x1c, 0xc6, 0x2c, 0x85,
+            0x29, 0x11, 0x99, 0x50,
+        ])
+    }
 
     fn barrier_record(
         ordinal: u64,
@@ -3037,6 +3808,237 @@ mod tests {
         ] {
             assert!(parse_options(arguments.into_iter().map(OsString::from)).is_err());
         }
+    }
+
+    #[test]
+    fn source_map_is_exactly_bound_and_hostile_documents_fail_closed() {
+        let input = fill_input();
+        let configuration = configuration_identity(
+            input.kir_sha256,
+            input.request_sha256,
+            DebugWaveWidthV1::Wave64,
+        );
+        let bytes = fill_source_map();
+        let admitted = admit_source_map_v1(&bytes, &input, configuration, fixture_subject())
+            .expect("admit exact fixture map");
+        assert_eq!(admitted.provenance, SourceMapProvenanceV1::CallerBound);
+        assert_eq!(admitted.catalog.sites().len(), 4);
+
+        assert!(
+            admit_source_map_v1(&bytes, &input, configuration, nonzero_identity([8; 32]))
+                .unwrap_err()
+                .contains("bundle subject")
+        );
+
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let stale = text.replacen(
+            "e8f2c794a5dd4aeac63f5c820f9d5785b40b5aaff357e3f6726164fa4425f384",
+            "0909090909090909090909090909090909090909090909090909090909090909",
+            1,
+        );
+        assert!(
+            admit_source_map_v1(stale.as_bytes(), &input, configuration, fixture_subject())
+                .unwrap_err()
+                .contains("canonical KIR identity")
+        );
+        for hostile in [
+            text.replacen(
+                "\"schema\": \"fe2o3-debug-source-map-v1\"",
+                "\"schema\": \"fe2o3-debug-source-map-v1\", \"unknown\": 1",
+                1,
+            ),
+            text.replacen(
+                "\"schema\": \"fe2o3-debug-source-map-v1\"",
+                "\"schema\": \"fe2o3-debug-source-map-v1\", \"schema\": \"fe2o3-debug-source-map-v1\"",
+                1,
+            ),
+            text.replacen("\"files\": [", "\"files\": null, \"discard\": [", 1),
+        ] {
+            assert!(admit_source_map_v1(
+                hostile.as_bytes(),
+                &input,
+                configuration,
+                fixture_subject(),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn compiler_map_handoff_verifies_committed_map_identity() {
+        let input = fill_input();
+        let configuration = configuration_identity(
+            input.kir_sha256,
+            input.request_sha256,
+            DebugWaveWidthV1::Wave64,
+        );
+        let bytes = fill_source_map();
+        let actual = debug_source_map_identity_v1(&bytes).unwrap();
+        let expected: OpaqueIdentityV1 = serde_json::from_str(
+            "\"5dd2d368096e36101d762b1b873b74765244af9d1b50b1a2caf27056bec41b4d\"",
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+        let admitted = admit_source_map_with_provenance_v1(
+            &bytes,
+            &input,
+            configuration,
+            fixture_subject(),
+            Some(actual),
+            SourceMapProvenanceV1::CompilerBundleAuthenticated,
+        )
+        .expect("admit bundle-committed map");
+        assert_eq!(
+            admitted.provenance,
+            SourceMapProvenanceV1::CompilerBundleAuthenticated
+        );
+        assert!(
+            admit_source_map_with_provenance_v1(
+                &bytes,
+                &input,
+                configuration,
+                fixture_subject(),
+                Some(nonzero_identity([7; 32])),
+                SourceMapProvenanceV1::CompilerBundleAuthenticated,
+            )
+            .unwrap_err()
+            .contains("bundle commitment")
+        );
+
+        let input = fill_input();
+        let wrong_configuration = nonzero_identity([9; 32]);
+        let admitted =
+            admit_source_map_v1(&bytes, &input, wrong_configuration, fixture_subject()).unwrap();
+        assert!(
+            SimulatorBackendV1::new_with_source_map(
+                input,
+                DebugWaveWidthV1::Wave64,
+                Some(admitted),
+            )
+            .err()
+            .expect("reject stale configuration")
+            .contains("configuration identity")
+        );
+    }
+
+    #[test]
+    fn source_breakpoint_states_are_typed_and_ambiguous_step_is_atomic() {
+        let input = fill_input();
+        let configuration = configuration_identity(
+            input.kir_sha256,
+            input.request_sha256,
+            DebugWaveWidthV1::Wave64,
+        );
+        let mut document: serde_json::Value = serde_json::from_slice(&fill_source_map()).unwrap();
+        document["eliminated"] = serde_json::json!([{
+            "file_identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b",
+            "byte_start": 30,
+            "byte_end": 40,
+            "line": 1,
+            "column": 31
+        }]);
+        let bytes = serde_json::to_vec(&document).unwrap();
+        let source_map =
+            admit_source_map_v1(&bytes, &input, configuration, fixture_subject()).unwrap();
+        let backend = SimulatorBackendV1::new_with_source_map(
+            input,
+            DebugWaveWidthV1::Wave64,
+            Some(source_map),
+        )
+        .unwrap();
+        let source_spec = |byte_start, byte_end| BreakpointSpecV1 {
+            client_label: None,
+            enabled: true,
+            scope: None,
+            hit_condition: None,
+            kind: BreakpointKindV1::Source {
+                source: SourceLocationV1 {
+                    map_identity: backend.source_map_identity.unwrap(),
+                    provenance: SourceMapProvenanceV1::CallerBound,
+                    file_identity: nonzero_identity([
+                        0x8b, 0x9d, 0xa0, 0x37, 0x23, 0xf1, 0xc1, 0x90, 0x2b, 0xc2, 0x2d, 0x28,
+                        0x27, 0x83, 0xd3, 0x89, 0x98, 0xec, 0xf3, 0xee, 0x4f, 0xde, 0x12, 0x61,
+                        0x35, 0x05, 0x2b, 0x17, 0xe0, 0x50, 0xe8, 0x0b,
+                    ]),
+                    byte_start,
+                    byte_end,
+                },
+            },
+        };
+        assert!(matches!(
+            backend.convert_breakpoint(1, &source_spec(20, 25)),
+            Err(ConvertErrorV1::Unavailable(
+                DebugCapabilityNameV1::SourceSites,
+                CapabilityUnavailableReasonV1::Absent,
+                _
+            ))
+        ));
+        assert!(matches!(
+            backend.convert_breakpoint(1, &source_spec(30, 40)),
+            Err(ConvertErrorV1::Unavailable(
+                DebugCapabilityNameV1::SourceSites,
+                CapabilityUnavailableReasonV1::OptimizedOut,
+                _
+            ))
+        ));
+        assert!(matches!(
+            backend.convert_breakpoint(1, &source_spec(47, 68)),
+            Err(ConvertErrorV1::Unavailable(
+                DebugCapabilityNameV1::SourceSites,
+                CapabilityUnavailableReasonV1::ManyToOne,
+                _
+            ))
+        ));
+
+        document["sites"][0]["spans"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "file_identity": "8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b",
+                "byte_start": 20,
+                "byte_end": 25,
+                "line": 1,
+                "column": 21
+            }));
+        let bytes = serde_json::to_vec(&document).unwrap();
+        let input = fill_input();
+        let source_map =
+            admit_source_map_v1(&bytes, &input, configuration, fixture_subject()).unwrap();
+        let mut backend = SimulatorBackendV1::new_with_source_map(
+            input,
+            DebugWaveWidthV1::Wave64,
+            Some(source_map),
+        )
+        .unwrap();
+        let operation_zero = backend
+            .session
+            .transcript()
+            .records()
+            .iter()
+            .position(|record| record.site.operation == 0)
+            .unwrap();
+        backend.session.seek_record_index(operation_zero);
+        let before = backend.cursor_sequence();
+        let response = backend.step(
+            1,
+            StepDirectionV1::Forward,
+            StepGranularityV1::Source,
+            1,
+            None,
+        );
+        assert!(matches!(
+            response,
+            DebugResponseV1::Unavailable {
+                unavailable: CapabilityUnavailableV1 {
+                    reason: CapabilityUnavailableReasonV1::ManyToOne,
+                    state_changed: false,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(backend.cursor_sequence(), before);
+        assert_eq!(backend.revision, 0);
     }
 
     #[test]

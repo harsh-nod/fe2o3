@@ -281,6 +281,19 @@ pub enum DebugRequestV1 {
         include_children: bool,
         page: PageRequestV1,
     },
+    ResolveSource {
+        schema: RequestSchemaV1,
+        request_id: u64,
+        expected_revision: u64,
+        site: KirSiteV1,
+    },
+    InspectStack {
+        schema: RequestSchemaV1,
+        request_id: u64,
+        expected_revision: u64,
+        scope: ExecutionScopeSelectorV1,
+        page: PageRequestV1,
+    },
     InspectValues {
         schema: RequestSchemaV1,
         request_id: u64,
@@ -339,6 +352,8 @@ impl DebugRequestV1 {
             | Self::Step { request_id, .. }
             | Self::Seek { request_id, .. }
             | Self::InspectScope { request_id, .. }
+            | Self::ResolveSource { request_id, .. }
+            | Self::InspectStack { request_id, .. }
             | Self::InspectValues { request_id, .. }
             | Self::ReadMemory { request_id, .. }
             | Self::QueryEvents { request_id, .. }
@@ -388,6 +403,12 @@ impl DebugRequestV1 {
             | Self::InspectScope {
                 expected_revision, ..
             }
+            | Self::ResolveSource {
+                expected_revision, ..
+            }
+            | Self::InspectStack {
+                expected_revision, ..
+            }
             | Self::InspectValues {
                 expected_revision, ..
             }
@@ -421,6 +442,8 @@ impl DebugRequestV1 {
             Self::Step { .. } => DebugOperationNameV1::Step,
             Self::Seek { .. } => DebugOperationNameV1::Seek,
             Self::InspectScope { .. } => DebugOperationNameV1::InspectScope,
+            Self::ResolveSource { .. } => DebugOperationNameV1::ResolveSource,
+            Self::InspectStack { .. } => DebugOperationNameV1::InspectStack,
             Self::InspectValues { .. } => DebugOperationNameV1::InspectValues,
             Self::ReadMemory { .. } => DebugOperationNameV1::ReadMemory,
             Self::QueryEvents { .. } => DebugOperationNameV1::QueryEvents,
@@ -468,6 +491,10 @@ impl DebugRequestV1 {
                 }
             }
             Self::InspectScope { scope, page, .. } => {
+                scope.validate()?;
+                page.validate()?;
+            }
+            Self::InspectStack { scope, page, .. } => {
                 scope.validate()?;
                 page.validate()?;
             }
@@ -559,6 +586,8 @@ pub enum DebugOperationNameV1 {
     Step,
     Seek,
     InspectScope,
+    ResolveSource,
+    InspectStack,
     InspectValues,
     ReadMemory,
     QueryEvents,
@@ -697,9 +726,17 @@ pub enum KirSitePointV1 {
 #[serde(deny_unknown_fields)]
 pub struct SourceLocationV1 {
     pub map_identity: OpaqueIdentityV1,
+    pub provenance: SourceMapProvenanceV1,
     pub file_identity: OpaqueIdentityV1,
     pub byte_start: u64,
     pub byte_end: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceMapProvenanceV1 {
+    CallerBound,
+    CompilerBundleAuthenticated,
 }
 
 impl SourceLocationV1 {
@@ -1417,6 +1454,19 @@ pub enum DebugResultV1 {
         )]
         next_cursor: Option<PageCursorV1>,
     },
+    Source {
+        site: SemanticSiteViewV1,
+    },
+    Stack {
+        snapshot: DebugSnapshotAnchorV1,
+        frames: Vec<StackFrameV1>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_optional_non_null"
+        )]
+        next_cursor: Option<PageCursorV1>,
+    },
     Values {
         snapshot: DebugSnapshotAnchorV1,
         values: Vec<DebugValueV1>,
@@ -1494,6 +1544,20 @@ impl DebugResultV1 {
                     scope.validate()?;
                 }
             }
+            Self::Source { site } => site.source.validate()?,
+            Self::Stack {
+                snapshot, frames, ..
+            } => {
+                snapshot.validate()?;
+                validate_response_count(frames.len(), limits)?;
+                let mut identities = BTreeSet::new();
+                for frame in frames {
+                    frame.validate()?;
+                    if !identities.insert(frame.frame) {
+                        return Err(ProtocolValidationErrorV1::DuplicateIdentity("stack frames"));
+                    }
+                }
+            }
             Self::Values {
                 snapshot, values, ..
             } => {
@@ -1556,6 +1620,8 @@ impl DebugResultV1 {
                     Self::Control { .. }
                 )
                 | (DebugOperationNameV1::InspectScope, Self::Scopes { .. })
+                | (DebugOperationNameV1::ResolveSource, Self::Source { .. })
+                | (DebugOperationNameV1::InspectStack, Self::Stack { .. })
                 | (DebugOperationNameV1::InspectValues, Self::Values { .. })
                 | (DebugOperationNameV1::ReadMemory, Self::Memory { .. })
                 | (DebugOperationNameV1::QueryEvents, Self::Events { .. })
@@ -1581,6 +1647,7 @@ pub enum DebugCapabilityNameV1 {
     HierarchyInspection,
     KirSites,
     SourceSites,
+    CallStack,
     Breakpoints,
     Watchpoints,
     ForwardStep,
@@ -1607,6 +1674,8 @@ pub enum CapabilityAvailabilityV1 {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityUnavailableReasonV1 {
+    Absent,
+    ManyToOne,
     NotRepresented,
     NotCaptured,
     RequiresAuthenticatedMap,
@@ -1844,11 +1913,44 @@ impl SourceSiteAvailabilityV1 {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceSiteUnavailableReasonV1 {
+    Absent,
+    ManyToOne,
     RequiresAuthenticatedMap,
     NotRepresented,
     OptimizedOut,
     OutsideCaptureScope,
     Truncated,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackFrameV1 {
+    pub frame: u64,
+    pub function_ordinal: u64,
+    pub block_ordinal: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    pub next_operation: Option<u64>,
+    pub values: StackValuesAvailabilityV1,
+}
+
+impl StackFrameV1 {
+    fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
+        if self.frame == 0 {
+            return Err(ProtocolValidationErrorV1::ZeroIdentity);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StackValuesAvailabilityV1 {
+    Captured { value_count: u64 },
+    Unavailable { reason: ValueUnavailableReasonV1 },
 }
 
 impl DebugSnapshotAnchorV1 {

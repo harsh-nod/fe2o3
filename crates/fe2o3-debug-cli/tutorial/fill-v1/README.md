@@ -33,3 +33,20 @@ The checked-in `workbench-projection.json` contains only those selected wire
 objects plus fixture metadata. The integration test regenerates it from
 `responses.jsonl`, so tutorial UI data cannot drift into synthetic debugger
 claims.
+
+`source.rs` and `source-map.json` are deterministic source-resolution fixtures.
+The map payload is bound to the exact fill KIR and fixture bundle subject; its
+admission is then bound to the fill simulation configuration. It exercises the
+low-level `caller_bound` path:
+
+```sh
+cargo run -p fe2o3-debug-cli --bin fe2o3-debug -- \
+  sim \
+  --kir-v7 crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir \
+  --request crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json \
+  --source-map crates/fe2o3-debug-cli/tutorial/fill-v1/source-map.json \
+  --source-bundle-subject e584497b146b0df95a63a7890e003cd8edf2ce9dfb45dfda1cc62c8529119950
+```
+
+The fixture is not evidence of compiler provenance. Production maps must enter
+through the compiler-bundle handoff described in the crate README.

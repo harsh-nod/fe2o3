@@ -5,7 +5,7 @@
     "request": "crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json",
     "protocol_requests": "crates/fe2o3-debug-cli/tutorial/fill-v1/requests.jsonl",
     "protocol_responses": "crates/fe2o3-debug-cli/tutorial/fill-v1/responses.jsonl",
-    "protocol_responses_sha256": "d779b816f636d3d31fd66aa5731b67a55f18f0932a91b7df67a0797582869cc6"
+    "protocol_responses_sha256": "7283e69ea847b73d03df389afa315f015b2044119cf1a19ba72b7a3b5fdf7c18"
   },
   "capabilities": {
     "status": "ok",
@@ -42,6 +42,10 @@
           "name": "source_sites",
           "availability": "unavailable",
           "reason": "requires_authenticated_map"
+        },
+        {
+          "name": "call_stack",
+          "availability": "available"
         },
         {
           "name": "breakpoints",
@@ -2129,7 +2133,7 @@
         "capability": "source_sites",
         "reason": "requires_authenticated_map",
         "state_changed": false,
-        "detail": "source stepping requires an exact-KIR authenticated source map"
+        "detail": "source stepping requires an exact-KIR bound source map"
       }
     }
   ],

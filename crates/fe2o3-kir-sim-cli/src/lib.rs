@@ -183,3 +183,31 @@ pub fn load_debug_simulation_input_v1(
         })
     }
 }
+
+/// Securely captures an inert, regular-file debugger sidecar with a caller
+/// supplied hard bound. The returned bytes have no pathname authority.
+pub fn load_debug_sidecar_v1(
+    path: &Path,
+    maximum: usize,
+) -> Result<Vec<u8>, SimulationInputErrorV1> {
+    if maximum == 0 || maximum > 4 * 1024 * 1024 {
+        return Err(SimulationInputErrorV1 {
+            stage: "arguments".to_owned(),
+            code: "invalid_command_line".to_owned(),
+            message: "debug sidecar bound must be between 1 byte and 4 MiB".to_owned(),
+        });
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::load_debug_sidecar_v1(path.as_os_str().to_owned(), maximum)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Err(SimulationInputErrorV1 {
+            stage: "platform".to_owned(),
+            code: "unsupported_platform".to_owned(),
+            message: "fe2o3 debugger sidecar admission requires Linux".to_owned(),
+        })
+    }
+}

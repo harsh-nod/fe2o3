@@ -5,9 +5,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use fe2o3_debug_cli::debug_source_map_identity_v1;
 use fe2o3_debug_protocol::{
     DebugBackendV1, DebugCapabilityNameV1, DebugResponseV1, DebugResultV1, MemoryAvailabilityV1,
-    ProtocolLimitsV1, ScopeStateV1, SessionStateV1, StopReasonV1, ValueAvailabilityV1,
+    ProtocolLimitsV1, ScopeStateV1, SessionStateV1, SourceMapProvenanceV1,
+    SourceSiteAvailabilityV1, StackValuesAvailabilityV1, StopReasonV1, ValueAvailabilityV1,
     WaveInterpretationV1, decode_response_line_v1,
 };
 use serde_json::{Value, json};
@@ -55,6 +57,37 @@ fn run_requests_with_request(requests: &[u8], request: &str) -> std::process::Ou
     child.wait_with_output().expect("wait for debugger")
 }
 
+fn run_requests_with_source_map(requests: &[u8]) -> std::process::Output {
+    let root = workspace_root();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe2o3-debug"))
+        .args([
+            "sim",
+            "--kir-v7",
+            "crates/fe2o3-kir-sim-cli/tutorial/fill-v1/kernel.kir",
+            "--request",
+            "crates/fe2o3-kir-sim-cli/tutorial/fill-v1/request.json",
+            "--source-map",
+            "crates/fe2o3-debug-cli/tutorial/fill-v1/source-map.json",
+            "--source-bundle-subject",
+            "e584497b146b0df95a63a7890e003cd8edf2ce9dfb45dfda1cc62c8529119950",
+            "--protocol",
+            "jsonl",
+        ])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn debugger with source map");
+    child
+        .stdin
+        .take()
+        .expect("debugger stdin")
+        .write_all(requests)
+        .expect("write source request stream");
+    child.wait_with_output().expect("wait for debugger")
+}
+
 fn run_fill() -> Vec<u8> {
     let root = workspace_root();
     let requests = fs::read(root.join("crates/fe2o3-debug-cli/tutorial/fill-v1/requests.jsonl"))
@@ -74,6 +107,72 @@ fn responses(bytes: &[u8]) -> Vec<DebugResponseV1> {
         .split_inclusive(|byte| *byte == b'\n')
         .map(|line| decode_response_line_v1(line, ProtocolLimitsV1::default()).unwrap())
         .collect()
+}
+
+#[test]
+fn source_map_drives_resolution_stepping_breakpoints_and_captured_stack() {
+    let map_bytes =
+        fs::read(workspace_root().join("crates/fe2o3-debug-cli/tutorial/fill-v1/source-map.json"))
+            .unwrap();
+    let map_identity: String = debug_source_map_identity_v1(&map_bytes)
+        .unwrap()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let requests = format!(
+        concat!(
+            "{{\"operation\":\"resolve_source\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"site\":{{\"function_ordinal\":0,\"block_ordinal\":0,\"point\":{{\"kind\":\"operation\",\"operation_ordinal\":2}}}}}}\n",
+            "{{\"operation\":\"set_breakpoints\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":2,\"expected_revision\":0,\"breakpoints\":[{{\"enabled\":true,\"kind\":{{\"kind\":\"source\",\"source\":{{\"map_identity\":\"{}\",\"provenance\":\"caller_bound\",\"file_identity\":\"8b9da03723f1c1902bc22d282783d38998ecf3ee4fde126135052b17e050e80b\",\"byte_start\":74,\"byte_end\":91}}}}}}]}}\n",
+            "{{\"operation\":\"continue\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":3,\"expected_revision\":1,\"max_events\":1024}}\n",
+            "{{\"operation\":\"inspect_stack\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":4,\"expected_revision\":2,\"scope\":{{\"level\":\"dispatch\"}},\"page\":{{\"limit\":16}}}}\n",
+            "{{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":5,\"expected_revision\":2,\"direction\":\"forward\",\"granularity\":\"source\",\"count\":1}}\n"
+        ),
+        map_identity
+    );
+    let output = run_requests_with_source_map(requests.as_bytes());
+    assert!(
+        output.status.success(),
+        "debugger failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses = responses(&output.stdout);
+    assert_eq!(responses.len(), 5);
+    let DebugResponseV1::Ok { result, .. } = &responses[0] else {
+        panic!("source resolve failed")
+    };
+    let DebugResultV1::Source { site } = result.as_ref() else {
+        panic!("wrong source result")
+    };
+    assert!(matches!(
+        site.source,
+        SourceSiteAvailabilityV1::Resolved { location }
+            if location.provenance == SourceMapProvenanceV1::CallerBound
+    ));
+
+    let DebugResponseV1::Ok { result, .. } = &responses[2] else {
+        panic!("source breakpoint did not stop")
+    };
+    assert!(matches!(
+        result.as_ref(),
+        DebugResultV1::Control { stop: Some(stop), .. }
+            if stop.reason == StopReasonV1::Breakpoint
+    ));
+
+    let DebugResponseV1::Ok { result, .. } = &responses[3] else {
+        panic!("stack query failed")
+    };
+    let DebugResultV1::Stack { frames, .. } = result.as_ref() else {
+        panic!("wrong stack result")
+    };
+    assert!(!frames.is_empty());
+    assert!(frames.iter().all(|frame| frame.frame > 0));
+    assert!(
+        frames
+            .iter()
+            .any(|frame| matches!(frame.values, StackValuesAvailabilityV1::Captured { .. }))
+    );
+    assert!(matches!(responses[4], DebugResponseV1::Ok { .. }));
 }
 
 fn project_workbench(bytes: &[u8]) -> Value {

@@ -21,9 +21,30 @@ record clears residency before scope state is reported, so its representative
 lane is `running` and other released lanes are `runnable` until their next
 record.
 
-Source operations require an authenticated exact-KIR source map, which this
-command does not yet accept. Source variables, hardware registers, hardware
-wave state, and KFD dispatch control are reported with typed `unavailable`
-responses instead of fabricated values. Input KIR and request documents are
-loaded through the same hardened parser and admission boundary as
-`fe2o3-kir-sim`.
+`--source-map MAP --source-bundle-subject SUBJECT` admits a strict, bounded
+`fe2o3-debug-source-map-v1` sidecar. Both options are required together. The
+map binds the canonical KIR digest and length plus a non-circular
+compiler-bundle subject identity. Admission binds those exact bytes to the
+complete simulation configuration identity and the backend rechecks that
+binding before use.
+Files are content identities and display paths only; the debugger never opens
+a source path from the map. KIR/source resolution, source breakpoints, and
+source stepping return distinct absent, eliminated, and many-to-one states.
+
+This command-line pair is a low-level/test consistency boundary. Because the
+caller supplies both documents, it is labeled `caller_bound`, not
+authenticated compiler provenance. Production compiler integration must call
+`run_admitted_jsonl_with_compiler_source_map_v1` with exact map bytes, the
+verified bundle subject, and the bundle-committed map identity obtained from the
+same compiler extraction/bundle decode transaction. Only that path emits
+`compiler_bundle_authenticated`. The bundle subject excludes the map payload
+to avoid circular identity; the enclosing bundle identity commits the map's
+domain-separated identity and exact length. `debug_source_map_identity_v1`
+implements the bundle's exact map-identity algorithm.
+
+`inspect_stack` pages captured simulator call frames, including function/block
+ordinals, the next operation, and typed captured/unavailable value state.
+Frames are not reconstructed from names or UI fixtures. Source variables,
+hardware registers, hardware wave state, and KFD dispatch control remain typed
+`unavailable`; no value is fabricated. KIR, request, and sidecar files use the
+hardened regular-file capture boundary shared with `fe2o3-kir-sim`.
