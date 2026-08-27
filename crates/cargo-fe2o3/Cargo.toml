@@ -59,7 +59,7 @@ path = "src/bin/fe2o3-rustc-wrapper.rs"
 
 [[bin]]
 name = "fe2o3-worker-v3-hsaco-fixture"
-path = "../fe2o3-hsaco-finalize/tests/fixtures/worker_v3_hsaco_fixture.rs"
+path = "tests/fixtures/worker_v3_hsaco_fixture.rs"
 test = false
 bench = false
 required-features = ["worker-v3-envelope-integration-test-only"]

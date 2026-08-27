@@ -56,7 +56,7 @@ use fe2o3_runtime_protocol::{
 };
 use sha2::{Digest as _, Sha256};
 
-#[path = "../../fe2o3-hsaco-finalize/tests/worker_v3_hsaco_admission.rs"]
+#[path = "fixtures/worker_v3_hsaco_admission.rs"]
 mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
