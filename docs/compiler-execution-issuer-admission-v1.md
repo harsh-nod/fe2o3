@@ -78,17 +78,24 @@ This admission is now consumed by one
 owns OS nonce generation, sequence and rollback state,
 challenge-before-release durability, exact request/subject comparison,
 receipt-before-release durability, crash replay, singleton exclusion, and
-idempotent acknowledgment. The signing entry points remain unreachable because
-no public constructor can create the required supervised-occurrence token.
+idempotent acknowledgment. The signing entry points construct a fresh
+`ProtectedCompilerExecutionOccurrenceV1` from this admission's own retained
+service session. They accept no occurrence parameter, so descriptor-only,
+foreign-admission, and caller-constructed subjects cannot reach signing.
 
 The authority service now has an authority-free primitive that independently
 binds an admitted live rustc pid/start identity to its exact procfs state,
 sealed V3 invocation, measured rustc/backend images, and retained artifact
-directory. The remaining issuer work is to launch that inspection under the
-production distinct-UID policy, reconstruct and retain the exact current V3
-subject, create the crate-private occurrence token, and expose the durable
-issuer through a bounded `SOCK_SEQPACKET` service loop. Worker V3 must then
-carry and verify the receipt under its own protected current rollback ledger.
+directory. The authority service now joins that observation to the exact
+current production-slot V3 publication, reconstructs the subject under the
+publication lock, and retains both custody values through issuer use. The
+currentness guard keeps that lock through request comparison, signing, and
+durable receipt commit. The
+remaining issuer work is to launch inspection under the production distinct-UID
+policy and expose the durable issuer through a bounded `SOCK_SEQPACKET` service
+loop that carries the journal-bound occurrence/session identity. Worker V3 must
+then carry and verify the receipt under its own protected current rollback
+ledger.
 Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification

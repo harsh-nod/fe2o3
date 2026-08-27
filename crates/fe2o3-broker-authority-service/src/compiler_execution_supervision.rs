@@ -265,6 +265,13 @@ impl ValidatedRemoteRustcProcessObservationV1 {
         &self.identity
     }
 
+    pub(crate) fn artifact_directory_procfd_path(&self) -> PathBuf {
+        PathBuf::from(format!(
+            "/proc/self/fd/{}",
+            self.artifact_directory.file.as_raw_fd()
+        ))
+    }
+
     /// This observation is inert and does not authenticate a compiler occurrence by itself.
     pub const fn authenticates_protected_compiler_execution(&self) -> bool {
         false
@@ -838,8 +845,30 @@ mod tests {
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, ExitStatus};
     use std::ptr;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
+    use fe2o3_artifact_transaction::{
+        BuildAttempt, BuildInvocation, BuildSession, ProducerIdentity, begin_build_attempt,
+        enable_same_mount_namespace_artifact_path_guard_v1, publish_compiler_module_handoff_v3,
+    };
     use fe2o3_build_authority::CompilerClosureV2;
+    use fe2o3_compiler_ffi::{
+        CodeObjectVersion, CompilerFfiEnvelopeV1, CompilerModuleHandoffV2, CompilerModuleKindV1,
+        CompilerModuleSymbolManifestV1, CompilerModuleSymbolRoleV1, DeviceTargetV1,
+        InertFinalCompilerModuleCommitmentV3, InertSemanticCompilerModuleHandoffV3,
+    };
+    use fe2o3_compiler_lineage::{
+        InertAbiReceiptV3, InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirReceiptV3,
+        InertDataLayoutReceiptV3, InertExportManifestReceiptV3,
+        InertFinalCompilerModuleCommitmentReceiptV3, InertFormalMemoryReceiptV3,
+        InertKernelIrReceiptV3, InertMiddleEndReceiptV3, InertMirToKirCorrespondenceReceiptV3,
+        InertProductionSemanticCapsuleV3, InertProofBindingReceiptV3,
+        InertRustcIdentityInventoryReceiptV3, InertRustcPreflightPlanReceiptV3,
+        InertSemanticToLlvmReceiptV3, InertTargetBindingReceiptV3,
+        OrderedInertSemanticLineageReceiptsV3,
+    };
     use fe2o3_rustc_invocation::{RustcInvocationDescriptorV2, RustcUnitV2};
     use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
     use tempfile::TempDir;
@@ -967,6 +996,12 @@ mod tests {
         Exact,
         BackendBytesMismatch,
         MissingInvocationCapability,
+        CompileMissingAttempt,
+        CompileInvalidAttempt,
+        PublishedExact,
+        PublishedInvocationMismatch,
+        PublishedCompilerClosureMismatch,
+        PublishedWrongProducer,
     }
 
     struct RemoteRustcFixture {
@@ -974,7 +1009,10 @@ mod tests {
         control: Option<OwnedFd>,
         child: Option<Child>,
         admission: Option<ProtectedServiceAdmissionV1>,
+        producer: Option<ProducerIdentity>,
+        attempt: Option<BuildAttempt>,
         _service_root: TempDir,
+        _rustc_executable_directory: Option<TempDir>,
         _artifact_directory: TempDir,
     }
 
@@ -986,14 +1024,26 @@ mod tests {
         fn shutdown(&mut self) -> ExitStatus {
             let control = self.control.take().expect("live fixture control endpoint");
             assert_eq!(rustix::io::write(&control, b"9\n").unwrap(), 2);
-            // `dash` reads one byte at a time, while `SOCK_SEQPACKET` discards the unread suffix of
-            // a record. Closing the endpoint supplies the EOF needed to complete the shell `read`.
+            // The shell fixture reads one byte at a time, while `SOCK_SEQPACKET` discards the
+            // unread suffix of a record. Closing also supplies the EOF expected by that fixture.
             drop(control);
             self.child
                 .take()
                 .expect("live fixture child")
                 .wait()
                 .unwrap()
+        }
+
+        fn supersede_publication(&self) {
+            let producer = self.producer.as_ref().expect("published fixture producer");
+            let superseding = begin_build_attempt(
+                self._artifact_directory.path(),
+                producer,
+                BuildInvocation::from_bytes([0xd1; 32]),
+                BuildSession::from_bytes([0xd2; 16]),
+            )
+            .unwrap();
+            assert_ne!(Some(superseding), self.attempt);
         }
     }
 
@@ -1012,8 +1062,162 @@ mod tests {
         }
     }
 
+    fn lineage_payload(label: &str, seed: u8) -> Vec<u8> {
+        format!("fe2o3-compiler-occurrence/{label}/{seed:02x}").into_bytes()
+    }
+
+    fn lineage_receipts(
+        seed: u8,
+        final_commitment: &[u8],
+    ) -> OrderedInertSemanticLineageReceiptsV3 {
+        OrderedInertSemanticLineageReceiptsV3::new(
+            InertRustcIdentityInventoryReceiptV3::from_canonical_preimage(lineage_payload(
+                "inventory",
+                seed,
+            ))
+            .unwrap(),
+            InertRustcPreflightPlanReceiptV3::from_canonical_preimage(lineage_payload(
+                "preflight",
+                seed,
+            ))
+            .unwrap(),
+            InertCanonicalSemanticMirReceiptV3::from_canonical_preimage(lineage_payload(
+                "semantic-mir",
+                seed,
+            ))
+            .unwrap(),
+            InertMiddleEndReceiptV3::from_canonical_preimage(lineage_payload("middle-end", seed))
+                .unwrap(),
+            InertKernelIrReceiptV3::from_canonical_preimage(lineage_payload("kernel-ir", seed))
+                .unwrap(),
+            InertMirToKirCorrespondenceReceiptV3::from_canonical_preimage(lineage_payload(
+                "mir-to-kir",
+                seed,
+            ))
+            .unwrap(),
+            InertFormalMemoryReceiptV3::from_canonical_preimage(lineage_payload(
+                "formal-memory",
+                seed,
+            ))
+            .unwrap(),
+            InertProofBindingReceiptV3::from_canonical_preimage(lineage_payload(
+                "proof-binding",
+                seed,
+            ))
+            .unwrap(),
+            InertTargetBindingReceiptV3::from_canonical_preimage(lineage_payload(
+                "target-binding",
+                seed,
+            ))
+            .unwrap(),
+            InertDataLayoutReceiptV3::from_canonical_preimage(lineage_payload("data-layout", seed))
+                .unwrap(),
+            InertAbiReceiptV3::from_canonical_preimage(lineage_payload("abi", seed)).unwrap(),
+            InertExportManifestReceiptV3::from_canonical_preimage(lineage_payload(
+                "export-manifest",
+                seed,
+            ))
+            .unwrap(),
+            InertAmdgpuLoweringReceiptV3::from_canonical_preimage(lineage_payload(
+                "amdgpu-lowering",
+                seed,
+            ))
+            .unwrap(),
+            InertSemanticToLlvmReceiptV3::from_canonical_preimage(lineage_payload(
+                "semantic-to-llvm",
+                seed,
+            ))
+            .unwrap(),
+            InertFinalCompilerModuleCommitmentReceiptV3::from_canonical_preimage(
+                final_commitment.to_vec(),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn compiler_handoff(
+        descriptor: RustcInvocationDescriptorV3,
+        seed: u8,
+    ) -> InertSemanticCompilerModuleHandoffV3 {
+        let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
+        let llvm = format!(
+            "; ModuleID = 'compiler-occurrence-{seed:02x}'\ndefine amdgpu_kernel void @kernel() {{ ret void }}\n"
+        )
+        .into_bytes();
+        let envelope =
+            CompilerFfiEnvelopeV1::for_module_without_device_ffi(target, CodeObjectVersion::V5)
+                .unwrap();
+        let manifest = CompilerModuleSymbolManifestV1::new([
+            (CompilerModuleSymbolRoleV1::KernelEntry, "kernel"),
+            (CompilerModuleSymbolRoleV1::KernelDescriptor, "kernel.kd"),
+        ])
+        .unwrap();
+        let module = CompilerModuleHandoffV2::new(
+            CompilerModuleKindV1::LlvmTextIr,
+            target,
+            CodeObjectVersion::V5,
+            envelope,
+            manifest,
+            &llvm,
+        )
+        .unwrap();
+        let final_commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(&module).unwrap();
+        let capsule = InertProductionSemanticCapsuleV3::new(
+            descriptor,
+            target,
+            lineage_receipts(seed, final_commitment.canonical_bytes()),
+        )
+        .unwrap();
+        InertSemanticCompilerModuleHandoffV3::new(capsule, module).unwrap()
+    }
+
+    fn compile_waiting_rustc_fixture() -> (TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("waiting_rustc.rs");
+        let executable = directory.path().join("waiting-rustc");
+        fs::write(
+            &source,
+            r#"use std::io::Read;
+fn main() {
+    let mut byte = [0_u8; 1];
+    let _ = std::io::stdin().read(&mut byte);
+}
+"#,
+        )
+        .unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+        let status = crate::test_process_execution::status(
+            Command::new(rustc)
+                .arg("--edition=2024")
+                .arg("-o")
+                .arg(&executable)
+                .arg(&source),
+        )
+        .unwrap();
+        assert!(status.success());
+        (directory, executable)
+    }
+
     fn spawn_remote_rustc(mutation: RemoteFixtureMutation) -> RemoteRustcFixture {
-        let rustc_executable = fs::canonicalize("/bin/sh").unwrap();
+        let published = matches!(
+            mutation,
+            RemoteFixtureMutation::PublishedExact
+                | RemoteFixtureMutation::PublishedInvocationMismatch
+                | RemoteFixtureMutation::PublishedCompilerClosureMismatch
+                | RemoteFixtureMutation::PublishedWrongProducer
+        );
+        let rustc_shaped = published
+            || matches!(
+                mutation,
+                RemoteFixtureMutation::CompileMissingAttempt
+                    | RemoteFixtureMutation::CompileInvalidAttempt
+            );
+        let (rustc_executable_directory, rustc_executable) = if rustc_shaped {
+            let (directory, executable) = compile_waiting_rustc_fixture();
+            (Some(directory), executable)
+        } else {
+            (None, fs::canonicalize("/bin/sh").unwrap())
+        };
         let rustc_executable_text = rustc_executable.to_str().unwrap().to_owned();
         let rustc_file = File::open(&rustc_executable).unwrap();
         let rustc_sha256 = digest_file(&rustc_file);
@@ -1039,7 +1243,37 @@ mod tests {
             descriptor_backend_sha256,
         )
         .unwrap();
-        let environment = CompileEnvironmentV2::from_child_environment([
+        let producer = published.then(|| {
+            ProducerIdentity::from_codegen(
+                "compiler_occurrence",
+                Some(std::path::Path::new("/src/compiler_occurrence.rs")),
+            )
+            .unwrap()
+        });
+        let publication_producer = producer.as_ref().map(|producer| {
+            if mutation == RemoteFixtureMutation::PublishedWrongProducer {
+                ProducerIdentity::from_codegen(
+                    "wrong_compiler_occurrence",
+                    Some(std::path::Path::new("/src/compiler_occurrence.rs")),
+                )
+                .unwrap()
+            } else {
+                producer.clone()
+            }
+        });
+        if published {
+            enable_same_mount_namespace_artifact_path_guard_v1();
+        }
+        let attempt = publication_producer.as_ref().map(|producer| {
+            begin_build_attempt(
+                artifact_directory.path(),
+                producer,
+                BuildInvocation::from_bytes([0xa1; 32]),
+                BuildSession::from_bytes([0xa2; 16]),
+            )
+            .unwrap()
+        });
+        let mut environment_entries = vec![
             (
                 OsString::from("FE2O3_HSACO_DIR"),
                 OsString::from(fe2o3_artifact_transaction::BROKERED_ARTIFACT_DIRECTORY_PATH_V1),
@@ -1056,18 +1290,38 @@ mod tests {
                 OsString::from(fe2o3_process_identity::CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2),
                 OsString::from(hex(descriptor_backend_sha256)),
             ),
-        ])
-        .unwrap();
-        let argv = vec![
-            rustc_executable_text.clone(),
-            "-c".into(),
-            "IFS= read -r _ || :".into(),
-            "fe2o3-remote-rustc-observation".into(),
-            format!(
-                "-Zcodegen-backend={}",
-                fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1
-            ),
         ];
+        if let Some(attempt) = attempt {
+            environment_entries.push((
+                OsString::from(fe2o3_artifact_transaction::BUILD_ATTEMPT_ENV_V1),
+                OsString::from(attempt.to_env_value()),
+            ));
+        } else if mutation == RemoteFixtureMutation::CompileInvalidAttempt {
+            environment_entries.push((
+                OsString::from(fe2o3_artifact_transaction::BUILD_ATTEMPT_ENV_V1),
+                OsString::from("noncanonical-attempt"),
+            ));
+        }
+        let environment =
+            CompileEnvironmentV2::from_child_environment(environment_entries).unwrap();
+        let mut argv = vec![rustc_executable_text.clone()];
+        if rustc_shaped {
+            argv.extend([
+                "--crate-name".into(),
+                "compiler_occurrence".into(),
+                "/src/compiler_occurrence.rs".into(),
+            ]);
+        } else {
+            argv.extend([
+                "-c".into(),
+                "IFS= read -r _ || :".into(),
+                "fe2o3-remote-rustc-observation".into(),
+            ]);
+        }
+        argv.push(format!(
+            "-Zcodegen-backend={}",
+            fe2o3_artifact_transaction::BROKERED_CODEGEN_BACKEND_PATH_V1
+        ));
         let descriptor = RustcInvocationDescriptorV3::new(
             RustcInvocationDescriptorV2::new(
                 rustc_sha256,
@@ -1079,6 +1333,62 @@ mod tests {
             closure,
         )
         .unwrap();
+        if let Some(attempt) = attempt {
+            let published_descriptor = if mutation
+                == RemoteFixtureMutation::PublishedInvocationMismatch
+            {
+                let mut changed_environment = environment
+                    .entries()
+                    .iter()
+                    .map(|entry| (OsString::from(entry.key()), OsString::from(entry.value())))
+                    .collect::<Vec<_>>();
+                changed_environment.push((
+                    OsString::from("COMPILER_OCCURRENCE_SUBSTITUTION"),
+                    OsString::from("1"),
+                ));
+                RustcInvocationDescriptorV3::new(
+                    RustcInvocationDescriptorV2::new(
+                        rustc_sha256,
+                        descriptor_backend_sha256,
+                        RustcUnitV2::new(&working_directory, argv.clone()).unwrap(),
+                        CompileEnvironmentV2::from_child_environment(changed_environment).unwrap(),
+                    )
+                    .unwrap(),
+                    closure,
+                )
+                .unwrap()
+            } else if mutation == RemoteFixtureMutation::PublishedCompilerClosureMismatch {
+                let changed_closure = CompilerClosureV2::new(
+                    [0x12; 32],
+                    [0x22; 32],
+                    [0x33; 32],
+                    rustc_sha256,
+                    [0x44; 32],
+                    descriptor_backend_sha256,
+                )
+                .unwrap();
+                RustcInvocationDescriptorV3::new(
+                    RustcInvocationDescriptorV2::new(
+                        rustc_sha256,
+                        descriptor_backend_sha256,
+                        RustcUnitV2::new(&working_directory, argv.clone()).unwrap(),
+                        environment.clone(),
+                    )
+                    .unwrap(),
+                    changed_closure,
+                )
+                .unwrap()
+            } else {
+                descriptor.clone()
+            };
+            publish_compiler_module_handoff_v3(
+                artifact_directory.path(),
+                publication_producer.as_ref().unwrap(),
+                attempt,
+                &compiler_handoff(published_descriptor, 0xb1),
+            )
+            .unwrap();
+        }
         let invocation = RustcInvocationCapabilityV1::create(descriptor.clone()).unwrap();
         let invocation_file = invocation.try_clone_for_transfer().unwrap();
         let (control, child_control) = seqpacket();
@@ -1093,7 +1403,7 @@ mod tests {
         let artifact_fd = artifact_file.as_raw_fd();
         // SAFETY: every source descriptor remains live through spawn. The child creates its
         // service socket before exec so SO_PEERCRED names the exact child PID, transfers one end,
-        // and retains the other at HELD_PEER_FD while the shell waits on CONTROL_FD.
+        // and retains the other at HELD_PEER_FD while the fixture waits on CONTROL_FD.
         unsafe {
             command.pre_exec(move || {
                 for (source, target) in [
@@ -1166,7 +1476,10 @@ mod tests {
             control: Some(control),
             child: Some(child),
             admission: Some(admission),
+            producer,
+            attempt,
             _service_root: service_root,
+            _rustc_executable_directory: rustc_executable_directory,
             _artifact_directory: artifact_directory,
         }
     }
@@ -1212,6 +1525,143 @@ mod tests {
                 descriptor: RUSTC_INVOCATION_CHILD_FD_V1,
                 ..
             })
+        ));
+        assert!(fixture.shutdown().success());
+    }
+
+    #[test]
+    fn compiler_occurrence_requires_compile_invocation_and_managed_attempt() {
+        let mut query = spawn_remote_rustc(RemoteFixtureMutation::Exact);
+        assert!(matches!(
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(query.admission()),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::RustcArguments(_))
+                | Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::NotCompileInvocation)
+        ));
+        assert!(query.shutdown().success());
+
+        let mut missing = spawn_remote_rustc(RemoteFixtureMutation::CompileMissingAttempt);
+        assert!(matches!(
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(missing.admission()),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::MissingBuildAttempt)
+        ));
+        assert!(missing.shutdown().success());
+
+        let mut invalid = spawn_remote_rustc(RemoteFixtureMutation::CompileInvalidAttempt);
+        assert!(matches!(
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(invalid.admission()),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::BuildAttempt(_))
+        ));
+        assert!(invalid.shutdown().success());
+    }
+
+    #[test]
+    fn compiler_occurrence_joins_live_process_and_current_publication() {
+        let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+        let occurrence =
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(fixture.admission())
+                .unwrap();
+        assert_ne!(occurrence.identity(), &[0; 32]);
+        assert_eq!(occurrence.subject().attempt(), fixture.attempt.unwrap());
+        assert!(!occurrence.grants_publication_authority());
+        assert!(!occurrence.grants_load_authority());
+        assert!(!occurrence.grants_launch_authority());
+        occurrence.revalidate().unwrap();
+
+        assert!(fixture.shutdown().success());
+        assert!(matches!(
+            occurrence.revalidate(),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::RevalidateObservation(_))
+        ));
+    }
+
+    #[test]
+    fn compiler_occurrence_rejects_superseded_publication() {
+        let fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+        let occurrence =
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(fixture.admission())
+                .unwrap();
+        fixture.supersede_publication();
+        let error = occurrence.revalidate().unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                crate::ProtectedCompilerExecutionOccurrenceErrorV1::AcquireCurrentToken(_)
+                    | crate::ProtectedCompilerExecutionOccurrenceErrorV1::RevalidateCurrentPublication(_)
+                    | crate::ProtectedCompilerExecutionOccurrenceErrorV1::RevalidateObservation(_)
+            ),
+            "unexpected stale-publication error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn compiler_occurrence_guard_holds_currentness_until_explicit_drop() {
+        let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedExact);
+        let occurrence =
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(fixture.admission())
+                .unwrap();
+        let guard = occurrence.acquire_for_issuer().unwrap();
+        guard.revalidate_immediately_before_signing().unwrap();
+
+        let output = fixture._artifact_directory.path().to_path_buf();
+        let producer = fixture.producer.as_ref().unwrap().clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = begin_build_attempt(
+                &output,
+                &producer,
+                BuildInvocation::from_bytes([0xe1; 32]),
+                BuildSession::from_bytes([0xe2; 16]),
+            );
+            finished_tx.send(result).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            finished_rx
+                .recv_timeout(Duration::from_millis(250))
+                .is_err(),
+            "superseding publication advanced while the issuer guard retained the lock"
+        );
+
+        drop(guard);
+        let superseding = finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_ne!(Some(superseding), fixture.attempt);
+        worker.join().unwrap();
+        assert!(occurrence.revalidate().is_err());
+        assert!(fixture.shutdown().success());
+    }
+
+    #[test]
+    fn compiler_occurrence_rejects_invocation_substitution() {
+        let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedInvocationMismatch);
+        assert!(matches!(
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(fixture.admission()),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::ExactInvocationMismatch)
+        ));
+        assert!(fixture.shutdown().success());
+    }
+
+    #[test]
+    fn compiler_occurrence_rejects_compiler_closure_substitution() {
+        let mut fixture =
+            spawn_remote_rustc(RemoteFixtureMutation::PublishedCompilerClosureMismatch);
+        assert!(matches!(
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(fixture.admission()),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::CompilerClosureMismatch)
+        ));
+        assert!(fixture.shutdown().success());
+    }
+
+    #[test]
+    fn compiler_occurrence_rejects_wrong_publication_producer() {
+        let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::PublishedWrongProducer);
+        assert!(matches!(
+            crate::ProtectedCompilerExecutionOccurrenceV1::observe_current(fixture.admission()),
+            Err(crate::ProtectedCompilerExecutionOccurrenceErrorV1::RecoverPublication(_))
         ));
         assert!(fixture.shutdown().success());
     }

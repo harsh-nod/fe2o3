@@ -24,6 +24,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
+    ProtectedCompilerExecutionOccurrenceErrorV1, ProtectedCompilerExecutionOccurrenceGuardV1,
+    ProtectedCompilerExecutionOccurrenceV1,
 };
 
 const RECORD_MAGIC: [u8; 8] = *b"F2O3CEJ1";
@@ -36,6 +38,7 @@ const RECORD_SIGNED_PREFIX_BYTES: usize = HEADER_BYTES
     + STAGE_BYTES
     + SHA256_BYTES
     + 8
+    + SHA256_BYTES
     + SHA256_BYTES
     + SHA256_BYTES
     + INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1
@@ -87,6 +90,7 @@ struct IssuerRecordV1 {
     sequence: u64,
     prior_anchor: [u8; SHA256_BYTES],
     last_receipt: [u8; SHA256_BYTES],
+    occurrence_identity: [u8; SHA256_BYTES],
     subject: Option<InertCompilerExecutionSubjectV1>,
     challenge: Option<CompilerExecutionAttestationChallengeV1>,
     request: Option<CompilerExecutionAttestationRequestV1>,
@@ -103,6 +107,7 @@ impl fmt::Debug for IssuerRecordV1 {
             .field("sequence", &self.sequence)
             .field("prior_anchor", &self.prior_anchor)
             .field("last_receipt", &self.last_receipt)
+            .field("occurrence_identity", &self.occurrence_identity)
             .field(
                 "request_identity",
                 &self.request.as_ref().map(|request| request.identity()),
@@ -122,6 +127,7 @@ impl IssuerRecordV1 {
             1,
             [0; SHA256_BYTES],
             [0; SHA256_BYTES],
+            [0; SHA256_BYTES],
             None,
             None,
             None,
@@ -133,7 +139,7 @@ impl IssuerRecordV1 {
 
     fn prepare(
         &self,
-        subject: InertCompilerExecutionSubjectV1,
+        occurrence: &ProtectedCompilerExecutionOccurrenceGuardV1<'_>,
         nonce: [u8; SHA256_BYTES],
         policy: &CompilerExecutionIssuerPolicyV1,
         signing_key: &SigningKey,
@@ -146,7 +152,7 @@ impl IssuerRecordV1 {
         }
         let challenge = CompilerExecutionAttestationChallengeV1::new(
             policy,
-            &subject,
+            occurrence.subject(),
             nonce,
             self.sequence,
             self.prior_anchor,
@@ -156,7 +162,8 @@ impl IssuerRecordV1 {
             self.sequence,
             self.prior_anchor,
             self.last_receipt,
-            Some(subject),
+            *occurrence.identity(),
+            Some(occurrence.subject().clone()),
             Some(challenge),
             None,
             None,
@@ -167,7 +174,7 @@ impl IssuerRecordV1 {
 
     fn issue(
         &self,
-        occurrence: &ProtectedCompilerExecutionOccurrenceV1,
+        occurrence: &ProtectedCompilerExecutionOccurrenceGuardV1<'_>,
         request_bytes: &[u8],
         policy: &CompilerExecutionIssuerPolicyV1,
         signing_key: &SigningKey,
@@ -178,22 +185,24 @@ impl IssuerRecordV1 {
                 actual: self.stage.name(),
             });
         }
-        occurrence.validate()?;
         let request = CompilerExecutionAttestationRequestV1::decode(request_bytes)?;
-        if self.subject.as_ref() != Some(&occurrence.subject)
-            || request.subject() != &occurrence.subject
+        if self.occurrence_identity != *occurrence.identity()
+            || self.subject.as_ref() != Some(occurrence.subject())
+            || request.subject() != occurrence.subject()
         {
             return Err(ProtectedCompilerExecutionIssuerErrorV1::OccurrenceMismatch);
         }
         if self.challenge.as_ref() != Some(request.challenge()) {
             return Err(ProtectedCompilerExecutionIssuerErrorV1::RequestMismatch);
         }
+        occurrence.revalidate_immediately_before_signing()?;
         let receipt = CompilerExecutionAttestationReceiptV1::issue(policy, &request, signing_key)?;
         Self::encode(
             IssuerStageV1::Issued,
             self.sequence,
             self.prior_anchor,
             self.last_receipt,
+            self.occurrence_identity,
             self.subject.clone(),
             self.challenge.clone(),
             Some(request),
@@ -228,6 +237,7 @@ impl IssuerRecordV1 {
                     next_sequence,
                     receipt.next_rollback_anchor(),
                     *receipt.identity().as_bytes(),
+                    [0; SHA256_BYTES],
                     None,
                     None,
                     None,
@@ -258,6 +268,7 @@ impl IssuerRecordV1 {
         sequence: u64,
         prior_anchor: [u8; SHA256_BYTES],
         last_receipt: [u8; SHA256_BYTES],
+        occurrence_identity: [u8; SHA256_BYTES],
         subject: Option<InertCompilerExecutionSubjectV1>,
         challenge: Option<CompilerExecutionAttestationChallengeV1>,
         request: Option<CompilerExecutionAttestationRequestV1>,
@@ -270,6 +281,7 @@ impl IssuerRecordV1 {
             stage,
             sequence,
             prior_anchor,
+            occurrence_identity,
             subject.as_ref(),
             challenge.as_ref(),
             request.as_ref(),
@@ -288,6 +300,7 @@ impl IssuerRecordV1 {
         put(&mut canonical, &mut offset, &sequence.to_le_bytes());
         put(&mut canonical, &mut offset, &prior_anchor);
         put(&mut canonical, &mut offset, &last_receipt);
+        put(&mut canonical, &mut offset, &occurrence_identity);
         put_optional(
             &mut canonical,
             &mut offset,
@@ -333,6 +346,7 @@ impl IssuerRecordV1 {
             sequence,
             prior_anchor,
             last_receipt,
+            occurrence_identity,
             subject,
             challenge,
             request,
@@ -379,6 +393,7 @@ impl IssuerRecordV1 {
         let sequence = reader.u64()?;
         let prior_anchor = reader.fixed::<32>()?;
         let last_receipt = reader.fixed::<32>()?;
+        let occurrence_identity = reader.fixed::<32>()?;
         let subject_bytes = reader.take(INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1)?;
         let challenge_bytes = reader.take(COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1)?;
         let request_bytes = reader.take(COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1)?;
@@ -432,6 +447,7 @@ impl IssuerRecordV1 {
             stage,
             sequence,
             prior_anchor,
+            occurrence_identity,
             subject.as_ref(),
             challenge.as_ref(),
             request.as_ref(),
@@ -443,6 +459,7 @@ impl IssuerRecordV1 {
             sequence,
             prior_anchor,
             last_receipt,
+            occurrence_identity,
             subject,
             challenge,
             request,
@@ -466,6 +483,7 @@ impl IssuerRecordV1 {
                     && self.prior_anchor == prior.prior_anchor
                     && self.last_receipt == prior.last_receipt
                     && self.subject == prior.subject
+                    && self.occurrence_identity == prior.occurrence_identity
                     && self.challenge == prior.challenge
             }
             (IssuerStageV1::Issued, IssuerStageV1::Ready) => {
@@ -501,6 +519,7 @@ fn validate_stage_payload(
     stage: IssuerStageV1,
     sequence: u64,
     prior_anchor: [u8; SHA256_BYTES],
+    occurrence_identity: [u8; SHA256_BYTES],
     subject: Option<&InertCompilerExecutionSubjectV1>,
     challenge: Option<&CompilerExecutionAttestationChallengeV1>,
     request: Option<&CompilerExecutionAttestationRequestV1>,
@@ -509,7 +528,8 @@ fn validate_stage_payload(
 ) -> Result<(), ProtectedCompilerExecutionIssuerErrorV1> {
     match stage {
         IssuerStageV1::Ready
-            if subject.is_none()
+            if occurrence_identity == [0; SHA256_BYTES]
+                && subject.is_none()
                 && challenge.is_none()
                 && request.is_none()
                 && receipt.is_none() =>
@@ -517,6 +537,11 @@ fn validate_stage_payload(
             Ok(())
         }
         IssuerStageV1::Prepared | IssuerStageV1::Issued => {
+            if occurrence_identity == [0; SHA256_BYTES] {
+                return Err(ProtectedCompilerExecutionIssuerErrorV1::InvalidRecord(
+                    "active issuer journal has no compiler occurrence identity",
+                ));
+            }
             let subject = subject.ok_or(ProtectedCompilerExecutionIssuerErrorV1::InvalidRecord(
                 "active issuer journal has no subject",
             ))?;
@@ -759,66 +784,6 @@ fn acquire_singleton_lock(
     Ok(SingletonLockV1 { descriptor: lock })
 }
 
-/// Opaque, move-only proof that the protected service independently observed one compiler
-/// occurrence and reconstructed its exact canonical subject.
-///
-/// No public constructor exists. The supervised-occurrence adapter is the only production
-/// producer.
-///
-/// ```compile_fail
-/// use fe2o3_broker_authority_service::ProtectedCompilerExecutionOccurrenceV1;
-/// let _ = ProtectedCompilerExecutionOccurrenceV1 {
-///     subject: todo!(),
-///     supervision_identity: [1; 32],
-/// };
-/// ```
-pub struct ProtectedCompilerExecutionOccurrenceV1 {
-    subject: InertCompilerExecutionSubjectV1,
-    supervision_identity: [u8; SHA256_BYTES],
-}
-
-impl fmt::Debug for ProtectedCompilerExecutionOccurrenceV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ProtectedCompilerExecutionOccurrenceV1")
-            .field("subject", &self.subject.identity())
-            .field("supervision_identity", &self.supervision_identity)
-            .finish_non_exhaustive()
-    }
-}
-
-impl ProtectedCompilerExecutionOccurrenceV1 {
-    #[allow(dead_code)]
-    pub(crate) fn from_supervised_subject(
-        subject: InertCompilerExecutionSubjectV1,
-        supervision_identity: [u8; SHA256_BYTES],
-    ) -> Result<Self, ProtectedCompilerExecutionIssuerErrorV1> {
-        let occurrence = Self {
-            subject,
-            supervision_identity,
-        };
-        occurrence.validate()?;
-        Ok(occurrence)
-    }
-
-    fn validate(&self) -> Result<(), ProtectedCompilerExecutionIssuerErrorV1> {
-        if self.supervision_identity == [0; SHA256_BYTES]
-            || !self
-                .subject
-                .identity()
-                .matches_canonical_bytes(self.subject.canonical_bytes())
-        {
-            return Err(ProtectedCompilerExecutionIssuerErrorV1::InvalidOccurrence);
-        }
-        Ok(())
-    }
-
-    /// Returns the exact independently reconstructed canonical subject.
-    pub const fn subject(&self) -> &InertCompilerExecutionSubjectV1 {
-        &self.subject
-    }
-}
-
 /// Move-only challenge released only after its complete prepared record is durable.
 ///
 /// ```compile_fail
@@ -915,14 +880,17 @@ impl ProtectedCompilerExecutionIssuerV1 {
     /// Generates and durably commits a fresh subject-bound challenge before returning it.
     pub fn prepare_challenge(
         &mut self,
-        occurrence: ProtectedCompilerExecutionOccurrenceV1,
     ) -> Result<ProtectedCompilerExecutionChallengeV1, ProtectedCompilerExecutionIssuerErrorV1>
     {
-        occurrence.validate()?;
         self.admission.validate_continuity()?;
+        let occurrence = ProtectedCompilerExecutionOccurrenceV1::observe_current(
+            self.admission.service_admission(),
+        )?;
+        let occurrence_guard = occurrence.acquire_for_issuer()?;
         let nonce = generate_nonce()?;
+        occurrence_guard.revalidate_immediately_before_signing()?;
         let next = self.ledger.record.prepare(
-            occurrence.subject,
+            &occurrence_guard,
             nonce,
             self.admission.policy(),
             self.admission.signing_key(),
@@ -934,6 +902,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
         self.admission.validate_continuity()?;
         self.ledger.commit(next)?;
         self.admission.validate_continuity()?;
+        drop(occurrence_guard);
         Ok(ProtectedCompilerExecutionChallengeV1 { challenge })
     }
 
@@ -941,13 +910,15 @@ impl ProtectedCompilerExecutionIssuerV1 {
     /// commits the complete receipt before release.
     pub fn issue_receipt(
         &mut self,
-        occurrence: ProtectedCompilerExecutionOccurrenceV1,
         request_bytes: &[u8],
     ) -> Result<ProtectedCompilerExecutionReceiptV1, ProtectedCompilerExecutionIssuerErrorV1> {
-        occurrence.validate()?;
         self.admission.validate_continuity()?;
+        let occurrence = ProtectedCompilerExecutionOccurrenceV1::observe_current(
+            self.admission.service_admission(),
+        )?;
+        let occurrence_guard = occurrence.acquire_for_issuer()?;
         let next = self.ledger.record.issue(
-            &occurrence,
+            &occurrence_guard,
             request_bytes,
             self.admission.policy(),
             self.admission.signing_key(),
@@ -959,6 +930,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
         self.admission.validate_continuity()?;
         self.ledger.commit(next)?;
         self.admission.validate_continuity()?;
+        drop(occurrence_guard);
         Ok(ProtectedCompilerExecutionReceiptV1 { receipt })
     }
 
@@ -1139,6 +1111,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     Admission(ProtectedCompilerExecutionIssuerAdmissionErrorV1),
     Durable(RetainedDurableDirectoryErrorV1),
     Protocol(CompilerExecutionAttestationErrorV1),
+    Occurrence(ProtectedCompilerExecutionOccurrenceErrorV1),
     SingletonLock(io::Error),
     Entropy(io::Error),
     Subject(String),
@@ -1151,7 +1124,6 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     RequestMismatch,
     ReceiptMismatch,
     OccurrenceMismatch,
-    InvalidOccurrence,
     IllegalSuccessor,
     SequenceExhausted,
     Poisoned,
@@ -1167,6 +1139,9 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::Admission(error) => write!(formatter, "issuer admission failed: {error}"),
             Self::Durable(error) => write!(formatter, "issuer durable state failed: {error}"),
             Self::Protocol(error) => write!(formatter, "issuer protocol failed: {error}"),
+            Self::Occurrence(error) => {
+                write!(formatter, "compiler occurrence validation failed: {error}")
+            }
             Self::SingletonLock(error) => {
                 write!(formatter, "issuer singleton lock failed: {error}")
             }
@@ -1180,9 +1155,8 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::ChallengeMismatch => formatter.write_str("issuer challenge mismatch"),
             Self::RequestMismatch => formatter.write_str("issuer request mismatch"),
             Self::ReceiptMismatch => formatter.write_str("issuer receipt mismatch"),
-            Self::OccurrenceMismatch => formatter.write_str("issuer occurrence subject mismatch"),
-            Self::InvalidOccurrence => {
-                formatter.write_str("invalid supervised compiler occurrence")
+            Self::OccurrenceMismatch => {
+                formatter.write_str("issuer occurrence identity or subject mismatch")
             }
             Self::IllegalSuccessor => {
                 formatter.write_str("issuer journal has an illegal successor")
@@ -1205,9 +1179,16 @@ impl Error for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::Admission(error) => Some(error),
             Self::Durable(error) => Some(error),
             Self::Protocol(error) => Some(error),
+            Self::Occurrence(error) => Some(error),
             Self::SingletonLock(error) | Self::Entropy(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+impl From<ProtectedCompilerExecutionOccurrenceErrorV1> for ProtectedCompilerExecutionIssuerErrorV1 {
+    fn from(error: ProtectedCompilerExecutionOccurrenceErrorV1) -> Self {
+        Self::Occurrence(error)
     }
 }
 
@@ -1338,40 +1319,53 @@ mod tests {
         }
 
         fn occurrence(&self) -> ProtectedCompilerExecutionOccurrenceV1 {
-            ProtectedCompilerExecutionOccurrenceV1::from_supervised_subject(
+            self.occurrence_with_identity([0x91; 32])
+        }
+
+        fn occurrence_with_identity(
+            &self,
+            identity: [u8; SHA256_BYTES],
+        ) -> ProtectedCompilerExecutionOccurrenceV1 {
+            ProtectedCompilerExecutionOccurrenceV1::from_supervised_subject_for_test(
                 self.subject.clone(),
-                [0x91; 32],
+                identity,
             )
             .unwrap()
+        }
+
+        fn prepare(
+            &self,
+            record: &IssuerRecordV1,
+            nonce: [u8; SHA256_BYTES],
+        ) -> Result<IssuerRecordV1, ProtectedCompilerExecutionIssuerErrorV1> {
+            let occurrence = self.occurrence();
+            let guard = occurrence.acquire_for_issuer()?;
+            record.prepare(&guard, nonce, &self.policy, &self.signing_key)
+        }
+
+        fn issue(
+            &self,
+            record: &IssuerRecordV1,
+            request_bytes: &[u8],
+        ) -> Result<IssuerRecordV1, ProtectedCompilerExecutionIssuerErrorV1> {
+            let occurrence = self.occurrence();
+            let guard = occurrence.acquire_for_issuer()?;
+            record.issue(&guard, request_bytes, &self.policy, &self.signing_key)
         }
     }
 
     #[test]
     fn record_sizes_and_all_stages_round_trip() {
-        assert_eq!(COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V1, 2468);
+        assert_eq!(COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V1, 2500);
         let fixture = Fixture::new();
         let ready = IssuerRecordV1::genesis(&fixture.policy, &fixture.signing_key).unwrap();
-        let prepared = ready
-            .prepare(
-                fixture.subject.clone(),
-                [0x71; 32],
-                &fixture.policy,
-                &fixture.signing_key,
-            )
-            .unwrap();
+        let prepared = fixture.prepare(&ready, [0x71; 32]).unwrap();
         let request = CompilerExecutionAttestationRequestV1::new(
             prepared.challenge.clone().unwrap(),
             fixture.subject.clone(),
         )
         .unwrap();
-        let issued = prepared
-            .issue(
-                &fixture.occurrence(),
-                request.canonical_bytes(),
-                &fixture.policy,
-                &fixture.signing_key,
-            )
-            .unwrap();
+        let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
         let (next, outcome) = issued
             .acknowledge(
                 issued.receipt.as_ref().unwrap().identity(),
@@ -1399,27 +1393,13 @@ mod tests {
     fn every_issued_record_byte_mutation_rejects() {
         let fixture = Fixture::new();
         let ready = IssuerRecordV1::genesis(&fixture.policy, &fixture.signing_key).unwrap();
-        let prepared = ready
-            .prepare(
-                fixture.subject.clone(),
-                [0x71; 32],
-                &fixture.policy,
-                &fixture.signing_key,
-            )
-            .unwrap();
+        let prepared = fixture.prepare(&ready, [0x71; 32]).unwrap();
         let request = CompilerExecutionAttestationRequestV1::new(
             prepared.challenge.clone().unwrap(),
             fixture.subject.clone(),
         )
         .unwrap();
-        let issued = prepared
-            .issue(
-                &fixture.occurrence(),
-                request.canonical_bytes(),
-                &fixture.policy,
-                &fixture.signing_key,
-            )
-            .unwrap();
+        let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
         for index in 0..issued.canonical.len() {
             let mut mutated = issued.canonical;
             mutated[index] ^= 0x80;
@@ -1507,15 +1487,7 @@ mod tests {
                         &fixture.signing_key,
                     )
                     .unwrap();
-                    let prepared = ledger
-                        .record
-                        .prepare(
-                            fixture.subject.clone(),
-                            [0x76; 32],
-                            &fixture.policy,
-                            &fixture.signing_key,
-                        )
-                        .unwrap();
+                    let prepared = fixture.prepare(&ledger.record, [0x76; 32]).unwrap();
                     let next = match transition {
                         Transition::Prepare => prepared,
                         Transition::Issue | Transition::Acknowledge => {
@@ -1525,14 +1497,8 @@ mod tests {
                                 fixture.subject.clone(),
                             )
                             .unwrap();
-                            let issued = ledger
-                                .record
-                                .issue(
-                                    &fixture.occurrence(),
-                                    request.canonical_bytes(),
-                                    &fixture.policy,
-                                    &fixture.signing_key,
-                                )
+                            let issued = fixture
+                                .issue(&ledger.record, request.canonical_bytes())
                                 .unwrap();
                             match transition {
                                 Transition::Issue => issued,
@@ -1595,15 +1561,7 @@ mod tests {
                 current_rollback_anchor: [0; 32],
             }
         );
-        let prepared = ledger
-            .record
-            .prepare(
-                fixture.subject.clone(),
-                [0x72; 32],
-                &fixture.policy,
-                &fixture.signing_key,
-            )
-            .unwrap();
+        let prepared = fixture.prepare(&ledger.record, [0x72; 32]).unwrap();
         let challenge = prepared.challenge.clone().unwrap();
         ledger.commit(prepared).unwrap();
         drop(ledger);
@@ -1618,14 +1576,8 @@ mod tests {
         );
         let request =
             CompilerExecutionAttestationRequestV1::new(challenge, fixture.subject.clone()).unwrap();
-        let issued = ledger
-            .record
-            .issue(
-                &fixture.occurrence(),
-                request.canonical_bytes(),
-                &fixture.policy,
-                &fixture.signing_key,
-            )
+        let issued = fixture
+            .issue(&ledger.record, request.canonical_bytes())
             .unwrap();
         let receipt = issued.receipt.clone().unwrap();
         ledger.commit(issued).unwrap();
@@ -1687,15 +1639,7 @@ mod tests {
         let fixture = Fixture::new();
         let mut ledger =
             IssuerLedgerV1::recover(fixture.root(), &fixture.policy, &fixture.signing_key).unwrap();
-        let prepared = ledger
-            .record
-            .prepare(
-                fixture.subject.clone(),
-                [0x77; 32],
-                &fixture.policy,
-                &fixture.signing_key,
-            )
-            .unwrap();
+        let prepared = fixture.prepare(&ledger.record, [0x77; 32]).unwrap();
         ledger.commit(prepared.clone()).unwrap();
         ledger
             .store
@@ -1718,20 +1662,14 @@ mod tests {
     fn substitutions_fail_before_a_receipt_exists() {
         let fixture = Fixture::new();
         let ready = IssuerRecordV1::genesis(&fixture.policy, &fixture.signing_key).unwrap();
-        let prepared = ready
-            .prepare(
-                fixture.subject.clone(),
-                [0x73; 32],
-                &fixture.policy,
-                &fixture.signing_key,
+        let prepared = fixture.prepare(&ready, [0x73; 32]).unwrap();
+        let wrong_subject = subject(0x30);
+        let wrong_occurrence =
+            ProtectedCompilerExecutionOccurrenceV1::from_supervised_subject_for_test(
+                wrong_subject.clone(),
+                [0x92; 32],
             )
             .unwrap();
-        let wrong_subject = subject(0x30);
-        let wrong_occurrence = ProtectedCompilerExecutionOccurrenceV1::from_supervised_subject(
-            wrong_subject.clone(),
-            [0x92; 32],
-        )
-        .unwrap();
         let request = CompilerExecutionAttestationRequestV1::new(
             CompilerExecutionAttestationChallengeV1::new(
                 &fixture.policy,
@@ -1744,9 +1682,10 @@ mod tests {
             wrong_subject,
         )
         .unwrap();
+        let wrong_guard = wrong_occurrence.acquire_for_issuer().unwrap();
         assert!(matches!(
             prepared.issue(
-                &wrong_occurrence,
+                &wrong_guard,
                 request.canonical_bytes(),
                 &fixture.policy,
                 &fixture.signing_key,
@@ -1755,6 +1694,32 @@ mod tests {
                 | Err(ProtectedCompilerExecutionIssuerErrorV1::RequestMismatch)
         ));
         assert!(prepared.receipt.is_none());
+    }
+
+    #[test]
+    fn recovered_prepared_record_rejects_a_subject_equivalent_new_occurrence() {
+        let fixture = Fixture::new();
+        let ready = IssuerRecordV1::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        let prepared = fixture.prepare(&ready, [0x75; 32]).unwrap();
+        let recovered = IssuerRecordV1::decode(&prepared.canonical, &fixture.policy).unwrap();
+        let request = CompilerExecutionAttestationRequestV1::new(
+            recovered.challenge.clone().unwrap(),
+            fixture.subject.clone(),
+        )
+        .unwrap();
+        let replacement = fixture.occurrence_with_identity([0x92; SHA256_BYTES]);
+        let replacement_guard = replacement.acquire_for_issuer().unwrap();
+
+        assert!(matches!(
+            recovered.issue(
+                &replacement_guard,
+                request.canonical_bytes(),
+                &fixture.policy,
+                &fixture.signing_key,
+            ),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::OccurrenceMismatch)
+        ));
+        assert!(fixture.issue(&recovered, request.canonical_bytes()).is_ok());
     }
 
     fn subject(seed: u8) -> InertCompilerExecutionSubjectV1 {

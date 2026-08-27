@@ -740,6 +740,8 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-build-authority",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
  "fe2o3-external-anchor-protocol",
  "fe2o3-host-link-closure",
  "fe2o3-process-identity",

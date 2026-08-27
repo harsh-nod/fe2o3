@@ -1,7 +1,7 @@
 # Protected Compiler-Execution Issuer Durable State V1
 
-Status: implemented local issuer state and authority-free remote process observation; supervised
-subject/current-publication join and Worker V3 authority remain open.
+Status: implemented local issuer state, authority-free remote process observation, and exact
+subject/current-publication join; bounded service transport and Worker V3 authority remain open.
 
 This contract consumes
 [`ProtectedCompilerExecutionIssuerAdmissionV1`](compiler-execution-issuer-admission-v1.md)
@@ -26,17 +26,32 @@ description. Its device and inode must match the retained root before the lock
 is accepted. A second live issuer for the same root therefore fails before it
 can inspect or mutate state.
 
-No public API constructs a `ProtectedCompilerExecutionOccurrenceV1`. The
-authority service can now independently retain and revalidate one exact remote
-rustc process observation, but that value is deliberately inert. The next
-supervised compiler adapter must reconstruct the exact canonical subject from
-the current V3 publication, join it to that observation, and create the
-move-only occurrence token inside the authority-service crate. Challenge
-preparation and receipt issuance are unreachable without such a token.
+The crate-private `ProtectedCompilerExecutionOccurrenceV1::observe_current` is
+the only production constructor for an occurrence. The durable issuer invokes
+it only with its own retained service admission; callers cannot select or
+substitute an occurrence. The constructor first retains and fully
+revalidates one exact remote rustc process observation. It derives the producer
+and managed build attempt from the sealed invocation, recovers only the
+production-slot V3 publication through the retained artifact-directory
+description, acquires its move-only currentness lease, and reconstructs the
+canonical subject under the publication lock. The subject's attempt, invocation
+digest, and complete compiler closure must match the remote observation. The
+occurrence retains both custody values and repeats the complete join whenever
+the issuer prepares or issues. Issuer validation returns a private guard that
+keeps the cooperative publication lock held through request comparison,
+signing, and durable journal commit. It exposes neither a descriptor nor
+signing, publication, load, or launch authority.
+
+The journal also signs the live occurrence identity in every active stage.
+`Prepared -> Issued` requires exact identity equality in addition to the
+canonical subject, so restart cannot complete an earlier challenge with a
+subject-equivalent replacement process. `Ready` requires the field to be zero.
+The bounded transport must carry the same occurrence/session binding without
+accepting a caller-provided substitute.
 
 ## Canonical Record
 
-The journal is one fixed 2,468-byte record. Integers are little-endian and all
+The journal is one fixed 2,500-byte record. Integers are little-endian and all
 reserved or absent fields are zero.
 
 | Offset | Bytes | Field |
@@ -44,7 +59,7 @@ reserved or absent fields are zero.
 | 0 | 8 | magic `F2O3CEJ1` |
 | 8 | 2 | version `1` |
 | 10 | 2 | reserved |
-| 12 | 8 | total byte length `2468` |
+| 12 | 8 | total byte length `2500` |
 | 20 | 4 | reserved |
 | 24 | 1 | stage: `Ready=1`, `Prepared=2`, `Issued=3` |
 | 25 | 7 | stage padding |
@@ -52,16 +67,17 @@ reserved or absent fields are zero.
 | 64 | 8 | nonzero sequence |
 | 72 | 32 | prior rollback anchor |
 | 104 | 32 | last acknowledged receipt identity |
-| 136 | 690 | canonical compiler-execution subject or zero |
-| 826 | 200 | canonical issuer challenge or zero |
-| 1026 | 946 | canonical attestation request or zero |
-| 1972 | 400 | canonical signed receipt or zero |
-| 2372 | 64 | Ed25519 journal signature |
-| 2436 | 32 | domain-separated journal identity |
+| 136 | 32 | exact live compiler-occurrence identity or zero |
+| 168 | 690 | canonical compiler-execution subject or zero |
+| 858 | 200 | canonical issuer challenge or zero |
+| 1058 | 946 | canonical attestation request or zero |
+| 2004 | 400 | canonical signed receipt or zero |
+| 2404 | 64 | Ed25519 journal signature |
+| 2468 | 32 | domain-separated journal identity |
 
-The signature covers bytes `0..2372` under
+The signature covers bytes `0..2404` under
 `FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-SIGNATURE/V1`. The terminal identity
-covers bytes `0..2436` under
+covers bytes `0..2468` under
 `FE2O3/COMPILER-EXECUTION-ISSUER-DURABLE-IDENTITY/V1`. Both digests include the
 domain, an explicit input length, and the complete input bytes.
 
@@ -74,8 +90,8 @@ requires byte-for-byte canonical encoding.
 
 Only these transitions are legal:
 
-1. `Ready(N, A) -> Prepared(N, A, subject, challenge)`
-2. `Prepared(N, A, subject, challenge) -> Issued(N, A, subject, challenge, request, receipt)`
+1. `Ready(N, A) -> Prepared(N, A, occurrence, subject, challenge)`
+2. `Prepared(N, A, occurrence, subject, challenge) -> Issued(N, A, occurrence, subject, challenge, request, receipt)`
 3. `Issued(N, A, receipt) -> Ready(N+1, receipt.next_anchor)`
 
 Genesis is `Ready(1, zero)`. Later ready states require nonzero prior and
@@ -141,38 +157,41 @@ supplied observations of:
 
 The in-process backend now calls this shared validator instead of maintaining a
 second implementation. The validator accepts only inert observations and
-returns only success or a typed mismatch; it cannot construct the opaque
-supervised-occurrence token and therefore cannot reach the signing API.
+returns only success or a typed mismatch. Backend self-observation cannot
+construct an occurrence because it has neither protected-service admission nor
+the independently retained current-publication lease.
 
 The protected service now gathers the same observations from the admitted live
 rustc process. It retains the exact procfs process directory; duplicates and
 validates the sealed invocation, backend, and artifact-directory descriptors
 through the admitted pidfd; hashes the retained rustc and backend objects; and
 revalidates process continuity and every retained object. The observation is
-move-only, exposes no descriptor, and cannot create the crate-private
-occurrence token. A production service under a distinct UID still needs a
-narrowly scoped launch policy that permits these ptrace-governed inspections.
-
-The remaining adapter must recover the exact current V3 publication through
-the retained artifact directory, reconstruct its canonical compiler-execution
-subject, join every subject identity to the remote process observation, retain
-currentness through issuance, and only then construct the occurrence token.
-Reusing the validator prevents the backend and issuer from assigning different
-meaning to the same V3 descriptor without treating backend self-observation as
-protected evidence.
+move-only and exposes no descriptor. The occurrence constructor uses its
+private artifact-directory description only to reacquire exact V3 currentness;
+the resulting lease remains private and is checked under lock together with a
+second full process revalidation. A production service under a distinct UID
+still needs a narrowly scoped launch policy that permits these ptrace-governed
+inspections. Reusing the validator prevents the backend and issuer from
+assigning different meaning to the same V3 descriptor without treating backend
+self-observation as protected evidence.
 
 ## Qualification
 
 The package suite checks all three stage encodings, truncation and extension,
 wrong key and policy, request/subject/occurrence substitutions, singleton
 exclusion, exact challenge and receipt re-emission, idempotent acknowledgment,
-and mutation of every one of the 2,468 issued-record bytes. Deterministic fault
+and mutation of every one of the 2,500 issued-record bytes. Deterministic fault
 injection exercises both sides of all seven retained-directory boundaries for
 genesis and each of the three legal transitions. Recovery must produce only
 the exact prior record or exact legal successor.
 
-This evidence qualifies the local durable issuer mechanism and the
-authority-free remote observation primitive only. The current-publication
-subject join, production distinct-UID inspection policy, bounded
-`SOCK_SEQPACKET` service protocol, Worker V3 wire carriage, verifier rollback
-ledger, and MI300X Cargo-to-KFD run remain required.
+This evidence qualifies the local durable issuer mechanism, remote observation,
+and current-publication subject join. Live tests cover exact construction,
+repeat revalidation, process exit, superseded attempt, wrong producer, changed
+invocation, non-compile input, and missing or malformed managed attempts.
+The issuer constructs every occurrence from its own admission, and a guard
+contention test proves a superseding attempt cannot advance until issuer
+currentness custody is explicitly dropped. Production distinct-UID inspection
+policy, the bounded `SOCK_SEQPACKET` service
+protocol with restart-durable occurrence binding, Worker V3 wire carriage,
+verifier rollback ledger, and the MI300X Cargo-to-KFD run remain required.

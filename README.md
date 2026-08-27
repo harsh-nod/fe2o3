@@ -113,17 +113,25 @@ It retains and remeasures the exact executable and key at every continuity
 boundary. A signed fixed-width singleton journal now durably commits fresh
 subject-bound challenges and exact receipts, recovers only immediate legal
 successors, re-emits prepared/issued outputs after crashes, and advances its
-rollback chain idempotently. Its signing APIs remain unreachable without the
-still-missing protected compiler-occurrence producer. The backend and protected
-service now share one authority-free validator for exact V3 argv, canonical
+rollback chain idempotently. Its signing APIs require a live move-only compiler
+occurrence. The backend and protected service share one authority-free validator
+for exact V3 argv, canonical
 cwd, complete environment, target, backend and artifact-directory capability
 paths, compiler-closure pins, and measured rustc/backend bytes. The service
 independently binds the admitted pid/start identity, procfs process directory,
 sealed invocation fd 199, backend fd 198, and artifact-directory fd 197; it
 retains and repeats every observation without exposing a raw descriptor or
-granting authority. Production distinct-UID launch permission, reconstruction
-of the exact current V3 subject, the bounded service loop, receipt carriage,
-external rollback verifier, and Worker V3 join remain absent. Consequently
+granting authority. The service now derives the exact producer and managed
+attempt from that sealed invocation through the same canonical producer
+constructor used by Cargo and the backend, reacquires the current production-slot V3
+publication, reconstructs its canonical subject under lock, and retains both
+custody values through every issuer use. The issuer accepts no caller-selected
+occurrence, and its private guard keeps publication currentness locked through
+request comparison, signing, and durable commit. Production distinct-UID launch
+permission, transport-level occurrence/session binding, the bounded service
+loop, receipt carriage, external rollback verifier, and Worker V3 join remain
+absent. The journal itself signs the occurrence identity and rejects a
+subject-equivalent replacement after restart. Consequently
 `CompilerExecutionProvenance` remains open. See
 [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md)
 and [durable issuer state V1](docs/compiler-execution-issuer-durable-v1.md).

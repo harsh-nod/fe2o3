@@ -162,7 +162,8 @@ authority. The backend fixture is not Rust user source.
 ## Crate Responsibilities
 
 - `cargo-fe2o3`: user command, backend discovery, build/run orchestration.
-- `fe2o3-artifact-transaction`: rustc-independent artifact ownership and publication protocol.
+- `fe2o3-artifact-transaction`: rustc-private-independent artifact ownership and publication
+  protocol, including canonical producer derivation from the shared rustc-invocation model.
 - `rustc-codegen-fe2o3`: rustc codegen backend and HSACO toolchain helpers.
 - `fe2o3-compiler-api`: target-neutral compile request/result contracts.
 - `cargo-fe2o3` plus `rustc-codegen-fe2o3`: the sole managed production route from attributed Rust source through ranked PLIRON, KIR, target lowering, and Worker V3.

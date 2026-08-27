@@ -82,6 +82,13 @@
 //! require_serialize::<LiveClientPidfdIdentityV1>();
 //! ```
 //!
+//! Compiler occurrences are constructed only inside the issuer from its own retained service
+//! admission. No caller can import or substitute that type:
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::ProtectedCompilerExecutionOccurrenceV1;
+//! ```
+//!
 //! The [`BrokerSessionMachineV1`] is a separate fixed-capacity, in-memory lifecycle model. Its
 //! broker-owned route retains prepared and granted Broker V4 state, requires the V4 static-LLD
 //! identity to match the exact W0 closure, invokes only an externally approved static linker, and
@@ -109,6 +116,8 @@ mod compiler_execution_issuer;
 #[cfg(target_os = "linux")]
 mod compiler_execution_issuer_durable;
 #[cfg(target_os = "linux")]
+mod compiler_execution_occurrence;
+#[cfg(target_os = "linux")]
 mod compiler_execution_supervision;
 #[cfg(target_os = "linux")]
 mod durable_session_consume;
@@ -130,7 +139,13 @@ pub use compiler_execution_issuer_durable::{
     COMPILER_EXECUTION_ISSUER_DURABLE_RECORD_BYTES_V1, CompilerExecutionIssuerAckV1,
     CompilerExecutionIssuerRecoveryV1, ProtectedCompilerExecutionChallengeV1,
     ProtectedCompilerExecutionIssuerErrorV1, ProtectedCompilerExecutionIssuerV1,
-    ProtectedCompilerExecutionOccurrenceV1, ProtectedCompilerExecutionReceiptV1,
+    ProtectedCompilerExecutionReceiptV1,
+};
+#[cfg(target_os = "linux")]
+pub use compiler_execution_occurrence::ProtectedCompilerExecutionOccurrenceErrorV1;
+#[cfg(target_os = "linux")]
+pub(crate) use compiler_execution_occurrence::{
+    ProtectedCompilerExecutionOccurrenceGuardV1, ProtectedCompilerExecutionOccurrenceV1,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_supervision::{

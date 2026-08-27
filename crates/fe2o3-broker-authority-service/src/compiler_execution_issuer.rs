@@ -614,6 +614,10 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
             .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)
     }
 
+    pub(crate) const fn service_admission(&self) -> &ProtectedServiceAdmissionV1 {
+        &self.service
+    }
+
     pub(crate) const fn signing_key(&self) -> &SigningKey {
         &self.signing_key.key
     }
