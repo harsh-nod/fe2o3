@@ -10,7 +10,7 @@ description = "Conservative kernel IR and bounded machine-effect analyses for fe
 [features]
 default = ["authenticated-machine-effect", "pliron-analysis"]
 authenticated-machine-effect = ["dep:rustix", "dep:sha2"]
-pliron-analysis = ["dep:dialect-gpu", "dep:dialect-kernel", "dep:dialect-proof", "dep:pliron"]
+pliron-analysis = ["dep:dialect-gpu", "dep:dialect-kernel", "dep:dialect-proof", "dep:pliron", "dep:sha2"]
 
 [dependencies]
 dialect-gpu = { workspace = true, optional = true }
