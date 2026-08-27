@@ -34,17 +34,17 @@ pub(crate) struct AuthenticatedProductionTargetV1 {
 impl RetainedProductionTargetV1 {
     pub(crate) fn authenticate_before_collection(
         tcx: TyCtxt<'_>,
-        configured_cpu: &AmdGpuTarget,
+        configured_target: &AmdGpuTarget,
     ) -> Result<Self, ProductionTargetErrorV1> {
         let retained = Self::authenticate_live_before_collection(tcx)?;
-        let configured_profile = production_profile_for_configured_cpu_v1(configured_cpu)
-            .ok_or_else(|| ProductionTargetErrorV1::ConfiguredCpu {
-                observed: configured_cpu.as_str().to_owned(),
+        let configured_profile = production_profile_for_configured_target_v1(configured_target)
+            .ok_or_else(|| ProductionTargetErrorV1::ConfiguredTarget {
+                observed: configured_target.as_str().to_owned(),
             })?;
         if configured_profile != retained.profile {
-            return Err(ProductionTargetErrorV1::ConfiguredCpuMismatch {
-                configured: configured_cpu.as_str().to_owned(),
-                observed: retained.profile.cpu().to_owned(),
+            return Err(ProductionTargetErrorV1::ConfiguredTargetMismatch {
+                configured: configured_target.as_str().to_owned(),
+                observed: retained.profile.device_target().to_owned(),
             });
         }
         Ok(retained)
@@ -149,18 +149,18 @@ fn require_exact_target_text(
     }
 }
 
-fn production_profile_for_configured_cpu_v1(
+fn production_profile_for_configured_target_v1(
     target: &AmdGpuTarget,
 ) -> Option<ProductionAmdTargetProfileV1> {
-    ProductionAmdTargetProfileV1::from_cpu(target.as_str())
+    ProductionAmdTargetProfileV1::from_device_target(target.as_str())
 }
 
 #[derive(Debug)]
 pub(crate) enum ProductionTargetErrorV1 {
-    ConfiguredCpu {
+    ConfiguredTarget {
         observed: String,
     },
-    ConfiguredCpuMismatch {
+    ConfiguredTargetMismatch {
         configured: String,
         observed: String,
     },
@@ -179,16 +179,16 @@ pub(crate) enum ProductionTargetErrorV1 {
 impl fmt::Display for ProductionTargetErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConfiguredCpu { observed } => write!(
+            Self::ConfiguredTarget { observed } => write!(
                 formatter,
-                "production compilation requires configured target CPU \"gfx942\" or \"gfx950\"; found {observed:?}"
+                "production compilation requires configured device target \"gfx942:xnack-\" or \"gfx950:xnack-\"; found {observed:?}"
             ),
-            Self::ConfiguredCpuMismatch {
+            Self::ConfiguredTargetMismatch {
                 configured,
                 observed,
             } => write!(
                 formatter,
-                "configured production target CPU {configured:?} does not match the live rustc target CPU {observed:?}"
+                "configured production device target {configured:?} does not match the live rustc device target {observed:?}"
             ),
             Self::LiveCpu { observed } => write!(
                 formatter,
@@ -219,8 +219,8 @@ impl std::error::Error for ProductionTargetErrorV1 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::RustcObservation(error) => Some(error),
-            Self::ConfiguredCpu { .. }
-            | Self::ConfiguredCpuMismatch { .. }
+            Self::ConfiguredTarget { .. }
+            | Self::ConfiguredTargetMismatch { .. }
             | Self::LiveCpu { .. }
             | Self::RustcSessionChanged
             | Self::RustcTargetMismatch { .. } => None,
@@ -242,18 +242,18 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn production_device_target_accepts_only_exact_admitted_cpus() {
+    fn production_device_target_accepts_only_exact_admitted_target_ids() {
         assert_eq!(
-            production_profile_for_configured_cpu_v1(&AmdGpuTarget::new("gfx942")),
+            production_profile_for_configured_target_v1(&AmdGpuTarget::new("gfx942:xnack-")),
             Some(ProductionAmdTargetProfileV1::Gfx942)
         );
         assert_eq!(
-            production_profile_for_configured_cpu_v1(&AmdGpuTarget::new("gfx950")),
+            production_profile_for_configured_target_v1(&AmdGpuTarget::new("gfx950:xnack-")),
             Some(ProductionAmdTargetProfileV1::Gfx950)
         );
-        for rejected in ["gfx942:xnack-", "gfx942:xnack+", "gfx950:xnack-", "GFX942"] {
+        for rejected in ["gfx942", "gfx942:xnack+", "gfx950", "GFX942:xnack-"] {
             assert_eq!(
-                production_profile_for_configured_cpu_v1(&AmdGpuTarget::new(rejected)),
+                production_profile_for_configured_target_v1(&AmdGpuTarget::new(rejected)),
                 None
             );
         }
