@@ -11963,40 +11963,146 @@ fn disjoint_slice_element(
     callables: &[SemanticCallableDeclV1],
     ty: SemanticTypeIdV1,
 ) -> Option<SemanticTypeIdV1> {
-    callables.iter().find_map(|callable| match callable {
-        SemanticCallableDeclV1::CompilerIntrinsic {
-            operation:
-                SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
-                    disjoint_slice,
-                    element,
-                    ..
-                }
-                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
-                    disjoint_slice,
-                    element,
-                    ..
-                }
-                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
-                    disjoint_slice,
-                    element,
-                    ..
-                }
-                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
-                    disjoint_slice,
-                    element,
-                    ..
-                }
-                | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
-                    disjoint_slice,
-                    element,
-                    ..
-                },
-            ..
-        } if *disjoint_slice == ty => Some(*element),
-        SemanticCallableDeclV1::Defined { .. }
-        | SemanticCallableDeclV1::DeviceFfiImport { .. }
-        | SemanticCallableDeclV1::CompilerIntrinsic { .. } => None,
+    callables.iter().find_map(|callable| {
+        let SemanticCallableDeclV1::CompilerIntrinsic { operation, .. } = callable else {
+            return None;
+        };
+        disjoint_slice_operation_element(operation, ty)
     })
+}
+
+fn disjoint_slice_operation_element(
+    operation: &SemanticCompilerIntrinsicOperationV1,
+    ty: SemanticTypeIdV1,
+) -> Option<SemanticTypeIdV1> {
+    let (disjoint_slice, element) = match operation {
+        SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+            disjoint_slice,
+            element,
+            ..
+        }
+        | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+            disjoint_slice,
+            element,
+            ..
+        } => (*disjoint_slice, *element),
+        _ => return None,
+    };
+    (disjoint_slice == ty).then_some(element)
+}
+
+#[cfg(test)]
+mod disjoint_slice_parameter_tests {
+    use super::*;
+
+    #[test]
+    fn every_disjoint_slice_intrinsic_authenticates_only_its_exact_parameter_type() {
+        let disjoint_slice = SemanticTypeIdV1::from_index(1);
+        let element = SemanticTypeIdV1::from_index(2);
+        let witness = SemanticTypeIdV1::from_index(3);
+        let raw_index = SemanticTypeIdV1::from_index(4);
+        let other_slice = SemanticTypeIdV1::from_index(5);
+        let index_space = SemanticDisjointIndexSpaceV1::Index1d;
+        let operations = [
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceLen {
+                disjoint_slice,
+                element,
+                raw_index,
+                index_space,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMut {
+                disjoint_slice,
+                index_witness: witness,
+                element,
+                raw_index,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetDisjointMut {
+                disjoint_slice,
+                index_witness: witness,
+                element,
+                raw_index,
+                index_space,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive {
+                disjoint_slice,
+                grid_leader: witness,
+                element,
+                raw_index,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut {
+                disjoint_slice,
+                block_witness: witness,
+                element,
+                raw_index,
+                index_space,
+                lanes_per_block: 64,
+                elements_per_lane: 4,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetTiled2dMut {
+                disjoint_slice,
+                tile_witness: witness,
+                element,
+                raw_index,
+                index_space,
+                lanes_per_tile: 64,
+                tile_rows: 16,
+                tile_columns: 16,
+                elements_per_lane: 4,
+            },
+            SemanticCompilerIntrinsicOperationV1::DisjointSliceGetRowStriped2dMut {
+                disjoint_slice,
+                stripe_witness: witness,
+                element,
+                raw_index,
+                index_space,
+                lanes_per_row: 64,
+                elements_per_lane: 4,
+            },
+        ];
+
+        for operation in operations {
+            assert_eq!(
+                disjoint_slice_operation_element(&operation, disjoint_slice),
+                Some(element)
+            );
+            assert_eq!(
+                disjoint_slice_operation_element(&operation, other_slice),
+                None
+            );
+        }
+        assert_eq!(
+            disjoint_slice_operation_element(
+                &SemanticCompilerIntrinsicOperationV1::ThreadIndex(SemanticAxisV1::X),
+                disjoint_slice,
+            ),
+            None
+        );
+    }
 }
 
 fn lower_address_space(address_space: u32) -> Result<AddressSpace, ProductionSemanticKirErrorV1> {
