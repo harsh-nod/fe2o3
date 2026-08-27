@@ -191,7 +191,8 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
             "FE2O3_EXTRACT_CRATE_V1",
             "fe2o3_production_ranked_bounds_fixture",
         )
-        .env("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1", &bundle_path);
+        .env("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1", &bundle_path)
+        .args(["--features", "barrier_before_access"]);
     let result = output(command, "run production simulation-bundle extraction");
 
     assert!(
@@ -218,7 +219,7 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         "simulation-bundle diagnostic overclaimed or omitted its transaction boundary:\n{}",
         result.stderr,
     );
-    let bytes = std::fs::read(bundle_path).expect("read exact simulation bundle");
+    let bytes = std::fs::read(&bundle_path).expect("read exact simulation bundle");
     let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(bytes)
         .expect("decode compiler-produced simulation bundle");
     assert_eq!(bundle.target(), "gfx942:xnack-");
@@ -299,41 +300,45 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         &simulation_request_path,
         serde_json::to_vec(&json!({
             "schema": "fe2o3-simulation-request-v1",
-            "kernel": "copy_static",
+            "kernel": "barrier_before_access",
             "grid": [1, 1, 1],
             "workgroup": [64, 1, 1],
-            "arguments": [
-                {
-                    "kind": "scalar",
-                    "type": "f32",
-                    "bits": "0x3fc00000",
-                },
-                {
-                    "kind": "buffer",
-                    "element": "f32",
-                    "access": "read_write",
-                    "alignment": 4,
-                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
-                },
-            ],
+            "arguments": [{
+                "kind": "buffer",
+                "element": "f32",
+                "access": "read_write",
+                "alignment": 4,
+                "bytes": format!("0x{}", "00".repeat(64 * 4)),
+            }],
         }))
         .unwrap(),
     )
     .unwrap();
-    let mapped_site = map
+    let (mapped_site, breakpoint_byte) = map
         .sites()
         .iter()
-        .find(|site| {
+        .find_map(|site| {
             site.spans()
                 .iter()
-                .any(|span| span.file_identity() == source_file.identity())
+                .filter(|span| span.file_identity() == source_file.identity())
+                .find_map(|span| {
+                    (span.byte_start()..span.byte_end())
+                        .find(|byte| {
+                            map.sites()
+                                .iter()
+                                .flat_map(|other| other.spans())
+                                .filter(|other_span| {
+                                    other_span.file_identity() == source_file.identity()
+                                        && other_span.byte_start() < *byte + 1
+                                        && *byte < other_span.byte_end()
+                                })
+                                .count()
+                                == 1
+                        })
+                        .map(|byte| (site, byte))
+                })
         })
-        .expect("ordinary source has at least one mapped KIR operation");
-    let mapped_span = mapped_site
-        .spans()
-        .iter()
-        .find(|span| span.file_identity() == source_file.identity())
-        .unwrap();
+        .expect("ordinary source has at least one unambiguous mapped source byte");
     let map_identity = bundle.debug_map_identity().unwrap();
     let site = mapped_site.site();
     let mut protocol_input = Vec::new();
@@ -364,9 +369,9 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
                     "source": {
                         "map_identity": hex(&map_identity),
                         "provenance": "compiler_bundle_bound",
-                        "file_identity": hex(&mapped_span.file_identity()),
-                        "byte_start": mapped_span.byte_start(),
-                        "byte_end": mapped_span.byte_end(),
+                        "file_identity": hex(&source_file.identity()),
+                        "byte_start": breakpoint_byte,
+                        "byte_end": breakpoint_byte + 1,
                     },
                 },
             }],
@@ -452,7 +457,10 @@ fn ordinary_kernel_source_exports_one_verified_authority_free_simulation_bundle(
         .map(|line| serde_json::from_slice::<Value>(line).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(responses.len(), 5);
-    assert!(responses.iter().all(|response| response["status"] == "ok"));
+    assert!(
+        responses.iter().all(|response| response["status"] == "ok"),
+        "debugger returned a typed error response: {responses:#?}",
+    );
     assert_eq!(responses[0]["result"]["result"], "source");
     assert_eq!(
         responses[0]["result"]["site"]["source"]["location"]["provenance"],
