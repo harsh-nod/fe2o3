@@ -246,6 +246,27 @@ impl fmt::Debug for LiveClientPidfdIdentityV1 {
 }
 
 impl LiveClientPidfdIdentityV1 {
+    fn try_clone(&self) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
+        self.validate_liveness()?;
+        let pidfd = rustix::io::fcntl_dupfd_cloexec(&self.pidfd, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectClientPidfd,
+                "cannot duplicate retained client pidfd",
+                io::Error::from(error),
+            )
+        })?;
+        let identity = Self {
+            pidfd,
+            expected_client: self.expected_client,
+            descriptor_identity: self.descriptor_identity,
+            identity_source: self.identity_source,
+            start_time_ticks: self.start_time_ticks,
+        };
+        identity.validate_liveness()?;
+        self.validate_liveness()?;
+        Ok(identity)
+    }
+
     /// Admits a supervisor-supplied pidfd for one exact, currently live expected PID.
     ///
     /// The exact `PIDFD_GET_INFO` v0 request is preferred. `ENOTTY`, or the legacy `EINVAL` caused
@@ -422,6 +443,40 @@ impl ProtectedServiceAdmissionV1 {
 
     pub(crate) fn client_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.live_client.pidfd.as_fd()
+    }
+
+    pub(crate) fn retain_session(
+        &self,
+    ) -> Result<ProtectedServiceAdmissionV1, ProtectedServiceAdmissionErrorV1> {
+        self.validate_session_continuity()?;
+        let root = rustix::io::fcntl_dupfd_cloexec(&self.root, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectRoot,
+                "cannot duplicate retained supervisor root",
+                io::Error::from(error),
+            )
+        })?;
+        let peer = rustix::io::fcntl_dupfd_cloexec(&self.peer, 0).map_err(|error| {
+            ProtectedServiceAdmissionErrorV1::io(
+                AdmissionErrorKindV1::InspectPeer,
+                "cannot duplicate retained service peer",
+                io::Error::from(error),
+            )
+        })?;
+        let live_client = self.live_client.try_clone()?;
+        let session = ProtectedServiceAdmissionV1 {
+            root,
+            peer,
+            live_client,
+            service_uid: self.service_uid,
+            root_identity: self.root_identity,
+            peer_identity: self.peer_identity,
+            #[cfg(test)]
+            non_authoritative_same_uid_session_test: self.non_authoritative_same_uid_session_test,
+        };
+        session.validate_session_continuity()?;
+        self.validate_session_continuity()?;
+        Ok(session)
     }
 
     pub(crate) fn try_clone_service_root(

@@ -38,8 +38,9 @@ const CODEGEN_BACKEND_FD: i32 = fe2o3_artifact_transaction::BROKERED_CODEGEN_BAC
 /// One independently observed, authority-free snapshot of an admitted live rustc process.
 ///
 /// The value retains the exact invocation capability, rustc executable, codegen backend,
-/// artifact directory, and procfs process directory. It is move-only and cannot create an issuer
-/// occurrence, sign a receipt, publish an artifact, or authorize loading or execution.
+/// artifact directory, procfs process directory, admitted peer, and pidfd. It is move-only and
+/// cannot create an issuer occurrence, sign a receipt, publish an artifact, or authorize loading
+/// or execution.
 ///
 /// ```compile_fail
 /// use fe2o3_broker_authority_service::ValidatedRemoteRustcProcessObservationV1;
@@ -60,6 +61,7 @@ const CODEGEN_BACKEND_FD: i32 = fe2o3_artifact_transaction::BROKERED_CODEGEN_BAC
 /// require_serialize::<ValidatedRemoteRustcProcessObservationV1>();
 /// ```
 pub struct ValidatedRemoteRustcProcessObservationV1 {
+    client_session: ProtectedServiceAdmissionV1,
     pid: u32,
     start_time_ticks: u64,
     proc_dir: RetainedDirectoryV1,
@@ -95,12 +97,13 @@ impl ValidatedRemoteRustcProcessObservationV1 {
         admission: &ProtectedServiceAdmissionV1,
     ) -> Result<Self, CompilerExecutionSupervisionErrorV1> {
         admission.validate_session_continuity()?;
-        let (pid, start_time_ticks) = admission.client_process_identity();
+        let client_session = admission.retain_session()?;
+        let (pid, start_time_ticks) = client_session.client_process_identity();
         let proc_dir = open_process_directory(pid)?;
         let (argv, canonical_working_directory, compile_environment) =
             observe_process_inputs(&proc_dir)?;
         let invocation = RustcInvocationCapabilityV1::from_file(File::from(
-            duplicate_remote_descriptor(admission, RUSTC_INVOCATION_CHILD_FD_V1)?,
+            duplicate_remote_descriptor(&client_session, RUSTC_INVOCATION_CHILD_FD_V1)?,
         ))
         .map_err(CompilerExecutionSupervisionErrorV1::InvocationCapability)?;
         let rustc_executable = RetainedMeasuredFileV1::admit(
@@ -110,14 +113,17 @@ impl ValidatedRemoteRustcProcessObservationV1 {
             true,
         )?;
         let codegen_backend = RetainedMeasuredFileV1::admit(
-            File::from(duplicate_remote_descriptor(admission, CODEGEN_BACKEND_FD)?),
+            File::from(duplicate_remote_descriptor(
+                &client_session,
+                CODEGEN_BACKEND_FD,
+            )?),
             "codegen backend",
             MAX_EXECUTABLE_BYTES_V3,
             false,
         )?;
         let artifact_directory = RetainedDirectoryV1::admit(
             File::from(duplicate_remote_descriptor(
-                admission,
+                &client_session,
                 ARTIFACT_DIRECTORY_FD,
             )?),
             "artifact directory",
@@ -141,6 +147,7 @@ impl ValidatedRemoteRustcProcessObservationV1 {
             &artifact_directory,
         )?;
         let observed = Self {
+            client_session,
             pid,
             start_time_ticks,
             proc_dir,
@@ -154,18 +161,18 @@ impl ValidatedRemoteRustcProcessObservationV1 {
             identity,
         };
         admission.validate_session_continuity()?;
-        observed.revalidate(admission)?;
+        observed.revalidate()?;
         Ok(observed)
     }
 
     /// Repeats every process, descriptor, byte, and semantic comparison against the same
     /// admitted pid/start identity.
-    pub fn revalidate(
-        &self,
-        admission: &ProtectedServiceAdmissionV1,
-    ) -> Result<(), CompilerExecutionSupervisionErrorV1> {
-        admission.validate_session_continuity()?;
-        if !admission.matches_client_process(self.pid, self.start_time_ticks) {
+    pub fn revalidate(&self) -> Result<(), CompilerExecutionSupervisionErrorV1> {
+        self.client_session.validate_session_continuity()?;
+        if !self
+            .client_session
+            .matches_client_process(self.pid, self.start_time_ticks)
+        {
             return Err(CompilerExecutionSupervisionErrorV1::ProcessIdentityChanged);
         }
         self.proc_dir.revalidate("client procfs directory", true)?;
@@ -187,7 +194,7 @@ impl ValidatedRemoteRustcProcessObservationV1 {
         }
 
         let current_invocation = RustcInvocationCapabilityV1::from_file(File::from(
-            duplicate_remote_descriptor(admission, RUSTC_INVOCATION_CHILD_FD_V1)?,
+            duplicate_remote_descriptor(&self.client_session, RUSTC_INVOCATION_CHILD_FD_V1)?,
         ))
         .map_err(CompilerExecutionSupervisionErrorV1::InvocationCapability)?;
         if current_invocation.descriptor() != self.invocation.descriptor() {
@@ -203,7 +210,10 @@ impl ValidatedRemoteRustcProcessObservationV1 {
             return Err(CompilerExecutionSupervisionErrorV1::RustcExecutableChanged);
         }
         let current_backend = RetainedMeasuredFileV1::admit(
-            File::from(duplicate_remote_descriptor(admission, CODEGEN_BACKEND_FD)?),
+            File::from(duplicate_remote_descriptor(
+                &self.client_session,
+                CODEGEN_BACKEND_FD,
+            )?),
             "codegen backend",
             MAX_EXECUTABLE_BYTES_V3,
             false,
@@ -213,7 +223,7 @@ impl ValidatedRemoteRustcProcessObservationV1 {
         }
         let current_artifact_directory = RetainedDirectoryV1::admit(
             File::from(duplicate_remote_descriptor(
-                admission,
+                &self.client_session,
                 ARTIFACT_DIRECTORY_FD,
             )?),
             "artifact directory",
@@ -241,7 +251,7 @@ impl ValidatedRemoteRustcProcessObservationV1 {
         {
             return Err(CompilerExecutionSupervisionErrorV1::IdentityChanged);
         }
-        admission.validate_session_continuity()?;
+        self.client_session.validate_session_continuity()?;
         Ok(())
     }
 
@@ -288,11 +298,11 @@ fn validate_descriptor_observation(
 }
 
 fn duplicate_remote_descriptor(
-    admission: &ProtectedServiceAdmissionV1,
+    client_session: &ProtectedServiceAdmissionV1,
     descriptor: i32,
 ) -> Result<OwnedFd, CompilerExecutionSupervisionErrorV1> {
     rustix::process::pidfd_getfd(
-        admission.client_pidfd(),
+        client_session.client_pidfd(),
         descriptor,
         rustix::process::PidfdGetfdFlags::empty(),
     )
@@ -963,12 +973,16 @@ mod tests {
         descriptor: RustcInvocationDescriptorV3,
         control: Option<OwnedFd>,
         child: Option<Child>,
-        admission: ProtectedServiceAdmissionV1,
+        admission: Option<ProtectedServiceAdmissionV1>,
         _service_root: TempDir,
         _artifact_directory: TempDir,
     }
 
     impl RemoteRustcFixture {
+        fn admission(&self) -> &ProtectedServiceAdmissionV1 {
+            self.admission.as_ref().expect("live fixture admission")
+        }
+
         fn shutdown(&mut self) -> ExitStatus {
             let control = self.control.take().expect("live fixture control endpoint");
             assert_eq!(rustix::io::write(&control, b"9\n").unwrap(), 2);
@@ -1151,7 +1165,7 @@ mod tests {
             descriptor,
             control: Some(control),
             child: Some(child),
-            admission,
+            admission: Some(admission),
             _service_root: service_root,
             _artifact_directory: artifact_directory,
         }
@@ -1160,26 +1174,28 @@ mod tests {
     #[test]
     fn observes_revalidates_and_rejects_exit_of_one_exact_remote_process() {
         let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::Exact);
-        let observation = ValidatedRemoteRustcProcessObservationV1::observe(&fixture.admission)
+        let observation = ValidatedRemoteRustcProcessObservationV1::observe(fixture.admission())
             .and_then(|observation| {
-                observation.revalidate(&fixture.admission)?;
+                observation.revalidate()?;
                 Ok(observation)
             });
 
+        drop(fixture.admission.take());
+        observation.as_ref().unwrap().revalidate().unwrap();
         assert!(fixture.shutdown().success());
         let observation = observation.unwrap();
         assert_eq!(observation.descriptor(), &fixture.descriptor);
         assert_ne!(observation.identity(), &[0; 32]);
         assert!(!observation.authenticates_protected_compiler_execution());
         assert!(!observation.grants_compiler_authority());
-        assert!(observation.revalidate(&fixture.admission).is_err());
+        assert!(observation.revalidate().is_err());
     }
 
     #[test]
     fn remote_backend_byte_substitution_fails_closed() {
         let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::BackendBytesMismatch);
         assert!(matches!(
-            ValidatedRemoteRustcProcessObservationV1::observe(&fixture.admission),
+            ValidatedRemoteRustcProcessObservationV1::observe(fixture.admission()),
             Err(CompilerExecutionSupervisionErrorV1::ProcessValidation(
                 ProtectedRustcProcessValidationErrorV1::RunningCodegenBackendMismatch
             ))
@@ -1191,7 +1207,7 @@ mod tests {
     fn missing_remote_invocation_capability_fails_closed() {
         let mut fixture = spawn_remote_rustc(RemoteFixtureMutation::MissingInvocationCapability);
         assert!(matches!(
-            ValidatedRemoteRustcProcessObservationV1::observe(&fixture.admission),
+            ValidatedRemoteRustcProcessObservationV1::observe(fixture.admission()),
             Err(CompilerExecutionSupervisionErrorV1::RemoteDescriptor {
                 descriptor: RUSTC_INVOCATION_CHILD_FD_V1,
                 ..
