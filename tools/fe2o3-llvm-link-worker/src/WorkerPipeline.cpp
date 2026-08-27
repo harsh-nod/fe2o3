@@ -704,6 +704,16 @@ bool isClosedExactWorkgroupSyncRequest(
          RequestValue.LinkOptions.VerifyEach;
 }
 
+bool containsExactWorkgroupSyncCompilerMarker(
+    const Request &RequestValue, const ExactWorkgroupSyncProfile &Profile) {
+  if (RequestValue.CompilerModule.Kind != InputKind::LlvmTextIr)
+    return false;
+  StringRef Text(
+      reinterpret_cast<const char *>(RequestValue.CompilerModule.Bytes.data()),
+      RequestValue.CompilerModule.Bytes.size());
+  return Text.contains(Profile.SectionPrefix);
+}
+
 bool isExactMoeTop2V1RequestCandidate(const Request &RequestValue) {
   bool CompilerInputMatches =
       RequestValue.Inputs.size() == 1 &&
@@ -732,11 +742,18 @@ bool isClosedExactMoeTop2V1Request(const Request &RequestValue) {
 
 const ExactWorkgroupSyncProfile *
 exactWorkgroupSyncProfile(const Request &RequestValue) {
+  const ExactWorkgroupSyncProfile *Selected = nullptr;
   for (const ExactWorkgroupSyncProfile *Profile :
-       {&ExactWorkgroupLdsReductionV1, &ExactScopedAtomicV1})
-    if (isExactWorkgroupSyncRequestCandidate(RequestValue, *Profile))
-      return Profile;
-  return nullptr;
+       {&ExactWorkgroupLdsReductionV1, &ExactScopedAtomicV1}) {
+    if (!containsExactWorkgroupSyncCompilerMarker(RequestValue, *Profile))
+      continue;
+    if (Selected)
+      return nullptr;
+    Selected = Profile;
+  }
+  return Selected && isExactWorkgroupSyncRequestCandidate(RequestValue, *Selected)
+             ? Selected
+             : nullptr;
 }
 
 bool mentionsExactGeneralGemmV1(const Request &RequestValue) {
@@ -822,19 +839,10 @@ bool mentionsExactRowSoftmaxV1(const Request &RequestValue) {
 }
 
 bool mentionsExactWorkgroupSync(const Request &RequestValue) {
-  auto Mentions = [&](ArrayRef<std::string> Symbols) {
-    return llvm::any_of(Symbols, [](StringRef Symbol) {
-      return Symbol == ExactWorkgroupLdsReductionV1Entry ||
-             Symbol == ExactWorkgroupLdsReductionV1Descriptor ||
-             Symbol == ExactScopedAtomicV1Entry ||
-             Symbol == ExactScopedAtomicV1Descriptor;
-    });
-  };
-  return Mentions(RequestValue.RequiredSymbols) ||
-         Mentions(RequestValue.ExpectedDefinedSymbols) ||
-         Mentions(RequestValue.ImportSymbols) ||
-         Mentions(RequestValue.ExportSymbols) ||
-         Mentions(RequestValue.FinalSymbols);
+  return containsExactWorkgroupSyncCompilerMarker(
+             RequestValue, ExactWorkgroupLdsReductionV1) ||
+         containsExactWorkgroupSyncCompilerMarker(RequestValue,
+                                                  ExactScopedAtomicV1);
 }
 
 bool mentionsExactMoeTop2V1(const Request &RequestValue) {
@@ -917,6 +925,8 @@ selectPostLinkProfile(const Request &RequestValue,
                                            Profile->Descriptor.str()};
     if (ExpectedSymbols != Symbols)
       continue;
+    if (!containsExactWorkgroupSyncCompilerMarker(RequestValue, *Profile))
+      return PostLinkProfile::LegacyGfx942G1;
     if (!isClosedExactWorkgroupSyncRequest(RequestValue, *Profile))
       return pipelineError(Twine("exact ") + Profile->Check +
                            " symbols require the closed Worker V2 profile");

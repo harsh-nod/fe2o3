@@ -51,6 +51,9 @@ sha2.workspace = true
 pliron.workspace = true
 
 [dev-dependencies]
+fe2o3-core.workspace = true
+fe2o3-host.workspace = true
+fe2o3-hsa-runtime = { workspace = true, features = ["hardware-test-hooks"] }
 object = { version = "0.39.1", default-features = false, features = ["elf", "read_core"] }
 rmpv = { version = "1.3.1", default-features = false }
 
@@ -67,6 +70,9 @@ name = "production_extraction_driver_v1"
 
 [[test]]
 name = "production_general_matrix_driver_v1"
+
+[[test]]
+name = "production_workgroup_sync_driver_v1"
 
 [[test]]
 name = "production_ranked_bounds_driver_v1"

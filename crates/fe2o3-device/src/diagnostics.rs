@@ -103,7 +103,7 @@ device_operation!(__gpu_printf_1_v1, "fe2o3_device_gpu_printf_1_v1", (format_id:
 device_operation!(__gpu_printf_2_v1, "fe2o3_device_gpu_printf_2_v1", (format_id: u32, value0: u32, value1: u32) -> ());
 device_operation!(__gpu_assert_fail_v1, "fe2o3_device_gpu_assert_fail_v1", (site_id: u32, line: u32) -> ());
 device_operation!(clock32, "fe2o3_device_clock32_v1", () -> u32);
-device_operation!(trap, "fe2o3_device_trap_v1", () -> ());
+device_operation!(trap, "fe2o3_device_trap_v1", () -> !);
 device_operation!(debugtrap, "fe2o3_device_debugtrap_v1", () -> ());
 device_operation!(__profiling_marker_v1, "fe2o3_device_profiling_marker_v1", (marker: u32) -> ());
 

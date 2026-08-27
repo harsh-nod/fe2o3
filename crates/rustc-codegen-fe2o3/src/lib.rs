@@ -67,6 +67,7 @@ mod production_reference_bounds_v2;
 mod production_reference_effect_join_v2;
 mod production_rustc_driver_v1;
 mod production_rustc_drop_v1;
+mod production_rustc_intrinsic_v1;
 mod production_semantic_body_v1;
 mod production_semantic_fn_abi_v1;
 mod production_semantic_lineage_v3;
@@ -112,6 +113,7 @@ mod worker_v2_producer;
 #[doc(hidden)]
 pub use production_rustc_driver_v1::{
     run_production_amdgpu_llvm_extraction_driver_v1, run_production_extraction_driver_v1,
+    run_production_gfx942_compiler_handoff_extraction_driver_v1,
     run_production_gfx942_llvm_extraction_driver_v1, run_production_ranked_extraction_driver_v1,
 };
 

@@ -22,6 +22,7 @@ use crate::{KernelCheckPassKindV1, KernelCheckStatusV1};
 pub const MAX_PLIRON_ATOMIC_OPERATIONS_V1: usize = 65_536;
 pub const MAX_PLIRON_ATOMIC_FINDINGS_V1: usize = 4_096;
 pub const MAX_PLIRON_ATOMIC_TARGET_CAPABILITIES_V1: usize = 256;
+pub const MAX_PLIRON_SYSTEM_COHERENT_ALLOCATIONS_V1: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PlironAtomicTargetCapabilityV1 {
@@ -76,6 +77,7 @@ impl PlironAtomicTargetCapabilityV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlironAtomicTargetContextV1 {
     capabilities: BTreeSet<PlironAtomicTargetCapabilityV1>,
+    system_coherent_allocations: BTreeSet<u64>,
 }
 
 impl PlironAtomicTargetContextV1 {
@@ -91,11 +93,34 @@ impl PlironAtomicTargetContextV1 {
         }
         Ok(Self {
             capabilities: retained,
+            system_coherent_allocations: BTreeSet::new(),
         })
+    }
+
+    pub fn with_system_coherent_allocations(
+        mut self,
+        allocations: impl IntoIterator<Item = u64>,
+    ) -> Result<Self, PlironAtomicTargetContextErrorV1> {
+        for allocation in allocations {
+            if allocation == 0 {
+                return Err(PlironAtomicTargetContextErrorV1::InvalidCoherentAllocation);
+            }
+            if self.system_coherent_allocations.len() == MAX_PLIRON_SYSTEM_COHERENT_ALLOCATIONS_V1
+                && !self.system_coherent_allocations.contains(&allocation)
+            {
+                return Err(PlironAtomicTargetContextErrorV1::CoherentAllocationLimitExceeded);
+            }
+            self.system_coherent_allocations.insert(allocation);
+        }
+        Ok(self)
     }
 
     pub fn capabilities(&self) -> &BTreeSet<PlironAtomicTargetCapabilityV1> {
         &self.capabilities
+    }
+
+    pub fn system_coherent_allocations(&self) -> &BTreeSet<u64> {
+        &self.system_coherent_allocations
     }
 
     pub const fn grants_compiler_refinement_authority(&self) -> bool {
@@ -116,12 +141,19 @@ impl PlironAtomicTargetContextV1 {
             .iter()
             .any(|capability| capability.supports(element_width, memory_space, scope))
     }
+
+    fn supports_system_coherence(&self, allocation_origin: u64) -> bool {
+        self.system_coherent_allocations
+            .contains(&allocation_origin)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlironAtomicTargetContextErrorV1 {
     InvalidCapability,
     CapabilityLimitExceeded,
+    InvalidCoherentAllocation,
+    CoherentAllocationLimitExceeded,
 }
 
 impl fmt::Display for PlironAtomicTargetContextErrorV1 {
@@ -132,6 +164,11 @@ impl fmt::Display for PlironAtomicTargetContextErrorV1 {
             ),
             Self::CapabilityLimitExceeded => formatter
                 .write_str("atomic target capability count exceeds the bounded verifier limit"),
+            Self::InvalidCoherentAllocation => {
+                formatter.write_str("system-coherent allocation identity must be non-zero")
+            }
+            Self::CoherentAllocationLimitExceeded => formatter
+                .write_str("system-coherent allocation count exceeds the bounded verifier limit"),
         }
     }
 }
@@ -378,7 +415,7 @@ fn run_check(
     target: Option<&PlironAtomicTargetContextV1>,
 ) -> PlironAtomicLegalityReportV1 {
     let mut operation_count = 0_usize;
-    let mut views = HashMap::<Value, (MemorySpaceAttr, u32)>::new();
+    let mut views = HashMap::<Value, (MemorySpaceAttr, u32, u64)>::new();
     for block in function.get_region(context).deref(context).iter(context) {
         for operation in block.deref(context).iter(context) {
             operation_count += 1;
@@ -390,10 +427,16 @@ fn run_check(
                 && let (Some(memory_space), Some(view_type)) =
                     (view.memory_space(context), view.view_type(context))
             {
-                views.insert(
-                    view.result(context),
-                    (memory_space, view_type.deref(context).element_width()),
-                );
+                if let Some(allocation_origin) = view.allocation_origin(context) {
+                    views.insert(
+                        view.result(context),
+                        (
+                            memory_space,
+                            view_type.deref(context).element_width(),
+                            allocation_origin,
+                        ),
+                    );
+                }
             }
         }
     }
@@ -452,7 +495,9 @@ fn run_check(
                 });
                 continue;
             }
-            let Some(&(memory_space, element_width)) = views.get(&access.view(context)) else {
+            let Some(&(memory_space, element_width, allocation_origin)) =
+                views.get(&access.view(context))
+            else {
                 findings.push(PlironAtomicLegalityFindingV1::ViewProvenanceUnavailable {
                     block: block_index,
                     operation: operation_index,
@@ -477,7 +522,9 @@ fn run_check(
                     scope,
                 });
             }
-            if scope == AtomicScopeAttr::System {
+            if scope == AtomicScopeAttr::System
+                && target.is_none_or(|target| !target.supports_system_coherence(allocation_origin))
+            {
                 findings.push(PlironAtomicLegalityFindingV1::SystemCoherenceUnproven {
                     block: block_index,
                     operation: operation_index,

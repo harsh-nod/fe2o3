@@ -17,8 +17,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use rustc_abi::ExternAbi;
 use rustc_middle::mir::{
     AggregateKind, AssertKind, BinOp, Body, BorrowKind, Local, MutBorrowKind,
-    NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, Rvalue, START_BLOCK,
-    StatementKind, TerminatorKind, UnwindAction,
+    NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, RawPtrKind, Rvalue,
+    START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
 use rustc_middle::ty::util::IntTypeExt;
@@ -30,6 +30,9 @@ use rustc_target::callconv::FnAbi;
 
 use crate::collector::CollectedFunctionRole;
 use crate::production_rustc_drop_v1::{ProductionRustcDropClassV1, classify_rustc_drop_v1};
+use crate::production_rustc_intrinsic_v1::{
+    ProductionRustcIntrinsicOperationV1, atomic_ordering_tag_v1, atomic_scope_tag_v1,
+};
 use crate::production_semantic_terminal_v1::{
     ProductionSemanticTerminalRuleV1, ProductionTerminalExpansionV1,
 };
@@ -257,6 +260,16 @@ pub(crate) struct TerminalExpansionRecipeV1<'tcx> {
     pub(crate) terminal: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NormalizedRustcIntrinsicRecipeV1<'tcx> {
+    pub(crate) caller: SemanticFunctionIdV1,
+    pub(crate) block: u32,
+    pub(crate) operation: ProductionRustcIntrinsicOperationV1,
+    pub(crate) element_type: Ty<'tcx>,
+    pub(crate) instance: Instance<'tcx>,
+    pub(crate) identities: CanonicalFunctionIdentitiesV1,
+}
+
 #[derive(Debug)]
 pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     types: Box<[RetainedSemanticTypeProducerV1<'tcx>]>,
@@ -267,6 +280,7 @@ pub(crate) struct ProductionSemanticPreflightPlanV1<'tcx> {
     roots: Box<[SemanticFunctionIdV1]>,
     direct_calls: Box<[DirectCallRecipeV1]>,
     terminal_expansions: Box<[TerminalExpansionRecipeV1<'tcx>]>,
+    normalized_intrinsics: Box<[NormalizedRustcIntrinsicRecipeV1<'tcx>]>,
     sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
 }
@@ -302,6 +316,12 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
 
     pub(crate) fn terminal_expansion_producers(&self) -> &[TerminalExpansionRecipeV1<'tcx>] {
         &self.terminal_expansions
+    }
+
+    pub(crate) fn normalized_intrinsic_producers(
+        &self,
+    ) -> &[NormalizedRustcIntrinsicRecipeV1<'tcx>] {
+        &self.normalized_intrinsics
     }
 
     pub(crate) fn canonical_transcript(&self) -> &[u8] {
@@ -474,6 +494,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     let mut edges = BTreeSet::new();
     let mut direct_calls = BTreeSet::new();
     let mut terminal_expansions = Vec::new();
+    let mut normalized_intrinsics = Vec::new();
     let mut first_rejection = None;
     for (index, function) in functions.iter().enumerate() {
         let function_id = SemanticFunctionIdV1::from_index(index as u32);
@@ -533,24 +554,53 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
                             );
                         }
                         None => {
-                            let identity =
-                                canonical_function_identities_v1(tcx, resolved).function();
-                            if let Some(callee) = function_ids.get(&identity).copied() {
-                                edges.insert(CallEdgeV1 {
-                                    caller: function_id,
-                                    callee,
-                                });
-                                direct_calls.insert(DirectCallRecipeV1 {
-                                    caller: function_id,
-                                    block: block.index() as u32,
-                                    callee,
-                                });
-                            } else {
-                                remember_rejection(
+                            match crate::production_rustc_intrinsic_v1::classify(tcx, resolved) {
+                                Ok(Some(classification)) => {
+                                    if args.len() != 2 {
+                                        remember_rejection(
+                                            &mut first_rejection,
+                                            "normalized atomic intrinsic with unexpected call arity",
+                                            site,
+                                        );
+                                        continue;
+                                    }
+                                    counts.charge(SemanticMirResourceV1::Statements, 1, limits)?;
+                                    counts.charge(SemanticMirResourceV1::Projections, 1, limits)?;
+                                    normalized_intrinsics.push(NormalizedRustcIntrinsicRecipeV1 {
+                                        caller: function_id,
+                                        block: block.index() as u32,
+                                        operation: classification.operation,
+                                        element_type: classification.element_type,
+                                        instance: resolved,
+                                        identities: canonical_function_identities_v1(tcx, resolved),
+                                    });
+                                }
+                                Ok(None) => {
+                                    let identity =
+                                        canonical_function_identities_v1(tcx, resolved).function();
+                                    if let Some(callee) = function_ids.get(&identity).copied() {
+                                        edges.insert(CallEdgeV1 {
+                                            caller: function_id,
+                                            callee,
+                                        });
+                                        direct_calls.insert(DirectCallRecipeV1 {
+                                            caller: function_id,
+                                            block: block.index() as u32,
+                                            callee,
+                                        });
+                                    } else {
+                                        remember_rejection(
+                                            &mut first_rejection,
+                                            "direct call escaped the collector-sealed function closure",
+                                            site,
+                                        );
+                                    }
+                                }
+                                Err(error) => remember_rejection(
                                     &mut first_rejection,
-                                    "direct call escaped the collector-sealed function closure",
+                                    format!("unsupported rustc compiler intrinsic: {error}"),
                                     site,
-                                );
+                                ),
                             }
                         }
                     }
@@ -717,6 +767,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
 
     let direct_calls = direct_calls.into_iter().collect::<Box<[_]>>();
     let terminal_expansions = terminal_expansions.into_boxed_slice();
+    let normalized_intrinsics = normalized_intrinsics.into_boxed_slice();
     let (sha256, canonical_transcript) = preflight_plan_identity_and_transcript_v1(
         target,
         identity_inventory_sha256,
@@ -730,6 +781,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         &edges,
         &direct_calls,
         &terminal_expansions,
+        &normalized_intrinsics,
         counts,
         tcx,
     );
@@ -742,6 +794,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
         roots,
         direct_calls,
         terminal_expansions,
+        normalized_intrinsics,
         sha256,
         canonical_transcript,
     })
@@ -888,7 +941,12 @@ impl<'a, 'tcx> BodyPreflightV1<'a, 'tcx> {
                 self.inspect_operand(operand, site)?;
                 self.charge(SemanticMirResourceV1::Operands, count - 1)
             }
-            Rvalue::RawPtr(..) => Err(reject("RawPtr rvalue", site)),
+            Rvalue::RawPtr(RawPtrKind::Const | RawPtrKind::Mut, place) => {
+                self.inspect_place(*place, site)
+            }
+            Rvalue::RawPtr(RawPtrKind::FakeForPtrMetadata, _) => {
+                Err(reject("fake raw pointer for metadata rvalue", site))
+            }
             Rvalue::Cast(
                 rustc_middle::mir::CastKind::IntToInt
                 | rustc_middle::mir::CastKind::IntToFloat
@@ -1932,6 +1990,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
     edges: &BTreeSet<CallEdgeV1>,
     direct_calls: &[DirectCallRecipeV1],
     terminal_expansions: &[TerminalExpansionRecipeV1<'tcx>],
+    normalized_intrinsics: &[NormalizedRustcIntrinsicRecipeV1<'tcx>],
     counts: RawMirPreflightCountsV1,
     tcx: TyCtxt<'tcx>,
 ) -> ([u8; 32], Box<[u8]>) {
@@ -1951,6 +2010,7 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         edges.len(),
         direct_calls.len(),
         terminal_expansions.len(),
+        normalized_intrinsics.len(),
     ] {
         digest.field(&u64::try_from(cardinality).unwrap_or(u64::MAX).to_le_bytes());
     }
@@ -2050,22 +2110,72 @@ fn preflight_plan_identity_and_transcript_v1<'tcx>(
         digest.field(&recipe.terminal.to_le_bytes());
         digest.field(&terminal_definition_sha256_v1(tcx, recipe));
     }
+    for recipe in normalized_intrinsics {
+        digest.field(&recipe.caller.index().to_le_bytes());
+        digest.field(&recipe.block.to_le_bytes());
+        digest.field(&[recipe.operation.operation_tag()]);
+        let (operation, access) = recipe.operation.atomic_rmw();
+        digest.field(&[atomic_rmw_operation_tag_v1(operation)]);
+        digest.field(&[atomic_ordering_tag_v1(access.ordering())]);
+        digest.field(&[atomic_scope_tag_v1(access.scope())]);
+        digest.field(rustc_type_identity_v1(tcx, recipe.element_type).as_bytes());
+        digest.field(recipe.identities.function().as_bytes());
+        digest.field(recipe.identities.item_definition().as_bytes());
+        digest.field(recipe.identities.monomorphization().as_bytes());
+        digest.field(recipe.identities.generic_type_arguments().as_bytes());
+        digest.field(recipe.identities.const_generic_arguments().as_bytes());
+        digest.field(&normalized_intrinsic_definition_sha256_v1(tcx, recipe));
+    }
     digest.finish_with_canonical_transcript()
+}
+
+const fn atomic_rmw_operation_tag_v1(
+    operation: fe2o3_mir_model::semantic_mir_v1::SemanticAtomicRmwOpV1,
+) -> u8 {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticAtomicRmwOpV1;
+    match operation {
+        SemanticAtomicRmwOpV1::Exchange => 0,
+        SemanticAtomicRmwOpV1::Add => 1,
+        SemanticAtomicRmwOpV1::Subtract => 2,
+        SemanticAtomicRmwOpV1::BitAnd => 3,
+        SemanticAtomicRmwOpV1::BitNand => 4,
+        SemanticAtomicRmwOpV1::BitOr => 5,
+        SemanticAtomicRmwOpV1::BitXor => 6,
+        SemanticAtomicRmwOpV1::SignedMaximum => 7,
+        SemanticAtomicRmwOpV1::SignedMinimum => 8,
+        SemanticAtomicRmwOpV1::UnsignedMaximum => 9,
+        SemanticAtomicRmwOpV1::UnsignedMinimum => 10,
+    }
+}
+
+fn normalized_intrinsic_definition_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    recipe: &NormalizedRustcIntrinsicRecipeV1<'tcx>,
+) -> [u8; 32] {
+    rustc_intrinsic_definition_sha256_v1(tcx, recipe.instance, recipe.identities)
 }
 
 fn terminal_definition_sha256_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     recipe: &TerminalExpansionRecipeV1<'tcx>,
 ) -> [u8; 32] {
-    let InstanceKind::Intrinsic(def_id) = recipe.instance.def else {
-        return rustc_mir_body_sha256_v1(tcx, recipe.instance);
+    rustc_intrinsic_definition_sha256_v1(tcx, recipe.instance, recipe.identities)
+}
+
+fn rustc_intrinsic_definition_sha256_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    identities: CanonicalFunctionIdentitiesV1,
+) -> [u8; 32] {
+    let InstanceKind::Intrinsic(def_id) = instance.def else {
+        return rustc_mir_body_sha256_v1(tcx, instance);
     };
     let intrinsic = tcx
         .intrinsic(def_id)
         .expect("a resolved intrinsic instance has intrinsic metadata");
     let mut digest = SemanticIdentityDigestV1::new(COMPILER_INTRINSIC_DEFINITION_DOMAIN_V1);
-    digest.field(recipe.identities.function().as_bytes());
-    digest.field(recipe.identities.item_definition().as_bytes());
+    digest.field(identities.function().as_bytes());
+    digest.field(identities.item_definition().as_bytes());
     digest.field(intrinsic.name.as_str().as_bytes());
     digest.field(&[u8::from(intrinsic.must_be_overridden)]);
     digest.field(&[u8::from(intrinsic.const_stable)]);
@@ -2198,6 +2308,7 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::Gfx950LdsTransposePublish => 83,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB4 => 84,
         ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8 => 85,
+        ProductionTerminalExpansionV1::Trap => 86,
     }
 }
 
@@ -2279,8 +2390,9 @@ mod tests {
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndex1d),
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::ThreadIndexGet),
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::DisjointSliceGetMut),
+            terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Trap),
         ];
-        assert_eq!(tags, [0, 1, 2]);
+        assert_eq!(tags, [0, 1, 2, 86]);
 
         let gfx950 = [
             terminal_expansion_tag_v1(ProductionTerminalExpansionV1::Gfx950MatrixContextCurrent),

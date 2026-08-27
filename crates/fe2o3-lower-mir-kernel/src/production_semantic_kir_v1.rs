@@ -10,12 +10,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::{error::Error, fmt};
 
 use fe2o3_kernel_ir::{
-    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Axis, BarrierSemantics, BasicBlock,
-    BinaryOp, BlockId, CastKind, CheckedBinaryOperator, ComparePredicate, Constant, Convergence,
-    F32MathFunction, FloatOperation, FormalMemoryIncompleteReason, Function, FunctionBody,
-    FunctionId, FunctionOperationLocation, Gfx950LdsTransposeFormatV1,
-    Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1, IndexKind, IntrinsicKind,
-    IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
+    AccessMode, AddressSpace, AmdGpuDiagnosticOperation, Atomic, AtomicKind, Axis,
+    BarrierSemantics, BasicBlock, BinaryOp, BlockId, CastKind, CheckedBinaryOperator,
+    ComparePredicate, Constant, Convergence, F32MathFunction, FloatOperation,
+    FormalMemoryIncompleteReason, Function, FunctionBody, FunctionId, FunctionOperationLocation,
+    Gfx950LdsTransposeFormatV1, Gfx950LdsTransposeOperationKindV1, Gfx950LdsTransposeOperationV1,
+    IndexKind, IntrinsicKind, IntrinsicOperation, Kernel, LaunchDomain, LaunchExtent,
     MAX_OPERATIONS_V1 as MAX_BLOCK_OPERATIONS_V1, MatrixOperation, MemoryAccess, MemoryOrdering,
     Module, Operation, OperationKind, ScalarType, Signature, SwitchCase, SynchronizationScope,
     TensorLayoutContractV1, Terminator, Type, UnaryOp, ValueDef, ValueId, VerificationErrors,
@@ -26,20 +26,24 @@ use fe2o3_kernel_ir::{
     plan_integer_cast_v1, verify_module,
 };
 use fe2o3_mir_model::semantic_mir_v1::{
-    SemanticAggregateKindV1, SemanticAssertMessageV1, SemanticAxisV1, SemanticBinaryOpV1,
-    SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCastKindV1, SemanticCheckedBinaryOpV1,
-    SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1, SemanticDirectCallV1,
-    SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1, SemanticEnumVariantV1,
-    SemanticF32MathFunctionV1, SemanticFieldsShapeV1, SemanticFunctionDeclV1, SemanticFunctionIdV1,
-    SemanticGfx950LdsTransposeFormatV1, SemanticLocalIdV1, SemanticLocalRoleV1,
-    SemanticMfmaAccumulatorContractV1, SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1,
-    SemanticMfmaProfileV1, SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1,
-    SemanticMutabilityV1, SemanticOperandV1, SemanticPlaceV1, SemanticPointerMetadataV1,
+    SemanticAbiPassModeV1, SemanticAbiPointeeKindV1, SemanticAggregateKindV1,
+    SemanticAssertMessageV1, SemanticAtomicOrderingV1, SemanticAtomicRmwOpV1, SemanticAtomicRmwV1,
+    SemanticAtomicScopeV1, SemanticAxisV1, SemanticBackendPrimitiveV1, SemanticBackendReprV1,
+    SemanticBinaryOpV1, SemanticBlockIdV1, SemanticCallableDeclV1, SemanticCastKindV1,
+    SemanticCheckedBinaryOpV1, SemanticCompilerIntrinsicOperationV1, SemanticConstantValueV1,
+    SemanticDirectCallV1, SemanticDisjointIndexSpaceV1, SemanticEnumEncodingV1,
+    SemanticEnumVariantV1, SemanticF32MathFunctionV1, SemanticFieldsShapeV1,
+    SemanticFunctionDeclV1, SemanticFunctionIdV1, SemanticGfx950LdsTransposeFormatV1,
+    SemanticLocalIdV1, SemanticLocalRoleV1, SemanticMfmaAccumulatorContractV1,
+    SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
+    SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1,
+    SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
     SemanticProjectionKindV1, SemanticRustcVariantsV1, SemanticRvalueKindV1, SemanticScalarTypeV1,
-    SemanticScalarValueV1, SemanticStatementKindV1, SemanticSubgroupReductionKindV1,
-    SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeLayoutDetailsV1,
-    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticVolatilityV1, semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
+    SemanticScalarValueV1, SemanticSourceArgumentOwnershipV1, SemanticStatementKindV1,
+    SemanticSubgroupReductionKindV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeLayoutDetailsV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticVolatilityV1,
+    semantic_direct_enum_variant_v1, semantic_scalar_enum_variant_v1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadDominanceV1, SemanticOptionAvailabilityV1, SemanticOptionDominanceV1,
@@ -1613,6 +1617,14 @@ fn kir_memory_access(
             let memory_space = ranked_memory_space(access.address_space)?;
             Some((pointer, dialect_kernel::AccessKindAttr::Write, memory_space))
         }
+        OperationKind::Atomic(ref atomic) => {
+            let memory_space = ranked_memory_space(atomic.access.address_space)?;
+            Some((
+                atomic.pointer,
+                dialect_kernel::AccessKindAttr::AtomicReadModifyWrite,
+                memory_space,
+            ))
+        }
         _ => None,
     }
 }
@@ -1631,7 +1643,7 @@ const fn ranked_memory_space(
 }
 
 fn is_kir_ranked_access(operation: &Operation) -> bool {
-    kir_memory_access(operation).is_some() || matches!(operation.kind, OperationKind::Atomic(_))
+    kir_memory_access(operation).is_some()
 }
 
 fn index_semantic_access_sites(
@@ -2506,7 +2518,15 @@ fn lower_module(
     }
     let parameter_types = parameters
         .iter()
-        .map(|(_, _, ty)| lower_parameter_type(semantic.types(), semantic.callables(), *ty))
+        .map(|(argument, _, ty)| {
+            lower_kernel_parameter_type(
+                semantic.types(),
+                semantic.callables(),
+                function,
+                *argument,
+                *ty,
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let parameter_values = parameters
         .iter()
@@ -4777,6 +4797,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 let _ = self.lower_operand(block, statement, condition, operations)?;
                 Ok(())
             }
+            SemanticStatementKindV1::AtomicRmw(atomic) => {
+                self.lower_atomic_rmw(block, statement, atomic, operations)
+            }
             SemanticStatementKindV1::Nop => Ok(()),
             _ => Err(unsupported(
                 0,
@@ -4786,6 +4809,91 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .unwrap_or("semantic statement has no exact Kernel IR lowering rule"),
             )),
         }
+    }
+
+    fn lower_atomic_rmw(
+        &mut self,
+        block: SemanticBlockIdV1,
+        statement: Option<u32>,
+        atomic: &SemanticAtomicRmwV1,
+        operations: &mut Vec<Operation>,
+    ) -> Result<(), ProductionSemanticKirErrorV1> {
+        let (pointer, pointer_ty) = self
+            .resolve_place(block, statement, atomic.address())?
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        let Type::Pointer(pointer_ty) = pointer_ty else {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic-rmw address is not a lowered pointer",
+            ));
+        };
+        if pointer_ty.access != AccessMode::ReadWrite {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic-rmw address is not writable",
+            ));
+        }
+        let pointee = (*pointer_ty.pointee).clone();
+        let scalar = pointee.as_scalar().ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic-rmw pointee is not a physical scalar",
+            )
+        })?;
+        let kind = lower_atomic_rmw_kind(atomic.operation(), scalar).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic-rmw operation has no exact Kernel IR operation",
+            )
+        })?;
+        let scope = lower_atomic_scope(atomic.access().scope()).ok_or_else(|| {
+            unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic scope has no exact Kernel IR scope",
+            )
+        })?;
+        let value = self.lower_operand(block, statement, atomic.value(), operations)?;
+        let (value, value_ty) = value
+            .value()
+            .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
+        if value_ty != pointee
+            || lower_memory_element_type(self.types, atomic.destination().ty())? != pointee
+        {
+            return Err(unsupported(
+                0,
+                Some(block.index()),
+                statement,
+                "semantic atomic-rmw value or result type differs from its pointee",
+            ));
+        }
+        let access =
+            memory_access_for_type(self.types, atomic.address().ty(), pointer_ty.address_space)?;
+        let result = self.emit(
+            operations,
+            pointee,
+            OperationKind::Atomic(Atomic {
+                kind,
+                pointer,
+                value: Some(value),
+                compare: None,
+                access,
+                scope,
+                ordering: lower_atomic_ordering(atomic.access().ordering()),
+                failure_ordering: None,
+            }),
+        )?;
+        self.bind_destination(block, statement, atomic.destination(), result)
     }
 
     fn lower_rvalue(
@@ -5098,7 +5206,16 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     .lower_operand(block, statement, operand, operations)?
                     .value()
                     .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
-                let target = lower_scalar_type(self.types, result_type)?;
+                let target = match self
+                    .types
+                    .get(result_type.index() as usize)
+                    .map(SemanticTypeDeclV1::shape)
+                {
+                    Some(SemanticTypeShapeV1::Pointer(_)) => {
+                        lower_parameter_type(self.types, &[], result_type)?
+                    }
+                    _ => lower_scalar_type(self.types, result_type)?,
+                };
                 if input_ty == target {
                     return Ok(SemanticValueBindingV1::Value {
                         id: input,
@@ -6032,6 +6149,21 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
             ));
         };
         require_current_production_intrinsic_v1(operation)?;
+        if matches!(operation, SemanticCompilerIntrinsicOperationV1::Trap) {
+            self.require_call_argument_count(block, call, 0)?;
+            if call.destination().is_some() {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "trap compiler intrinsic unexpectedly has a destination",
+                ));
+            }
+            self.push_operation(operations, || {
+                AmdGpuDiagnosticOperation::Trap.operation(None)
+            })?;
+            return Ok(Terminator::Unreachable);
+        }
         let destination = call.destination().ok_or_else(|| {
             unsupported(
                 0,
@@ -7197,6 +7329,9 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                     None,
                     "compiler intrinsic has no fill-profile lowering rule",
                 ));
+            }
+            SemanticCompilerIntrinsicOperationV1::Trap => {
+                unreachable!("trap compiler intrinsic returned before destination lowering")
             }
         };
         self.store_enum_payload_v1(
@@ -10776,7 +10911,7 @@ fn lower_parameter_type(
             let address_space = lower_address_space(pointer.address_space())?;
             match pointer.metadata() {
                 SemanticPointerMetadataV1::None => Ok(Type::pointer(
-                    lower_scalar_type(types, pointer.pointee())?,
+                    lower_memory_element_type(types, pointer.pointee())?,
                     address_space,
                     access,
                 )),
@@ -10817,6 +10952,172 @@ fn lower_parameter_type(
             "kernel argument type has no authenticated Kernel IR representation",
         )),
     }
+}
+
+fn lower_memory_element_type(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Result<Type, ProductionSemanticKirErrorV1> {
+    if let Ok(scalar) = lower_scalar_type(types, ty) {
+        return Ok(scalar);
+    }
+    transparent_scalar_storage_type(types, ty).ok_or_else(|| {
+        ProductionSemanticKirErrorV1::ScalarTypeUnavailable {
+            semantic_type: ty.index(),
+            shape: types
+                .get(ty.index() as usize)
+                .map(|declaration| format!("{declaration:?}"))
+                .unwrap_or_else(|| "<missing>".to_owned()),
+        }
+    })
+}
+
+fn transparent_scalar_storage_type(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+) -> Option<Type> {
+    let mut current = ty;
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(current) || visited.len() > MAX_SSA_VALUE_COMPONENTS_V1 {
+            return None;
+        }
+        if let Ok(scalar) = lower_scalar_type(types, current) {
+            return Some(scalar);
+        }
+        let declaration = types.get(current.index() as usize)?;
+        let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
+            return None;
+        };
+        let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
+            return None;
+        };
+        if declaration.layout().is_uninhabited()
+            || aggregate.fields().len() != 1
+            || layout.field_offsets() != [0]
+            || !layout.padding().is_empty()
+        {
+            return None;
+        }
+        let field_ty = aggregate.fields()[0];
+        let field = types.get(field_ty.index() as usize)?;
+        if field.layout().is_uninhabited()
+            || declaration.layout().size_bytes() != field.layout().size_bytes()
+            || declaration.layout().alignment_bytes() != field.layout().alignment_bytes()
+        {
+            return None;
+        }
+        current = field_ty;
+    }
+}
+
+fn lower_kernel_parameter_type(
+    types: &[SemanticTypeDeclV1],
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    argument: u32,
+    ty: SemanticTypeIdV1,
+) -> Result<Type, ProductionSemanticKirErrorV1> {
+    let declaration = types
+        .get(usize::try_from(ty.index()).unwrap_or(usize::MAX))
+        .ok_or_else(|| unsupported(0, None, None, "kernel argument type is missing"))?;
+    if !matches!(declaration.shape(), SemanticTypeShapeV1::Aggregate(_)) {
+        return lower_parameter_type(types, callables, ty);
+    }
+    authenticated_global_mut_pointer_parameter(types, function, argument, ty).ok_or_else(|| {
+        unsupported(
+            0,
+            None,
+            None,
+            "kernel argument type has no authenticated Kernel IR representation",
+        )
+    })
+}
+
+/// Recognizes the exact source/ABI/layout contract established for the
+/// production `DeviceGlobalMutPtr<T>` argument. No individual structural fact
+/// is authority: the production descriptor join has already authenticated the
+/// source wrapper, and this boundary rechecks every retained consequence before
+/// assigning the Kernel IR global address space.
+fn authenticated_global_mut_pointer_parameter(
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    argument: u32,
+    ty: SemanticTypeIdV1,
+) -> Option<Type> {
+    let argument = usize::try_from(argument).ok()?;
+    let abi = function.abi();
+    if abi.source_input_types().get(argument) != Some(&ty)
+        || abi.source_argument_ownership().get(argument)
+            != Some(&SemanticSourceArgumentOwnershipV1::ExclusiveOwner)
+    {
+        return None;
+    }
+    let abi_argument = abi.adjusted_arguments().get(argument)?;
+    if abi_argument.ty() != ty || !matches!(abi_argument.mode(), SemanticAbiPassModeV1::Direct(_)) {
+        return None;
+    }
+
+    let declaration = types.get(ty.index() as usize)?;
+    let pointee = abi_argument
+        .value()
+        .pointee_override()
+        .or(declaration.abi_properties().first_pointee())?;
+    if pointee.kind() != SemanticAbiPointeeKindV1::Raw {
+        return None;
+    }
+    let outer_pointer = scalar_backend_pointer(declaration)?;
+    let SemanticTypeShapeV1::Aggregate(aggregate) = declaration.shape() else {
+        return None;
+    };
+    let SemanticTypeLayoutDetailsV1::Aggregate(layout) = declaration.layout().details() else {
+        return None;
+    };
+    if aggregate.fields().len() != layout.field_offsets().len() {
+        return None;
+    }
+
+    let mut physical_pointer = None;
+    for (&field_ty, &field_offset) in aggregate.fields().iter().zip(layout.field_offsets()) {
+        let field = types.get(field_ty.index() as usize)?;
+        if field.layout().size_bytes() == Some(0) {
+            if field.layout().is_uninhabited() {
+                return None;
+            }
+            continue;
+        }
+        if physical_pointer.is_some() || field_offset != 0 {
+            return None;
+        }
+        let SemanticTypeShapeV1::Pointer(pointer) = field.shape() else {
+            return None;
+        };
+        if pointer.kind() != SemanticPointerKindV1::Raw
+            || pointer.mutability() != SemanticMutabilityV1::Mutable
+            || pointer.metadata() != SemanticPointerMetadataV1::None
+            || scalar_backend_pointer(field)? != outer_pointer
+            || declaration.layout().size_bytes() != field.layout().size_bytes()
+            || declaration.layout().alignment_bytes() != field.layout().alignment_bytes()
+        {
+            return None;
+        }
+        physical_pointer = Some(pointer);
+    }
+
+    let pointer = physical_pointer?;
+    Some(Type::pointer(
+        lower_scalar_type(types, pointer.pointee()).ok()?,
+        AddressSpace::Global,
+        AccessMode::ReadWrite,
+    ))
+}
+
+fn scalar_backend_pointer(declaration: &SemanticTypeDeclV1) -> Option<SemanticBackendPrimitiveV1> {
+    let SemanticBackendReprV1::Scalar(scalar) = declaration.layout().backend_repr() else {
+        return None;
+    };
+    let primitive = scalar.primitive();
+    matches!(primitive, SemanticBackendPrimitiveV1::Pointer { .. }).then_some(primitive)
 }
 
 const MAX_SSA_VALUE_COMPONENTS_V1: usize = 256;
@@ -11479,6 +11780,51 @@ const fn semantic_operand_type(operand: &SemanticOperandV1) -> SemanticTypeIdV1 
     match operand {
         SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) => place.ty(),
         SemanticOperandV1::Constant(constant) => constant.ty(),
+    }
+}
+
+const fn lower_atomic_rmw_kind(
+    operation: SemanticAtomicRmwOpV1,
+    scalar: ScalarType,
+) -> Option<AtomicKind> {
+    if !scalar.is_integer() {
+        return None;
+    }
+    Some(match operation {
+        SemanticAtomicRmwOpV1::Exchange => AtomicKind::Exchange,
+        SemanticAtomicRmwOpV1::Add => AtomicKind::Add,
+        SemanticAtomicRmwOpV1::Subtract => AtomicKind::Subtract,
+        SemanticAtomicRmwOpV1::BitAnd => AtomicKind::BitAnd,
+        SemanticAtomicRmwOpV1::BitNand => return None,
+        SemanticAtomicRmwOpV1::BitOr => AtomicKind::BitOr,
+        SemanticAtomicRmwOpV1::BitXor => AtomicKind::BitXor,
+        SemanticAtomicRmwOpV1::SignedMaximum if scalar.is_signed_integer() => AtomicKind::Max,
+        SemanticAtomicRmwOpV1::SignedMinimum if scalar.is_signed_integer() => AtomicKind::Min,
+        SemanticAtomicRmwOpV1::UnsignedMaximum if !scalar.is_signed_integer() => AtomicKind::Max,
+        SemanticAtomicRmwOpV1::UnsignedMinimum if !scalar.is_signed_integer() => AtomicKind::Min,
+        SemanticAtomicRmwOpV1::SignedMaximum
+        | SemanticAtomicRmwOpV1::SignedMinimum
+        | SemanticAtomicRmwOpV1::UnsignedMaximum
+        | SemanticAtomicRmwOpV1::UnsignedMinimum => return None,
+    })
+}
+
+const fn lower_atomic_ordering(ordering: SemanticAtomicOrderingV1) -> MemoryOrdering {
+    match ordering {
+        SemanticAtomicOrderingV1::Relaxed => MemoryOrdering::Relaxed,
+        SemanticAtomicOrderingV1::Release => MemoryOrdering::Release,
+        SemanticAtomicOrderingV1::Acquire => MemoryOrdering::Acquire,
+        SemanticAtomicOrderingV1::AcquireRelease => MemoryOrdering::AcquireRelease,
+        SemanticAtomicOrderingV1::SequentiallyConsistent => MemoryOrdering::SequentiallyConsistent,
+    }
+}
+
+const fn lower_atomic_scope(scope: SemanticAtomicScopeV1) -> Option<SynchronizationScope> {
+    match scope {
+        SemanticAtomicScopeV1::Workgroup => Some(SynchronizationScope::Workgroup),
+        SemanticAtomicScopeV1::Agent => Some(SynchronizationScope::Device),
+        SemanticAtomicScopeV1::System => Some(SynchronizationScope::System),
+        SemanticAtomicScopeV1::SingleThread | SemanticAtomicScopeV1::Device => None,
     }
 }
 

@@ -87,6 +87,7 @@ impl TypedDescriptorRootV1 {
 enum DescriptorArgumentKindV1 {
     SharedSlice(ScalarTypeV1),
     DisjointSlice(ScalarTypeV1),
+    GlobalMutPointer(ScalarTypeV1),
     Scalar(ScalarTypeV1),
 }
 
@@ -263,6 +264,9 @@ fn typed_descriptor_roots_from_collection_with_policy<'tcx>(
                                             GeneralTypedArgumentKindV3::DisjointSlice(_) => {
                                                 AccessMode::ReadWrite
                                             }
+                                            GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+                                                AccessMode::ReadWrite
+                                            }
                                         },
                                         offset: u32::try_from(field.offset()).map_err(|_| {
                                             CompilerDescriptorError::ArgumentOffsetOverflow {
@@ -343,6 +347,9 @@ fn descriptor_argument_kind(kind: GeneralTypedArgumentKindV3) -> DescriptorArgum
         GeneralTypedArgumentKindV3::SharedSlice(_) => DescriptorArgumentKindV1::SharedSlice(scalar),
         GeneralTypedArgumentKindV3::DisjointSlice(_) => {
             DescriptorArgumentKindV1::DisjointSlice(scalar)
+        }
+        GeneralTypedArgumentKindV3::GlobalMutPointer(_) => {
+            DescriptorArgumentKindV1::GlobalMutPointer(scalar)
         }
     }
 }
@@ -449,7 +456,6 @@ fn validate_production_v1_descriptor_evidence(
     use fe2o3_artifacts::{RustDisjointIndexSpaceV1, RustSourceTypeShapeV1};
     use fe2o3_kernel_ir::{
         AccessMode as KirAccessMode, AddressSpace, FormalMemoryAccessKind, FormalParameterKind,
-        Type as KirType,
     };
     use fe2o3_mir_model::semantic_mir_v1::{
         SemanticCallableDeclV1, SemanticCompilerIntrinsicOperationV1, SemanticDisjointIndexSpaceV1,
@@ -520,22 +526,8 @@ fn validate_production_v1_descriptor_evidence(
         .zip(&entry.signature.parameters)
         .enumerate()
     {
-        let exact_kernel_type = match (root_argument.kind, kernel_type) {
-            (DescriptorArgumentKindV1::Scalar(scalar), KirType::Scalar(actual)) => {
-                descriptor_scalar_to_kernel_ir(scalar) == Some(*actual)
-            }
-            (DescriptorArgumentKindV1::SharedSlice(scalar), KirType::Slice(actual)) => {
-                actual.address_space == AddressSpace::Global
-                    && actual.access == KirAccessMode::ReadOnly
-                    && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
-            }
-            (DescriptorArgumentKindV1::DisjointSlice(scalar), KirType::Slice(actual)) => {
-                actual.address_space == AddressSpace::Global
-                    && actual.access == KirAccessMode::ReadWrite
-                    && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
-            }
-            _ => false,
-        };
+        let exact_kernel_type =
+            production_descriptor_argument_matches_kernel_type_v1(root_argument.kind, kernel_type);
         if !exact_kernel_type {
             return Err(CompilerDescriptorError::ProductionDescriptorMismatch(
                 "typed descriptor/Kernel IR argument correspondence",
@@ -682,10 +674,17 @@ fn validate_production_v1_descriptor_evidence(
         let expected_access = match argument.kind {
             DescriptorArgumentKindV1::SharedSlice(_) => KirAccessMode::ReadOnly,
             DescriptorArgumentKindV1::DisjointSlice(_) => KirAccessMode::ReadWrite,
+            DescriptorArgumentKindV1::GlobalMutPointer(_) => KirAccessMode::ReadWrite,
+            DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
+        };
+        let expected_kind = match argument.kind {
+            DescriptorArgumentKindV1::SharedSlice(_)
+            | DescriptorArgumentKindV1::DisjointSlice(_) => FormalParameterKind::Slice,
+            DescriptorArgumentKindV1::GlobalMutPointer(_) => FormalParameterKind::Pointer,
             DescriptorArgumentKindV1::Scalar(_) => unreachable!(),
         };
         if allocation.value() != body.parameters[index]
-            || allocation.kind() != FormalParameterKind::Slice
+            || allocation.kind() != expected_kind
             || allocation.address_space() != AddressSpace::Global
             || allocation.access() != expected_access
         {
@@ -727,6 +726,35 @@ fn validate_production_v1_descriptor_evidence(
         }
     }
     Ok(geometry)
+}
+
+fn production_descriptor_argument_matches_kernel_type_v1(
+    descriptor: DescriptorArgumentKindV1,
+    kernel_type: &fe2o3_kernel_ir::Type,
+) -> bool {
+    use fe2o3_kernel_ir::{AccessMode as KirAccessMode, AddressSpace, Type as KirType};
+
+    match (descriptor, kernel_type) {
+        (DescriptorArgumentKindV1::Scalar(scalar), KirType::Scalar(actual)) => {
+            descriptor_scalar_to_kernel_ir(scalar) == Some(*actual)
+        }
+        (DescriptorArgumentKindV1::SharedSlice(scalar), KirType::Slice(actual)) => {
+            actual.address_space == AddressSpace::Global
+                && actual.access == KirAccessMode::ReadOnly
+                && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+        }
+        (DescriptorArgumentKindV1::DisjointSlice(scalar), KirType::Slice(actual)) => {
+            actual.address_space == AddressSpace::Global
+                && actual.access == KirAccessMode::ReadWrite
+                && actual.element.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+        }
+        (DescriptorArgumentKindV1::GlobalMutPointer(scalar), KirType::Pointer(actual)) => {
+            actual.address_space == AddressSpace::Global
+                && actual.access == KirAccessMode::ReadWrite
+                && actual.pointee.as_scalar() == descriptor_scalar_to_kernel_ir(scalar)
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn validate_production_v1_semantic_ownership_evidence(
@@ -792,6 +820,9 @@ pub(crate) fn validate_production_v1_semantic_ownership_evidence(
             DescriptorArgumentKindV1::DisjointSlice(_) => {
                 SemanticSourceArgumentOwnershipV1::ExclusiveOwner
             }
+            DescriptorArgumentKindV1::GlobalMutPointer(_) => {
+                SemanticSourceArgumentOwnershipV1::ExclusiveOwner
+            }
         };
         let exact_abi_mode = matches!(
             (argument.layout.abi_class(), semantic_abi.mode()),
@@ -831,7 +862,9 @@ fn rust_ownership_discharges_runtime_alias_v1(
         return false;
     };
     matches!(left, DescriptorArgumentKindV1::DisjointSlice(_))
+        || matches!(left, DescriptorArgumentKindV1::GlobalMutPointer(_))
         || matches!(right, DescriptorArgumentKindV1::DisjointSlice(_))
+        || matches!(right, DescriptorArgumentKindV1::GlobalMutPointer(_))
 }
 
 fn descriptor_scalar_to_kernel_ir(scalar: ScalarTypeV1) -> Option<fe2o3_kernel_ir::ScalarType> {
@@ -1347,6 +1380,15 @@ fn construct_compiler_descriptor_source_with_profile_v1(
                             argument.offset,
                         )
                     }
+                    DescriptorArgumentKindV1::GlobalMutPointer(_) => {
+                        LogicalArgumentV1::global_mut_pointer(
+                            source_index,
+                            name,
+                            source_type,
+                            device_layout,
+                            argument.offset,
+                        )
+                    }
                 }
                 .map_err(CompilerDescriptorError::Validation)
             })
@@ -1733,6 +1775,10 @@ fn descriptor_records(
             SourceTypeRecordV1::new(SourceTypeDescriptorV1::disjoint_slice(scalar)),
             DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::disjoint_slice(scalar)),
         ),
+        DescriptorArgumentKindV1::GlobalMutPointer(scalar) => (
+            SourceTypeRecordV1::new(SourceTypeDescriptorV1::global_mut_pointer(scalar)),
+            DeviceLayoutRecordV1::new(DeviceLayoutDescriptorV1::global_mut_pointer(scalar)),
+        ),
     }
 }
 
@@ -1766,6 +1812,13 @@ fn descriptor_capabilities(
                 // Exact target binding is represented by the descriptor table's
                 // device target, not as an executable kernel capability.
             }
+            TargetCapability::Extension { namespace, name }
+                if namespace == fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    && name == fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME =>
+            {
+                // The closed diagnostic contract is authenticated by Kernel IR
+                // and target lowering. Descriptor V1 has no diagnostic tag.
+            }
             TargetCapability::Subgroups | TargetCapability::SubgroupSize(64) => {
                 result.insert(CapabilityV1::Subgroup);
                 result.insert(CapabilityV1::AmdWave);
@@ -1777,6 +1830,9 @@ fn descriptor_capabilities(
                 if allow_workgroup_memory =>
             {
                 result.insert(CapabilityV1::WorkgroupMemory);
+            }
+            TargetCapability::Atomic { .. } => {
+                result.insert(CapabilityV1::Atomics);
             }
             TargetCapability::BFloat16 if allow_exact_tiled_matrix => {
                 result.insert(CapabilityV1::MatrixMultiply);
@@ -2760,6 +2816,31 @@ mod tests {
         .unwrap()
     }
 
+    fn global_mut_pointer_layout() -> RustLayoutEvidenceV1 {
+        RustLayoutEvidenceV1::new(
+            RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(
+                RustScalarElementTypeV1::F32,
+            )),
+            RustcAbiClassV1::Scalar,
+            PointerWidth::Bits64,
+            8,
+            8,
+            vec![
+                RustPhysicalComponentV1::new(
+                    0,
+                    8,
+                    8,
+                    RustPhysicalComponentKindV1::Pointer {
+                        mutability: RustPointerMutabilityV1::Mut,
+                        pointee: RustScalarElementTypeV1::F32,
+                    },
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
     fn descriptor_argument(
         index: usize,
         kind: DescriptorArgumentKindV1,
@@ -2769,6 +2850,9 @@ mod tests {
             DescriptorArgumentKindV1::Scalar(_) => (scalar_layout(), AccessMode::ByValue),
             DescriptorArgumentKindV1::SharedSlice(_) => (layout(false), AccessMode::ReadOnly),
             DescriptorArgumentKindV1::DisjointSlice(_) => (layout(true), AccessMode::ReadWrite),
+            DescriptorArgumentKindV1::GlobalMutPointer(_) => {
+                (global_mut_pointer_layout(), AccessMode::ReadWrite)
+            }
         };
         TypedDescriptorArgumentV1 {
             name: format!("arg{index}"),
@@ -2909,6 +2993,50 @@ mod tests {
         assert!(!rust_ownership_discharges_runtime_alias_v1(
             2, 8, &arguments
         ));
+    }
+
+    #[test]
+    fn production_descriptor_requires_exact_global_mut_pointer_kernel_type() {
+        use fe2o3_kernel_ir::{
+            AccessMode as KirAccessMode, AddressSpace, ScalarType as KirScalar, Type as KirType,
+        };
+
+        let descriptor = DescriptorArgumentKindV1::GlobalMutPointer(ScalarTypeV1::U32);
+        let exact = KirType::pointer(
+            KirType::Scalar(KirScalar::U32),
+            AddressSpace::Global,
+            KirAccessMode::ReadWrite,
+        );
+        assert!(production_descriptor_argument_matches_kernel_type_v1(
+            descriptor, &exact
+        ));
+
+        for hostile in [
+            KirType::pointer(
+                KirType::Scalar(KirScalar::I32),
+                AddressSpace::Global,
+                KirAccessMode::ReadWrite,
+            ),
+            KirType::pointer(
+                KirType::Scalar(KirScalar::U32),
+                AddressSpace::Workgroup,
+                KirAccessMode::ReadWrite,
+            ),
+            KirType::pointer(
+                KirType::Scalar(KirScalar::U32),
+                AddressSpace::Global,
+                KirAccessMode::ReadOnly,
+            ),
+            KirType::slice(
+                KirType::Scalar(KirScalar::U32),
+                AddressSpace::Global,
+                KirAccessMode::ReadWrite,
+            ),
+        ] {
+            assert!(!production_descriptor_argument_matches_kernel_type_v1(
+                descriptor, &hostile
+            ));
+        }
     }
 
     fn module() -> Module {
@@ -3340,6 +3468,67 @@ mod tests {
             ),
             Err(CompilerDescriptorError::UnsupportedCapability(_))
         ));
+    }
+
+    #[test]
+    fn exact_kernel_ir_atomic_requirement_projects_to_descriptor_atomics() {
+        use fe2o3_kernel_ir::{AddressSpace, SynchronizationScope};
+
+        let mut module = Module::new("atomic_descriptor_capability_test");
+        module
+            .required_capabilities
+            .insert(TargetCapability::Atomic {
+                width_bits: 32,
+                address_space: AddressSpace::Global,
+                max_scope: SynchronizationScope::System,
+            });
+
+        assert_eq!(
+            descriptor_capabilities(&module, false, false).unwrap(),
+            vec![CapabilityV1::Atomics]
+        );
+
+        module
+            .required_capabilities
+            .insert(TargetCapability::Float64);
+        assert!(matches!(
+            descriptor_capabilities(&module, false, false),
+            Err(CompilerDescriptorError::UnsupportedCapability(_))
+        ));
+    }
+
+    #[test]
+    fn descriptor_capabilities_admit_only_the_exact_gfx942_diagnostic_contract() {
+        let exact = TargetCapability::Extension {
+            namespace: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE.to_owned(),
+            name: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+        };
+        let mut module = Module::new("diagnostic_descriptor_capability_test");
+        module.required_capabilities.insert(exact.clone());
+        assert!(
+            descriptor_capabilities(&module, false, false)
+                .unwrap()
+                .is_empty()
+        );
+
+        for hostile in [
+            TargetCapability::Extension {
+                namespace: "fe2o3.amdgpu.lookalike".to_owned(),
+                name: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAME.to_owned(),
+            },
+            TargetCapability::Extension {
+                namespace: fe2o3_kernel_ir::AMDGPU_GFX942_DIAGNOSTICS_CAPABILITY_NAMESPACE
+                    .to_owned(),
+                name: "diagnostics.gfx942.v2".to_owned(),
+            },
+        ] {
+            module.required_capabilities.clear();
+            module.required_capabilities.insert(hostile);
+            assert!(matches!(
+                descriptor_capabilities(&module, false, false),
+                Err(CompilerDescriptorError::UnsupportedCapability(_))
+            ));
+        }
     }
 
     #[test]

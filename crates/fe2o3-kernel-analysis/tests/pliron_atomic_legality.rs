@@ -4,7 +4,8 @@ use dialect_kernel::{
 };
 use fe2o3_kernel_analysis::{
     KernelCheckPassKindV1, KernelCheckStatusV1, MAX_PLIRON_ATOMIC_TARGET_CAPABILITIES_V1,
-    PlironAtomicLegalityFindingV1, PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1,
+    MAX_PLIRON_SYSTEM_COHERENT_ALLOCATIONS_V1, PlironAtomicLegalityFindingV1,
+    PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextV1,
     require_pliron_atomic_legality_with_target_before_lowering_v1,
     run_pliron_atomic_legality_check_v1, run_pliron_atomic_legality_check_with_target_v1,
 };
@@ -37,7 +38,15 @@ fn append<O: Op>(context: &Context, block: Ptr<BasicBlock>, operation: &O) {
 
 fn view(context: &mut Context, memory_space: MemorySpaceAttr) -> RankedViewOp {
     let view_type = RankedViewType::new(context, 32, true, vec![1]).unwrap();
-    RankedViewOp::new_in_space(context, view_type, vec![], memory_space).unwrap()
+    RankedViewOp::new_in_space_with_allocation_contract(
+        context,
+        view_type,
+        vec![],
+        memory_space,
+        1,
+        1,
+    )
+    .unwrap()
 }
 
 fn target(
@@ -231,6 +240,13 @@ fn system_scope_stays_incomplete_without_authenticated_allocation_coherence() {
             .to_string();
     assert!(diagnostic.contains("error[FE2O3-ATOMIC-002]"));
     assert!(diagnostic.contains("authenticated coherent-allocation provenance"));
+
+    let coherent = target
+        .with_system_coherent_allocations([1])
+        .expect("bounded coherent allocation");
+    let report = run_pliron_atomic_legality_check_with_target_v1(context, &function, &coherent);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
+    assert!(report.findings().is_empty());
 }
 
 #[test]
@@ -260,5 +276,19 @@ fn target_capability_context_is_bounded_and_rejects_invalid_claims() {
             MAX_PLIRON_ATOMIC_TARGET_CAPABILITIES_V1 + 1
         ))
         .is_err()
+    );
+    assert!(
+        PlironAtomicTargetContextV1::new([valid])
+            .unwrap()
+            .with_system_coherent_allocations([0])
+            .is_err()
+    );
+    assert!(
+        PlironAtomicTargetContextV1::new([valid])
+            .unwrap()
+            .with_system_coherent_allocations(
+                1..=u64::try_from(MAX_PLIRON_SYSTEM_COHERENT_ALLOCATIONS_V1 + 1).unwrap(),
+            )
+            .is_err()
     );
 }

@@ -827,7 +827,7 @@ fn hostile_atomic_source_and_compiler_mutations_fail_closed() {
             "atomic-terminal-substitution",
             mutation(
                 ATOMIC_SOURCE,
-                "let lane = thread::thread_idx_x() as usize;",
+                "let lane = thread::index_1d().get();",
                 "let lane = thread::block_dim_x() as usize;",
             ),
         ),

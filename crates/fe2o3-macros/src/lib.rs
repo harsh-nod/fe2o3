@@ -4,11 +4,11 @@ mod control_flow_v1;
 
 use fe2o3_artifacts::{
     AbiField, AbiKind, AbiLayout, Access, AddressSpace, AliasClass, ArgumentOwnership, BlockSize,
-    DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestAlgorithm, DigestBytes, Dimensions,
-    LaunchContract, Mutability, Name, PointerWidth, RustDisjointIndexSpaceV1, RustLayoutEvidenceV1,
-    RustPhysicalComponentKindV1, RustPhysicalComponentV1, RustPointerMutabilityV1,
-    RustScalarElementTypeV1, RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1,
-    ScalarType, TypeIdentity, derive_generated_host_contract_identity_v1,
+    DigestBytes, Dimensions, LaunchContract, Mutability, Name, PointerWidth,
+    RustDisjointIndexSpaceV1, RustLayoutEvidenceV1, RustPhysicalComponentKindV1,
+    RustPhysicalComponentV1, RustPointerMutabilityV1, RustScalarElementTypeV1,
+    RustSourceTypeShapeV1, RustTypeEvidenceV1, RustcAbiClassV1, ScalarType, TypeIdentity,
+    derive_generated_host_contract_identity_v1,
 };
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
@@ -368,10 +368,6 @@ const GENERAL_TYPED_WAVE64_BLOCK_V1: [u32; 3] = [64, 1, 1];
 const GENERAL_TYPED_POINTER_SIZE_V1: u64 = 8;
 const GENERAL_TYPED_POINTER_ALIGNMENT_V1: u32 = 8;
 const GENERAL_TYPED_SLICE_SIZE_V1: u64 = 16;
-const GENERAL_TYPED_GLOBAL_MUT_POINTER_TYPE_DOMAIN_V1: &[u8] =
-    b"FE2O3/RUST-TYPE-EVIDENCE/DEVICE-GLOBAL-MUT-PTR/V1\0";
-const GENERAL_TYPED_GLOBAL_MUT_POINTER_LAYOUT_DOMAIN_V1: &[u8] =
-    b"FE2O3/RUST-LAYOUT-EVIDENCE/DEVICE-GLOBAL-MUT-PTR/V1\0";
 const KERNEL_FRONTEND_REGISTRATION_PREFIX_V1: &str = "__fe2o3_kernel_frontend_contract_v1_";
 const KERNEL_FRONTEND_REGISTRATION_MAGIC_V1: u64 = u64::from_le_bytes(*b"FE2O3KFA");
 const KERNEL_FRONTEND_REGISTRATION_VERSION_V1: u16 = 1;
@@ -3011,42 +3007,27 @@ fn general_typed_type_identity_v1(argument: GeneralTypedArgumentKindV1) -> TypeI
 }
 
 fn general_typed_global_mut_pointer_type_identity_v1(scalar: GeneralTypedScalarV1) -> TypeIdentity {
-    let scalar_tag = general_typed_scalar_identity_tag_v1(scalar);
-    let mut type_preimage = Vec::from(GENERAL_TYPED_GLOBAL_MUT_POINTER_TYPE_DOMAIN_V1);
-    type_preimage.extend_from_slice(&1_u16.to_le_bytes());
-    type_preimage.push(scalar_tag);
-    let rust_type_digest = DigestAlgorithm::Sha256.calculate(&type_preimage).bytes();
-    let rust_type = DeclaredRustTypeIdentity::from_untrusted_bytes(rust_type_digest);
-
-    let mut layout_preimage = Vec::from(GENERAL_TYPED_GLOBAL_MUT_POINTER_LAYOUT_DOMAIN_V1);
-    layout_preimage.extend_from_slice(&1_u16.to_le_bytes());
-    layout_preimage.extend_from_slice(rust_type_digest.as_bytes());
-    layout_preimage.push(2); // 64-bit pointer width.
-    layout_preimage.extend_from_slice(&GENERAL_TYPED_POINTER_SIZE_V1.to_le_bytes());
-    layout_preimage.extend_from_slice(&GENERAL_TYPED_POINTER_ALIGNMENT_V1.to_le_bytes());
-    layout_preimage.push(2); // Mutable physical pointer.
-    layout_preimage.push(scalar_tag);
-    let layout = DigestAlgorithm::Sha256.calculate(&layout_preimage).bytes();
-
-    TypeIdentity::new(
-        rust_type,
-        DeclaredRustLayoutIdentity::from_untrusted_bytes(layout),
+    let scalar = scalar.rust_layout_scalar();
+    let pointer = RustPhysicalComponentV1::new(
+        0,
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        RustPhysicalComponentKindV1::Pointer {
+            mutability: RustPointerMutabilityV1::Mut,
+            pointee: scalar,
+        },
     )
-}
-
-const fn general_typed_scalar_identity_tag_v1(scalar: GeneralTypedScalarV1) -> u8 {
-    match scalar {
-        GeneralTypedScalarV1::I8 => 1,
-        GeneralTypedScalarV1::U8 => 2,
-        GeneralTypedScalarV1::I16 => 3,
-        GeneralTypedScalarV1::U16 => 4,
-        GeneralTypedScalarV1::I32 => 5,
-        GeneralTypedScalarV1::U32 => 6,
-        GeneralTypedScalarV1::I64 => 7,
-        GeneralTypedScalarV1::U64 => 8,
-        GeneralTypedScalarV1::F32 => 10,
-        GeneralTypedScalarV1::F64 => 11,
-    }
+    .expect("the fixed V1 global pointer component is valid");
+    RustLayoutEvidenceV1::new(
+        RustTypeEvidenceV1::new(RustSourceTypeShapeV1::global_mut_pointer(scalar)),
+        RustcAbiClassV1::Scalar,
+        PointerWidth::Bits64,
+        GENERAL_TYPED_POINTER_SIZE_V1,
+        GENERAL_TYPED_POINTER_ALIGNMENT_V1,
+        vec![pointer],
+    )
+    .expect("the fixed V1 global pointer layout is valid")
+    .type_identity()
 }
 
 fn general_typed_scalar_type_identity_v1(scalar: GeneralTypedScalarV1) -> TypeIdentity {

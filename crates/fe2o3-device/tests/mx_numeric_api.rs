@@ -95,7 +95,7 @@ fn gfx942_admits_only_reviewed_fnuz_formats() {
 }
 
 #[test]
-fn numeric_admission_fails_closed_for_mx_and_other_targets() {
+fn numeric_admission_is_target_exact_for_mx_and_fnuz() {
     let gfx942 = AmdTargetId::parse("gfx942:xnack-").unwrap();
     let capabilities = gfx942.capabilities().unwrap();
     for format in [MxFormat::Fp8, MxFormat::Bf8] {
@@ -105,7 +105,7 @@ fn numeric_admission_fails_closed_for_mx_and_other_targets() {
         );
     }
 
-    for target_text in ["gfx90a", "gfx950", "gfx1100"] {
+    for target_text in ["gfx90a", "gfx1100"] {
         let target = AmdTargetId::parse(target_text).unwrap();
         let capabilities = target.capabilities().unwrap();
         for format in [Fp8Format::E4M3Fnuz, Fp8Format::E5M2Fnuz] {
@@ -120,5 +120,14 @@ fn numeric_admission_fails_closed_for_mx_and_other_targets() {
                 AdvancedCapabilityStatus::Supported
             );
         }
+    }
+
+    let gfx950 = AmdTargetId::parse("gfx950").unwrap();
+    let capabilities = gfx950.capabilities().unwrap();
+    for format in [MxFormat::Fp8, MxFormat::Bf8] {
+        assert_eq!(
+            capabilities.mx_format_support(format),
+            AdvancedCapabilityStatus::Supported
+        );
     }
 }

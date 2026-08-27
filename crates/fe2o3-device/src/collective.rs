@@ -33,6 +33,13 @@ pub const GFX942_STATIC_LDS_U32X256_BYTES: u32 = GFX942_STATIC_LDS_U32X256_SLOTS
 /// Required alignment of [`Gfx942StaticLdsU32x256`].
 pub const GFX942_STATIC_LDS_U32X256_ALIGNMENT: u32 = 4;
 
+const fn supported_workgroup_collective_size(size: u64) -> bool {
+    if size == 0 || size > MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE as u64 {
+        return false;
+    }
+    size & (size - 1) == 0
+}
+
 mod sealed {
     pub trait CollectiveElement {}
 }
@@ -331,10 +338,7 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
         lds: DynamicLds<'group, T, LdsUninitialized>,
     ) -> Result<Self, WorkgroupCollectiveScratchError> {
         let size = group.size();
-        if size == 0
-            || size > u64::from(MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE)
-            || !size.is_power_of_two()
-        {
+        if !supported_workgroup_collective_size(size) {
             return Err(WorkgroupCollectiveScratchError::UnsupportedWorkgroupSize { size });
         }
         let required = size as u32;
@@ -369,10 +373,7 @@ impl<'group, T: Gfx942CollectiveElement> WorkgroupCollectiveScratch<'group, T> {
         slots: u32,
     ) -> Result<Self, WorkgroupCollectiveScratchError> {
         let size = group.size();
-        if size == 0
-            || size > u64::from(MAX_GFX942_WORKGROUP_COLLECTIVE_SIZE)
-            || !size.is_power_of_two()
-        {
+        if !supported_workgroup_collective_size(size) {
             return Err(WorkgroupCollectiveScratchError::UnsupportedWorkgroupSize { size });
         }
         let required = size as u32;

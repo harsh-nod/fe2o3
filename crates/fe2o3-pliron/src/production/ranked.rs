@@ -45,10 +45,12 @@ use dialect_proof::{
 };
 use fe2o3_kernel_analysis::{
     HierarchicalOwnershipReportV1, MAX_RANKED_BOUNDS_BLOCKS, MAX_RANKED_BOUNDS_OPERATIONS,
-    PlironAtomicLegalityReportV1, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
+    PlironAtomicLegalityReportV1, PlironAtomicTargetCapabilityV1, PlironAtomicTargetContextErrorV1,
+    PlironAtomicTargetContextV1, PlironBarrierReportV1, PlironSemanticRefinementReportV1,
     PlironTensorLayoutReportV1, PlironWorkgroupMemoryReportV1, ProductionPlironPreloweringErrorV2,
     ProductionPlironPreloweringReportV2, RankedBoundsReportV1, RankedRaceReportV1,
     require_production_pliron_checks_before_lowering_v2,
+    require_production_pliron_checks_with_atomic_target_before_lowering_v2,
 };
 use fe2o3_kernel_ir::{MatrixElement, TensorLayoutContractV1};
 use pliron::{
@@ -3727,7 +3729,19 @@ impl ProductionPlironSessionV1 {
     ) -> Result<ProductionPlironPreloweringReportV2, ProductionSessionErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let function = FuncOp::from_operation(function);
-            require_production_pliron_checks_before_lowering_v2(&self.inner.context, &function)
+            match self.atomic_target.as_ref() {
+                Some(target) => {
+                    require_production_pliron_checks_with_atomic_target_before_lowering_v2(
+                        &self.inner.context,
+                        &function,
+                        target,
+                    )
+                }
+                None => require_production_pliron_checks_before_lowering_v2(
+                    &self.inner.context,
+                    &function,
+                ),
+            }
         }));
         match result {
             Ok(Ok(report)) => Ok(report),
@@ -5547,6 +5561,7 @@ impl ProductionRankedKernelLoweringInputV1 {
 #[derive(Debug)]
 pub enum ProductionRankedCompileErrorV1 {
     Registration(NameError),
+    AtomicTarget(PlironAtomicTargetContextErrorV1),
     Context(ContextBuildError),
     Session(ProductionSessionErrorV1),
 }
@@ -5556,6 +5571,12 @@ impl fmt::Display for ProductionRankedCompileErrorV1 {
         match self {
             Self::Registration(_) => {
                 formatter.write_str("kernel dialect registration construction failed")
+            }
+            Self::AtomicTarget(error) => {
+                write!(
+                    formatter,
+                    "gfx942 atomic target construction failed: {error}"
+                )
             }
             Self::Context(error) => write!(
                 formatter,
@@ -5569,7 +5590,7 @@ impl fmt::Display for ProductionRankedCompileErrorV1 {
 impl Error for ProductionRankedCompileErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Registration(_) | Self::Context(_) => None,
+            Self::Registration(_) | Self::AtomicTarget(_) | Self::Context(_) => None,
             Self::Session(error) => Some(error),
         }
     }
@@ -5833,6 +5854,30 @@ pub fn compile_ranked_kernel_for_lowering_v1(
     construction: ProductionConstructionV1,
     limits: ProductionSessionLimitsV1,
 ) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    compile_ranked_kernel_for_lowering_with_target_v1(construction, limits, None)
+}
+
+pub fn compile_ranked_kernel_for_gfx942_lowering_v1(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    system_coherent_allocations: impl IntoIterator<Item = u64>,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
+    let target = PlironAtomicTargetContextV1::new([PlironAtomicTargetCapabilityV1::new(
+        32,
+        MemorySpaceAttr::Global,
+        AtomicScopeAttr::System,
+    )
+    .map_err(ProductionRankedCompileErrorV1::AtomicTarget)?])
+    .and_then(|target| target.with_system_coherent_allocations(system_coherent_allocations))
+    .map_err(ProductionRankedCompileErrorV1::AtomicTarget)?;
+    compile_ranked_kernel_for_lowering_with_target_v1(construction, limits, Some(target))
+}
+
+fn compile_ranked_kernel_for_lowering_with_target_v1(
+    construction: ProductionConstructionV1,
+    limits: ProductionSessionLimitsV1,
+    atomic_target: Option<PlironAtomicTargetContextV1>,
+) -> Result<ProductionRankedKernelLoweringInputV1, ProductionRankedCompileErrorV1> {
     let kernel_registration = dialect_kernel::dialect_registration()
         .map_err(ProductionRankedCompileErrorV1::Registration)?;
     let gpu_registration = dialect_gpu::dialect_registration()
@@ -5844,6 +5889,9 @@ pub fn compile_ranked_kernel_for_lowering_v1(
         [kernel_registration, gpu_registration, proof_registration],
     )
     .map_err(ProductionRankedCompileErrorV1::Context)?;
+    if let Some(target) = atomic_target {
+        session.bind_atomic_target(target);
+    }
     let registered = session
         .register_construction(construction)
         .map_err(ProductionRankedCompileErrorV1::Session)?;
