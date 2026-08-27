@@ -20,4 +20,3 @@ sha2.workspace = true
 
 [dev-dependencies]
 dialect-amdgcn.workspace = true
-fe2o3-amdgcn-model.workspace = true

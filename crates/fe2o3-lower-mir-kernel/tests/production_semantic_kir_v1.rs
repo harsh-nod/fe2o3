@@ -1,5 +1,5 @@
+use dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir;
 use dialect_kernel::IndexBinaryKindAttr;
-use fe2o3_amdgcn_model::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir;
 use fe2o3_kernel_ir::{
     AmdGpuDiagnosticOperation, BinaryOp, BlockId, CheckedBinaryOperator, LaunchDomain,
     OperationKind, ScalarType, TargetCapability, Terminator, Type, WaveWidth, WorkgroupSize,
