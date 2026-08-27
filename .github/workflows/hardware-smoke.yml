@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       confirm_hardware:
-        description: Confirm this run may execute kernels on the GPU
+        description: Confirm this run may create KFD memory and queue resources
         required: true
         default: false
         type: boolean
       target:
-        description: Optional AMDGPU target; leave empty to detect with rocminfo
-        required: false
-        default: ''
+        description: KFD admission target (currently gfx942)
+        required: true
+        default: gfx942
         type: string
 
 permissions:
@@ -24,7 +24,7 @@ concurrency:
 jobs:
   smoke:
     if: ${{ inputs.confirm_hardware }}
-    name: Build and run GPU examples
+    name: Validate KFD resources on every GPU
     runs-on: [self-hosted, linux, x64, rocm, amd-gpu]
     environment: gpu-hardware
     timeout-minutes: 120
@@ -39,7 +39,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
 
-      - name: Run guarded GPU smoke suite
+      - name: Run guarded KFD hardware suite
         run: scripts/ci-local.sh hardware-smoke
 
       - name: Upload smoke failure artifacts

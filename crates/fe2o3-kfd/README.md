@@ -164,7 +164,8 @@ The `live-validation` feature is non-production only. It enables the
 `kfd-host-visible-memory` example and a single-threaded fork/mincore negative
 that verifies the DONTFORK VMA is absent in the child. The example always
 launches the selected-GPU transaction in an isolated subprocess and creates no
-queue or reset.
+queue or reset. Pass one decimal or `0x` unique ID, or pass `--all` to run one
+isolated child for every topology GPU with the same requested byte count.
 
 ## R2 shared typed GTT memory slice
 
@@ -338,7 +339,9 @@ guard remains held through resource return. Drop performs none of those native
 operations. The isolated `kfd-compute-aql-queue` example confirms this lifecycle
 live on the selected MI300X while publishing zero packets and performing zero
 MMIO stores. It also forks to confirm the doorbell and all eight shadow VMAs
-are absent in the child. `kfd-compute-aql-queue-policy` links the default
+are absent in the child. It accepts one unique ID or `--all`; the latter uses a
+separate process and queue lifecycle for every topology GPU.
+`kfd-compute-aql-queue-policy` links the default
 production closure for the no-ROCm ELF audit.
 
 The private bounded exception wait is one-shot and terminal. WAIT result and

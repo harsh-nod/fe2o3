@@ -306,9 +306,10 @@ target lowering, and host execution into explicit ownership boundaries:
   request through one configured backend and has no selector or fallback slot.
   Inspection is an observation of that transaction rather than another
   compiler implementation. The production rustc backend likewise has no
-  selector. Temporary non-publishing migration oracles are compiled
-  only by the `qualification-oracles-test-only` backend feature and selected
-  by `FE2O3_QUALIFICATION_ORACLE_V1` in isolated integration tests.
+  selector. Temporary non-publishing migration oracles compile only into the
+  feature-enabled library test binary; no backend dylib can select them. The
+  shard policy inventories selector-bearing integration targets as retired
+  migration debt and prevents them from entering production CI.
 - General kernel checks: `fe2o3-kernel-analysis` owns the fixed pre-lowering
   Kernel IR sequence for structure, control flow, bounds obligations, race
   freedom, barrier convergence, and workgroup-memory initialization/reuse.
@@ -412,12 +413,11 @@ Safe ownership of resources used by asynchronous copies is documented in
   falls back to a workload-specific implementation. Historical emitters and
   exact workload paths remain only as migration evidence until equivalent
   production coverage permits their deletion.
-- A backend built with `qualification-oracles-test-only` and
-  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` exercises the exact `fill` or
-  three-slice `vecadd` kernel through imported MIR, canonical target-neutral
-  kernel IR, verification, exact-shape legalization, G1 AMDGPU lowering, and
-  the qualification artifact transaction. The oracle,
-  ABI, witness dataflow, bounds control flow, and accepted kernel shapes are
+- The feature-enabled library test binary exercises exact `fill`, `vecadd`,
+  and other retained oracle fixtures through imported MIR, canonical
+  target-neutral kernel IR, verification, exact-shape legalization, and G1
+  AMDGPU lowering without exposing an executable compiler selector. The
+  oracle, ABI, witness dataflow, bounds control flow, and accepted shapes are
   fail closed: invalid values and unsupported kernels remove stale generation
   artifacts and never fall back or acquire production publication authority.
 - `fe2o3-core` provides HIP-backed contexts, streams, device buffers, pinned
@@ -745,14 +745,14 @@ is complete, and the recorded runs grant no current production authority.
   `sanitize` and `debug` retain plan mode and can execute descriptor-pinned
   native ROCgdb under bounded supervision. ROCgdb precise-memory diagnostics
   are not a race, API, initialization, synchronization, or safety proof.
-  The opt-in S09 source-debug pilot builds one exact General V3 `alpha` profile
+  The historical S09 source-debug pilot built one exact General V3 `alpha` profile
   at O0 into an alpha-only COV6 HSACO for `gfx942:xnack-`. It binds inert
   semantic and build identity records to the physical `alpha`/`alpha.kd` pair,
   verifies linked DWARF, executes a dedicated controller over lengths 1, 255,
   256, 257, and 1023 with CPU-oracle and canary checks, and uses native ROCgdb
   to inspect scalar and aggregate arguments, a reference value, physical slice
   fields, and local `i`; tuple and array locals also carry located DWARF. The
-  checked-in lane produces only `local-capability-v2` evidence: it does not
+  archived lane produced only `local-capability-v2` evidence: it does not
   authenticate the compiler or runner, install production trust, materialize
   tuple/array runtime values at the fixed stop, cover optimized or general
   debugging, or provide a safety proof. Rows 45 and 46 and supplemental row S09
@@ -975,33 +975,29 @@ Run the repository validation lanes:
 scripts/ci-local.sh generic
 scripts/ci-local.sh generic-core
 scripts/ci-local.sh shard-policy
-scripts/ci-local.sh rustc-codegen-shard 01-control-flow
+scripts/ci-local.sh rustc-codegen-shard 04-memory-math-gemm
 scripts/ci-local.sh workspace-test
 VERUS=/absolute/path/to/verus scripts/ci-local.sh verus
-FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
-FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx1151 scripts/ci-local.sh hardware-smoke
+FE2O3_TARGET=gfx942 scripts/ci-local.sh rocm-compile
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx942 scripts/ci-local.sh hardware-smoke
 ```
 
 `generic` remains the complete serial generic gate. Hosted CI runs
-`generic-core` once and executes every target-isolated rustc-codegen integration
-test through the checked-in shard manifest. `shard-policy` derives the
-authoritative test-target set from locked Cargo metadata and rejects missing,
-duplicate, renamed, unknown, malformed, empty, or newly unassigned targets.
+`generic-core` once and executes every selector-free production integration
+target in the checked-in shard manifest. `shard-policy` derives the complete
+test-target set from locked Cargo metadata, requires an exact active-or-retired
+partition, and rejects overlap, missing, duplicate, renamed, unknown,
+malformed, empty, or newly unassigned targets. Retired targets are migration
+inventory, not executed evidence; their oracle logic runs only in library tests.
 Each hosted core or shard job uses separate Cargo and log directories; the
 stable `Generic validation` check succeeds only after the core and all shards
 succeed.
 
-Run the exact opt-in S09 local-capability lane on `gfx942:xnack-`. The evidence
-directory must be an absolute path that does not already exist:
-
-```bash
-FE2O3_ALLOW_S09_DEBUG=1 \
-FE2O3_LLVM_LINK_WORKER=/absolute/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-FE2O3_S09_EVIDENCE_DIR=/absolute/new-evidence-directory \
-  scripts/ci-local.sh s09-debug-hardware
-```
+The historical S09 hardware entry point is retired because its debug HSACO
+generator used the removed Worker V2 selector and HSA runtime. Its offline
+DWARF/transcript checkers remain tested; hardware evidence must be regenerated
+through a production Worker V3 compiler path and KFD runtime before the lane
+can be enabled again.
 
 `workspace-test` is the comprehensive local test gate. It runs all workspace
 test targets except `rustc-codegen-fe2o3`, then tests that package in a separate
@@ -1031,17 +1027,15 @@ To build or run one package directly:
 ```bash
 cargo run --locked -p cargo-fe2o3 -- build -p fe2o3-vecadd
 cargo run --locked -p cargo-fe2o3 -- run -p fe2o3-vecadd
-cargo test --locked -p rustc-codegen-fe2o3 \
-  --features qualification-oracles-test-only \
-  --test kernel_ir_codegen opt_in_vecadd_publishes_exact_g1_without_gpu \
-  -- --ignored --exact
+env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked \
+  -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --lib
 ```
 
 The first two commands enter the sole production route. The current vecadd
 application fails closed before dispatch because its Worker V3 application
 verifier has not yet been wired to the generated `Arguments`; it never falls
-back to the embedded V2 artifact. The third command is an isolated
-non-production qualification test. `FE2O3_CODEGEN_PIPELINE` is no longer
+back to the embedded V2 artifact. The third command is the isolated offline
+oracle fixture suite. `FE2O3_CODEGEN_PIPELINE` is no longer
 accepted, and a production backend rejects `FE2O3_QUALIFICATION_ORACLE_V1`.
 
 The retired manifest smoke command is not a production or direct-KFD path and

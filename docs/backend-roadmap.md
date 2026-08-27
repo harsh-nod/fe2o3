@@ -98,17 +98,14 @@ single-backend but is not yet the owner of the rustc production composition.
   optimizes, emits relocatable ELF through pinned upstream LLVM target-machine
   APIs, and links HSACO through in-process LLD library APIs. It does not use
   COMGR or a command-line compiler or linker.
-- In a backend built with `qualification-oracles-test-only`,
-  `FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1` selects the first integrated G1 qualification oracle:
-  imported device MIR is translated to canonical kernel IR, verified, strictly
-  legalized for the exact 1D `fill` shape, lowered by `fe2o3-amdgcn-model`
-  through the `dialect-amdgcn` compatibility facade, and published through the
-  existing transactional LLVM/object/HSACO path. Invalid selectors and
-  unsupported selected inputs fail without legacy fallback and remove stale
-  artifacts. With no oracle selected, compilation enters the sole production
-  route. `kernel-ir-v1` and workload-specific oracles require explicit
-  qualification selection and cannot complete a production device transaction.
-  The removed `FE2O3_CODEGEN_PIPELINE` environment is rejected.
+- `qualification-oracles-test-only` compiles retained G1 and workload-specific
+  oracle implementations only into the backend library test binary. Those
+  fixtures translate imported MIR to canonical kernel IR, verify and lower
+  their bounded shapes, and test transactional models without publishing or
+  becoming a backend route. Backend dylibs are feature invariant and reject
+  `FE2O3_QUALIFICATION_ORACLE_V1`; the removed `FE2O3_CODEGEN_PIPELINE`
+  environment is also rejected. Selector-bearing integration targets remain
+  explicit migration inventory outside production shards.
 - `fe2o3-amdgcn-model`, reached through the `dialect-amdgcn` compatibility
   facade, lowers that verified fill subset to deterministic AMDGPU LLVM. Its
   code-object regression checks target/features, ELF and metadata versions,

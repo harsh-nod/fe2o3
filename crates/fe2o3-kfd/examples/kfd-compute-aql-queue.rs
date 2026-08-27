@@ -1,17 +1,43 @@
 //! Isolated MI300X CREATE/doorbell-map/DESTROY validation without MMIO stores.
 
+use std::path::Path;
 use std::process::Command;
 
+use fe2o3_kfd::topology::discover_default_topology;
 use fe2o3_kfd::{DeviceSelector, GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, OpenedKfd};
 
 const CHILD_ENV: &str = "FE2O3_KFD_COMPUTE_AQL_QUEUE_CHILD";
+const USAGE: &str = "usage: kfd-compute-aql-queue (--all|<selected-unique-id>)";
 
-fn parse_u64(value: &str) -> Result<u64, Box<dyn std::error::Error>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GpuSelection {
+    All,
+    UniqueId(u64),
+}
+
+fn parse_u64(value: &str) -> Result<u64, String> {
     if let Some(hex) = value.strip_prefix("0x") {
-        Ok(u64::from_str_radix(hex, 16)?)
+        u64::from_str_radix(hex, 16)
+            .map_err(|error| format!("invalid selected unique ID `{value}`: {error}"))
     } else {
-        Ok(value.parse()?)
+        value
+            .parse()
+            .map_err(|error| format!("invalid selected unique ID `{value}`: {error}"))
     }
+}
+
+fn parse_selection(args: impl IntoIterator<Item = String>) -> Result<GpuSelection, String> {
+    let mut args = args.into_iter();
+    let selected = args.next().ok_or_else(|| USAGE.to_owned())?;
+    let selection = if selected == "--all" {
+        GpuSelection::All
+    } else {
+        GpuSelection::UniqueId(parse_u64(&selected)?)
+    };
+    if let Some(extra) = args.next() {
+        return Err(format!("unexpected argument `{extra}`; {USAGE}"));
+    }
+    Ok(selection)
 }
 
 fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
@@ -49,19 +75,84 @@ fn run_child(unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let unique = std::env::args()
-        .nth(1)
-        .ok_or("usage: kfd-compute-aql-queue <selected-unique-id>")?;
-    if std::env::var_os(CHILD_ENV).is_some() {
-        return run_child(parse_u64(&unique)?);
-    }
-    let status = Command::new(std::env::current_exe()?)
-        .arg(unique)
+fn run_isolated_child(executable: &Path, unique_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+    let status = Command::new(executable)
+        .arg(unique_id.to_string())
         .env(CHILD_ENV, "1")
         .status()?;
     if !status.success() {
-        return Err(format!("isolated compute-AQL queue child failed with {status}").into());
+        return Err(format!(
+            "isolated compute-AQL queue child for unique ID {unique_id:016x} failed with {status}"
+        )
+        .into());
     }
     Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let selection = parse_selection(std::env::args().skip(1))?;
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let GpuSelection::UniqueId(unique_id) = selection else {
+            return Err("isolated compute-AQL queue child requires one explicit unique ID".into());
+        };
+        return run_child(unique_id);
+    }
+
+    let unique_ids = match selection {
+        GpuSelection::All => {
+            let unique_ids = discover_default_topology()?
+                .topology()
+                .gpu_nodes()
+                .iter()
+                .map(|gpu| gpu.unique_id())
+                .collect::<Vec<_>>();
+            if unique_ids.is_empty() {
+                return Err("no topology GPU available for --all".into());
+            }
+            unique_ids
+        }
+        GpuSelection::UniqueId(unique_id) => vec![unique_id],
+    };
+    let executable = std::env::current_exe()?;
+    for unique_id in unique_ids {
+        run_isolated_child(&executable, unique_id)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GpuSelection, parse_selection};
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn explicit_unique_ids_accept_decimal_and_hex() {
+        assert_eq!(
+            parse_selection(args(&["42"])).unwrap(),
+            GpuSelection::UniqueId(42)
+        );
+        assert_eq!(
+            parse_selection(args(&["0x2a"])).unwrap(),
+            GpuSelection::UniqueId(42)
+        );
+    }
+
+    #[test]
+    fn all_is_an_explicit_selection() {
+        assert_eq!(
+            parse_selection(args(&["--all"])).unwrap(),
+            GpuSelection::All
+        );
+    }
+
+    #[test]
+    fn malformed_or_ambiguous_arguments_are_rejected() {
+        assert!(parse_selection(args(&[])).is_err());
+        assert!(parse_selection(args(&["not-an-id"])).is_err());
+        assert!(parse_selection(args(&["42", "extra"])).is_err());
+        assert!(parse_selection(args(&["--all", "extra"])).is_err());
+    }
 }

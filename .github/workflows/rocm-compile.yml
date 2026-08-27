@@ -4,10 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: AMDGPU target passed as FE2O3_TARGET
+        description: Exact production qualification target
         required: true
-        default: gfx1100
-        type: string
+        default: gfx942
+        type: choice
+        options:
+          - gfx942
 
 permissions:
   contents: read
@@ -18,7 +20,7 @@ concurrency:
 
 jobs:
   compile:
-    name: Compile examples for ${{ inputs.target }}
+    name: Validate production compilation for ${{ inputs.target }}
     runs-on: [self-hosted, linux, x64, rocm]
     timeout-minutes: 90
     env:
@@ -31,7 +33,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
 
-      - name: Compile examples and semantic marker fixtures
+      - name: Run production extraction and code-object checks
         run: scripts/ci-local.sh rocm-compile
 
       - name: Upload compiler failure artifacts

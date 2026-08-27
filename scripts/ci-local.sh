@@ -38,9 +38,6 @@ readonly RUNTIME_IDENTITY_ORACLE_TESTS="${REPO_ROOT}/scripts/tests/runtime_ident
 readonly RUNTIME_IDENTITY_ORACLE="${REPO_ROOT}/scripts/runtime-identity-oracle.sh"
 readonly RUNTIME_PURE_RUST_TARGET_DIR="${DEFAULT_CARGO_TARGET_ROOT}/runtime-pure-rust-policy"
 readonly CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"
-readonly GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS=4200
-readonly COLLECTED_CONTROL_FLOW_TIMEOUT_SECONDS=4200
-readonly COLLECTED_CONTROL_FLOW_TEST_THREADS=1
 readonly CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"
 readonly TEST_DRIVER_BINARY_ENV="FE2O3_TEST_CARGO_FE2O3_BIN"
 readonly TEST_DRIVER_SHA256_ENV="FE2O3_TEST_CARGO_FE2O3_SHA256"
@@ -146,9 +143,9 @@ Commands:
   parity-evidence Run parity, signed-attestation, and queue shell tests
   parity-production-immutable  Run opt-in root ext4/XFS ingestion test
   verus           Run positive and negative Verus proof fixtures; requires Verus
-  rocm-compile    Run bounded ROCm compiler qualification; requires ROCm
-  hardware-smoke  Run guarded hardware checks; requires an AMD GPU and opt-in
-  s09-debug-hardware  Run exact gfx942 direct-link and ROCgdb evidence; explicit opt-in
+  rocm-compile    Run bounded production ROCm compiler checks; requires ROCm
+  hardware-smoke  Run guarded KFD hardware checks; requires MI300X and opt-in
+  s09-debug-hardware  Retired until Worker V3/KFD debug evidence is available
 EOF
 }
 
@@ -271,12 +268,12 @@ validate_cargo_fe2o3_driver() {
   local canonical mode owner digest parent parent_mode parent_owner
 
   [[ -n "${CARGO_FE2O3_BINARY}" && -n "${CARGO_FE2O3_SHA256}" ]] || {
-    printf '%s\n' 'cargo-fe2o3 qualification driver is not prepared' >&2
+    printf '%s\n' 'cargo-fe2o3 sealed driver is not prepared' >&2
     return 2
   }
   [[ "${CARGO_FE2O3_BINARY}" == /* && -f "${CARGO_FE2O3_BINARY}" &&
     ! -L "${CARGO_FE2O3_BINARY}" && -x "${CARGO_FE2O3_BINARY}" ]] || {
-    printf 'cargo-fe2o3 qualification driver is not an absolute executable file: %s\n' \
+    printf 'cargo-fe2o3 sealed driver is not an absolute executable file: %s\n' \
       "${CARGO_FE2O3_BINARY}" >&2
     return 2
   }
@@ -293,7 +290,7 @@ validate_cargo_fe2o3_driver() {
     [[ "${parent_mode}" != 500 ]] || [[ "${parent_owner}" != "$(id -u)" ]] ||
     [[ "${digest}" != "${CARGO_FE2O3_SHA256}" ]]; then
     printf '%s\n' \
-      'cargo-fe2o3 qualification driver identity or private custody changed' >&2
+      'cargo-fe2o3 sealed driver identity or private custody changed' >&2
     return 2
   fi
 }
@@ -369,9 +366,6 @@ prepare_cargo_fe2o3_driver() {
 
   case "${driver_profile}" in
     production) ;;
-    # Qualification is a caller role, not a cargo-fe2o3 feature. The sealed
-    # driver remains byte-identical to the production-profile build.
-    qualification) ;;
     *)
       printf 'unknown cargo-fe2o3 driver profile: %s\n' \
         "${driver_profile}" >&2
@@ -450,7 +444,7 @@ PY
   built_sha256="${built_sha256%% *}"
   CARGO_FE2O3_DRIVER_ROOT="${TMPDIR}/fe2o3-ci-driver-${built_sha256}"
   [[ ! -e "${CARGO_FE2O3_DRIVER_ROOT}" && ! -L "${CARGO_FE2O3_DRIVER_ROOT}" ]] || {
-    printf 'private qualification driver root already exists: %s\n' \
+    printf 'private sealed driver root already exists: %s\n' \
       "${CARGO_FE2O3_DRIVER_ROOT}" >&2
     return 2
   }
@@ -821,55 +815,27 @@ run_rustc_codegen_lib_tests() {
   run_step rustc-codegen-lib-tests \
     env CARGO_PROFILE_DEV_DEBUG=1 \
       cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
-  run_step rustc-codegen-qualification-route-tests \
-    cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --lib qualification_selection::tests
-}
-
-run_rustc_codegen_test_driver() {
-  # Qualification tests must never execute Cargo's shared unversioned driver
-  # path: another nested build can replace it between validation and exec.
-  retire_cargo_fe2o3_driver
-  prepare_cargo_fe2o3_driver rustc-codegen-driver qualification
+  # Qualification implementations are inert offline fixtures. They compile
+  # only into this libtest binary and can never be selected by a backend dylib.
+  run_step rustc-codegen-offline-oracle-tests \
+    env CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" \
+        --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" --lib
 }
 
 run_rustc_codegen_target() {
   local test_target="$1"
-  validate_cargo_fe2o3_driver
   local -a command=(
     env CARGO_PROFILE_DEV_DEBUG=1
-    FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}"
-    FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}"
     cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}"
-    --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"
     --test "${test_target}"
   )
-
-  # This target launches several independent clean Cargo graphs. Bound libtest
-  # concurrency explicitly so runner core count cannot multiply their storage
-  # and compiler pressure without limit.
-  if [[ "${test_target}" == collected_executable_scalar_control_flow_v2 ]]; then
-    command+=(-- --test-threads="${COLLECTED_CONTROL_FLOW_TEST_THREADS}")
-  fi
 
   # Cargo can emit a test rlib and an unversioned backend dylib with different
   # Rust symbol hashes during one --all-targets build. Each target-isolated
   # invocation produces the exact backend dylib before running its linked test.
   # Match the limited-debug profile used by the production automatic backend
   # builder so clean and cache-restored shards exercise the same bounded image.
-  if [[ "${test_target}" == collected_executable_scalar_control_flow_v2 ]]; then
-    run_step_with_timeout "${COLLECTED_CONTROL_FLOW_TIMEOUT_SECONDS}" \
-      "rustc-codegen-test-${test_target}" \
-      "${command[@]}"
-    return
-  fi
-  if [[ "${test_target}" == general_gemm_semantic_frontend ]]; then
-    run_step_with_timeout "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
-      "rustc-codegen-test-${test_target}" \
-      "${command[@]}"
-    return
-  fi
   run_step "rustc-codegen-test-${test_target}" \
     "${command[@]}"
 }
@@ -896,13 +862,11 @@ run_all_rustc_codegen_shards() {
 run_rustc_codegen_shard() {
   local shard_id="$1"
   run_shard_policy
-  run_rustc_codegen_test_driver
   run_rustc_codegen_shard_targets "${shard_id}"
 }
 
 run_rustc_codegen_tests() {
   run_shard_policy
-  run_rustc_codegen_test_driver
   run_rustc_codegen_lib_tests
   run_all_rustc_codegen_shards
 }
@@ -922,6 +886,9 @@ run_workspace_tests() {
 
 run_backend_build() {
   run_step backend-build cargo build --locked -p rustc-codegen-fe2o3
+  run_step backend-all-features-build \
+    env CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo build --locked -p rustc-codegen-fe2o3 --all-features
 }
 
 run_verus() {
@@ -992,20 +959,22 @@ run_generic_core() {
 
 run_generic() {
   run_generic_core
-  run_rustc_codegen_test_driver
   run_all_rustc_codegen_shards
 }
 
 run_rocm_compile() {
-  # Compiler qualification never consumes a production Worker V2
-  # configuration. Clear it before preparing or executing any child in this
-  # lane. cargo-fe2o3 itself remains feature-invariant and must not receive a
-  # qualification selector.
+  # Production compilation never consumes a Worker V2 configuration. Clear it
+  # before preparing or executing any child in this lane.
   unset FE2O3_WORKER_V2_CONFIG_V2
-  export FE2O3_TARGET="${FE2O3_TARGET:-gfx1100}"
+  export FE2O3_TARGET="${FE2O3_TARGET:-gfx942}"
+  [[ "${FE2O3_TARGET}" == gfx942 ]] || {
+    printf 'production ROCm qualification requires FE2O3_TARGET=gfx942, got %s\n' \
+      "${FE2O3_TARGET}" >&2
+    return 2
+  }
   local -a loader_environment_removals wrapper_managed_packages
 
-  prepare_cargo_fe2o3_driver rocm qualification
+  prepare_cargo_fe2o3_driver rocm production
   load_dynamic_loader_environment_removals loader_environment_removals
   validate_cargo_fe2o3_driver
   load_example_packages wrapper-managed wrapper_managed_packages \
@@ -1017,96 +986,53 @@ run_rocm_compile() {
   run_step rocm-doctor \
     env "${loader_environment_removals[@]}" \
       "${CARGO_FE2O3_BINARY}" doctor
-  run_step rocm-trusted-device-items \
+  run_step rocm-production-extraction-safe-kernel \
     env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test trusted_device_items \
-      genuine_markers_emit_and_local_external_spoofs_fail_closed -- \
-      --ignored --exact
-  run_step rocm-trusted-device-item-stale-cleanup \
+        --test production_extraction_driver_v1 \
+        attributed_kernel_is_recollected_inside_a_real_amdgcn_dependency_graph -- \
+        --ignored --exact
+  run_step rocm-production-extraction-unsafe-rejection \
     env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test trusted_device_items \
-      rejected_lookalikes_remove_preseeded_artifacts_atomically -- \
-      --ignored --exact
-  run_step rocm-cross-crate-typed-binding \
+        --test production_extraction_driver_v1 \
+        production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics -- \
+        --ignored --exact
+  run_step rocm-production-general-matrix \
     env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
-      FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
       cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test cross_crate_typed_binding \
-      same_logical_name_in_two_rlibs_resolves_distinct_artifacts -- \
-      --ignored --exact
+        --test production_general_matrix_driver_v1 \
+        safe_dynamic_matrix_kernel_uses_the_single_production_pipeline -- \
+        --ignored --exact
+  run_step rocm-production-transaction \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_pipeline \
+        attributed_kernel_enters_one_transaction_and_fails_without_fallback -- \
+        --ignored --exact
+  run_step rocm-production-ranked-bounds \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed -- \
+        --ignored --exact
+  run_step rocm-production-barrier-cfg \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        production_barrier_cfg_preserves_order_and_fails_closed -- \
+        --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \
       --ignored --exact
-  run_step rocm-kernel-ir-codegen-rejection \
-    env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- \
-      --ignored --exact
-  run_step rocm-kernel-ir-vecadd \
-    env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      opt_in_vecadd_publishes_exact_g1_without_gpu -- \
-      --ignored --exact
-
 }
 
 require_gpu_access() {
-  local kfd_path="${1:-/dev/kfd}"
-  local dxg_path="${2:-/dev/dxg}"
-  local device_node
-
-  if [[ -e "${kfd_path}" ]]; then
-    device_node="${kfd_path}"
-  elif [[ -e "${dxg_path}" ]]; then
-    if [[ "${HSA_ENABLE_DXG_DETECTION:-}" != "1" ]]; then
-      printf '%s\n' \
-        'WSL GPU smoke requires HSA_ENABLE_DXG_DETECTION=1' >&2
-      return 2
-    fi
-    device_node="${dxg_path}"
-  else
-    printf '%s\n' \
-      'GPU smoke requires /dev/kfd (native Linux) or /dev/dxg (WSL)' >&2
+  if [[ ! -c /dev/kfd || ! -r /dev/kfd || ! -w /dev/kfd ]]; then
+    printf '%s\n' 'GPU smoke requires read/write access to /dev/kfd' >&2
     return 2
   fi
-
-  if [[ ! -r "${device_node}" || ! -w "${device_node}" ]]; then
-    printf 'GPU smoke requires read/write access to %s\n' \
-      "${device_node}" >&2
-    return 2
-  fi
-}
-
-wavefront_for_target() {
-  local processor="${1%%:*}"
-  case "${processor}" in
-    gfx9*) printf '%s\n' 64 ;;
-    gfx*) printf '%s\n' 32 ;;
-    *)
-      printf 'cannot derive wavefront size for FE2O3_TARGET=%s\n' "$1" >&2
-      return 2
-      ;;
-  esac
 }
 
 run_hardware_smoke() {
@@ -1120,83 +1046,33 @@ run_hardware_smoke() {
       'hardware HSACO inspection requires an explicit FE2O3_TARGET' >&2
     return 2
   fi
-  require_gpu_access /dev/kfd /dev/dxg
-  if ! command -v rocminfo >/dev/null 2>&1; then
-    printf '%s\n' 'GPU smoke requires rocminfo on PATH' >&2
-    return 2
-  fi
+  require_gpu_access
+  case "${FE2O3_TARGET}" in
+    gfx942 | gfx942:xnack-) ;;
+    *)
+      printf 'KFD hardware smoke requires FE2O3_TARGET=gfx942[:xnack-], got %s\n' \
+        "${FE2O3_TARGET}" >&2
+      return 2
+      ;;
+  esac
 
-  local -a loader_environment_removals
-  prepare_cargo_fe2o3_driver hardware qualification
-  load_dynamic_loader_environment_removals loader_environment_removals
-
-  validate_cargo_fe2o3_driver
-  run_step hardware-rocminfo rocminfo
-  validate_cargo_fe2o3_driver
-  run_step hardware-doctor \
-    env "${loader_environment_removals[@]}" \
-      "${CARGO_FE2O3_BINARY}" doctor
-  local rocm_path="${ROCM_PATH:-/opt/rocm}"
-  local native_test_directory="${CARGO_TARGET_DIRECTORY}/ci-native"
-  local native_test="${native_test_directory}/fe2o3-hip-device-properties-test"
-  mkdir -p -- "${native_test_directory}"
-  run_step hardware-hip-device-properties-build \
-    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -D__HIP_PLATFORM_AMD__ \
-      -I "${rocm_path}/include" -I "${REPO_ROOT}/crates/fe2o3-hip-sys/native" \
-      "${REPO_ROOT}/crates/fe2o3-hip-sys/native/device_properties_test.c" \
-      -L "${rocm_path}/lib" -Wl,-rpath,"${rocm_path}/lib" -lamdhip64 \
-      -o "${native_test}"
-  run_step hardware-hip-device-properties-test "${native_test}"
-  run_step hardware-observed-device-target \
-    cargo test --locked -p fe2o3-core --lib \
-      device_target::tests::context_observes_a_real_hip_device -- \
-      --ignored --exact
-  run_step hardware-device-copy-transfer \
-    cargo test --locked -p fe2o3-core --test device_copy_derive_hardware -- \
-      --ignored --exact derived_struct_bytes_round_trip_through_device_memory
-  run_step hardware-kernel-ir-fill \
-    env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      opt_in_fill_publishes_g1_and_executes_on_the_gpu -- \
-      --ignored --exact
-  run_step hardware-kernel-ir-vecadd \
-    env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
-      cargo test --locked -p rustc-codegen-fe2o3 \
-      --features "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}" \
-      --test kernel_ir_codegen \
-      opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- \
-      --ignored --exact
-  validate_cargo_fe2o3_driver
-  local test_wavefront
-  test_wavefront="$(wavefront_for_target "${FE2O3_TARGET}")"
-  run_step hardware-hsaco-inspection env \
-    FE2O3_TEST_HSACO="${CARGO_TARGET_DIRECTORY}/fe2o3/vecadd.hsaco" \
-    FE2O3_TEST_TARGET="${FE2O3_TARGET}" \
-    FE2O3_TEST_WAVEFRONT="${test_wavefront}" \
-    cargo test --locked -p fe2o3-hsaco --test inspection \
-      inspects_real_generated_vecadd_hsaco -- --ignored --exact
+  run_step hardware-runtime-identity-oracle \
+    env FE2O3_ALLOW_RUNTIME_IDENTITY_ORACLE=1 \
+      bash "${RUNTIME_IDENTITY_ORACLE}"
+  run_step hardware-kfd-device-identity \
+    cargo run --locked -p fe2o3-kfd --example kfd-device-identity -- --all
+  run_step hardware-kfd-host-visible-memory \
+    cargo run --locked -p fe2o3-kfd --features live-validation \
+      --example kfd-host-visible-memory -- --all
+  run_step hardware-kfd-compute-aql-queue \
+    cargo run --locked -p fe2o3-kfd --features live-validation \
+      --example kfd-compute-aql-queue -- --all
 }
 
 run_s09_debug_hardware() {
-  if [[ -z "${FE2O3_S09_EVIDENCE_DIR:-}" ]]; then
-    printf '%s\n' 'S09 debug hardware requires FE2O3_S09_EVIDENCE_DIR' >&2
-    return 2
-  fi
-  local -a loader_environment_removals
-  prepare_cargo_fe2o3_driver s09 qualification
-  load_dynamic_loader_environment_removals loader_environment_removals
-  validate_cargo_fe2o3_driver
-  run_step s09-debug-hardware \
-    env "${loader_environment_removals[@]}" \
-      FE2O3_TEST_CARGO_FE2O3_BIN="${CARGO_FE2O3_BINARY}" \
-      FE2O3_TEST_CARGO_FE2O3_SHA256="${CARGO_FE2O3_SHA256}" \
-      bash scripts/s09-debug-ci.sh "${FE2O3_S09_EVIDENCE_DIR}"
+  printf '%s\n' \
+    'S09 hardware evidence is retired until debug HSACO generation uses the production Worker V3 and KFD runtime paths' >&2
+  return 2
 }
 
 run_parity_production_immutable() {

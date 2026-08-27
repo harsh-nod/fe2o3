@@ -156,7 +156,7 @@ oracle, and production-route-absence evidence with:
 
 ```text
 python3 scripts/test-bounded-moe-docs.py
-cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --test moe_top2_v1
+cargo test --locked -p rustc-codegen-fe2o3 --features qualification-oracles-test-only --lib collected_moe_top2_v1::
 cargo test --locked -p fe2o3-verifier --test moe_expert_compact_plan_v1
 VERUS=/absolute/path/to/pinned/verus \
   ./scripts/test-moe-expert-compact-plan-verus.sh
@@ -189,25 +189,10 @@ reject ambiguous helpers, signature changes, payload/proof/kernel
 substitutions, duplicate native identities, cloning linear selections, and
 unloading while a kernel set remains live.
 
-The real-source Worker V2 integration remains an ignored ROCm test. Run it with
-the same pinned worker and toolchain identities used to build the worker:
-
-```text
-FE2O3_LLVM_LINK_WORKER=/absolute/path/to/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=<measured-worker-id> \
-FE2O3_LLVM_BUILD_ID=<measured-llvm-id> \
-cargo test --locked -p rustc-codegen-fe2o3 \
-  --test kernel_ir_codegen \
-  worker_v2_real_source_publishes_two_kernels_with_one_shared_helper \
-  -- --ignored --exact --nocapture
-```
-
-On MI300X this test is compile/publication evidence: it runs the sealed Cargo
-backend, emits one `gfx942` HSACO containing both entries and one shared helper,
-and checks the published code object. It does not dispatch either kernel. HSA
-multi-symbol lifecycle tests at this checkpoint use the reviewed adapter's
-host-side test boundary and likewise do not establish two-kernel hardware
-execution.
+The real-source Worker V2 integration from this checkpoint is retired: its
+backend selector no longer exists. Its retained oracle logic is exercised only
+inside the feature-enabled library test binary and is not current
+compile/publication or hardware evidence.
 
 ## Bounded Pliron scalar-add MI300X slice
 
@@ -299,33 +284,21 @@ cargo test --locked -p fe2o3-hsa-runtime --all-targets --features hardware-test-
 ```
 
 The next hardware evidence must enter through the production Worker V3
-application, verifier, HSA load, generated dispatch, completion, and unload
+application and verifier, generated dispatch, completion, and a KFD runtime
 path. A fake verifier or externally selected legacy route cannot satisfy that
 gate.
 
-### Repository-backed compiler evidence controller
+### Archived compiler evidence controller
 
-The checked compiler-evidence fixtures pin the exact source, toolchain, direct
-LLVM/LLD worker, COV6 metadata, descriptor section, and finalized HSACO
-identity used by the bounded alpha/zeta compiler observation. The controller
-runs two independent clean builds and requires byte-identical worker and
-artifact outputs.
+The checked controller and fixtures preserve the hardening and identity model
+used by the historical bounded alpha/zeta Worker V2 observation. New captures
+are disabled because their generator depended on a retired backend selector.
+`scripts/gfx942-cov6-compiler-evidence.sh` therefore fails closed in capture
+mode; its mutation self-test remains available for the archived format.
 
-```text
-systemd-run --user --scope --quiet -p Delegate=yes \
-  scripts/gfx942-cov6-compiler-evidence.sh \
-  /absolute/absent/run-root \
-  /absolute/absent/evidence-root
-```
-
-The controller is compiler evidence only. Its retired Worker V2 hardware
-capture has been removed, so it does not load or dispatch the artifact. The
-canonical transaction uses versioned Worker V2 serialization names, but those
-records grant no application, verifier, HSA load, or launch authority. Current
-hardware qualification must use the sole production Worker V3 route.
-
-The compiler-generation path uses LLVM and LLD library APIs only. It invokes
-neither COMGR nor a command-line HSACO linker or disassembler.
+A replacement compiler-evidence controller must consume a production Worker V3
+artifact and cannot grant runtime authority. New hardware qualification must
+use KFD rather than the historical HSA harness.
 
 ## Verus proof coverage
 
@@ -350,67 +323,34 @@ HSACO, HIP, or GPU execution refines that model.
 
 ## ROCm compile coverage
 
-Set an explicit LLVM target and run the bounded compiler-qualification gates:
+Set the admitted LLVM target and run the bounded production compiler gates:
 
 ```text
-FE2O3_TARGET=gfx1151 scripts/ci-local.sh rocm-compile
+FE2O3_TARGET=gfx942 scripts/ci-local.sh rocm-compile
 ```
 
-Use the target reported by `rocminfo` on the machine under test. Compilation
-does not execute a kernel. The ROCm, hardware-smoke, and S09 lanes resolve an
-existing canonical, current-user-owned, private Cargo target before building a
-single `cargo-fe2o3` qualification driver. They authenticate the exact Cargo
-package, source, binary-target, profile, and target-root receipt, copy that
-binary into a mode-0500 private directory, and bind every nested qualification
-test to its SHA-256 identity. Direct driver launches remove dynamic-loader
-controls while preserving unrelated environment variables. If `TMPDIR` is not
-configured, the gate creates and trap-cleans a private temporary root under the
-admitted Cargo target. This lane also compiles the trusted-device marker
-fixtures. `#[kernel]` generates a typed `KernelMarkerV1` with deterministic
-marker symbol; public kernels expose the marker publicly but doc-hidden.
-Genuine and renamed dependencies must emit, while local lookalikes, the
-same-name unmarked external crate, local markers, and duplicate markers must
-fail closed. Rejected fixtures also preseed generated artifacts and require
-transactional invalidation of the complete artifact triplet. Markers identify
-compiler semantics; marker and executable authenticity plus full ABI semantics
-remain unsafe artifact-provenance and generated-binding responsibilities.
-
-The lane also compiles and inspects the hardened G1 code object, compiles the
-real three-slice vecadd through the isolated `kernel-ir-v1` backend test
-harness, validates its exact ABI and bounds-control-flow LLVM shape, and checks
-that invalid selectors or unsupported inputs fail without fallback and remove
-stale artifacts. Every nested compiler test is bound to the sealed driver path
-and SHA-256 identity. The feature-invariant `cargo-fe2o3` CLI receives no
-qualification selector; its `build` and `run` commands remain protected
-production requests in every feature configuration.
+Compilation does not execute a kernel. The lane runs the selector-free
+production extraction, general-matrix, transaction, ranked-bounds, and barrier
+drivers, including their fail-closed cases, then compiles and inspects the
+independent hardened G1 code-object fixture. It builds one private,
+content-addressed `cargo-fe2o3` production driver for `doctor`; neither that
+driver nor any backend child receives a qualification selector.
 
 ## Hardware smoke
 
 Hardware execution is deliberately opt-in:
 
 ```text
-FE2O3_ALLOW_GPU_SMOKE=1 scripts/ci-local.sh hardware-smoke
+FE2O3_ALLOW_GPU_SMOKE=1 FE2O3_TARGET=gfx942 \
+  scripts/ci-local.sh hardware-smoke
 ```
 
-Native Linux requires read/write access to `/dev/kfd`. WSL uses `/dev/dxg` and
-also requires `HSA_ENABLE_DXG_DETECTION=1` with AMD's WSL HSA runtime installed:
-
-```text
-HSA_ENABLE_DXG_DETECTION=1 \
-FE2O3_ALLOW_GPU_SMOKE=1 \
-FE2O3_TARGET=gfx1151 \
-scripts/ci-local.sh hardware-smoke
-```
-
-The hardware lane no longer invokes the retired manifest-wide smoke runner.
-It runs focused hardware tests, including both `fe2o3-fill` and `fe2o3-vecadd`
-through a backend built with
-`qualification-oracles-test-only` and selected by
-`FE2O3_QUALIFICATION_ORACLE_V1=kernel-ir-v1`, so the integrated verified-IR paths are
-exercised as explicit qualification routes independently of the sole
-production transaction. Generated HSACO inspection uses a strict
-qualification-specific metadata profile. This legacy lane is not direct-KFD
-dispatch evidence and does not authorize a new runtime dependency.
+Native Linux requires read/write access to `/dev/kfd`; WSL `/dev/dxg` is not a
+KFD substitute. The lane measures the pure-Rust KFD identity boundary, admits
+every visible `gfx942:xnack-` device, maps and releases host-visible memory on
+each device, and creates, validates, and destroys one isolated compute AQL
+queue per device without packet submission or MMIO stores. It does not execute
+a kernel or claim application-level Worker V3 dispatch coverage.
 
 The host crate enforces the same split. Its feature-free build exposes the
 Worker V3 application, admission, verification, HSA load, and generated

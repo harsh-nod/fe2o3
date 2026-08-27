@@ -227,9 +227,6 @@ prepare_cargo_fe2o3_driver() {
       # share one immutable private root, like the real digest-addressed driver.
       root="${TIMEOUT_TEST_ROOT}/production-driver"
       ;;
-    qualification)
-      root="${TIMEOUT_TEST_ROOT}/${step_prefix}-driver"
-      ;;
     *)
       printf 'mock received unknown driver profile: %s\n' \
         "${driver_profile}" >&2
@@ -334,72 +331,6 @@ assert_equals() {
   fi
 }
 
-assert_source_fixed_count() {
-  local expected_count="$1"
-  local needle="$2"
-  local context="$3"
-  shift 3
-  local actual_count
-  actual_count="$({
-    rg --fixed-strings --only-matching --glob '*.rs' -- "${needle}" "$@" || true
-  } | awk 'END { print NR + 0 }')"
-  assert_equals "${expected_count}" "${actual_count}" "${context}"
-}
-
-assert_qualification_caller_source_policy() {
-  local test_root="${REPO_ROOT}/crates/rustc-codegen-fe2o3/tests"
-  local support="${test_root}/support/cargo_fe2o3.rs"
-  local collected="${test_root}/collected_executable_scalar_control_flow_v2.rs"
-  local kernel_ir="${test_root}/kernel_ir_codegen.rs"
-
-  assert_source_fixed_count 19 \
-    'cargo_fe2o3::non_production_command(' \
-    'sealed non-production driver call-site inventory changed without review' \
-    "${test_root}"
-  assert_source_fixed_count 1 \
-    'pub fn non_production_command(workspace: &Path) -> Command {' \
-    'sealed non-production driver helper is missing or duplicated' \
-    "${support}"
-  assert_source_fixed_count 2 \
-    '.arg("rustc")' \
-    'direct wrapper exceptions must remain exact rustc invocations' \
-    "${kernel_ir}"
-  assert_source_fixed_count 2 \
-    '.env("FE2O3_BINDING_WRAPPER_MODE_V1", "1")' \
-    'direct wrapper exceptions lost or expanded binding-wrapper admission' \
-    "${kernel_ir}"
-  assert_source_fixed_count 2 \
-    '.env("FE2O3_BUILD_SESSION_V1",' \
-    'direct wrapper exceptions lost or expanded explicit build sessions' \
-    "${kernel_ir}"
-
-  assert_source_fixed_count 0 \
-    '.arg(INTERNAL_QUALIFICATION_HARNESS_ARG)' \
-    'deleted Cargo qualification harness was restored' \
-    "${collected}"
-  assert_source_fixed_count 0 \
-    'const INTERNAL_QUALIFICATION_HARNESS_ARG: &str = "__fe2o3-qualification-harness-v1";' \
-    'deleted Cargo qualification token was restored' \
-    "${collected}"
-  assert_source_fixed_count 0 \
-    'FE2O3_QUALIFICATION_BACKEND_V1' \
-    'deleted Cargo qualification backend namespace was restored' \
-    "${test_root}"
-  assert_source_fixed_count 0 \
-    'qualification-oracles-test-only' \
-    'sealed cargo-fe2o3 helper restored a deleted Cargo feature' \
-    "${support}"
-
-  assert_source_fixed_count 0 \
-    'Command::new(cargo_fe2o3::binary' \
-    'tests bypassed the sealed cargo-fe2o3 command helper' \
-    "${test_root}"
-  assert_source_fixed_count 1 \
-    'Command::new(binary(workspace))' \
-    'authenticated driver construction escaped the reviewed support helper' \
-    "${support}"
-}
-
 assert_step_count() {
   local expected_name="$1"
   local expected_count="$2"
@@ -407,19 +338,14 @@ assert_step_count() {
   assert_equals "${expected_count}" "$(step_count "${expected_name}")" "${context}"
 }
 
-assert_codegen_test_driver_once() {
-  assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 1 \
-    'codegen tests did not seal the qualification driver exactly once'
-  assert_equals \
-    "cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics" \
-    "$(step_command rustc-codegen-driver-cargo-fe2o3-bootstrap)" \
-    'codegen test driver bootstrap is not sealed and feature-invariant'
+assert_no_codegen_test_driver() {
+  assert_step_count rustc-codegen-driver-cargo-fe2o3-bootstrap 0 \
+    'selector-free codegen tests unexpectedly built a shared driver'
 }
 
 codegen_target_prefix() {
-  printf 'env CARGO_PROFILE_DEV_DEBUG=1 FE2O3_TEST_CARGO_FE2O3_BIN=%s FE2O3_TEST_CARGO_FE2O3_SHA256=%s cargo test --locked -p %s --features %s --test ' \
-    "${CARGO_FE2O3_BINARY}" "${CARGO_FE2O3_SHA256}" \
-    "${RUSTC_CODEGEN_TEST_PACKAGE}" "${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"
+  printf 'env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p %s --test ' \
+    "${RUSTC_CODEGEN_TEST_PACKAGE}"
 }
 
 assert_all_codegen_targets_once() {
@@ -436,7 +362,7 @@ assert_all_codegen_targets_once() {
         "codegen target ${test_target} did not run exactly once"
       [[ "$(step_command "rustc-codegen-test-${test_target}")" == \
         "$(codegen_target_prefix)${test_target}"* ]] || {
-        printf 'codegen target %s did not receive the sealed driver binding\n' \
+        printf 'codegen target %s did not use the selector-free production command\n' \
           "${test_target}" >&2
         exit 1
       }
@@ -451,9 +377,27 @@ assert_all_codegen_targets_once() {
     'codegen integration target count differs from the manifest'
 }
 
-assert_qualification_caller_source_policy
+assert_no_retired_codegen_targets() {
+  local -a retired_targets
+  local command target
+  mapfile -t retired_targets < <(
+    python3 "${RUSTC_CODEGEN_SHARD_POLICY}" retired
+  )
+  for command in "${STEP_COMMANDS[@]}"; do
+    for target in "${retired_targets[@]}"; do
+      if [[ " ${command} " == *" -p ${RUSTC_CODEGEN_TEST_PACKAGE} "* ]] &&
+        [[ " ${command} " == *" --test ${target} "* ]]; then
+        printf 'CI command executed retired qualification target %s: %s\n' \
+          "${target}" "${command}" >&2
+        exit 1
+      fi
+    done
+  done
+}
+
 run_tests
-assert_codegen_test_driver_once
+assert_no_codegen_test_driver
+assert_no_retired_codegen_targets
 assert_equals \
   'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
   "$(step_command cpu-tests-cargo-fe2o3-bootstrap)" \
@@ -500,28 +444,16 @@ assert_equals \
   "$(step_command rustc-codegen-lib-tests)" \
   'generic backend library tests are not using bounded debug information'
 assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib qualification_selection::tests" \
-  "$(step_command rustc-codegen-qualification-route-tests)" \
-  'generic backend qualification route test command changed'
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib" \
+  "$(step_command rustc-codegen-offline-oracle-tests)" \
+  'generic backend offline oracle test command changed'
 assert_equals \
   "$(codegen_target_prefix)g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
   'generic backend integration tests are not target-isolated'
 assert_all_codegen_targets_once
-assert_equals 4200 "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
-  'general GEMM semantic frontend timeout policy changed without review'
-assert_equals 4200 "${COLLECTED_CONTROL_FLOW_TIMEOUT_SECONDS}" \
-  'collected control-flow timeout policy changed without review'
-assert_equals \
-  "${GENERAL_GEMM_SEMANTIC_FRONTEND_TIMEOUT_SECONDS}" \
-  "${STEP_TIMEOUT_OVERRIDES[rustc-codegen-test-general_gemm_semantic_frontend]:-}" \
-  'general GEMM semantic frontend did not receive its reviewed timeout override'
-assert_equals \
-  "${COLLECTED_CONTROL_FLOW_TIMEOUT_SECONDS}" \
-  "${STEP_TIMEOUT_OVERRIDES[rustc-codegen-test-collected_executable_scalar_control_flow_v2]:-}" \
-  'collected control-flow target did not receive its reviewed timeout override'
-assert_equals 2 "${#STEP_TIMEOUT_OVERRIDES[@]}" \
-  'an unexpected codegen target received a timeout override'
+assert_equals 0 "${#STEP_TIMEOUT_OVERRIDES[@]}" \
+  'a production codegen target received an unexpected timeout override'
 for backend_command in "${STEP_COMMANDS[@]}"; do
   if [[ "${backend_command}" == *"-p ${RUSTC_CODEGEN_TEST_PACKAGE}"* ]] &&
     [[ "${backend_command}" == *"--all-targets"* ]]; then
@@ -530,7 +462,6 @@ for backend_command in "${STEP_COMMANDS[@]}"; do
   fi
 done
 codegen_integration_prefix="$(codegen_target_prefix)"
-serialized_codegen_targets=0
 for index in "${!STEP_NAMES[@]}"; do
   if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
     [[ "${STEP_COMMANDS[index]}" != "${codegen_integration_prefix}"* ]]; then
@@ -539,24 +470,18 @@ for index in "${!STEP_NAMES[@]}"; do
     exit 1
   fi
   if [[ "${STEP_NAMES[index]}" == rustc-codegen-test-* ]] &&
-    [[ "${STEP_COMMANDS[index]}" == *"-- --test-threads="* ]]; then
-    serialized_codegen_targets=$((serialized_codegen_targets + 1))
-    assert_equals rustc-codegen-test-collected_executable_scalar_control_flow_v2 \
-      "${STEP_NAMES[index]}" \
-      'an unrelated codegen target received the serialization policy'
-    assert_equals \
-      "$(codegen_target_prefix)collected_executable_scalar_control_flow_v2 -- --test-threads=1" \
-      "${STEP_COMMANDS[index]}" \
-      'the heavy control-flow target did not use the reviewed thread bound'
+    [[ "${STEP_COMMANDS[index]}" == *"--features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE}"* ]]; then
+    printf 'production integration target enabled offline qualification code: %s\n' \
+      "${STEP_NAMES[index]}" >&2
+    exit 1
   fi
 done
-assert_equals 1 "${serialized_codegen_targets}" \
-  'the codegen serialization policy must select exactly one target'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
 run_workspace_tests
-assert_codegen_test_driver_once
+assert_no_codegen_test_driver
+assert_no_retired_codegen_targets
 assert_equals \
   "cargo test --locked --workspace --all-targets --exclude ${RUSTC_CODEGEN_TEST_PACKAGE}" \
   "$(step_command workspace-tests)" \
@@ -566,9 +491,9 @@ assert_equals \
   "$(step_command rustc-codegen-lib-tests)" \
   'full workspace backend library test command changed'
 assert_equals \
-  "cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib qualification_selection::tests" \
-  "$(step_command rustc-codegen-qualification-route-tests)" \
-  'full workspace backend qualification route test command changed'
+  "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --lib" \
+  "$(step_command rustc-codegen-offline-oracle-tests)" \
+  'full workspace backend offline oracle test command changed'
 assert_equals \
   "$(codegen_target_prefix)g2_layout" \
   "$(step_command rustc-codegen-test-g2_layout)" \
@@ -577,21 +502,22 @@ assert_all_codegen_targets_once
 
 STEP_NAMES=()
 STEP_COMMANDS=()
-run_rustc_codegen_shard 01-control-flow
-assert_codegen_test_driver_once
+run_rustc_codegen_shard 04-memory-math-gemm
+assert_no_codegen_test_driver
+assert_no_retired_codegen_targets
 assert_equals \
   "python3 ${RUSTC_CODEGEN_SHARD_POLICY} check" \
   "$(step_command rustc-codegen-shard-policy)" \
   'codegen shard did not validate the checked-in assignment'
 assert_equals \
-  "$(codegen_target_prefix)collected_executable_scalar_control_flow_v2 -- --test-threads=1" \
-  "$(step_command rustc-codegen-test-collected_executable_scalar_control_flow_v2)" \
+  "$(codegen_target_prefix)general_gemm_mutation_corpus_integrity" \
+  "$(step_command rustc-codegen-test-general_gemm_mutation_corpus_integrity)" \
   'codegen shard did not keep its target isolated'
 assert_step_count rustc-codegen-lib-tests 0 \
   'integration shard unexpectedly reran backend library tests'
 for shard_step in "${STEP_NAMES[@]}"; do
   if [[ "${shard_step}" == rustc-codegen-test-* ]] &&
-    [[ "${shard_step}" != rustc-codegen-test-collected_executable_scalar_control_flow_v2 ]]; then
+    [[ "${shard_step}" != rustc-codegen-test-general_gemm_mutation_corpus_integrity ]]; then
     printf 'codegen shard ran an unassigned target: %s\n' "${shard_step}" >&2
     exit 1
   fi
@@ -601,6 +527,7 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic_core
+assert_no_retired_codegen_targets
 for core_step in \
   workspace-dependency-policy-tests \
   workspace-dependency-policy \
@@ -627,6 +554,7 @@ for core_step in \
   workspace-binding-check-boundary \
   workspace-binding-projection-revalidation \
   backend-build \
+  backend-all-features-build \
   ci-local-test-gate \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
@@ -636,6 +564,7 @@ for core_step in \
   cpu-test-partition-revalidation \
   cpu-test-binding-projection-revalidation \
   rustc-codegen-lib-tests \
+  rustc-codegen-offline-oracle-tests \
   core-doc-tests \
   device-copy-renamed-dependency \
   device-copy-derive-real-trait \
@@ -671,6 +600,10 @@ assert_equals \
   'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
   "$(step_command generic-check-cargo-fe2o3-bootstrap)" \
   'generic check did not retain the feature-free production driver'
+assert_equals \
+  'env CARGO_PROFILE_DEV_DEBUG=1 cargo build --locked -p rustc-codegen-fe2o3 --all-features' \
+  "$(step_command backend-all-features-build)" \
+  'generic core did not build the all-feature production backend'
 assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --workspace --all-targets --locked --exclude fe2o3-production-extraction-fixture --exclude fe2o3-production-ranked-bounds-fixture --exclude fe2o3-disabled-fixture" \
   "$(step_command workspace-binding-check)" \
@@ -712,12 +645,15 @@ STEP_NAMES=()
 STEP_COMMANDS=()
 retire_cargo_fe2o3_driver
 run_generic
-assert_codegen_test_driver_once
+assert_no_codegen_test_driver
+assert_no_retired_codegen_targets
 assert_all_codegen_targets_once
 assert_step_count rustc-codegen-shard-policy 1 \
   'serial generic gate did not run shard policy exactly once'
 assert_step_count rustc-codegen-lib-tests 1 \
   'serial generic gate did not run backend library tests exactly once'
+assert_step_count rustc-codegen-offline-oracle-tests 1 \
+  'serial generic gate did not run offline oracle tests exactly once'
 
 STEP_NAMES=()
 STEP_COMMANDS=()
@@ -772,12 +708,12 @@ driver_environment="$(
 )"
 for loader_name in LD_FE2O3_CI_TEST DYLD_FE2O3_CI_TEST GLIBC_TUNABLES; do
   if rg -q "^${loader_name}=" <<<"${driver_environment}"; then
-    printf 'direct qualification driver retained %s\n' "${loader_name}" >&2
+    printf 'direct sealed driver retained %s\n' "${loader_name}" >&2
     exit 1
   fi
 done
 rg -Fx 'FE2O3_CI_TEST_PRESERVED=present' <<<"${driver_environment}" >/dev/null || {
-  printf '%s\n' 'direct qualification driver lost an unrelated variable' >&2
+  printf '%s\n' 'direct sealed driver lost an unrelated variable' >&2
   exit 1
 }
 PUBLIC_ROOT="${TIMEOUT_TEST_ROOT}/public-root"
@@ -867,7 +803,7 @@ PY
 done
 chmod 700 -- "${CARGO_FE2O3_BINARY}"
 if validate_cargo_fe2o3_driver 2>/dev/null; then
-  printf '%s\n' 'qualification driver validator accepted changed mode' >&2
+  printf '%s\n' 'sealed driver validator accepted changed mode' >&2
   exit 1
 fi
 chmod 500 -- "${CARGO_FE2O3_BINARY}"
@@ -875,7 +811,7 @@ chmod 700 -- "${CARGO_FE2O3_BINARY}"
 printf '# hostile replacement\n' >>"${CARGO_FE2O3_BINARY}"
 chmod 500 -- "${CARGO_FE2O3_BINARY}"
 if validate_cargo_fe2o3_driver 2>/dev/null; then
-  printf '%s\n' 'qualification driver validator accepted changed content' >&2
+  printf '%s\n' 'sealed driver validator accepted changed content' >&2
   exit 1
 fi
 unset LD_FE2O3_CI_TEST DYLD_FE2O3_CI_TEST GLIBC_TUNABLES FE2O3_CI_TEST_PRESERVED
@@ -887,7 +823,6 @@ prepare_cargo_fe2o3_driver() {
   local -a feature_args=()
   case "${driver_profile}" in
     production) ;;
-    qualification) ;;
     *)
       printf 'mock received unknown driver profile: %s\n' \
         "${driver_profile}" >&2
@@ -920,9 +855,14 @@ load_example_packages() {
 }
 export FE2O3_WORKER_V2_CONFIG_V2="${TIMEOUT_TEST_ROOT}/hostile-worker-v2-config.json"
 run_rocm_compile
+assert_no_retired_codegen_targets
+if (export FE2O3_TARGET=gfx1100; run_rocm_compile >/dev/null 2>&1); then
+  printf '%s\n' 'ROCm compilation accepted a target not covered by its production drivers' >&2
+  exit 1
+fi
 if [[ -v FE2O3_WORKER_V2_CONFIG_V2 ]]; then
   printf '%s\n' \
-    'ROCm qualification retained an ambient production Worker V2 configuration' >&2
+    'ROCm compilation retained an ambient Worker V2 configuration' >&2
   exit 1
 fi
 assert_equals \
@@ -953,6 +893,22 @@ assert_equals \
   "env ${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 doctor" \
   "$(step_command rocm-doctor)" \
   'ROCm compile did not invoke the resolved driver directly for doctor'
+for production_step in \
+  rocm-production-extraction-safe-kernel \
+  rocm-production-extraction-unsafe-rejection \
+  rocm-production-general-matrix \
+  rocm-production-transaction \
+  rocm-production-ranked-bounds \
+  rocm-production-barrier-cfg; do
+  assert_step_count "${production_step}" 1 \
+    "ROCm compile did not run ${production_step} exactly once"
+  if [[ " $(step_command "${production_step}") " == \
+    *" --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} "* ]]; then
+    printf 'ROCm production step enabled offline qualification code: %s\n' \
+      "${production_step}" >&2
+    exit 1
+  fi
+done
 for index in "${!STEP_NAMES[@]}"; do
   step_name="${STEP_NAMES[index]}"
   step_command_value="${STEP_COMMANDS[index]}"
@@ -964,21 +920,6 @@ for index in "${!STEP_NAMES[@]}"; do
     printf 'deleted ROCm qualification test lane returned as %s\n' "${step_name}" >&2
     exit 1
   fi
-  case "${step_name}" in
-    rocm-trusted-device-items | \
-      rocm-trusted-device-item-stale-cleanup | \
-      rocm-cross-crate-typed-binding | \
-      rocm-kernel-ir-codegen-rejection | \
-      rocm-kernel-ir-vecadd)
-      [[ " ${step_command_value} " == \
-        *" FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 "* ]] &&
-        [[ " ${step_command_value} " == \
-          *" FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} "* ]] || {
-        printf 'ROCm nested test lost the sealed driver binding: %s\n' "${step_name}" >&2
-        exit 1
-      }
-      ;;
-  esac
   if [[ " ${step_command_value} " == *" FE2O3_QUALIFICATION_ORACLE_V1="* ]] &&
     [[ " ${step_command_value} " == *"/cargo-fe2o3 build "* ]]; then
     printf 'ROCm compile restored an obsolete Cargo qualification build: %s\n' \
@@ -987,13 +928,18 @@ for index in "${!STEP_NAMES[@]}"; do
   fi
 done
 assert_equals \
-  "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test trusted_device_items genuine_markers_emit_and_local_external_spoofs_fail_closed -- --ignored --exact" \
-  "$(step_command rocm-trusted-device-items)" \
-  'ROCm compile did not provide the direct driver contract to trusted-device tests'
-assert_equals \
-  "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/rocm-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test kernel_ir_codegen selected_pipeline_rejects_invalid_or_unsupported_inputs_and_cleans_stale_artifacts -- --ignored --exact" \
-  "$(step_command rocm-kernel-ir-codegen-rejection)" \
-  'ROCm compile did not provide the direct driver contract to kernel-IR tests'
+  "cargo test --locked -p dialect-amdgcn --test lowering rocm_compiles_the_golden_to_an_amdgpu_code_object -- --ignored --exact" \
+  "$(step_command rocm-g1-code-object)" \
+  'ROCm compile did not produce the target code-object fixture'
+for retired_step in \
+  rocm-trusted-device-items \
+  rocm-trusted-device-item-stale-cleanup \
+  rocm-cross-crate-typed-binding \
+  rocm-kernel-ir-codegen-rejection \
+  rocm-kernel-ir-vecadd; do
+  assert_step_count "${retired_step}" 0 \
+    "ROCm compile restored retired qualification step ${retired_step}"
+done
 assert_step_count rocm-clean-kernel-ir-v1-fe2o3-fill 0 \
   'ROCm compile restored obsolete manifest-routed cleanup'
 assert_step_count rocm-build-kernel-ir-v1-fe2o3-fill 0 \
@@ -1006,33 +952,37 @@ STEP_COMMANDS=()
 require_gpu_access() {
   return 0
 }
-resolve_cargo_target_directory() {
-  printf '%s\n' "${TIMEOUT_TEST_ROOT}/external-target"
-}
 export FE2O3_ALLOW_GPU_SMOKE=1
 export FE2O3_TARGET=gfx942:xnack-
 run_hardware_smoke
+assert_no_retired_codegen_targets
 assert_equals \
-  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
-  "$(step_command hardware-cargo-fe2o3-bootstrap)" \
-  'hardware smoke did not build the feature-invariant driver'
+  "env FE2O3_ALLOW_RUNTIME_IDENTITY_ORACLE=1 bash ${RUNTIME_IDENTITY_ORACLE}" \
+  "$(step_command hardware-runtime-identity-oracle)" \
+  'hardware smoke did not run the KFD runtime identity oracle'
 assert_equals \
-  "cc -std=c11 -Wall -Wextra -Werror -D__HIP_PLATFORM_AMD__ -I /opt/rocm/include -I ${REPO_ROOT}/crates/fe2o3-hip-sys/native ${REPO_ROOT}/crates/fe2o3-hip-sys/native/device_properties_test.c -L /opt/rocm/lib -Wl\,-rpath\,/opt/rocm/lib -lamdhip64 -o ${TIMEOUT_TEST_ROOT}/external-target/ci-native/fe2o3-hip-device-properties-test" \
-  "$(step_command hardware-hip-device-properties-build)" \
-  'hardware smoke native helper did not use the resolved external target directory'
+  'cargo run --locked -p fe2o3-kfd --example kfd-device-identity -- --all' \
+  "$(step_command hardware-kfd-device-identity)" \
+  'hardware smoke did not admit every visible KFD device'
 assert_equals \
-  "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/hardware-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} cargo test --locked -p rustc-codegen-fe2o3 --features ${RUSTC_CODEGEN_QUALIFICATION_FEATURE} --test kernel_ir_codegen opt_in_vecadd_publishes_exact_g1_and_executes_on_the_gpu -- --ignored --exact" \
-  "$(step_command hardware-kernel-ir-vecadd)" \
-  'hardware smoke did not provide the direct driver contract to nested tests'
-for hardware_step in hardware-kernel-ir-fill hardware-kernel-ir-vecadd; do
-  hardware_command="$(step_command "${hardware_step}")"
-  [[ " ${hardware_command} " == \
-    *" FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/hardware-driver/cargo-fe2o3 "* ]] &&
-    [[ " ${hardware_command} " == \
-      *" FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} "* ]] || {
-    printf 'hardware nested test lost the sealed driver binding: %s\n' "${hardware_step}" >&2
-    exit 1
-  }
+  'cargo run --locked -p fe2o3-kfd --features live-validation --example kfd-host-visible-memory -- --all' \
+  "$(step_command hardware-kfd-host-visible-memory)" \
+  'hardware smoke did not exercise KFD host-visible memory on every device'
+assert_equals \
+  'cargo run --locked -p fe2o3-kfd --features live-validation --example kfd-compute-aql-queue -- --all' \
+  "$(step_command hardware-kfd-compute-aql-queue)" \
+  'hardware smoke did not exercise KFD AQL queue ownership on every device'
+for retired_hardware_step in \
+  hardware-cargo-fe2o3-bootstrap \
+  hardware-hip-device-properties-build \
+  hardware-hip-device-properties-test \
+  hardware-observed-device-target \
+  hardware-device-copy-transfer \
+  hardware-kernel-ir-fill \
+  hardware-kernel-ir-vecadd \
+  hardware-hsaco-inspection; do
+  assert_step_count "${retired_hardware_step}" 0 \
+    "KFD hardware smoke restored retired step ${retired_hardware_step}"
 done
 assert_step_count hardware-smoke 0 \
   'hardware smoke retained the selector-free manifest runner'
@@ -1041,15 +991,15 @@ unset FE2O3_ALLOW_GPU_SMOKE FE2O3_TARGET
 STEP_NAMES=()
 STEP_COMMANDS=()
 export FE2O3_S09_EVIDENCE_DIR="${TIMEOUT_TEST_ROOT}/s09-evidence"
-run_s09_debug_hardware
-assert_equals \
-  'cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3 --message-format=json-render-diagnostics' \
-  "$(step_command s09-cargo-fe2o3-bootstrap)" \
-  'S09 did not build the feature-invariant driver'
-assert_equals \
-  "env FE2O3_TEST_CARGO_FE2O3_BIN=${TIMEOUT_TEST_ROOT}/s09-driver/cargo-fe2o3 FE2O3_TEST_CARGO_FE2O3_SHA256=${CARGO_FE2O3_SHA256} bash scripts/s09-debug-ci.sh ${TIMEOUT_TEST_ROOT}/s09-evidence" \
-  "$(step_command s09-debug-hardware)" \
-  'S09 hardware did not provide the direct driver contract'
+if run_s09_debug_hardware 2>/dev/null; then
+  printf '%s\n' 'retired S09 hardware lane unexpectedly ran' >&2
+  exit 1
+fi
+assert_step_count s09-cargo-fe2o3-bootstrap 0 \
+  'retired S09 hardware lane built cargo-fe2o3'
+assert_step_count s09-debug-hardware 0 \
+  'retired S09 hardware lane invoked its legacy runtime'
+assert_no_retired_codegen_targets
 unset FE2O3_S09_EVIDENCE_DIR
 
 STEP_NAMES=()

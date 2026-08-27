@@ -76,6 +76,59 @@ name = "reference_binding_v1"
 
 [[test]]
 name = "cross_crate_typed_binding"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "collected_executable_scalar_control_flow_v2"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "flash_attention_v1"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "frontend_contract_collector"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "g2_semantics"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "general_gemm_positive_receipt_hardening"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "general_gemm_provider_auth"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "general_gemm_semantic_frontend"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "half_math_compiler"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "kernel_ir_codegen"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "moe_top2_v1"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "trusted_device_items"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "wave64_collectives_v1"
+required-features = ["qualification-oracles-test-only"]
+
+[[test]]
+name = "workgroup_sync_v1"
+required-features = ["qualification-oracles-test-only"]
 
 [[test]]
 name = "tiled_gemm_frontend"

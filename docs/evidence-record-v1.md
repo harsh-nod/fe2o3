@@ -124,26 +124,19 @@ scripts/run-parity-snapshot.sh verify-only \
   --shard Q3 --shard Q4
 ```
 
-The optional gfx942 compile shard requires all four Worker V2 identities. The
-runner validates them, includes them in the canonical dry-run plan and result
-record, and passes only those exact values through its empty environment:
+The optional gfx942 compile shard invokes the selector-free production ROCm
+lane under exact `FE2O3_TARGET=gfx942`:
 
 ```bash
 scripts/run-parity-snapshot.sh run \
   --repo "$PWD" \
   --archive-root /evidence/snapshot-001 \
-  --gfx942-compile \
-  --llvm-link-worker /absolute/path/to/fe2o3-llvm-link-worker \
-  --llvm-link-worker-build-id fe2o3-worker-v1-sha256-<digest> \
-  --llvm-build-id rocm-7.2.4 \
-  --llvm-as /absolute/path/to/llvm-as
+  --gfx942-compile
 ```
 
-Ambient `FE2O3_LLVM_LINK_WORKER`, `FE2O3_LLVM_LINK_WORKER_BUILD_ID`,
-`FE2O3_LLVM_BUILD_ID`, and `FE2O3_LLVM_AS` values are ignored. Missing,
-malformed, non-executable, or inconsistent options fail before any shard runs.
-The compile shard records compilation and Worker V2 publication only; it is not
-hardware execution evidence.
+Ambient Worker V2 values are ignored. The compile shard records the
+selector-free production ROCm lane and independent G1 code-object compilation;
+it is not hardware execution evidence.
 
 The fixed row-softmax LLVM 22 release gate is a distinct, stricter
 compiler/code-object reproducibility lane. It is not silently folded into
@@ -162,27 +155,18 @@ authentication, machine attestation, GPU execution, or parity-promotion
 authority. A separately archived command-result record is still required
 before the lane can be cited by a parity row.
 
-The gfx942 hardware lane requires the exact vecadd HSACO to be a regular,
-non-symlink file inside the archive. Its size and digest are bound as a record
-artifact, while its absolute path is recorded in the command environment:
-
-```bash
-scripts/run-parity-snapshot.sh run \
-  --repo "$PWD" \
-  --archive-root /evidence/snapshot-001 \
-  --shard Q5 \
-  --gfx942-hardware \
-  --vecadd-hsaco artifacts/gfx942-vecadd.hsaco
-```
+The old gfx942 hardware snapshot option is unavailable because it depended on
+Worker V2 publication and HSA execution. It fails closed until production
+Worker V3 artifacts and KFD execution define replacement evidence.
 
 The raw alpha/zeta vertical slice landed through
 `daf0b459ced07a25376670c83b1474eaebcd1a68` is not a shard in this static
 snapshot plan. The generated-safe fake-authenticator shard added at
 `dc9738e367c392f7716eacb8459ca73fa32abbbb` has also been retired and deleted.
-The following commands reproduce the measured Worker V2 build and export on a
-ROCm 7.2.4 system. The worker measurement is derived by CMake
-from its pinned LLVM/LLD configuration and worker sources, not from the output
-binary alone:
+The following commands are the historical Worker V2 build and export procedure
+recorded at that checkpoint. They are not runnable current evidence. The
+worker measurement was derived by CMake from its pinned LLVM/LLD configuration
+and worker sources, not from the output binary alone:
 
 ```bash
 cmake -S tools/fe2o3-llvm-link-worker -B /absolute/path/to/worker-build \
@@ -195,20 +179,10 @@ cmake -S tools/fe2o3-llvm-link-worker -B /absolute/path/to/worker-build \
 cmake --build /absolute/path/to/worker-build --parallel
 ctest --test-dir /absolute/path/to/worker-build --output-on-failure
 cat /absolute/path/to/worker-build/fe2o3-worker-build-id.txt
-
-test ! -e /absolute/path/to/alpha-zeta-cov6.hsaco
-FE2O3_LLVM_LINK_WORKER=/absolute/path/to/worker-build/fe2o3-llvm-link-worker \
-FE2O3_LLVM_LINK_WORKER_BUILD_ID=fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9 \
-FE2O3_LLVM_BUILD_ID=7.2.4 \
-FE2O3_GFX942_ALPHA_ZETA_OUTPUT=/absolute/path/to/alpha-zeta-cov6.hsaco \
-cargo +nightly-2026-04-03 test --locked -p rustc-codegen-fe2o3 \
-  --test kernel_ir_codegen \
-  worker_v2_general_v3_alpha_zeta_build_links_and_validate_backend_witnesses \
-  -- --ignored --exact --nocapture
-sha256sum /absolute/path/to/alpha-zeta-cov6.hsaco
-/opt/rocm/llvm/bin/llvm-readelf --notes \
-  /absolute/path/to/alpha-zeta-cov6.hsaco
 ```
+
+The retired generator invocation is intentionally omitted. It depended on the
+removed backend selector and cannot produce current evidence.
 
 The observed worker identity was
 `fe2o3-worker-v1-sha256-234d22f9fb347c86495e7156e53ef8eab55e939d6514973a6df373aee12f77a9`.
@@ -225,15 +199,14 @@ Those harnesses, exact host adapters, and the optional alpha/zeta parity shard
 have been deleted. Their observations remain historical and cannot be rerun as
 a current alternate application path.
 
-The repository-backed compiler-evidence controller still performs two isolated
-direct LLVM/LLD builds and requires byte-identical COV6 output. Its Worker V2
-names identify versioned compiler transaction records; the controller no
-longer builds or runs the retired hardware harness. It grants no application,
-verification, HSA load, or launch authority.
+The repository-backed compiler-evidence controller is archived and rejects new
+captures because its generator depended on the retired Worker V2 selector. Its
+mutation self-test preserves the historical record-format checks, but it grants
+no application, verification, load, or launch authority.
 
 Current hardware evidence must pass through the sole Worker V3 application
-handoff, production verifier, retained publication currentness, generic HSA
-load, generated dispatch, completion, and unload path. Until a production
+handoff, production verifier, retained publication currentness, generated
+dispatch, completion, and a KFD runtime path. Until a production
 `WorkerV3VerifierV1` joins compiler, Verus/proof, Rust ABI, and machine-effect
 evidence for the exact artifact, that hardware evidence remains open.
 
