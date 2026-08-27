@@ -3348,7 +3348,7 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
-                    if crate::production_rustc_intrinsic_v1::is_reviewed_core_function_v1(
+                    if crate::production_rustc_intrinsic_v1::is_reviewed_core_unsafe_atomic_function_v1(
                         self.tcx,
                         function.instance,
                     ) {
