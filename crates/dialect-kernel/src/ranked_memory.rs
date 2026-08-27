@@ -178,6 +178,21 @@ impl Verify for RankedViewType {
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct IndexType;
 
+/// Opaque structural obligation carrier for one checked-access condition.
+///
+/// The type is intentionally crate-private. Its presence proves no source
+/// correspondence or compiler authority by itself. Raw IR can spell the type;
+/// production analysis must separately bind it to an owner-held semantic-MIR
+/// success path.
+#[pliron_type(
+    name = "kernel.checked_access_capability",
+    format,
+    generate_get = true,
+    verifier = "succ"
+)]
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub(crate) struct CheckedAccessCapabilityType;
+
 /// Constant index payload.
 #[pliron_attr(name = "kernel.index_value", format = "$0", verifier = "succ")]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -921,7 +936,7 @@ impl Verify for DeterministicJoinOp {
 #[pliron_op(
     name = "kernel.checked_tiled_index_2d",
     format,
-    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    interfaces = [NRegionsInterface<0>],
     attributes = (
         kernel_lanes_per_tile: IndexValueAttr,
         kernel_tile_rows: IndexValueAttr,
@@ -958,6 +973,47 @@ impl CheckedTiledIndex2DOp {
         op
     }
 
+    /// Builds the predicated structural form. The final operand is the
+    /// physical extent of the one-dimensional destination view and result 1
+    /// carries the obligation consumed by the corresponding access. This
+    /// shape grants no source or refinement authority.
+    pub fn new_predicated(
+        context: &mut Context,
+        invocation: Value,
+        component: Value,
+        rows: Value,
+        columns: Value,
+        row_stride: Value,
+        physical_extent: Value,
+        geometry: [u64; 4],
+    ) -> Self {
+        let [lanes_per_tile, tile_rows, tile_columns, elements_per_lane] = geometry;
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![
+                IndexType::get(context).into(),
+                CheckedAccessCapabilityType::get(context).into(),
+            ],
+            vec![
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_lanes_per_tile(context, IndexValueAttr(lanes_per_tile));
+        op.set_attr_kernel_tile_rows(context, IndexValueAttr(tile_rows));
+        op.set_attr_kernel_tile_columns(context, IndexValueAttr(tile_columns));
+        op.set_attr_kernel_elements_per_lane(context, IndexValueAttr(elements_per_lane));
+        op
+    }
+
     pub fn operands(&self, context: &Context) -> [Value; 5] {
         let operation = self.get_operation().deref(context);
         core::array::from_fn(|index| operation.get_operand(index))
@@ -975,15 +1031,29 @@ impl CheckedTiledIndex2DOp {
     pub fn result(&self, context: &Context) -> Value {
         self.get_operation().deref(context).get_result(0)
     }
+
+    pub fn physical_extent(&self, context: &Context) -> Option<Value> {
+        let operation = self.get_operation().deref(context);
+        (operation.get_num_operands() == 6).then(|| operation.get_operand(5))
+    }
+
+    pub fn success(&self, context: &Context) -> Option<Value> {
+        let operation = self.get_operation().deref(context);
+        (operation.get_num_results() == 2).then(|| operation.get_result(1))
+    }
 }
 
 impl Verify for CheckedTiledIndex2DOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
-        verify_no_regions_results_successors(self, context, 1, 0)?;
         let raw = self.get_operation();
         let raw = raw.deref(context);
+        verify_no_regions_results_successors(self, context, raw.get_num_results(), 0)?;
         let geometry = self.geometry(context);
-        if raw.get_num_operands() != 5
+        let legacy = raw.get_num_operands() == 5 && raw.get_num_results() == 1;
+        let predicated = raw.get_num_operands() == 6
+            && raw.get_num_results() == 2
+            && is_checked_access_capability(raw.get_result(1), context);
+        if !(legacy || predicated)
             || payload_attribute_count(&raw) != 4
             || geometry.is_none_or(|[lanes, rows, columns, elements]| {
                 lanes == 0
@@ -1003,7 +1073,7 @@ impl Verify for CheckedTiledIndex2DOp {
                 )
             );
         }
-        for operand in 0..5 {
+        for operand in 0..raw.get_num_operands() {
             require_index_operand(self, context, operand)?;
         }
         Ok(())
@@ -1017,7 +1087,7 @@ impl Verify for CheckedTiledIndex2DOp {
 #[pliron_op(
     name = "kernel.checked_row_striped_index_2d",
     format,
-    interfaces = [NResultsInterface<1>, NRegionsInterface<0>],
+    interfaces = [NRegionsInterface<0>],
     attributes = (
         kernel_lanes_per_row: IndexValueAttr,
         kernel_row_striped_elements_per_lane: IndexValueAttr
@@ -1053,6 +1123,44 @@ impl CheckedRowStripedIndex2DOp {
         op
     }
 
+    pub fn new_predicated(
+        context: &mut Context,
+        invocation: Value,
+        component: Value,
+        rows: Value,
+        columns: Value,
+        row_stride: Value,
+        physical_extent: Value,
+        geometry: [u64; 2],
+    ) -> Self {
+        let [lanes_per_row, elements_per_lane] = geometry;
+        let operation = Operation::new(
+            context,
+            Self::get_concrete_op_info(),
+            vec![
+                IndexType::get(context).into(),
+                CheckedAccessCapabilityType::get(context).into(),
+            ],
+            vec![
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ],
+            vec![],
+            0,
+        );
+        let op = Self::from_operation(operation);
+        op.set_attr_kernel_lanes_per_row(context, IndexValueAttr(lanes_per_row));
+        op.set_attr_kernel_row_striped_elements_per_lane(
+            context,
+            IndexValueAttr(elements_per_lane),
+        );
+        op
+    }
+
     pub fn operands(&self, context: &Context) -> [Value; 5] {
         let operation = self.get_operation().deref(context);
         core::array::from_fn(|index| operation.get_operand(index))
@@ -1069,15 +1177,29 @@ impl CheckedRowStripedIndex2DOp {
     pub fn result(&self, context: &Context) -> Value {
         self.get_operation().deref(context).get_result(0)
     }
+
+    pub fn physical_extent(&self, context: &Context) -> Option<Value> {
+        let operation = self.get_operation().deref(context);
+        (operation.get_num_operands() == 6).then(|| operation.get_operand(5))
+    }
+
+    pub fn success(&self, context: &Context) -> Option<Value> {
+        let operation = self.get_operation().deref(context);
+        (operation.get_num_results() == 2).then(|| operation.get_result(1))
+    }
 }
 
 impl Verify for CheckedRowStripedIndex2DOp {
     fn verify(&self, context: &Context) -> PlironResult<()> {
-        verify_no_regions_results_successors(self, context, 1, 0)?;
         let raw = self.get_operation();
         let raw = raw.deref(context);
+        verify_no_regions_results_successors(self, context, raw.get_num_results(), 0)?;
         let geometry = self.geometry(context);
-        if raw.get_num_operands() != 5
+        let legacy = raw.get_num_operands() == 5 && raw.get_num_results() == 1;
+        let predicated = raw.get_num_operands() == 6
+            && raw.get_num_results() == 2
+            && is_checked_access_capability(raw.get_result(1), context);
+        if !(legacy || predicated)
             || payload_attribute_count(&raw) != 2
             || geometry.is_none_or(|[lanes, elements]| {
                 lanes == 0
@@ -1096,7 +1218,7 @@ impl Verify for CheckedRowStripedIndex2DOp {
                 )
             );
         }
-        for operand in 0..5 {
+        for operand in 0..raw.get_num_operands() {
             require_index_operand(self, context, operand)?;
         }
         Ok(())
@@ -1214,7 +1336,7 @@ impl RankedAccessOp {
         if kind.is_atomic() {
             return Err(RankedMemoryError::MissingAtomicContract);
         }
-        Self::build(context, kind, None, None, view, indices)
+        Self::build(context, kind, None, None, view, indices, None)
     }
 
     pub fn new_atomic(
@@ -1228,7 +1350,36 @@ impl RankedAccessOp {
         if !kind.is_atomic() {
             return Err(RankedMemoryError::UnexpectedAtomicContract);
         }
-        Self::build(context, kind, Some(ordering), Some(scope), view, indices)
+        Self::build(
+            context,
+            kind,
+            Some(ordering),
+            Some(scope),
+            view,
+            indices,
+            None,
+        )
+    }
+
+    /// Builds a structurally predicated one-dimensional write. The opaque
+    /// success value is paired with the checked index and physical extent.
+    /// This constructor grants no source or refinement authority.
+    pub fn new_predicated(
+        context: &mut Context,
+        view: Value,
+        index: Value,
+        success: Value,
+    ) -> Result<Self, RankedMemoryError> {
+        validate_predicated_access(context, view, index, success)?;
+        Self::build(
+            context,
+            AccessKindAttr::Write,
+            None,
+            None,
+            view,
+            vec![index],
+            Some(success),
+        )
     }
 
     fn build(
@@ -1238,6 +1389,7 @@ impl RankedAccessOp {
         scope: Option<AtomicScopeAttr>,
         view: Value,
         indices: Vec<Value>,
+        success: Option<Value>,
     ) -> Result<Self, RankedMemoryError> {
         let view_type =
             ranked_view_type(view, context).ok_or(RankedMemoryError::ForeignViewType)?;
@@ -1254,9 +1406,10 @@ impl RankedAccessOp {
         if kind.writes_memory() && !writable {
             return Err(RankedMemoryError::WriteThroughReadOnlyView);
         }
-        let mut operands = Vec::with_capacity(indices.len() + 1);
+        let mut operands = Vec::with_capacity(indices.len() + 1 + usize::from(success.is_some()));
         operands.push(view);
         operands.extend(indices);
+        operands.extend(success);
         let operation = Operation::new(
             context,
             Self::get_concrete_op_info(),
@@ -1297,9 +1450,19 @@ impl RankedAccessOp {
     pub fn indices(&self, context: &Context) -> Vec<Value> {
         let operation = self.get_operation();
         let operation = operation.deref(context);
-        (1..operation.get_num_operands())
+        let end = operation
+            .get_num_operands()
+            .saturating_sub(usize::from(self.checked_success(context).is_some()));
+        (1..end)
             .map(|operand| operation.get_operand(operand))
             .collect()
+    }
+
+    pub fn checked_success(&self, context: &Context) -> Option<Value> {
+        let operation = self.get_operation().deref(context);
+        let last = operation.get_num_operands().checked_sub(1)?;
+        let value = operation.get_operand(last);
+        is_checked_access_capability(value, context).then_some(value)
     }
 }
 
@@ -1321,7 +1484,8 @@ impl Verify for RankedAccessOp {
             return verify_err!(self.loc(context), RankedMemoryError::ForeignViewType);
         };
         let view_type = view_type.deref(context);
-        let actual = operation.get_num_operands() - 1;
+        let success = self.checked_success(context);
+        let actual = operation.get_num_operands() - 1 - usize::from(success.is_some());
         if actual != view_type.rank() {
             return verify_err!(
                 self.loc(context),
@@ -1341,11 +1505,99 @@ impl Verify for RankedAccessOp {
                 RankedMemoryError::WriteThroughReadOnlyView
             );
         }
-        for operand in 1..operation.get_num_operands() {
+        for operand in 1..=actual {
             require_index_operand(self, context, operand)?;
+        }
+        if let Some(success) = success {
+            if self.kind(context) != Some(AccessKindAttr::Write) || actual != 1 {
+                return verify_err!(
+                    self.loc(context),
+                    RankedMemoryError::MalformedPayload(
+                        "predicated kernel.access must be one non-atomic write"
+                    )
+                );
+            }
+            if let Err(error) = validate_predicated_access(
+                context,
+                self.view(context),
+                self.indices(context)[0],
+                success,
+            ) {
+                return verify_err!(self.loc(context), error);
+            }
         }
         Ok(())
     }
+}
+
+fn validate_predicated_access(
+    context: &Context,
+    view: Value,
+    index: Value,
+    success: Value,
+) -> Result<(), RankedMemoryError> {
+    if !is_checked_access_capability(success, context) {
+        return Err(RankedMemoryError::MalformedPayload(
+            "predicated kernel.access success has the wrong type",
+        ));
+    }
+    let view_type = ranked_view_type(view, context).ok_or(RankedMemoryError::ForeignViewType)?;
+    if view_type.deref(context).shape() != [DYNAMIC_EXTENT] {
+        return Err(RankedMemoryError::MalformedPayload(
+            "predicated kernel.access requires one dynamic view extent",
+        ));
+    }
+    let view_definition = view
+        .defining_op()
+        .ok_or(RankedMemoryError::ForeignViewType)?;
+    let view_operation = Operation::get_op_dyn(view_definition, context);
+    let view_operation = view_operation
+        .downcast_ref::<RankedViewOp>()
+        .ok_or(RankedMemoryError::ForeignViewType)?;
+    let extent =
+        view_operation
+            .dynamic_extent(context, 0)
+            .ok_or(RankedMemoryError::MalformedPayload(
+                "predicated kernel.access view is missing its physical extent",
+            ))?;
+    let producer = success
+        .defining_op()
+        .ok_or(RankedMemoryError::MalformedPayload(
+            "predicated kernel.access success has no checked definition",
+        ))?;
+    if index.defining_op() != Some(producer) {
+        return Err(RankedMemoryError::MalformedPayload(
+            "predicated kernel.access index and success have different definitions",
+        ));
+    }
+    let producer = Operation::get_op_dyn(producer, context);
+    let (expected_index, expected_success, expected_extent) =
+        if let Some(checked) = producer.downcast_ref::<CheckedTiledIndex2DOp>() {
+            (
+                checked.result(context),
+                checked.success(context),
+                checked.physical_extent(context),
+            )
+        } else if let Some(checked) = producer.downcast_ref::<CheckedRowStripedIndex2DOp>() {
+            (
+                checked.result(context),
+                checked.success(context),
+                checked.physical_extent(context),
+            )
+        } else {
+            return Err(RankedMemoryError::MalformedPayload(
+                "predicated kernel.access success has a foreign definition",
+            ));
+        };
+    if expected_index != index
+        || expected_success != Some(success)
+        || expected_extent != Some(extent)
+    {
+        return Err(RankedMemoryError::MalformedPayload(
+            "predicated kernel.access changed its checked index, success, or physical extent",
+        ));
+    }
+    Ok(())
 }
 
 /// Requests a hierarchy-level ownership proof for one logical output view.
@@ -2367,6 +2619,15 @@ pub fn ranked_view_type(value: Value, context: &Context) -> Option<TypedHandle<R
 
 pub fn is_index_type(value: Value, context: &Context) -> bool {
     value.get_type(context).deref(context).is::<IndexType>()
+}
+
+fn is_checked_access_capability(value: Value, context: &Context) -> bool {
+    is_checked_access_capability_type(&*value.get_type(context).deref(context))
+}
+
+/// Recognizes the opaque structural carrier without exposing its constructor.
+pub fn is_checked_access_capability_type(ty: &dyn Type) -> bool {
+    ty.downcast_ref::<CheckedAccessCapabilityType>().is_some()
 }
 
 fn require_index_operand(

@@ -10618,6 +10618,58 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             ranked_value_text_v1(*columns),
             ranked_value_text_v1(*row_stride),
         ),
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+            result,
+            success,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => format!(
+            "  %{}, %{} = kernel.checked_tiled_index_2d <{}, {}, {}, {}>({}, {}, {}, {}, {}, {})\n",
+            result.get(),
+            success.get(),
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+            ranked_value_text_v1(*invocation),
+            ranked_value_text_v1(*component),
+            ranked_value_text_v1(*rows),
+            ranked_value_text_v1(*columns),
+            ranked_value_text_v1(*row_stride),
+            ranked_value_text_v1(*physical_extent),
+        ),
+        ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+            result,
+            success,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_row,
+            elements_per_lane,
+        } => format!(
+            "  %{}, %{} = kernel.checked_row_striped_index_2d <{}, {}>({}, {}, {}, {}, {}, {})\n",
+            result.get(),
+            success.get(),
+            lanes_per_row,
+            elements_per_lane,
+            ranked_value_text_v1(*invocation),
+            ranked_value_text_v1(*component),
+            ranked_value_text_v1(*rows),
+            ranked_value_text_v1(*columns),
+            ranked_value_text_v1(*row_stride),
+            ranked_value_text_v1(*physical_extent),
+        ),
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -10637,6 +10689,16 @@ fn format_ranked_operation(operation: &ProductionRankedOperationV1) -> String {
             kind,
             ranked_value_text_v1(*view),
             format_ranked_values(indices),
+        ),
+        ProductionRankedOperationV1::PredicatedAccess {
+            view,
+            index,
+            success,
+        } => format!(
+            "  kernel.predicated_access Write {}[{}] if {}\n",
+            ranked_value_text_v1(*view),
+            ranked_value_text_v1(*index),
+            ranked_value_text_v1(*success),
         ),
         ProductionRankedOperationV1::ValueAccess {
             kind,
@@ -13946,6 +14008,9 @@ mod tests {
                 | ProductionRankedOperationV1::IndexBinary { .. }
                 | ProductionRankedOperationV1::CheckedTiledIndex2D { .. }
                 | ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. }
+                | ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D { .. }
+                | ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D { .. }
+                | ProductionRankedOperationV1::PredicatedAccess { .. }
                 | ProductionRankedOperationV1::Dimension { .. }
                 | ProductionRankedOperationV1::OwnershipContract { .. }
                 | ProductionRankedOperationV1::Barrier { .. }

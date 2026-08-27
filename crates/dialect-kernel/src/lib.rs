@@ -49,7 +49,8 @@ pub use ranked_memory::{
     InvocationIndexOp, LaunchExtentAttr, MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK,
     MemorySpaceAttr, NoAliasClassAttr, OwnershipContractOp, OwnershipCoverageAttr,
     OwnershipPartitionAttr, RankedAccessOp, RankedMemoryError, RankedViewOp, RankedViewType,
-    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_index_type, ranked_view_type,
+    ReturnOp, SUPPORTED_ELEMENT_WIDTHS, TrapOp, is_checked_access_capability_type, is_index_type,
+    ranked_view_type,
 };
 pub use semantic_contract::{
     RequireEquivalentOp, SemanticBinaryKindAttr, SemanticBinaryOp, SemanticConstantAttr,

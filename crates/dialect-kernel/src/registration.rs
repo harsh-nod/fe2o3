@@ -2,6 +2,7 @@ use fe2o3_pliron_owner_core::{
     DialectRegistration, DialectRegistrationService, NameError, RegistrationHookError,
 };
 
+use crate::ranked_memory::CheckedAccessCapabilityType;
 use crate::{
     AccessKindAttr, AlgorithmOp, AlgorithmType, AllocationEffectOp, AllocationOriginAttr,
     AnalysisSplitControlCountAttr, AnalysisSplitOp, AtomicOrderingAttr, AtomicScopeAttr,
@@ -34,6 +35,7 @@ fn registration_hook(
     service.register_attribute::<IterationDomainAttr>()?;
     service.register_type::<RankedViewType>()?;
     service.register_type::<IndexType>()?;
+    service.register_type::<CheckedAccessCapabilityType>()?;
     service.register_type::<SemanticScalarType>()?;
     service.register_attribute::<SemanticScalarKindAttr>()?;
     service.register_attribute::<SemanticTypedUnaryKindAttr>()?;

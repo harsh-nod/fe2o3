@@ -35,7 +35,9 @@ use pliron::{
 };
 use sha2::{Digest, Sha256};
 
-use dialect_kernel::{IndexType, RankedViewType, SemanticScalarType};
+use dialect_kernel::{
+    IndexType, RankedViewType, SemanticScalarType, is_checked_access_capability_type,
+};
 use dialect_proof::{EvidenceRefType, ObligationRefType};
 
 use crate::pliron_pass_contract::{
@@ -1061,6 +1063,7 @@ fn is_production_type(ty: &dyn Type) -> bool {
         || ty.downcast_ref::<IndexType>().is_some()
         || ty.downcast_ref::<RankedViewType>().is_some()
         || ty.downcast_ref::<SemanticScalarType>().is_some()
+        || is_checked_access_capability_type(ty)
         || ty.downcast_ref::<ObligationRefType>().is_some()
         || ty.downcast_ref::<EvidenceRefType>().is_some()
 }

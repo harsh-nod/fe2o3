@@ -799,6 +799,182 @@ fn checked_tiled_index_verifier_rejects_malformed_geometry_and_payload() {
 }
 
 #[test]
+fn predicated_checked_access_binds_index_success_and_physical_extent() {
+    let context = &mut Context::new();
+    register_dialect(context, &kernel_name()).unwrap();
+    let values = (0..6)
+        .map(|value| IndexConstantOp::new(context, value + 1))
+        .collect::<Vec<_>>();
+    let extent = values[5].result(context);
+    let view_type = RankedViewType::new(context, 32, true, vec![DYNAMIC_EXTENT]).unwrap();
+    let view = RankedViewOp::new(context, view_type, vec![extent]).unwrap();
+    let tiled = CheckedTiledIndex2DOp::new_predicated(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        extent,
+        [64, 16, 16, 4],
+    );
+    verify_op(&tiled, context).unwrap();
+    let access = RankedAccessOp::new_predicated(
+        context,
+        view.result(context),
+        tiled.result(context),
+        tiled.success(context).unwrap(),
+    )
+    .unwrap();
+    verify_op(&access, context).unwrap();
+    assert_eq!(access.indices(context), [tiled.result(context)]);
+    assert_eq!(access.checked_success(context), tiled.success(context));
+
+    let other = CheckedRowStripedIndex2DOp::new_predicated(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        extent,
+        [64, 4],
+    );
+    verify_op(&other, context).unwrap();
+    assert!(
+        RankedAccessOp::new_predicated(
+            context,
+            view.result(context),
+            tiled.result(context),
+            other.success(context).unwrap(),
+        )
+        .is_err()
+    );
+
+    let different_extent = IndexConstantOp::new(context, 99);
+    let different_view_type = RankedViewType::new(context, 32, true, vec![DYNAMIC_EXTENT]).unwrap();
+    let different_view = RankedViewOp::new(
+        context,
+        different_view_type,
+        vec![different_extent.result(context)],
+    )
+    .unwrap();
+    assert!(
+        RankedAccessOp::new_predicated(
+            context,
+            different_view.result(context),
+            tiled.result(context),
+            tiled.success(context).unwrap(),
+        )
+        .is_err()
+    );
+
+    let read_only_type = RankedViewType::new(context, 32, false, vec![DYNAMIC_EXTENT]).unwrap();
+    let read_only = RankedViewOp::new(context, read_only_type, vec![extent]).unwrap();
+    assert!(
+        RankedAccessOp::new_predicated(
+            context,
+            read_only.result(context),
+            tiled.result(context),
+            tiled.success(context).unwrap(),
+        )
+        .is_err()
+    );
+
+    let rank_two_type =
+        RankedViewType::new(context, 32, true, vec![DYNAMIC_EXTENT, DYNAMIC_EXTENT]).unwrap();
+    let rank_two = RankedViewOp::new(context, rank_two_type, vec![extent, extent]).unwrap();
+    assert!(
+        RankedAccessOp::new_predicated(
+            context,
+            rank_two.result(context),
+            tiled.result(context),
+            tiled.success(context).unwrap(),
+        )
+        .is_err()
+    );
+
+    let wrong_kind = RankedAccessOp::new_predicated(
+        context,
+        view.result(context),
+        tiled.result(context),
+        tiled.success(context).unwrap(),
+    )
+    .unwrap();
+    wrong_kind.set_attr_kernel_access_kind(context, AccessKindAttr::Read);
+    assert!(verify_op(&wrong_kind, context).is_err());
+
+    let malformed_count = CheckedTiledIndex2DOp::new_predicated(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        extent,
+        [64, 16, 16, 4],
+    );
+    Operation::pop_result(malformed_count.get_operation(), context);
+    assert!(verify_op(&malformed_count, context).is_err());
+
+    let wrong_success_type = CheckedTiledIndex2DOp::new_predicated(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        extent,
+        [64, 16, 16, 4],
+    );
+    wrong_success_type
+        .success(context)
+        .unwrap()
+        .set_type(context, IndexType::get(context).into());
+    assert!(verify_op(&wrong_success_type, context).is_err());
+    assert!(
+        RankedAccessOp::new_predicated(
+            context,
+            view.result(context),
+            wrong_success_type.result(context),
+            wrong_success_type.success(context).unwrap(),
+        )
+        .is_err()
+    );
+
+    // Missing or repeated uses remain structurally valid. This dialect shape
+    // carries an obligation only; production source correspondence is what
+    // may later prove an exact use relation.
+    let unused = CheckedRowStripedIndex2DOp::new_predicated(
+        context,
+        values[0].result(context),
+        values[1].result(context),
+        values[2].result(context),
+        values[3].result(context),
+        values[4].result(context),
+        extent,
+        [64, 4],
+    );
+    verify_op(&unused, context).unwrap();
+    let reused_first = RankedAccessOp::new_predicated(
+        context,
+        view.result(context),
+        unused.result(context),
+        unused.success(context).unwrap(),
+    )
+    .unwrap();
+    let reused_second = RankedAccessOp::new_predicated(
+        context,
+        view.result(context),
+        unused.result(context),
+        unused.success(context).unwrap(),
+    )
+    .unwrap();
+    verify_op(&reused_first, context).unwrap();
+    verify_op(&reused_second, context).unwrap();
+}
+
+#[test]
 fn checked_row_striped_index_verifier_rejects_zero_overflow_and_missing_operands() {
     let context = &mut Context::new();
     register_dialect(context, &kernel_name()).unwrap();

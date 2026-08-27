@@ -911,6 +911,12 @@ pub fn normalized_effect_refinement_hash_for_kernel_v2(
                 {
                     unmodeled_matching_write = true;
                 }
+                ProductionRankedOperationV1::PredicatedAccess { view, index, .. }
+                    if *view == contract.view
+                        && [*index].as_slice() == contract.indices.as_slice() =>
+                {
+                    unmodeled_matching_write = true;
+                }
                 ProductionRankedOperationV1::ValueAccess {
                     kind,
                     view,
@@ -1056,11 +1062,22 @@ pub fn normalized_tensor_refinement_hash_for_kernel_v1(
                     indices,
                     value,
                 } if kind.writes_memory() && *view == contract.output_view => {
-                    writes.push((candidate_block, candidate_operation, *kind, indices, *value));
+                    writes.push((
+                        candidate_block,
+                        candidate_operation,
+                        *kind,
+                        indices.clone(),
+                        *value,
+                    ));
                 }
                 ProductionRankedOperationV1::Access { kind, view, .. }
                 | ProductionRankedOperationV1::AtomicAccess { kind, view, .. }
                     if kind.writes_memory() && *view == contract.output_view =>
+                {
+                    return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
+                }
+                ProductionRankedOperationV1::PredicatedAccess { view, .. }
+                    if *view == contract.output_view =>
                 {
                     return Err(ProductionRankedKernelErrorV1::InvalidReferenceContract);
                 }
@@ -1139,7 +1156,7 @@ pub fn normalized_tensor_refinement_hash_for_kernel_v1(
                 *block == component.store_site.block as usize
                     && *operation == component.store_site.operation as usize
                     && *kind == AccessKindAttr::Write
-                    && *indices == &component.indices
+                    && indices.as_slice() == component.indices.as_slice()
                     && *value == component.gpu_value
             })
             .count();
@@ -1597,6 +1614,36 @@ pub enum ProductionRankedOperationV1 {
         lanes_per_row: u64,
         elements_per_lane: u64,
     },
+    /// Structural predicated tiled mapping. `success` carries an obligation
+    /// tying the mapping to the destination physical extent. The recipe shape
+    /// alone grants no source, refinement, artifact, or launch authority.
+    PredicatedCheckedTiledIndex2D {
+        result: ProductionRankedValueIdV1,
+        success: ProductionRankedValueIdV1,
+        invocation: ProductionRankedValueV1,
+        component: ProductionRankedValueV1,
+        rows: ProductionRankedValueV1,
+        columns: ProductionRankedValueV1,
+        row_stride: ProductionRankedValueV1,
+        physical_extent: ProductionRankedValueV1,
+        lanes_per_tile: u64,
+        tile_rows: u64,
+        tile_columns: u64,
+        elements_per_lane: u64,
+    },
+    /// Structural predicated row-striped mapping with no authority by itself.
+    PredicatedCheckedRowStripedIndex2D {
+        result: ProductionRankedValueIdV1,
+        success: ProductionRankedValueIdV1,
+        invocation: ProductionRankedValueV1,
+        component: ProductionRankedValueV1,
+        rows: ProductionRankedValueV1,
+        columns: ProductionRankedValueV1,
+        row_stride: ProductionRankedValueV1,
+        physical_extent: ProductionRankedValueV1,
+        lanes_per_row: u64,
+        elements_per_lane: u64,
+    },
     Dimension {
         result: ProductionRankedValueIdV1,
         view: ProductionRankedValueV1,
@@ -1606,6 +1653,13 @@ pub enum ProductionRankedOperationV1 {
         kind: AccessKindAttr,
         view: ProductionRankedValueV1,
         indices: Vec<ProductionRankedValueV1>,
+    },
+    /// One non-atomic write structurally paired with the checked mapping that
+    /// produced `index` and `success`. This shape grants no authority.
+    PredicatedAccess {
+        view: ProductionRankedValueV1,
+        index: ProductionRankedValueV1,
+        success: ProductionRankedValueV1,
     },
     /// A non-atomic access whose exact semantic write RHS is retained.
     ///
@@ -2097,6 +2151,9 @@ impl ProductionRankedKernelV1 {
         let mut locals = Vec::new();
         let mut saw_execution_layout = false;
         let mut allocation_classes = HashMap::new();
+        let mut predicated_success_uses: BTreeMap<ProductionRankedValueIdV1, usize> =
+            BTreeMap::new();
+        let mut predicated_indices = BTreeMap::new();
         let mut total_block_arguments = 0_usize;
         for (block_index, block) in self.blocks.iter().enumerate() {
             if block_index == 0 && block.index_argument_count != 0
@@ -2180,6 +2237,42 @@ impl ProductionRankedKernelV1 {
                     }
                 }
                 let result = validate_operation(operation, self.argument_count, &locals)?;
+                if let ProductionRankedOperationV1::Access { indices, .. }
+                | ProductionRankedOperationV1::ValueAccess { indices, .. }
+                | ProductionRankedOperationV1::AtomicAccess { indices, .. }
+                | ProductionRankedOperationV1::AtomicValueAccess { indices, .. } = operation
+                {
+                    if let Some(index) = indices.iter().find_map(|value| {
+                        let ProductionRankedValueV1::Local(index) = value else {
+                            return None;
+                        };
+                        predicated_indices.contains_key(index).then_some(*index)
+                    }) {
+                        return Err(
+                            ProductionRankedKernelErrorV1::InvalidPredicatedAccessIndexUse {
+                                index,
+                            },
+                        );
+                    }
+                }
+                if let ProductionRankedOperationV1::PredicatedAccess { success, .. } = operation {
+                    let ProductionRankedValueV1::Local(success) = success else {
+                        return Err(ProductionRankedKernelErrorV1::InvalidShape);
+                    };
+                    let uses = predicated_success_uses.get_mut(success).ok_or(
+                        ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse {
+                            success: *success,
+                            uses: 0,
+                        },
+                    )?;
+                    *uses = uses.checked_add(1).ok_or(
+                        ProductionRankedKernelErrorV1::ResourceLimit {
+                            resource: "predicated success use",
+                            limit: 1,
+                            actual: usize::MAX,
+                        },
+                    )?;
+                }
                 if let Some((identity, kind)) = result {
                     if block_index != 0 {
                         return Err(ProductionRankedKernelErrorV1::NonEntryDefinition {
@@ -2200,6 +2293,42 @@ impl ProductionRankedKernelV1 {
                         });
                     }
                     locals.push(kind);
+                    let paired = match operation {
+                        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+                            result,
+                            success,
+                            physical_extent,
+                            ..
+                        }
+                        | ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+                            result,
+                            success,
+                            physical_extent,
+                            ..
+                        } => Some((*result, *success, *physical_extent)),
+                        _ => None,
+                    };
+                    if let Some((index, success, physical_extent)) = paired {
+                        let expected = u32::try_from(locals.len()).map_err(|_| {
+                            ProductionRankedKernelErrorV1::ResourceLimit {
+                                resource: "local value",
+                                limit: MAX_RANKED_BOUNDS_OPERATIONS,
+                                actual: locals.len(),
+                            }
+                        })?;
+                        if success.get() != expected {
+                            return Err(ProductionRankedKernelErrorV1::NonCanonicalValueId {
+                                expected,
+                                actual: success.get(),
+                            });
+                        }
+                        locals.push(RecipeValueKindV1::CheckedAccessSuccess {
+                            index: ProductionRankedValueV1::Local(index),
+                            physical_extent,
+                        });
+                        predicated_success_uses.insert(success, 0);
+                        predicated_indices.insert(index, success);
+                    }
                 }
             }
             validate_terminator(
@@ -2209,6 +2338,15 @@ impl ProductionRankedKernelV1 {
                 &self.blocks,
                 block_index,
             )?;
+        }
+        if let Some((success, uses)) = predicated_success_uses
+            .into_iter()
+            .find(|(_, uses)| *uses != 1)
+        {
+            return Err(ProductionRankedKernelErrorV1::InvalidPredicatedAccessUse {
+                success,
+                uses,
+            });
         }
         Ok(tree_work)
     }
@@ -2467,6 +2605,13 @@ pub enum ProductionRankedKernelErrorV1 {
         actual: usize,
     },
     InvalidShape,
+    InvalidPredicatedAccessUse {
+        success: ProductionRankedValueIdV1,
+        uses: usize,
+    },
+    InvalidPredicatedAccessIndexUse {
+        index: ProductionRankedValueIdV1,
+    },
     InvalidExecutionLayout,
     InvalidUnsignedCast,
     InvalidAllocationContract,
@@ -2726,6 +2871,16 @@ impl fmt::Display for ProductionRankedKernelErrorV1 {
                 formatter,
                 "ranked view rank must be within 1..={MAX_RANKED_MEMORY_RANK}"
             ),
+            Self::InvalidPredicatedAccessUse { success, uses } => write!(
+                formatter,
+                "ranked predicated success value {} must be consumed exactly once but has {uses} uses",
+                success.get(),
+            ),
+            Self::InvalidPredicatedAccessIndexUse { index } => write!(
+                formatter,
+                "ranked predicated index value {} is consumed by an unpaired memory access",
+                index.get(),
+            ),
             Self::InvalidExecutionLayout => formatter.write_str(
                 "ranked execution layout must be the unique first entry operation with nonzero workgroup axes and an integral subgroup width",
             ),
@@ -2820,6 +2975,10 @@ impl Error for ProductionRankedKernelErrorV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecipeValueKindV1 {
     Index,
+    CheckedAccessSuccess {
+        index: ProductionRankedValueV1,
+        physical_extent: ProductionRankedValueV1,
+    },
     Semantic,
     TypedSemantic {
         scalar: super::ProductionSemanticScalarTypeV2,
@@ -2828,6 +2987,7 @@ enum RecipeValueKindV1 {
     View {
         rank: usize,
         writable: bool,
+        dynamic_extent: Option<ProductionRankedValueV1>,
     },
 }
 
@@ -2876,8 +3036,9 @@ fn require_view(
     locals: &[RecipeValueKindV1],
 ) -> Result<(usize, bool), ProductionRankedKernelErrorV1> {
     match require_value(value, argument_count, locals)? {
-        RecipeValueKindV1::View { rank, writable } => Ok((rank, writable)),
+        RecipeValueKindV1::View { rank, writable, .. } => Ok((rank, writable)),
         RecipeValueKindV1::Index
+        | RecipeValueKindV1::CheckedAccessSuccess { .. }
         | RecipeValueKindV1::Semantic
         | RecipeValueKindV1::TypedSemantic { .. } => {
             Err(ProductionRankedKernelErrorV1::ExpectedView(value))
@@ -2969,6 +3130,8 @@ fn validate_operation(
                 RecipeValueKindV1::View {
                     rank: shape.len(),
                     writable: *writable,
+                    dynamic_extent: (shape.as_slice() == [DYNAMIC_EXTENT])
+                        .then(|| dynamic_extents[0]),
                 },
             )))
         }
@@ -3079,6 +3242,77 @@ fn validate_operation(
             }
             Ok(Some((*result, RecipeValueKindV1::Index)))
         }
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+            ..
+        } => {
+            for value in [
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ] {
+                require_index(*value, argument_count, locals)?;
+            }
+            if *lanes_per_tile == 0
+                || *tile_rows == 0
+                || *tile_columns == 0
+                || *elements_per_lane == 0
+                || !lanes_per_tile.is_multiple_of(*tile_columns)
+                || lanes_per_tile.checked_mul(*elements_per_lane)
+                    != tile_rows.checked_mul(*tile_columns)
+                || (lanes_per_tile / tile_columns).checked_mul(*elements_per_lane)
+                    != Some(*tile_rows)
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+            }
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
+        ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+            result,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_row,
+            elements_per_lane,
+            ..
+        } => {
+            for value in [
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ] {
+                require_index(*value, argument_count, locals)?;
+            }
+            if *lanes_per_row == 0
+                || *elements_per_lane == 0
+                || (*elements_per_lane - 1)
+                    .checked_mul(*lanes_per_row)
+                    .and_then(|base| base.checked_add(*lanes_per_row - 1))
+                    .is_none()
+            {
+                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+            }
+            Ok(Some((*result, RecipeValueKindV1::Index)))
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -3106,6 +3340,29 @@ fn validate_operation(
             }
             validate_access(*kind, *view, indices, argument_count, locals)?;
             Ok(None)
+        }
+        ProductionRankedOperationV1::PredicatedAccess {
+            view,
+            index,
+            success,
+        } => {
+            let kind = require_value(*view, argument_count, locals)?;
+            let RecipeValueKindV1::View {
+                rank: 1,
+                writable: true,
+                dynamic_extent: Some(view_extent),
+            } = kind
+            else {
+                return Err(ProductionRankedKernelErrorV1::InvalidShape);
+            };
+            require_index(*index, argument_count, locals)?;
+            match require_value(*success, argument_count, locals)? {
+                RecipeValueKindV1::CheckedAccessSuccess {
+                    index: expected_index,
+                    physical_extent,
+                } if expected_index == *index && physical_extent == view_extent => Ok(None),
+                _ => Err(ProductionRankedKernelErrorV1::InvalidShape),
+            }
         }
         ProductionRankedOperationV1::ValueAccess {
             kind,
@@ -3444,6 +3701,26 @@ fn validate_block_argument_values_v1(
                 validate(*value)?;
             }
         }
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            ..
+        } => {
+            for value in [
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ] {
+                validate(*value)?;
+            }
+        }
         ProductionRankedOperationV1::CheckedRowStripedIndex2D {
             invocation,
             component,
@@ -3456,6 +3733,26 @@ fn validate_block_argument_values_v1(
                 validate(*value)?;
             }
         }
+        ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            ..
+        } => {
+            for value in [
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ] {
+                validate(*value)?;
+            }
+        }
         ProductionRankedOperationV1::Dimension { view, .. }
         | ProductionRankedOperationV1::OwnershipContract { view, .. } => validate(*view)?,
         ProductionRankedOperationV1::Access { view, indices, .. }
@@ -3464,6 +3761,15 @@ fn validate_block_argument_values_v1(
             for value in indices {
                 validate(*value)?;
             }
+        }
+        ProductionRankedOperationV1::PredicatedAccess {
+            view,
+            index,
+            success,
+        } => {
+            validate(*view)?;
+            validate(*index)?;
+            validate(*success)?;
         }
         ProductionRankedOperationV1::ValueAccess {
             view,
@@ -4449,6 +4755,87 @@ fn materialize_operation(
             })?;
             (op.get_operation(), Some((*result, op.result(context))))
         }
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+            result,
+            success,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            let op = CheckedTiledIndex2DOp::new_predicated(
+                context,
+                resolve_value(*invocation, arguments, locals, block_arguments)?,
+                resolve_value(*component, arguments, locals, block_arguments)?,
+                resolve_value(*rows, arguments, locals, block_arguments)?,
+                resolve_value(*columns, arguments, locals, block_arguments)?,
+                resolve_value(*row_stride, arguments, locals, block_arguments)?,
+                resolve_value(*physical_extent, arguments, locals, block_arguments)?,
+                [
+                    *lanes_per_tile,
+                    *tile_rows,
+                    *tile_columns,
+                    *elements_per_lane,
+                ],
+            );
+            if result.get() as usize != locals.len()
+                || success.get() != result.get().saturating_add(1)
+            {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "validated predicated checked results changed order",
+                ));
+            }
+            locals.push(op.result(context));
+            locals.push(op.success(context).ok_or(
+                ProductionRankedKernelErrorV1::Materialization(
+                    "predicated tiled operation omitted its success result",
+                ),
+            )?);
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+            result,
+            success,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            let op = CheckedRowStripedIndex2DOp::new_predicated(
+                context,
+                resolve_value(*invocation, arguments, locals, block_arguments)?,
+                resolve_value(*component, arguments, locals, block_arguments)?,
+                resolve_value(*rows, arguments, locals, block_arguments)?,
+                resolve_value(*columns, arguments, locals, block_arguments)?,
+                resolve_value(*row_stride, arguments, locals, block_arguments)?,
+                resolve_value(*physical_extent, arguments, locals, block_arguments)?,
+                [*lanes_per_row, *elements_per_lane],
+            );
+            if result.get() as usize != locals.len()
+                || success.get() != result.get().saturating_add(1)
+            {
+                return Err(ProductionRankedKernelErrorV1::Materialization(
+                    "validated predicated checked results changed order",
+                ));
+            }
+            locals.push(op.result(context));
+            locals.push(op.success(context).ok_or(
+                ProductionRankedKernelErrorV1::Materialization(
+                    "predicated row-striped operation omitted its success result",
+                ),
+            )?);
+            (op.get_operation(), None)
+        }
         ProductionRankedOperationV1::CheckedTiledIndex2D {
             result,
             invocation,
@@ -4627,6 +5014,24 @@ fn materialize_operation(
             .map_err(|_| {
                 ProductionRankedKernelErrorV1::Materialization(
                     "validated ranked access failed materialization",
+                )
+            })?;
+            (op.get_operation(), None)
+        }
+        ProductionRankedOperationV1::PredicatedAccess {
+            view,
+            index,
+            success,
+        } => {
+            let op = RankedAccessOp::new_predicated(
+                context,
+                resolve_value(*view, arguments, locals, block_arguments)?,
+                resolve_value(*index, arguments, locals, block_arguments)?,
+                resolve_value(*success, arguments, locals, block_arguments)?,
+            )
+            .map_err(|_| {
+                ProductionRankedKernelErrorV1::Materialization(
+                    "validated predicated ranked access failed materialization",
                 )
             })?;
             (op.get_operation(), None)

@@ -1113,6 +1113,81 @@ fn checked_tiled_dynamic_layout_never_authorizes_a_raw_marker() {
 }
 
 #[test]
+fn raw_predicated_checked_access_never_grants_race_authority() {
+    for launch_extent in [0, 64] {
+        for access_uses in [1, 2] {
+            let context = &mut setup();
+            let (function, arguments) =
+                function_with_index_arguments(context, "raw_predicated_checked_access", 4);
+            let entry = function.get_entry_block(context);
+            let access_block = block(context, &function, "access");
+            let exit = block(context, &function, "exit");
+            let view_type =
+                RankedViewType::new(context, 32, true, vec![dialect_kernel::DYNAMIC_EXTENT])
+                    .unwrap();
+            let output = RankedViewOp::new(context, view_type, vec![arguments[0]]).unwrap();
+            let invocation = InvocationIndexOp::new(context, 0, launch_extent);
+            let component = IndexConstantOp::new(context, 0);
+            let checked = CheckedTiledIndex2DOp::new_predicated(
+                context,
+                invocation.result(context),
+                component.result(context),
+                arguments[1],
+                arguments[2],
+                arguments[3],
+                arguments[0],
+                [64, 16, 16, 4],
+            );
+            let guard = IndexLessThanBranchOp::new(
+                context,
+                checked.result(context),
+                arguments[0],
+                access_block,
+                exit,
+            );
+            for operation in [
+                output.get_operation(),
+                invocation.get_operation(),
+                component.get_operation(),
+                checked.get_operation(),
+                guard.get_operation(),
+            ] {
+                operation.insert_at_back(entry, context);
+            }
+            for _ in 0..access_uses {
+                let write = RankedAccessOp::new_predicated(
+                    context,
+                    output.result(context),
+                    checked.result(context),
+                    checked.success(context).unwrap(),
+                )
+                .unwrap();
+                append(context, access_block, &write);
+            }
+            let to_exit = BranchOp::new(context, exit);
+            let ret = ReturnOp::new(context);
+            append(context, access_block, &to_exit);
+            append(context, exit, &ret);
+
+            let report = run_pliron_ranked_race_check_v1(context, &function);
+            assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+            assert!(!report.grants_compiler_refinement_authority());
+            assert!(!report.grants_artifact_or_launch_authority());
+            let error = require_pliron_ranked_race_freedom_before_lowering_v1(context, &function)
+                .expect_err("raw capability shape must not grant source correspondence")
+                .to_string();
+            assert!(error.contains("error[FE2O3-RACE-002]"), "{error}");
+            if launch_extent == 64 {
+                assert!(
+                    error.contains("checked structured index markers are currently incomplete"),
+                    "{error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn dynamic_multiaxis_mapping_requires_every_active_axis() {
     for drop_y in [false, true] {
         let context = &mut setup();

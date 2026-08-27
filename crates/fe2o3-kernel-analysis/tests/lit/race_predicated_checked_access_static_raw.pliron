@@ -1,0 +1,22 @@
+// RUN: fe2o3-pliron-lit --passes=general %s
+// EXPECT: REJECT
+// CHECK: error[FE2O3-RACE-002]
+// CHECK: access dimension 0 has unresolved index
+// CHECK: checked structured index markers are currently incomplete
+
+builtin.func @race_predicated_checked_access_static_raw: builtin.function <(kernel.index , kernel.index , kernel.index , kernel.index ) -> ()>
+{
+  ^entry_block1v1(extent_v0: kernel.index , rows_v1: kernel.index , columns_v2: kernel.index , stride_v3: kernel.index ):
+    v4 = kernel.ranked_view (extent_v0) [] [kernel_memory_space: kernel.memory_space Global, kernel_allocation_origin: kernel.allocation_origin 0, kernel_noalias_class: kernel.noalias_class 0]: <(kernel.index ) -> (kernel.ranked_view <32,true,[0]>)>;
+    v5 = kernel.invocation_index () [] [kernel_invocation_dimension: kernel.invocation_dimension 0, kernel_launch_extent: kernel.launch_extent 64]: <() -> (kernel.index )>;
+    v6 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
+    checked_v7, success_v8 = kernel.checked_tiled_index_2d (v5, v6, rows_v1, columns_v2, stride_v3, extent_v0) [] [kernel_lanes_per_tile: kernel.index_value 64, kernel_tile_rows: kernel.index_value 16, kernel_tile_columns: kernel.index_value 16, kernel_elements_per_lane: kernel.index_value 4]: <(kernel.index , kernel.index , kernel.index , kernel.index , kernel.index , kernel.index ) -> (kernel.index , kernel.checked_access_capability )>;
+    kernel.index_lt_br (checked_v7, extent_v0) [^access_block2v1, ^exit_block3v1] []: <(kernel.index , kernel.index ) -> ()>
+
+  ^access_block2v1():
+    kernel.access (v4, checked_v7, success_v8) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <32,true,[0]>, kernel.index , kernel.checked_access_capability ) -> ()>;
+    kernel.br () [^exit_block3v1] []: <() -> ()>
+
+  ^exit_block3v1():
+    kernel.return () [] []: <() -> ()>
+}

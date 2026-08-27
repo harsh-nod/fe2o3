@@ -1219,8 +1219,11 @@ fn functional_refinement_graph_operation_tag(operation: &ProductionRankedOperati
         ProductionRankedOperationV1::DeterministicJoin { .. } => 8,
         ProductionRankedOperationV1::CheckedTiledIndex2D { .. } => 9,
         ProductionRankedOperationV1::CheckedRowStripedIndex2D { .. } => 10,
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D { .. } => 35,
+        ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D { .. } => 36,
         ProductionRankedOperationV1::Dimension { .. } => 11,
         ProductionRankedOperationV1::Access { .. } => 12,
+        ProductionRankedOperationV1::PredicatedAccess { .. } => 37,
         ProductionRankedOperationV1::ValueAccess { .. } => 26,
         ProductionRankedOperationV1::AtomicAccess { .. } => 13,
         ProductionRankedOperationV1::AtomicValueAccess { .. } => 27,
@@ -1493,6 +1496,66 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update(lanes_per_row.to_le_bytes());
             digest.update(elements_per_lane.to_le_bytes());
         }
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+            result,
+            success,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            digest.update([35]);
+            digest.update(result.get().to_le_bytes());
+            digest.update(success.get().to_le_bytes());
+            for value in [
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ] {
+                hash_value(digest, *value);
+            }
+            digest.update(lanes_per_tile.to_le_bytes());
+            digest.update(tile_rows.to_le_bytes());
+            digest.update(tile_columns.to_le_bytes());
+            digest.update(elements_per_lane.to_le_bytes());
+        }
+        ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+            result,
+            success,
+            invocation,
+            component,
+            rows,
+            columns,
+            row_stride,
+            physical_extent,
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            digest.update([36]);
+            digest.update(result.get().to_le_bytes());
+            digest.update(success.get().to_le_bytes());
+            for value in [
+                invocation,
+                component,
+                rows,
+                columns,
+                row_stride,
+                physical_extent,
+            ] {
+                hash_value(digest, *value);
+            }
+            digest.update(lanes_per_row.to_le_bytes());
+            digest.update(elements_per_lane.to_le_bytes());
+        }
         ProductionRankedOperationV1::Dimension {
             result,
             view,
@@ -1512,6 +1575,16 @@ fn hash_ranked_operation(digest: &mut Sha256, operation: &ProductionRankedOperat
             digest.update([access_kind_tag(*kind)]);
             hash_value(digest, *view);
             hash_values(digest, indices);
+        }
+        ProductionRankedOperationV1::PredicatedAccess {
+            view,
+            index,
+            success,
+        } => {
+            digest.update([37]);
+            hash_value(digest, *view);
+            hash_value(digest, *index);
+            hash_value(digest, *success);
         }
         ProductionRankedOperationV1::ValueAccess {
             kind,
@@ -2332,6 +2405,45 @@ mod tests {
             functional_refinement_graph_operation_tag(&base),
             functional_refinement_graph_operation_tag(&changed_kind),
         );
+    }
+
+    #[test]
+    fn predicated_identity_binds_pair_geometry_extent_and_access_success() {
+        let identity = derive_exact_ranked_operation_identity_v1;
+        let checked = |success, physical_extent, elements_per_lane| {
+            ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+                result: ProductionRankedValueIdV1::new(0),
+                success: ProductionRankedValueIdV1::new(success),
+                invocation: ProductionRankedValueV1::Argument(0),
+                component: ProductionRankedValueV1::Argument(1),
+                rows: ProductionRankedValueV1::Argument(2),
+                columns: ProductionRankedValueV1::Argument(3),
+                row_stride: ProductionRankedValueV1::Argument(4),
+                physical_extent: ProductionRankedValueV1::Argument(physical_extent),
+                lanes_per_tile: 64,
+                tile_rows: 16,
+                tile_columns: 16,
+                elements_per_lane,
+            }
+        };
+        let base = checked(1, 5, 4);
+        for changed in [checked(2, 5, 4), checked(1, 6, 4), checked(1, 5, 8)] {
+            assert_ne!(identity(&base), identity(&changed));
+        }
+
+        let access = ProductionRankedOperationV1::PredicatedAccess {
+            view: ProductionRankedValueV1::Argument(0),
+            index: ProductionRankedValueV1::Argument(1),
+            success: ProductionRankedValueV1::Argument(2),
+        };
+        let changed_access = ProductionRankedOperationV1::PredicatedAccess {
+            view: ProductionRankedValueV1::Argument(0),
+            index: ProductionRankedValueV1::Argument(1),
+            success: ProductionRankedValueV1::Argument(4),
+        };
+        assert_ne!(identity(&access), identity(&changed_access));
+        assert_eq!(identity(&base), identity(&base));
+        assert_eq!(identity(&access), identity(&access));
     }
 
     #[test]
