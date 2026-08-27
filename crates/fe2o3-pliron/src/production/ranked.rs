@@ -4163,6 +4163,9 @@ fn production_pipeline_check_error(
         ProductionPlironPreloweringErrorV2::Semantic(error) => {
             ProductionSessionErrorV1::RankedSemantic(error)
         }
+        ProductionPlironPreloweringErrorV2::Preservation(error) => {
+            ProductionSessionErrorV1::RankedPassPreservation(error)
+        }
     }
 }
 
@@ -5513,6 +5516,12 @@ impl ProductionRankedKernelLoweringInputV1 {
 
     pub const fn semantic_report(&self) -> &PlironSemanticRefinementReportV1 {
         self.production_pipeline_report.semantics()
+    }
+
+    pub const fn pass_preservation_report(
+        &self,
+    ) -> &fe2o3_kernel_analysis::PlironPassPreservationReportV1 {
+        self.production_pipeline_report.preservation()
     }
 
     pub fn all_mandatory_reports_are_clean(&self) -> bool {

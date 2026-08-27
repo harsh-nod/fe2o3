@@ -524,6 +524,10 @@ fn ranked_operation_kind(operation: &dyn Op) -> Option<RankedOperationKind> {
     }
 }
 
+pub(crate) fn is_production_ranked_operation_v1(operation: &dyn Op) -> bool {
+    ranked_operation_kind(operation).is_some()
+}
+
 #[derive(Clone, Copy)]
 enum RankedBoundsResource {
     Blocks,

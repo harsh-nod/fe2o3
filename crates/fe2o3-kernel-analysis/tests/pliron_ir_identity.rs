@@ -1,7 +1,8 @@
-use dialect_gpu::{HierarchyAttr, HierarchyIdOp};
+use dialect_gpu::{HierarchyAttr, HierarchyIdOp, HierarchyIndexType};
 use dialect_kernel::{
-    BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexType,
-    IndexUnknownOp, ReturnOp, register_dialect,
+    BranchOp, DIALECT_NAME, DimensionAttr, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexType, IndexUnknownOp, InvocationDimensionAttr, IterationDomainAttr, ReturnOp,
+    register_dialect,
 };
 use fe2o3_kernel_analysis::{
     MAX_PLIRON_IDENTITY_BLOCKS_V1, MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1,
@@ -12,12 +13,14 @@ use fe2o3_kernel_analysis::{
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
+        attributes::TypeAttr,
         op_interfaces::OneRegionInterface,
         ops::FuncOp,
         types::{FunctionType, UnitType},
     },
     context::{Context, Ptr},
     dialect::DialectName,
+    identifier::Identifier,
     linked_list::ContainsLinkedList,
     op::Op,
     r#type::TypeHandle,
@@ -449,4 +452,95 @@ fn registered_printer_output_is_bounded_before_transcript_growth() {
             ..
         }
     ));
+}
+
+#[test]
+fn attribute_ids_distinguish_equal_payload_text() {
+    let before_context = &mut setup();
+    let before = arithmetic_function(before_context, baseline());
+    before
+        .get_operation()
+        .deref_mut(before_context)
+        .attributes
+        .set(
+            Identifier::try_from("test_same_payload").unwrap(),
+            DimensionAttr(7),
+        );
+
+    let after_context = &mut setup();
+    let after = arithmetic_function(after_context, baseline());
+    after
+        .get_operation()
+        .deref_mut(after_context)
+        .attributes
+        .set(
+            Identifier::try_from("test_same_payload").unwrap(),
+            InvocationDimensionAttr(7),
+        );
+
+    let error = require_pliron_ir_structural_identity_preserved_v1(
+        before_context,
+        &before,
+        after_context,
+        &after,
+    )
+    .unwrap_err();
+    let change = verified_change(&error);
+    assert_eq!(change.component(), "attributes");
+    assert!(change.before().contains("kernel.dimension"));
+    assert!(change.after().contains("kernel.invocation_dimension"));
+}
+
+#[test]
+fn registered_but_unadmitted_attribute_fails_closed() {
+    let context = &mut setup();
+    let function = arithmetic_function(context, baseline());
+    function.get_operation().deref_mut(context).attributes.set(
+        Identifier::try_from("test_unadmitted").unwrap(),
+        IterationDomainAttr::new(1).unwrap(),
+    );
+
+    let error = derive_pliron_ir_structural_identity_v1(context, &function).unwrap_err();
+    assert!(matches!(
+        error,
+        PlironIrIdentityErrorV1::UnsupportedAttribute { .. }
+    ));
+    assert!(error.to_string().contains("FE2O3-PRESERVE-001"));
+    assert!(error.to_string().contains("kernel.iteration_domain"));
+}
+
+#[test]
+fn registered_but_unadmitted_type_fails_before_verification() {
+    let context = &mut setup();
+    let hierarchy: TypeHandle = HierarchyIndexType::get(context, HierarchyAttr::Lane).into();
+    let function = empty_function(context, "unadmitted_type", vec![hierarchy]);
+    let ret = ReturnOp::new(context);
+    append(context, function.get_entry_block(context), &ret);
+
+    let error = derive_pliron_ir_structural_identity_v1(context, &function).unwrap_err();
+    assert!(matches!(
+        error,
+        PlironIrIdentityErrorV1::UnsupportedType { .. }
+    ));
+    assert!(error.to_string().contains("FE2O3-PRESERVE-001"));
+    assert!(error.to_string().contains("gpu.hierarchy_index"));
+}
+
+#[test]
+fn unadmitted_type_nested_in_function_type_fails_closed() {
+    let context = &mut setup();
+    let function = arithmetic_function(context, baseline());
+    let hierarchy: TypeHandle = HierarchyIndexType::get(context, HierarchyAttr::Lane).into();
+    let nested: TypeHandle = FunctionType::get(context, vec![hierarchy], vec![]).into();
+    function.get_operation().deref_mut(context).attributes.set(
+        Identifier::try_from("test_nested_type").unwrap(),
+        TypeAttr::new(nested),
+    );
+
+    let error = derive_pliron_ir_structural_identity_v1(context, &function).unwrap_err();
+    assert!(matches!(
+        error,
+        PlironIrIdentityErrorV1::UnsupportedType { .. }
+    ));
+    assert!(error.to_string().contains("gpu.hierarchy_index"));
 }

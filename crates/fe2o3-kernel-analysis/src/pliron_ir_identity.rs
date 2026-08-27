@@ -11,22 +11,38 @@ use std::{
     fmt::{self, Write as _},
     ops::Range,
     panic::{AssertUnwindSafe, catch_unwind},
+    sync::Arc,
 };
 
 use pliron::{
     attribute::{AttrObj, AttributeDict},
     basic_block::BasicBlock,
-    builtin::{op_interfaces::OneRegionInterface, ops::FuncOp},
+    builtin::{
+        attributes::TypeAttr,
+        op_interfaces::OneRegionInterface,
+        ops::FuncOp,
+        type_interfaces::FunctionTypeInterface,
+        types::{FP16Type, FP32Type, FP64Type, FunctionType, IntegerType, UnitType},
+    },
     common_traits::Named,
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     op::Op,
     operation::{Operation, verify_operation},
     printable::Printable,
-    r#type::Typed,
+    r#type::{Type, TypeHandle, Typed},
     value::Value,
 };
 use sha2::{Digest, Sha256};
+
+use dialect_kernel::{IndexType, RankedViewType, SemanticScalarType};
+use dialect_proof::{EvidenceRefType, ObligationRefType};
+
+use crate::pliron_pass_contract::{
+    IdentityCaptureFailureV1, IdentityComparisonFailureV1, PlironStructuralIdentityLabelV1,
+    PlironStructuralIdentityProviderV1,
+};
+use crate::pliron_ranked_bounds::is_production_ranked_operation_v1;
 
 pub const MAX_PLIRON_IDENTITY_BLOCKS_V1: usize = 1_024;
 pub const MAX_PLIRON_IDENTITY_OPERATIONS_V1: usize = 65_536;
@@ -36,6 +52,7 @@ pub const MAX_PLIRON_IDENTITY_SUCCESSORS_V1: usize = 16_384;
 pub const MAX_PLIRON_IDENTITY_ATTRIBUTES_V1: usize = 262_144;
 pub const MAX_PLIRON_IDENTITY_ENTITY_TEXT_BYTES_V1: usize = 65_536;
 pub const MAX_PLIRON_IDENTITY_CANONICAL_BYTES_V1: usize = 16 * 1_024 * 1_024;
+pub const MAX_PLIRON_IDENTITY_TYPE_NESTING_V1: usize = 64;
 
 const TRANSCRIPT_MAGIC_V1: &[u8] = b"fe2o3.pliron.ranked.structural-identity.v1";
 const MAX_DIAGNOSTIC_DETAIL_CHARS_V1: usize = 240;
@@ -78,6 +95,14 @@ pub enum PlironIrIdentityErrorV1 {
         location: PlironPreserveLocationV1,
         detail: &'static str,
     },
+    UnsupportedAttribute {
+        location: PlironPreserveLocationV1,
+        attribute: String,
+    },
+    UnsupportedType {
+        location: PlironPreserveLocationV1,
+        ty: String,
+    },
     ResourceLimitExceeded {
         location: PlironPreserveLocationV1,
         resource: &'static str,
@@ -104,6 +129,22 @@ pub enum PlironIrIdentityErrorV1 {
     TraversalPanicked,
 }
 
+impl PlironIrIdentityErrorV1 {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::StructuralVerificationFailed { .. } => "FE2O3-PRESERVE-000",
+            Self::UnsupportedRoot { .. }
+            | Self::UnsupportedOperation { .. }
+            | Self::UnsupportedAttribute { .. }
+            | Self::UnsupportedType { .. } => "FE2O3-PRESERVE-001",
+            Self::ResourceLimitExceeded { .. } => "FE2O3-PRESERVE-002",
+            Self::ExternalOperand { .. } | Self::ExternalSuccessor { .. } => "FE2O3-PRESERVE-003",
+            Self::RenderingFailed { .. } => "FE2O3-PRESERVE-004",
+            Self::TraversalPanicked => "FE2O3-PRESERVE-005",
+        }
+    }
+}
+
 impl fmt::Display for PlironIrIdentityErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -114,6 +155,17 @@ impl fmt::Display for PlironIrIdentityErrorV1 {
             Self::UnsupportedOperation { location, detail } => write!(
                 formatter,
                 "error[FE2O3-PRESERVE-001]: unsupported structure at {location}: {detail}; help: lower the construct into the closed production ranked PLIRON subset before preservation checking"
+            ),
+            Self::UnsupportedAttribute {
+                location,
+                attribute,
+            } => write!(
+                formatter,
+                "error[FE2O3-PRESERVE-001]: unsupported attribute {attribute} at {location}; help: lower metadata into an attribute with a closed production canonical encoding"
+            ),
+            Self::UnsupportedType { location, ty } => write!(
+                formatter,
+                "error[FE2O3-PRESERVE-001]: unsupported type {ty} at {location}; help: lower values into a type with a closed production canonical encoding"
             ),
             Self::ResourceLimitExceeded {
                 location,
@@ -307,9 +359,63 @@ struct IdentityRecordV1 {
     summary: String,
 }
 
-struct BuiltIdentityV1 {
+pub(crate) struct BuiltIdentityV1 {
     identity: PlironIrStructuralIdentityV1,
     records: Vec<IdentityRecordV1>,
+}
+
+pub(crate) struct LivePlironStructuralIdentityProviderV1<'a> {
+    context: &'a Context,
+    function: &'a FuncOp,
+}
+
+impl<'a> LivePlironStructuralIdentityProviderV1<'a> {
+    pub(crate) const fn new(context: &'a Context, function: &'a FuncOp) -> Self {
+        Self { context, function }
+    }
+}
+
+impl PlironStructuralIdentityProviderV1 for LivePlironStructuralIdentityProviderV1<'_> {
+    type Snapshot = BuiltIdentityV1;
+
+    fn capture(&mut self) -> Result<Self::Snapshot, IdentityCaptureFailureV1> {
+        build_identity_caught(self.context, self.function).map_err(|error| {
+            IdentityCaptureFailureV1::Unavailable {
+                source_code: error.code(),
+                detail: error.to_string(),
+            }
+        })
+    }
+
+    fn label(&self, snapshot: &Self::Snapshot) -> PlironStructuralIdentityLabelV1 {
+        PlironStructuralIdentityLabelV1::new(
+            snapshot.identity.sha256,
+            snapshot.identity.canonical.len(),
+        )
+    }
+
+    fn require_exact_identity(
+        &self,
+        expected: &Self::Snapshot,
+        observed: &Self::Snapshot,
+    ) -> Result<(), IdentityComparisonFailureV1> {
+        if expected.identity.exactly_matches(&observed.identity) {
+            return Ok(());
+        }
+        let (location, component, before, after) = first_record_difference(expected, observed);
+        Err(IdentityComparisonFailureV1::new(
+            "FE2O3-PRESERVE-010",
+            format!(
+                "verified PLIRON structure changed at {location}, component {component}: before `{before}`, after `{after}`; before identity {}, after identity {}; help: preserve the exact ranked IR structure or re-run correctness verification for the transformed function",
+                hex_digest(&expected.identity.sha256),
+                hex_digest(&observed.identity.sha256),
+            ),
+        ))
+    }
+
+    fn retain_exact_identity(&self, snapshot: Self::Snapshot) -> Arc<[u8]> {
+        Arc::from(snapshot.identity.canonical)
+    }
 }
 
 struct PrescanV1 {
@@ -388,8 +494,13 @@ fn build_identity(
             });
         }
         Ok(Err(error)) => {
+            let detail = render_bounded(
+                PlironPreserveLocationV1::Function,
+                "structural verifier diagnostic",
+                |writer| write!(writer, "{error}"),
+            )?;
             return Err(PlironIrIdentityErrorV1::StructuralVerificationFailed {
-                detail: truncate_detail(&error.to_string()),
+                detail: truncate_detail(&detail),
             });
         }
         Ok(Ok(())) => {}
@@ -466,7 +577,7 @@ fn build_identity(
             &mut encoder,
         )?;
         for (argument_index, argument) in block_ref.arguments().enumerate() {
-            let ty = render_type(context, argument, block_location.clone())?;
+            let (type_id, ty) = render_type(context, argument, block_location.clone())?;
             let value_id = value_ids[&argument];
             encoder.record(
                 block_location.clone(),
@@ -475,6 +586,7 @@ fn build_identity(
                 |encoder| {
                     encoder.usize(argument_index)?;
                     encoder.u64(value_id)?;
+                    encoder.string(type_id.as_bytes())?;
                     encoder.string(ty.as_bytes())
                 },
             )?;
@@ -498,21 +610,22 @@ fn build_identity(
             let mut results = Vec::with_capacity(raw.get_num_results());
             let mut rendered_result_bytes = 0_usize;
             for result in raw.results() {
-                let ty = render_type(context, result, location.clone())?;
+                let (type_id, ty) = render_type(context, result, location.clone())?;
                 rendered_result_bytes = rendered_result_bytes
-                    .checked_add(ty.len())
+                    .checked_add(type_id.len())
+                    .and_then(|total| total.checked_add(ty.len()))
                     .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
                 if rendered_result_bytes > MAX_PLIRON_IDENTITY_CANONICAL_BYTES_V1 {
                     return Err(canonical_bytes_resource_error(rendered_result_bytes));
                 }
-                results.push((value_ids[&result], ty));
+                results.push((value_ids[&result], type_id, ty));
             }
             let result_summary = if results.is_empty() {
                 "no results".to_owned()
             } else {
                 results
                     .iter()
-                    .map(|(value, ty)| format!("v{value}: {ty}"))
+                    .map(|(value, type_id, ty)| format!("v{value}: {type_id} {ty}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             };
@@ -522,8 +635,9 @@ fn build_identity(
                 result_summary,
                 |encoder| {
                     encoder.usize(results.len())?;
-                    for (value, ty) in &results {
+                    for (value, type_id, ty) in &results {
                         encoder.u64(*value)?;
+                        encoder.string(type_id.as_bytes())?;
                         encoder.string(ty.as_bytes())?;
                     }
                     Ok(())
@@ -532,10 +646,14 @@ fn build_identity(
             let mut operand_ids = Vec::with_capacity(raw.get_num_operands());
             for (operand_index, operand) in raw.operands().enumerate() {
                 let Some(value_id) = value_ids.get(&operand).copied() else {
+                    let value =
+                        render_bounded(location.clone(), "external value name", |writer| {
+                            write!(writer, "{}", operand.unique_name(context))
+                        })?;
                     return Err(PlironIrIdentityErrorV1::ExternalOperand {
                         location: location.clone(),
                         operand: operand_index,
-                        value: operand.unique_name(context).to_string(),
+                        value,
                     });
                 };
                 operand_ids.push(value_id);
@@ -629,6 +747,33 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
         root_ref.attributes.0.len(),
         MAX_PLIRON_IDENTITY_ATTRIBUTES_V1,
     )?;
+    validate_attribute_dict(
+        context,
+        &root_ref.attributes,
+        PlironPreserveLocationV1::Function,
+    )?;
+    let function_type = function.get_type(context);
+    validate_type_handle(context, function_type, PlironPreserveLocationV1::Function)?;
+    let function_type_ref = function_type.deref(context);
+    let function_type = function_type_ref
+        .downcast_ref::<FunctionType>()
+        .ok_or_else(|| PlironIrIdentityErrorV1::UnsupportedType {
+            location: PlironPreserveLocationV1::Function,
+            ty: function_type_ref.get_type_id().to_string(),
+        })?;
+    let function_arguments = function_type.arg_types();
+    let function_results = function_type.res_types();
+    check_limit(
+        PlironPreserveLocationV1::Function,
+        "function signature types",
+        function_arguments
+            .len()
+            .saturating_add(function_results.len()),
+        MAX_PLIRON_IDENTITY_VALUES_V1,
+    )?;
+    for ty in function_arguments.into_iter().chain(function_results) {
+        validate_type_handle(context, ty, PlironPreserveLocationV1::Function)?;
+    }
 
     let mut blocks = Vec::new();
     let mut operations = Vec::new();
@@ -646,6 +791,11 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
         )?;
         let block_index = blocks.len();
         let block_ref = block.deref(context);
+        let block_location = PlironPreserveLocationV1::Block { block: block_index };
+        validate_attribute_dict(context, &block_ref.attributes, block_location.clone())?;
+        for argument in block_ref.arguments() {
+            validate_type_handle(context, argument.get_type(context), block_location.clone())?;
+        }
         values = values.saturating_add(block_ref.get_num_arguments());
         attributes = attributes.saturating_add(block_ref.attributes.0.len());
         check_limit(
@@ -676,13 +826,17 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
                 operation_count,
                 MAX_PLIRON_IDENTITY_OPERATIONS_V1,
             )?;
-            if !is_production_ranked_operation(&name) {
+            if !is_production_ranked_operation_v1(dynamic.as_ref()) {
                 return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
                     location,
                     detail: "operation is outside the closed ranked operation allowlist",
                 });
             }
             let raw = operation.deref(context);
+            validate_attribute_dict(context, &raw.attributes, location.clone())?;
+            for result in raw.results() {
+                validate_type_handle(context, result.get_type(context), location.clone())?;
+            }
             if raw.num_regions() != 0 {
                 return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
                     location,
@@ -734,58 +888,24 @@ fn prescan(context: &Context, function: &FuncOp) -> Result<PrescanV1, PlironIrId
     })
 }
 
-fn is_production_ranked_operation(name: &str) -> bool {
-    matches!(
-        name,
-        "kernel.ranked_view"
-            | "kernel.index_constant"
-            | "kernel.index_unknown"
-            | "kernel.invocation_index"
-            | "kernel.index_binary"
-            | "kernel.deterministic_join"
-            | "kernel.checked_tiled_index_2d"
-            | "kernel.checked_row_striped_index_2d"
-            | "kernel.dim"
-            | "kernel.access"
-            | "kernel.ownership_contract"
-            | "kernel.allocation_effect"
-            | "kernel.index_lt_br"
-            | "kernel.index_lt_br_args"
-            | "kernel.index_eq_br"
-            | "kernel.index_eq_br_args"
-            | "kernel.analysis_split"
-            | "kernel.br"
-            | "kernel.br_args"
-            | "kernel.return"
-            | "kernel.trap"
-            | "gpu.barrier"
-            | "gpu.execution_layout"
-            | "gpu.fence"
-            | "kernel.semantic_symbol"
-            | "kernel.semantic_constant"
-            | "kernel.semantic_binary"
-            | "kernel.semantic_expression_commitment"
-            | "kernel.semantic_typed_symbol"
-            | "kernel.tensor_result_component"
-            | "kernel.semantic_typed_constant"
-            | "kernel.semantic_typed_unary"
-            | "kernel.semantic_typed_binary"
-            | "kernel.semantic_typed_compare"
-            | "kernel.semantic_typed_select"
-            | "kernel.semantic_typed_cast"
-            | "kernel.semantic_typed_root"
-            | "kernel.require_equivalent"
-            | "kernel.require_finite_fold"
-            | "kernel.require_finite_recurrence"
-            | "kernel.require_permutation_gather"
-            | "proof.obligation"
-            | "proof.evidence_ref"
-            | "proof.require_refinement"
-            | "proof.require_tensor_refinement"
-            | "proof.require_effect_refinement"
-            | "proof.require_numerical_refinement"
-            | "kernel.tensor_layout"
-    )
+fn validate_attribute_dict(
+    context: &Context,
+    attributes: &AttributeDict,
+    location: PlironPreserveLocationV1,
+) -> Result<(), PlironIrIdentityErrorV1> {
+    for attribute in attributes.0.values() {
+        let attribute_id = attribute.get_attr_id().to_string();
+        if !is_production_attribute_id(&attribute_id) {
+            return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
+                location: location.clone(),
+                attribute: attribute_id,
+            });
+        }
+        if let Some(type_attribute) = attribute.downcast_ref::<TypeAttr>() {
+            validate_type_handle(context, type_attribute.get_type(context), location.clone())?;
+        }
+    }
+    Ok(())
 }
 
 fn encode_attributes(
@@ -794,32 +914,30 @@ fn encode_attributes(
     location: PlironPreserveLocationV1,
     encoder: &mut IdentityEncoderV1,
 ) -> Result<(), PlironIrIdentityErrorV1> {
-    let mut sorted = attributes
-        .0
-        .iter()
-        .map(|(key, attribute)| (key.to_string(), attribute))
-        .collect::<Vec<_>>();
-    sorted.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+    let mut sorted = attributes.0.iter().collect::<Vec<_>>();
+    sorted.sort_by(|lhs, rhs| lhs.0.cmp(rhs.0));
     for (key, _) in &sorted {
         check_limit(
             location.clone(),
             "attribute key bytes",
-            key.len(),
+            key.as_ref().len(),
             MAX_IDENTIFIER_BYTES_V1,
         )?;
     }
     let mut rendered = Vec::with_capacity(sorted.len());
     let mut rendered_bytes = 0_usize;
     for (key, attribute) in sorted {
-        let value = render_attribute(context, attribute, location.clone())?;
+        let key = key.to_string();
+        let (attribute_id, value) = render_attribute(context, attribute, location.clone())?;
         rendered_bytes = rendered_bytes
             .checked_add(key.len())
+            .and_then(|total| total.checked_add(attribute_id.len()))
             .and_then(|total| total.checked_add(value.len()))
             .ok_or_else(|| canonical_bytes_resource_error(usize::MAX))?;
         if rendered_bytes > MAX_PLIRON_IDENTITY_CANONICAL_BYTES_V1 {
             return Err(canonical_bytes_resource_error(rendered_bytes));
         }
-        rendered.push((key, value));
+        rendered.push((key, attribute_id, value));
     }
     let summary = if rendered.is_empty() {
         "no attributes".to_owned()
@@ -827,15 +945,16 @@ fn encode_attributes(
         truncate_detail(
             &rendered
                 .iter()
-                .map(|(key, value)| format!("{key}={value}"))
+                .map(|(key, attribute_id, value)| format!("{key}={attribute_id} {value}"))
                 .collect::<Vec<_>>()
                 .join(", "),
         )
     };
     encoder.record(location.clone(), "attributes", summary, |encoder| {
         encoder.usize(rendered.len())?;
-        for (key, value) in rendered {
+        for (key, attribute_id, value) in rendered {
             encoder.string(key.as_bytes())?;
+            encoder.string(attribute_id.as_bytes())?;
             encoder.string(value.as_bytes())?;
         }
         Ok(())
@@ -846,20 +965,160 @@ fn render_attribute(
     context: &Context,
     attribute: &AttrObj,
     location: PlironPreserveLocationV1,
-) -> Result<String, PlironIrIdentityErrorV1> {
-    render_bounded(location, "attribute", |writer| {
+) -> Result<(String, String), PlironIrIdentityErrorV1> {
+    let attribute_id = attribute.get_attr_id().to_string();
+    if !is_production_attribute_id(&attribute_id) {
+        return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
+            location,
+            attribute: attribute_id,
+        });
+    }
+    let value = render_bounded(location, "attribute", |writer| {
         write!(writer, "{}", attribute.disp(context))
-    })
+    })?;
+    Ok((attribute_id, value))
 }
 
 fn render_type(
     context: &Context,
     value: Value,
     location: PlironPreserveLocationV1,
+) -> Result<(String, String), PlironIrIdentityErrorV1> {
+    render_type_handle(context, value.get_type(context), location)
+}
+
+fn render_type_handle(
+    context: &Context,
+    ty: TypeHandle,
+    location: PlironPreserveLocationV1,
+) -> Result<(String, String), PlironIrIdentityErrorV1> {
+    let type_id = validate_type_handle(context, ty, location.clone())?;
+    let value = render_bounded(location, "type", |writer| {
+        write!(writer, "{}", ty.disp(context))
+    })?;
+    Ok((type_id, value))
+}
+
+fn validate_type_handle(
+    context: &Context,
+    ty: TypeHandle,
+    location: PlironPreserveLocationV1,
 ) -> Result<String, PlironIrIdentityErrorV1> {
-    render_bounded(location, "type", |writer| {
-        write!(writer, "{}", value.get_type(context).disp(context))
-    })
+    validate_type_handle_at_depth(context, ty, location, 0)
+}
+
+fn validate_type_handle_at_depth(
+    context: &Context,
+    ty: TypeHandle,
+    location: PlironPreserveLocationV1,
+    depth: usize,
+) -> Result<String, PlironIrIdentityErrorV1> {
+    check_limit(
+        location.clone(),
+        "type nesting depth",
+        depth,
+        MAX_PLIRON_IDENTITY_TYPE_NESTING_V1,
+    )?;
+    let borrowed = ty.deref(context);
+    let type_id = borrowed.get_type_id().to_string();
+    if !is_production_type(&*borrowed) {
+        return Err(PlironIrIdentityErrorV1::UnsupportedType {
+            location,
+            ty: type_id,
+        });
+    }
+    let nested = borrowed
+        .downcast_ref::<FunctionType>()
+        .map(|function| {
+            function
+                .arg_types()
+                .into_iter()
+                .chain(function.res_types())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    drop(borrowed);
+    for nested_type in nested {
+        validate_type_handle_at_depth(context, nested_type, location.clone(), depth + 1)?;
+    }
+    Ok(type_id)
+}
+
+fn is_production_type(ty: &dyn Type) -> bool {
+    ty.downcast_ref::<FunctionType>().is_some()
+        || ty.downcast_ref::<IntegerType>().is_some()
+        || ty.downcast_ref::<UnitType>().is_some()
+        || ty.downcast_ref::<FP16Type>().is_some()
+        || ty.downcast_ref::<FP32Type>().is_some()
+        || ty.downcast_ref::<FP64Type>().is_some()
+        || ty.downcast_ref::<IndexType>().is_some()
+        || ty.downcast_ref::<RankedViewType>().is_some()
+        || ty.downcast_ref::<SemanticScalarType>().is_some()
+        || ty.downcast_ref::<ObligationRefType>().is_some()
+        || ty.downcast_ref::<EvidenceRefType>().is_some()
+}
+
+fn is_production_attribute_id(attribute: &str) -> bool {
+    matches!(
+        attribute,
+        "builtin.identifier"
+            | "builtin.debug_info"
+            | "builtin.string"
+            | "builtin.bool"
+            | "builtin.integer"
+            | "builtin.unit"
+            | "builtin.type"
+            | "builtin.operand_segment_sizes"
+            | "gpu.address_space"
+            | "gpu.execution_domain"
+            | "gpu.execution_extent"
+            | "gpu.grid_identity"
+            | "gpu.hierarchy"
+            | "gpu.memory_order"
+            | "gpu.memory_scope"
+            | "gpu.subgroup_size"
+            | "kernel.access_kind"
+            | "kernel.allocation_origin"
+            | "kernel.analysis_split_control_count"
+            | "kernel.atomic_ordering"
+            | "kernel.atomic_scope"
+            | "kernel.dimension"
+            | "kernel.index_binary_kind"
+            | "kernel.index_value"
+            | "kernel.invocation_dimension"
+            | "kernel.launch_extent"
+            | "kernel.memory_space"
+            | "kernel.noalias_class"
+            | "kernel.ownership_coverage"
+            | "kernel.ownership_partition"
+            | "kernel.semantic_binary_kind"
+            | "kernel.semantic_cast_kind"
+            | "kernel.semantic_compare_kind"
+            | "kernel.semantic_constant"
+            | "kernel.semantic_coverage_binding"
+            | "kernel.semantic_domain_bound"
+            | "kernel.semantic_evaluation_order"
+            | "kernel.semantic_exceptional_value"
+            | "kernel.semantic_expression_commitment"
+            | "kernel.semantic_ieee_rounding"
+            | "kernel.semantic_numerical_policy"
+            | "kernel.semantic_overflow"
+            | "kernel.semantic_scalar_kind"
+            | "kernel.semantic_step_bound"
+            | "kernel.semantic_symbol"
+            | "kernel.semantic_typed_binary_kind"
+            | "kernel.semantic_unary_kind"
+            | "kernel.tensor_convergence"
+            | "kernel.tensor_fragment"
+            | "kernel.tensor_instruction"
+            | "kernel.tensor_value_root"
+            | "proof.absolute_error_f64_bits"
+            | "proof.covered_boundary"
+            | "proof.evidence_status"
+            | "proof.id"
+            | "proof.property"
+            | "proof.relative_error_f64_bits"
+    )
 }
 
 fn render_bounded(

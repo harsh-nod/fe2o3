@@ -374,6 +374,8 @@ fn static_non_gemm_kernel_reaches_safety_verified_lowering_input() {
         input.production_pipeline_report().status(),
         KernelCheckStatusV1::Clean
     );
+    assert!(input.pass_preservation_report().is_exact_identity());
+    assert_eq!(input.pass_preservation_report().certificates().len(), 8);
     assert!(
         !input
             .production_pipeline_report()
