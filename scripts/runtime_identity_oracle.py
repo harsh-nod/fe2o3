@@ -15,6 +15,7 @@ import sys
 
 
 EXPECTED_GPU_COUNT = 8
+EXPECTED_METADATA_AUDIT_ROOTS = 5
 EXPECTED_PROFILE = "gfx942:xnack-"
 EXPECTED_TARGET = "gfx942"
 EXPECTED_WAVEFRONT = 64
@@ -301,7 +302,7 @@ def parse_provenance(
     packages = _parse_decimal(metadata_match.group(2), "metadata audit package count")
     allowed_build_scripts = metadata_match.group(3)
     if (
-        roots != 4
+        roots != EXPECTED_METADATA_AUDIT_ROOTS
         or not 4 <= packages <= 65_536
         or allowed_build_scripts != "libc@0.2.189,rustix@1.1.4"
     ):
@@ -701,7 +702,7 @@ def compare_and_render(
         f"runtime_pure_rust_auditor_sha256={hashlib.sha256(provenance_inputs.auditor_data).hexdigest()}",
         f"cargo_lock_sha256={hashlib.sha256(provenance_inputs.cargo_lock_data).hexdigest()}",
         "metadata_audit_status=passed",
-        "metadata_audit_roots=4",
+        f"metadata_audit_roots={EXPECTED_METADATA_AUDIT_ROOTS}",
         f"metadata_audit_packages={provenance.metadata_packages}",
         f"metadata_audit_allowed_build_scripts={provenance.metadata_allowed_build_scripts}",
         f"metadata_audit_report_sha256={hashlib.sha256(provenance_inputs.metadata_audit_report_data).hexdigest()}",
