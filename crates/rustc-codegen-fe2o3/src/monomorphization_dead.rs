@@ -29,9 +29,7 @@ const MAX_LOCAL_CONST_SCAN_STATEMENTS_V1: usize = 4096;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompilerDeadBranchObservationV1 {
     evidence: MonomorphizationDeadEvidenceV1,
-    selected_successors: BTreeMap<usize, usize>,
     excluded_blocks: BTreeSet<usize>,
-    policy_reachable_blocks: BTreeSet<usize>,
 }
 
 impl CompilerDeadBranchObservationV1 {
@@ -114,43 +112,14 @@ impl CompilerDeadBranchObservationV1 {
             .collect::<BTreeMap<_, _>>();
         let successors = body_successors(body)?;
         let excluded_blocks = excluded_blocks(&successors, &selected_successors);
-        let policy_reachable_blocks = reachable_blocks(&successors, &selected_successors);
         Ok(Self {
             evidence,
-            selected_successors,
             excluded_blocks,
-            policy_reachable_blocks,
         })
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn validate_against<'tcx>(
-        &self,
-        tcx: TyCtxt<'tcx>,
-        instance: Instance<'tcx>,
-        body: &Body<'tcx>,
-    ) -> Result<(), DeadBranchObservationError> {
-        let actual = Self::observe(tcx, instance, body)?;
-        if self != &actual {
-            return Err(DeadBranchObservationError::new(
-                "stored dead-branch observation disagrees with active rustc MIR",
-            ));
-        }
-        Ok(())
     }
 
     pub(crate) fn includes_block(&self, block: usize) -> bool {
         !self.excluded_blocks.contains(&block)
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn selected_successor(&self, block: usize) -> Option<usize> {
-        self.selected_successors.get(&block).copied()
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn imports_block(&self, block: usize) -> bool {
-        self.policy_reachable_blocks.contains(&block)
     }
 
     pub(crate) fn excluded_blocks(&self) -> &BTreeSet<usize> {

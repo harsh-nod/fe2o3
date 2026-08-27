@@ -24,31 +24,6 @@ const INDEX_1D_DIAGNOSTIC_ITEM: &str = "fe2o3_device_thread_index_1d";
 const POINTER_BYTES: u64 = 8;
 const POINTER_ALIGNMENT: u32 = 8;
 const SLICE_BYTES: u64 = 16;
-const DEFAULT_WORKGROUP: [u32; 3] = [256, 1, 1];
-
-const ALPHA_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 3] = [
-    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
-];
-const ALPHA_ARGUMENT_NAMES: [&str; 3] = ["scale", "input", "output"];
-const ZETA_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 4] = [
-    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
-];
-const ZETA_ARGUMENT_NAMES: [&str; 4] = ["a", "b", "bias", "output"];
-const SCALAR_GEMM_V1_ARGUMENT_KINDS: [GeneralTypedArgumentKindV3; 6] = [
-    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::SharedSlice(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::DisjointSlice(RustScalarElementTypeV1::F32),
-    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
-    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
-    GeneralTypedArgumentKindV3::Scalar(RustScalarElementTypeV1::U32),
-];
-const SCALAR_GEMM_V1_ARGUMENT_NAMES: [&str; 6] = ["a", "b", "c", "m", "n", "k"];
-
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum GeneralTypedArgumentKindV3 {
     Scalar(RustScalarElementTypeV1),
@@ -130,8 +105,6 @@ impl std::error::Error for GeneralTypedExtractError {}
 pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
-    logical_name: &str,
-    export_name: &str,
     launch: &LaunchContract,
 ) -> Result<GeneralTypedKernelContractV3, GeneralTypedExtractError> {
     if !matches!(instance.def, InstanceKind::Item(_)) {
@@ -196,8 +169,8 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
     for (index, ty) in signature.inputs().iter().copied().enumerate() {
         arguments.push(extract_argument(tcx, &layout_cx, ty, trusted_index, index)?);
     }
-    validate_general_typed_launch_v3(logical_name, export_name, &arguments, launch)?;
-    let abi = build_abi(logical_name, export_name, &arguments)?;
+    validate_general_typed_launch_v3(launch)?;
+    let abi = build_abi(&arguments)?;
     Ok(GeneralTypedKernelContractV3 {
         arguments,
         abi,
@@ -206,9 +179,6 @@ pub(crate) fn extract_general_typed_kernel_v3<'tcx>(
 }
 
 fn validate_general_typed_launch_v3(
-    logical_name: &str,
-    export_name: &str,
-    arguments: &[GeneralTypedArgumentV3],
     launch: &LaunchContract,
 ) -> Result<(), GeneralTypedExtractError> {
     let BlockSize::Exact(dimensions) = launch.block_size() else {
@@ -228,13 +198,6 @@ fn validate_general_typed_launch_v3(
     {
         return Err(GeneralTypedExtractError::new(
             "general typed V3 requires a target-sized exact XYZ workgroup and no dynamic shared memory",
-        ));
-    }
-    if exact_argument_names(logical_name, export_name, arguments).is_some()
-        && dimensions != DEFAULT_WORKGROUP
-    {
-        return Err(GeneralTypedExtractError::new(
-            "the alpha/zeta and scalar_gemm_v1 V3 profiles require exact 256x1x1 launch",
         ));
     }
     Ok(())
@@ -708,12 +671,7 @@ fn slice_layout<'tcx>(
     .map_err(|error| GeneralTypedExtractError::new(format!("invalid {argument} evidence: {error}")))
 }
 
-fn build_abi(
-    logical_name: &str,
-    export_name: &str,
-    arguments: &[GeneralTypedArgumentV3],
-) -> Result<AbiLayout, GeneralTypedExtractError> {
-    let exact_names = exact_argument_names(logical_name, export_name, arguments);
+fn build_abi(arguments: &[GeneralTypedArgumentV3]) -> Result<AbiLayout, GeneralTypedExtractError> {
     let mut offset = 0_u64;
     let mut layout_alignment = 1_u32;
     let mut fields = Vec::with_capacity(arguments.len());
@@ -721,8 +679,7 @@ fn build_abi(
         let (size, alignment) = argument_size_alignment(argument.kind);
         offset = align_up(offset, alignment)
             .ok_or_else(|| GeneralTypedExtractError::new("general typed ABI offset overflow"))?;
-        let name =
-            exact_names.map_or_else(|| format!("arg{index}"), |names| names[index].to_owned());
+        let name = format!("arg{index}");
         fields.push(build_abi_field(&name, index, offset, argument)?);
         offset = offset
             .checked_add(size)
@@ -734,29 +691,6 @@ fn build_abi(
     AbiLayout::new(size, layout_alignment, PointerWidth::Bits64, fields).map_err(|error| {
         GeneralTypedExtractError::new(format!("invalid general typed ABI: {error}"))
     })
-}
-
-fn exact_argument_names(
-    logical_name: &str,
-    export_name: &str,
-    arguments: &[GeneralTypedArgumentV3],
-) -> Option<&'static [&'static str]> {
-    let argument_kinds = arguments
-        .iter()
-        .map(|argument| argument.kind())
-        .collect::<Vec<_>>();
-    match (logical_name, export_name) {
-        ("alpha", "alpha") if argument_kinds == ALPHA_ARGUMENT_KINDS => {
-            Some(ALPHA_ARGUMENT_NAMES.as_slice())
-        }
-        ("zeta", "zeta") if argument_kinds == ZETA_ARGUMENT_KINDS => {
-            Some(ZETA_ARGUMENT_NAMES.as_slice())
-        }
-        ("scalar_gemm_v1", "scalar_gemm_v1") if argument_kinds == SCALAR_GEMM_V1_ARGUMENT_KINDS => {
-            Some(SCALAR_GEMM_V1_ARGUMENT_NAMES.as_slice())
-        }
-        _ => None,
-    }
 }
 
 fn build_abi_field(
@@ -1032,7 +966,7 @@ mod tests {
         ]
     }
 
-    fn alpha_arguments() -> Vec<GeneralTypedArgumentV3> {
+    fn three_arguments() -> Vec<GeneralTypedArgumentV3> {
         vec![
             argument(GeneralTypedArgumentKindV3::Scalar(
                 RustScalarElementTypeV1::F32,
@@ -1046,7 +980,7 @@ mod tests {
         ]
     }
 
-    fn zeta_arguments() -> Vec<GeneralTypedArgumentV3> {
+    fn four_arguments() -> Vec<GeneralTypedArgumentV3> {
         vec![
             argument(GeneralTypedArgumentKindV3::SharedSlice(
                 RustScalarElementTypeV1::F32,
@@ -1061,13 +995,6 @@ mod tests {
                 RustScalarElementTypeV1::F32,
             )),
         ]
-    }
-
-    fn scalar_gemm_v1_arguments() -> Vec<GeneralTypedArgumentV3> {
-        SCALAR_GEMM_V1_ARGUMENT_KINDS
-            .into_iter()
-            .map(argument)
-            .collect()
     }
 
     fn launch() -> LaunchContract {
@@ -1082,7 +1009,7 @@ mod tests {
     }
 
     fn identity(name: &str, arguments: &[GeneralTypedArgumentV3]) -> DigestBytes {
-        let abi = build_abi(name, name, arguments).unwrap();
+        let abi = build_abi(arguments).unwrap();
         identity_with_abi(name, &abi)
     }
 
@@ -1098,132 +1025,86 @@ mod tests {
     }
 
     #[test]
-    fn alpha_and_zeta_reconstruct_exact_offsets_sizes_and_effects() {
-        let alpha = build_abi("alpha", "alpha", &alpha_arguments()).unwrap();
-        assert_eq!(alpha.size(), 40);
-        assert_eq!(alpha.alignment(), 8);
+    fn three_and_four_reconstruct_exact_offsets_sizes_and_effects() {
+        let three = build_abi(&three_arguments()).unwrap();
+        assert_eq!(three.size(), 40);
+        assert_eq!(three.alignment(), 8);
         assert_eq!(
-            alpha
+            three
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
-            ["scale", "input", "output"]
+            ["arg0", "arg1", "arg2"]
         );
         assert_eq!(
-            alpha
+            three
                 .fields()
                 .iter()
                 .map(|field| field.offset())
                 .collect::<Vec<_>>(),
             [0, 8, 24]
         );
-        assert_eq!(alpha.fields()[2].access(), Access::ReadWrite);
+        assert_eq!(three.fields()[2].access(), Access::ReadWrite);
 
-        let zeta = build_abi("zeta", "zeta", &zeta_arguments()).unwrap();
-        assert_eq!(zeta.size(), 56);
+        let four = build_abi(&four_arguments()).unwrap();
+        assert_eq!(four.size(), 56);
         assert_eq!(
-            zeta.fields()
+            four.fields()
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
-            ["a", "b", "bias", "output"]
+            ["arg0", "arg1", "arg2", "arg3"]
         );
         assert_eq!(
-            zeta.fields()
+            four.fields()
                 .iter()
                 .map(|field| field.offset())
                 .collect::<Vec<_>>(),
             [0, 16, 32, 40]
         );
-        assert_eq!(zeta.fields()[3].access(), Access::ReadWrite);
-    }
-
-    #[test]
-    fn scalar_gemm_v1_reconstructs_the_normative_explicit_cov6_abi() {
-        let abi = build_abi(
-            "scalar_gemm_v1",
-            "scalar_gemm_v1",
-            &scalar_gemm_v1_arguments(),
-        )
-        .unwrap();
-        assert_eq!(abi.size(), 64);
-        assert_eq!(abi.alignment(), 8);
-        assert_eq!(
-            abi.fields()
-                .iter()
-                .map(|field| field.name().as_str())
-                .collect::<Vec<_>>(),
-            ["a", "b", "c", "m", "n", "k"]
-        );
-        assert_eq!(
-            abi.fields()
-                .iter()
-                .map(|field| field.offset())
-                .collect::<Vec<_>>(),
-            [0, 16, 32, 48, 52, 56]
-        );
-        assert_eq!(
-            abi.fields()
-                .iter()
-                .map(|field| field.size())
-                .collect::<Vec<_>>(),
-            [16, 16, 16, 4, 4, 4]
-        );
-        assert_eq!(abi.fields()[0].access(), Access::ReadOnly);
-        assert_eq!(abi.fields()[1].access(), Access::ReadOnly);
-        assert_eq!(abi.fields()[2].access(), Access::ReadWrite);
+        assert_eq!(four.fields()[3].access(), Access::ReadWrite);
     }
 
     #[test]
     fn host_contract_identity_is_order_and_scalar_sensitive() {
-        let alpha = alpha_arguments();
-        let alpha_identity = identity("alpha", &alpha);
-        let generic_alpha_abi = build_abi("alpha_lookalike", "alpha_lookalike", &alpha).unwrap();
-        assert_ne!(
-            alpha_identity,
-            identity_with_abi("alpha", &generic_alpha_abi),
-            "ABI field names must be bound into the generated host contract identity"
+        let three = three_arguments();
+        let three_identity = identity("three", &three);
+        assert_eq!(
+            three_identity,
+            identity("three", &three),
+            "structural ABI reconstruction must be deterministic"
         );
-        let zeta = zeta_arguments();
-        let zeta_identity = identity("zeta", &zeta);
-        let generic_zeta_abi = build_abi("zeta_lookalike", "zeta_lookalike", &zeta).unwrap();
-        assert_ne!(
-            zeta_identity,
-            identity_with_abi("zeta", &generic_zeta_abi),
-            "zeta ABI field names must be bound into the generated host contract identity"
-        );
-        let declared = GeneratedHostContractIdV3::from_bytes(*alpha_identity.as_bytes());
-        assert_eq!(declared.as_bytes(), *alpha_identity.as_bytes());
+        let declared = GeneratedHostContractIdV3::from_bytes(*three_identity.as_bytes());
+        assert_eq!(declared.as_bytes(), *three_identity.as_bytes());
         let mut wrong_identity = declared.as_bytes();
         wrong_identity[31] ^= 1;
-        assert_ne!(wrong_identity, *alpha_identity.as_bytes());
+        assert_ne!(wrong_identity, *three_identity.as_bytes());
 
-        let mut reordered = alpha.clone();
+        let mut reordered = three.clone();
         reordered.swap(0, 1);
-        assert_ne!(alpha_identity, identity("alpha", &reordered));
+        assert_ne!(three_identity, identity("three", &reordered));
 
-        let mut scalar_mutation = alpha;
+        let mut scalar_mutation = three;
         scalar_mutation[0] = argument(GeneralTypedArgumentKindV3::Scalar(
             RustScalarElementTypeV1::F64,
         ));
-        assert_ne!(alpha_identity, identity("alpha", &scalar_mutation));
+        assert_ne!(three_identity, identity("three", &scalar_mutation));
 
-        let mut layout_mutation = alpha_arguments();
+        let mut layout_mutation = three_arguments();
         layout_mutation[1].layout = argument(GeneralTypedArgumentKindV3::DisjointSlice(
             RustScalarElementTypeV1::F32,
         ))
         .layout;
-        assert_ne!(alpha_identity, identity("alpha", &layout_mutation));
-        assert_ne!(alpha_identity, identity("renamed", &alpha_arguments()));
+        assert_ne!(three_identity, identity("three", &layout_mutation));
+        assert_ne!(three_identity, identity("renamed", &three_arguments()));
     }
 
     #[test]
     fn lookalike_general_v3_contracts_keep_positional_names() {
-        let alpha_lookalike =
-            build_abi("alpha_lookalike", "alpha_lookalike", &alpha_arguments()).unwrap();
+        let three_lookalike = build_abi(&three_arguments()).unwrap();
         assert_eq!(
-            alpha_lookalike
+            three_lookalike
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
@@ -1231,10 +1112,9 @@ mod tests {
             ["arg0", "arg1", "arg2"]
         );
 
-        let zeta_lookalike =
-            build_abi("zeta_lookalike", "zeta_lookalike", &zeta_arguments()).unwrap();
+        let four_lookalike = build_abi(&four_arguments()).unwrap();
         assert_eq!(
-            zeta_lookalike
+            four_lookalike
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
@@ -1242,13 +1122,13 @@ mod tests {
             ["arg0", "arg1", "arg2", "arg3"]
         );
 
-        let mut same_abi_shape = alpha_arguments();
+        let mut same_abi_shape = three_arguments();
         same_abi_shape[0] = argument(GeneralTypedArgumentKindV3::Scalar(
             RustScalarElementTypeV1::U32,
         ));
-        let wrong_alpha_signature = build_abi("alpha", "alpha", &same_abi_shape).unwrap();
+        let wrong_three_signature = build_abi(&same_abi_shape).unwrap();
         assert_eq!(
-            wrong_alpha_signature
+            wrong_three_signature
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
@@ -1256,28 +1136,16 @@ mod tests {
             ["arg0", "arg1", "arg2"]
         );
 
-        let mut reordered_zeta = zeta_arguments();
-        reordered_zeta.swap(0, 2);
-        let wrong_zeta_signature = build_abi("zeta", "zeta", &reordered_zeta).unwrap();
+        let mut reordered_four = four_arguments();
+        reordered_four.swap(0, 2);
+        let wrong_four_signature = build_abi(&reordered_four).unwrap();
         assert_eq!(
-            wrong_zeta_signature
+            wrong_four_signature
                 .fields()
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
             ["arg0", "arg1", "arg2", "arg3"]
         );
-
-        for (logical_name, export_name) in [("alpha", "renamed"), ("renamed", "alpha")] {
-            let mismatched = build_abi(logical_name, export_name, &alpha_arguments()).unwrap();
-            assert_eq!(
-                mismatched
-                    .fields()
-                    .iter()
-                    .map(|field| field.name().as_str())
-                    .collect::<Vec<_>>(),
-                ["arg0", "arg1", "arg2"]
-            );
-        }
     }
 }

@@ -16,11 +16,6 @@ use fe2o3_compiler_closure_capability::{
 use fe2o3_rustc_invocation::{CompileEnvironmentV2, RustcInvocationDescriptorV3};
 use sha2::{Digest as _, Sha256};
 
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-use crate::qualification_selection::{
-    RustcInvocationPolicy, SelectedQualificationOracle, rustc_invocation_policy,
-};
-
 #[cfg(test)]
 const BASELINE_PROTECTED_TARGET_V1: &str = fe2o3_amd_target::PRODUCTION_GFX942_DEVICE_TARGET_V1;
 const EXPECTED_COMPILER_CLOSURE_SHA256_ENV_V1: &str = "FE2O3_EXPECTED_COMPILER_CLOSURE_SHA256_V1";
@@ -104,10 +99,6 @@ pub(crate) enum ProtectedRustcInvocationErrorV1 {
         backend_marker_present: bool,
         qualification_backend_marker_present: bool,
     },
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    QualificationObservationsMissing,
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    QualificationCodegenBackendObservationMismatch,
     Observation(String),
     ArgumentsMismatch,
     WorkingDirectoryMismatch,
@@ -145,14 +136,6 @@ impl fmt::Display for ProtectedRustcInvocationErrorV1 {
             } => write!(
                 formatter,
                 "rustc invocation signals are forbidden by this admission policy (descriptor: {descriptor_present}, compiler-closure marker: {compiler_closure_marker_present}, protected-backend marker: {backend_marker_present}, qualification-backend marker: {qualification_backend_marker_present})"
-            ),
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            Self::QualificationObservationsMissing => formatter.write_str(
-                "qualification-observed rustc requires paired compiler-closure and qualification-backend observations",
-            ),
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            Self::QualificationCodegenBackendObservationMismatch => formatter.write_str(
-                "qualification backend observation differs from the retained loaded backend image",
             ),
             Self::Observation(detail) => write!(
                 formatter,
@@ -221,46 +204,6 @@ pub(crate) fn admit_for_production_codegen()
     )
 }
 
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-fn admit_for_codegen_at(
-    qualification: Option<SelectedQualificationOracle>,
-    explicit_unprotected_qualification: bool,
-    child_fd: RawFd,
-    _compiler_closure_marker_present: bool,
-    _backend_marker_present: bool,
-    qualification_backend_marker_present: bool,
-    _qualification_observations_authenticated: bool,
-) -> Result<Option<AdmittedProtectedRustcInvocationV1>, ProtectedRustcInvocationErrorV1> {
-    match rustc_invocation_policy(qualification, explicit_unprotected_qualification) {
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        RustcInvocationPolicy::Unmanaged => {
-            reject_unexpected_rustc_signals_at(
-                child_fd,
-                _compiler_closure_marker_present,
-                _backend_marker_present,
-                qualification_backend_marker_present,
-            )?;
-            return Ok(None);
-        }
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        RustcInvocationPolicy::QualificationObserved => {
-            reject_unexpected_rustc_signals_at(child_fd, false, _backend_marker_present, false)?;
-            if !_compiler_closure_marker_present || !qualification_backend_marker_present {
-                return Err(ProtectedRustcInvocationErrorV1::QualificationObservationsMissing);
-            }
-            if !_qualification_observations_authenticated {
-                return Err(
-                    ProtectedRustcInvocationErrorV1::QualificationCodegenBackendObservationMismatch,
-                );
-            }
-            return Ok(None);
-        }
-        RustcInvocationPolicy::ProtectedV3 => {
-            return admit_protected_v3_at(child_fd, qualification_backend_marker_present);
-        }
-    }
-}
-
 fn admit_protected_v3_at(
     child_fd: RawFd,
     qualification_backend_marker_present: bool,
@@ -278,47 +221,6 @@ fn admit_protected_v3_at(
     let capability = retain_inherited_capability_at(child_fd)?;
     let observation = RustcProcessObservationV1::capture(capability.descriptor())?;
     validate_capability(capability, observation).map(Some)
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-fn reject_unexpected_rustc_signals_at(
-    child_fd: RawFd,
-    compiler_closure_marker_present: bool,
-    backend_marker_present: bool,
-    qualification_backend_marker_present: bool,
-) -> Result<(), ProtectedRustcInvocationErrorV1> {
-    // Do not close an unexpected descriptor here: an ordinary rustc process
-    // may have reused this number for a Rust-owned file. Returning an error
-    // prevents fallback without violating that owner's descriptor lifetime.
-    // SAFETY: fcntl observes but does not consume the descriptor.
-    let descriptor_present = if unsafe { libc::fcntl(child_fd, libc::F_GETFD) } >= 0 {
-        true
-    } else {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EBADF) {
-            false
-        } else {
-            return Err(ProtectedRustcInvocationErrorV1::Capability(format!(
-                "cannot close reserved inherited descriptor {child_fd}: {error}"
-            )));
-        }
-    };
-    if descriptor_present
-        || compiler_closure_marker_present
-        || backend_marker_present
-        || qualification_backend_marker_present
-    {
-        Err(
-            ProtectedRustcInvocationErrorV1::UnexpectedProtectedSignals {
-                descriptor_present,
-                compiler_closure_marker_present,
-                backend_marker_present,
-                qualification_backend_marker_present,
-            },
-        )
-    } else {
-        Ok(())
-    }
 }
 
 fn retain_inherited_capability_at(

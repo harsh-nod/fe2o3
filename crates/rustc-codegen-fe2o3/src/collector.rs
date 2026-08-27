@@ -1,6 +1,4 @@
-use fe2o3_artifacts::{
-    BlockSize, Dimensions, LaunchContract, TypeIdentity, derive_generated_host_contract_identity_v1,
-};
+use fe2o3_artifacts::{BlockSize, Dimensions, LaunchContract};
 use fe2o3_kernel_descriptor::MAX_ARGUMENTS_PER_KERNEL;
 use fe2o3_rustc_front::{
     ASSEMBLY_OPERAND_ADDRESS_V1, ASSEMBLY_OPERAND_IMMEDIATE_V1, ASSEMBLY_OPERAND_SGPR_V1,
@@ -12,12 +10,11 @@ use fe2o3_rustc_front::{
 };
 use reserved_fe2o3_symbols::{
     CrateBindingIdV1, GeneratedHostContractIdV3, KernelBindingIdV1,
-    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1, TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
-    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2, derive_crate_binding_id_v1,
+    TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_crate_binding_id_v1,
     derive_kernel_binding_id_v1, host_kernel_symbol_v1,
 };
 use rustc_ast::InlineAsmOptions;
-use rustc_hir::def_id::{DefId, DefIndex, LOCAL_CRATE};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{BlockCheckMode, ExprKind, ItemKind, Safety, UnsafeSource};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
@@ -42,34 +39,6 @@ pub(crate) use production_importer_v1::{
     AuthenticatedRustcIdentityInventoryV3, AuthenticatedRustcPreflightPlanV3,
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_v1,
 };
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) use production_importer_v1::{
-    rust_disjoint_tile_2d_v1, rust_index_witness_space_v1, rust_option_payload_v1,
-};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TypedKernelProfile {
-    VecAddRustcLayoutV2,
-    GeneralScalarSliceRustcLayoutV3 {
-        generated_host_contract_identity: GeneratedHostContractIdV3,
-    },
-}
-
-impl TypedKernelProfile {
-    pub(crate) const fn expected_argument_count(self) -> Option<usize> {
-        match self {
-            Self::VecAddRustcLayoutV2 => Some(3),
-            Self::GeneralScalarSliceRustcLayoutV3 { .. } => None,
-        }
-    }
-
-    pub(crate) const fn accepts_argument_count(self, actual: usize) -> bool {
-        match self.expected_argument_count() {
-            Some(expected) => actual == expected,
-            None => actual > 0 && actual <= MAX_ARGUMENTS_PER_KERNEL,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TypedArgumentListV1<T> {
@@ -134,15 +103,9 @@ pub struct CollectedFunction<'tcx> {
     pub export_name: String,
     /// Present only for registered kernel roots.
     pub(crate) logical_name: Option<String>,
-    /// Present only when the registration selects a versioned typed profile.
-    pub(crate) typed_profile: Option<TypedKernelProfile>,
-    /// Present only for a V2 typed registration validated by the backend.
+    /// Present only for a generic typed V3 registration.
+    pub(crate) generated_host_contract_identity: Option<GeneratedHostContractIdV3>,
     pub(crate) kernel_binding: Option<KernelBindingIdV1>,
-    /// rustc-derived identities for each source argument in a typed profile.
-    pub(crate) typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
-    /// Complete rustc-derived contract for a general V3 typed root.
-    pub(crate) general_typed_contract:
-        Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     /// Compiler-authenticated source contract for this exact kernel root.
     pub(crate) frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
     /// Exact safe-Rust reference/effect binding for this kernel root.
@@ -150,93 +113,6 @@ pub struct CollectedFunction<'tcx> {
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
     /// Compiler-private observation derived from this exact monomorphized MIR.
     pub(crate) dead_branches: Option<crate::monomorphization_dead::CompilerDeadBranchObservationV1>,
-}
-
-/// Collector-sealed identity of one exact typed kernel root.
-///
-/// Private fields and the absence of a public constructor ensure downstream
-/// code can only receive this value after registration, session binding,
-/// function-pointer, symbol, and unique-root validation has completed.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct AuthenticatedKernelOwner<T> {
-    target: T,
-    crate_name: String,
-    module_path: String,
-    logical_name: String,
-    export_name: String,
-    typed_profile: TypedKernelProfile,
-    target_def_path: String,
-    crate_binding: CrateBindingIdV1,
-    kernel_binding: KernelBindingIdV1,
-    observed_symbol: String,
-}
-
-#[derive(Clone, Debug)]
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct AuthenticatedKernelOwners<T> {
-    owners: Vec<AuthenticatedKernelOwner<T>>,
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-impl<T> Default for AuthenticatedKernelOwners<T> {
-    fn default() -> Self {
-        Self { owners: Vec::new() }
-    }
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-impl<T> AuthenticatedKernelOwners<T> {
-    fn push(&mut self, owner: AuthenticatedKernelOwner<T>) {
-        self.owners.push(owner);
-    }
-
-    fn as_slice(&self) -> &[AuthenticatedKernelOwner<T>] {
-        &self.owners
-    }
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-impl<T: Copy> AuthenticatedKernelOwner<T> {
-    pub(crate) const fn target(&self) -> T {
-        self.target
-    }
-
-    pub(crate) fn crate_name(&self) -> &str {
-        &self.crate_name
-    }
-
-    pub(crate) fn module_path(&self) -> &str {
-        &self.module_path
-    }
-
-    pub(crate) fn logical_name(&self) -> &str {
-        &self.logical_name
-    }
-
-    pub(crate) fn export_name(&self) -> &str {
-        &self.export_name
-    }
-
-    pub(crate) const fn typed_profile(&self) -> TypedKernelProfile {
-        self.typed_profile
-    }
-
-    pub(crate) fn target_def_path(&self) -> &str {
-        &self.target_def_path
-    }
-
-    pub(crate) const fn crate_binding(&self) -> CrateBindingIdV1 {
-        self.crate_binding
-    }
-
-    pub(crate) const fn kernel_binding(&self) -> KernelBindingIdV1 {
-        self.kernel_binding
-    }
-
-    pub(crate) fn observed_symbol(&self) -> &str {
-        &self.observed_symbol
-    }
 }
 
 /// Source-level kernel contract authenticated against one exact rustc instance.
@@ -261,21 +137,6 @@ pub(crate) struct ReachableAssemblySummaryV1 {
 }
 
 impl AuthenticatedKernelFrontendContractV1 {
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn registration_path(&self) -> &str {
-        &self.registration_path
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) const fn target_def_path_hash(&self) -> [u8; 16] {
-        self.target_def_path_hash
-    }
-
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) fn target_symbol(&self) -> &str {
-        &self.target_symbol
-    }
-
     pub(crate) fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
@@ -318,69 +179,10 @@ impl ReachableAssemblySummaryV1 {
 #[derive(Clone, Debug, Default)]
 pub struct CollectionResult<'tcx> {
     pub functions: Vec<CollectedFunction<'tcx>>,
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    pub(crate) authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     // Private source state retained for compiler-envelope construction.
     pub(crate) device_ffi: crate::device_ffi::DeviceFfiClosure,
     /// Inert canonical observation produced from the successfully closed graph.
     pub(crate) compiler_ffi_observation: Option<fe2o3_compiler_ffi::CompilerFfiEnvelopeV1>,
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-impl<'tcx> CollectionResult<'tcx> {
-    pub(crate) fn authenticated_kernel_owners(
-        &self,
-    ) -> &[AuthenticatedKernelOwner<Instance<'tcx>>] {
-        self.authenticated_kernel_owners.as_slice()
-    }
-}
-
-/// Consumer boundary for the shared rustc graph collector.
-///
-/// Qualification retains its historical dead-branch projection, three
-/// oracle-only terminal classifiers, and eager layout evidence because the
-/// explicitly selected oracle routes still consume those records. Production
-/// never receives that variant and instead traverses every block through the
-/// workload-neutral semantic-terminal registry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CollectorPurposeV1 {
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    QualificationOracle {
-        extended_helper_edges: bool,
-    },
-    Production,
-}
-
-impl CollectorPurposeV1 {
-    const fn inspect_block(self, _qualification_includes_block: bool) -> bool {
-        match self {
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            Self::QualificationOracle { .. } => _qualification_includes_block,
-            Self::Production => true,
-        }
-    }
-
-    const fn accepts_extended_edges(self) -> bool {
-        match self {
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            Self::QualificationOracle {
-                extended_helper_edges,
-            } => extended_helper_edges,
-            Self::Production => true,
-        }
-    }
-
-    const fn is_qualification_oracle(self) -> bool {
-        match self {
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            Self::QualificationOracle { .. } => true,
-            Self::Production => false,
-        }
-    }
-
-    const fn is_production(self) -> bool {
-        matches!(self, Self::Production)
-    }
 }
 
 #[derive(Debug)]
@@ -466,42 +268,14 @@ pub(crate) fn count_production_roots_before_monomorphization_v1(tcx: TyCtxt<'_>)
         .saturating_add(crate::device_ffi::count_local_registration_candidates(tcx))
 }
 
-/// Collects compatibility evidence for an explicitly selected qualification
-/// oracle. The caller must supply both the resolved target and its explicit
-/// oracle token; process environment cannot silently alter collection.
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn collect_qualification_device_functions<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    cgus: &[CodegenUnit<'tcx>],
-    verbose: bool,
-    target: &crate::AmdGpuTarget,
-    qualification: crate::qualification_selection::SelectedQualificationOracle,
-) -> Result<CollectionResult<'tcx>, CollectError> {
-    let extended_helper_edges = qualification.requires_extended_collector_edges();
-    collect_device_functions_for_purpose(
-        tcx,
-        cgus,
-        verbose,
-        target.as_str().to_owned(),
-        CollectorPurposeV1::QualificationOracle {
-            extended_helper_edges,
-        },
-    )
-}
-
 pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
     target: crate::production_target_v1::RetainedProductionTargetV1,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let collection = collect_device_functions_for_purpose(
-        tcx,
-        cgus,
-        verbose,
-        target.canonical_name().to_owned(),
-        CollectorPurposeV1::Production,
-    )?;
+    let collection =
+        collect_device_functions(tcx, cgus, verbose, target.canonical_name().to_owned())?;
     let roots = collection
         .functions
         .iter()
@@ -530,12 +304,11 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     })
 }
 
-fn collect_device_functions_for_purpose<'tcx>(
+fn collect_device_functions<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
     verbose: bool,
     target: String,
-    purpose: CollectorPurposeV1,
 ) -> Result<CollectionResult<'tcx>, CollectError> {
     let ffi_declarations =
         crate::device_ffi::collect_declarations(tcx, cgus).map_err(|error| CollectError {
@@ -548,9 +321,7 @@ fn collect_device_functions_for_purpose<'tcx>(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let gfx942_xnack_minus = target == "gfx942:xnack-";
-    let retain_qualification_layout_evidence = purpose.is_qualification_oracle();
-    let mut collector = DeviceCollector::new(tcx, verbose, ffi_declarations, target, purpose);
+    let mut collector = DeviceCollector::new(tcx, verbose, ffi_declarations, target);
 
     for declaration in ffi_exports {
         if declaration.contract.direction == crate::device_ffi::DeviceFfiDirection::Export {
@@ -566,14 +337,7 @@ fn collect_device_functions_for_purpose<'tcx>(
         }
     }
 
-    for root in kernel_roots(
-        tcx,
-        cgus,
-        gfx942_xnack_minus,
-        retain_qualification_layout_evidence,
-    )
-    .map_err(CollectError::from)?
-    {
+    for root in kernel_roots(tcx, cgus).map_err(CollectError::from)? {
         let instance = root.target;
         let raw_name = tcx.def_path_str(instance.def_id());
         if verbose {
@@ -586,69 +350,6 @@ fn collect_device_functions_for_purpose<'tcx>(
     }
 
     collector.collect()
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub fn dump_device_functions<'tcx>(tcx: TyCtxt<'tcx>, functions: &[CollectedFunction<'tcx>]) {
-    let mut rows = functions
-        .iter()
-        .map(|function| {
-            let def_id = function.instance.def_id();
-            debug_assert_eq!(function.is_kernel_entry(), function.logical_name.is_some());
-            debug_assert!(function.is_kernel_entry() || function.typed_profile.is_none());
-            debug_assert!(function.is_kernel_entry() || function.kernel_binding.is_none());
-            debug_assert!(function.is_kernel_entry() || function.typed_layout_identities.is_none());
-            debug_assert!(function.is_kernel_entry() || function.general_typed_contract.is_none());
-            debug_assert!(function.is_kernel_entry() || function.frontend_contract.is_none());
-            let mir_stats = if tcx.is_mir_available(def_id) {
-                let mir = tcx.instance_mir(function.instance.def);
-                format!(
-                    "{} bb, {} locals, {} args",
-                    mir.basic_blocks.len(),
-                    mir.local_decls.len(),
-                    mir.arg_count
-                )
-            } else {
-                "no MIR".to_string()
-            };
-            (
-                function.export_name.clone(),
-                match function.typed_profile {
-                    Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
-                        "kernel/typed-vecadd-rustc-layout-v2"
-                    }
-                    Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. }) => {
-                        "kernel/typed-general-rustc-layout-v3"
-                    }
-                    None => match function.role {
-                        CollectedFunctionRole::KernelEntry => "kernel",
-                        CollectedFunctionRole::InternalHelper => "internal-helper",
-                        CollectedFunctionRole::DeviceFfiExport => "device-ffi-export",
-                    },
-                },
-                function.logical_name.clone(),
-                tcx.crate_name(def_id.krate).to_string(),
-                tcx.def_path_str(def_id),
-                tcx.symbol_name(function.instance).name.to_string(),
-                mir_stats,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.3.cmp(&b.3)));
-
-    eprintln!("\n=== fe2o3 device function collection ===");
-    for (export_name, kind, logical_name, crate_name, path, identity, mir_stats) in rows {
-        eprintln!("  [{kind}] {export_name}");
-        if let Some(logical_name) = logical_name.filter(|name| name != &export_name) {
-            eprintln!("      logical name: {logical_name}");
-        }
-        eprintln!("      crate: {crate_name}");
-        eprintln!("      path: {path}");
-        eprintln!("      instance: {identity}");
-        eprintln!("      MIR:  {mir_stats}");
-    }
-    eprintln!("========================================\n");
 }
 
 #[derive(Clone, Debug)]
@@ -675,12 +376,8 @@ struct KernelRoot<T> {
     target: T,
     logical_name: String,
     export_name: String,
-    typed_profile: Option<TypedKernelProfile>,
+    generated_host_contract_identity: Option<GeneratedHostContractIdV3>,
     kernel_binding: Option<KernelBindingIdV1>,
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    authenticated_owner: Option<AuthenticatedKernelOwner<T>>,
-    typed_layout_identities: Option<TypedArgumentListV1<TypeIdentity>>,
-    general_typed_contract: Option<crate::rust_type_layout_v3::GeneralTypedKernelContractV3>,
     frontend_contract: Option<AuthenticatedKernelFrontendContractV1>,
     reference_effect_binding:
         Option<crate::reference_effect_v1::AuthenticatedReferenceEffectBindingV1>,
@@ -746,8 +443,6 @@ impl From<RegistrationError> for CollectError {
 fn kernel_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgus: &[CodegenUnit<'tcx>],
-    gfx942_xnack_minus: bool,
-    retain_qualification_layout_evidence: bool,
 ) -> Result<Vec<KernelRoot<Instance<'tcx>>>, RegistrationError> {
     let mut functions_by_symbol = BTreeMap::new();
 
@@ -807,110 +502,15 @@ fn kernel_roots<'tcx>(
     }
 
     let session_crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
-    for record in &records {
-        if record.target.def_id().krate != LOCAL_CRATE {
-            authenticate_external_typed_v2_registration(tcx, record)?;
-        }
-    }
     let mut roots = validate_registration_records(
         records,
         session_crate_binding(tcx),
         Some(&session_crate_name),
-        gfx942_xnack_minus,
     )?;
     let frontend_records = decode_frontend_contract_registrations(tcx, &functions_by_symbol)?;
     bind_frontend_contract_registrations(tcx, &mut roots, frontend_records)?;
     let reference_records = decode_reference_binding_registrations(tcx)?;
     bind_reference_binding_registrations(tcx, &mut roots, reference_records)?;
-    if !retain_qualification_layout_evidence {
-        for root in &mut roots {
-            root.typed_layout_identities = None;
-            root.general_typed_contract = None;
-        }
-        return Ok(roots);
-    }
-    for root in &mut roots {
-        let registration_path = format!(
-            "{}{}",
-            reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
-            root.logical_name
-        );
-        match root.typed_profile {
-            Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
-                let evidence =
-                    crate::rust_type_layout::extract_exact_typed_vecadd_layout(tcx, root.target)
-                        .map_err(|error| {
-                            RegistrationError::new(
-                                &registration_path,
-                                format!("rustc type/layout evidence extraction failed: {error}"),
-                            )
-                        })?;
-                let identities = evidence
-                    .into_iter()
-                    .map(|argument| argument.type_identity())
-                    .collect();
-                root.typed_layout_identities =
-                    Some(TypedArgumentListV1::new(identities).map_err(|error| {
-                        RegistrationError::new(&registration_path, error.to_string())
-                    })?);
-                root.general_typed_contract = None;
-            }
-            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
-                generated_host_contract_identity,
-            }) => {
-                let launch =
-                    general_typed_launch_v3(root.frontend_contract.as_ref(), &registration_path)?;
-                let contract = crate::rust_type_layout_v3::extract_general_typed_kernel_v3(
-                    tcx,
-                    root.target,
-                    &root.logical_name,
-                    &root.export_name,
-                    &launch,
-                )
-                .map_err(|error| {
-                    RegistrationError::new(
-                        &registration_path,
-                        format!("general rustc type/layout extraction failed: {error}"),
-                    )
-                })?;
-                let kernel_binding = root.kernel_binding.ok_or_else(|| {
-                    RegistrationError::new(&registration_path, "V3 root has no kernel binding")
-                })?;
-                let derived = derive_generated_host_contract_identity_v1(
-                    MANIFEST_DERIVED_SCALAR_SLICE_PROFILE_TAG_V1,
-                    kernel_binding.as_bytes(),
-                    &root.logical_name,
-                    &root.export_name,
-                    contract.abi(),
-                    contract.launch(),
-                );
-                if derived.as_bytes() != &generated_host_contract_identity.as_bytes() {
-                    return Err(RegistrationError::new(
-                        &registration_path,
-                        format!(
-                            "generated host-contract identity {} disagrees with rustc-derived identity {}",
-                            generated_host_contract_identity.to_hex(),
-                            encode_lower_hex(derived.as_bytes())
-                        ),
-                    ));
-                }
-                let identities = contract
-                    .arguments()
-                    .iter()
-                    .map(|argument| argument.type_identity())
-                    .collect();
-                root.typed_layout_identities =
-                    Some(TypedArgumentListV1::new(identities).map_err(|error| {
-                        RegistrationError::new(&registration_path, error.to_string())
-                    })?);
-                root.general_typed_contract = Some(contract);
-            }
-            None => {
-                root.typed_layout_identities = None;
-                root.general_typed_contract = None;
-            }
-        }
-    }
     Ok(roots)
 }
 
@@ -1001,236 +601,6 @@ fn session_crate_binding(tcx: TyCtxt<'_>) -> Option<CrateBindingIdV1> {
         crate_name.as_str(),
         metadata.iter().map(String::as_str),
     ))
-}
-
-fn authenticate_external_typed_v2_registration<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    record: &RegistrationRecord<Instance<'tcx>>,
-) -> Result<(), RegistrationError> {
-    if record.version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2
-        || record.kind != reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2
-    {
-        return Err(RegistrationError::new(
-            &record.registration_path,
-            "cross-crate kernels require an exact producer-owned typed V2 registration",
-        ));
-    }
-    let crate_num = record.target.def_id().krate;
-    let actual_crate_name = tcx.crate_name(crate_num).to_string();
-    if record.target_crate_name != actual_crate_name {
-        return Err(RegistrationError::new(
-            &record.registration_path,
-            format!(
-                "external target crate `{}` disagrees with rustc producer crate `{actual_crate_name}`",
-                record.target_crate_name
-            ),
-        ));
-    }
-    let expected_name = format!(
-        "{}{}",
-        reserved_fe2o3_symbols::KERNEL_REGISTRATION_PREFIX,
-        record.logical_name,
-    );
-    let mut matches = Vec::new();
-    for index in 0..tcx.num_extern_def_ids(crate_num) {
-        let def_id = DefId {
-            krate: crate_num,
-            index: DefIndex::from_usize(index),
-        };
-        if !matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::Static { .. }) {
-            continue;
-        }
-        let path = tcx.def_path_str(def_id);
-        if final_path_segment(&path) != expected_name {
-            continue;
-        }
-        if tcx.is_mutable_static(def_id) {
-            return Err(RegistrationError::new(
-                path,
-                "upstream kernel registration must be immutable",
-            ));
-        }
-        let flags = tcx.codegen_fn_attrs(def_id).flags;
-        if !flags.intersects(CodegenFnAttrFlags::USED_COMPILER | CodegenFnAttrFlags::USED_LINKER) {
-            return Err(RegistrationError::new(
-                path,
-                "upstream kernel registration must carry #[used]",
-            ));
-        }
-        let ty = tcx
-            .try_normalize_erasing_regions(
-                TypingEnv::fully_monomorphized(),
-                tcx.type_of(def_id).instantiate_identity(),
-            )
-            .map_err(|_| {
-                RegistrationError::new(&path, "upstream kernel registration type did not normalize")
-            })?;
-        let TyKind::Tuple(types) = ty.kind() else {
-            return Err(RegistrationError::new(
-                path,
-                "upstream kernel registration must use the exact V2 tuple type",
-            ));
-        };
-        let exact_v2 = types.len() == reserved_fe2o3_symbols::KERNEL_REGISTRATION_V2_FIELD_COUNT
-            && types[0] == tcx.types.u64
-            && types[1] == tcx.types.u16
-            && types[2] == tcx.types.u16
-            && is_shared_str(types[3])
-            && is_shared_str(types[4])
-            && is_shared_str(types[5])
-            && is_shared_str(types[6])
-            && matches!(types[7].kind(), TyKind::FnPtr(..));
-        if !exact_v2 {
-            return Err(RegistrationError::new(
-                path,
-                "upstream kernel registration must use the exact V2 tuple type",
-            ));
-        }
-        require_static_registration_integer(
-            tcx,
-            def_id,
-            0,
-            u128::from(reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC),
-            "magic",
-            &path,
-        )?;
-        require_static_registration_integer(
-            tcx,
-            def_id,
-            1,
-            u128::from(reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2),
-            "version",
-            &path,
-        )?;
-        require_static_registration_integer(
-            tcx,
-            def_id,
-            2,
-            u128::from(reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2),
-            "kind",
-            &path,
-        )?;
-        require_static_registration_string(
-            tcx,
-            def_id,
-            3,
-            &record.logical_name,
-            "logical name",
-            &path,
-        )?;
-        require_static_registration_string(
-            tcx,
-            def_id,
-            4,
-            &record.export_name,
-            "export name",
-            &path,
-        )?;
-        require_static_registration_string(
-            tcx,
-            def_id,
-            5,
-            &record
-                .crate_binding
-                .expect("external V2 record has a crate binding")
-                .to_hex(),
-            "crate binding",
-            &path,
-        )?;
-        require_static_registration_string(
-            tcx,
-            def_id,
-            6,
-            &record
-                .kernel_binding
-                .expect("external V2 record has a kernel binding")
-                .to_hex(),
-            "kernel binding",
-            &path,
-        )?;
-        let target = crate::static_registration::function(tcx, def_id, 7).map_err(|reason| {
-            RegistrationError::new(
-                &path,
-                format!("upstream kernel registration function is invalid: {reason}"),
-            )
-        })?;
-        if target != record.target {
-            return Err(RegistrationError::new(
-                path,
-                format!(
-                    "upstream kernel registration points to `{}`, not imported target `{}`",
-                    tcx.def_path_str(target.def_id()),
-                    record.target_identity,
-                ),
-            ));
-        }
-        if owner_module_path(&path) != owner_module_path(&record.target_identity) {
-            return Err(RegistrationError::new(
-                path,
-                "upstream kernel registration and target must share one producer module",
-            ));
-        }
-        matches.push(def_id);
-    }
-    if matches.len() != 1 {
-        return Err(RegistrationError::new(
-            &record.registration_path,
-            format!(
-                "external kernel `{}` has {} exact producer registrations in crate `{actual_crate_name}`; exactly one is required",
-                record.target_identity,
-                matches.len(),
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn require_static_registration_integer(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    index: usize,
-    expected: u128,
-    field: &str,
-    path: &str,
-) -> Result<(), RegistrationError> {
-    let observed = crate::static_registration::integer(tcx, def_id, index).map_err(|reason| {
-        RegistrationError::new(
-            path,
-            format!("upstream kernel registration {field} is invalid: {reason}"),
-        )
-    })?;
-    (observed == expected).then_some(()).ok_or_else(|| {
-        RegistrationError::new(
-            path,
-            format!(
-                "upstream kernel registration {field} {observed} does not match imported value {expected}"
-            ),
-        )
-    })
-}
-
-fn require_static_registration_string(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    index: usize,
-    expected: &str,
-    field: &str,
-    path: &str,
-) -> Result<(), RegistrationError> {
-    let observed = crate::static_registration::string(tcx, def_id, index).map_err(|reason| {
-        RegistrationError::new(
-            path,
-            format!("upstream kernel registration {field} is invalid: {reason}"),
-        )
-    })?;
-    (observed == expected).then_some(()).ok_or_else(|| {
-        RegistrationError::new(
-            path,
-            format!(
-                "upstream kernel registration {field} `{observed}` does not match imported value `{expected}`"
-            ),
-        )
-    })
 }
 
 fn registration_candidates<'tcx>(
@@ -2259,7 +1629,6 @@ fn validate_registration_records<T: Copy>(
     mut records: Vec<RegistrationRecord<T>>,
     expected_crate_binding: Option<CrateBindingIdV1>,
     expected_crate_name: Option<&str>,
-    allow_external_typed_v2: bool,
 ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
     records.sort_by(|lhs, rhs| lhs.registration_path.cmp(&rhs.registration_path));
 
@@ -2277,15 +1646,11 @@ fn validate_registration_records<T: Copy>(
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_MAGIC
             )));
         }
-        let typed_profile = match (record.version, record.kind) {
+        let generated_host_contract_identity = match (record.version, record.kind) {
             (
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1,
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL,
             ) => None,
-            (
-                reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2,
-                reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2,
-            ) => Some(TypedKernelProfile::VecAddRustcLayoutV2),
             (
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3,
                 reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
@@ -2296,36 +1661,17 @@ fn validate_registration_records<T: Copy>(
                     .ok_or_else(|| error("V3 registration has no profile tag".to_owned()))?;
                 if profile_tag != TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3 {
                     return Err(error(format!(
-                        "V3 profile tag `{profile_tag}` is not the canonical general typed profile `{TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3}`"
+                        "V3 profile tag {profile_tag:?} is not the canonical general typed profile {TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3:?}"
                     )));
                 }
-                let generated_host_contract_identity =
-                    record.generated_host_contract_identity.ok_or_else(|| {
-                        error("V3 registration has no generated host-contract identity".to_owned())
-                    })?;
-                Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
-                    generated_host_contract_identity,
-                })
+                Some(record.generated_host_contract_identity.ok_or_else(|| {
+                    error("V3 registration has no generated host-contract identity".to_owned())
+                })?)
             }
-            (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1, kind)
-                if kind
-                    == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2 =>
-            {
-                return Err(error("typed registrations require version 2".to_owned()));
-            }
-            (_, kind)
-                if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1 =>
-            {
+            (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2, _) => {
                 return Err(error(
-                    "typed vecadd profile V1 uses unauthenticated opaque layout identities and is no longer accepted"
+                    "registration version 2 has been removed; use the generic typed V3 contract"
                         .to_owned(),
-                ));
-            }
-            (reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2, kind)
-                if kind == reserved_fe2o3_symbols::KERNEL_REGISTRATION_KIND_KERNEL =>
-            {
-                return Err(error(
-                    "ordinary registrations must remain version 1".to_owned(),
                 ));
             }
             (version, kind)
@@ -2344,7 +1690,6 @@ fn validate_registration_records<T: Copy>(
             }
             (version, _)
                 if version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V1
-                    && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V2
                     && version != reserved_fe2o3_symbols::KERNEL_REGISTRATION_VERSION_V3 =>
             {
                 return Err(error(format!("unknown registration version {version}")));
@@ -2374,62 +1719,24 @@ fn validate_registration_records<T: Copy>(
         let target_module = owner_module_path(&record.target_identity);
         let target_is_external =
             expected_crate_name.is_some_and(|expected| record.target_crate_name != expected);
-        if typed_profile.is_some() {
+        if generated_host_contract_identity.is_some() {
             let _expected_crate_name = expected_crate_name.ok_or_else(|| {
                 error("typed registration has no rustc session crate identity".to_owned())
             })?;
             if target_is_external {
-                if typed_profile != Some(TypedKernelProfile::VecAddRustcLayoutV2) {
-                    return Err(error(
-                        "cross-crate kernels are bounded to typed V2".to_owned(),
-                    ));
-                }
-                if !allow_external_typed_v2 {
-                    return Err(error(
-                        "cross-crate typed V2 kernels are bounded to gfx942:xnack-".to_owned(),
-                    ));
-                }
-            } else if registration_module != target_module {
+                return Err(error(
+                    "cross-crate generic typed kernels are not yet supported".to_owned(),
+                ));
+            }
+            if registration_module != target_module {
                 return Err(error(format!(
-                    "registered target module `{target_module}` disagrees with registration module `{registration_module}`"
+                    "registered target module {target_module:?} disagrees with registration module {registration_module:?}"
                 )));
             }
         }
 
-        let kernel_binding = match typed_profile {
-            Some(TypedKernelProfile::VecAddRustcLayoutV2) => {
-                let crate_binding = record
-                    .crate_binding
-                    .ok_or_else(|| error("V2 registration has no crate binding".to_owned()))?;
-                let expected = expected_crate_binding.ok_or_else(|| {
-                    error("V2 registration has no rustc session crate binding".to_owned())
-                })?;
-                if !target_is_external && crate_binding != expected {
-                    return Err(error(format!(
-                        "crate binding {} disagrees with rustc session binding {}",
-                        crate_binding.to_hex(),
-                        expected.to_hex()
-                    )));
-                }
-                let declared = record
-                    .kernel_binding
-                    .ok_or_else(|| error("V2 registration has no kernel binding".to_owned()))?;
-                let expected = derive_kernel_binding_id_v1(
-                    crate_binding,
-                    TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-                    &record.logical_name,
-                    &record.export_name,
-                );
-                if declared != expected {
-                    return Err(error(format!(
-                        "kernel binding {} disagrees with derived binding {}",
-                        declared.to_hex(),
-                        expected.to_hex()
-                    )));
-                }
-                Some(declared)
-            }
-            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. }) => {
+        let kernel_binding = match generated_host_contract_identity {
+            Some(_) => {
                 let crate_binding = record
                     .crate_binding
                     .ok_or_else(|| error("V3 registration has no crate binding".to_owned()))?;
@@ -2509,36 +1816,12 @@ fn validate_registration_records<T: Copy>(
             "target identity",
         )?;
 
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        let authenticated_owner = match typed_profile {
-            Some(typed_profile) => Some(AuthenticatedKernelOwner {
-                target: record.target,
-                crate_name: record.target_crate_name.clone(),
-                module_path: target_module.to_owned(),
-                logical_name: record.logical_name.clone(),
-                export_name: record.export_name.clone(),
-                typed_profile,
-                target_def_path: record.target_identity.clone(),
-                crate_binding: record
-                    .crate_binding
-                    .expect("typed registration crate binding was validated above"),
-                kernel_binding: kernel_binding
-                    .expect("typed registration kernel binding was validated above"),
-                observed_symbol: record.target_symbol.clone(),
-            }),
-            None => None,
-        };
-
         roots.push(KernelRoot {
             target: record.target,
             logical_name: record.logical_name,
             export_name: record.export_name,
-            typed_profile,
+            generated_host_contract_identity,
             kernel_binding,
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            authenticated_owner,
-            typed_layout_identities: None,
-            general_typed_contract: None,
             frontend_contract: None,
             reference_effect_binding: None,
         });
@@ -2606,12 +1889,9 @@ struct DeviceCollector<'tcx> {
     used_export_names: BTreeSet<String>,
     worklist: VecDeque<CollectedFunction<'tcx>>,
     result: Vec<CollectedFunction<'tcx>>,
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    authenticated_kernel_owners: AuthenticatedKernelOwners<Instance<'tcx>>,
     ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
     reachable_ffi_imports: BTreeSet<reserved_fe2o3_symbols::DeviceFfiContractIdV1>,
     expected_target: String,
-    purpose: CollectorPurposeV1,
     inspected_blocks: usize,
     verbose: bool,
 }
@@ -2722,7 +2002,6 @@ impl<'tcx> DeviceCollector<'tcx> {
         verbose: bool,
         ffi_declarations: Vec<crate::device_ffi::CollectedDeviceFfi<'tcx>>,
         target: String,
-        purpose: CollectorPurposeV1,
     ) -> Self {
         Self {
             tcx,
@@ -2734,12 +2013,9 @@ impl<'tcx> DeviceCollector<'tcx> {
             used_export_names: BTreeSet::new(),
             worklist: VecDeque::new(),
             result: Vec::new(),
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            authenticated_kernel_owners: AuthenticatedKernelOwners::default(),
             ffi_declarations,
             reachable_ffi_imports: BTreeSet::new(),
             expected_target: target,
-            purpose,
             inspected_blocks: 0,
             verbose,
         }
@@ -2822,10 +2098,8 @@ impl<'tcx> DeviceCollector<'tcx> {
                 role: CollectedFunctionRole::DeviceFfiExport,
                 export_name,
                 logical_name: None,
-                typed_profile: None,
+                generated_host_contract_identity: None,
                 kernel_binding: None,
-                typed_layout_identities: None,
-                general_typed_contract: None,
                 frontend_contract: None,
                 reference_effect_binding: None,
                 dead_branches: None,
@@ -2839,12 +2113,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             target: instance,
             logical_name,
             export_name,
-            typed_profile,
+            generated_host_contract_identity,
             kernel_binding,
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            authenticated_owner,
-            typed_layout_identities,
-            general_typed_contract,
             frontend_contract,
             reference_effect_binding,
         } = root;
@@ -2864,20 +2134,13 @@ impl<'tcx> DeviceCollector<'tcx> {
                     label: self.instance_label(instance),
                 },
             );
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            if let Some(owner) = authenticated_owner {
-                debug_assert_eq!(owner.target, instance);
-                self.authenticated_kernel_owners.push(owner);
-            }
             self.worklist.push_back(CollectedFunction {
                 instance,
                 role: CollectedFunctionRole::KernelEntry,
                 export_name,
                 logical_name: Some(logical_name),
-                typed_profile,
+                generated_host_contract_identity,
                 kernel_binding,
-                typed_layout_identities,
-                general_typed_contract,
                 frontend_contract,
                 reference_effect_binding,
                 dead_branches: None,
@@ -2962,20 +2225,9 @@ impl<'tcx> DeviceCollector<'tcx> {
                 );
             }
 
-            for (block_id, block) in mir.basic_blocks.iter_enumerated() {
-                if !self
-                    .purpose
-                    .inspect_block(dead_branches.includes_block(block_id.as_usize()))
-                {
-                    continue;
-                }
+            for (_, block) in mir.basic_blocks.iter_enumerated() {
                 if let Some(terminator) = &block.terminator {
-                    self.process_terminator(
-                        &terminator.kind,
-                        mir,
-                        &function.instance,
-                        function.is_kernel_entry(),
-                    )?;
+                    self.process_terminator(&terminator.kind, mir, &function.instance)?;
                 }
             }
 
@@ -3010,8 +2262,6 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         let mut collection = CollectionResult {
             functions: self.result,
-            #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-            authenticated_kernel_owners: self.authenticated_kernel_owners,
             device_ffi,
             compiler_ffi_observation: None,
         };
@@ -3029,7 +2279,6 @@ impl<'tcx> DeviceCollector<'tcx> {
         terminator: &TerminatorKind<'tcx>,
         body: &Body<'tcx>,
         caller: &Instance<'tcx>,
-        is_kernel_root: bool,
     ) -> Result<(), CollectError> {
         match terminator {
             TerminatorKind::Call { func, unwind, .. } => {
@@ -3064,14 +2313,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                 caller,
             ),
             TerminatorKind::Assert { unwind, .. }
-                if (is_kernel_root || self.purpose.accepts_extended_edges())
-                    && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
+                if matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
                 Ok(())
             }
             TerminatorKind::Drop { place, unwind, .. }
-                if self.purpose.accepts_extended_edges()
-                    && matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
+                if matches!(unwind, UnwindAction::Continue | UnwindAction::Unreachable) =>
             {
                 match classify_rustc_drop_v1(self.tcx, *caller, body, *place) {
                     Ok(ProductionRustcDropClassV1::Trivial) => Ok(()),
@@ -3271,10 +2518,6 @@ impl<'tcx> DeviceCollector<'tcx> {
     }
 
     fn authenticate_production_kernel_source_safety(&self) -> Result<(), CollectError> {
-        if !self.purpose.is_production() {
-            return Ok(());
-        }
-
         let functions = self
             .result
             .iter()
@@ -3511,22 +2754,23 @@ impl<'tcx> DeviceCollector<'tcx> {
                 ));
             }
         };
-        let normalized_intrinsic = if self.purpose.is_production()
-            && crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
+        let normalized_intrinsic =
+            if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
                 .is_none()
-        {
-            crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved).map_err(|error| {
-                self.reachable_error(
-                    caller,
-                    &format!("unsupported rustc compiler intrinsic: {error}"),
-                    Some(self.instance_label(resolved)),
-                )
-            })?
-        } else {
-            None
-        };
-        if self.purpose.is_production()
-            && normalized_intrinsic.is_none()
+            {
+                crate::production_rustc_intrinsic_v1::classify(self.tcx, resolved).map_err(
+                    |error| {
+                        self.reachable_error(
+                            caller,
+                            &format!("unsupported rustc compiler intrinsic: {error}"),
+                            Some(self.instance_label(resolved)),
+                        )
+                    },
+                )?
+            } else {
+                None
+            };
+        if normalized_intrinsic.is_none()
             && self.tcx.fn_sig(*def_id).skip_binder().safety() == Safety::Unsafe
             && !crate::production_rustc_intrinsic_v1::is_reviewed_core_unsafe_atomic_function_v1(
                 self.tcx, resolved,
@@ -3587,11 +2831,8 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         // Only an exact rustc diagnostic-item identity may terminate
         // collection without traversing the callee body.
-        let registered_terminal = if self.purpose.is_production() {
-            crate::production_semantic_terminal_v1::classify(self.tcx, *def_id).is_some()
-        } else {
-            crate::trusted_device_items::classify(self.tcx, *def_id).is_some()
-        };
+        let registered_terminal =
+            crate::production_semantic_terminal_v1::classify(self.tcx, *def_id).is_some();
         if registered_terminal {
             if self.verbose {
                 eprintln!(
@@ -3646,40 +2887,16 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
 
-        // Production stops only at the workload-neutral reviewed device
-        // registry. The sole importer must apply that item's explicit
-        // expand-or-reject rule; workload/profile classifiers remain oracles.
-        if self.purpose.is_production()
-            && crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
-                .is_some()
-        {
+        // Collection stops only at the workload-neutral reviewed device
+        // registry. The sole semantic importer applies each registered item's
+        // explicit expand-or-reject rule.
+        if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id()).is_some() {
             if self.verbose {
                 eprintln!(
                     "[collector] stopping at registered semantic terminal {}",
                     self.tcx.def_path_str(resolved.def_id())
                 );
             }
-            return Ok(());
-        }
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        if self.purpose.is_qualification_oracle()
-            && crate::collected_flash_attention_v1::classify_exact_flash_attention_compiler_intrinsic(
-                self.tcx,
-                resolved.def_id(),
-            )
-            .is_some()
-        {
-            return Ok(());
-        }
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        if self.purpose.is_qualification_oracle()
-            && crate::collected_moe_top2_v1::classify_exact_moe_top2_compiler_intrinsic(
-                self.tcx,
-                resolved.def_id(),
-            )
-            .is_some()
-        {
             return Ok(());
         }
 
@@ -3698,18 +2915,6 @@ impl<'tcx> DeviceCollector<'tcx> {
         // repeated against the exact concrete implementation selected by
         // rustc. The classifier authenticates the implementation through the
         // diagnostic-item-marked device type and the exact lang-item trait.
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        if self.purpose.is_qualification_oracle()
-            && crate::trusted_device_items::classify(self.tcx, resolved.def_id()).is_some()
-        {
-            if self.verbose {
-                eprintln!(
-                    "[collector] stopping at resolved trusted device item {}",
-                    self.tcx.def_path_str(resolved.def_id())
-                );
-            }
-            return Ok(());
-        }
         if let Some(rejection) =
             crate::trusted_device_items::rejected_provider(self.tcx, resolved.def_id())
         {
@@ -3763,10 +2968,8 @@ impl<'tcx> DeviceCollector<'tcx> {
             role: CollectedFunctionRole::InternalHelper,
             export_name,
             logical_name: None,
-            typed_profile: None,
+            generated_host_contract_identity: None,
             kernel_binding: None,
-            typed_layout_identities: None,
-            general_typed_contract: None,
             frontend_contract: None,
             reference_effect_binding: None,
             dead_branches: None,
@@ -4024,11 +3227,10 @@ fn sanitize_symbol_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthenticatedKernelFrontendContractV1, CallChainLink, CollectorPurposeV1, KernelRoot,
-        ObservedInlineAssemblyV1, RegistrationError, RegistrationRecord, TypedArgumentListError,
-        TypedArgumentListV1, TypedKernelProfile, general_typed_launch_v3,
-        reconcile_frontend_contract, reconstruct_call_chain, root_scoped_call_chains,
-        validate_registration_records as validate_records,
+        AuthenticatedKernelFrontendContractV1, CallChainLink, KernelRoot, ObservedInlineAssemblyV1,
+        RegistrationError, RegistrationRecord, TypedArgumentListError, TypedArgumentListV1,
+        general_typed_launch_v3, reconcile_frontend_contract, reconstruct_call_chain,
+        root_scoped_call_chains, validate_registration_records as validate_records,
     };
     use fe2o3_artifacts::{
         BlockSize, DeclaredRustLayoutIdentity, DeclaredRustTypeIdentity, DigestBytes, Dimensions,
@@ -4043,12 +3245,11 @@ mod tests {
     };
     use reserved_fe2o3_symbols::{
         GeneratedHostContractIdV3, KERNEL_PREFIX, KERNEL_REGISTRATION_KIND_KERNEL,
-        KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3,
-        KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2, KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1,
-        KERNEL_REGISTRATION_MAGIC, KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1,
-        KERNEL_REGISTRATION_VERSION_V2, KERNEL_REGISTRATION_VERSION_V3, KernelBindingIdV1,
-        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-        derive_crate_binding_id_v1, derive_kernel_binding_id_v1, host_kernel_symbol_v1,
+        KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3, KERNEL_REGISTRATION_MAGIC,
+        KERNEL_REGISTRATION_PREFIX, KERNEL_REGISTRATION_VERSION_V1, KERNEL_REGISTRATION_VERSION_V2,
+        KERNEL_REGISTRATION_VERSION_V3, KernelBindingIdV1,
+        TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3, derive_crate_binding_id_v1,
+        derive_kernel_binding_id_v1, host_kernel_symbol_v1,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -4151,7 +3352,7 @@ mod tests {
         records: Vec<RegistrationRecord<T>>,
     ) -> Result<Vec<KernelRoot<T>>, RegistrationError> {
         let expected_crate_binding = records.iter().find_map(|record| record.crate_binding);
-        validate_records(records, expected_crate_binding, Some("fixture"), false)
+        validate_records(records, expected_crate_binding, Some("fixture"))
     }
 
     fn registration(
@@ -4186,28 +3387,6 @@ mod tests {
         }
     }
 
-    fn typed_registration(
-        path: &str,
-        logical_name: &str,
-        export_name: &str,
-        target: u8,
-    ) -> RegistrationRecord<u8> {
-        let mut registration = registration(path, logical_name, export_name, target);
-        let crate_binding = derive_crate_binding_id_v1("fixture", ["metadata"]);
-        let kernel_binding = derive_kernel_binding_id_v1(
-            crate_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            logical_name,
-            export_name,
-        );
-        registration.version = KERNEL_REGISTRATION_VERSION_V2;
-        registration.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
-        registration.crate_binding = Some(crate_binding);
-        registration.kernel_binding = Some(kernel_binding);
-        registration.target_symbol = host_kernel_symbol_v1(kernel_binding);
-        registration
-    }
-
     fn general_typed_registration(
         path: &str,
         logical_name: &str,
@@ -4236,117 +3415,18 @@ mod tests {
     #[test]
     fn genuine_v1_registration_becomes_a_kernel_root() {
         let roots = validate_registration_records(vec![registration(
-            "crate::__fe2o3_kernel_registration_vecadd",
-            "vecadd",
-            "vecadd",
+            "crate::__fe2o3_kernel_registration_plain",
+            "plain",
+            "plain",
             7,
         )])
         .unwrap();
 
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].target, 7);
-        assert_eq!(roots[0].logical_name, "vecadd");
-        assert_eq!(roots[0].export_name, "vecadd");
-        assert_eq!(roots[0].typed_profile, None);
-    }
-
-    #[test]
-    fn typed_vecadd_registration_carries_its_profile_into_the_kernel_root() {
-        let typed = typed_registration(
-            "crate::__fe2o3_kernel_registration_vecadd",
-            "vecadd",
-            "vecadd",
-            7,
-        );
-        let roots = validate_registration_records(vec![typed]).unwrap();
-
-        assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].target, 7);
-        assert_eq!(roots[0].logical_name, "vecadd");
-        assert_eq!(roots[0].export_name, "vecadd");
-        assert_eq!(
-            roots[0].typed_profile,
-            Some(TypedKernelProfile::VecAddRustcLayoutV2)
-        );
-        assert!(roots[0].kernel_binding.is_some());
-    }
-
-    #[test]
-    fn gfx942_external_typed_v2_registration_preserves_producer_binding() {
-        let mut typed = typed_registration(
-            "consumer::__fe2o3_kernel_registration_vecadd",
-            "vecadd",
-            "vecadd",
-            7,
-        );
-        typed.target_crate_name = "producer".to_owned();
-        typed.target_identity = "producer::kernels::__fe2o3_host_kernel_v1_vecadd".to_owned();
-        let producer_binding = derive_crate_binding_id_v1("producer", ["producer-metadata"]);
-        let kernel_binding = derive_kernel_binding_id_v1(
-            producer_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            "vecadd",
-            "vecadd",
-        );
-        typed.crate_binding = Some(producer_binding);
-        typed.kernel_binding = Some(kernel_binding);
-        typed.target_symbol = host_kernel_symbol_v1(kernel_binding);
-        let consumer_binding = derive_crate_binding_id_v1("consumer", ["consumer-metadata"]);
-
-        let roots = validate_records(
-            vec![typed.clone()],
-            Some(consumer_binding),
-            Some("consumer"),
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].kernel_binding, Some(kernel_binding));
-
-        let substituted = KernelBindingIdV1::from_bytes([0x5a; 32]);
-        typed.kernel_binding = Some(substituted);
-        typed.target_symbol = host_kernel_symbol_v1(substituted);
-        let error = validate_records(vec![typed], Some(consumer_binding), Some("consumer"), true)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("disagrees with derived binding"),
-            "substituted producer binding was not rejected: {error}"
-        );
-    }
-
-    #[test]
-    fn external_typed_v2_registration_fails_closed_outside_gfx942_profile() {
-        let mut typed = typed_registration(
-            "consumer::__fe2o3_kernel_registration_vecadd",
-            "vecadd",
-            "vecadd",
-            7,
-        );
-        typed.target_crate_name = "producer".to_owned();
-        typed.target_identity = "producer::kernels::__fe2o3_host_kernel_v1_vecadd".to_owned();
-        let producer_binding = derive_crate_binding_id_v1("producer", ["producer-metadata"]);
-        let kernel_binding = derive_kernel_binding_id_v1(
-            producer_binding,
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
-            "vecadd",
-            "vecadd",
-        );
-        typed.crate_binding = Some(producer_binding);
-        typed.kernel_binding = Some(kernel_binding);
-        typed.target_symbol = host_kernel_symbol_v1(kernel_binding);
-
-        let error = validate_records(
-            vec![typed],
-            Some(derive_crate_binding_id_v1(
-                "consumer",
-                ["consumer-metadata"],
-            )),
-            Some("consumer"),
-            false,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("bounded to gfx942:xnack-"));
+        assert_eq!(roots[0].logical_name, "plain");
+        assert_eq!(roots[0].export_name, "plain");
+        assert_eq!(roots[0].generated_host_contract_identity, None);
     }
 
     #[test]
@@ -4360,45 +3440,13 @@ mod tests {
         let roots = validate_registration_records(vec![registration]).unwrap();
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].target, 3);
-        assert!(matches!(
-            roots[0].typed_profile,
-            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
-                generated_host_contract_identity,
-            }) if generated_host_contract_identity.as_bytes() == [0x63; 32]
-        ));
-    }
-
-    #[test]
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    fn authenticated_kernel_owner_exposes_stable_owner_and_exact_build_observation() {
-        let registration = general_typed_registration(
-            "general_genuine::__fe2o3_kernel_registration_alpha",
-            "alpha",
-            "alpha",
-            3,
+        assert_eq!(
+            roots[0]
+                .generated_host_contract_identity
+                .unwrap()
+                .as_bytes(),
+            [0x63; 32],
         );
-        let expected_crate_binding = registration.crate_binding.unwrap();
-        let expected_kernel_binding = registration.kernel_binding.unwrap();
-        let expected_symbol = registration.target_symbol.clone();
-        let expected_def_path = registration.target_identity.clone();
-        let roots = validate_registration_records(vec![registration]).unwrap();
-        let owner = roots[0].authenticated_owner.as_ref().unwrap();
-
-        assert_eq!(owner.target(), 3);
-        assert_eq!(owner.crate_name(), "fixture");
-        assert_eq!(owner.module_path(), "general_genuine");
-        assert_eq!(owner.logical_name(), "alpha");
-        assert_eq!(owner.export_name(), "alpha");
-        assert!(matches!(
-            owner.typed_profile(),
-            TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 {
-                generated_host_contract_identity,
-            } if generated_host_contract_identity.as_bytes() == [0x63; 32]
-        ));
-        assert_eq!(owner.target_def_path(), expected_def_path);
-        assert_eq!(owner.crate_binding(), expected_crate_binding);
-        assert_eq!(owner.kernel_binding(), expected_kernel_binding);
-        assert_eq!(owner.observed_symbol(), expected_symbol);
     }
 
     #[test]
@@ -4412,14 +3460,13 @@ mod tests {
         let expected_crate_binding = registration.crate_binding.unwrap();
 
         let error =
-            validate_records(vec![registration.clone()], None, Some("fixture"), false).unwrap_err();
+            validate_records(vec![registration.clone()], None, Some("fixture")).unwrap_err();
         assert!(error.reason.contains("no rustc session crate binding"));
 
         let error = validate_records(
             vec![registration.clone()],
             Some(expected_crate_binding),
             None,
-            false,
         )
         .unwrap_err();
         assert!(error.reason.contains("no rustc session crate identity"));
@@ -4430,15 +3477,18 @@ mod tests {
             vec![wrong_crate],
             Some(expected_crate_binding),
             Some("fixture"),
-            false,
         )
         .unwrap_err();
-        assert!(error.reason.contains("bounded to typed V2"));
+        assert!(error.reason.contains("cross-crate generic typed kernels"));
 
         let mut wrong_module = registration.clone();
         wrong_module.target_identity = format!("spoof::{}", wrong_module.target_symbol);
         let error = validate_registration_records(vec![wrong_module]).unwrap_err();
-        assert!(error.reason.contains("target module `spoof`"));
+        assert!(
+            error
+                .reason
+                .contains("registered target module \"spoof\" disagrees")
+        );
 
         let mut wrong_logical = registration.clone();
         wrong_logical.logical_name = "beta".to_owned();
@@ -4469,7 +3519,6 @@ mod tests {
             vec![wrong_crate_binding],
             Some(expected_crate_binding),
             Some("fixture"),
-            false,
         )
         .unwrap_err();
         assert!(
@@ -4532,11 +3581,11 @@ mod tests {
             validate_registration_records(vec![old_version])
                 .unwrap_err()
                 .reason
-                .contains("require version 3")
+                .contains("registration version 2 has been removed")
         );
 
         let mut old_kind = registration;
-        old_kind.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_LAYOUT_V2;
+        old_kind.kind = KERNEL_REGISTRATION_KIND_TYPED_GENERAL_LAYOUT_V3 + 1;
         assert!(
             validate_registration_records(vec![old_kind])
                 .unwrap_err()
@@ -4570,21 +3619,16 @@ mod tests {
     }
 
     #[test]
-    fn typed_registration_identity_and_host_symbol_fail_closed() {
-        let typed = typed_registration(
-            "crate::__fe2o3_kernel_registration_vecadd",
-            "vecadd",
-            "vecadd",
+    fn generic_typed_registration_identity_and_host_symbol_fail_closed() {
+        let typed = general_typed_registration(
+            "crate::__fe2o3_kernel_registration_typed",
+            "typed",
+            "typed",
             7,
         );
         let wrong_crate = derive_crate_binding_id_v1("other", ["metadata"]);
-        let error = validate_records(
-            vec![typed.clone()],
-            Some(wrong_crate),
-            Some("fixture"),
-            false,
-        )
-        .unwrap_err();
+        let error =
+            validate_records(vec![typed.clone()], Some(wrong_crate), Some("fixture")).unwrap_err();
         assert!(
             error
                 .reason
@@ -4594,7 +3638,7 @@ mod tests {
         let mut wrong_kernel = typed.clone();
         wrong_kernel.kernel_binding = Some(derive_kernel_binding_id_v1(
             wrong_kernel.crate_binding.unwrap(),
-            TYPED_VECADD_F32_LAYOUT_PROFILE_TAG_V2,
+            TYPED_GENERAL_RUSTC_LAYOUT_PROFILE_TAG_V3,
             "different",
             "different",
         ));
@@ -4602,7 +3646,7 @@ mod tests {
         assert!(error.reason.contains("disagrees with derived binding"));
 
         let mut logical_host_symbol = typed;
-        logical_host_symbol.target_symbol = format!("{KERNEL_PREFIX}vecadd");
+        logical_host_symbol.target_symbol = format!("{KERNEL_PREFIX}typed");
         let error = validate_registration_records(vec![logical_host_symbol]).unwrap_err();
         assert!(error.reason.contains("target symbol"));
         assert!(error.reason.contains("inconsistent with export name"));
@@ -4798,12 +3842,12 @@ mod tests {
 
         let mut obsolete_typed = base;
         obsolete_typed.version = KERNEL_REGISTRATION_VERSION_V2;
-        obsolete_typed.kind = KERNEL_REGISTRATION_KIND_TYPED_VECADD_V1;
+        obsolete_typed.kind = KERNEL_REGISTRATION_KIND_KERNEL;
         assert!(
             validate_registration_records(vec![obsolete_typed])
                 .unwrap_err()
                 .reason
-                .contains("opaque layout identities")
+                .contains("registration version 2 has been removed")
         );
     }
 
@@ -4842,7 +3886,7 @@ mod tests {
         .unwrap_err();
         assert!(export_error.reason.contains("duplicate export name `same`"));
 
-        let typed_duplicate = typed_registration(
+        let typed_duplicate = general_typed_registration(
             "crate::b::__fe2o3_kernel_registration_same",
             "same",
             "typed",
@@ -4939,45 +3983,12 @@ mod tests {
     }
 
     #[test]
-    fn collector_purposes_keep_output_and_terminal_authority_explicit() {
-        let production = CollectorPurposeV1::Production;
-        assert!(production.inspect_block(false));
-        assert!(production.inspect_block(true));
-        assert!(production.accepts_extended_edges());
-        assert!(!production.is_qualification_oracle());
-        assert!(production.is_production());
-
-        #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-        {
-            let qualification = CollectorPurposeV1::QualificationOracle {
-                extended_helper_edges: false,
-            };
-            assert!(!qualification.inspect_block(false));
-            assert!(!qualification.accepts_extended_edges());
-            assert!(qualification.is_qualification_oracle());
-            assert!(!qualification.is_production());
-
-            let extended_qualification = CollectorPurposeV1::QualificationOracle {
-                extended_helper_edges: true,
-            };
-            assert!(extended_qualification.accepts_extended_edges());
-        }
-    }
-
-    #[test]
-    fn production_registration_surface_accepts_every_valid_registration_version() {
+    fn production_registration_surface_accepts_v1_and_generic_v3() {
         let ordinary = validate_registration_records(vec![registration(
             "fixture::__fe2o3_kernel_plain",
             "plain",
             "plain",
             1,
-        )])
-        .unwrap();
-        let typed = validate_registration_records(vec![typed_registration(
-            "fixture::__fe2o3_kernel_typed",
-            "typed",
-            "typed",
-            2,
         )])
         .unwrap();
         let general = validate_registration_records(vec![general_typed_registration(
@@ -4988,36 +3999,8 @@ mod tests {
         )])
         .unwrap();
 
-        assert!(ordinary[0].typed_profile.is_none());
-        assert!(matches!(
-            typed[0].typed_profile,
-            Some(TypedKernelProfile::VecAddRustcLayoutV2)
-        ));
-        assert!(matches!(
-            general[0].typed_profile,
-            Some(TypedKernelProfile::GeneralScalarSliceRustcLayoutV3 { .. })
-        ));
-    }
-
-    #[test]
-    #[cfg(all(test, feature = "qualification-oracles-test-only"))]
-    fn qualification_entry_requires_resolved_target_and_explicit_oracle_token() {
-        let source = include_str!("collector.rs");
-        let qualification = source
-            .split_once("pub(crate) fn collect_qualification_device_functions")
-            .unwrap()
-            .1
-            .split_once("pub(crate) fn collect_authenticated_kernel_closure_v1")
-            .unwrap()
-            .0;
-        for forbidden in ["std::env", "QUALIFICATION_ORACLE_ENV", "FE2O3_TARGET"] {
-            assert!(
-                !qualification.contains(forbidden),
-                "qualification collection entry contains hidden input {forbidden:?}"
-            );
-        }
-        assert!(qualification.contains("target: &crate::AmdGpuTarget"));
-        assert!(qualification.contains("SelectedQualificationOracle"));
+        assert!(ordinary[0].generated_host_contract_identity.is_none());
+        assert!(general[0].generated_host_contract_identity.is_some());
     }
 
     #[test]
@@ -5027,7 +4010,7 @@ mod tests {
             .split_once("pub(crate) fn collect_authenticated_kernel_closure_v1")
             .unwrap()
             .1
-            .split_once("fn collect_device_functions_for_purpose")
+            .split_once("fn collect_device_functions")
             .unwrap()
             .0;
         for forbidden in ["std::env", "QUALIFICATION_ORACLE_ENV", "FE2O3_TARGET"] {

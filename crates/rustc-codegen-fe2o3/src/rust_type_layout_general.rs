@@ -1,10 +1,9 @@
 //! Bounded rustc layout facts for general, fully monomorphized Rust types.
 //!
-//! This module is intentionally independent of the typed vecadd artifact
-//! profile. The facts here are a compiler-side foundation, not trusted
-//! evidence: no artifact or host authorization path consumes them yet. This
-//! type-only layer rejects function-address-bearing types; a future constant
-//! extractor must likewise reject allocation relocations until it records them.
+//! These workload-neutral facts are compiler observations, not standalone
+//! proof, load, or launch authority. This type-only layer rejects
+//! function-address-bearing types; a future constant extractor must likewise
+//! reject allocation relocations until it records them.
 
 use std::fmt;
 

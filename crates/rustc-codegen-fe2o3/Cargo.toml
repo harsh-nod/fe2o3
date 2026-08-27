@@ -8,10 +8,6 @@ rust-version.workspace = true
 description = "Compiler backend support code for fe2o3."
 build = "build.rs"
 
-[features]
-qualification-oracles-test-only = []
-row-softmax-metadata-mutation-test-only = []
-
 [dependencies]
 dialect-amdgcn.workspace = true
 dialect-gpu.workspace = true
@@ -25,9 +21,6 @@ fe2o3-compiler-api.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-compiler-lineage.workspace = true
-fe2o3-general-gemm-compiler.workspace = true
-fe2o3-hsaco.workspace = true
-fe2o3-hsaco-finalize = { workspace = true, features = ["general-gemm-v1"] }
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-analysis = { workspace = true, features = [
     "authenticated-machine-effect",
@@ -51,6 +44,8 @@ sha2.workspace = true
 pliron.workspace = true
 
 [dev-dependencies]
+fe2o3-hsaco.workspace = true
+fe2o3-hsaco-finalize.workspace = true
 fe2o3-core.workspace = true
 fe2o3-host.workspace = true
 fe2o3-hsa-runtime = { workspace = true, features = ["hardware-test-hooks"] }
@@ -82,18 +77,6 @@ name = "reference_binding_v1"
 
 [[test]]
 name = "cross_crate_typed_binding"
-
-[[test]]
-name = "tiled_gemm_frontend"
-required-features = ["qualification-oracles-test-only"]
-
-[[test]]
-name = "gfx942_wave_lds_compiler"
-required-features = ["qualification-oracles-test-only"]
-
-[[test]]
-name = "memory_intrinsics_compiler"
-required-features = ["qualification-oracles-test-only"]
 
 [package.metadata.rust-analyzer]
 rustc_private = true

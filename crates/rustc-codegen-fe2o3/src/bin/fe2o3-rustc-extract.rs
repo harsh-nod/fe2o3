@@ -829,6 +829,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some(package_identity("1.0.0", 1)),
             )
             .unwrap() else {
@@ -998,6 +999,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap() else {
@@ -1033,6 +1035,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(OsString::new()),
             Some(package_identity("1.0.0", 1)),
         )
@@ -1050,6 +1053,7 @@ mod tests {
             Some(OsString::from("unit")),
             None,
             Some(OsString::from("generic.ll")),
+            None,
             None,
             None,
             Some(package_identity("1.0.0", 1)),
@@ -1071,6 +1075,7 @@ mod tests {
             Some(OsString::from("generic.ll")),
             Some(OsString::from("gfx942.ll")),
             None,
+            None,
             Some(package_identity("1.0.0", 1)),
         )
         .unwrap_err();
@@ -1081,6 +1086,7 @@ mod tests {
             Some(OsString::from("unit")),
             None,
             Some(OsString::new()),
+            None,
             None,
             None,
             Some(package_identity("1.0.0", 1)),

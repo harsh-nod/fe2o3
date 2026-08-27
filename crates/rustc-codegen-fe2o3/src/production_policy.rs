@@ -3,10 +3,12 @@
 use std::env;
 use std::ffi::OsStr;
 
+const REMOVED_QUALIFICATION_ORACLE_ENV: &str = "FE2O3_QUALIFICATION_ORACLE_V1";
+
 pub(crate) fn environment_rejection() -> Option<String> {
     rejection_from_values(
         env::var_os(crate::OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref(),
-        env::var_os(crate::QUALIFICATION_ORACLE_ENV).as_deref(),
+        env::var_os(REMOVED_QUALIFICATION_ORACLE_ENV).as_deref(),
     )
 }
 
@@ -16,15 +18,15 @@ fn rejection_from_values(
 ) -> Option<String> {
     if let Some(value) = obsolete_pipeline {
         return Some(format!(
-            "{} has been removed; production compilation has no selector and temporary test oracles use {}; found {value:?}",
+            "{} and {} are unsupported and removed; production compilation has no alternate route; found {value:?}",
             crate::OBSOLETE_CODEGEN_PIPELINE_ENV,
-            crate::QUALIFICATION_ORACLE_ENV,
+            REMOVED_QUALIFICATION_ORACLE_ENV,
         ));
     }
     qualification_oracle.map(|value| {
         format!(
-            "{} has been removed from the rustc backend; qualification comparisons may run only as offline, non-authoritative fixtures; found {value:?}",
-            crate::QUALIFICATION_ORACLE_ENV,
+            "{} is unsupported and removed; production compilation has no alternate route; found {value:?}",
+            REMOVED_QUALIFICATION_ORACLE_ENV,
         )
     })
 }
@@ -33,7 +35,7 @@ fn rejection_from_values(
 mod tests {
     use std::ffi::OsStr;
 
-    use super::rejection_from_values;
+    use super::{REMOVED_QUALIFICATION_ORACLE_ENV, rejection_from_values};
 
     #[test]
     fn unset_environment_accepts_the_only_production_compiler() {
@@ -47,7 +49,9 @@ mod tests {
             Some(OsStr::new("kernel-ir-v1")),
         )
         .expect("obsolete selector must be rejected");
-        assert!(rejection.contains("FE2O3_CODEGEN_PIPELINE has been removed"));
+        assert!(rejection.contains("FE2O3_CODEGEN_PIPELINE"));
+        assert!(rejection.contains("unsupported and removed"));
+        assert!(rejection.contains("no alternate route"));
         assert!(rejection.contains("FE2O3_QUALIFICATION_ORACLE_V1"));
     }
 
@@ -55,7 +59,8 @@ mod tests {
     fn qualification_oracle_is_absent_from_the_production_backend() {
         let rejection = rejection_from_values(None, Some(OsStr::new("kernel-ir-v1")))
             .expect("qualification oracle must be rejected");
-        assert!(rejection.contains("FE2O3_QUALIFICATION_ORACLE_V1 has been removed"));
-        assert!(rejection.contains("offline, non-authoritative fixtures"));
+        assert!(rejection.contains(REMOVED_QUALIFICATION_ORACLE_ENV));
+        assert!(rejection.contains("unsupported and removed"));
+        assert!(rejection.contains("no alternate route"));
     }
 }

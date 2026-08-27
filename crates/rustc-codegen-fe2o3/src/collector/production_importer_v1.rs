@@ -3147,36 +3147,6 @@ fn exact_ordered_axes_match<T: PartialEq>(
 mod tests {
     use super::*;
 
-    #[cfg(feature = "qualification-oracles-test-only")]
-    #[test]
-    fn terminal_diagnostic_is_bounded_and_workload_neutral() {
-        let error = ProductionSemanticImportErrorV1::TargetNeutralLoweringPending {
-            functions: 3,
-            callables: 6,
-            rustc_identity_inventory_sha256: [0xab; 32],
-            rustc_preflight_plan_sha256: [0xcd; 32],
-            semantic_sha256: [0xef; 32],
-        };
-        let diagnostic = error.to_string();
-        assert!(diagnostic.contains("3 function(s)"));
-        assert!(diagnostic.contains("6 callable(s)"));
-        assert!(diagnostic.contains(&"ab".repeat(32)));
-        assert!(diagnostic.contains(&"cd".repeat(32)));
-        assert!(diagnostic.contains(&"ef".repeat(32)));
-        assert!(diagnostic.contains("admitted one complete semantic MIR request"));
-        assert!(diagnostic.contains("recursively verified for exact semantic equivalence"));
-        assert!(diagnostic.contains("target-neutral lowering remains pending"));
-        for forbidden in [
-            "GEMM",
-            "attention",
-            "softmax",
-            "export name",
-            concat!("MIR ", "transcript"),
-        ] {
-            assert!(!diagnostic.contains(forbidden));
-        }
-    }
-
     #[test]
     fn root_custody_comparison_rejects_every_sequence_substitution() {
         assert!(exact_ordered_axes_match([1, 2], [1, 2]));

@@ -2701,7 +2701,6 @@ dependencies = [
  "fe2o3-compiler-lineage",
  "fe2o3-core",
  "fe2o3-functional-proof",
- "fe2o3-general-gemm-compiler",
  "fe2o3-host",
  "fe2o3-hsa-runtime",
  "fe2o3-hsaco",

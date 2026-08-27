@@ -9,19 +9,13 @@
 //! This remains a compiler build-observation boundary, not cryptographic
 //! package authentication. A publisher signature or transparency-log identity
 //! must be checked before the managed build when that stronger claim is needed.
-//! General GEMM binds imported source hashes, exact semantic definitions, and
-//! the device-type dependency edge. A Cargo manifest that selects the same
-//! reviewed source and dependency graph is intentionally equivalent; manifest
-//! authorship and package provenance are outside this authority.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::ty::{FloatTy, TyCtxt, TyKind};
+use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::{SourceFileHash, Symbol};
 use sha2::{Digest as _, Sha256};
 
@@ -31,10 +25,6 @@ use dialect_amdgcn::{
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
-const MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2: &[u8] =
-    b"FE2O3/MATRIX-PROVIDER-SOURCE-IDENTITY/V2\0";
-const ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
-    b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-IDENTITY/V1\0";
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
@@ -43,55 +33,7 @@ const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
     0x04, 0xd0, 0x65, 0xe1, 0x6c, 0xa0, 0x69, 0x38, 0xc1, 0x9d, 0xe1, 0x54, 0xe5, 0xe4, 0xc1, 0xba,
     0x7e, 0x7b, 0x3e, 0x91, 0x0c, 0xfd, 0x43, 0x00, 0xd2, 0x01, 0xa9, 0x4a, 0xe5, 0x7f, 0xfd, 0xca,
 ];
-#[allow(
-    dead_code,
-    reason = "consumed by the staged row-softmax V2 provider protocol"
-)]
-const ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2: &[u8] =
-    b"FE2O3/ROW-SOFTMAX-PROVIDER-SOURCE-CLOSURE/V2\0";
-#[allow(
-    dead_code,
-    reason = "consumed by the staged matrix V3 provider protocol"
-)]
-const MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3: &[u8] =
-    b"FE2O3/MATRIX-PROVIDER-SOURCE-CLOSURE/V3\0";
-const GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
-    b"FE2O3/GENERAL-GEMM-PROVIDER-SOURCE-IDENTITY/V1\0";
-const GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1: &[u8] =
-    b"FE2O3/GENERAL-GEMM-PROVIDER-SEMANTIC-SOURCE-TREE/V1\0";
-const GENERAL_GEMM_DEPENDENCY_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] =
-    b"FE2O3/GENERAL-GEMM-DEPENDENCY-SEMANTIC-IDENTITY/V1\0";
-// Exact reviewed Rust source tree for the compiler-issued semantic surface.
-// The Cargo manifest/package that selected this source is not authenticated.
-const REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1: [u8; 32] = [
-    0xee, 0x5d, 0xcd, 0xb5, 0x44, 0x12, 0xc9, 0x5e, 0xe8, 0x2e, 0xa3, 0x2e, 0x0a, 0x46, 0x9f, 0x31,
-    0xc3, 0xb3, 0xb7, 0xd8, 0xe1, 0x76, 0x5c, 0xf3, 0xa7, 0xf4, 0xac, 0x4f, 0x3d, 0xab, 0xa5, 0x7b,
-];
-const REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1: [u8; 32] = [
-    0x6e, 0x25, 0xc4, 0xfc, 0xfc, 0x64, 0xc2, 0xc4, 0xd2, 0x2c, 0xa8, 0x0a, 0x6b, 0xbe, 0x6a, 0xe6,
-    0x56, 0x73, 0x6a, 0xae, 0x66, 0x49, 0xab, 0x12, 0x17, 0xad, 0xc5, 0x2e, 0x47, 0x92, 0xcf, 0xe4,
-];
-const REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1: [u8; 32] = [
-    0x5d, 0xdf, 0x25, 0xf8, 0x70, 0x03, 0x3a, 0x57, 0xfe, 0xd7, 0x7b, 0xd2, 0xd7, 0xf9, 0x63, 0x1c,
-    0x0b, 0xbd, 0xb7, 0x86, 0x11, 0x8f, 0x8c, 0x37, 0x28, 0x3e, 0x76, 0x09, 0xd9, 0x35, 0x2d, 0x18,
-];
-// Portable semantic identity of the reviewed `fe2o3_device::DisjointSlice`
-// definition and reference source closure used by the store signatures.
-const REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1: [u8; 32] = [
-    0xf5, 0xbd, 0xf2, 0x69, 0x89, 0xbb, 0xca, 0xce, 0xc8, 0xe5, 0x9c, 0x98, 0xb2, 0xfe, 0x7c, 0xf1,
-    0xd7, 0x0b, 0xac, 0x39, 0xb5, 0xf9, 0xdf, 0xb8, 0xa3, 0x85, 0x65, 0xbe, 0xd1, 0x87, 0x87, 0x85,
-];
 
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn reviewed_general_gemm_provider_semantics_identity_v1() -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"FE2O3/GENERAL-GEMM-PROVIDER-SEMANTICS/V1\0");
-    digest.update(REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1);
-    digest.update(REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1);
-    digest.update(REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1);
-    digest.update(REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1);
-    digest.finalize().into()
-}
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
     b"FE2O3/PROVIDER-SEMANTIC-DEFINITION-TRANSCRIPT/V1\0";
 #[cfg(test)]
@@ -103,43 +45,7 @@ const REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device");
 const REVIEWED_FE2O3_DEVICE_SOURCE_ROOT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../fe2o3-device/src");
-const REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../examples/tiled_gemm_general_v1/device-api/src"
-);
-
 static WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
-#[allow(
-    dead_code,
-    reason = "consumed by the staged row-softmax V2 provider protocol"
-)]
-static ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_V2: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
-#[allow(
-    dead_code,
-    reason = "consumed by the staged matrix V3 provider protocol"
-)]
-static MATRIX_PROVIDER_SOURCE_CLOSURE_V3: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
-static GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct ReviewedMatrixProviderObservationV2 {
-    pub(crate) crate_name: String,
-    pub(crate) stable_crate_id: u64,
-    pub(crate) crate_hash: [u8; 16],
-    pub(crate) cargo_metadata_build_observation: [u8; 32],
-    pub(crate) source_identity: [u8; 32],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) struct ReviewedRowSoftmaxProviderDefinitionV1 {
-    pub(crate) crate_name: String,
-    pub(crate) stable_crate_id: u64,
-    pub(crate) crate_hash: [u8; 16],
-    pub(crate) cargo_metadata_build_observation: [u8; 32],
-    pub(crate) source_identity: [u8; 32],
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompilerProviderObservationV1 {
@@ -148,42 +54,12 @@ pub(crate) struct CompilerProviderObservationV1 {
     pub(crate) crate_hash_observation: [u8; 16],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProviderSemanticDefinitionRoleV1 {
-    TrustedDefinition,
-    SemanticTerminal,
-}
-
-impl ProviderSemanticDefinitionRoleV1 {
-    const fn canonical_name(self) -> &'static [u8] {
-        match self {
-            Self::TrustedDefinition => b"trusted-definition",
-            Self::SemanticTerminal => b"semantic-terminal",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ReviewedProviderSemanticProfileV1 {
-    WorkgroupFlashMoeV4,
-    RowSoftmaxV2,
-    MatrixV3,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProviderSemanticDefinitionExpectationV1<'a> {
-    pub(crate) definition_role: ProviderSemanticDefinitionRoleV1,
-    pub(crate) canonical_role: &'a str,
-    pub(crate) canonical_definition_path: &'a str,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReviewedProviderSemanticDefinitionV1 {
     /// These rustc values prove same-session crate membership only. They are
     /// intentionally excluded from `durable_semantic_identity` because Cargo
     /// can change them after an unrelated transitive feature change.
     pub(crate) provider: CompilerProviderObservationV1,
-    profile: ReviewedProviderSemanticProfileV1,
     pub(crate) canonical_definition_path: String,
     pub(crate) structural_local_definition_component: [u8; 32],
     pub(crate) cargo_metadata_build_observation: [u8; 32],
@@ -218,7 +94,6 @@ impl ReviewedProviderSemanticDefinitionV1 {
 
     pub(crate) fn durable_semantic_identity(
         &self,
-        definition_role: ProviderSemanticDefinitionRoleV1,
         canonical_role: &str,
     ) -> Result<[u8; 32], String> {
         self.validate()?;
@@ -231,7 +106,7 @@ impl ReviewedProviderSemanticDefinitionV1 {
             &mut hasher,
             PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1,
         );
-        hash_source_identity_field(&mut hasher, definition_role.canonical_name());
+        hash_source_identity_field(&mut hasher, b"semantic-terminal");
         hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
         hash_source_identity_field(&mut hasher, self.provider.crate_name.as_bytes());
         hash_source_identity_field(&mut hasher, self.canonical_definition_path.as_bytes());
@@ -241,129 +116,6 @@ impl ReviewedProviderSemanticDefinitionV1 {
         hash_source_identity_field(&mut hasher, &self.definition_source_identity);
         Ok(hasher.finalize().into())
     }
-
-    #[allow(
-        dead_code,
-        reason = "called by the staged row-softmax V2 and matrix V3 collectors"
-    )]
-    pub(crate) fn durable_semantic_identity_for_profile(
-        &self,
-        expected_profile: ReviewedProviderSemanticProfileV1,
-        definition_role: ProviderSemanticDefinitionRoleV1,
-        canonical_role: &str,
-    ) -> Result<[u8; 32], String> {
-        if self.profile != expected_profile {
-            return Err("reviewed provider semantic profile was substituted".to_owned());
-        }
-        self.durable_semantic_identity(definition_role, canonical_role)
-    }
-}
-
-fn general_gemm_dependency_semantic_identity_v1(
-    definition: &ReviewedProviderSemanticDefinitionV1,
-    compiled_definition_source_identity: [u8; 32],
-    definition_role: ProviderSemanticDefinitionRoleV1,
-    canonical_role: &str,
-) -> Result<[u8; 32], String> {
-    if definition.profile != ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4 {
-        return Err("reviewed general-GEMM dependency profile was substituted".to_owned());
-    }
-    if definition.provider.crate_name != "fe2o3_device"
-        || definition.canonical_definition_path.is_empty()
-        || definition.structural_local_definition_component == [0; 32]
-        || definition.source_closure_identity == [0; 32]
-        || definition.definition_source_identity == [0; 32]
-        || compiled_definition_source_identity == [0; 32]
-        || canonical_role.is_empty()
-    {
-        return Err("reviewed general-GEMM dependency identity is incomplete".to_owned());
-    }
-    let local_definition_path = definition
-        .canonical_definition_path
-        .strip_prefix("fe2o3_device::")
-        .ok_or_else(|| {
-            "reviewed general-GEMM dependency definition path is not canonical".to_owned()
-        })?;
-    if structural_local_definition_component_v1(local_definition_path)?
-        != definition.structural_local_definition_component
-    {
-        return Err(
-            "reviewed general-GEMM dependency structural definition component changed".to_owned(),
-        );
-    }
-    if compiled_definition_source_identity != definition.definition_source_identity {
-        return Err(
-            "reviewed general-GEMM DisjointSlice compiled source identity changed".to_owned(),
-        );
-    }
-
-    let mut hasher = Sha256::new();
-    hash_source_identity_field(
-        &mut hasher,
-        GENERAL_GEMM_DEPENDENCY_SEMANTIC_IDENTITY_DOMAIN_V1,
-    );
-    hash_source_identity_field(&mut hasher, definition_role.canonical_name());
-    hash_source_identity_field(&mut hasher, canonical_role.as_bytes());
-    hash_source_identity_field(&mut hasher, definition.provider.crate_name.as_bytes());
-    hash_source_identity_field(&mut hasher, definition.canonical_definition_path.as_bytes());
-    hash_source_identity_field(
-        &mut hasher,
-        &definition.structural_local_definition_component,
-    );
-    hash_source_identity_field(&mut hasher, &definition.source_closure_identity);
-    hash_source_identity_field(&mut hasher, &compiled_definition_source_identity);
-    Ok(hasher.finalize().into())
-}
-
-#[allow(
-    dead_code,
-    reason = "called by the staged row-softmax V2 and matrix V3 collectors"
-)]
-pub(crate) fn validate_ordered_provider_semantic_definitions_v1(
-    definitions: &[ReviewedProviderSemanticDefinitionV1],
-    expectations: &[ProviderSemanticDefinitionExpectationV1<'_>],
-) -> Result<(CompilerProviderObservationV1, Vec<[u8; 32]>), String> {
-    if definitions.is_empty() || definitions.len() != expectations.len() {
-        return Err("reviewed provider definition sequence has the wrong length".to_owned());
-    }
-
-    let mut expected_paths = BTreeSet::new();
-    let mut expected_roles = BTreeSet::new();
-    let mut observed_paths = BTreeSet::new();
-    let provider = definitions[0].provider.clone();
-    let profile = definitions[0].profile;
-    let mut identities = Vec::with_capacity(definitions.len());
-    for (definition, expectation) in definitions.iter().zip(expectations) {
-        definition.validate()?;
-        if expectation.canonical_definition_path.is_empty()
-            || !expected_paths.insert(expectation.canonical_definition_path)
-        {
-            return Err("reviewed provider definition sequence has duplicate expectations".into());
-        }
-        if expectation.canonical_role.is_empty()
-            || !expected_roles.insert(expectation.canonical_role)
-        {
-            return Err("reviewed provider definition sequence has duplicate roles".into());
-        }
-        if !observed_paths.insert(definition.canonical_definition_path.as_str()) {
-            return Err("reviewed provider definition sequence has duplicate definitions".into());
-        }
-        if definition.canonical_definition_path != expectation.canonical_definition_path {
-            return Err("reviewed provider definition sequence is reordered or substituted".into());
-        }
-        if definition.provider != provider {
-            return Err("reviewed provider changed within the compiler session".into());
-        }
-        if definition.profile != profile {
-            return Err("reviewed provider semantic profile changed within the sequence".into());
-        }
-        identities.push(definition.durable_semantic_identity_for_profile(
-            profile,
-            expectation.definition_role,
-            expectation.canonical_role,
-        )?);
-    }
-    Ok((provider, identities))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -404,33 +156,6 @@ pub(crate) enum TrustedAmdGpuDiagnosticOperation {
     Trap,
     DebugTrap,
     ProfilingMarker,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TrustedGeneralGemmSurfaceV1 {
-    Typestate,
-    ProofSensitive,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TrustedGeneralGemmOperationV1 {
-    Acquire,
-    Lane,
-    WorkgroupX,
-    WorkgroupY,
-    LoadA,
-    LoadB,
-    LoadC,
-    Stage,
-    StageValue,
-    WaitStage,
-    ReadStage,
-    Publish,
-    Mfma,
-    MfmaValue,
-    Reuse,
-    Store,
-    StoreEpilogue,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -582,7 +307,6 @@ pub(crate) enum TrustedDeviceItem {
     Gfx950LdsTransposePublish,
     Gfx950LdsTransposeReadB4,
     Gfx950LdsTransposeReadB8,
-    GeneralGemm(TrustedGeneralGemmSurfaceV1, TrustedGeneralGemmOperationV1),
     DeviceValue(DeviceValueDiagnosticItem),
     DeviceMath(DeviceMathDiagnosticItem),
     HalfOperation(TrustedHalfOperation),
@@ -1327,190 +1051,6 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::Gfx950LdsTransposeTile<Gfx950Fp8E4M3>::read_mfma_fragment",
     ),
     (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            TrustedGeneralGemmOperationV1::Acquire,
-        ),
-        "fe2o3_device_general_tiled_gemm_wave64_acquire_v1",
-        "fe2o3_gemm_device_v1::acquire_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            TrustedGeneralGemmOperationV1::Stage,
-        ),
-        "fe2o3_device_general_tiled_gemm_wave64_stage_v1",
-        "fe2o3_gemm_device_v1::stage_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            TrustedGeneralGemmOperationV1::Publish,
-        ),
-        "fe2o3_device_general_tiled_gemm_wave64_publish_v1",
-        "fe2o3_gemm_device_v1::publish_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            TrustedGeneralGemmOperationV1::Mfma,
-        ),
-        "fe2o3_device_general_tiled_gemm_wave64_mfma_v1",
-        "fe2o3_gemm_device_v1::mfma_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            TrustedGeneralGemmOperationV1::Reuse,
-        ),
-        "fe2o3_device_general_tiled_gemm_wave64_reuse_v1",
-        "fe2o3_gemm_device_v1::reuse_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            TrustedGeneralGemmOperationV1::Store,
-        ),
-        "fe2o3_device_general_tiled_gemm_wave64_store_v1",
-        "fe2o3_gemm_device_v1::store_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Acquire,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_acquire_v1",
-        "fe2o3_gemm_device_v1::proof_acquire_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Lane,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_lane_v1",
-        "fe2o3_gemm_device_v1::proof_lane_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::WorkgroupX,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_workgroup_x_v1",
-        "fe2o3_gemm_device_v1::proof_workgroup_x_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::WorkgroupY,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_workgroup_y_v1",
-        "fe2o3_gemm_device_v1::proof_workgroup_y_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::LoadA,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_load_a_v1",
-        "fe2o3_gemm_device_v1::proof_load_a_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::LoadB,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_load_b_v1",
-        "fe2o3_gemm_device_v1::proof_load_b_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::LoadC,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_load_c_v1",
-        "fe2o3_gemm_device_v1::proof_load_c_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Stage,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_stage_v1",
-        "fe2o3_gemm_device_v1::proof_stage_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::StageValue,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_stage_value_v1",
-        "fe2o3_gemm_device_v1::proof_stage_value_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::WaitStage,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_wait_stage_v1",
-        "fe2o3_gemm_device_v1::proof_wait_stage_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::ReadStage,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_read_stage_v1",
-        "fe2o3_gemm_device_v1::proof_read_stage_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Publish,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_publish_v1",
-        "fe2o3_gemm_device_v1::proof_publish_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Mfma,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_mfma_v1",
-        "fe2o3_gemm_device_v1::proof_mfma_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::MfmaValue,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_mfma_value_v1",
-        "fe2o3_gemm_device_v1::proof_mfma_value_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Reuse,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_reuse_v1",
-        "fe2o3_gemm_device_v1::proof_reuse_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::Store,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_store_v1",
-        "fe2o3_gemm_device_v1::proof_store_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
-        TrustedDeviceItem::GeneralGemm(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            TrustedGeneralGemmOperationV1::StoreEpilogue,
-        ),
-        "fe2o3_device_general_tiled_gemm_proof_store_epilogue_v1",
-        "fe2o3_gemm_device_v1::proof_store_epilogue_gfx942_tiled_gemm_wave64_v1",
-    ),
-    (
         TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
         "fe2o3_device_amdgpu_v_mov_b32_v1",
         "fe2o3_device::diagnostics::__amdgpu_v_mov_b32_v1",
@@ -1663,10 +1203,7 @@ impl TrustedDeviceItem {
     }
 
     pub(crate) const fn expected_provider_crate(self) -> &'static str {
-        match self {
-            Self::GeneralGemm(_, _) => "fe2o3_gemm_device_v1",
-            _ => "fe2o3_device",
-        }
+        "fe2o3_device"
     }
 }
 
@@ -1722,11 +1259,6 @@ pub(crate) fn classify(tcx: TyCtxt<'_>, def_id: DefId) -> Option<TrustedDeviceIt
     classify_half_operation(tcx, def_id).map(TrustedDeviceItem::HalfOperation)
 }
 
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn rejected_provider_marker(tcx: TyCtxt<'_>, def_id: DefId) -> Option<&'static str> {
-    rejected_provider(tcx, def_id).map(|rejection| rejection.marker)
-}
-
 pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<RejectedTrustedProvider> {
     let (item, marker) = TRUSTED_ITEMS
         .iter()
@@ -1759,12 +1291,8 @@ pub(crate) fn rejected_provider(tcx: TyCtxt<'_>, def_id: DefId) -> Option<Reject
 }
 
 fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Result<(), String> {
-    if matches!(item, TrustedDeviceItem::GeneralGemm(_, _)) {
-        reviewed_general_gemm_provider_definition_v1(tcx, def_id, item)
-    } else {
-        let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
-        validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)
-    }
+    let definition = reviewed_provider_semantic_definition_v1(tcx, def_id)?;
+    validate_reviewed_fe2o3_device_provider_definition_v1(item, &definition)
 }
 
 fn validate_reviewed_fe2o3_device_provider_definition_v1(
@@ -1781,10 +1309,7 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
             item.canonical_path()
         ));
     }
-    definition.durable_semantic_identity(
-        ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-        item.canonical_path(),
-    )?;
+    definition.durable_semantic_identity(item.canonical_path())?;
     Ok(())
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
@@ -1875,9 +1400,6 @@ fn validate_safe_execution_provider_definition_v1(
     definition: &ReviewedProviderSemanticDefinitionV1,
 ) -> Result<(), String> {
     definition.validate()?;
-    if definition.profile != ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4 {
-        return Err("safe execution provider semantic profile was substituted".to_owned());
-    }
     if definition.source_closure_identity != REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1 {
         return Err(format!(
             "safe execution provider source closure does not match the reviewed V1 identity: {:02x?}",
@@ -2205,284 +1727,6 @@ fn named_external_provider_as(
     Ok(crate_name)
 }
 
-fn reviewed_general_gemm_provider_definition_v1(
-    tcx: TyCtxt<'_>,
-    provider_definition: DefId,
-    item: TrustedDeviceItem,
-) -> Result<(), String> {
-    let crate_name =
-        named_external_provider_as(tcx, provider_definition.krate, "fe2o3_gemm_device_v1")?;
-    let actual_path = tcx.def_path_str(provider_definition);
-    if actual_path != item.canonical_path() {
-        return Err(format!(
-            "provider definition path is `{actual_path}`, expected `{}`",
-            item.canonical_path()
-        ));
-    }
-    let source_tree = GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1
-        .get_or_init(|| {
-            reviewed_source_tree_identity(
-                Path::new(REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT),
-                GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1,
-            )
-        })
-        .clone()?;
-    let provider = compiler_provider_observation_v1(tcx, provider_definition.krate);
-    if provider.crate_name != crate_name
-        || provider.stable_crate_id == 0
-        || provider.crate_hash_observation == [0; 16]
-        || source_tree == [0; 32]
-    {
-        return Err("reviewed general-GEMM provider observation is incomplete".to_owned());
-    }
-    let TrustedDeviceItem::GeneralGemm(surface, _) = item else {
-        return Err("general-GEMM provider rule received a non-GEMM item".to_owned());
-    };
-    validate_reviewed_general_gemm_source_tree_v1(source_tree)?;
-    validate_reviewed_general_gemm_surface_v1(tcx, surface, &provider)?;
-    validate_reviewed_general_gemm_dependency_v1(tcx, surface, provider_definition.krate)?;
-    Ok(())
-}
-
-fn validate_reviewed_general_gemm_source_tree_v1(source_tree: [u8; 32]) -> Result<(), String> {
-    if source_tree != REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_TREE_V1 {
-        return Err(format!(
-            "general-GEMM provider semantic source tree does not match the reviewed V1 identity: {source_tree:02x?}"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_reviewed_general_gemm_definition_source_v1(
-    surface: TrustedGeneralGemmSurfaceV1,
-    definition_source: [u8; 32],
-) -> Result<(), String> {
-    let expected_definition = match surface {
-        TrustedGeneralGemmSurfaceV1::Typestate => {
-            REVIEWED_GENERAL_GEMM_TYPESTATE_DEFINITION_SOURCE_V1
-        }
-        TrustedGeneralGemmSurfaceV1::ProofSensitive => {
-            REVIEWED_GENERAL_GEMM_PROOF_DEFINITION_SOURCE_V1
-        }
-    };
-    if definition_source != expected_definition {
-        return Err(format!(
-            "general-GEMM provider definition source does not match the reviewed V1 identity: {definition_source:02x?}"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_reviewed_general_gemm_terminal_provider_v1(
-    expected: &CompilerProviderObservationV1,
-    actual: &CompilerProviderObservationV1,
-) -> Result<(), String> {
-    if actual != expected {
-        return Err(
-            "reviewed general-GEMM terminal provider changed within the compiler session"
-                .to_owned(),
-        );
-    }
-    Ok(())
-}
-
-fn validate_reviewed_general_gemm_surface_v1(
-    tcx: TyCtxt<'_>,
-    surface: TrustedGeneralGemmSurfaceV1,
-    provider: &CompilerProviderObservationV1,
-) -> Result<(), String> {
-    let mut terminal_count = 0_usize;
-    for (candidate, marker, canonical_path) in TRUSTED_ITEMS {
-        let TrustedDeviceItem::GeneralGemm(candidate_surface, _) = candidate else {
-            continue;
-        };
-        if *candidate_surface != surface {
-            continue;
-        }
-        terminal_count += 1;
-        let definition = tcx
-            .get_diagnostic_item(Symbol::intern(marker))
-            .ok_or_else(|| format!("reviewed general-GEMM terminal `{marker}` is unavailable"))?;
-        let actual_provider = compiler_provider_observation_v1(tcx, definition.krate);
-        validate_reviewed_general_gemm_terminal_provider_v1(provider, &actual_provider)?;
-        let actual_path = tcx.def_path_str(definition);
-        if actual_path != *canonical_path {
-            return Err(format!(
-                "general-GEMM terminal path is `{actual_path}`, expected `{canonical_path}`"
-            ));
-        }
-        let definition_source = reviewed_compiled_provider_source_identity_at_root(
-            tcx,
-            definition,
-            Path::new(REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT),
-            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )?;
-        validate_reviewed_general_gemm_definition_source_v1(surface, definition_source)?;
-    }
-    let expected_terminal_count = match surface {
-        TrustedGeneralGemmSurfaceV1::Typestate => 6,
-        TrustedGeneralGemmSurfaceV1::ProofSensitive => 17,
-    };
-    if terminal_count != expected_terminal_count {
-        return Err(format!(
-            "reviewed general-GEMM surface has {terminal_count} terminals, expected {expected_terminal_count}"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_reviewed_general_gemm_dependency_v1(
-    tcx: TyCtxt<'_>,
-    surface: TrustedGeneralGemmSurfaceV1,
-    provider_crate: rustc_hir::def_id::CrateNum,
-) -> Result<(), String> {
-    let store_item = TrustedDeviceItem::GeneralGemm(surface, TrustedGeneralGemmOperationV1::Store);
-    let store_marker = TRUSTED_ITEMS
-        .iter()
-        .find_map(|(candidate, marker, _)| (*candidate == store_item).then_some(*marker))
-        .expect("every general-GEMM surface has one store terminal");
-    let store = tcx
-        .get_diagnostic_item(Symbol::intern(store_marker))
-        .ok_or_else(|| format!("reviewed general-GEMM store `{store_marker}` is unavailable"))?;
-    if store.krate != provider_crate || tcx.def_kind(store) != DefKind::Fn {
-        return Err("reviewed general-GEMM store definition was substituted".to_owned());
-    }
-
-    let disjoint_slice = tcx
-        .get_diagnostic_item(Symbol::intern("fe2o3_device_disjoint_slice"))
-        .ok_or_else(|| "reviewed fe2o3_device DisjointSlice is unavailable".to_owned())?;
-    let signature =
-        tcx.instantiate_bound_regions_with_erased(tcx.fn_sig(store).instantiate_identity());
-    let context = signature
-        .inputs()
-        .first()
-        .ok_or_else(|| "reviewed general-GEMM store omitted its context".to_owned())?;
-    let context = match context.kind() {
-        TyKind::Ref(_, context, _) => *context,
-        _ => *context,
-    };
-    let TyKind::Adt(context_definition, _) = context.kind() else {
-        return Err("reviewed general-GEMM store context is not a provider ADT".to_owned());
-    };
-    let expected_context_path = match surface {
-        TrustedGeneralGemmSurfaceV1::Typestate => "fe2o3_gemm_device_v1::Gfx942TiledGemmWave64V1",
-        TrustedGeneralGemmSurfaceV1::ProofSensitive => {
-            "fe2o3_gemm_device_v1::ProofSensitiveGeneralGemmWave64V1"
-        }
-    };
-    if context_definition.did().krate != provider_crate
-        || tcx.def_path_str(context_definition.did()) != expected_context_path
-    {
-        return Err("reviewed general-GEMM store context definition was substituted".to_owned());
-    }
-    let context_source = reviewed_compiled_provider_source_identity_at_root(
-        tcx,
-        context_definition.did(),
-        Path::new(REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT),
-        GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-    )?;
-    validate_reviewed_general_gemm_definition_source_v1(
-        TrustedGeneralGemmSurfaceV1::Typestate,
-        context_source,
-    )?;
-
-    let c = signature
-        .inputs()
-        .get(1)
-        .ok_or_else(|| "reviewed general-GEMM store omitted its C slice".to_owned())?;
-    let TyKind::Ref(_, c, _) = c.kind() else {
-        return Err("reviewed general-GEMM store C argument is not a reference".to_owned());
-    };
-    let TyKind::Adt(c_definition, c_arguments) = c.kind() else {
-        return Err("reviewed general-GEMM store C argument is not DisjointSlice".to_owned());
-    };
-    if c_definition.did() != disjoint_slice
-        || c_arguments.len() != 2
-        || !c_arguments
-            .first()
-            .and_then(|argument| argument.as_type())
-            .is_some_and(|element| matches!(element.kind(), TyKind::Float(FloatTy::F32)))
-    {
-        return Err(
-            "reviewed general-GEMM store substituted its fe2o3_device DisjointSlice dependency"
-                .to_owned(),
-        );
-    }
-
-    let dependency = reviewed_provider_semantic_definition_v1(tcx, disjoint_slice)?;
-    let compiled_dependency_source = reviewed_compiled_provider_source_identity_at_root(
-        tcx,
-        disjoint_slice,
-        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT),
-        WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-    )?;
-    if dependency.canonical_definition_path != "fe2o3_device::DisjointSlice" {
-        return Err("reviewed general-GEMM DisjointSlice dependency path changed".to_owned());
-    }
-    let dependency_identity = general_gemm_dependency_semantic_identity_v1(
-        &dependency,
-        compiled_dependency_source,
-        ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-        "general-gemm-disjoint-slice-dependency-v1",
-    )?;
-    validate_reviewed_general_gemm_dependency_identity_v1(dependency_identity)
-}
-
-fn validate_reviewed_general_gemm_dependency_identity_v1(
-    dependency_identity: [u8; 32],
-) -> Result<(), String> {
-    if dependency_identity != REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1 {
-        return Err(format!(
-            "reviewed general-GEMM DisjointSlice dependency identity changed: {dependency_identity:02x?}"
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn reviewed_matrix_provider_observation(
-    tcx: TyCtxt<'_>,
-    provider_definition: DefId,
-) -> Result<ReviewedMatrixProviderObservationV2, String> {
-    let crate_num = provider_definition.krate;
-    let crate_name = named_external_provider(tcx, crate_num)?;
-    let stable_crate_id = tcx.stable_crate_id(crate_num).as_u64();
-    let source_identity = reviewed_matrix_source_identity(tcx, provider_definition)?;
-    let cargo_metadata_build_observation =
-        decode_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
-    Ok(ReviewedMatrixProviderObservationV2 {
-        crate_name,
-        stable_crate_id,
-        crate_hash: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
-        cargo_metadata_build_observation,
-        source_identity,
-    })
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-pub(crate) fn reviewed_row_softmax_provider_definition(
-    tcx: TyCtxt<'_>,
-    provider_definition: DefId,
-) -> Result<ReviewedRowSoftmaxProviderDefinitionV1, String> {
-    let crate_num = provider_definition.krate;
-    let crate_name = named_external_provider(tcx, crate_num)?;
-    let stable_crate_id = tcx.stable_crate_id(crate_num).as_u64();
-    let source_identity = reviewed_provider_source_identity(
-        tcx,
-        provider_definition,
-        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-    )?;
-    let cargo_metadata_build_observation =
-        decode_sha256_environment(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2)?;
-    Ok(ReviewedRowSoftmaxProviderDefinitionV1 {
-        crate_name,
-        stable_crate_id,
-        crate_hash: tcx.crate_hash(crate_num).as_u128().to_le_bytes(),
-        cargo_metadata_build_observation,
-        source_identity,
-    })
-}
-
 pub(crate) fn compiler_provider_observation_v1(
     tcx: TyCtxt<'_>,
     crate_num: rustc_hir::def_id::CrateNum,
@@ -2498,13 +1742,12 @@ pub(crate) fn reviewed_provider_semantic_definition_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
 ) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
-    reviewed_provider_semantic_definition_with_profile_v1(
+    reviewed_provider_semantic_definition_from_source_v1(
         tcx,
         provider_definition,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         &WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE,
-        ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
     )
 }
 
@@ -2524,49 +1767,12 @@ pub(crate) fn authenticate_reviewed_safe_external_helper_v1(
     Ok(true)
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by the staged row-softmax V2 provider protocol"
-)]
-pub(crate) fn reviewed_row_softmax_provider_semantic_definition_v2(
-    tcx: TyCtxt<'_>,
-    provider_definition: DefId,
-) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
-    reviewed_provider_semantic_definition_with_profile_v1(
-        tcx,
-        provider_definition,
-        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-        &ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_V2,
-        ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-    )
-}
-
-#[allow(
-    dead_code,
-    reason = "consumed by the staged matrix V3 provider protocol"
-)]
-pub(crate) fn reviewed_matrix_provider_semantic_definition_v3(
-    tcx: TyCtxt<'_>,
-    provider_definition: DefId,
-) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
-    reviewed_provider_semantic_definition_with_profile_v1(
-        tcx,
-        provider_definition,
-        MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
-        MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
-        &MATRIX_PROVIDER_SOURCE_CLOSURE_V3,
-        ReviewedProviderSemanticProfileV1::MatrixV3,
-    )
-}
-
-fn reviewed_provider_semantic_definition_with_profile_v1(
+fn reviewed_provider_semantic_definition_from_source_v1(
     tcx: TyCtxt<'_>,
     provider_definition: DefId,
     definition_source_domain: &[u8],
     source_closure_domain: &[u8],
     source_closure_cache: &OnceLock<Result<[u8; 32], String>>,
-    profile: ReviewedProviderSemanticProfileV1,
 ) -> Result<ReviewedProviderSemanticDefinitionV1, String> {
     let crate_num = provider_definition.krate;
     let crate_name = named_external_provider(tcx, crate_num)?;
@@ -2597,7 +1803,6 @@ fn reviewed_provider_semantic_definition_with_profile_v1(
         structural_local_definition_component_v1(&structural_local_definition_path)?;
     Ok(ReviewedProviderSemanticDefinitionV1 {
         provider,
-        profile,
         canonical_definition_path,
         structural_local_definition_component,
         cargo_metadata_build_observation: decode_sha256_environment(
@@ -2706,31 +1911,6 @@ fn reviewed_provider_source_closure_identity(
     Ok(hasher.finalize().into())
 }
 
-fn reviewed_source_tree_identity(source_root: &Path, domain: &[u8]) -> Result<[u8; 32], String> {
-    if domain.is_empty() {
-        return Err("reviewed provider source-tree domain is empty".to_owned());
-    }
-    require_directory_without_symlink(source_root, "source directory")?;
-    let source_root = std::fs::canonicalize(source_root).map_err(|error| {
-        format!(
-            "reviewed provider source tree `{}` is unavailable: {error}",
-            source_root.display()
-        )
-    })?;
-    let mut files = Vec::new();
-    collect_reviewed_source_files(&source_root, &mut files)?;
-    files.sort();
-
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    for file in files {
-        let (relative, bytes) = reviewed_source_file(&source_root, &file)?;
-        hash_source_identity_field(&mut hasher, relative.as_bytes());
-        hash_source_identity_field(&mut hasher, &bytes);
-    }
-    Ok(hasher.finalize().into())
-}
-
 fn require_directory_without_symlink(path: &Path, description: &str) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
@@ -2829,45 +2009,6 @@ fn collect_reviewed_source_files(root: &Path, files: &mut Vec<PathBuf>) -> Resul
 fn hash_source_identity_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-fn reviewed_matrix_source_identity(tcx: TyCtxt<'_>, def_id: DefId) -> Result<[u8; 32], String> {
-    reviewed_provider_source_identity(tcx, def_id, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2)
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-fn reviewed_provider_source_identity(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    domain: &[u8],
-) -> Result<[u8; 32], String> {
-    reviewed_provider_source_identity_at_root(
-        tcx,
-        def_id,
-        Path::new(REVIEWED_FE2O3_DEVICE_SOURCE_ROOT),
-        domain,
-    )
-}
-
-#[cfg(all(test, feature = "qualification-oracles-test-only"))]
-fn reviewed_provider_source_identity_at_root(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    reviewed_root: &Path,
-    domain: &[u8],
-) -> Result<[u8; 32], String> {
-    let file_name = tcx
-        .sess
-        .source_map()
-        .span_to_filename(tcx.def_span(def_id))
-        .prefer_local_unconditionally()
-        .to_string_lossy()
-        .into_owned();
-    let reviewed_root = std::fs::canonicalize(reviewed_root).map_err(|error| {
-        format!("reviewed provider source root is unavailable to the managed build: {error}")
-    })?;
-    reviewed_provider_source_identity_from_path(&reviewed_root, Path::new(&file_name), domain)
 }
 
 fn reviewed_compiled_provider_source_identity_at_root(
@@ -3106,27 +2247,16 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        CompilerProviderObservationV1, GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1, HALF_MATH_DIAGNOSTIC_ITEMS,
-        MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3, MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
-        ProviderSemanticDefinitionExpectationV1, ProviderSemanticDefinitionRoleV1,
-        ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-        ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, ReviewedProviderSemanticDefinitionV1,
-        ReviewedProviderSemanticProfileV1, TrustedAmdGpuDiagnosticOperation,
-        TrustedAmdGpuInlineOperation, TrustedDeviceItem, TrustedGeneralGemmOperationV1,
-        TrustedGeneralGemmSurfaceV1, WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        CompilerProviderObservationV1, HALF_MATH_DIAGNOSTIC_ITEMS,
+        ReviewedProviderSemanticDefinitionV1, TrustedAmdGpuDiagnosticOperation,
+        TrustedAmdGpuInlineOperation, TrustedDeviceItem,
+        WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
         WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1, canonical_compiler_definition_path,
-        exact_provider_compiler_definition_path_v1, general_gemm_dependency_semantic_identity_v1,
-        pinned_core_semantic_terminal_identity_v1, reviewed_provider_source_closure_identity,
-        reviewed_provider_source_identity_from_path, reviewed_source_tree_identity,
+        exact_provider_compiler_definition_path_v1, pinned_core_semantic_terminal_identity_v1,
+        reviewed_provider_source_closure_identity, reviewed_provider_source_identity_from_path,
         safe_execution_compiler_definition_path, safe_execution_provider_bound_item,
         structural_local_definition_component_v1, validate_compiled_provider_source_hash_v1,
-        validate_ordered_provider_semantic_definitions_v1,
         validate_reviewed_fe2o3_device_provider_definition_v1,
-        validate_reviewed_general_gemm_definition_source_v1,
-        validate_reviewed_general_gemm_dependency_identity_v1,
-        validate_reviewed_general_gemm_source_tree_v1,
-        validate_reviewed_general_gemm_terminal_provider_v1,
     };
     use dialect_amdgcn::{DeviceMathDiagnosticItem, DeviceValueDiagnosticItem};
     use rustc_span::{SourceFileHash, SourceFileHashAlgorithm};
@@ -3176,7 +2306,6 @@ mod tests {
     }
 
     fn semantic_definition(
-        profile: ReviewedProviderSemanticProfileV1,
         path: &str,
         source_closure_identity: [u8; 32],
         definition_source_identity: [u8; 32],
@@ -3187,7 +2316,6 @@ mod tests {
                 stable_crate_id: 7,
                 crate_hash_observation: [3; 16],
             },
-            profile,
             canonical_definition_path: format!("fe2o3_device::{path}"),
             structural_local_definition_component: structural_local_definition_component_v1(path)
                 .unwrap(),
@@ -3200,10 +2328,7 @@ mod tests {
     #[test]
     fn provider_semantic_identity_excludes_volatile_compilation_disambiguators() {
         fn identity(definition: &ReviewedProviderSemanticDefinitionV1) -> Result<[u8; 32], String> {
-            definition.durable_semantic_identity(
-                ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-                "fe2o3_device::thread::thread_idx_x",
-            )
+            definition.durable_semantic_identity("fe2o3_device::thread::thread_idx_x")
         }
 
         let definition = ReviewedProviderSemanticDefinitionV1 {
@@ -3212,7 +2337,6 @@ mod tests {
                 stable_crate_id: 7,
                 crate_hash_observation: [3; 16],
             },
-            profile: ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
             canonical_definition_path: "fe2o3_device::thread::thread_idx_x".into(),
             structural_local_definition_component: structural_local_definition_component_v1(
                 "thread::thread_idx_x",
@@ -3275,35 +2399,16 @@ mod tests {
         mutation = definition.clone();
         mutation.provider.crate_hash_observation = [0; 16];
         assert!(identity(&mutation).is_err());
-        assert_ne!(
+        assert_eq!(
             definition
-                .durable_semantic_identity(
-                    ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                    "fe2o3_device::thread::thread_idx_x",
-                )
+                .durable_semantic_identity("fe2o3_device::thread::thread_idx_x")
                 .unwrap(),
             exact
         );
-        assert!(
-            definition
-                .durable_semantic_identity(ProviderSemanticDefinitionRoleV1::SemanticTerminal, "",)
-                .is_err()
-        );
-        assert!(
-            definition
-                .durable_semantic_identity_for_profile(
-                    ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-                    "fe2o3_device::thread::thread_idx_x",
-                )
-                .is_err()
-        );
+        assert!(definition.durable_semantic_identity("").is_err());
         assert_ne!(
             definition
-                .durable_semantic_identity(
-                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-                    "fe2o3_device::thread::block_idx_x",
-                )
+                .durable_semantic_identity("fe2o3_device::thread::block_idx_x",)
                 .unwrap(),
             exact
         );
@@ -3315,7 +2420,6 @@ mod tests {
         let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
         let local = structural.strip_prefix("fe2o3_device::").unwrap();
         let exact = semantic_definition(
-            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
             local,
             super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
             [6; 32],
@@ -3324,7 +2428,6 @@ mod tests {
             .expect("exact reviewed provider");
 
         let wrong_path = semantic_definition(
-            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
             "thread::{impl#99}::checked_block",
             super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
             [6; 32],
@@ -3355,7 +2458,6 @@ mod tests {
             let structural = exact_provider_compiler_definition_path_v1(item).unwrap();
             let local = structural.strip_prefix("fe2o3_device::").unwrap();
             let exact = semantic_definition(
-                ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
                 local,
                 super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
                 [6; 32],
@@ -3364,7 +2466,6 @@ mod tests {
                 .expect("exact checked read-view capability");
 
             let lookalike = semantic_definition(
-                ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
                 &format!("lookalike::{local}"),
                 super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
                 [6; 32],
@@ -3439,19 +2540,10 @@ mod tests {
         .unwrap();
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
 
-        let definition = semantic_definition(
-            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
-            "thread::thread_idx_x",
-            [5; 32],
-            [6; 32],
-        );
+        let definition = semantic_definition("thread::thread_idx_x", [5; 32], [6; 32]);
         assert_eq!(
             definition
-                .durable_semantic_identity_for_profile(
-                    ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
-                    ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-                    "fe2o3_device::thread::thread_idx_x",
-                )
+                .durable_semantic_identity("fe2o3_device::thread::thread_idx_x")
                 .unwrap(),
             digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
         );
@@ -3460,7 +2552,6 @@ mod tests {
     #[test]
     fn safe_execution_provider_validation_rejects_source_substitution() {
         let exact = semantic_definition(
-            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
             "wave::{impl#4}::current",
             super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
             [6; 32],
@@ -3470,193 +2561,6 @@ mod tests {
         let mut changed = exact.clone();
         changed.source_closure_identity[0] ^= 1;
         assert!(super::validate_safe_execution_provider_definition_v1(&changed).is_err());
-
-        changed = exact;
-        changed.profile = ReviewedProviderSemanticProfileV1::MatrixV3;
-        assert!(super::validate_safe_execution_provider_definition_v1(&changed).is_err());
-    }
-
-    #[test]
-    fn reviewed_general_gemm_companion_source_is_exactly_pinned() {
-        let source_root = Path::new(super::REVIEWED_GENERAL_GEMM_PROVIDER_SOURCE_ROOT);
-        let source_tree =
-            reviewed_source_tree_identity(source_root, GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1)
-                .unwrap();
-        let typestate_definition = reviewed_provider_source_identity_from_path(
-            source_root,
-            &source_root.join("lib.rs"),
-            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )
-        .unwrap();
-        let proof_definition = reviewed_provider_source_identity_from_path(
-            source_root,
-            &source_root.join("proof_sensitive_terminals.rs"),
-            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )
-        .unwrap();
-        validate_reviewed_general_gemm_source_tree_v1(source_tree).unwrap();
-        validate_reviewed_general_gemm_definition_source_v1(
-            TrustedGeneralGemmSurfaceV1::Typestate,
-            typestate_definition,
-        )
-        .unwrap();
-        validate_reviewed_general_gemm_definition_source_v1(
-            TrustedGeneralGemmSurfaceV1::ProofSensitive,
-            proof_definition,
-        )
-        .unwrap();
-
-        let modified = ProviderPackageFixture::new();
-        fs::remove_dir_all(modified.source_root()).unwrap();
-        fs::create_dir_all(modified.source_root()).unwrap();
-        let mut changed = fs::read(source_root.join("lib.rs")).unwrap();
-        changed.extend_from_slice(b"\n// semantic mutation\n");
-        fs::write(modified.definition(), changed).unwrap();
-        let changed_source_tree = reviewed_source_tree_identity(
-            &modified.source_root(),
-            GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1,
-        )
-        .unwrap();
-        let changed_definition = reviewed_provider_source_identity_from_path(
-            &modified.source_root(),
-            &modified.definition(),
-            GENERAL_GEMM_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )
-        .unwrap();
-        assert!(
-            validate_reviewed_general_gemm_source_tree_v1(changed_source_tree).is_err()
-                || validate_reviewed_general_gemm_definition_source_v1(
-                    TrustedGeneralGemmSurfaceV1::Typestate,
-                    changed_definition,
-                )
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn general_gemm_semantic_source_tree_excludes_manifest_provenance() {
-        let first = ProviderPackageFixture::new();
-        let second = ProviderPackageFixture::new();
-        fs::write(
-            second.root.join("Cargo.toml"),
-            b"[package]\nname='alternate-manifest'\nversion='999.0.0'\n",
-        )
-        .unwrap();
-        assert_eq!(
-            reviewed_source_tree_identity(
-                &first.source_root(),
-                GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1,
-            )
-            .unwrap(),
-            reviewed_source_tree_identity(
-                &second.source_root(),
-                GENERAL_GEMM_PROVIDER_SOURCE_TREE_DOMAIN_V1,
-            )
-            .unwrap()
-        );
-    }
-
-    #[test]
-    fn reviewed_general_gemm_compiler_observation_is_same_session_only() {
-        let exact = CompilerProviderObservationV1 {
-            crate_name: "fe2o3_gemm_device_v1".into(),
-            stable_crate_id: 0x1234,
-            crate_hash_observation: [0x56; 16],
-        };
-        validate_reviewed_general_gemm_terminal_provider_v1(&exact, &exact).unwrap();
-
-        let mut changed = exact.clone();
-        changed.stable_crate_id ^= 1;
-        assert!(validate_reviewed_general_gemm_terminal_provider_v1(&exact, &changed).is_err());
-        changed = exact.clone();
-        changed.crate_hash_observation[0] ^= 1;
-        assert!(validate_reviewed_general_gemm_terminal_provider_v1(&exact, &changed).is_err());
-        changed = exact.clone();
-        changed.crate_name = "same_name_impostor".into();
-        assert!(validate_reviewed_general_gemm_terminal_provider_v1(&exact, &changed).is_err());
-    }
-
-    #[test]
-    fn reviewed_general_gemm_dependency_identity_is_portable_and_exact() {
-        let source_closure_identity = reviewed_provider_source_closure_identity(
-            Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT),
-            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        )
-        .unwrap();
-        let source_root = Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT);
-        let definition_source_identity = reviewed_provider_source_identity_from_path(
-            source_root,
-            &source_root.join("lib.rs"),
-            WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )
-        .unwrap();
-        let definition = semantic_definition(
-            ReviewedProviderSemanticProfileV1::WorkgroupFlashMoeV4,
-            "DisjointSlice",
-            source_closure_identity,
-            definition_source_identity,
-        );
-        let identity = |definition: &ReviewedProviderSemanticDefinitionV1,
-                        compiled_source: [u8; 32]| {
-            general_gemm_dependency_semantic_identity_v1(
-                definition,
-                compiled_source,
-                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                "general-gemm-disjoint-slice-dependency-v1",
-            )
-        };
-        let exact = identity(&definition, definition_source_identity).unwrap();
-        assert_eq!(
-            exact,
-            super::REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1
-        );
-        validate_reviewed_general_gemm_dependency_identity_v1(exact).unwrap();
-
-        let mut portable = definition.clone();
-        portable.provider.stable_crate_id = 0;
-        portable.provider.crate_hash_observation = [0; 16];
-        portable.cargo_metadata_build_observation = [0; 32];
-        assert_eq!(
-            identity(&portable, definition_source_identity).unwrap(),
-            exact
-        );
-
-        portable = definition.clone();
-        portable.cargo_metadata_build_observation[0] ^= 1;
-        portable.provider.stable_crate_id ^= 1;
-        portable.provider.crate_hash_observation[0] ^= 1;
-        assert_eq!(
-            identity(&portable, definition_source_identity).unwrap(),
-            exact
-        );
-
-        let mut changed_definition = definition.clone();
-        changed_definition.canonical_definition_path = "fe2o3_device::Index1D".into();
-        changed_definition.structural_local_definition_component =
-            structural_local_definition_component_v1("Index1D").unwrap();
-        assert_ne!(
-            identity(&changed_definition, definition_source_identity).unwrap(),
-            exact
-        );
-        changed_definition = definition.clone();
-        changed_definition.source_closure_identity[0] ^= 1;
-        assert_ne!(
-            identity(&changed_definition, definition_source_identity).unwrap(),
-            exact
-        );
-        changed_definition = definition.clone();
-        changed_definition.definition_source_identity[0] ^= 1;
-        assert!(identity(&changed_definition, definition_source_identity).is_err());
-        changed_definition = definition.clone();
-        changed_definition.provider.crate_name = "substituted_device".into();
-        assert!(identity(&changed_definition, definition_source_identity).is_err());
-        changed_definition = definition.clone();
-        changed_definition.profile = ReviewedProviderSemanticProfileV1::MatrixV3;
-        assert!(identity(&changed_definition, definition_source_identity).is_err());
-
-        let mut changed = super::REVIEWED_GENERAL_GEMM_DISJOINT_SLICE_DEPENDENCY_V1;
-        changed[0] ^= 1;
-        assert!(validate_reviewed_general_gemm_dependency_identity_v1(changed).is_err());
     }
 
     #[test]
@@ -3682,102 +2586,12 @@ mod tests {
     }
 
     #[test]
-    fn row_and_matrix_profiles_bind_distinct_source_domains() {
-        let fixture = ProviderPackageFixture::new();
-        let workgroup_closure = reviewed_provider_source_closure_identity(
-            &fixture.root,
-            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
-        )
-        .unwrap();
-        let row_closure = reviewed_provider_source_closure_identity(
-            &fixture.root,
-            ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
-        )
-        .unwrap();
-        let matrix_closure = reviewed_provider_source_closure_identity(
-            &fixture.root,
-            MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
-        )
-        .unwrap();
-        assert_ne!(workgroup_closure, row_closure);
-        assert_ne!(workgroup_closure, matrix_closure);
-        assert_ne!(row_closure, matrix_closure);
-
-        let workgroup_source = reviewed_provider_source_identity_from_path(
-            &fixture.source_root(),
-            &fixture.definition(),
-            WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )
-        .unwrap();
-        let row_source = reviewed_provider_source_identity_from_path(
-            &fixture.source_root(),
-            &fixture.definition(),
-            ROW_SOFTMAX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
-        )
-        .unwrap();
-        let matrix_source = reviewed_provider_source_identity_from_path(
-            &fixture.source_root(),
-            &fixture.definition(),
-            MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
-        )
-        .unwrap();
-        assert_ne!(workgroup_source, row_source);
-        assert_ne!(workgroup_source, matrix_source);
-        assert_ne!(row_source, matrix_source);
-
-        let row = semantic_definition(
-            ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-            "thread::thread_idx_x",
-            row_closure,
-            row_source,
-        );
-        let matrix = semantic_definition(
-            ReviewedProviderSemanticProfileV1::MatrixV3,
-            "thread::thread_idx_x",
-            matrix_closure,
-            matrix_source,
-        );
-        let row_identity = row
-            .durable_semantic_identity_for_profile(
-                ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                "provider-thread-index",
-            )
-            .unwrap();
-        let matrix_identity = matrix
-            .durable_semantic_identity_for_profile(
-                ReviewedProviderSemanticProfileV1::MatrixV3,
-                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                "provider-thread-index",
-            )
-            .unwrap();
-        assert_ne!(row_identity, matrix_identity);
-        assert!(
-            row.durable_semantic_identity_for_profile(
-                ReviewedProviderSemanticProfileV1::MatrixV3,
-                ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                "provider-thread-index",
-            )
-            .is_err()
-        );
-        assert!(
-            matrix
-                .durable_semantic_identity_for_profile(
-                    ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-                    ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                    "provider-thread-index",
-                )
-                .is_err()
-        );
-    }
-
-    #[test]
     fn complete_source_closure_binds_manifest_build_script_and_nested_sources() {
         let fixture = ProviderPackageFixture::new();
         let identity = || {
             reviewed_provider_source_closure_identity(
                 &fixture.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .unwrap()
         };
@@ -3812,103 +2626,13 @@ mod tests {
     }
 
     #[test]
-    fn ordered_definition_validation_rejects_substitution_and_exposes_role_order() {
-        let first = semantic_definition(
-            ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-            "thread::thread_idx_x",
-            [5; 32],
-            [6; 32],
-        );
-        let second = semantic_definition(
-            ReviewedProviderSemanticProfileV1::RowSoftmaxV2,
-            "thread::block_idx_x",
-            [5; 32],
-            [7; 32],
-        );
-        let expectations = [
-            ProviderSemanticDefinitionExpectationV1 {
-                definition_role: ProviderSemanticDefinitionRoleV1::TrustedDefinition,
-                canonical_role: "thread-index",
-                canonical_definition_path: "fe2o3_device::thread::thread_idx_x",
-            },
-            ProviderSemanticDefinitionExpectationV1 {
-                definition_role: ProviderSemanticDefinitionRoleV1::SemanticTerminal,
-                canonical_role: "block-index",
-                canonical_definition_path: "fe2o3_device::thread::block_idx_x",
-            },
-        ];
-        let (provider, identities) = validate_ordered_provider_semantic_definitions_v1(
-            &[first.clone(), second.clone()],
-            &expectations,
-        )
-        .unwrap();
-        assert_eq!(provider, first.provider);
-        assert_eq!(identities.len(), 2);
-
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[second.clone(), first.clone()],
-                &expectations,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first.clone(), first.clone()],
-                &expectations,
-            )
-            .is_err()
-        );
-
-        let mut duplicate_role = expectations;
-        duplicate_role[1].canonical_role = duplicate_role[0].canonical_role;
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first.clone(), second.clone()],
-                &duplicate_role,
-            )
-            .is_err()
-        );
-
-        let mut reordered_roles = expectations;
-        reordered_roles.swap(0, 1);
-        reordered_roles[0].canonical_definition_path = "fe2o3_device::thread::thread_idx_x";
-        reordered_roles[1].canonical_definition_path = "fe2o3_device::thread::block_idx_x";
-        let (_, reordered_identities) = validate_ordered_provider_semantic_definitions_v1(
-            &[first.clone(), second.clone()],
-            &reordered_roles,
-        )
-        .unwrap();
-        assert_ne!(reordered_identities, identities);
-
-        let mut changed_provider = second.clone();
-        changed_provider.provider.stable_crate_id ^= 1;
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first.clone(), changed_provider],
-                &expectations,
-            )
-            .is_err()
-        );
-        let mut changed_profile = second;
-        changed_profile.profile = ReviewedProviderSemanticProfileV1::MatrixV3;
-        assert!(
-            validate_ordered_provider_semantic_definitions_v1(
-                &[first, changed_profile],
-                &expectations,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn source_closure_rejects_missing_inputs_and_out_of_root_definitions() {
         let missing_manifest = ProviderPackageFixture::new();
         fs::remove_file(missing_manifest.root.join("Cargo.toml")).unwrap();
         assert!(
             reviewed_provider_source_closure_identity(
                 &missing_manifest.root,
-                MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .is_err()
         );
@@ -3918,7 +2642,7 @@ mod tests {
         assert!(
             reviewed_provider_source_closure_identity(
                 &missing_source_root.root,
-                MATRIX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V3,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .is_err()
         );
@@ -3931,7 +2655,7 @@ mod tests {
             reviewed_provider_source_identity_from_path(
                 &reviewed.source_root(),
                 &outside.definition(),
-                MATRIX_PROVIDER_SOURCE_IDENTITY_DOMAIN_V2,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1,
             )
             .is_err()
         );
@@ -3960,7 +2684,7 @@ mod tests {
         assert!(
             reviewed_provider_source_closure_identity(
                 &manifest_link.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .is_err()
         );
@@ -3974,7 +2698,7 @@ mod tests {
         assert!(
             reviewed_provider_source_closure_identity(
                 &source_link.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .is_err()
         );
@@ -3993,7 +2717,7 @@ mod tests {
         assert!(
             reviewed_provider_source_closure_identity(
                 &source_root_link.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .is_err()
         );
@@ -4003,7 +2727,7 @@ mod tests {
         assert!(
             reviewed_provider_source_closure_identity(
                 &socket.root,
-                ROW_SOFTMAX_PROVIDER_SOURCE_CLOSURE_DOMAIN_V2,
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
             )
             .is_err()
         );
@@ -4242,98 +2966,6 @@ mod tests {
             TrustedDeviceItem::Gfx950LdsTransposePublish,
             TrustedDeviceItem::Gfx950LdsTransposeReadB4,
             TrustedDeviceItem::Gfx950LdsTransposeReadB8,
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::Typestate,
-                TrustedGeneralGemmOperationV1::Acquire,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::Typestate,
-                TrustedGeneralGemmOperationV1::Stage,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::Typestate,
-                TrustedGeneralGemmOperationV1::Publish,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::Typestate,
-                TrustedGeneralGemmOperationV1::Mfma,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::Typestate,
-                TrustedGeneralGemmOperationV1::Reuse,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::Typestate,
-                TrustedGeneralGemmOperationV1::Store,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Acquire,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Lane,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::WorkgroupX,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::WorkgroupY,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::LoadA,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::LoadB,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::LoadC,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Stage,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::StageValue,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::WaitStage,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::ReadStage,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Publish,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Mfma,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::MfmaValue,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Reuse,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::Store,
-            ),
-            TrustedDeviceItem::GeneralGemm(
-                TrustedGeneralGemmSurfaceV1::ProofSensitive,
-                TrustedGeneralGemmOperationV1::StoreEpilogue,
-            ),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VMovB32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VAddU32),
             TrustedDeviceItem::AmdGpuInline(TrustedAmdGpuInlineOperation::VSubU32),
