@@ -4,13 +4,7 @@
 //! proposes a same-site rewrite; the validator independently proves the exact
 //! structural relation before the normalized recipe can leave its constructor.
 
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fmt,
-    num::NonZeroU64,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{collections::BTreeMap, error::Error, fmt};
 
 use super::{
     ProductionRankedKernelV1, ProductionRankedOperationV1, ProductionRankedValueIdV1,
@@ -18,20 +12,9 @@ use super::{
 };
 use dialect_kernel::IndexBinaryKindAttr;
 
-const SEALED_RANKED_CONTEXT_V1: [u8; 32] = [0x31; 32];
-const SEALED_FOLD_IMPLEMENTATION_V1: [u8; 32] = [0x52; 32];
-const SEALED_FOLD_CONFIGURATION_V1: [u8; 32] = [0x73; 32];
-
-static NEXT_RANKED_TRANSLATION_SESSION_V1: AtomicU64 = AtomicU64::new(1);
-
 /// Fail-closed failure from the compiler-owned ranked translation boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionRankedTranslationErrorV1 {
-    SessionIdentityExhausted,
-    ContextMismatch,
-    ImplementationMismatch,
-    ConfigurationMismatch,
-    OutputBindingMismatch,
     FunctionIdentityChanged,
     FunctionSignatureChanged,
     BlockStructureChanged {
@@ -63,11 +46,6 @@ pub enum ProductionRankedTranslationErrorV1 {
 impl ProductionRankedTranslationErrorV1 {
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::SessionIdentityExhausted => "FE2O3-RANKED-TRANSFORM-001",
-            Self::ContextMismatch | Self::ImplementationMismatch | Self::ConfigurationMismatch => {
-                "FE2O3-RANKED-TRANSFORM-002"
-            }
-            Self::OutputBindingMismatch => "FE2O3-RANKED-TRANSFORM-003",
             Self::FunctionIdentityChanged | Self::FunctionSignatureChanged => {
                 "FE2O3-RANKED-TRANSFORM-004"
             }
@@ -85,21 +63,6 @@ impl fmt::Display for ProductionRankedTranslationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "error[{}]: ", self.code())?;
         match self {
-            Self::SessionIdentityExhausted => {
-                formatter.write_str("ranked translation session identity space is exhausted")
-            }
-            Self::ContextMismatch => {
-                formatter.write_str("ranked translation context binding changed")
-            }
-            Self::ImplementationMismatch => {
-                formatter.write_str("ranked translation implementation binding changed")
-            }
-            Self::ConfigurationMismatch => {
-                formatter.write_str("ranked translation configuration binding changed")
-            }
-            Self::OutputBindingMismatch => {
-                formatter.write_str("ranked translation output changed after exact validation")
-            }
             Self::FunctionIdentityChanged => {
                 formatter.write_str("ranked translation changed the function identity")
             }
@@ -145,10 +108,6 @@ impl fmt::Display for ProductionRankedTranslationErrorV1 {
 impl Error for ProductionRankedTranslationErrorV1 {}
 
 struct RankedTranslationSessionV1 {
-    session: NonZeroU64,
-    context: [u8; 32],
-    implementation: [u8; 32],
-    configuration: [u8; 32],
     before: ProductionRankedKernelV1,
 }
 
@@ -160,31 +119,12 @@ enum RankedTranslationDispositionV1 {
 
 #[derive(Debug)]
 struct RankedTranslationReceiptV1 {
-    session: NonZeroU64,
-    context: [u8; 32],
-    implementation: [u8; 32],
-    configuration: [u8; 32],
     output: ProductionRankedKernelV1,
     disposition: RankedTranslationDispositionV1,
 }
 
-fn begin_translation_v1(
-    before: ProductionRankedKernelV1,
-) -> Result<RankedTranslationSessionV1, ProductionRankedTranslationErrorV1> {
-    let session = NEXT_RANKED_TRANSLATION_SESSION_V1
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-            value.checked_add(1)
-        })
-        .map_err(|_| ProductionRankedTranslationErrorV1::SessionIdentityExhausted)?;
-    let session = NonZeroU64::new(session)
-        .ok_or(ProductionRankedTranslationErrorV1::SessionIdentityExhausted)?;
-    Ok(RankedTranslationSessionV1 {
-        session,
-        context: SEALED_RANKED_CONTEXT_V1,
-        implementation: SEALED_FOLD_IMPLEMENTATION_V1,
-        configuration: SEALED_FOLD_CONFIGURATION_V1,
-        before,
-    })
+fn begin_translation_v1(before: ProductionRankedKernelV1) -> RankedTranslationSessionV1 {
+    RankedTranslationSessionV1 { before }
 }
 
 fn fold_candidate_v1(kind: IndexBinaryKindAttr, lhs: u64, rhs: u64) -> Option<u64> {
@@ -208,8 +148,8 @@ fn preceding_constant_v1(
 }
 
 fn run_folder_v1(kernel: &mut ProductionRankedKernelV1) {
-    let mut constants = BTreeMap::new();
     for block in &mut kernel.blocks {
+        let mut constants = BTreeMap::new();
         for operation in &mut block.operations {
             let replacement = match operation {
                 ProductionRankedOperationV1::IndexConstant { result, value } => {
@@ -276,11 +216,11 @@ fn replay_translation_v1(
         return Err(ProductionRankedTranslationErrorV1::TreeWorkChanged);
     }
 
-    let mut constants = BTreeMap::new();
     let mut rewrites = 0_usize;
     for (block_index, (before_block, after_block)) in
         before.blocks.iter().zip(&after.blocks).enumerate()
     {
+        let mut constants = BTreeMap::new();
         if before_block.index_argument_count != after_block.index_argument_count {
             return Err(ProductionRankedTranslationErrorV1::BlockStructureChanged {
                 block: block_index,
@@ -373,65 +313,33 @@ fn replay_translation_v1(
 
 fn finish_translation_v1(
     session: RankedTranslationSessionV1,
-    after: &ProductionRankedKernelV1,
+    output: ProductionRankedKernelV1,
 ) -> Result<RankedTranslationReceiptV1, ProductionRankedTranslationErrorV1> {
-    let RankedTranslationSessionV1 {
-        session,
-        context,
-        implementation,
-        configuration,
-        before,
-    } = session;
-    if context != SEALED_RANKED_CONTEXT_V1 {
-        return Err(ProductionRankedTranslationErrorV1::ContextMismatch);
-    }
-    if implementation != SEALED_FOLD_IMPLEMENTATION_V1 {
-        return Err(ProductionRankedTranslationErrorV1::ImplementationMismatch);
-    }
-    if configuration != SEALED_FOLD_CONFIGURATION_V1 {
-        return Err(ProductionRankedTranslationErrorV1::ConfigurationMismatch);
-    }
-    let disposition = match replay_translation_v1(&before, after)? {
+    let disposition = match replay_translation_v1(&session.before, &output)? {
         0 => RankedTranslationDispositionV1::NotApplicable,
         rewrites => RankedTranslationDispositionV1::Applied { rewrites },
     };
-    drop(before);
     Ok(RankedTranslationReceiptV1 {
-        session,
-        context,
-        implementation,
-        configuration,
-        output: after.clone(),
+        output,
         disposition,
     })
 }
 
 fn consume_translation_v1(
     receipt: RankedTranslationReceiptV1,
-    after: &ProductionRankedKernelV1,
-) -> Result<RankedTranslationDispositionV1, ProductionRankedTranslationErrorV1> {
-    if receipt.session.get() == 0
-        || receipt.context != SEALED_RANKED_CONTEXT_V1
-        || receipt.implementation != SEALED_FOLD_IMPLEMENTATION_V1
-        || receipt.configuration != SEALED_FOLD_CONFIGURATION_V1
-    {
-        return Err(ProductionRankedTranslationErrorV1::ContextMismatch);
-    }
-    if receipt.output != *after {
-        return Err(ProductionRankedTranslationErrorV1::OutputBindingMismatch);
-    }
-    Ok(receipt.disposition)
+) -> (ProductionRankedKernelV1, RankedTranslationDispositionV1) {
+    (receipt.output, receipt.disposition)
 }
 
 pub(super) fn fold_and_validate_index_constants_v1(
     before: ProductionRankedKernelV1,
 ) -> Result<ProductionRankedKernelV1, ProductionRankedTranslationErrorV1> {
-    let session = begin_translation_v1(before)?;
+    let session = begin_translation_v1(before);
     let mut after = session.before.clone();
     run_folder_v1(&mut after);
-    let receipt = finish_translation_v1(session, &after)?;
-    consume_translation_v1(receipt, &after)?;
-    Ok(after)
+    let receipt = finish_translation_v1(session, after)?;
+    let (output, _) = consume_translation_v1(receipt);
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -760,6 +668,7 @@ mod tests {
                 },
             ],
         );
+        assert_eq!(replay_translation_v1(&before, &before), Ok(0));
         let mut after = before.clone();
         let ProductionRankedOperationV1::Access { kind, .. } = &mut after.blocks[0].operations[2]
         else {
@@ -803,6 +712,7 @@ mod tests {
                 },
             ],
         );
+        assert_eq!(replay_translation_v1(&before, &before), Ok(0));
         let mut after = before.clone();
         let ProductionRankedOperationV1::RequestAuthenticatedReferenceEquivalent {
             actual,
@@ -824,60 +734,36 @@ mod tests {
     }
 
     #[test]
-    fn session_rejects_sealed_identity_changes() {
-        let before = raw_kernel("session_binding", 0, vec![]);
-
-        let mut wrong_context = begin_translation_v1(before.clone()).expect("session");
-        wrong_context.context[0] ^= 1;
-        assert_eq!(
-            finish_translation_v1(wrong_context, &before).unwrap_err(),
-            ProductionRankedTranslationErrorV1::ContextMismatch
-        );
-
-        let mut wrong_implementation = begin_translation_v1(before.clone()).expect("session");
-        wrong_implementation.implementation[0] ^= 1;
-        assert_eq!(
-            finish_translation_v1(wrong_implementation, &before).unwrap_err(),
-            ProductionRankedTranslationErrorV1::ImplementationMismatch
-        );
-
-        let mut wrong_configuration = begin_translation_v1(before.clone()).expect("session");
-        wrong_configuration.configuration[0] ^= 1;
-        assert_eq!(
-            finish_translation_v1(wrong_configuration, &before).unwrap_err(),
-            ProductionRankedTranslationErrorV1::ConfigurationMismatch
-        );
-    }
-
-    #[test]
-    fn consumed_receipt_rejects_a_stale_output() {
-        let before = raw_kernel(
-            "output_binding",
-            0,
-            vec![
-                constant(0, 2),
-                constant(1, 3),
-                binary(2, IndexBinaryKindAttr::Add, 0, 1),
+    fn validator_does_not_resolve_cross_block_values_without_definitions() {
+        let before = ProductionRankedKernelV1 {
+            function_name: "cross_block_definition".to_owned(),
+            argument_count: 0,
+            blocks: vec![
+                ProductionRankedBlockV1::new(
+                    vec![constant(0, 2), constant(1, 3)],
+                    ProductionRankedTerminatorV1::Branch { target: 1 },
+                ),
+                ProductionRankedBlockV1::new(
+                    vec![binary(2, IndexBinaryKindAttr::Add, 0, 1)],
+                    ProductionRankedTerminatorV1::Return,
+                ),
             ],
-        );
-        let session = begin_translation_v1(before.clone()).expect("session");
-        let mut after = session.before.clone();
-        run_folder_v1(&mut after);
-        let receipt = finish_translation_v1(session, &after).expect("validated receipt");
-        after.blocks[0].operations[2] = constant(2, 6);
-        assert_eq!(
-            consume_translation_v1(receipt, &after),
-            Err(ProductionRankedTranslationErrorV1::OutputBindingMismatch)
-        );
+            tree_work: 4,
+        };
+        let mut proposed = before.clone();
+        run_folder_v1(&mut proposed);
+        assert!(matches!(
+            proposed.blocks[1].operations[0],
+            ProductionRankedOperationV1::IndexBinary { .. }
+        ));
 
-        let session = begin_translation_v1(before).expect("session");
-        let mut after = session.before.clone();
-        run_folder_v1(&mut after);
-        let mut receipt = finish_translation_v1(session, &after).expect("validated receipt");
-        receipt.output.blocks[0].operations[2] = constant(2, 6);
+        proposed.blocks[1].operations[0] = constant(2, 5);
         assert_eq!(
-            consume_translation_v1(receipt, &after),
-            Err(ProductionRankedTranslationErrorV1::OutputBindingMismatch)
+            replay_translation_v1(&before, &proposed),
+            Err(ProductionRankedTranslationErrorV1::IllegalRewrite {
+                block: 1,
+                operation: 0,
+            })
         );
     }
 
@@ -898,12 +784,11 @@ mod tests {
     #[test]
     fn receipt_distinguishes_applied_and_not_applicable() {
         let unchanged = raw_kernel("not_applicable_receipt", 0, vec![constant(0, 1)]);
-        let session = begin_translation_v1(unchanged.clone()).expect("session");
-        let receipt = finish_translation_v1(session, &unchanged).expect("identity relation");
-        assert_eq!(
-            consume_translation_v1(receipt, &unchanged).expect("consume"),
-            RankedTranslationDispositionV1::NotApplicable
-        );
+        let session = begin_translation_v1(unchanged.clone());
+        let receipt = finish_translation_v1(session, unchanged.clone()).expect("identity relation");
+        let (output, disposition) = consume_translation_v1(receipt);
+        assert_eq!(output, unchanged);
+        assert_eq!(disposition, RankedTranslationDispositionV1::NotApplicable);
 
         let before = raw_kernel(
             "applied_receipt",
@@ -914,12 +799,14 @@ mod tests {
                 binary(2, IndexBinaryKindAttr::Add, 0, 1),
             ],
         );
-        let session = begin_translation_v1(before).expect("session");
+        let session = begin_translation_v1(before);
         let mut after = session.before.clone();
         run_folder_v1(&mut after);
-        let receipt = finish_translation_v1(session, &after).expect("fold relation");
+        let receipt = finish_translation_v1(session, after.clone()).expect("fold relation");
+        let (output, disposition) = consume_translation_v1(receipt);
+        assert_eq!(output, after);
         assert_eq!(
-            consume_translation_v1(receipt, &after).expect("consume"),
+            disposition,
             RankedTranslationDispositionV1::Applied { rewrites: 1 }
         );
     }
