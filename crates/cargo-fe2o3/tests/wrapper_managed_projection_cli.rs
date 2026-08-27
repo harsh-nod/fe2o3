@@ -406,7 +406,7 @@ fn nonvirtual_root_package_excludes_its_generated_target_directory_on_repeat() {
     write(
         &workspace.0,
         "Cargo.toml",
-        "[package]\nname = \"root-ordinary\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"root-ordinary\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
     );
     write(
         &workspace.0,
