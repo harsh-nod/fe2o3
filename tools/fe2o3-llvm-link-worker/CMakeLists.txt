@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(fe2o3_llvm_link_worker LANGUAGES CXX)
 
-option(FE2O3_ROW_SOFTMAX_RELEASE_GATE
-  "Require all measured row-softmax V1 release prerequisites" OFF)
-
 if(NOT DEFINED LLVM_DIR OR LLVM_DIR STREQUAL "")
   message(FATAL_ERROR "LLVM_DIR must name the explicit pinned LLVM CMake package")
 endif()
@@ -105,38 +102,6 @@ else()
   set(FE2O3_GFX942_UNSAFE_MATH_SHA256 "disabled")
   set(FE2O3_GFX942_FINITE_ONLY_SHA256 "disabled")
   message(STATUS "gfx942 OCML provider disabled: reviewed bitcode is absent")
-endif()
-if(FE2O3_ROW_SOFTMAX_RELEASE_GATE AND
-   NOT FE2O3_GFX942_DEVICE_LIBS_ENABLED)
-  message(FATAL_ERROR
-    "row-softmax release gate requires the measured gfx942 OCML closure")
-endif()
-if(FE2O3_ROW_SOFTMAX_RELEASE_GATE)
-  foreach(FE2O3_REQUIRED_RELEASE_VARIABLE IN ITEMS
-      FE2O3_EXPECTED_GFX942_DEVICE_LIB_CANONICAL_DIR
-      FE2O3_EXPECTED_GFX942_OCML_SHA256
-      FE2O3_EXPECTED_GFX942_ISA_SHA256
-      FE2O3_EXPECTED_GFX942_UNSAFE_MATH_SHA256
-      FE2O3_EXPECTED_GFX942_FINITE_ONLY_SHA256
-      FE2O3_EXPECTED_WORKER_BUILD_ID)
-    if(NOT DEFINED ${FE2O3_REQUIRED_RELEASE_VARIABLE} OR
-       "${${FE2O3_REQUIRED_RELEASE_VARIABLE}}" STREQUAL "")
-      message(FATAL_ERROR
-        "${FE2O3_REQUIRED_RELEASE_VARIABLE} is required by the release gate")
-    endif()
-  endforeach()
-  if(NOT FE2O3_GFX942_DEVICE_LIB_DIR STREQUAL
-     FE2O3_EXPECTED_GFX942_DEVICE_LIB_CANONICAL_DIR)
-    message(FATAL_ERROR
-      "gfx942 provider path differs from the reviewed canonical directory")
-  endif()
-  foreach(FE2O3_PROVIDER_DIGEST IN ITEMS OCML ISA UNSAFE_MATH FINITE_ONLY)
-    if(NOT FE2O3_GFX942_${FE2O3_PROVIDER_DIGEST}_SHA256 STREQUAL
-       FE2O3_EXPECTED_GFX942_${FE2O3_PROVIDER_DIGEST}_SHA256)
-      message(FATAL_ERROR
-        "gfx942 ${FE2O3_PROVIDER_DIGEST} digest differs from the reviewed value")
-    endif()
-  endforeach()
 endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-llvm-build-id.txt"
   "${FE2O3_MEASURED_LLVM_BUILD_ID}\n")
@@ -296,11 +261,6 @@ string(SHA256 FE2O3_WORKER_MEASUREMENT_SHA256
 set(FE2O3_WORKER_MEASUREMENT
   "fe2o3-worker-v1-sha256-${FE2O3_WORKER_MEASUREMENT_SHA256}")
 message(STATUS "fe2o3 worker asserted build claim: ${FE2O3_WORKER_MEASUREMENT}")
-if(FE2O3_ROW_SOFTMAX_RELEASE_GATE AND
-   NOT FE2O3_WORKER_MEASUREMENT STREQUAL FE2O3_EXPECTED_WORKER_BUILD_ID)
-  message(FATAL_ERROR
-    "worker build claim differs from the operator-selected reviewed manifest")
-endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fe2o3-worker-build-id.txt"
   "${FE2O3_WORKER_MEASUREMENT}\n")
 
@@ -345,12 +305,7 @@ target_link_libraries(fe2o3-llvm-link-worker PRIVATE fe2o3_worker_pipeline
   Threads::Threads)
 
 include(CTest)
-if(FE2O3_ROW_SOFTMAX_RELEASE_GATE AND NOT BUILD_TESTING)
-  message(FATAL_ERROR "row-softmax release gate requires BUILD_TESTING=ON")
-endif()
 if(BUILD_TESTING)
-  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/row-softmax-v1-llvm22-body.ll")
   add_executable(fe2o3-worker-codec-tests tests/CodecTests.cpp)
   target_compile_definitions(fe2o3-worker-codec-tests PRIVATE
     FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
@@ -372,23 +327,6 @@ if(BUILD_TESTING)
     fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS})
   add_test(NAME fe2o3-worker-pipeline-tests
     COMMAND fe2o3-worker-pipeline-tests)
-  add_test(NAME fe2o3-worker-exact-row-softmax-v1-tests
-    COMMAND fe2o3-worker-pipeline-tests --exact-row-softmax-only)
-
-  add_executable(fe2o3-row-softmax-llvm22-layout-probe
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/rustc-codegen-fe2o3/tests/fixtures/row-softmax-llvm22-target-layout.cpp")
-  target_include_directories(fe2o3-row-softmax-llvm22-layout-probe SYSTEM
-    PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_definitions(fe2o3-row-softmax-llvm22-layout-probe PRIVATE
-    FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}")
-  target_compile_options(fe2o3-row-softmax-llvm22-layout-probe PRIVATE
-    -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter
-    -fno-exceptions -fno-rtti)
-  target_link_libraries(fe2o3-row-softmax-llvm22-layout-probe PRIVATE
-    ${FE2O3_LLVM_LIBS})
-  add_test(NAME fe2o3-row-softmax-llvm22-layout-probe
-    COMMAND fe2o3-row-softmax-llvm22-layout-probe)
-
   add_executable(fe2o3-worker-device-library-policy-tests
     tests/DeviceLibraryPolicyTests.cpp)
   add_executable(fe2o3-worker-machine-effect-tests

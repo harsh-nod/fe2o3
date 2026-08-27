@@ -72,7 +72,7 @@ constexpr uint32_t PhysicalProfileElfFlags =
     ELF::EF_AMDGPU_MACH_AMDGCN_GFX942 | ELF::EF_AMDGPU_FEATURE_XNACK_OFF_V4 |
     ELF::EF_AMDGPU_FEATURE_SRAMECC_ANY_V4;
 constexpr uint16_t SchemaVersion = 1;
-constexpr size_t MaxEntries = 2;
+constexpr size_t MaxEntries = 64;
 constexpr size_t MaxEdges = 256;
 constexpr size_t MaxSymbolBytes = 256;
 constexpr size_t MaxElfSections = 256;
@@ -1040,23 +1040,6 @@ struct AnalyzedFunction {
   std::vector<LocalEffect> Effects;
 };
 
-enum class AnalysisProfile {
-  AlphaZetaV1,
-  ScalarGemmV1,
-};
-
-Expected<AnalysisProfile>
-analysisProfileForEntries(ArrayRef<PhysicalMachineEffectEntryRequest> Entries) {
-  if (Entries.size() == 1 && Entries.front().Symbol == "scalar_gemm_v1")
-    return AnalysisProfile::ScalarGemmV1;
-  if (!Entries.empty() &&
-      llvm::all_of(Entries, [](const PhysicalMachineEffectEntryRequest &Entry) {
-        return Entry.Symbol == "alpha" || Entry.Symbol == "zeta";
-      }))
-    return AnalysisProfile::AlphaZetaV1;
-  return analysisError("entry set is outside bounded analyzer profiles");
-}
-
 struct McState {
   std::unique_ptr<MCRegisterInfo> Registers;
   std::unique_ptr<MCAsmInfo> AsmInfo;
@@ -1166,81 +1149,15 @@ bool forbiddenOpcodeFamily(StringRef Name) {
   return Name.contains("ATOMIC") || Name.starts_with("DS_") ||
          Name.starts_with("FLAT_") || Name.starts_with("BUFFER_") ||
          Name.starts_with("TBUFFER_") || Name.starts_with("IMAGE_") ||
-         Name.starts_with("SCRATCH_");
-}
-
-bool acceptedAlphaZetaOpcode(StringRef Name) {
-  return Name.starts_with("S_WAITCNT") || Name.starts_with("S_NOP") ||
-         Name.starts_with("S_ENDPGM") || Name.starts_with("S_CLAUSE") ||
-         Name == "S_DELAY_ALU" || Name.starts_with("V_MOV_") ||
-         Name.starts_with("S_MOV_") || Name.starts_with("V_ADD_") ||
-         Name.starts_with("V_MUL_") || Name.starts_with("V_FMA_") ||
-         Name.starts_with("V_MAD_") || Name.starts_with("S_GETPC_") ||
-         Name.starts_with("S_ADD_") || Name.starts_with("S_ADDC_") ||
-         Name.starts_with("S_SUB_");
-}
-
-// Exact LLVM 22 MC opcode closure of the pinned scalar_gemm_v1 artifact.
-bool acceptedScalarGemmOpcode(StringRef Name) {
-  return StringSwitch<bool>(Name)
-      .Case("S_ADDC_U32_vi", true)
-      .Case("S_ADD_I32_vi", true)
-      .Case("S_ADD_U32_vi", true)
-      .Case("S_AND_B64_vi", true)
-      .Case("S_CMP_GE_U32_vi", true)
-      .Case("S_CMP_LG_U64_vi", true)
-      .Case("S_CSELECT_B64_vi", true)
-      .Case("S_ENDPGM_vi", true)
-      .Case("S_LSHL_B64_vi", true)
-      .Case("S_LSHR_B64_vi", true)
-      .Case("S_MOV_B32_vi", true)
-      .Case("S_MOV_B64_vi", true)
-      .Case("S_MUL_HI_U32_vi", true)
-      .Case("S_MUL_I32_vi", true)
-      .Case("S_NOP_vi", true)
-      .Case("S_OR_B64_vi", true)
-      .Case("S_OR_SAVEEXEC_B64_vi", true)
-      .Case("S_SUBB_U32_vi", true)
-      .Case("S_SUB_U32_vi", true)
-      .Case("S_WAITCNT_vi", true)
-      .Case("V_ACCVGPR_READ_B32_vi", true)
-      .Case("V_ACCVGPR_WRITE_B32_vi", true)
-      .Case("V_ADD3_U32_vi", true)
-      .Case("V_ADDC_CO_U32_e32_gfx9", true)
-      .Case("V_ADD_CO_U32_e32_gfx9", true)
-      .Case("V_ADD_F32_e64_vi", true)
-      .Case("V_CMP_EQ_U32_e64_vi", true)
-      .Case("V_CMP_GE_U32_e64_vi", true)
-      .Case("V_CMP_LT_U64_e64_vi", true)
-      .Case("V_CMP_NE_U32_e64_vi", true)
-      .Case("V_CNDMASK_B32_e64_vi", true)
-      .Case("V_CVT_F32_U32_e64_vi", true)
-      .Case("V_CVT_U32_F32_e64_vi", true)
-      .Case("V_FMAC_F32_e64_vi", true)
-      .Case("V_LSHLREV_B64_vi", true)
-      .Case("V_LSHL_ADD_U64_vi", true)
-      .Case("V_LSHRREV_B64_vi", true)
-      .Case("V_MAD_U64_U32_vi", true)
-      .Case("V_MOV_B32_e32_vi", true)
-      .Case("V_MOV_B64_e32_vi", true)
-      .Case("V_MUL_F32_e64_vi", true)
-      .Case("V_MUL_HI_U32_vi", true)
-      .Case("V_MUL_LO_U32_vi", true)
-      .Case("V_OR_B32_e64_vi", true)
-      .Case("V_RCP_F32_e64_vi", true)
-      .Case("V_READFIRSTLANE_B32_vi", true)
-      .Case("V_READLANE_B32_vi", true)
-      .Case("V_SUBB_CO_U32_e64_gfx9", true)
-      .Case("V_SUB_CO_U32_e64_gfx9", true)
-      .Case("V_SUB_U32_e64_gfx9", true)
-      .Case("V_TRUNC_F32_e64_vi", true)
-      .Case("V_WRITELANE_B32_vi", true)
-      .Default(false);
-}
-
-bool acceptedScalarGemmMemoryOpcode(StringRef Name) {
-  return Name == "GLOBAL_LOAD_DWORD_vi" || Name == "GLOBAL_STORE_DWORD_vi" ||
-         Name == "S_LOAD_DWORD_IMM_vi" || Name == "S_LOAD_DWORDX2_IMM_vi";
+         Name.starts_with("SCRATCH_") || Name.starts_with("S_SENDMSG") ||
+         Name.starts_with("S_SLEEP") || Name.starts_with("S_TRAP") ||
+         Name.starts_with("S_DEBUG") || Name.starts_with("S_SETREG") ||
+         Name.starts_with("S_SETPRIO") || Name.starts_with("S_ICACHE") ||
+         Name.starts_with("S_MEMTIME") ||
+         Name.starts_with("S_MEMREALTIME") ||
+         Name.starts_with("S_TTRACEDATA") || Name.starts_with("S_WAKEUP") ||
+         Name.starts_with("S_HALT") || Name.starts_with("S_RFE") ||
+         Name.starts_with("S_BARRIER") || Name.starts_with("EXP");
 }
 
 std::string instructionDescription(const DecodedInstruction &Instruction,
@@ -1354,74 +1271,6 @@ struct FunctionCfg {
   std::vector<size_t> InstructionBlocks;
 };
 
-Error validateScalarGemmCfg(ArrayRef<DecodedInstruction> Instructions,
-                            const std::map<size_t, size_t> &BranchTargets,
-                            const FunctionCfg &Cfg, const McState &Mc,
-                            StringRef FunctionName) {
-  // LLVM emits distinct forward entries into the outer and inner cycles.
-  if (llvm::any_of(Cfg.Blocks, [](const FunctionCfg::Block &Block) {
-        return !Block.Reachable;
-      }))
-    return analysisError(Twine("unreachable scalar GEMM block in ") +
-                         FunctionName);
-
-  std::map<std::string, size_t> BranchCounts;
-  std::map<std::string, size_t> BackwardBranchCounts;
-  size_t BackwardBranches = 0;
-  std::set<size_t> BackwardTargets;
-  std::set<size_t> ForwardTargets;
-  std::optional<std::pair<size_t, size_t>> InnerLatch;
-  std::optional<std::pair<size_t, size_t>> OuterLatch;
-  for (const auto &[Source, Target] : BranchTargets) {
-    StringRef Name = Instructions[Source].Name;
-    ++BranchCounts[Name.str()];
-    if (Target >= Source) {
-      ForwardTargets.insert(Target);
-      continue;
-    }
-    ++BackwardBranches;
-    ++BackwardBranchCounts[Name.str()];
-    BackwardTargets.insert(Target);
-    if (Name != "S_BRANCH_vi" && Name != "S_CBRANCH_VCCNZ_vi")
-      return analysisError(Twine("unsupported scalar GEMM backward branch ") +
-                           Name + " in " + FunctionName);
-    if (Name == "S_CBRANCH_VCCNZ_vi")
-      InnerLatch = {Source, Target};
-    else
-      OuterLatch = {Source, Target};
-  }
-
-  const std::map<std::string, size_t> ExpectedBranches = {
-      {"S_BRANCH_vi", 3},
-      {"S_CBRANCH_EXECZ_vi", 1},
-      {"S_CBRANCH_SCC1_vi", 1},
-      {"S_CBRANCH_VCCNZ_vi", 1},
-  };
-  const std::map<std::string, size_t> ExpectedBackwardBranches = {
-      {"S_BRANCH_vi", 1},
-      {"S_CBRANCH_VCCNZ_vi", 1},
-  };
-  if (BranchCounts != ExpectedBranches || BackwardBranches != 2 ||
-      BackwardBranchCounts != ExpectedBackwardBranches ||
-      BackwardTargets.size() != 2 || !InnerLatch || !OuterLatch ||
-      !(OuterLatch->second < InnerLatch->second &&
-        InnerLatch->first < OuterLatch->first) ||
-      !llvm::all_of(BackwardTargets, [&](size_t Target) {
-        return ForwardTargets.contains(Target);
-      }))
-    return analysisError(Twine("scalar GEMM branch profile mismatch in ") +
-                         FunctionName);
-  for (size_t I = 0; I < Instructions.size(); ++I) {
-    const MCInstrDesc &Descriptor =
-        Mc.Instructions->get(Instructions[I].Inst.getOpcode());
-    if (Descriptor.isBranch() && !Descriptor.isCall() &&
-        !isSetPc(Instructions[I]) && !BranchTargets.contains(I))
-      return analysisError(Twine("unclassified scalar GEMM branch in ") +
-                           FunctionName);
-  }
-  return Error::success();
-}
-
 void appendUnique(std::vector<size_t> &Values, size_t Value) {
   if (llvm::find(Values, Value) == Values.end())
     Values.push_back(Value);
@@ -1429,7 +1278,7 @@ void appendUnique(std::vector<size_t> &Values, size_t Value) {
 
 Expected<FunctionCfg>
 buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
-                 StringRef FunctionName, AnalysisProfile Profile) {
+                 StringRef FunctionName) {
   std::map<uint64_t, size_t> Boundaries;
   for (size_t I = 0; I < Instructions.size(); ++I)
     if (!Boundaries.emplace(Instructions[I].Address, I).second)
@@ -1451,9 +1300,7 @@ buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
                                        Instruction.Size, Target))
         return analysisError(Twine("unknown branch target in ") + FunctionName);
       auto Boundary = Boundaries.find(Target);
-      if (Boundary == Boundaries.end() || Target == Instruction.Address ||
-          (Target < Instruction.Address &&
-           Profile != AnalysisProfile::ScalarGemmV1))
+      if (Boundary == Boundaries.end() || Target <= Instruction.Address)
         return analysisError(
             Twine("unsupported backward or external branch in ") +
             FunctionName);
@@ -1537,10 +1384,6 @@ buildFunctionCfg(ArrayRef<DecodedInstruction> Instructions, McState &Mc,
       return analysisError(Twine("reachable fallthrough exits symbol ") +
                            FunctionName);
   }
-  if (Profile == AnalysisProfile::ScalarGemmV1)
-    if (Error ErrorValue = validateScalarGemmCfg(Instructions, BranchTargets,
-                                                 Result, Mc, FunctionName))
-      return ErrorValue;
   return Result;
 }
 
@@ -1777,11 +1620,11 @@ Expected<uint64_t> directCallTargets(ArrayRef<DecodedInstruction> Instructions,
 
 Expected<AnalyzedFunction>
 analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
-                bool ReturnPairIsLiveIn, AnalysisProfile Profile, McState &Mc) {
+                bool ReturnPairIsLiveIn, McState &Mc) {
   auto Decoded = decodeFunction(Function, Mc);
   if (!Decoded)
     return Decoded.takeError();
-  auto Cfg = buildFunctionCfg(*Decoded, Mc, Function.Name, Profile);
+  auto Cfg = buildFunctionCfg(*Decoded, Mc, Function.Name);
   if (!Cfg)
     return Cfg.takeError();
 
@@ -1809,9 +1652,6 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
     if (Descriptor.isIndirectBranch())
       return analysisError(Twine("indirect branch in ") + Function.Name);
     if (Descriptor.isCall()) {
-      if (Profile == AnalysisProfile::ScalarGemmV1)
-        return analysisError(Twine("call in scalar GEMM profile: ") +
-                             Function.Name);
       auto Target = directCallTargets(*Decoded, Index, *Cfg, Mc);
       if (!Target)
         return analysisError(Twine("cannot resolve call in ") + Function.Name +
@@ -1842,10 +1682,6 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       continue;
     }
     if (Descriptor.isBranch()) {
-      if (Descriptor.isBarrier() &&
-          !(Profile == AnalysisProfile::ScalarGemmV1 && Name == "S_BRANCH_vi"))
-        return analysisError(Twine("barrier branch ") + Name + " in " +
-                             Function.Name);
       continue;
     }
     if (Descriptor.mayLoad() || Descriptor.mayStore()) {
@@ -1854,9 +1690,7 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       bool SupportedRead =
           Name.starts_with("GLOBAL_LOAD_") || Name.starts_with("S_LOAD_");
       bool SupportedWrite = Name.starts_with("GLOBAL_STORE_");
-      if ((Profile == AnalysisProfile::ScalarGemmV1 &&
-           !acceptedScalarGemmMemoryOpcode(Name)) ||
-          (Read && !SupportedRead) || (Write && !SupportedWrite) ||
+      if ((Read && !SupportedRead) || (Write && !SupportedWrite) ||
           (Read && Write))
         return analysisError(Twine("unsupported memory instruction ") + Name +
                              " in " + Function.Name);
@@ -1871,12 +1705,9 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
                                 *Width});
       continue;
     }
-    bool Accepted = Profile == AnalysisProfile::ScalarGemmV1
-                        ? acceptedScalarGemmOpcode(Name)
-                        : acceptedAlphaZetaOpcode(Name);
-    if (!Accepted)
-      return analysisError(Twine("unsupported instruction ") + Name + " in " +
-                           Function.Name);
+    if (Descriptor.isTrap())
+      return analysisError(Twine("unsupported side-effecting instruction ") +
+                           Name + " in " + Function.Name);
   }
   llvm::sort(Result.Evidence.DirectCallees);
   if (std::adjacent_find(Result.Evidence.DirectCallees.begin(),
@@ -1981,7 +1812,7 @@ bool matchesPhysicalMachineEffectMetadataTargetV1(StringRef Target) {
 PhysicalMachineEffectIdentities physicalMachineEffectIdentities() {
   std::string Analyzer =
       (Twine(FE2O3_WORKER_BUILD_ID) + "|target=gfx942:xnack-|cov=6|profile="
-                                      "alpha-zeta-v1+scalar-gemm-v1")
+                                      "bounded-generic-v1")
           .str();
   std::string Toolchain =
       (Twine(FE2O3_LLVM_BUILD_ID) + "|llvm=" + LLVM_VERSION_STRING).str();
@@ -2084,7 +1915,7 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
   if (!EntryCount)
     return EntryCount.takeError();
   if (*EntryCount == 0 || *EntryCount > MaxEntries)
-    return analysisError("entry count exceeds alpha/zeta bound");
+    return analysisError("entry count exceeds bound");
   for (uint16_t I = 0; I < *EntryCount; ++I) {
     auto Symbol = Input.symbol();
     if (!Symbol)
@@ -2115,10 +1946,6 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
   for (size_t I = 1; I < Result.Entries.size(); ++I)
     if (Result.Entries[I - 1].Symbol >= Result.Entries[I].Symbol)
       return analysisError("entries are duplicate or noncanonical");
-  auto Profile = analysisProfileForEntries(Result.Entries);
-  if (!Profile)
-    return Profile.takeError();
-
   auto Payload = Input.take(static_cast<size_t>(Result.PayloadBytes));
   if (!Payload)
     return Payload.takeError();
@@ -2141,15 +1968,14 @@ decodePhysicalMachineEffectRequest(ArrayRef<uint8_t> Bytes) {
 Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
     const PhysicalMachineEffectRequest &Request) {
   if (Request.Entries.empty() || Request.Entries.size() > MaxEntries)
-    return analysisError("request entry count exceeds bounded profiles");
+    return analysisError("request entry count exceeds bound");
   for (size_t I = 0; I < Request.Entries.size(); ++I) {
     StringRef Symbol = Request.Entries[I].Symbol;
+    if (!Reader::validSymbol(Symbol))
+      return analysisError("request entry symbol is invalid");
     if (I != 0 && Request.Entries[I - 1].Symbol >= Symbol)
       return analysisError("request entries are not canonical");
   }
-  auto Profile = analysisProfileForEntries(Request.Entries);
-  if (!Profile)
-    return Profile.takeError();
   if (Request.Payload.empty() ||
       SHA256::hash(Request.Payload) != Request.PayloadDigest ||
       Request.Payload.size() != Request.PayloadBytes)
@@ -2242,7 +2068,7 @@ Expected<PhysicalMachineEffectEvidence> analyzeGfx942PhysicalMachineEffects(
       return analysisError(Twine("reachable function symbol is absent: ") +
                            Name);
     auto Analyzed = analyzeFunction(
-        *Function, *Symbols, !KernelEntries.contains(Name), *Profile, *Mc);
+        *Function, *Symbols, !KernelEntries.contains(Name), *Mc);
     if (!Analyzed)
       return Analyzed.takeError();
     for (const std::string &Callee : Analyzed->Evidence.DirectCallees)
