@@ -58,6 +58,7 @@
 mod attempt;
 mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
+mod compiler_execution_subject;
 mod compiler_module_handoff;
 mod durable_link_publication;
 mod durable_published_claim;
@@ -112,6 +113,12 @@ pub use compiler_artifact_generation_v1::{
     MAX_COMPILER_ARTIFACT_GENERATION_SCOPE_RECORD_BYTES_V1, MAX_COMPILER_HSACO_BYTES_V1,
     MAX_COMPILER_LINEAGE_BYTES_V1, MAX_COMPILER_NEUTRAL_KIR_BYTES_V1,
     MAX_COMPILER_SEMANTIC_MIR_BYTES_V1, MAX_COMPILER_TARGET_KIR_BYTES_V1,
+};
+pub use compiler_execution_subject::{
+    CompilerExecutionSubjectErrorV1, INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1,
+    INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1, INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1,
+    InertCompilerExecutionContentBindingV1, InertCompilerExecutionSubjectIdentityV1,
+    InertCompilerExecutionSubjectV1,
 };
 pub use compiler_module_handoff::{
     CompilerModuleHandoffConsumptionTokenV3, CompilerModuleHandoffCurrentnessLeaseV3,

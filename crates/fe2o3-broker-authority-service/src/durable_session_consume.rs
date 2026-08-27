@@ -10,7 +10,7 @@
 //! descriptor.
 //!
 //! There is intentionally no path API. Storage is reached only through the service-owned root
-//! retained by `ProtectedBrokerServiceAdmissionV1`, or through a fresh supervisor-supplied root
+//! retained by `ProtectedServiceAdmissionV1`, or through a fresh supervisor-supplied root
 //! descriptor during restart. No advisory-lock inode, environment variable, `PATH` lookup, client
 //! bearer token, linker, loader, or runtime operation participates.
 //!

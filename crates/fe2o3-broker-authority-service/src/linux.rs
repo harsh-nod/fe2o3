@@ -76,13 +76,13 @@ pub enum AdmissionErrorKindV1 {
 
 /// Failure from the inert protected-service admission boundary.
 #[derive(Debug)]
-pub struct BrokerAuthorityServiceAdmissionErrorV1 {
+pub struct ProtectedServiceAdmissionErrorV1 {
     kind: AdmissionErrorKindV1,
     message: String,
     source: Option<io::Error>,
 }
 
-impl BrokerAuthorityServiceAdmissionErrorV1 {
+impl ProtectedServiceAdmissionErrorV1 {
     fn new(kind: AdmissionErrorKindV1, message: impl Into<String>) -> Self {
         Self {
             kind,
@@ -104,13 +104,13 @@ impl BrokerAuthorityServiceAdmissionErrorV1 {
     }
 }
 
-impl fmt::Display for BrokerAuthorityServiceAdmissionErrorV1 {
+impl fmt::Display for ProtectedServiceAdmissionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
-impl Error for BrokerAuthorityServiceAdmissionErrorV1 {
+impl Error for ProtectedServiceAdmissionErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         self.source
             .as_ref()
@@ -133,9 +133,9 @@ impl ObjectIdentityV1 {
         descriptor: &OwnedFd,
         kind: AdmissionErrorKindV1,
         label: &'static str,
-    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         let stat = rustix::fs::fstat(descriptor).map_err(|error| {
-            BrokerAuthorityServiceAdmissionErrorV1::io(
+            ProtectedServiceAdmissionErrorV1::io(
                 kind,
                 format!("cannot inspect retained {label} descriptor"),
                 io::Error::from(error),
@@ -164,9 +164,9 @@ struct PeerCredentialsV1 {
 }
 
 impl PeerCredentialsV1 {
-    fn inspect(peer: &OwnedFd) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    fn inspect(peer: &OwnedFd) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         let credentials = rustix::net::sockopt::socket_peercred(peer).map_err(|error| {
-            BrokerAuthorityServiceAdmissionErrorV1::io(
+            ProtectedServiceAdmissionErrorV1::io(
                 AdmissionErrorKindV1::InspectPeer,
                 "cannot inspect retained peer SO_PEERCRED",
                 io::Error::from(error),
@@ -174,15 +174,15 @@ impl PeerCredentialsV1 {
         })?;
         let raw_pid = credentials.pid.as_raw_nonzero().get();
         let pid = u32::try_from(raw_pid).map_err(|_| {
-            BrokerAuthorityServiceAdmissionErrorV1::new(
+            ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ExpectedClientPid,
-                "broker peer SO_PEERCRED PID is not a positive u32",
+                "service peer SO_PEERCRED PID is not a positive u32",
             )
         })?;
         if pid == 0 {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ExpectedClientPid,
-                "broker peer SO_PEERCRED PID is zero",
+                "service peer SO_PEERCRED PID is zero",
             ));
         }
         Ok(Self {
@@ -224,8 +224,8 @@ struct PidfdTargetObservationV1 {
 /// successful check, so callers must invoke [`Self::validate_liveness`] at each use boundary.
 ///
 /// This token has no raw-descriptor, path, storage, serialization, signal, wait, or reap API. It
-/// grants no authority and is not by itself bound to a broker peer; that binding occurs only when
-/// it is consumed by [`ProtectedBrokerServiceAdmissionV1::admit`].
+/// grants no authority and is not by itself bound to a service peer; that binding occurs only when
+/// it is consumed by [`ProtectedServiceAdmissionV1::admit`].
 pub struct LiveClientPidfdIdentityV1 {
     pidfd: OwnedFd,
     expected_client: ExpectedClientProcessIdentityV1,
@@ -257,7 +257,7 @@ impl LiveClientPidfdIdentityV1 {
     pub fn admit(
         supervisor_pidfd: OwnedFd,
         expected_client: ExpectedClientProcessIdentityV1,
-    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         require_close_on_exec(
             &supervisor_pidfd,
             AdmissionErrorKindV1::ClientPidfdCloseOnExec,
@@ -289,7 +289,7 @@ impl LiveClientPidfdIdentityV1 {
     /// `waitid(P_PIDFD, WEXITED | WNOHANG | WNOWAIT)` when the target is a waitable child. It never
     /// reaps. `ECHILD` is expected for a valid non-child pidfd and leaves poll as the liveness
     /// authority. A successful return cannot prevent a later process exit.
-    pub fn validate_liveness(&self) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+    pub fn validate_liveness(&self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
         require_close_on_exec(
             &self.pidfd,
             AdmissionErrorKindV1::ClientPidfdCloseOnExec,
@@ -301,7 +301,7 @@ impl LiveClientPidfdIdentityV1 {
             "client pidfd",
         )?;
         if descriptor_identity != self.descriptor_identity {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ClientPidfdIdentityChanged,
                 "retained client pidfd descriptor identity changed",
             ));
@@ -309,7 +309,7 @@ impl LiveClientPidfdIdentityV1 {
         let observation = inspect_pidfd_target(&self.pidfd)?;
         require_process_pidfd_mode(&self.pidfd)?;
         if observation.source != self.identity_source {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ClientPidfdIdentityChanged,
                 "retained client pidfd identity probe changed",
             ));
@@ -322,7 +322,7 @@ impl LiveClientPidfdIdentityV1 {
         require_pidfd_live(&self.pidfd)?;
         let final_observation = inspect_pidfd_target(&self.pidfd)?;
         if final_observation != observation {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ClientPidfdIdentityChanged,
                 "retained client pidfd target changed while checking liveness",
             ));
@@ -333,7 +333,7 @@ impl LiveClientPidfdIdentityV1 {
             "client pidfd",
         )?;
         if final_identity != self.descriptor_identity {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ClientPidfdIdentityChanged,
                 "retained client pidfd descriptor changed while checking liveness",
             ));
@@ -347,15 +347,11 @@ impl LiveClientPidfdIdentityV1 {
 }
 
 impl ExpectedClientProcessIdentityV1 {
-    pub fn new(
-        pid: u32,
-        uid: u32,
-        gid: u32,
-    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    pub fn new(pid: u32, uid: u32, gid: u32) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         if pid == 0 {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ExpectedClientPid,
-                "expected broker client PID must be nonzero",
+                "expected service client PID must be nonzero",
             ));
         }
         Ok(Self { pid, uid, gid })
@@ -387,7 +383,7 @@ impl ExpectedClientProcessIdentityV1 {
 /// This value is not an execution capability. Its only operation revalidates the retained Linux
 /// file descriptions, pidfd target and point-in-time liveness, and peer credentials against their
 /// admission snapshots.
-pub struct ProtectedBrokerServiceAdmissionV1 {
+pub struct ProtectedServiceAdmissionV1 {
     root: OwnedFd,
     peer: OwnedFd,
     live_client: LiveClientPidfdIdentityV1,
@@ -398,10 +394,10 @@ pub struct ProtectedBrokerServiceAdmissionV1 {
     non_authoritative_same_uid_session_test: bool,
 }
 
-impl fmt::Debug for ProtectedBrokerServiceAdmissionV1 {
+impl fmt::Debug for ProtectedServiceAdmissionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("ProtectedBrokerServiceAdmissionV1")
+            .debug_struct("ProtectedServiceAdmissionV1")
             .field("authority", &"none")
             .field("service_uid", &self.service_uid)
             .field("root_identity", &self.root_identity)
@@ -411,7 +407,7 @@ impl fmt::Debug for ProtectedBrokerServiceAdmissionV1 {
     }
 }
 
-impl ProtectedBrokerServiceAdmissionV1 {
+impl ProtectedServiceAdmissionV1 {
     pub(crate) const fn matches_client_process(&self, pid: u32, start_time_ticks: u64) -> bool {
         self.live_client.expected_client.pid == pid
             && self.live_client.start_time_ticks == start_time_ticks
@@ -419,10 +415,10 @@ impl ProtectedBrokerServiceAdmissionV1 {
 
     pub(crate) fn try_clone_service_root(
         &self,
-    ) -> Result<OwnedFd, BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<OwnedFd, ProtectedServiceAdmissionErrorV1> {
         self.validate_session_continuity()?;
         rustix::io::fcntl_dupfd_cloexec(&self.root, 0).map_err(|error| {
-            BrokerAuthorityServiceAdmissionErrorV1::new(
+            ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::InspectRoot,
                 format!("cannot duplicate retained service root: {error}"),
             )
@@ -435,7 +431,7 @@ impl ProtectedBrokerServiceAdmissionV1 {
 
     pub(crate) fn validate_session_continuity(
         &self,
-    ) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
         #[cfg(test)]
         if self.non_authoritative_same_uid_session_test {
             return self.validate_continuity_inner::<false>();
@@ -462,7 +458,7 @@ impl ProtectedBrokerServiceAdmissionV1 {
         supervisor_root: OwnedFd,
         retained_peer: OwnedFd,
         live_client: LiveClientPidfdIdentityV1,
-    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         let service_uid = rustix::process::geteuid().as_raw();
         require_close_on_exec(
             &supervisor_root,
@@ -472,7 +468,7 @@ impl ProtectedBrokerServiceAdmissionV1 {
         require_close_on_exec(
             &retained_peer,
             AdmissionErrorKindV1::PeerCloseOnExec,
-            "broker peer",
+            "service peer",
         )?;
         let root_identity = validate_root(&supervisor_root, service_uid)?;
         let retained_peer_identity =
@@ -485,22 +481,22 @@ impl ProtectedBrokerServiceAdmissionV1 {
         )?;
         let peer_identity = validate_peer_shape(&retained_peer)?;
         if peer_identity != retained_peer_identity {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::PeerIdentityChanged,
-                "retained broker peer identity changed during admission",
+                "retained service peer identity changed during admission",
             ));
         }
         if live_client.expected_client.uid == service_uid {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::SameUidClient,
-                "expected broker client UID equals protected service effective UID",
+                "expected client UID equals protected service effective UID",
             ));
         }
         let peer_credentials = PeerCredentialsV1::inspect(&retained_peer)?;
         if peer_credentials != live_client.expected_client.credentials() {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::PeerCredentialsMismatch,
-                "broker peer SO_PEERCRED does not match the retained pidfd client identity",
+                "service peer SO_PEERCRED does not match the retained pidfd client identity",
             ));
         }
         live_client.validate_liveness()?;
@@ -519,14 +515,14 @@ impl ProtectedBrokerServiceAdmissionV1 {
         root: OwnedFd,
         peer: OwnedFd,
         live_client: LiveClientPidfdIdentityV1,
-    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         let service_uid = rustix::process::geteuid().as_raw();
         require_close_on_exec(
             &root,
             AdmissionErrorKindV1::RootCloseOnExec,
             "supervisor root",
         )?;
-        require_close_on_exec(&peer, AdmissionErrorKindV1::PeerCloseOnExec, "broker peer")?;
+        require_close_on_exec(&peer, AdmissionErrorKindV1::PeerCloseOnExec, "service peer")?;
         let root_identity = validate_root(&root, service_uid)?;
         let peer_identity = validate_peer_shape(&peer)?;
         require_distinct_descriptors(root_identity, peer_identity)?;
@@ -537,7 +533,7 @@ impl ProtectedBrokerServiceAdmissionV1 {
         )?;
         let credentials = PeerCredentialsV1::inspect(&peer)?;
         if credentials != live_client.expected_client.credentials() {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::PeerCredentialsMismatch,
                 "test peer SO_PEERCRED does not match retained pidfd identity",
             ));
@@ -563,7 +559,7 @@ impl ProtectedBrokerServiceAdmissionV1 {
         service_uid: u32,
         root_identity: ObjectIdentityV1,
         peer_identity: ObjectIdentityV1,
-    ) -> Result<Self, BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         let admission = Self {
             root,
             peer,
@@ -580,15 +576,15 @@ impl ProtectedBrokerServiceAdmissionV1 {
 
     /// Revalidates service UID, root security metadata, socket shape, observed object identities,
     /// pidfd target and liveness, and `SO_PEERCRED`; any discrepancy fails closed.
-    pub fn validate_continuity(&self) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+    pub fn validate_continuity(&self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
         self.validate_continuity_inner::<true>()
     }
 
     fn validate_continuity_inner<const REQUIRE_DISTINCT_UID: bool>(
         &self,
-    ) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
         if rustix::process::geteuid().as_raw() != self.service_uid {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ServiceIdentityChanged,
                 "protected service effective UID changed after admission",
             ));
@@ -602,13 +598,13 @@ impl ProtectedBrokerServiceAdmissionV1 {
         require_close_on_exec(
             &self.peer,
             AdmissionErrorKindV1::PeerCloseOnExec,
-            "broker peer",
+            "service peer",
         )?;
         self.live_client.validate_liveness()?;
 
         let root_identity = validate_root(&self.root, self.service_uid)?;
         if root_identity != self.root_identity {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::RootIdentityChanged,
                 "retained supervisor directory identity or security metadata changed",
             ));
@@ -616,9 +612,9 @@ impl ProtectedBrokerServiceAdmissionV1 {
 
         let peer_identity = validate_peer_shape(&self.peer)?;
         if peer_identity != self.peer_identity {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::PeerIdentityChanged,
-                "retained broker peer descriptor identity changed",
+                "retained service peer descriptor identity changed",
             ));
         }
         require_distinct_descriptors(root_identity, peer_identity)?;
@@ -629,24 +625,24 @@ impl ProtectedBrokerServiceAdmissionV1 {
         )?;
 
         if REQUIRE_DISTINCT_UID && self.live_client.expected_client.uid == self.service_uid {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::SameUidClient,
-                "expected broker client UID equals protected service effective UID",
+                "expected client UID equals protected service effective UID",
             ));
         }
         let credentials = PeerCredentialsV1::inspect(&self.peer)?;
         if credentials != self.live_client.expected_client.credentials() {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::PeerCredentialsChanged,
-                "retained broker peer SO_PEERCRED no longer matches expected client identity",
+                "retained service peer SO_PEERCRED no longer matches expected client identity",
             ));
         }
         let final_peer_identity =
             ObjectIdentityV1::inspect(&self.peer, AdmissionErrorKindV1::InspectPeer, "peer")?;
         if final_peer_identity != self.peer_identity {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::PeerIdentityChanged,
-                "retained broker peer identity changed while checking credentials",
+                "retained service peer identity changed while checking credentials",
             ));
         }
         self.live_client.validate_liveness()?;
@@ -656,7 +652,7 @@ impl ProtectedBrokerServiceAdmissionV1 {
     #[cfg(test)]
     fn validate_non_authoritative_test_continuity(
         &self,
-    ) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+    ) -> Result<(), ProtectedServiceAdmissionErrorV1> {
         self.validate_continuity_inner::<false>()
     }
 }
@@ -665,16 +661,16 @@ fn require_close_on_exec(
     descriptor: &OwnedFd,
     kind: AdmissionErrorKindV1,
     label: &'static str,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     let flags = rustix::io::fcntl_getfd(descriptor).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             kind,
             format!("cannot inspect {label} descriptor flags"),
             io::Error::from(error),
         )
     })?;
     if !flags.contains(rustix::io::FdFlags::CLOEXEC) {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             kind,
             format!("retained {label} descriptor does not have FD_CLOEXEC"),
         ));
@@ -682,11 +678,9 @@ fn require_close_on_exec(
     Ok(())
 }
 
-fn require_process_pidfd_mode(
-    pidfd: &OwnedFd,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+fn require_process_pidfd_mode(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     let flags = rustix::fs::fcntl_getfl(pidfd).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot inspect client pidfd file status flags",
             io::Error::from(error),
@@ -695,7 +689,7 @@ fn require_process_pidfd_mode(
     // Linux v6.12 UAPI defines PIDFD_THREAD as exactly O_EXCL. This contract rejects only that
     // identified process-vs-thread selector and does not require unrelated flag bits to be zero.
     if flags.contains(rustix::fs::OFlags::EXCL) {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientPidfdThread,
             "client pidfd has Linux PIDFD_THREAD (O_EXCL) semantics",
         ));
@@ -705,7 +699,7 @@ fn require_process_pidfd_mode(
 
 fn inspect_pidfd_target(
     pidfd: &OwnedFd,
-) -> Result<PidfdTargetObservationV1, BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
     // SAFETY: PidfdInfoV0 contains only integer fields, so all-zero is a valid request. The ioctl
     // reads the request mask and initializes fields indicated by the returned mask.
     let mut info = unsafe { MaybeUninit::<PidfdInfoV0>::zeroed().assume_init() };
@@ -715,7 +709,7 @@ fn inspect_pidfd_target(
     let result = unsafe { libc::ioctl(pidfd.as_raw_fd(), PIDFD_GET_INFO_V0, &mut info) };
     if result == 0 {
         if info.mask & PIDFD_INFO_PID_V0 == 0 || info.pid == 0 || info.tgid != info.pid {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::InspectClientPidfd,
                 "PIDFD_GET_INFO omitted a usable process-leader target PID",
             ));
@@ -732,18 +726,18 @@ fn inspect_pidfd_target(
 fn dispatch_pidfd_get_info_error(
     pidfd: &OwnedFd,
     error: io::Error,
-) -> Result<PidfdTargetObservationV1, BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
     match error.raw_os_error() {
         // Linux v6.12 checks for a nonzero pidfd ioctl argument before its command switch, so the
         // pointer-bearing v0 info request returns EINVAL. Linux v6.13 dispatches PIDFD_GET_INFO
         // before that check. Neither errno proves descriptor type: only strict kernel procfs
         // inspection below can make this fallback succeed.
         Some(libc::ENOTTY) | Some(libc::EINVAL) => inspect_pidfd_target_from_procfs(pidfd),
-        Some(libc::ESRCH) => Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        Some(libc::ESRCH) => Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientAlreadyDead,
             "client pidfd target exited before identity inspection",
         )),
-        _ => Err(BrokerAuthorityServiceAdmissionErrorV1::io(
+        _ => Err(ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot inspect client pidfd with PIDFD_GET_INFO",
             error,
@@ -753,7 +747,7 @@ fn dispatch_pidfd_get_info_error(
 
 fn inspect_pidfd_target_from_procfs(
     pidfd: &OwnedFd,
-) -> Result<PidfdTargetObservationV1, BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<PidfdTargetObservationV1, ProtectedServiceAdmissionErrorV1> {
     let self_entry = open_validated_procfs_self()?;
     let directory_flags = rustix::fs::OFlags::RDONLY
         | rustix::fs::OFlags::DIRECTORY
@@ -767,7 +761,7 @@ fn inspect_pidfd_target_from_procfs(
     )
     .map(File::from)
     .map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot open the retained procfs fdinfo directory",
             io::Error::from(error),
@@ -784,7 +778,7 @@ fn inspect_pidfd_target_from_procfs(
     )
     .map(File::from)
     .map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot open the bounded procfs client pidfd identity record",
             io::Error::from(error),
@@ -798,14 +792,14 @@ fn inspect_pidfd_target_from_procfs(
         .take(MAX_PIDFD_FDINFO_BYTES + 1)
         .read_to_string(&mut contents)
         .map_err(|error| {
-            BrokerAuthorityServiceAdmissionErrorV1::io(
+            ProtectedServiceAdmissionErrorV1::io(
                 AdmissionErrorKindV1::InspectClientPidfd,
                 "cannot read the bounded procfs client pidfd identity record",
                 error,
             )
         })?;
     if contents.len() as u64 > MAX_PIDFD_FDINFO_BYTES {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             "procfs client pidfd identity record exceeds 4096 bytes",
         ));
@@ -818,19 +812,19 @@ fn inspect_pidfd_target_from_procfs(
     })
 }
 
-fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmissionErrorV1> {
+fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, ProtectedServiceAdmissionErrorV1> {
     let mut pid_value = None;
     let mut flags_value = None;
     for line in contents.lines() {
         if let Some(field) = line.strip_prefix("Pid:") {
             let value = field.strip_prefix('\t').ok_or_else(|| {
-                BrokerAuthorityServiceAdmissionErrorV1::new(
+                ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has a malformed Pid field",
                 )
             })?;
             if pid_value.is_some() {
-                return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+                return Err(ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has duplicate Pid fields",
                 ));
@@ -839,13 +833,13 @@ fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmis
                 && value.bytes().all(|byte| byte.is_ascii_digit())
                 && (value.len() == 1 || !value.starts_with('0'));
             if value != "-1" && !canonical_positive_or_zero {
-                return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+                return Err(ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has a non-canonical decimal Pid field",
                 ));
             }
             pid_value = Some(value.parse::<i64>().map_err(|_| {
-                BrokerAuthorityServiceAdmissionErrorV1::new(
+                ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has a malformed Pid field",
                 )
@@ -853,13 +847,13 @@ fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmis
         }
         if let Some(field) = line.strip_prefix("flags:") {
             let value = field.strip_prefix('\t').ok_or_else(|| {
-                BrokerAuthorityServiceAdmissionErrorV1::new(
+                ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has a malformed flags field",
                 )
             })?;
             if flags_value.is_some() {
-                return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+                return Err(ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has duplicate flags fields",
                 ));
@@ -868,13 +862,13 @@ fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmis
                 || !value.starts_with('0')
                 || !value.bytes().all(|byte| matches!(byte, b'0'..=b'7'))
             {
-                return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+                return Err(ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has a malformed octal flags field",
                 ));
             }
             flags_value = Some(u32::from_str_radix(value, 8).map_err(|_| {
-                BrokerAuthorityServiceAdmissionErrorV1::new(
+                ProtectedServiceAdmissionErrorV1::new(
                     AdmissionErrorKindV1::InspectClientPidfd,
                     "procfs client pidfd identity record has an out-of-range octal flags field",
                 )
@@ -882,13 +876,13 @@ fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmis
         }
     }
     let pid_value = pid_value.ok_or_else(|| {
-        BrokerAuthorityServiceAdmissionErrorV1::new(
+        ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             "descriptor is not a pidfd with a procfs Pid identity field",
         )
     })?;
     let flags_value = flags_value.ok_or_else(|| {
-        BrokerAuthorityServiceAdmissionErrorV1::new(
+        ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             "descriptor has no exact procfs octal flags identity field",
         )
@@ -896,25 +890,25 @@ fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmis
     // Linux v6.12 fs/proc/fd.c emits file->f_flags in octal, and pidfd.h defines PIDFD_THREAD as
     // O_EXCL. Reject only that exact bit so unrelated current or future flags remain admissible.
     if flags_value & libc::PIDFD_THREAD != 0 {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientPidfdThread,
             "procfs client pidfd flags contain Linux PIDFD_THREAD (O_EXCL)",
         ));
     }
     if pid_value == -1 {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientAlreadyDead,
             "client pidfd target was already reaped",
         ));
     }
     let pid = u32::try_from(pid_value).map_err(|_| {
-        BrokerAuthorityServiceAdmissionErrorV1::new(
+        ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             "procfs client pidfd identity is not positive in the selected procfs namespace view",
         )
     })?;
     if pid == 0 {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             "procfs client pidfd identity is not positive in the selected procfs namespace view",
         ));
@@ -922,16 +916,16 @@ fn parse_pidfd_fdinfo(contents: &str) -> Result<u32, BrokerAuthorityServiceAdmis
     Ok(pid)
 }
 
-fn open_validated_procfs_self() -> Result<File, BrokerAuthorityServiceAdmissionErrorV1> {
+fn open_validated_procfs_self() -> Result<File, ProtectedServiceAdmissionErrorV1> {
     let self_entry = File::open("/proc/self").map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot open /proc/self for pidfd fallback validation",
             error,
         )
     })?;
     let numeric_entry = File::open(format!("/proc/{}", std::process::id())).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "selected procfs mount has no numeric entry for the service getpid value",
             error,
@@ -940,21 +934,21 @@ fn open_validated_procfs_self() -> Result<File, BrokerAuthorityServiceAdmissionE
     require_procfs(&self_entry, "/proc/self")?;
     require_procfs(&numeric_entry, "numeric /proc self entry")?;
     let self_stat = rustix::fs::fstat(&self_entry).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot inspect /proc/self",
             io::Error::from(error),
         )
     })?;
     let numeric_stat = rustix::fs::fstat(&numeric_entry).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             "cannot inspect numeric /proc self entry",
             io::Error::from(error),
         )
     })?;
     if (self_stat.st_dev, self_stat.st_ino) != (numeric_stat.st_dev, numeric_stat.st_ino) {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             "/proc/self and /proc/<getpid> do not name the same process in the selected procfs mount",
         ));
@@ -965,16 +959,16 @@ fn open_validated_procfs_self() -> Result<File, BrokerAuthorityServiceAdmissionE
 fn require_procfs(
     file: &File,
     label: &'static str,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     let filesystem = rustix::fs::fstatfs(file).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientPidfd,
             format!("cannot inspect filesystem type for {label}"),
             io::Error::from(error),
         )
     })?;
     if filesystem.f_type != rustix::fs::PROC_SUPER_MAGIC {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientPidfd,
             format!("{label} is not backed by procfs"),
         ));
@@ -982,15 +976,13 @@ fn require_procfs(
     Ok(())
 }
 
-fn inspect_process_start_time_ticks(
-    pid: u32,
-) -> Result<u64, BrokerAuthorityServiceAdmissionErrorV1> {
+fn inspect_process_start_time_ticks(pid: u32) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
     // Validate that the selected procfs mount maps the service's numeric getpid consistently
     // before trusting a numeric client entry. This remains a trusted compatible-procfs
     // precondition; the check does not prove mount-namespace provenance.
     let _validated_self = open_validated_procfs_self()?;
     let mut record = File::open(format!("/proc/{pid}/stat")).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::InspectClientStartTime,
             "cannot open bounded client procfs stat identity",
             error,
@@ -1003,14 +995,14 @@ fn inspect_process_start_time_ticks(
         .take(MAX_PROC_STAT_BYTES + 1)
         .read_to_end(&mut contents)
         .map_err(|error| {
-            BrokerAuthorityServiceAdmissionErrorV1::io(
+            ProtectedServiceAdmissionErrorV1::io(
                 AdmissionErrorKindV1::InspectClientStartTime,
                 "cannot read bounded client procfs stat identity",
                 error,
             )
         })?;
     if contents.is_empty() || contents.len() as u64 > MAX_PROC_STAT_BYTES {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientStartTime,
             "client procfs stat identity is empty or exceeds 4096 bytes",
         ));
@@ -1021,12 +1013,12 @@ fn inspect_process_start_time_ticks(
 fn parse_process_start_time_ticks(
     contents: &[u8],
     expected_pid: u32,
-) -> Result<u64, BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
     let close = contents
         .iter()
         .rposition(|byte| *byte == b')')
         .ok_or_else(|| {
-            BrokerAuthorityServiceAdmissionErrorV1::new(
+            ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::InspectClientStartTime,
                 "client procfs stat identity has no command terminator",
             )
@@ -1035,13 +1027,13 @@ fn parse_process_start_time_ticks(
         .iter()
         .position(|byte| *byte == b' ')
         .ok_or_else(|| {
-            BrokerAuthorityServiceAdmissionErrorV1::new(
+            ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::InspectClientStartTime,
                 "client procfs stat identity has no PID terminator",
             )
         })?;
     if contents.get(first_space + 1) != Some(&b'(') || close <= first_space + 1 {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientStartTime,
             "client procfs stat identity has a malformed command field",
         ));
@@ -1051,7 +1043,7 @@ fn parse_process_start_time_ticks(
         || (pid_bytes.len() > 1 && pid_bytes.starts_with(b"0"))
         || !pid_bytes.iter().all(u8::is_ascii_digit)
     {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientStartTime,
             "client procfs stat identity has a noncanonical PID",
         ));
@@ -1060,7 +1052,7 @@ fn parse_process_start_time_ticks(
         .ok()
         .and_then(|value| value.parse::<u32>().ok());
     if recorded_pid != Some(expected_pid) {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientStartTime,
             "client procfs stat PID does not match the retained pidfd target",
         ));
@@ -1068,7 +1060,7 @@ fn parse_process_start_time_ticks(
     let mut fields = contents
         .get(close + 1..)
         .ok_or_else(|| {
-            BrokerAuthorityServiceAdmissionErrorV1::new(
+            ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::InspectClientStartTime,
                 "client procfs stat identity ended at its command field",
             )
@@ -1076,7 +1068,7 @@ fn parse_process_start_time_ticks(
         .split(u8::is_ascii_whitespace)
         .filter(|field| !field.is_empty());
     let start_time = fields.nth(19).ok_or_else(|| {
-        BrokerAuthorityServiceAdmissionErrorV1::new(
+        ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientStartTime,
             "client procfs stat identity has no start-time field",
         )
@@ -1085,7 +1077,7 @@ fn parse_process_start_time_ticks(
         || (start_time.len() > 1 && start_time.starts_with(b"0"))
         || !start_time.iter().all(u8::is_ascii_digit)
     {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::InspectClientStartTime,
             "client procfs stat identity has a noncanonical start time",
         ));
@@ -1095,7 +1087,7 @@ fn parse_process_start_time_ticks(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value != 0)
         .ok_or_else(|| {
-            BrokerAuthorityServiceAdmissionErrorV1::new(
+            ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::InspectClientStartTime,
                 "client procfs stat identity has an invalid start time",
             )
@@ -1106,11 +1098,11 @@ fn parse_process_start_time_ticks(
 fn require_client_start_time(
     actual: u64,
     expected: u64,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     if actual == expected {
         Ok(())
     } else {
-        Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientStartTimeChanged,
             "retained client process start time changed",
         ))
@@ -1120,9 +1112,9 @@ fn require_client_start_time(
 fn require_pidfd_target(
     actual_pid: u32,
     expected_pid: u32,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     if actual_pid != expected_pid {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientPidfdTargetMismatch,
             format!("client pidfd targets PID {actual_pid}, expected exact PID {expected_pid}"),
         ));
@@ -1130,21 +1122,21 @@ fn require_pidfd_target(
     Ok(())
 }
 
-fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     require_pidfd_not_pollable(pidfd)?;
     let options = rustix::process::WaitIdOptions::EXITED
         | rustix::process::WaitIdOptions::NOHANG
         | rustix::process::WaitIdOptions::NOWAIT;
     match rustix::process::waitid(rustix::process::WaitId::PidFd(pidfd.as_fd()), options) {
         Ok(Some(_)) => {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+            return Err(ProtectedServiceAdmissionErrorV1::new(
                 AdmissionErrorKindV1::ClientAlreadyDead,
                 "client pidfd identifies an exited waitable child",
             ));
         }
         Ok(None) | Err(rustix::io::Errno::CHILD) => {}
         Err(error) => {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::io(
+            return Err(ProtectedServiceAdmissionErrorV1::io(
                 AdmissionErrorKindV1::InspectClientPidfd,
                 "cannot perform non-reaping waitid liveness probe on client pidfd",
                 io::Error::from(error),
@@ -1154,9 +1146,7 @@ fn require_pidfd_live(pidfd: &OwnedFd) -> Result<(), BrokerAuthorityServiceAdmis
     require_pidfd_not_pollable(pidfd)
 }
 
-fn require_pidfd_not_pollable(
-    pidfd: &OwnedFd,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+fn require_pidfd_not_pollable(pidfd: &OwnedFd) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     let mut poll_descriptor = libc::pollfd {
         fd: pidfd.as_raw_fd(),
         events: libc::POLLIN,
@@ -1171,7 +1161,7 @@ fn require_pidfd_not_pollable(
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
-            return Err(BrokerAuthorityServiceAdmissionErrorV1::io(
+            return Err(ProtectedServiceAdmissionErrorV1::io(
                 AdmissionErrorKindV1::InspectClientPidfd,
                 "cannot poll client pidfd for liveness",
                 error,
@@ -1182,12 +1172,12 @@ fn require_pidfd_not_pollable(
         return Ok(());
     }
     if poll_descriptor.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::ClientAlreadyDead,
             "client pidfd reports process exit",
         ));
     }
-    Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+    Err(ProtectedServiceAdmissionErrorV1::new(
         AdmissionErrorKindV1::InspectClientPidfd,
         format!(
             "client pidfd returned unexpected poll events 0x{:x}",
@@ -1199,16 +1189,16 @@ fn require_pidfd_not_pollable(
 fn validate_root(
     root: &OwnedFd,
     service_uid: u32,
-) -> Result<ObjectIdentityV1, BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<ObjectIdentityV1, ProtectedServiceAdmissionErrorV1> {
     let identity = ObjectIdentityV1::inspect(root, AdmissionErrorKindV1::InspectRoot, "root")?;
     if !rustix::fs::FileType::from_raw_mode(identity.mode).is_dir() {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::RootNotDirectory,
             "supervisor-supplied root descriptor is not a directory",
         ));
     }
     if identity.uid != service_uid {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::RootOwner,
             format!(
                 "supervisor directory owner UID {} differs from service UID {service_uid}",
@@ -1217,7 +1207,7 @@ fn validate_root(
         ));
     }
     if identity.mode & PERMISSION_AND_SPECIAL_BITS != DIRECTORY_PERMISSIONS {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::RootMode,
             format!(
                 "supervisor directory mode is {:04o}, expected exactly 0700",
@@ -1226,7 +1216,7 @@ fn validate_root(
         ));
     }
     if identity.links == 0 {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::RootUnlinked,
             "supervisor directory has st_nlink zero and is no longer linked",
         ));
@@ -1236,33 +1226,33 @@ fn validate_root(
 
 fn validate_peer_shape(
     peer: &OwnedFd,
-) -> Result<ObjectIdentityV1, BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<ObjectIdentityV1, ProtectedServiceAdmissionErrorV1> {
     let identity = ObjectIdentityV1::inspect(peer, AdmissionErrorKindV1::InspectPeer, "peer")?;
     let domain = rustix::net::sockopt::socket_domain(peer).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::PeerDomain,
-            "retained broker peer is not a socket with an inspectable domain",
+            "retained service peer is not a socket with an inspectable domain",
             io::Error::from(error),
         )
     })?;
     if domain != AddressFamily::UNIX {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::PeerDomain,
-            "retained broker peer is not an AF_UNIX socket",
+            "retained service peer is not an AF_UNIX socket",
         ));
     }
 
     let socket_type = rustix::net::sockopt::socket_type(peer).map_err(|error| {
-        BrokerAuthorityServiceAdmissionErrorV1::io(
+        ProtectedServiceAdmissionErrorV1::io(
             AdmissionErrorKindV1::PeerSocketType,
-            "cannot inspect retained broker peer socket type",
+            "cannot inspect retained service peer socket type",
             io::Error::from(error),
         )
     })?;
     if socket_type != SocketType::SEQPACKET {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::PeerSocketType,
-            "retained broker peer is not SOCK_SEQPACKET",
+            "retained service peer is not SOCK_SEQPACKET",
         ));
     }
 
@@ -1281,9 +1271,9 @@ fn validate_peer_shape(
     let final_identity =
         ObjectIdentityV1::inspect(peer, AdmissionErrorKindV1::InspectPeer, "peer")?;
     if final_identity != identity {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::PeerIdentityChanged,
-            "retained broker peer identity changed while checking socket shape",
+            "retained service peer identity changed while checking socket shape",
         ));
     }
     Ok(final_identity)
@@ -1300,7 +1290,7 @@ fn require_unnamed_unix_address(
     side: UnixAddressSideV1,
     kind: AdmissionErrorKindV1,
     label: &'static str,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     let mut address = MaybeUninit::<libc::sockaddr_un>::zeroed();
     let mut length = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_un>())
         .expect("sockaddr_un length fits socklen_t");
@@ -1325,9 +1315,9 @@ fn require_unnamed_unix_address(
             UnixAddressSideV1::Local => kind,
             UnixAddressSideV1::Remote => AdmissionErrorKindV1::PeerNotConnected,
         };
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::io(
+        return Err(ProtectedServiceAdmissionErrorV1::io(
             error_kind,
-            format!("cannot inspect retained broker peer {label} address"),
+            format!("cannot inspect retained service peer {label} address"),
             io::Error::last_os_error(),
         ));
     }
@@ -1335,16 +1325,16 @@ fn require_unnamed_unix_address(
     // buffer began fully zeroed for any bytes the kernel did not write.
     let address = unsafe { address.assume_init() };
     if i32::from(address.sun_family) != libc::AF_UNIX {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             kind,
-            format!("retained broker peer {label} address is not AF_UNIX"),
+            format!("retained service peer {label} address is not AF_UNIX"),
         ));
     }
     let unnamed_length = std::mem::offset_of!(libc::sockaddr_un, sun_path);
     if usize::try_from(length).ok() != Some(unnamed_length) {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             kind,
-            format!("retained broker peer {label} address is named"),
+            format!("retained service peer {label} address is named"),
         ));
     }
     Ok(())
@@ -1353,11 +1343,11 @@ fn require_unnamed_unix_address(
 fn require_distinct_descriptors(
     root: ObjectIdentityV1,
     peer: ObjectIdentityV1,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     if root.object() == peer.object() {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::DuplicateDescriptors,
-            "supervisor root and broker peer resolve to the same object",
+            "supervisor root and service peer resolve to the same object",
         ));
     }
     Ok(())
@@ -1367,9 +1357,9 @@ fn require_distinct_pidfd_descriptor(
     root: ObjectIdentityV1,
     peer: ObjectIdentityV1,
     pidfd: ObjectIdentityV1,
-) -> Result<(), BrokerAuthorityServiceAdmissionErrorV1> {
+) -> Result<(), ProtectedServiceAdmissionErrorV1> {
     if pidfd.object() == root.object() || pidfd.object() == peer.object() {
-        return Err(BrokerAuthorityServiceAdmissionErrorV1::new(
+        return Err(ProtectedServiceAdmissionErrorV1::new(
             AdmissionErrorKindV1::DuplicateDescriptors,
             "client pidfd resolves to the same object as another retained service descriptor",
         ));
@@ -1554,8 +1544,8 @@ mod tests {
         root: OwnedFd,
         peer: OwnedFd,
         expected: ExpectedClientProcessIdentityV1,
-    ) -> Result<ProtectedBrokerServiceAdmissionV1, BrokerAuthorityServiceAdmissionErrorV1> {
-        ProtectedBrokerServiceAdmissionV1::admit(root, peer, live_identity(expected))
+    ) -> Result<ProtectedServiceAdmissionV1, ProtectedServiceAdmissionErrorV1> {
+        ProtectedServiceAdmissionV1::admit(root, peer, live_identity(expected))
     }
 
     fn sleeping_child() -> Child {
@@ -1586,7 +1576,7 @@ mod tests {
     fn non_authoritative_test_admission(
         root: OwnedFd,
         peer: OwnedFd,
-    ) -> ProtectedBrokerServiceAdmissionV1 {
+    ) -> ProtectedServiceAdmissionV1 {
         let credentials = PeerCredentialsV1::inspect(&peer).unwrap();
         let expected_client =
             ExpectedClientProcessIdentityV1::new(credentials.pid, credentials.uid, credentials.gid)
@@ -1598,7 +1588,7 @@ mod tests {
         root: OwnedFd,
         peer: OwnedFd,
         live_client: LiveClientPidfdIdentityV1,
-    ) -> ProtectedBrokerServiceAdmissionV1 {
+    ) -> ProtectedServiceAdmissionV1 {
         try_non_authoritative_test_admission_with_live(root, peer, live_client).unwrap()
     }
 
@@ -1606,8 +1596,8 @@ mod tests {
         root: OwnedFd,
         peer: OwnedFd,
         live_client: LiveClientPidfdIdentityV1,
-    ) -> Result<ProtectedBrokerServiceAdmissionV1, BrokerAuthorityServiceAdmissionErrorV1> {
-        ProtectedBrokerServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
+    ) -> Result<ProtectedServiceAdmissionV1, ProtectedServiceAdmissionErrorV1> {
+        ProtectedServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
             root,
             peer,
             live_client,
