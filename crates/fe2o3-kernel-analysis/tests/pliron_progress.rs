@@ -1,6 +1,6 @@
 use dialect_kernel::{
     BranchArgsOp, BranchOp, DIALECT_NAME, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexType, ReturnOp, register_dialect,
+    IndexLessThanBranchArgsOp, IndexType, InvocationIndexOp, ReturnOp, register_dialect,
 };
 use fe2o3_kernel_analysis::{
     KernelCheckStatusV1, PlironProgressFindingV1, run_pliron_progress_check_v1,
@@ -101,6 +101,137 @@ fn constant_loop(context: &mut Context, start: u64, bound: u64, step: u64) -> Fu
     function
 }
 
+#[derive(Clone, Copy)]
+enum MultiBlockCase {
+    Canonical,
+    MutatedForwarding,
+    ExternalIntermediateEntry,
+    MultipleHeaderEntries,
+    InvocationLatchUpdate,
+}
+
+fn multi_block_loop(
+    context: &mut Context,
+    static_bound: Option<u64>,
+    step_value: u64,
+    case: MultiBlockCase,
+) -> FuncOp {
+    let (function, arguments) = make_function(
+        context,
+        "multi_block_loop",
+        usize::from(static_bound.is_none()),
+    );
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (first, first_induction) = index_block(context, &function, "first");
+    let (second, second_induction) = index_block(context, &function, "second");
+    let (latch, latch_induction) = index_block(context, &function, "latch");
+    let exit = block(context, &function, "exit");
+    let start = IndexConstantOp::new(context, 0);
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let step = IndexConstantOp::new(context, step_value);
+    let bound_constant = static_bound.map(|bound| IndexConstantOp::new(context, bound));
+    let bound = bound_constant.as_ref().map_or_else(
+        || arguments.first().copied().expect("symbolic bound"),
+        |bound| bound.result(context),
+    );
+    let invocation = matches!(case, MultiBlockCase::InvocationLatchUpdate)
+        .then(|| InvocationIndexOp::new(context, 0, 8));
+
+    for operation in [
+        start.get_operation(),
+        zero.get_operation(),
+        one.get_operation(),
+        step.get_operation(),
+    ] {
+        operation.insert_at_back(entry, context);
+    }
+    if let Some(bound) = &bound_constant {
+        append(context, entry, bound);
+    }
+    if let Some(invocation) = &invocation {
+        append(context, entry, invocation);
+    }
+    if matches!(case, MultiBlockCase::MultipleHeaderEntries) {
+        let first_entry = block(context, &function, "first_entry");
+        let second_entry = block(context, &function, "second_entry");
+        let split = IndexLessThanBranchArgsOp::new(
+            context,
+            zero.result(context),
+            one.result(context),
+            vec![],
+            vec![],
+            first_entry,
+            second_entry,
+        );
+        let first_enter = BranchArgsOp::new(context, vec![start.result(context)], header);
+        let second_enter = BranchArgsOp::new(context, vec![start.result(context)], header);
+        append(context, entry, &split);
+        append(context, first_entry, &first_enter);
+        append(context, second_entry, &second_enter);
+    } else if matches!(case, MultiBlockCase::ExternalIntermediateEntry) {
+        let enter = IndexLessThanBranchArgsOp::new(
+            context,
+            zero.result(context),
+            one.result(context),
+            vec![start.result(context)],
+            vec![start.result(context)],
+            header,
+            second,
+        );
+        append(context, entry, &enter);
+    } else {
+        let enter = BranchArgsOp::new(context, vec![start.result(context)], header);
+        append(context, entry, &enter);
+    }
+
+    let condition = IndexLessThanBranchArgsOp::new(
+        context,
+        induction,
+        bound,
+        vec![induction],
+        vec![],
+        first,
+        exit,
+    );
+    append(context, header, &condition);
+
+    if matches!(case, MultiBlockCase::MutatedForwarding) {
+        let changed = IndexBinaryOp::new(
+            context,
+            IndexBinaryKindAttr::Add,
+            first_induction,
+            one.result(context),
+        );
+        let forward = BranchArgsOp::new(context, vec![changed.result(context)], second);
+        append(context, first, &changed);
+        append(context, first, &forward);
+    } else {
+        let forward = BranchArgsOp::new(context, vec![first_induction], second);
+        append(context, first, &forward);
+    }
+    let forward = BranchArgsOp::new(context, vec![second_induction], latch);
+    append(context, second, &forward);
+
+    let latch_base = invocation
+        .as_ref()
+        .map_or(latch_induction, |invocation| invocation.result(context));
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        latch_base,
+        step.result(context),
+    );
+    let repeat = BranchArgsOp::new(context, vec![next.result(context)], header);
+    let ret = ReturnOp::new(context);
+    append(context, latch, &next);
+    append(context, latch, &repeat);
+    append(context, exit, &ret);
+    verify_operation(function.get_operation(), context).unwrap();
+    function
+}
+
 #[test]
 fn canonical_unit_induction_proves_machine_finite_progress() {
     let context = &mut setup();
@@ -126,6 +257,72 @@ fn static_positive_nonunit_step_is_proved_only_when_its_update_cannot_overflow()
         report.findings(),
         [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
             if reason.contains("overflow")
+    ));
+}
+
+#[test]
+fn canonical_multiblock_recurrence_forwards_one_induction_value() {
+    let context = &mut setup();
+    let function = multi_block_loop(context, Some(64), 16, MultiBlockCase::Canonical);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(report.certificates().len(), 1);
+    assert_eq!(report.certificates()[0].step(), 16);
+}
+
+#[test]
+fn multiblock_symbolic_bound_is_supported_only_for_a_unit_step() {
+    let context = &mut setup();
+    let function = multi_block_loop(context, None, 1, MultiBlockCase::Canonical);
+    assert!(run_pliron_progress_check_v1(context, &function).is_clean());
+
+    let function = multi_block_loop(context, None, 16, MultiBlockCase::Canonical);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("symbolic bound") && reason.contains("no-wrap")
+    ));
+}
+
+#[test]
+fn multiblock_static_bound_must_cover_the_final_update_without_wrap() {
+    let context = &mut setup();
+    let function = multi_block_loop(context, Some(u64::MAX), 16, MultiBlockCase::Canonical);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("overflow")
+    ));
+}
+
+#[test]
+fn multiblock_recurrence_rejects_mutation_and_alternate_entry() {
+    for case in [
+        MultiBlockCase::MutatedForwarding,
+        MultiBlockCase::ExternalIntermediateEntry,
+        MultiBlockCase::InvocationLatchUpdate,
+    ] {
+        let context = &mut setup();
+        let function = multi_block_loop(context, Some(64), 1, case);
+        let report = run_pliron_progress_check_v1(context, &function);
+        assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    }
+}
+
+#[test]
+fn multiblock_two_external_header_entries_are_not_single_entry() {
+    let context = &mut setup();
+    let function = multi_block_loop(context, Some(64), 1, MultiBlockCase::MultipleHeaderEntries);
+    let report = run_pliron_progress_check_v1(context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Incomplete);
+    assert!(matches!(
+        report.findings(),
+        [PlironProgressFindingV1::ProgressIncomplete { reason, .. }]
+            if reason.contains("exactly one external entry")
     ));
 }
 

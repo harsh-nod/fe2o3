@@ -4,7 +4,10 @@
 //! control flow is rejected when nontermination is structural, or reported as
 //! incomplete when a ranking function would require a stronger solver.
 
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use dialect_kernel::{
     BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
@@ -200,6 +203,7 @@ pub fn run_pliron_progress_check_v1(
     }
 
     let reachable = reachable_blocks(&edges);
+    let predecessors = predecessor_lists(&edges);
     let definitely_reachable = definitely_reachable_blocks(context, &blocks, &block_indices);
     let mut findings = Vec::new();
     let mut certificates = Vec::new();
@@ -233,6 +237,7 @@ pub fn run_pliron_progress_check_v1(
             &blocks,
             &block_indices,
             &operation_blocks,
+            &predecessors,
             &component,
         ) {
             CanonicalLoopResultV1::Proved(certificate) => certificates.push(certificate),
@@ -276,13 +281,10 @@ fn canonical_positive_induction_loop(
     blocks: &[Ptr<BasicBlock>],
     block_indices: &HashMap<Ptr<BasicBlock>, usize>,
     operation_blocks: &HashMap<Ptr<Operation>, usize>,
+    predecessors: &[Vec<usize>],
     component: &[usize],
 ) -> CanonicalLoopResultV1 {
-    if component.len() != 2 {
-        return CanonicalLoopResultV1::Incomplete(
-            "only a two-block canonical induction loop is currently modeled",
-        );
-    }
+    let component_members = component.iter().copied().collect::<HashSet<_>>();
     for header_index in component {
         let header = blocks[*header_index];
         let header_block = header.deref(context);
@@ -299,68 +301,126 @@ fn canonical_positive_induction_loop(
         {
             continue;
         }
-        let raw = branch.get_operation().deref(context);
-        let Some(body) = raw.successors().next() else {
-            continue;
-        };
-        let Some(exit) = raw.successors().nth(1) else {
+        let successors = branch
+            .get_operation()
+            .deref(context)
+            .successors()
+            .collect::<Vec<_>>();
+        let [body, exit] = successors.as_slice() else {
             continue;
         };
         let (Some(body_index), Some(exit_index)) = (
-            block_indices.get(&body).copied(),
-            block_indices.get(&exit).copied(),
+            block_indices.get(body).copied(),
+            block_indices.get(exit).copied(),
         ) else {
             continue;
         };
-        if !component.contains(&body_index) || component.contains(&exit_index) {
+        if !component_members.contains(&body_index) || component_members.contains(&exit_index) {
             continue;
         }
-        let body_predecessors = predecessor_indices(context, blocks, block_indices, body);
-        if body_predecessors.as_slice() != [*header_index] {
+        let internal_header_predecessors = predecessors[*header_index]
+            .iter()
+            .copied()
+            .filter(|predecessor| component_members.contains(predecessor))
+            .collect::<Vec<_>>();
+        let external_header_predecessors = predecessors[*header_index]
+            .iter()
+            .copied()
+            .filter(|predecessor| !component_members.contains(predecessor))
+            .collect::<Vec<_>>();
+        if internal_header_predecessors.len() != 1 || external_header_predecessors.len() != 1 {
             return CanonicalLoopResultV1::Incomplete(
-                "the loop body has a predecessor other than its guarded header",
-            );
-        }
-        let header_predecessors = predecessor_indices(context, blocks, block_indices, header);
-        if !header_predecessors.contains(&body_index)
-            || !header_predecessors
-                .iter()
-                .any(|block| !component.contains(block))
-        {
-            return CanonicalLoopResultV1::Incomplete(
-                "the loop header does not have exactly the canonical external entry and body recurrence",
+                "the loop header does not have exactly one external entry and one internal recurrence",
             );
         }
         if branch
             .rhs(context)
             .defining_op()
             .and_then(|definition| operation_blocks.get(&definition))
-            .is_some_and(|block| component.contains(block))
+            .is_some_and(|block| component_members.contains(block))
         {
             return CanonicalLoopResultV1::Incomplete(
                 "the loop bound depends on a value defined inside the cycle",
             );
         }
-        let body_block = body.deref(context);
-        if body_block.get_num_arguments() != 1 {
-            continue;
-        }
-        let Some(backedge) = body_block.get_terminator(context) else {
-            continue;
+        let mut visited = HashSet::new();
+        let mut previous_index = *header_index;
+        let mut current_index = body_index;
+        let (latch_index, latch_induction, next) = loop {
+            if !component_members.contains(&current_index) || !visited.insert(current_index) {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the guarded loop body does not form one acyclic forwarding path to the latch",
+                );
+            }
+            if predecessors[current_index].as_slice() != [previous_index] {
+                return CanonicalLoopResultV1::Incomplete(
+                    "the loop body has a predecessor other than the preceding canonical loop block",
+                );
+            }
+            let current = blocks[current_index];
+            let current_block = current.deref(context);
+            if current_block.get_num_arguments() != 1 {
+                return CanonicalLoopResultV1::Incomplete(
+                    "every loop forwarding block must carry exactly one induction argument",
+                );
+            }
+            let current_induction = current_block.get_argument(0);
+            let Some(terminator) = current_block.get_terminator(context) else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "a loop forwarding block has no terminator",
+                );
+            };
+            let terminator = Operation::get_op_dyn(terminator, context);
+            let Some(forward) = terminator.downcast_ref::<BranchArgsOp>() else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "an intermediate loop block does not have one unconditional SSA forwarding edge",
+                );
+            };
+            let successors = forward
+                .get_operation()
+                .deref(context)
+                .successors()
+                .collect::<Vec<_>>();
+            let [successor] = successors.as_slice() else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "an intermediate loop block does not have exactly one successor",
+                );
+            };
+            let Some(successor_index) = block_indices.get(successor).copied() else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "an intermediate loop edge leaves the kernel function",
+                );
+            };
+            let arguments = forward.arguments(context);
+            let [forwarded] = arguments.as_slice() else {
+                return CanonicalLoopResultV1::Incomplete(
+                    "an intermediate loop edge does not carry exactly one induction value",
+                );
+            };
+            if successor_index == *header_index {
+                break (current_index, current_induction, *forwarded);
+            }
+            if !component_members.contains(&successor_index) {
+                return CanonicalLoopResultV1::Incomplete(
+                    "an intermediate loop block has an exit outside the guarded header",
+                );
+            }
+            if *forwarded != current_induction {
+                return CanonicalLoopResultV1::Incomplete(
+                    "an intermediate loop edge does not forward the induction value unchanged",
+                );
+            }
+            previous_index = current_index;
+            current_index = successor_index;
         };
-        let backedge = Operation::get_op_dyn(backedge, context);
-        let Some(backedge) = backedge.downcast_ref::<BranchArgsOp>() else {
-            continue;
-        };
-        if backedge.get_operation().deref(context).successors().next() != Some(header) {
-            continue;
+        if visited.len() != component.len().saturating_sub(1)
+            || internal_header_predecessors.as_slice() != [latch_index]
+        {
+            return CanonicalLoopResultV1::Incomplete(
+                "the cycle contains blocks outside the unique guarded induction path",
+            );
         }
-        let arguments = backedge.arguments(context);
-        if arguments.len() != 1 {
-            continue;
-        }
-        let next = arguments[0];
-        if next == body_block.get_argument(0) {
+        if next == latch_induction {
             return zero_step_result(
                 context,
                 blocks,
@@ -382,7 +442,7 @@ fn canonical_positive_induction_loop(
             );
         };
         if increment.kind(context) != Some(IndexBinaryKindAttr::Add)
-            || increment.lhs(context) != body_block.get_argument(0)
+            || increment.lhs(context) != latch_induction
         {
             return CanonicalLoopResultV1::Incomplete("the induction update is not `i + constant`");
         }
@@ -433,25 +493,13 @@ fn canonical_positive_induction_loop(
     )
 }
 
-fn predecessor_indices(
-    context: &Context,
-    blocks: &[Ptr<BasicBlock>],
-    block_indices: &HashMap<Ptr<BasicBlock>, usize>,
-    target: Ptr<BasicBlock>,
-) -> Vec<usize> {
-    let mut predecessors = blocks
-        .iter()
-        .copied()
-        .filter_map(|block| {
-            let terminator = block.deref(context).get_terminator(context)?;
-            terminator
-                .deref(context)
-                .successors()
-                .any(|successor| successor == target)
-                .then(|| block_indices[&block])
-        })
-        .collect::<Vec<_>>();
-    predecessors.sort_unstable();
+fn predecessor_lists(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut predecessors = vec![Vec::new(); edges.len()];
+    for (source, successors) in edges.iter().enumerate() {
+        for successor in successors {
+            predecessors[*successor].push(source);
+        }
+    }
     predecessors
 }
 
