@@ -108,6 +108,34 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         blocked.stderr,
     );
 
+    let blocked_multi_lane = run_feature_extraction(&ScratchTarget::new(), "blocked_multi_lane");
+    assert!(
+        blocked_multi_lane.status.success()
+            && blocked_multi_lane
+                .stderr
+                .contains("all mandatory kernel checks clean true")
+            && blocked_multi_lane
+                .stderr
+                .contains("kernel.index_constant 192")
+            && blocked_multi_lane
+                .stderr
+                .contains("kernel.index_binary Add")
+            && blocked_multi_lane.stderr.contains("kernel.access Write"),
+        "bounded multi-lane blocked access did not pass production extraction:\n{}",
+        blocked_multi_lane.stderr,
+    );
+
+    let dynamic_multi_lane =
+        run_feature_extraction(&ScratchTarget::new(), "blocked_multi_lane_dynamic_grid");
+    assert!(
+        !dynamic_multi_lane.status.success()
+            && dynamic_multi_lane.stderr.contains(
+                "a multi-lane blocked mapping requires an authenticated rank-1 launch extent"
+            ),
+        "dynamic-grid multi-lane blocked access did not fail closed:\n{}",
+        dynamic_multi_lane.stderr,
+    );
+
     let oob = run_extraction(&ScratchTarget::new(), true);
     assert!(
         !oob.status.success(),

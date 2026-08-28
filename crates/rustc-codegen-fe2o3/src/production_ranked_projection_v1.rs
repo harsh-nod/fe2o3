@@ -168,6 +168,7 @@ enum CapabilityEdgeKindV1 {
     },
     CheckedBlock {
         mapping: SemanticDisjointIndexSpaceV1,
+        lanes_per_block: u64,
         elements_per_lane: u64,
         availability: SemanticOptionAvailabilityV1,
     },
@@ -964,6 +965,7 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         semantic.callables(),
         semantic.types(),
         function,
+        bounded_linear_launch_extent_v1(source_launch),
         &constants,
         &mut entry_operations,
         &mut next_value,
@@ -4204,6 +4206,7 @@ fn project_intrinsic_contracts(
     callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
+    linear_launch_upper_bound: Option<u64>,
     constants: &[Option<u64>],
     operations: &mut Vec<ProductionRankedOperationV1>,
     next_value: &mut u32,
@@ -4399,9 +4402,17 @@ fn project_intrinsic_contracts(
                 elements_per_lane,
                 ..
             } => {
-                if *lanes_per_block != 1 {
+                if *lanes_per_block == 0 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a malformed blocked mapping reached ranked projection",
+                    ));
+                }
+                if *lanes_per_block != 1
+                    && linear_launch_upper_bound
+                        .is_none_or(|upper_bound| upper_bound > *lanes_per_block)
+                {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a blocked mapping with more than one lane before quotient facts are available",
+                        "a multi-lane blocked mapping requires an authenticated rank-1 launch extent no larger than its lane block",
                     ));
                 }
                 let expected = SemanticDisjointIndexSpaceV1::BlockedIndex1d {
@@ -4424,6 +4435,7 @@ fn project_intrinsic_contracts(
                 )?;
                 CapabilityEdgeKindV1::CheckedBlock {
                     mapping: expected,
+                    lanes_per_block: *lanes_per_block,
                     elements_per_lane: *elements_per_lane,
                     availability,
                 }
@@ -4796,29 +4808,41 @@ fn project_intrinsic_contracts(
                 }
                 CapabilityEdgeKindV1::CheckedBlock {
                     mapping,
+                    lanes_per_block,
                     elements_per_lane,
                     availability,
                 } => {
-                    let maximum_raw = (u64::MAX - (elements_per_lane - 1)) / elements_per_lane;
-                    reserve_operation(operations)?;
-                    let upper = next_value_id(next_value)?;
-                    operations.push(ProductionRankedOperationV1::IndexConstant {
-                        result: upper,
-                        value: maximum_raw + 1,
-                    });
-                    push_ranked_ir(
-                        ranked_ir,
-                        &format!(
-                            "  %{} = kernel.index_constant {}\n",
-                            upper.get(),
-                            maximum_raw + 1,
-                        ),
-                    )?;
-                    ProjectedDisjointIndexV1 {
-                        mapping,
-                        precondition: Some((input.value, ProductionRankedValueV1::Local(upper))),
-                        availability: Some(CapabilityAvailabilityV1::Option(availability)),
-                        ..input
+                    if lanes_per_block == 1 {
+                        let maximum_raw = (u64::MAX - (elements_per_lane - 1)) / elements_per_lane;
+                        reserve_operation(operations)?;
+                        let upper = next_value_id(next_value)?;
+                        operations.push(ProductionRankedOperationV1::IndexConstant {
+                            result: upper,
+                            value: maximum_raw + 1,
+                        });
+                        push_ranked_ir(
+                            ranked_ir,
+                            &format!(
+                                "  %{} = kernel.index_constant {}\n",
+                                upper.get(),
+                                maximum_raw + 1,
+                            ),
+                        )?;
+                        ProjectedDisjointIndexV1 {
+                            mapping,
+                            precondition: Some((
+                                input.value,
+                                ProductionRankedValueV1::Local(upper),
+                            )),
+                            availability: Some(CapabilityAvailabilityV1::Option(availability)),
+                            ..input
+                        }
+                    } else {
+                        ProjectedDisjointIndexV1 {
+                            mapping,
+                            availability: Some(CapabilityAvailabilityV1::Option(availability)),
+                            ..input
+                        }
                     }
                 }
                 CapabilityEdgeKindV1::CheckedTiled2d {
@@ -5085,9 +5109,17 @@ fn project_intrinsic_contracts(
                         "blocked accessor mapping identity changed",
                     ));
                 }
-                if *lanes_per_block != 1 {
+                if *lanes_per_block == 0 {
+                    return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                        "a malformed blocked mapping reached ranked projection",
+                    ));
+                }
+                if *lanes_per_block != 1
+                    && linear_launch_upper_bound
+                        .is_none_or(|upper_bound| upper_bound > *lanes_per_block)
+                {
                     return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                        "a blocked mapping with more than one lane before quotient facts are available",
+                        "a multi-lane blocked accessor requires an authenticated rank-1 launch extent no larger than its lane block",
                     ));
                 }
                 let component = call
@@ -5102,47 +5134,63 @@ fn project_intrinsic_contracts(
                         "a blocked component is outside the authenticated elements-per-lane bound",
                     ));
                 }
-                reserve_operation(operations)?;
-                let elements = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::IndexConstant {
-                    result: elements,
-                    value: *elements_per_lane,
-                });
-                reserve_operation(operations)?;
-                let block_base = next_value_id(next_value)?;
-                operations.push(ProductionRankedOperationV1::IndexBinary {
-                    result: block_base,
-                    kind: IndexBinaryKindAttr::Multiply,
-                    lhs: projected.value,
-                    rhs: ProductionRankedValueV1::Local(elements),
-                });
+                let (base, offset) = if *lanes_per_block == 1 {
+                    reserve_operation(operations)?;
+                    let elements = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexConstant {
+                        result: elements,
+                        value: *elements_per_lane,
+                    });
+                    reserve_operation(operations)?;
+                    let block_base = next_value_id(next_value)?;
+                    operations.push(ProductionRankedOperationV1::IndexBinary {
+                        result: block_base,
+                        kind: IndexBinaryKindAttr::Multiply,
+                        lhs: projected.value,
+                        rhs: ProductionRankedValueV1::Local(elements),
+                    });
+                    push_ranked_ir(
+                        ranked_ir,
+                        &format!(
+                            "  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Multiply {}, %{}\n",
+                            elements.get(),
+                            elements_per_lane,
+                            block_base.get(),
+                            ranked_value_text_v1(projected.value),
+                            elements.get(),
+                        ),
+                    )?;
+                    (ProductionRankedValueV1::Local(block_base), component)
+                } else {
+                    let component_offset = component.checked_mul(*lanes_per_block).ok_or(
+                        ProductionRankedProjectionErrorV1::Unsupported(
+                            "a blocked component offset overflows u64",
+                        ),
+                    )?;
+                    (projected.value, component_offset)
+                };
                 reserve_operation(operations)?;
                 let component_value = next_value_id(next_value)?;
                 operations.push(ProductionRankedOperationV1::IndexConstant {
                     result: component_value,
-                    value: component,
+                    value: offset,
                 });
                 reserve_operation(operations)?;
                 let index = next_value_id(next_value)?;
                 operations.push(ProductionRankedOperationV1::IndexBinary {
                     result: index,
                     kind: IndexBinaryKindAttr::Add,
-                    lhs: ProductionRankedValueV1::Local(block_base),
+                    lhs: base,
                     rhs: ProductionRankedValueV1::Local(component_value),
                 });
                 push_ranked_ir(
                     ranked_ir,
                     &format!(
-                        "  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Multiply {}, %{}\n  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Add %{}, %{}\n",
-                        elements.get(),
-                        elements_per_lane,
-                        block_base.get(),
-                        ranked_value_text_v1(projected.value),
-                        elements.get(),
+                        "  %{} = kernel.index_constant {}\n  %{} = kernel.index_binary Add {}, %{}\n",
                         component_value.get(),
-                        component,
+                        offset,
                         index.get(),
-                        block_base.get(),
+                        ranked_value_text_v1(base),
                         component_value.get(),
                     ),
                 )?;
@@ -9519,6 +9567,16 @@ fn source_execution_layout_v1(
         subgroup_size,
         full_physical_workgroups: true,
     })
+}
+
+fn bounded_linear_launch_extent_v1(source_launch: &LaunchContract) -> Option<u64> {
+    if source_launch.rank() != 1 {
+        return None;
+    }
+    let BlockSize::Exact(block) = source_launch.block_size() else {
+        return None;
+    };
+    u64::from(block.x()).checked_mul(u64::from(source_launch.max_grid().x()))
 }
 
 fn checked_global_extent_v1(
