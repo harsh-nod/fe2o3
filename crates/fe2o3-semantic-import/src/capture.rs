@@ -184,7 +184,9 @@ impl IdentityFactV1 {
         match (self.origin, self.value, self.unavailable_reason) {
             (TruthOriginV1::Unavailable, None, Some(_)) => Ok(()),
             (TruthOriginV1::Unavailable, _, _) => Err(CaptureErrorV1::InvalidUnavailableFact),
-            (_, Some(value), None) if value.format_version != 0 && value.canonical_len != 0 => {
+            (TruthOriginV1::Declared, Some(value), None)
+                if value.format_version != 0 && value.canonical_len != 0 =>
+            {
                 Ok(())
             }
             _ => Err(CaptureErrorV1::InvalidAvailableFact),
@@ -377,9 +379,9 @@ impl SemanticCaptureV1 {
         {
             return Err(CaptureErrorV1::InvalidDeviceIdentity);
         }
-        let mut prior_ordinal = None;
+        let mut prior_selector: Option<(u32, u32)> = None;
         let mut dispatch_ids = BTreeSet::new();
-        for dispatch in &self.dispatches {
+        for (expected_ordinal, dispatch) in (0_u64..).zip(&self.dispatches) {
             if dispatch.run_identity != run.identity
                 || !device_ids.contains(&dispatch.device_identity)
             {
@@ -396,11 +398,27 @@ impl SemanticCaptureV1 {
                 return Err(CaptureErrorV1::StaleDispatchIdentity);
             }
             if !dispatch_ids.insert(dispatch.identity)
-                || prior_ordinal.is_some_and(|prior| prior >= dispatch.source_record_ordinal)
+                || dispatch.source_record_ordinal != expected_ordinal
             {
                 return Err(CaptureErrorV1::NonCanonicalDispatchOrder);
             }
-            prior_ordinal = Some(dispatch.source_record_ordinal);
+            if dispatch.dispatch_index != 0 && prior_selector.is_none() {
+                return Err(CaptureErrorV1::NonCanonicalSourceSelector);
+            }
+            if let Some((prior_process, prior_dispatch)) = prior_selector {
+                let valid = if dispatch.process_index == prior_process {
+                    dispatch.dispatch_index
+                        == prior_dispatch
+                            .checked_add(1)
+                            .ok_or(CaptureErrorV1::NonCanonicalSourceSelector)?
+                } else {
+                    dispatch.process_index > prior_process && dispatch.dispatch_index == 0
+                };
+                if !valid {
+                    return Err(CaptureErrorV1::NonCanonicalSourceSelector);
+                }
+            }
+            prior_selector = Some((dispatch.process_index, dispatch.dispatch_index));
             if dispatch.start_timestamp > dispatch.end_timestamp
                 || dispatch.end_timestamp - dispatch.start_timestamp != dispatch.duration_ticks
             {
@@ -519,6 +537,7 @@ pub enum CaptureErrorV1 {
     StaleDispatchIdentity,
     StaleReference,
     NonCanonicalDispatchOrder,
+    NonCanonicalSourceSelector,
     InvalidTiming,
     InvalidKernelIrClaim,
     InvalidUnavailableFact,

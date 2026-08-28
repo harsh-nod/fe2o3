@@ -132,6 +132,65 @@ fn capture_rejects_noncanonical_malformed_and_stale_documents() {
 }
 
 #[test]
+fn capture_rejects_provenance_upgrades_and_noncanonical_source_selectors() {
+    let capture =
+        import_rocprofv3_capture_v1(&source(), binding(), ImportLimitsV1::default()).unwrap();
+    for origin in [
+        TruthOriginV1::Proved,
+        TruthOriginV1::Observed,
+        TruthOriginV1::Inferred,
+    ] {
+        let mut hostile = capture.clone();
+        hostile.dispatches[0].artifact.origin = origin;
+        assert!(matches!(
+            decode_capture_v1(&serde_json::to_vec(&hostile).unwrap()),
+            Err(CaptureErrorV1::InvalidAvailableFact)
+        ));
+    }
+    let mut unavailable_with_value = capture.clone();
+    unavailable_with_value.dispatches[0].artifact.origin = TruthOriginV1::Unavailable;
+    unavailable_with_value.dispatches[0]
+        .artifact
+        .unavailable_reason = Some(CaptureUnavailableReasonV1::NotProvided);
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&unavailable_with_value).unwrap()),
+        Err(CaptureErrorV1::InvalidUnavailableFact)
+    ));
+    let mut declared_without_value = capture.clone();
+    declared_without_value.dispatches[0].artifact.value = None;
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&declared_without_value).unwrap()),
+        Err(CaptureErrorV1::InvalidAvailableFact)
+    ));
+
+    let mut skipped_ordinal = capture.clone();
+    skipped_ordinal.dispatches[1].source_record_ordinal = 9;
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&skipped_ordinal).unwrap()),
+        Err(CaptureErrorV1::StaleDispatchIdentity) | Err(CaptureErrorV1::NonCanonicalDispatchOrder)
+    ));
+    let mut reordered = capture.clone();
+    reordered.dispatches.swap(0, 1);
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&reordered).unwrap()),
+        Err(CaptureErrorV1::NonCanonicalDispatchOrder)
+    ));
+    let mut rewritten_selector = capture.clone();
+    rewritten_selector.dispatches[1].dispatch_index = 7;
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&rewritten_selector).unwrap()),
+        Err(CaptureErrorV1::NonCanonicalSourceSelector)
+    ));
+    let mut regressed_process = capture.clone();
+    regressed_process.dispatches[2].process_index = 0;
+    regressed_process.dispatches[2].dispatch_index = 0;
+    assert!(matches!(
+        decode_capture_v1(&serde_json::to_vec(&regressed_process).unwrap()),
+        Err(CaptureErrorV1::NonCanonicalSourceSelector)
+    ));
+}
+
+#[test]
 fn capture_enforces_source_and_container_bounds_before_use() {
     let source_without_agent = br#"{"rocprofiler-sdk-tool":[{"buffer_records":{"kernel_dispatch":[{"start_timestamp":1,"end_timestamp":2,"dispatch_info":{"workgroup_size":{"x":1,"y":1,"z":1},"grid_size":{"x":1,"y":1,"z":1}}}]}}]}"#;
     assert!(matches!(
