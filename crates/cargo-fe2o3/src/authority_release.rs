@@ -22,6 +22,8 @@ use std::process::{Command, ExitCode, ExitStatus};
 use std::time::Duration;
 
 use fe2o3_build_authority::CompilerClosureV2;
+use fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1;
+use fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1;
 use sha2::{Digest, Sha256};
 
 use crate::pinned_executable::PinnedExecutable;
@@ -35,8 +37,9 @@ const CONTRACT_FD: RawFd = 187;
 const CONTROL_FD: RawFd = 188;
 const LAUNCHER_IMAGE_FD: RawFd = 189;
 const CWD_FD: RawFd = 190;
-const CONTRACT_MAGIC: &[u8; 8] = b"F2AURL2\0";
-const CONTRACT_VERSION: u16 = 2;
+const CLIENT_PROFILE_FD: RawFd = 203;
+const CONTRACT_MAGIC: &[u8; 8] = b"F2AURL3\0";
+const CONTRACT_VERSION: u16 = 3;
 const CONTRACT_HEADER_BYTES: usize = 24;
 const CONTRACT_IDENTITY_BYTES: usize = 32;
 const MAX_CONTRACT_BYTES: usize = 2 * 1024 * 1024;
@@ -49,12 +52,12 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 // This window ends before the launcher grants the fresh attempt; the grant/accept exchange keeps
 // the shorter handshake deadline below.
 const CHILD_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const CONTRACT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V2\0";
-const GRANT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V2\0";
-const ACCEPT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V2\0";
-const READY_MAGIC: &[u8; 8] = b"F2AURDY2";
-const GRANT_MAGIC: &[u8; 8] = b"F2AUGRT2";
-const ACCEPT_MAGIC: &[u8; 8] = b"F2AUACC2";
+const CONTRACT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V3\0";
+const GRANT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V3\0";
+const ACCEPT_DOMAIN: &[u8] = b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V3\0";
+const READY_MAGIC: &[u8; 8] = b"F2AURDY3";
+const GRANT_MAGIC: &[u8; 8] = b"F2AUGRT3";
+const ACCEPT_MAGIC: &[u8; 8] = b"F2AUACC3";
 const READY_BYTES: usize = 8 + 32 + 32 + 4 + 8;
 const GRANT_BYTES: usize = 8 + 32 + 32;
 const ACCEPT_BYTES: usize = 8 + 32;
@@ -220,8 +223,9 @@ struct ReleaseContract {
     launcher: ImageIdentity,
     child: ImageIdentity,
     cwd: ObjectIdentity,
-    descriptors: [ObjectIdentity; 7],
+    descriptors: [ObjectIdentity; 8],
     compiler: CompilerClosureObservation,
+    compiler_execution_profile_identity: [u8; 32],
     argv: Vec<Vec<u8>>,
     environment: Vec<(Vec<u8>, Vec<u8>)>,
 }
@@ -234,8 +238,9 @@ struct ChildObservation {
     launcher: ImageIdentity,
     child: ImageIdentity,
     cwd: ObjectIdentity,
-    descriptors: [ObjectIdentity; 7],
+    descriptors: [ObjectIdentity; 8],
     compiler: CompilerClosureObservation,
+    compiler_execution_profile_identity: [u8; 32],
     argv: Vec<Vec<u8>>,
     environment: Vec<(Vec<u8>, Vec<u8>)>,
 }
@@ -256,6 +261,11 @@ impl ReleaseContract {
             descriptor.encode(&mut body);
         }
         self.compiler.encode(&mut body);
+        require_nonzero(
+            self.compiler_execution_profile_identity,
+            "compiler-execution client profile",
+        )?;
+        body.extend_from_slice(&self.compiler_execution_profile_identity);
         encode_fields(&mut body, &self.argv)?;
         body.extend_from_slice(
             &u32::try_from(self.environment.len())
@@ -332,12 +342,17 @@ impl ReleaseContract {
         let launcher = ImageIdentity::decode(&mut decoder)?;
         let child = ImageIdentity::decode(&mut decoder)?;
         let cwd = ObjectIdentity::decode(&mut decoder)?;
-        let mut descriptors = [cwd; 7];
+        let mut descriptors = [cwd; 8];
         for descriptor in &mut descriptors {
             *descriptor = ObjectIdentity::decode(&mut decoder)?;
         }
         let compiler = CompilerClosureObservation::decode(&mut decoder)?;
         compiler.validate_child_image(child)?;
+        let compiler_execution_profile_identity = decoder.array()?;
+        require_nonzero(
+            compiler_execution_profile_identity,
+            "compiler-execution client profile",
+        )?;
         let argv = decoder.fields(MAX_ARGUMENTS)?;
         let environment_count = usize::try_from(decoder.u32()?)
             .map_err(|_| "release environment count is not representable".to_owned())?;
@@ -361,6 +376,7 @@ impl ReleaseContract {
                 cwd,
                 descriptors,
                 compiler,
+                compiler_execution_profile_identity,
                 argv,
                 environment,
             },
@@ -373,6 +389,7 @@ pub(crate) struct ProtectedReleaseAdmission {
     attempt: [u8; 32],
     contract_identity: [u8; 32],
     compiler_closure: CompilerClosureV2,
+    compiler_execution_profile: CompilerExecutionClientProfileCapabilityV1,
     control: UnixStream,
     child_image: File,
 }
@@ -388,6 +405,16 @@ impl ProtectedReleaseAdmission {
 
     pub(crate) const fn compiler_closure(&self) -> CompilerClosureV2 {
         self.compiler_closure
+    }
+
+    pub(crate) const fn compiler_execution_profile(&self) -> &CompilerExecutionClientProfileV1 {
+        self.compiler_execution_profile.profile()
+    }
+
+    pub(crate) const fn compiler_execution_profile_capability(
+        &self,
+    ) -> &CompilerExecutionClientProfileCapabilityV1 {
+        &self.compiler_execution_profile
     }
 
     pub(crate) fn configure_descendant(&self, command: &mut Command) {
@@ -484,6 +511,15 @@ pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
 
 fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
     reject_reserved_descriptors(&[0, 1, 2])?;
+    let compiler_execution_profile =
+        CompilerExecutionClientProfileCapabilityV1::from_production_profile().map_err(|error| {
+            format!("cannot admit the fixed compiler-execution client profile: {error}")
+        })?;
+    let compiler_execution_profile_file = compiler_execution_profile
+        .try_clone_for_transfer()
+        .map_err(|error| format!("cannot retain compiler-execution client profile: {error}"))?;
+    let compiler_execution_profile_identity =
+        *compiler_execution_profile.profile().identity().as_bytes();
     let compiler = observe_compiler_closure()?;
     let environment = current_environment()?;
     let argv = planned_child_argv(args)?;
@@ -550,6 +586,9 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         child_control_object,
         launcher_object,
         cwd,
+        ObjectIdentity::from_metadata(&compiler_execution_profile_file.metadata().map_err(
+            |error| format!("cannot inspect compiler-execution client profile: {error}"),
+        )?),
     ];
     let mut contract = ReleaseContract {
         attempt,
@@ -561,6 +600,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         cwd,
         descriptors,
         compiler,
+        compiler_execution_profile_identity,
         argv,
         environment: environment_bytes(&environment),
     };
@@ -587,10 +627,13 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
         .envs(environment.iter().cloned());
     install_child_boundary(
         command.as_command_mut(),
-        &contract_file,
-        &child_control,
-        &launcher_file,
-        &cwd_file,
+        ReleaseChildBoundarySources {
+            contract: &contract_file,
+            control: &child_control,
+            launcher: &launcher_file,
+            cwd: &cwd_file,
+            client_profile: &compiler_execution_profile_file,
+        },
         &contract.descriptors[3..],
         contract.parent_pid,
     )?;
@@ -621,7 +664,7 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
 fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
     let encoded = read_sealed_contract(CONTRACT_FD)?;
     let (contract, contract_identity) = ReleaseContract::decode(&encoded)?;
-    let child_image = validate_child_state(&contract, args)?;
+    let (child_image, compiler_execution_profile) = validate_child_state(&contract, args)?;
     let mut control = take_control_socket(CONTROL_FD)?;
     configure_timeouts(&control)?;
     authenticate_parent(&contract, &control)?;
@@ -662,6 +705,7 @@ fn admit_child(args: &[OsString]) -> Result<ProtectedReleaseAdmission, String> {
         attempt: contract.attempt,
         contract_identity,
         compiler_closure: contract.compiler.closure,
+        compiler_execution_profile,
         control,
         child_image,
     })
@@ -714,7 +758,10 @@ fn parent_handshake(
     Ok(())
 }
 
-fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result<File, String> {
+fn validate_child_state(
+    contract: &ReleaseContract,
+    args: &[OsString],
+) -> Result<(File, CompilerExecutionClientProfileCapabilityV1), String> {
     validate_release_environment()?;
     verify_parent_death_signal()?;
     let parent_pid = u32::try_from(unsafe { libc::getppid() })
@@ -724,7 +771,16 @@ fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result
     let cwd = ObjectIdentity::from_metadata(
         &fs::metadata(".").map_err(|error| format!("cannot inspect release child cwd: {error}"))?,
     );
-    reject_reserved_descriptors(&[0, 1, 2, CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD])?;
+    reject_reserved_descriptors(&[
+        0,
+        1,
+        2,
+        CONTRACT_FD,
+        CONTROL_FD,
+        LAUNCHER_IMAGE_FD,
+        CWD_FD,
+        CLIENT_PROFILE_FD,
+    ])?;
     let descriptors = [
         ObjectIdentity::from_fd(0, "release stdin")?,
         ObjectIdentity::from_fd(1, "release stdout")?,
@@ -733,7 +789,14 @@ fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result
         ObjectIdentity::from_fd(CONTROL_FD, "release control")?,
         ObjectIdentity::from_fd(LAUNCHER_IMAGE_FD, "release launcher image")?,
         ObjectIdentity::from_fd(CWD_FD, "release cwd")?,
+        ObjectIdentity::from_fd(CLIENT_PROFILE_FD, "compiler-execution client profile")?,
     ];
+    let compiler_execution_profile = CompilerExecutionClientProfileCapabilityV1::from_file(
+        clone_fd(CLIENT_PROFILE_FD, "compiler-execution client profile")?,
+    )
+    .map_err(|error| format!("invalid inherited compiler-execution client profile: {error}"))?;
+    let compiler_execution_profile_identity =
+        *compiler_execution_profile.profile().identity().as_bytes();
     let launcher_file = clone_fd(LAUNCHER_IMAGE_FD, "launcher image")?;
     if image_identity(&launcher_file, contract.launcher.sha256)? != launcher {
         return Err("retained launcher image differs from the sealed contract".to_owned());
@@ -749,6 +812,7 @@ fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result
             cwd,
             descriptors,
             compiler: observe_compiler_closure()?,
+            compiler_execution_profile_identity,
             argv: observed_child_argv(args)?,
             environment: environment_bytes(&current_environment()?),
         },
@@ -757,7 +821,7 @@ fn validate_child_state(contract: &ReleaseContract, args: &[OsString]) -> Result
     if retained_child != child {
         return Err("release child changed before retaining its wrapper image".to_owned());
     }
-    Ok(child_image)
+    Ok((child_image, compiler_execution_profile))
 }
 
 fn validate_child_observation(
@@ -785,6 +849,10 @@ fn validate_child_observation(
     observed.compiler.validate_child_image(observed.child)?;
     if observed.compiler != contract.compiler {
         return Err("release compiler closure/runtime tree drifted across exec".to_owned());
+    }
+    if observed.compiler_execution_profile_identity != contract.compiler_execution_profile_identity
+    {
+        return Err("release compiler-execution client profile differs".to_owned());
     }
     if observed.argv != contract.argv {
         return Err("release child argv differs from the sealed contract".to_owned());
@@ -1022,7 +1090,7 @@ fn open_current_directory() -> Result<File, String> {
 
 fn create_contract_file() -> Result<File, String> {
     let file = rustix::fs::memfd_create(
-        "fe2o3-authority-release-contract-v2",
+        "fe2o3-authority-release-contract-v3",
         rustix::fs::MemfdFlags::CLOEXEC | rustix::fs::MemfdFlags::ALLOW_SEALING,
     )
     .map(File::from)
@@ -1055,16 +1123,27 @@ fn write_and_seal_contract(file: &File, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+struct ReleaseChildBoundarySources<'source> {
+    contract: &'source File,
+    control: &'source UnixStream,
+    launcher: &'source File,
+    cwd: &'source File,
+    client_profile: &'source File,
+}
+
 fn install_child_boundary(
     command: &mut Command,
-    contract: &File,
-    control: &UnixStream,
-    launcher: &File,
-    cwd: &File,
+    sources: ReleaseChildBoundarySources<'_>,
     expected: &[ObjectIdentity],
     expected_parent: u32,
 ) -> Result<(), String> {
-    for fd in [CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD] {
+    for fd in [
+        CONTRACT_FD,
+        CONTROL_FD,
+        LAUNCHER_IMAGE_FD,
+        CWD_FD,
+        CLIENT_PROFILE_FD,
+    ] {
         if fs::metadata(format!("/proc/self/fd/{fd}")).is_ok() {
             return Err(format!(
                 "reserved release descriptor {fd} is already in use"
@@ -1072,20 +1151,22 @@ fn install_child_boundary(
         }
     }
     let sources = [
-        contract.as_raw_fd(),
-        control.as_raw_fd(),
-        launcher.as_raw_fd(),
-        cwd.as_raw_fd(),
+        sources.contract.as_raw_fd(),
+        sources.control.as_raw_fd(),
+        sources.launcher.as_raw_fd(),
+        sources.cwd.as_raw_fd(),
+        sources.client_profile.as_raw_fd(),
     ];
-    let expected: [ObjectIdentity; 4] = expected
+    let expected: [ObjectIdentity; 5] = expected
         .try_into()
         .map_err(|_| "release descriptor manifest has the wrong count".to_owned())?;
-    for ((source, identity), label) in
-        sources
-            .into_iter()
-            .zip(expected)
-            .zip(["contract", "control", "launcher image", "cwd"])
-    {
+    for ((source, identity), label) in sources.into_iter().zip(expected).zip([
+        "contract",
+        "control",
+        "launcher image",
+        "cwd",
+        "compiler-execution client profile",
+    ]) {
         let observed = ObjectIdentity::from_fd(source, label)?;
         if observed != identity {
             return Err(format!(
@@ -1100,7 +1181,13 @@ fn install_child_boundary(
             install_parent_death_signal(expected_parent)?;
             for ((source, target), identity) in sources
                 .into_iter()
-                .zip([CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD])
+                .zip([
+                    CONTRACT_FD,
+                    CONTROL_FD,
+                    LAUNCHER_IMAGE_FD,
+                    CWD_FD,
+                    CLIENT_PROFILE_FD,
+                ])
                 .zip(expected)
             {
                 if source != target && libc::dup3(source, target, 0) != target {
@@ -1209,7 +1296,13 @@ fn close_admission_descriptors() -> Result<(), String> {
     // SAFETY: admission has validated the complete fixed descriptor manifest immediately before
     // this transition, and each descriptor is still owned by this process.
     unsafe {
-        for fd in [CONTRACT_FD, CONTROL_FD, LAUNCHER_IMAGE_FD, CWD_FD] {
+        for fd in [
+            CONTRACT_FD,
+            CONTROL_FD,
+            LAUNCHER_IMAGE_FD,
+            CWD_FD,
+            CLIENT_PROFILE_FD,
+        ] {
             rustix::io::close(fd);
         }
     }
@@ -1593,8 +1686,10 @@ mod tests {
                 object(80, libc::S_IFSOCK | 0o600),
                 object(1, libc::S_IFREG | 0o500),
                 object(20, libc::S_IFDIR | 0o500),
+                object(90, libc::S_IFREG | 0o400),
             ],
             compiler: compiler_observation(),
+            compiler_execution_profile_identity: [7; 32],
             argv: vec![
                 fe2o3_build_authority::PROTECTED_AUTHORITY_ARGV0.to_vec(),
                 INTERNAL_CHILD_ARG.as_bytes().to_vec(),
@@ -1614,6 +1709,7 @@ mod tests {
             cwd: contract.cwd,
             descriptors: contract.descriptors,
             compiler: contract.compiler,
+            compiler_execution_profile_identity: contract.compiler_execution_profile_identity,
             argv: contract.argv.clone(),
             environment: contract.environment.clone(),
         }
@@ -1643,15 +1739,15 @@ mod tests {
         );
         assert_eq!(
             CONTRACT_DOMAIN,
-            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V2\0"
+            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-CONTRACT/V3\0"
         );
         assert_eq!(
             GRANT_DOMAIN,
-            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V2\0"
+            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-GRANT/V3\0"
         );
         assert_eq!(
             ACCEPT_DOMAIN,
-            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V2\0"
+            b"FE2O3/PROTECTED-AUTHORITY-RELEASE-ACCEPT/V3\0"
         );
         let (decoded, identity) = ReleaseContract::decode(&encoded).unwrap();
         assert_eq!(decoded, expected);
@@ -1670,22 +1766,24 @@ mod tests {
     }
 
     #[test]
-    fn v1_contract_headers_fail_closed() {
-        let mut old_magic = contract().encode().unwrap();
-        old_magic[..8].copy_from_slice(b"F2AURL1\0");
-        assert!(
-            ReleaseContract::decode(&old_magic)
-                .unwrap_err()
-                .contains("magic")
-        );
+    fn legacy_contract_headers_fail_closed() {
+        for (magic, version) in [(b"F2AURL1\0", 1_u16), (b"F2AURL2\0", 2_u16)] {
+            let mut old_magic = contract().encode().unwrap();
+            old_magic[..8].copy_from_slice(magic);
+            assert!(
+                ReleaseContract::decode(&old_magic)
+                    .unwrap_err()
+                    .contains("magic")
+            );
 
-        let mut old_version = contract().encode().unwrap();
-        old_version[8..10].copy_from_slice(&1_u16.to_le_bytes());
-        assert!(
-            ReleaseContract::decode(&old_version)
-                .unwrap_err()
-                .contains("version/header")
-        );
+            let mut old_version = contract().encode().unwrap();
+            old_version[8..10].copy_from_slice(&version.to_le_bytes());
+            assert!(
+                ReleaseContract::decode(&old_version)
+                    .unwrap_err()
+                    .contains("version/header")
+            );
+        }
     }
 
     #[test]
@@ -1760,6 +1858,10 @@ mod tests {
         let mut changed = contract();
         changed.launcher.object.inode += 1;
         assert_ne!(baseline, changed.encode().unwrap());
+
+        let mut changed = contract();
+        changed.compiler_execution_profile_identity[0] ^= 1;
+        assert_ne!(baseline, changed.encode().unwrap());
     }
 
     #[test]
@@ -1810,7 +1912,7 @@ mod tests {
     fn descriptor_substitution_reuse_and_cwd_drift_are_rejected() {
         let contract = contract();
         let mut descriptor = observation(&contract);
-        descriptor.descriptors[4].inode += 1;
+        descriptor.descriptors[7].inode += 1;
         assert!(
             validate_child_observation(&contract, &descriptor)
                 .unwrap_err()
@@ -1879,5 +1981,13 @@ mod tests {
                 "compiler pin {index}"
             );
         }
+
+        let mut profile = observation(&contract);
+        profile.compiler_execution_profile_identity[0] ^= 1;
+        assert!(
+            validate_child_observation(&contract, &profile)
+                .unwrap_err()
+                .contains("client profile")
+        );
     }
 }

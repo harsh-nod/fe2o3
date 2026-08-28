@@ -305,6 +305,8 @@ dependencies = [
  "fe2o3-artifacts",
  "fe2o3-build-authority",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-core",
  "fe2o3-device",

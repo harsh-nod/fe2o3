@@ -179,8 +179,14 @@ the same pidfd child is live. The supervisor then publishes those exact bytes
 once over the authenticated Cargo control connection, drops that connection,
 and retains pidfd serving custody; cancellation and drop use pidfd signaling
 plus exactly-once bounded reaping. The pinned policy has an
-immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
-service-profile establishment, Cargo listener acquisition, and the Worker V3
+immutable sealed memfd capability reserved at rustc fd 202. The protected
+release contract now admits and binds the sole fixed root-owned client profile.
+The Cargo wrapper transports that profile through its authenticated broker,
+creates the selected rustc's service endpoint at fd 195 after fork, installs
+the exact policy at fd 202, transfers the live endpoint and pidfd only to the
+fixed distinct-UID supervisor socket, and gates fresh Worker V3 publication on
+canonical readiness while retaining exact invocation custody. Distinct-UID
+service deployment, backend receipt acquisition/carriage, and the Worker V3
 authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

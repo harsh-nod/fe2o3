@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod attestation;
+mod client_profile;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
@@ -11,6 +12,10 @@ mod supervisor_handoff;
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
     "/run/fe2o3/compiler-execution-supervisor.sock";
+
+/// Sole production public client-profile pathname.
+pub const COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1: &str =
+    "/etc/fe2o3/compiler-execution/client-profile-v1";
 
 pub use attestation::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
@@ -22,6 +27,10 @@ pub use attestation::{
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
+};
+pub use client_profile::{
+    COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, CompilerExecutionClientProfileErrorV1,
+    CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
