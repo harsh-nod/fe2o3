@@ -6,6 +6,8 @@ future broker-owned anti-rollback hash chain.
 It provides:
 
 - fixed-width canonical V1 challenge and signed-observation messages;
+- a 528-byte canonical receipt binding one exact challenge to its strictly
+  verified signed observation and explicit prior/proposed position;
 - a domain-separated hash-chain head over the exact expected sequence, prior
   head, transaction digest, and anchor-key identity;
 - strict Ed25519 verification against an exact caller-supplied public-key value;
@@ -16,6 +18,9 @@ A commit decision exists only after a valid signature reports the exact proposed
 sequence and head. A valid signature reporting the exact prior sequence and head
 produces an abort decision. Sequence gaps, regressions, overflow, stale challenge
 fields, phase confusion, noncanonical encodings, and trailing bytes are rejected.
+The receipt is safe to persist and replay through a caller-owned journal, but it
+remains inert: the caller-pinned key does not establish key provenance, external
+service deployment, or monotonic storage authority.
 
 ## Canonical transaction digest
 
