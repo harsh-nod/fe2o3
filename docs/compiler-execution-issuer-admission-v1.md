@@ -97,10 +97,12 @@ through a move-only committed-publication capability that callers cannot
 construct from wire bytes. The
 [protected Worker ledger](compiler-execution-worker-ledger-v1.md) now creates
 that capability only after independently verifying, committing, and reacquiring
-the exact request and sidecar. The remaining issuer work is to launch inspection
-under the production distinct-UID policy and expose the composition through a
-bounded `SOCK_SEQPACKET` service loop that carries the journal-bound
-occurrence/session identity.
+the exact request and sidecar. The
+[bounded service](compiler-execution-service-v1.md) now exposes that composition
+over the already admitted `SOCK_SEQPACKET` connection and makes the direct
+transition methods private. The remaining issuer deployment work is to launch
+inspection under the production distinct-UID policy using a static issuer
+executable and its supervisor.
 Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification

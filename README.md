@@ -127,9 +127,12 @@ constructor used by Cargo and the backend, reacquires the current production-slo
 publication, reconstructs its canonical subject under lock, and retains both
 custody values through every issuer use. The issuer accepts no caller-selected
 occurrence, and its private guard keeps publication currentness locked through
-request comparison, signing, and durable commit. Production distinct-UID launch
-permission, the bounded service loop, and Worker V3 authority join remain
-absent. A fixed receipt sidecar and publication ACK now
+request comparison, signing, and durable commit. A canonical fixed-width packet
+codec and allocation-free bounded `SOCK_SEQPACKET` loop now expose only Inspect,
+Prepare, Issue, Publish, and Cancel over the already admitted peer; the issuer's
+direct transition methods are private. Production distinct-UID launch and
+inspection policy and the Worker V3 authority join remain absent. A fixed
+receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
 journal V2 retains that complete ACK across every later state, accepts no raw
@@ -147,6 +150,8 @@ The transport records are specified in
 [receipt publication V1](docs/compiler-execution-receipt-publication-v1.md).
 The durable consumer is specified in
 [Worker receipt ledger V1](docs/compiler-execution-worker-ledger-v1.md).
+The bounded transport is specified in
+[compiler execution service V1](docs/compiler-execution-service-v1.md).
 
 ## CUDA-Oxide status
 

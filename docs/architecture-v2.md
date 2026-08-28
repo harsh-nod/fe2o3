@@ -86,9 +86,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   exact request and current rollback anchor, durably commits only an immediate
   successor, reacquires the canonical record, and is the sole source of the
   issuer's move-only publication ACK capability. Issuer recovery accepts only
-  the three exact cross-journal crash positions. The bounded service transport,
-  load-envelope receipt carriage, external monotonic rollback anchoring, and
-  Worker V3 verifier authority join remain open.
+  the three exact cross-journal crash positions. The fixed canonical packet
+  codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
+  admitted issuer; all direct transition methods are private and exact replay
+  resolves lost responses. A production distinct-UID launcher and inspection
+  policy, load-envelope receipt carriage, external monotonic rollback anchoring,
+  and Worker V3 verifier authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and

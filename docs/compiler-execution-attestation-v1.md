@@ -13,9 +13,10 @@ and one exact supervised compiler occurrence. The
 [receipt publication contract](compiler-execution-receipt-publication-v1.md)
 also fixes authority-free sidecar and ACK bytes. The descriptor-relative Worker
 ledger now implements durable publication and rollback verification. Bounded
-service transport, lossless Worker V3 carriage, and the Worker V3 authority join
-remain open; the codec alone does not authenticate protected compiler
-execution.
+service packets and the allocation-free service loop are implemented over one
+already admitted issuer. The production distinct-UID launcher and inspection
+policy, lossless Worker V3 carriage, and the Worker V3 authority join remain
+open; the codec alone does not authenticate protected compiler execution.
 
 ## Records
 
@@ -110,8 +111,8 @@ signing transition to revalidate that retained admission:
 3. Generate the nonce from the protected freshness source.
 4. Observe the exact supervised rustc/backend occurrence and independently
    reconstruct its canonical subject.
-5. Accept one bounded request over the existing descriptor channel without a
-   shell, COMGR, or command-line compiler/linker path.
+5. Accept canonical bounded requests over the existing descriptor channel
+   without a shell, COMGR, or command-line compiler/linker path.
 6. Compare the request with live occurrence custody and the outstanding
    challenge before signing.
 7. Durably commit the next sequence and rollback anchor before releasing the
@@ -155,5 +156,7 @@ These tests qualify only the codec and pinned-key signature boundary. The
 [durable issuer state](compiler-execution-issuer-durable-v2.md) implement the
 local protected signer and supervised occurrence foundation. The receipt
 sidecar codec and [Worker ledger](compiler-execution-worker-ledger-v1.md) are
-frozen separately. Bounded service transport, Worker V3 carriage and authority
-verification, and MI300X end-to-end tests remain required.
+frozen separately. The [bounded service](compiler-execution-service-v1.md) is
+implemented over an admitted connection. Production distinct-UID deployment,
+Worker V3 carriage and authority verification, external anti-rollback, and
+MI300X end-to-end tests remain required.

@@ -1,8 +1,9 @@
 # Protected Compiler-Execution Issuer Durable State V2
 
 Status: implemented local issuer state, exact subject/current-publication join,
-publication-bound ACK journal, and cross-journal Worker rollback commit; bounded
-service transport and Worker verification authority remain open.
+publication-bound ACK journal, cross-journal Worker rollback commit, and bounded
+service transport over an admitted connection; production deployment and Worker
+verification authority remain open.
 
 This contract consumes
 [`ProtectedCompilerExecutionIssuerAdmissionV1`](compiler-execution-issuer-admission-v1.md)
@@ -207,7 +208,7 @@ repeat revalidation, process exit, superseded attempt, wrong producer, changed
 invocation, non-compile input, and missing or malformed managed attempts.
 The issuer constructs every occurrence from its own admission, and a guard
 contention test proves a superseding attempt cannot advance until issuer
-currentness custody is explicitly dropped. Production distinct-UID inspection
-policy, the bounded `SOCK_SEQPACKET` service, Worker V3
-load-envelope/verification carriage, and the MI300X Cargo-to-KFD run remain
-required.
+currentness custody is explicitly dropped. The bounded `SOCK_SEQPACKET` service
+and exact replay path are implemented. Production distinct-UID launch and
+inspection policy, Worker V3 load-envelope/verification carriage, external
+monotonic rollback anchoring, and the MI300X Cargo-to-KFD run remain required.

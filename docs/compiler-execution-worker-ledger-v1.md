@@ -5,8 +5,9 @@
 This document fixes the implemented descriptor-relative Worker rollback ledger
 for protected compiler-execution receipts. It is one component of the existing
 Worker V3 pipeline, not an alternate compiler or runtime route. Bounded service
-transport, lossless load-envelope carriage, production verifier authority, and
-the Cargo-to-KFD run remain open.
+transport over an admitted connection is implemented. Production distinct-UID
+deployment, lossless load-envelope carriage, production verifier authority,
+and the Cargo-to-KFD run remain open.
 
 The ledger consumes the canonical
 [receipt publication V1](compiler-execution-receipt-publication-v1.md) sidecar.

@@ -45,9 +45,12 @@ canaries. Compiler-execution authority now has signed request and receipt
 records plus separate crash-safe issuer and Worker journals. The Worker journal
 verifies and durably reacquires the exact request and receipt before the issuer
 can acknowledge publication, and recovery accepts only the three legal
-cross-journal positions. This closes durable local receipt publication, but not
-the service transport, external monotonic rollback anchor, or production Worker
-verifier. The next major gates are:
+cross-journal positions. A fixed-width canonical packet protocol and bounded
+allocation-free `SOCK_SEQPACKET` loop now make that composition the sole public
+issuer transition path over an admitted connection. This closes local service
+transport and durable receipt publication, but not the production distinct-UID
+launcher and inspection policy, external monotonic rollback anchor, or
+production Worker verifier. The next major gates are:
 
 1. implement the reviewed production Worker V3 verifier, make generated
    applications invoke the canonical inherited pure-KFD transition, and prove
