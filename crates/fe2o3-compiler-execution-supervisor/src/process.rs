@@ -18,6 +18,7 @@ use fe2o3_compiler_execution_protocol::{
 use fe2o3_static_preexec_manifest::{
     PREEXEC_EXECUTABLE_FD, PREEXEC_MANIFEST_FD, PREEXEC_MAX_DESCRIPTORS, PREEXEC_SOURCE_FD_BASE,
 };
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::SendFlags;
 use rustix::pipe::{PipeFlags, pipe_with};
 
@@ -506,6 +507,76 @@ pub struct ServingProtectedIssuerV1 {
     policy: CompilerExecutionIssuerPolicyV1,
 }
 
+/// Inert termination of one naturally exited, exactly-once reaped issuer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProtectedIssuerTerminationV1 {
+    /// The issuer returned one ordinary process exit status.
+    Exited {
+        /// Exact status supplied to the Linux process-exit operation.
+        status: i32,
+    },
+    /// The issuer was terminated by one signal.
+    Signaled {
+        /// Exact Linux signal number that terminated the issuer.
+        signal: i32,
+        /// Whether Linux reported that the terminating signal dumped core.
+        core_dumped: bool,
+    },
+}
+
+impl ProtectedIssuerTerminationV1 {
+    /// Reports whether the issuer returned ordinary status zero.
+    pub const fn succeeded(self) -> bool {
+        matches!(self, Self::Exited { status: 0 })
+    }
+
+    fn from_wait_status(
+        status: &rustix::process::WaitIdStatus,
+    ) -> Result<Self, ProtectedIssuerLaunchErrorV1> {
+        if let Some(status) = status.exit_status() {
+            return Ok(Self::Exited { status });
+        }
+        if let Some(signal) = status.terminating_signal() {
+            return Ok(Self::Signaled {
+                signal,
+                core_dumped: status.dumped(),
+            });
+        }
+        Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+            "waitid returned a nonterminal issuer state",
+        ))
+    }
+}
+
+/// Inert evidence that one announced issuer exited naturally and was reaped once.
+///
+/// This value exposes no descriptor, signing operation, publication authority,
+/// loading authority, or GPU authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExitedProtectedIssuerV1 {
+    pid: u32,
+    readiness: CompilerExecutionServiceReadyV1,
+    termination: ProtectedIssuerTerminationV1,
+}
+
+impl ExitedProtectedIssuerV1 {
+    /// Returns the PID formerly paired with the now-consumed pidfd.
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Returns the exact readiness record acknowledged before serving began.
+    pub const fn readiness(&self) -> &CompilerExecutionServiceReadyV1 {
+        &self.readiness
+    }
+
+    /// Returns the exact terminal state observed while reaping through the pidfd.
+    pub const fn termination(&self) -> ProtectedIssuerTerminationV1 {
+        self.termination
+    }
+}
+
 impl fmt::Debug for ServingProtectedIssuerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -540,6 +611,26 @@ impl ServingProtectedIssuerV1 {
             return Err(self.process.exited_error("is no longer serving"));
         }
         Ok(())
+    }
+
+    /// Waits for natural issuer termination and consumes exactly-once process custody.
+    ///
+    /// One absolute nonzero timeout covers pidfd observation and reaping. If the
+    /// boundary expires or observation fails, consuming `self` fails closed: its
+    /// destructor kills the exact child through the pidfd and transfers reaping to
+    /// the bounded internal reaper.
+    pub fn wait_for_exit(
+        mut self,
+        timeout: Duration,
+    ) -> Result<ExitedProtectedIssuerV1, ProtectedIssuerLaunchErrorV1> {
+        let deadline = session_deadline(timeout)?;
+        let pid = self.pid();
+        let termination = self.process.wait_and_reap(deadline)?;
+        Ok(ExitedProtectedIssuerV1 {
+            pid,
+            readiness: self.readiness,
+            termination,
+        })
     }
 
     /// Cancels the exact serving child and synchronously reaps it once.
@@ -803,6 +894,15 @@ fn protected_pipe(
 
 fn bounded_deadline(timeout: Duration) -> Result<Instant, ProtectedIssuerLaunchErrorV1> {
     if timeout.is_zero() || timeout > MAX_LAUNCH_WAIT_V1 {
+        return Err(ProtectedIssuerLaunchErrorV1::InvalidTimeout);
+    }
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(ProtectedIssuerLaunchErrorV1::InvalidTimeout)
+}
+
+fn session_deadline(timeout: Duration) -> Result<Instant, ProtectedIssuerLaunchErrorV1> {
+    if timeout.is_zero() {
         return Err(ProtectedIssuerLaunchErrorV1::InvalidTimeout);
     }
     Instant::now()
@@ -1710,6 +1810,46 @@ impl ProtectedIssuerChildV1 {
         signal_error.map_or(wait_result, Err)
     }
 
+    fn wait_and_reap(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<ProtectedIssuerTerminationV1, ProtectedIssuerLaunchErrorV1> {
+        let status = loop {
+            let pidfd =
+                self.pidfd
+                    .as_ref()
+                    .ok_or(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                        "pidfd was already transferred for reaping",
+                    ))?;
+            match rustix::process::waitid(
+                rustix::process::WaitId::PidFd(pidfd.as_fd()),
+                rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
+            ) {
+                Ok(Some(status)) => break status,
+                Ok(None) | Err(rustix::io::Errno::INTR) => {
+                    wait_for_pidfd_exit(pidfd, deadline)?;
+                }
+                Err(rustix::io::Errno::CHILD) => {
+                    return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                        "issuer child was reaped outside its pidfd owner",
+                    ));
+                }
+                Err(source) => {
+                    return Err(io_error(
+                        "reap naturally exited issuer pidfd",
+                        source.into(),
+                    ));
+                }
+            }
+        };
+        drop(self.pidfd.take());
+        self.reap_slot
+            .take()
+            .expect("live issuer child retains one reap slot")
+            .complete();
+        ProtectedIssuerTerminationV1::from_wait_status(&status)
+    }
+
     fn finish_or_defer(&mut self) {
         let Some(pidfd) = self.pidfd.take() else {
             return;
@@ -1723,6 +1863,49 @@ impl ProtectedIssuerChildV1 {
             ReapPollV1::Reaped | ReapPollV1::Lost => {
                 drop(pidfd);
                 slot.complete();
+            }
+        }
+    }
+}
+
+fn wait_for_pidfd_exit(
+    pidfd: &OwnedFd,
+    deadline: Instant,
+) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(ProtectedIssuerLaunchErrorV1::Timeout("natural issuer exit"));
+        }
+        let timeout = Timespec {
+            tv_sec: i64::try_from(remaining.as_secs()).unwrap_or(i64::MAX),
+            tv_nsec: i64::from(remaining.subsec_nanos()),
+        };
+        let mut descriptors = [PollFd::new(
+            pidfd,
+            PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+        )];
+        match poll(&mut descriptors, Some(&timeout)) {
+            Ok(0) => {
+                return Err(ProtectedIssuerLaunchErrorV1::Timeout("natural issuer exit"));
+            }
+            Ok(_) => {
+                let events = descriptors[0].revents();
+                if events.contains(PollFlags::NVAL) {
+                    return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                        "issuer pidfd became invalid while awaiting exit",
+                    ));
+                }
+                if events.intersects(PollFlags::IN | PollFlags::ERR | PollFlags::HUP) {
+                    return Ok(());
+                }
+            }
+            Err(rustix::io::Errno::INTR) => {}
+            Err(source) => {
+                return Err(io_error(
+                    "poll naturally exiting issuer pidfd",
+                    source.into(),
+                ));
             }
         }
     }

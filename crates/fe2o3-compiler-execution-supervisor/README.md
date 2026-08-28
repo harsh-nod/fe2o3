@@ -67,11 +67,13 @@ truncated, extended, stale, or timed-out readiness fails closed. A consuming
 publication sends those exact bytes once over the authenticated Cargo control
 connection, closes that endpoint, and returns `ServingProtectedIssuerV1`
 while retaining the same pidfd. A closed or stalled Cargo peer fails closed
-before serving custody exists. Explicit cancellation uses `pidfd_send_signal`;
-every synchronous path reaps once with `waitid(P_PIDFD)`, and dropped live
-custody transfers to a fixed 64-slot reaper. Abrupt supervisor death is
-covered both by the bootstrap gate and the static launcher's parent identity
-check.
+before serving custody exists. Serving custody can be consumed by one bounded
+pidfd wait that returns an inert PID/readiness/termination record only after
+`waitid(P_PIDFD)` has reaped the exact child once. A wait timeout fails closed
+and cancels that child. Explicit cancellation uses `pidfd_send_signal`; every
+synchronous path reaps once, and dropped live custody transfers to a fixed
+64-slot reaper. Abrupt supervisor death is covered both by the bootstrap gate
+and the static launcher's parent identity check.
 
 The launcher deliberately inherits an already established profile instead of
 performing privileged credential transitions after `clone3`. Deployment must
