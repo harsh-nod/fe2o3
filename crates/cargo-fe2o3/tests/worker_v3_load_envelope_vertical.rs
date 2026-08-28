@@ -286,6 +286,8 @@ enum ReviewedTestWorkerV3VerifierFault {
     Sequence,
     PriorRollbackAnchor,
     CurrentRollbackAnchor,
+    ZeroCurrentRecordVerification,
+    ZeroCurrentRecordAttestation,
     ZeroProtectedPolicyVerification,
     ZeroProtectedWorkerLedgerVerification,
     ZeroExternalRollbackVerification,
@@ -391,6 +393,8 @@ where
         let mut sequence = request.compiler_execution_sequence();
         let mut prior_rollback = request.compiler_execution_prior_rollback_anchor();
         let mut current_rollback = request.compiler_execution_current_rollback_anchor();
+        let mut current_record_verification = [0xd4; 32];
+        let mut current_record_attestation = [0xd5; 32];
         let mut protected_policy_verification = [0xd1; 32];
         let mut protected_worker_ledger_verification = [0xd2; 32];
         let mut external_rollback_verification = [0xd3; 32];
@@ -415,6 +419,12 @@ where
             ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor => {
                 current_rollback[0] ^= 0xff;
             }
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordVerification => {
+                current_record_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordAttestation => {
+                current_record_attestation = [0; 32];
+            }
             ReviewedTestWorkerV3VerifierFault::ZeroProtectedPolicyVerification => {
                 protected_policy_verification = [0; 32];
             }
@@ -425,7 +435,7 @@ where
                 external_rollback_verification = [0; 32];
             }
         }
-        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::new(
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::synthetic_for_test_only(
             subject,
             carriage,
             policy,
@@ -438,6 +448,8 @@ where
             sequence,
             prior_rollback,
             current_rollback,
+            current_record_verification,
+            current_record_attestation,
             protected_policy_verification,
             protected_worker_ledger_verification,
             external_rollback_verification,
@@ -1687,6 +1699,18 @@ fn v3_verification_rejects_every_compiler_execution_substitution_and_missing_aut
             ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor,
             WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
                 "compiler-execution current rollback anchor",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "compiler current-record verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroCurrentRecordAttestation,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "compiler current-record attestation",
             ),
         ),
         (
