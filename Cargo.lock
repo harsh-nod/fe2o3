@@ -793,6 +793,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-issuer"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-broker-authority-service",
+ "fe2o3-compiler-closure-capability",
+ "libc",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-protocol"
 version = "0.1.0"
 dependencies = [

@@ -89,9 +89,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   the three exact cross-journal crash positions. The fixed canonical packet
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay
-  resolves lost responses. A production distinct-UID launcher and inspection
-  policy, load-envelope receipt carriage, external monotonic rollback anchoring,
-  and Worker V3 verifier authority join remain open.
+  resolves lost responses. A descriptor-only musl-static issuer entrypoint now
+  hardens itself and admits fixed FDs 3 through 8. A sealed launch manifest
+  binds exact rustc PID/UID/GID to the exact pinned policy, and the static build
+  gate rejects every dynamic-loader edge and undefined symbol. Production
+  distinct-UID supervisor launch and inspection policy, backend acquisition,
+  load-envelope receipt carriage, external monotonic rollback anchoring, and
+  Worker V3 verifier authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and
@@ -138,8 +142,9 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   a transport component of the production transaction, not another compiler
   pipeline. Its direct-parent handoff creates that socketpair in the post-fork
   rustc child, transfers only the service endpoint, and binds it to exact child
-  credentials and a live pidfd. Cargo-wrapper and protected-supervisor wiring
-  remain pending.
+  credentials and a live pidfd. The canonical launch manifest and issuer
+  entrypoint can consume those identities, but Cargo-wrapper readiness and
+  protected-supervisor wiring remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
