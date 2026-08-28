@@ -4,13 +4,16 @@ use fe2o3_artifact_transaction::{
     INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1, InertCompilerExecutionSubjectV1,
 };
 use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestV1,
-    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
-    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
+    CompilerExecutionReceiptPublicationV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -18,6 +21,7 @@ const SUBJECT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/INERT-COMPILER-EXECUTION-SUBJECT/
 const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identity-v2\0";
 
 struct Fixture {
+    signing_key: SigningKey,
     policy: CompilerExecutionIssuerPolicyV1,
     request: CompilerExecutionAttestationRequestV1,
     receipt: CompilerExecutionAttestationReceiptV1,
@@ -46,6 +50,7 @@ impl Fixture {
         let receipt =
             CompilerExecutionAttestationReceiptV1::issue(&policy, &request, &signing_key).unwrap();
         Self {
+            signing_key,
             policy,
             request,
             receipt,
@@ -69,6 +74,129 @@ impl Fixture {
         )
         .unwrap()
     }
+}
+
+#[test]
+fn challenge_bound_current_record_attestation_round_trips_and_verifies() {
+    assert_eq!(COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V1, 536);
+    let fixture = Fixture::new(0x51);
+    let verification = current_record_verification(&fixture, [0x91; 32], [0x92; 32]);
+    let challenge = [0xa1; 32];
+    let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+        &fixture.policy,
+        verification.clone(),
+        challenge,
+        &fixture.signing_key,
+    )
+    .unwrap();
+    let decoded =
+        CompilerExecutionCurrentRecordAttestationV1::decode(attestation.canonical_bytes()).unwrap();
+    assert_eq!(decoded, attestation);
+    assert_eq!(decoded.challenge(), challenge);
+    assert_eq!(decoded.verification(), &verification);
+    assert_eq!(decoded.verifying_key(), *fixture.policy.verifying_key());
+    assert!(!decoded.grants_authority());
+
+    let verified = decoded
+        .verify(&fixture.policy, &verification, challenge)
+        .unwrap();
+    assert_eq!(verified.verification(), &verification);
+    assert!(verified.authenticates_pinned_signing_key());
+    assert!(verified.authenticates_expected_challenge());
+    assert!(!verified.authenticates_protected_current_record());
+    assert!(!verified.authenticates_external_rollback_currentness());
+    assert!(!verified.grants_authority());
+}
+
+#[test]
+fn current_record_attestation_rejects_key_policy_challenge_and_record_substitution() {
+    let fixture = Fixture::new(0x51);
+    let other = Fixture::new(0x61);
+    let verification = current_record_verification(&fixture, [0x91; 32], [0x92; 32]);
+    let substituted_verification = current_record_verification(&fixture, [0xa1; 32], [0xa2; 32]);
+    let challenge = [0xb1; 32];
+    let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+        &fixture.policy,
+        verification.clone(),
+        challenge,
+        &fixture.signing_key,
+    )
+    .unwrap();
+
+    assert!(matches!(
+        CompilerExecutionCurrentRecordAttestationV1::issue(
+            &fixture.policy,
+            verification.clone(),
+            challenge,
+            &other.signing_key,
+        ),
+        Err(CompilerExecutionCurrentRecordVerificationErrorV1::SigningKeyMismatch)
+    ));
+    assert!(matches!(
+        attestation
+            .clone()
+            .verify(&other.policy, &verification, challenge),
+        Err(CompilerExecutionCurrentRecordVerificationErrorV1::PolicyMismatch)
+    ));
+    assert!(matches!(
+        attestation
+            .clone()
+            .verify(&fixture.policy, &verification, [0xb2; 32]),
+        Err(CompilerExecutionCurrentRecordVerificationErrorV1::ChallengeMismatch)
+    ));
+    assert!(matches!(
+        attestation.verify(&fixture.policy, &substituted_verification, challenge),
+        Err(CompilerExecutionCurrentRecordVerificationErrorV1::VerificationMismatch)
+    ));
+}
+
+#[test]
+fn every_current_record_attestation_byte_mutation_and_wrong_length_rejects() {
+    let fixture = Fixture::new(0x51);
+    let verification = current_record_verification(&fixture, [0x91; 32], [0x92; 32]);
+    let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+        &fixture.policy,
+        verification,
+        [0xc1; 32],
+        &fixture.signing_key,
+    )
+    .unwrap();
+    assert_mutations_rejected(attestation.canonical_bytes(), |bytes| {
+        CompilerExecutionCurrentRecordAttestationV1::decode(bytes).is_err()
+    });
+    assert_wrong_lengths(attestation.canonical_bytes(), |bytes| {
+        CompilerExecutionCurrentRecordAttestationV1::decode(bytes).is_err()
+    });
+}
+
+#[test]
+fn zero_current_record_attestation_challenge_rejects_before_signing() {
+    let fixture = Fixture::new(0x51);
+    let verification = current_record_verification(&fixture, [0x91; 32], [0x92; 32]);
+    assert!(matches!(
+        CompilerExecutionCurrentRecordAttestationV1::issue(
+            &fixture.policy,
+            verification,
+            [0; 32],
+            &fixture.signing_key,
+        ),
+        Err(CompilerExecutionCurrentRecordVerificationErrorV1::ZeroChallenge)
+    ));
+}
+
+fn current_record_verification(
+    fixture: &Fixture,
+    protected_policy: [u8; 32],
+    protected_ledger: [u8; 32],
+) -> CompilerExecutionCurrentRecordVerificationV1 {
+    let carriage = fixture.carriage();
+    CompilerExecutionCurrentRecordVerificationV1::new(
+        fixture.request.subject(),
+        &carriage,
+        protected_policy,
+        protected_ledger,
+    )
+    .unwrap()
 }
 
 #[test]
