@@ -586,6 +586,12 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
         self.service.client_pidfd()
     }
 
+    pub(crate) const fn external_anchor_mut(
+        &mut self,
+    ) -> &mut ProtectedCompilerExecutionExternalAnchorV1 {
+        &mut self.external_anchor
+    }
+
     pub(crate) const fn signing_key(&self) -> &SigningKey {
         &self.signing_key.key
     }

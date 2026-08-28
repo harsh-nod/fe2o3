@@ -153,9 +153,16 @@ ancillary-free signed observation verified under the policy key. The production
 supervisor now retains that exact endpoint and pidfd, binds their admitted
 service identity to the launch manifest, and transfers both through the static
 launcher for independent issuer admission at FDs 10 and 11. Receipt publication
-does not yet invoke the endpoint, so this is not external rollback authority. The result
-remains authority-free until protected key custody, external rollback, and
-refinement evidence are joined. The issuer's direct transition
+now durably prepares the exact anchor challenge, exchanges it over that retained
+endpoint, persists an exact signed proposed-position observation, and only then
+commits and reacquires the Worker record and returns its publication ACK. Restart
+re-emits the same prepared challenge, finishes an already anchor-committed local
+publication without a second exchange, and durably aborts on an exact signed
+prior-position observation. This ordering does not prove that the external
+service is independently operated, monotonic, crash durable, or backed by a
+protected signing key. The result remains authority-free until those external
+rollback properties, protected key custody, and refinement evidence are joined.
+The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
 absolute deadline, including exact issued-request reconstruction. Its child

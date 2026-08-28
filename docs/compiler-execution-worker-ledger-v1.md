@@ -7,12 +7,13 @@ for protected compiler-execution receipts. It is one component of the existing
 Worker V3 pipeline, not an alternate compiler or runtime route. Bounded service
 transport and an exact-current carriage verification operation over an admitted
 connection are implemented. The ledger also implements the local crash-safe
-external-anchor journal for one publication. The broker now also implements a retained
-external-anchor endpoint admission and bounded authenticated exchange, but that
-endpoint is not yet carried through the production supervisor launch or invoked
-by the issuer. Production distinct-UID deployment, independently
-operated monotonic service integration, externally anchored VerifyCurrent
-evidence, production verifier authority, and the Cargo-to-KFD run remain open.
+external-anchor journal for one publication. The supervisor carries a retained
+external-anchor endpoint and service pidfd through the static launch, the issuer
+independently re-admits them, and the production Publish operation drives the
+bounded authenticated exchange before Worker commit and ACK. Production
+distinct-UID deployment, independently operated monotonic service integration,
+externally anchored VerifyCurrent evidence, production verifier authority, and
+the Cargo-to-KFD run remain open.
 
 The ledger consumes the canonical
 [receipt publication V1](compiler-execution-receipt-publication-v1.md) sidecar.
@@ -98,11 +99,14 @@ or the exact matching record, representing the only crash window between those
 writes. `Published` requires that exact record and identity. An ACK is formed
 only after the `Published` journal has itself been committed and reacquired.
 
-These operations remain internal and are not called by the application-facing
-service in this checkpoint. The transport described below is likewise not yet
-owned by the production issuer. Until the supervisor carries that admitted
-endpoint into the protected process and the issuer drives this state machine,
-the existing service route has no external rollback authority.
+These operations remain internal, but the application-facing Publish operation
+now composes them with the transport described below. A fresh transaction cannot
+create a Worker record until the issuer has durably prepared its challenge,
+received and verified an exact signed proposed-position observation, and durably
+recorded that receipt. Restart from `PreparedAnchor` re-exchanges the same
+challenge; restart from `AnchorCommitted` completes locally; exact replay from
+`Published` returns the same record without network traffic; and a signed prior
+position leaves the transaction `Aborted` with no Worker ACK.
 
 ## External-Anchor Endpoint And Exchange
 
@@ -201,10 +205,13 @@ state without a second Worker transition.
 The retained root is owner-only, descriptor-relative, identity-checked, and
 held by the dedicated protected service. The Worker record identity is not a
 second signature and same-host storage, including the local anchor journal, is
-not an external monotonic anchor. An
+not an external monotonic anchor. The production path now requires a signed
+observation over the admitted endpoint, but this repository does not yet
+implement or qualify the independently operated monotonic backend behind that
+endpoint. An
 actor able to replace the complete service-owned directory with an older
 mutually consistent issuer/Worker snapshot can roll both journals back. A
-production deployment must bind the combined position to the reviewed external
+production deployment must supply and qualify the reviewed external
 anti-rollback service or an equivalent monotonic facility.
 
 The current-record verification identities are deterministic hashes of the
@@ -245,3 +252,6 @@ wrong pinned credentials, same-UID production rejection, blocking or mutated
 status flags, wrong pidfd target, process death, endpoint closure, timeout,
 short and oversized packets, forbidden ancillary data, duplicate responses,
 prequeued recovery, wrong signature/key, and nonce and phase substitution.
+Issuer-composition tests cover first proposed commit, write-free published
+replay, prepared and anchor-committed restart, signed-prior abort, endpoint
+failure, and the absence of any Worker ACK before anchor commit.

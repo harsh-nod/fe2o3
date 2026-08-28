@@ -84,9 +84,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   public issuer methods accept no caller-selected occurrence. A separate
   descriptor-relative Worker ledger verifies the signed receipt against the
   exact request and current rollback anchor, durably commits only an immediate
-  successor, reacquires the canonical record, and is the sole source of the
-  issuer's move-only publication ACK capability. Issuer recovery accepts only
-  the three exact cross-journal crash positions. The fixed canonical packet
+  successor, and is the sole source of the issuer's move-only publication ACK
+  capability. Before Worker commit, the issuer durably prepares the exact
+  external-anchor challenge, exchanges it over the supervisor-admitted endpoint,
+  and persists an exact signed proposed-position receipt. It then reacquires the
+  canonical Worker record and published anchor journal. Issuer recovery accepts
+  only the exact cross-journal crash positions. The fixed canonical packet
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay
   resolves lost responses. A descriptor-only musl-static issuer entrypoint now

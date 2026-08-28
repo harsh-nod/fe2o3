@@ -28,9 +28,10 @@ use sha2::{Digest, Sha256};
 
 use crate::compiler_execution_worker_ledger::{
     ProtectedCompilerExecutionWorkerLedgerErrorV1, ReacquiredWorkerReceiptRecordV1,
-    WorkerReceiptLedgerV1,
+    WorkerExternalAnchorPublicationPlanV1, WorkerReceiptLedgerV1,
 };
 use crate::{
+    ProtectedCompilerExecutionExternalAnchorErrorV1,
     ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
     ProtectedCompilerExecutionOccurrenceErrorV1, ProtectedCompilerExecutionOccurrenceGuardV1,
     ProtectedCompilerExecutionOccurrenceV1,
@@ -1159,9 +1160,10 @@ impl ProtectedCompilerExecutionIssuerV1 {
         Ok(outcome)
     }
 
-    /// Verifies and durably publishes one exact issued receipt in the protected Worker ledger,
-    /// reacquires the canonical Worker record, and only then advances the issuer journal.
-    /// Repeating the same request and sidecar after a lost response is idempotent.
+    /// Verifies and externally anchors one exact issued receipt, durably publishes it in the
+    /// protected Worker ledger, reacquires the canonical Worker record, and only then advances the
+    /// issuer journal. Repeating the same request and sidecar after a lost response recovers the
+    /// persisted challenge or finishes an already anchor-committed local publication.
     pub(super) fn publish_receipt_to_worker(
         &mut self,
         request_bytes: &[u8],
@@ -1177,9 +1179,15 @@ impl ProtectedCompilerExecutionIssuerV1 {
             &request,
             &publication,
         )?;
-        let reacquired = self
-            .worker_ledger
-            .commit_publication(request, publication)?;
+        let worker_ledger = &mut self.worker_ledger;
+        let external_anchor = self.admission.external_anchor_mut();
+        let reacquired = commit_externally_anchored_worker_publication(
+            worker_ledger,
+            external_anchor,
+            request,
+            publication,
+        )?;
+        self.admission.validate_continuity()?;
         validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
         let committed =
             CommittedCompilerExecutionReceiptPublicationV1::from_reacquired_worker_record(
@@ -1366,6 +1374,22 @@ impl ProtectedCompilerExecutionIssuerV1 {
     pub(super) fn recovery(&self) -> CompilerExecutionIssuerRecoveryV1 {
         self.ledger.recovery()
     }
+}
+
+fn commit_externally_anchored_worker_publication(
+    worker_ledger: &mut WorkerReceiptLedgerV1,
+    external_anchor: &mut crate::ProtectedCompilerExecutionExternalAnchorV1,
+    request: CompilerExecutionAttestationRequestV1,
+    publication: CompilerExecutionReceiptPublicationV1,
+) -> Result<ReacquiredWorkerReceiptRecordV1, ProtectedCompilerExecutionIssuerErrorV1> {
+    let plan = worker_ledger.prepare_external_anchor_publication(request, publication)?;
+    if let WorkerExternalAnchorPublicationPlanV1::Exchange(challenge) = plan {
+        let receipt = external_anchor.exchange(&challenge)?;
+        worker_ledger.record_external_anchor_observation(receipt.observation_bytes())?;
+    }
+    worker_ledger
+        .commit_anchored_publication()
+        .map_err(Into::into)
 }
 
 fn validate_worker_ledger_join(
@@ -1606,6 +1630,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     ReceiptPublication(CompilerExecutionReceiptPublicationErrorV1),
     CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV1),
     WorkerLedger(ProtectedCompilerExecutionWorkerLedgerErrorV1),
+    ExternalAnchor(ProtectedCompilerExecutionExternalAnchorErrorV1),
     Occurrence(ProtectedCompilerExecutionOccurrenceErrorV1),
     SingletonLock(io::Error),
     Entropy(io::Error),
@@ -1645,6 +1670,9 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
                 )
             }
             Self::WorkerLedger(error) => write!(formatter, "issuer Worker ledger failed: {error}"),
+            Self::ExternalAnchor(error) => {
+                write!(formatter, "issuer external-anchor exchange failed: {error}")
+            }
             Self::Occurrence(error) => {
                 write!(formatter, "compiler occurrence validation failed: {error}")
             }
@@ -1693,6 +1721,7 @@ impl Error for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::ReceiptPublication(error) => Some(error),
             Self::CurrentRecord(error) => Some(error),
             Self::WorkerLedger(error) => Some(error),
+            Self::ExternalAnchor(error) => Some(error),
             Self::Occurrence(error) => Some(error),
             Self::SingletonLock(error) | Self::Entropy(error) => Some(error),
             _ => None,
@@ -1748,15 +1777,35 @@ impl From<ProtectedCompilerExecutionWorkerLedgerErrorV1>
     }
 }
 
+impl From<ProtectedCompilerExecutionExternalAnchorErrorV1>
+    for ProtectedCompilerExecutionIssuerErrorV1
+{
+    fn from(error: ProtectedCompilerExecutionExternalAnchorErrorV1) -> Self {
+        Self::ExternalAnchor(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
+    use std::os::fd::{AsRawFd, FromRawFd, RawFd};
     use std::os::unix::fs::PermissionsExt;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use fe2o3_artifact_transaction::{
         INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1, INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1,
         RetainedDurableFaultTimingV1, RetainedDurableRecordBoundaryV1,
     };
+    use fe2o3_external_anchor_protocol::{
+        ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorChallengeV1,
+        AnchorPositionV1, UnsignedAnchorObservationV1,
+    };
+    use fe2o3_runtime_protocol::{
+        CompilerExecutionExternalAnchorServiceIdentityV1,
+        CompilerExecutionWorkerAnchorJournalStageV1,
+    };
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
     use tempfile::TempDir;
 
     use super::*;
@@ -1899,6 +1948,344 @@ mod tests {
             )
             .unwrap()
         }
+    }
+
+    fn pidfd_for_current_process() -> OwnedFd {
+        // SAFETY: pidfd_open receives the current positive PID and zero flags. Success returns one
+        // fresh owned close-on-exec descriptor.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_open,
+                libc::pid_t::try_from(std::process::id()).unwrap(),
+                0,
+            )
+        };
+        assert!(
+            descriptor >= 0,
+            "pidfd_open failed: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: successful pidfd_open returned a fresh owned descriptor.
+        unsafe { OwnedFd::from_raw_fd(descriptor as RawFd) }
+    }
+
+    fn external_anchor_transport(
+        fixture: &Fixture,
+    ) -> (crate::ProtectedCompilerExecutionExternalAnchorV1, OwnedFd) {
+        let (peer, service) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+            None,
+        )
+        .unwrap();
+        let identity = CompilerExecutionExternalAnchorServiceIdentityV1::new(
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+        )
+        .unwrap();
+        let admission =
+            crate::ProtectedExternalAnchorServiceAdmissionV1::admit_non_authoritative_same_uid_test(
+                peer,
+                pidfd_for_current_process(),
+                identity,
+            )
+            .unwrap();
+        let transport = crate::ProtectedCompilerExecutionExternalAnchorV1::from_issuer_policy(
+            admission,
+            &fixture.policy,
+        )
+        .unwrap();
+        (transport, service)
+    }
+
+    fn issued_publication(
+        fixture: &Fixture,
+        nonce: [u8; SHA256_BYTES],
+    ) -> (
+        CompilerExecutionAttestationRequestV1,
+        CompilerExecutionReceiptPublicationV1,
+    ) {
+        let ready = IssuerRecordV2::genesis(&fixture.policy, &fixture.signing_key).unwrap();
+        let prepared = fixture.prepare(&ready, nonce).unwrap();
+        let request = CompilerExecutionAttestationRequestV1::new(
+            prepared.challenge.clone().unwrap(),
+            fixture.subject.clone(),
+        )
+        .unwrap();
+        let issued = fixture.issue(&prepared, request.canonical_bytes()).unwrap();
+        let publication = issued.receipt_publication().unwrap();
+        (request, publication)
+    }
+
+    fn receive_anchor_challenge(service: &OwnedFd) -> AnchorChallengeV1 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut bytes = [0_u8; ANCHOR_CHALLENGE_WIRE_LEN_V1];
+        loop {
+            // SAFETY: the fixed byte array is writable and `service` retains the descriptor.
+            let received = unsafe {
+                libc::recv(
+                    service.as_raw_fd(),
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                    libc::MSG_DONTWAIT,
+                )
+            };
+            if received == bytes.len() as isize {
+                return AnchorChallengeV1::decode(&bytes).unwrap();
+            }
+            if received < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock {
+                assert!(Instant::now() < deadline, "challenge receive timed out");
+                thread::yield_now();
+                continue;
+            }
+            panic!("unexpected challenge receive result: {received}");
+        }
+    }
+
+    fn signed_anchor_observation(
+        challenge: &AnchorChallengeV1,
+        position: AnchorPositionV1,
+        signing_key: &SigningKey,
+    ) -> [u8; ANCHOR_OBSERVATION_WIRE_LEN_V1] {
+        let unsigned = UnsignedAnchorObservationV1::from_challenge(challenge, position);
+        let signature = signing_key.sign(&unsigned.signing_bytes()).to_bytes();
+        unsigned.attach_signature(signature)
+    }
+
+    fn spawn_anchor_response(
+        service: OwnedFd,
+        expected: Option<AnchorChallengeV1>,
+        position: AnchorPositionV1,
+        signing_key: SigningKey,
+    ) -> thread::JoinHandle<OwnedFd> {
+        thread::spawn(move || {
+            let challenge = receive_anchor_challenge(&service);
+            if let Some(expected) = expected {
+                assert_eq!(challenge, expected);
+            }
+            let response = signed_anchor_observation(&challenge, position, &signing_key);
+            // SAFETY: `response` is readable for its fixed length and `service` remains owned.
+            let sent = unsafe {
+                libc::send(
+                    service.as_raw_fd(),
+                    response.as_ptr().cast(),
+                    response.len(),
+                    libc::MSG_NOSIGNAL,
+                )
+            };
+            assert_eq!(sent, response.len() as isize);
+            service
+        })
+    }
+
+    fn assert_no_anchor_challenge(service: &OwnedFd) {
+        let mut bytes = [0_u8; ANCHOR_CHALLENGE_WIRE_LEN_V1];
+        // SAFETY: the fixed byte array is writable and `service` retains the descriptor.
+        let received = unsafe {
+            libc::recv(
+                service.as_raw_fd(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+        assert_eq!(received, -1);
+        assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn externally_anchored_worker_publication_commits_before_replay_ack() {
+        let fixture = Fixture::new();
+        let anchor_signing_key = SigningKey::from_bytes(&[0x52; 32]);
+        let (request, publication) = issued_publication(&fixture, [0xa1; SHA256_BYTES]);
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let (mut anchor, service) = external_anchor_transport(&fixture);
+        let response = spawn_anchor_response(
+            service,
+            None,
+            AnchorPositionV1::Proposed,
+            anchor_signing_key,
+        );
+
+        let first = commit_externally_anchored_worker_publication(
+            &mut worker,
+            &mut anchor,
+            request.clone(),
+            publication.clone(),
+        )
+        .unwrap();
+        let service = response.join().unwrap();
+        let first_ack = first.into_acknowledgment();
+        assert_eq!(
+            worker.anchor_journal().unwrap().stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Published
+        );
+        assert_eq!(
+            worker.last_record().unwrap().acknowledgment().unwrap(),
+            first_ack
+        );
+
+        let replay = commit_externally_anchored_worker_publication(
+            &mut worker,
+            &mut anchor,
+            request,
+            publication,
+        )
+        .unwrap()
+        .into_acknowledgment();
+        assert_eq!(replay, first_ack);
+        assert_no_anchor_challenge(&service);
+    }
+
+    #[test]
+    fn prepared_anchor_restart_reuses_durable_challenge_before_publication() {
+        let fixture = Fixture::new();
+        let (request, publication) = issued_publication(&fixture, [0xa2; SHA256_BYTES]);
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let expected = match worker
+            .prepare_external_anchor_publication(request.clone(), publication.clone())
+            .unwrap()
+        {
+            WorkerExternalAnchorPublicationPlanV1::Exchange(challenge) => challenge,
+            WorkerExternalAnchorPublicationPlanV1::CommitLocally => {
+                panic!("fresh publication unexpectedly skipped anchor exchange")
+            }
+        };
+        assert!(worker.last_record().is_none());
+        drop(worker);
+
+        let mut recovered =
+            WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let (mut anchor, service) = external_anchor_transport(&fixture);
+        let response = spawn_anchor_response(
+            service,
+            Some(expected),
+            AnchorPositionV1::Proposed,
+            SigningKey::from_bytes(&[0x52; 32]),
+        );
+        commit_externally_anchored_worker_publication(
+            &mut recovered,
+            &mut anchor,
+            request,
+            publication,
+        )
+        .unwrap();
+        drop(response.join().unwrap());
+        assert!(recovered.last_record().is_some());
+        assert_eq!(
+            recovered.anchor_journal().unwrap().stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Published
+        );
+    }
+
+    #[test]
+    fn anchor_committed_restart_finishes_without_reexchange() {
+        let fixture = Fixture::new();
+        let anchor_signing_key = SigningKey::from_bytes(&[0x52; 32]);
+        let (request, publication) = issued_publication(&fixture, [0xa3; SHA256_BYTES]);
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let challenge = match worker
+            .prepare_external_anchor_publication(request.clone(), publication.clone())
+            .unwrap()
+        {
+            WorkerExternalAnchorPublicationPlanV1::Exchange(challenge) => challenge,
+            WorkerExternalAnchorPublicationPlanV1::CommitLocally => {
+                panic!("fresh publication unexpectedly skipped anchor exchange")
+            }
+        };
+        let observation =
+            signed_anchor_observation(&challenge, AnchorPositionV1::Proposed, &anchor_signing_key);
+        worker
+            .record_external_anchor_observation(&observation)
+            .unwrap();
+        assert!(worker.last_record().is_none());
+        drop(worker);
+
+        let mut recovered =
+            WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let (mut anchor, service) = external_anchor_transport(&fixture);
+        commit_externally_anchored_worker_publication(
+            &mut recovered,
+            &mut anchor,
+            request,
+            publication,
+        )
+        .unwrap();
+        assert_no_anchor_challenge(&service);
+        assert!(recovered.last_record().is_some());
+    }
+
+    #[test]
+    fn prior_anchor_observation_aborts_without_worker_ack() {
+        let fixture = Fixture::new();
+        let (request, publication) = issued_publication(&fixture, [0xa4; SHA256_BYTES]);
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let (mut anchor, service) = external_anchor_transport(&fixture);
+        let response = spawn_anchor_response(
+            service,
+            None,
+            AnchorPositionV1::Prior,
+            SigningKey::from_bytes(&[0x52; 32]),
+        );
+
+        assert!(matches!(
+            commit_externally_anchored_worker_publication(
+                &mut worker,
+                &mut anchor,
+                request.clone(),
+                publication.clone(),
+            ),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedger(
+                ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorNotCommitted
+            ))
+        ));
+        let service = response.join().unwrap();
+        assert!(worker.last_record().is_none());
+        assert_eq!(
+            worker.anchor_journal().unwrap().stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::Aborted
+        );
+        assert!(matches!(
+            commit_externally_anchored_worker_publication(
+                &mut worker,
+                &mut anchor,
+                request,
+                publication,
+            ),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedger(
+                ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorNotCommitted
+            ))
+        ));
+        assert_no_anchor_challenge(&service);
+    }
+
+    #[test]
+    fn external_anchor_transport_failure_cannot_create_worker_ack() {
+        let fixture = Fixture::new();
+        let (request, publication) = issued_publication(&fixture, [0xa5; SHA256_BYTES]);
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        let (mut anchor, service) = external_anchor_transport(&fixture);
+        drop(service);
+
+        assert!(matches!(
+            commit_externally_anchored_worker_publication(
+                &mut worker,
+                &mut anchor,
+                request,
+                publication,
+            ),
+            Err(ProtectedCompilerExecutionIssuerErrorV1::ExternalAnchor(_))
+        ));
+        assert!(worker.last_record().is_none());
+        assert_eq!(
+            worker.anchor_journal().unwrap().stage(),
+            CompilerExecutionWorkerAnchorJournalStageV1::PreparedAnchor
+        );
+        assert!(matches!(
+            worker.commit_anchored_publication(),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::ExternalAnchorNotCommitted)
+        ));
     }
 
     #[test]

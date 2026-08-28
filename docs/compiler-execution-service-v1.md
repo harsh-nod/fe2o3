@@ -35,11 +35,12 @@ one exact descriptor-free readiness packet and EOF transition ready custody to
 serving custody without surrendering the pidfd. Pidfd cancellation and
 fixed-capacity deferred cleanup provide exactly-once reaping. The issuer
 re-admits the anchor endpoint and pidfd against both the manifest service
-identity and policy-pinned anchor key. Receipt publication does not yet invoke
-that transport. Production must
-still establish that exact profile in a deployed distinct-UID service
-entrypoint. Cargo now admits the fixed root-owned client profile and connects
-only to the fixed authenticated listener path.
+identity and policy-pinned anchor key. Receipt publication now drives that
+transport and requires a durably recorded exact proposed-position observation
+before the Worker record or ACK can advance. Production must still establish
+that exact profile in a deployed distinct-UID service entrypoint and supply an
+independently operated monotonic backend. Cargo now admits the fixed root-owned
+client profile and connects only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 exact-carriage protected verification operation, bounded restart-safe client
 state machine, backend acquisition, attempt-scoped sidecar transport, and
@@ -55,8 +56,9 @@ The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
-external monotonic rollback anchor, deployed distinct-UID service entrypoint,
-and exact Cargo-to-KFD run remain open.
+independently operated external monotonic rollback backend, externally anchored
+current-record verification, deployed distinct-UID service entrypoint, and exact
+Cargo-to-KFD run remain open.
 
 The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
 have reusable immutable memfd capabilities in
@@ -192,16 +194,25 @@ Publish performs one ordered composition:
 
 1. validate the issuer and Worker journal position;
 2. verify the exact request and signed publication sidecar;
-3. durably commit and reacquire the canonical Worker record;
-4. derive the move-only committed-publication witness from that reacquisition;
-5. durably acknowledge the same publication in the issuer journal; and
-6. return the authority-free Worker ACK with `Advanced` or
+3. durably prepare or recover the exact external-anchor transaction and
+   challenge;
+4. unless an exact prior attempt already recorded anchor commit, exchange that
+   challenge over the admitted endpoint and durably record the signed
+   observation; an exact prior-position observation aborts the transaction;
+5. durably commit and reacquire the canonical Worker record;
+6. durably mark the matching anchor journal `Published` and reacquire it;
+7. derive the move-only committed-publication witness from the exact Worker
+   reacquisition;
+8. durably acknowledge the same publication in the issuer journal; and
+9. return the authority-free Worker ACK with `Advanced` or
    `AlreadyAcknowledged` disposition.
 
-The issuer never acknowledges before the Worker record is durable. Repeating
-the exact Publish after a lost response returns the same ACK with
-`AlreadyAcknowledged`; changing the request, sidecar, Worker identity, policy,
-sequence, or anchor fails closed.
+The issuer never acknowledges before both the proposed anchor receipt and Worker
+record are durable and the anchor journal is `Published`. Repeating the exact
+Publish after a lost response reuses the durable challenge or completes from an
+already committed stage, then returns the same ACK with `AlreadyAcknowledged`;
+changing the request, sidecar, Worker identity, policy, sequence, challenge,
+observation, or anchor fails closed.
 
 Recover rereads the canonical Worker record, repeats strict policy, signature,
 request, publication, identity, and ACK validation, and requires exact compiler

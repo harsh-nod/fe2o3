@@ -125,8 +125,10 @@ durable receipt commit. The issuer accepts a publication acknowledgment only
 through a move-only committed-publication capability that callers cannot
 construct from wire bytes. The
 [protected Worker ledger](compiler-execution-worker-ledger-v1.md) now creates
-that capability only after independently verifying, committing, and reacquiring
-the exact request and sidecar. The
+that capability only after durably resolving the exact transaction against the
+admitted external-anchor endpoint, independently verifying and committing the
+request and sidecar, and reacquiring both the Worker record and published anchor
+journal. The
 [bounded service](compiler-execution-service-v1.md) now exposes that composition
 over the already admitted `SOCK_SEQPACKET` connection and makes the direct
 transition methods private. The descriptor-only musl-static issuer entrypoint
