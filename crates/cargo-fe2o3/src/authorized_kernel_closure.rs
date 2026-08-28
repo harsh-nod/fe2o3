@@ -27,8 +27,8 @@ const MAX_SOURCE_TREE_FILES: usize = 100_000;
 const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const TRUSTED_FE2O3_EXTERNAL_SOURCE: &str = concat!(
     "git+https://github.com/harsh-nod/fe2o3.git?rev=",
-    "f002295ec848bfa0bead78d123829a24fb0bfa46#",
-    "f002295ec848bfa0bead78d123829a24fb0bfa46",
+    "1e3c185ed57e751d53c8da19a4fb01ee00b59e4e#",
+    "1e3c185ed57e751d53c8da19a4fb01ee00b59e4e",
 );
 const TRUSTED_REGISTRY_BUILD_SCRIPTS: [(&str, &str, &str); 25] = [
     (
@@ -208,7 +208,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
 const TRUSTED_FE2O3_MACROS_TREE: &str =
     "b0c66e0c88e7d29729200ebc7dfaf39ab8b7d785952f2f6c4a56489e8cf540fe";
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
-    "4a7be0b38d84c1760b54b68297a952dea3f443a692b60e4b78e48a3b096378db";
+    "b0c66e0c88e7d29729200ebc7dfaf39ab8b7d785952f2f6c4a56489e8cf540fe";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =
     "fc950a51041eeb74fd756624e3c981fe24d52a6e8b4868da613e5b9a8c499429";
 
@@ -1566,9 +1566,9 @@ mod tests {
         }
 
         for source in [
-            "git+https://github.com/harsh-nod/fe2o3.git?rev=f002295ec848bfa0bead78d123829a24fb0bfa46#ffffffffffffffffffffffffffffffffffffffff",
-            "git+https://example.invalid/fe2o3.git?rev=f002295ec848bfa0bead78d123829a24fb0bfa46#f002295ec848bfa0bead78d123829a24fb0bfa46",
-            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#f002295ec848bfa0bead78d123829a24fb0bfa46",
+            "git+https://github.com/harsh-nod/fe2o3.git?rev=1e3c185ed57e751d53c8da19a4fb01ee00b59e4e#ffffffffffffffffffffffffffffffffffffffff",
+            "git+https://example.invalid/fe2o3.git?rev=1e3c185ed57e751d53c8da19a4fb01ee00b59e4e#1e3c185ed57e751d53c8da19a4fb01ee00b59e4e",
+            "git+https://github.com/harsh-nod/fe2o3.git?branch=main#1e3c185ed57e751d53c8da19a4fb01ee00b59e4e",
             "git+https://github.com/harsh-nod/fe2o3.git?rev=0123456789abcdef0123456789abcdef01234567#0123456789abcdef0123456789abcdef01234567",
         ] {
             for (package, package_digest) in [(&git, &external_macro_digest), (&hip, &hip_digest)] {
@@ -1638,6 +1638,10 @@ mod tests {
             let root = crates.join(name);
             assert_eq!(hex(&canonical_tree_digest(&root, None).unwrap()), expected);
         }
+        assert_eq!(
+            TRUSTED_FE2O3_EXTERNAL_MACROS_TREE,
+            TRUSTED_FE2O3_MACROS_TREE
+        );
     }
 
     #[test]
