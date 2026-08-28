@@ -5,7 +5,7 @@ use std::fmt;
 use std::io::{self, IoSliceMut};
 use std::mem;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::ptr;
@@ -29,6 +29,13 @@ const TRANSFER_BYTES: usize = 24;
 /// ```compile_fail
 /// fn require_clone<T: Clone>() {}
 /// require_clone::<fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1;
+/// fn decompose(launch: CompilerExecutionServiceLaunchV1) {
+///     let _ = launch.into_descriptors();
+/// }
 /// ```
 pub struct CompilerExecutionServiceLaunchV1 {
     service_peer: OwnedFd,
@@ -59,18 +66,15 @@ impl CompilerExecutionServiceLaunchV1 {
         self.submitter
     }
 
-    /// Borrows the service endpoint whose peer is the rustc endpoint at fixed FD 195.
-    pub fn service_peer(&self) -> BorrowedFd<'_> {
-        self.service_peer.as_fd()
-    }
-
-    /// Borrows the pidfd retaining the exact rustc process identity.
-    pub fn client_pidfd(&self) -> BorrowedFd<'_> {
-        self.client_pidfd.as_fd()
-    }
-
     /// Consumes the inert launch inputs for one protected-supervisor transfer.
-    pub fn into_descriptors(self) -> (OwnedFd, OwnedFd) {
+    pub(crate) fn into_descriptors(self) -> (OwnedFd, OwnedFd) {
+        (self.service_peer, self.client_pidfd)
+    }
+
+    /// Decomposes launch inputs for cross-crate adversarial protocol tests only.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn into_test_descriptors(self) -> (OwnedFd, OwnedFd) {
         (self.service_peer, self.client_pidfd)
     }
 

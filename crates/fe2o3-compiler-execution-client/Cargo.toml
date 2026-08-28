@@ -8,6 +8,9 @@ rust-version.workspace = true
 description = "Bounded protected compiler-execution service client for fe2o3."
 publish = false
 
+[features]
+test-support = []
+
 [dependencies]
 fe2o3-artifact-transaction.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true

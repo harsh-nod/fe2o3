@@ -750,7 +750,7 @@ fn exact_cross_process_handoff_is_admitted_and_revalidated() {
     let submitter = launch.submitter();
     let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest.clone()).unwrap();
-    let (service_peer, pidfd) = launch.into_descriptors();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(&sender, &handoff, &[service_peer.as_fd(), pidfd.as_fd()]);
 
@@ -796,7 +796,7 @@ fn pending_handoff(
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
-    let (service_peer, pidfd) = launch.into_descriptors();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(&sender, &handoff, &[service_peer.as_fd(), pidfd.as_fd()]);
     (guard, child, sender, receiver)
@@ -1034,7 +1034,7 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let substituted =
         CompilerExecutionSupervisorHandoffV1::new(substituted_submitter, manifest).unwrap();
-    let (service_peer, pidfd) = launch.into_descriptors();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(
         &sender,
@@ -1062,7 +1062,7 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &wrong_policy);
     let wrong_handoff =
         CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), wrong_manifest).unwrap();
-    let (service_peer, pidfd) = launch.into_descriptors();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(
         &sender,
@@ -1081,7 +1081,7 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
-    let (service_peer, _pidfd) = launch.into_descriptors();
+    let (service_peer, _pidfd) = launch.into_test_descriptors();
     let duplicate = rustix::io::fcntl_dupfd_cloexec(&service_peer, 0).unwrap();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(
@@ -1101,7 +1101,7 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
-    let (service_peer, pidfd) = launch.into_descriptors();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
     let extra = File::open("/dev/null").unwrap();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(
@@ -1398,7 +1398,7 @@ fn fixed_named_listener_dispatches_one_complete_session() {
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &policy),
     )
     .unwrap();
-    let (service_peer, pidfd) = launch.into_descriptors();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
     send_handoff_fixture(
         &cargo_control,
         &handoff,
