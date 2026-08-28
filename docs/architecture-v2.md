@@ -129,6 +129,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   handoff, and sealed static-application identity. Feature-free `cargo-fe2o3`
   and `fe2o3-host` share the same Worker V3 runtime envelope. The retired Worker V2 bundle is no longer a workspace package. V1/V2/V3 suffixes that remain on
   records are frozen wire versions, not selectable compiler implementations.
+- `fe2o3-compiler-execution-client` owns the one bounded client state machine
+  for protected compiler receipt recovery and issuance. It resumes durable
+  Ready, Prepared, or Issued state over one unnamed `SOCK_SEQPACKET` peer; it is
+  a transport component of the production transaction, not another compiler
+  pipeline.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

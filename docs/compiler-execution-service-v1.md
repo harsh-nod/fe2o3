@@ -12,9 +12,10 @@ This checkpoint is not the complete production deployment. A static issuer
 executable and supervisor still need to establish the real distinct-UID launch
 and ptrace inspection policy before admission. The complete receipt carriage,
 subject-bound current-record recovery operation, and lossless Worker V3 V2
-load-envelope codec now exist, but the production service client, V2-only
-Cargo/host routing, external monotonic rollback anchoring, verifier authority,
-and the exact Cargo-to-KFD run remain open.
+load-envelope codec and bounded restart-safe client state machine now exist, but
+the static distinct-UID launcher, inherited peer and pinned-policy capability
+integration, V2-only Cargo/host routing, external monotonic rollback anchoring,
+verifier authority, and the exact Cargo-to-KFD run remain open.
 
 ## Transport And Ownership
 
@@ -118,6 +119,13 @@ response so the same bounded client can continue with issuance. A corrupt record
 or a current record for another subject is never reported as absent. Recovery
 still covers only the current record; immutable history and custody confirmation
 before successor issuance remain part of the production service deployment.
+
+`fe2o3-compiler-execution-client` implements the corresponding single-session
+machine. It attempts Recover first, correlates every response to the exact
+request and caller-pinned policy, and resumes the minimum legal suffix from
+Ready, Prepared, or Issued. Issued restart reconstructs the exact challenge and
+request from authenticated receipt fields before Publish. Recovery-only clients
+send Cancel after ReceiptAbsent so the service terminates without mutation.
 
 ## Authority Limit
 

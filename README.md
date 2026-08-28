@@ -134,8 +134,10 @@ Prepare, Issue, Publish, Cancel, and exact-subject Recover over the already
 admitted peer. Recover strictly reacquires the current Worker record and returns
 its complete receipt carriage, or reports nonterminal absence only when no
 canonical Worker record exists; a different or damaged current record fails
-closed. The issuer's direct transition methods are private. Production client
-integration, distinct-UID launch and
+closed. The issuer's direct transition methods are private. One shared bounded
+client now recovers first and resumes Ready, Prepared, or Issued under one
+absolute deadline, including exact issued-request reconstruction. Its inherited
+peer and pinned-policy capability integration, distinct-UID launch and
 inspection policy and the Worker V3 authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
@@ -415,7 +417,8 @@ target lowering, and host execution into explicit ownership boundaries:
 - Artifact, build, proof, and evidence boundaries remain in
   `fe2o3-artifacts`, `fe2o3-kernel-descriptor`, `fe2o3-hsaco`,
   `fe2o3-hsaco-finalize`, `fe2o3-artifact-transaction`,
-  `fe2o3-runtime-protocol`, `fe2o3-build-authority`,
+  `fe2o3-runtime-protocol`, `fe2o3-compiler-execution-client`,
+  `fe2o3-build-authority`,
   `fe2o3-host-link-closure`, `fe2o3-broker-authority-service`,
   `fe2o3-external-anchor-protocol`, `fe2o3-process-identity`,
   `fe2o3-protected-publisher`, `fe2o3-verifier`, and

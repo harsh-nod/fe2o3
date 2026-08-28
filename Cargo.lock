@@ -299,6 +299,7 @@ name = "cargo-fe2o3"
 version = "0.1.0"
 dependencies = [
  "cap-primitives",
+ "ed25519-dalek",
  "fe2o3-amd-target",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
@@ -772,6 +773,18 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-build-authority",
  "fe2o3-rustc-invocation",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-compiler-execution-client"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
+ "fe2o3-runtime-protocol",
  "libc",
  "rustix",
  "sha2 0.11.0",

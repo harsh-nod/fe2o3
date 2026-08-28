@@ -723,6 +723,12 @@ impl CompilerExecutionAttestationReceiptV1 {
         self.challenge_identity
     }
 
+    /// Returns the issuer nonce needed to reconstruct the exact challenge after an issued-state
+    /// restart. The signed receipt authenticates this value; exposing it grants no authority.
+    pub const fn challenge_nonce(&self) -> [u8; SHA256_BYTES] {
+        self.nonce
+    }
+
     /// Returns the issuer rollback-ledger sequence.
     pub const fn sequence(&self) -> u64 {
         self.sequence
