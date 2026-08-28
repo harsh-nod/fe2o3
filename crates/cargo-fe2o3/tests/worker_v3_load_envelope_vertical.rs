@@ -363,6 +363,12 @@ where
             capsule.receipts().proof_binding().canonical_preimage(),
             request.proof_binding_receipt_bytes()
         );
+        let proof_inputs = request.validate_compiler_proof_inputs_v3().unwrap();
+        assert!(proof_inputs.has_exact_decoded_input_association());
+        assert!(proof_inputs.has_structural_mir_to_kir_correspondence());
+        assert!(!proof_inputs.authenticates_verus_execution());
+        assert!(!proof_inputs.establishes_compiler_refinement());
+        assert!(!proof_inputs.grants_runtime_authority());
         assert_eq!(
             request
                 .compiler_execution_receipt_carriage()

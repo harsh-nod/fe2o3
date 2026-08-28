@@ -45,9 +45,12 @@ use fe2o3_kernel_descriptor::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "../../../tests/support/compiler_proof_inputs_v3.rs"]
+mod compiler_proof_inputs_v3;
 #[path = "fixtures/worker_v3_hsaco_test_support.rs"]
 mod hsaco_fixture;
 
+use compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v3;
 use hsaco_fixture::{
     ScalarAddFixtureMutation, scalar_add_fixture_with, slice_fixture_with_descriptor_table,
     slice_fixture_with_descriptor_table_and_workgroup,
@@ -1080,6 +1083,12 @@ fn capsule_bytes(
             )
         })
         .collect::<Vec<_>>();
+    let proof_inputs = canonical_compiler_proof_inputs_v3(seed);
+    receipts[2].0 = proof_inputs.semantic_mir().to_vec();
+    receipts[3].0 = proof_inputs.middle_end().to_vec();
+    receipts[4].0 = proof_inputs.kernel_ir().to_vec();
+    receipts[5].0 = proof_inputs.correspondence().to_vec();
+    receipts[6].0 = proof_inputs.formal_memory().to_vec();
     let hsaco = handoff
         .module_bytes()
         .windows(RAW_HSACO_MARKER.len())

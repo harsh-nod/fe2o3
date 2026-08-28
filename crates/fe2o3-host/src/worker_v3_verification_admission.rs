@@ -6,6 +6,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_hsaco::CodeObjectVersion;
 use fe2o3_kernel_descriptor::{KernelDescriptorV1, KernelId};
 use fe2o3_runtime_protocol::CompilerExecutionReceiptCarriageV1;
+use fe2o3_verifier::{
+    CompilerProofInputValidationErrorV3, ValidatedCompilerProofInputsV3,
+    validate_compiler_proof_inputs_v3,
+};
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
@@ -246,6 +250,26 @@ impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, 
             .receipts()
             .proof_binding()
             .canonical_preimage()
+    }
+
+    /// Independently decodes and cross-checks every exact compiler proof input retained by the
+    /// recovered capsule.
+    ///
+    /// The move-only result establishes canonical input ownership and structural MIR-to-KIR
+    /// association only. It does not authenticate Verus execution, establish compiler refinement,
+    /// or grant publication, load, or launch authority.
+    pub fn validate_compiler_proof_inputs_v3(
+        &self,
+    ) -> Result<ValidatedCompilerProofInputsV3, CompilerProofInputValidationErrorV3> {
+        let receipts = self.handoff.capsule().receipts();
+        validate_compiler_proof_inputs_v3(
+            receipts.proof_binding(),
+            receipts.semantic_mir(),
+            receipts.middle_end(),
+            receipts.kernel_ir(),
+            receipts.mir_to_kir_correspondence(),
+            receipts.formal_memory(),
+        )
     }
 
     /// Returns the exact finalized HSACO bytes retained by the current-publication token.
@@ -738,6 +762,7 @@ pub struct WorkerV3VerificationDecisionV1 {
     target: fe2o3_amd_target::AmdTargetId,
     code_object_version: CodeObjectVersion,
     compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+    proof_inputs: WorkerV3ProofInputEvidenceV1,
     verifier_measurement_sha256: [u8; 32],
     verification_transcript_sha256: [u8; 32],
     proof_executable_binding_sha256: [u8; 32],
@@ -746,13 +771,20 @@ pub struct WorkerV3VerificationDecisionV1 {
     safety_properties: WorkerV3SafetyPropertiesV1,
 }
 
+#[derive(Debug)]
+enum WorkerV3ProofInputEvidenceV1 {
+    Validated(ValidatedCompilerProofInputsV3),
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    Synthetic,
+}
+
 impl WorkerV3VerificationDecisionV1 {
     #[allow(
         dead_code,
         reason = "reserved for the crate-owned production verifier; synthetic builds enter through the explicitly gated constructor"
     )]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -766,6 +798,54 @@ impl WorkerV3VerificationDecisionV1 {
         target: fe2o3_amd_target::AmdTargetId,
         code_object_version: CodeObjectVersion,
         compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        proof_inputs: ValidatedCompilerProofInputsV3,
+        verifier_measurement_sha256: [u8; 32],
+        verification_transcript_sha256: [u8; 32],
+        proof_executable_binding_sha256: [u8; 32],
+        rust_type_layout_contract_sha256: [u8; 32],
+        rust_effect_contract_sha256: [u8; 32],
+        safety_properties: WorkerV3SafetyPropertiesV1,
+    ) -> Self {
+        Self::new_with_evidence(
+            challenge,
+            lineage,
+            kernel_id,
+            marker_binding,
+            generated_host_contract,
+            capsule_sha256,
+            formal_memory_sha256,
+            proof_binding_sha256,
+            finalized_sha256,
+            finalized_length,
+            target,
+            code_object_version,
+            compiler_execution,
+            WorkerV3ProofInputEvidenceV1::Validated(proof_inputs),
+            verifier_measurement_sha256,
+            verification_transcript_sha256,
+            proof_executable_binding_sha256,
+            rust_type_layout_contract_sha256,
+            rust_effect_contract_sha256,
+            safety_properties,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_evidence(
+        challenge: WorkerV3VerificationChallengeIdentityV1,
+        lineage: WorkerV3HostLineageIdentityV1,
+        kernel_id: KernelId,
+        marker_binding: [u8; 32],
+        generated_host_contract: [u8; 32],
+        capsule_sha256: [u8; 32],
+        formal_memory_sha256: [u8; 32],
+        proof_binding_sha256: [u8; 32],
+        finalized_sha256: [u8; 32],
+        finalized_length: u64,
+        target: fe2o3_amd_target::AmdTargetId,
+        code_object_version: CodeObjectVersion,
+        compiler_execution: WorkerV3CompilerExecutionVerificationV1,
+        proof_inputs: WorkerV3ProofInputEvidenceV1,
         verifier_measurement_sha256: [u8; 32],
         verification_transcript_sha256: [u8; 32],
         proof_executable_binding_sha256: [u8; 32],
@@ -787,6 +867,7 @@ impl WorkerV3VerificationDecisionV1 {
             target,
             code_object_version,
             compiler_execution,
+            proof_inputs,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -800,7 +881,7 @@ impl WorkerV3VerificationDecisionV1 {
     #[cfg(feature = "worker-v3-verifier-test-support")]
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments)]
-    pub const fn synthetic_for_test_only(
+    pub fn synthetic_for_test_only(
         challenge: WorkerV3VerificationChallengeIdentityV1,
         lineage: WorkerV3HostLineageIdentityV1,
         kernel_id: KernelId,
@@ -821,7 +902,7 @@ impl WorkerV3VerificationDecisionV1 {
         rust_effect_contract_sha256: [u8; 32],
         safety_properties: WorkerV3SafetyPropertiesV1,
     ) -> Self {
-        Self::new(
+        Self::new_with_evidence(
             challenge,
             lineage,
             kernel_id,
@@ -835,6 +916,7 @@ impl WorkerV3VerificationDecisionV1 {
             target,
             code_object_version,
             compiler_execution,
+            WorkerV3ProofInputEvidenceV1::Synthetic,
             verifier_measurement_sha256,
             verification_transcript_sha256,
             proof_executable_binding_sha256,
@@ -866,6 +948,18 @@ impl WorkerV3VerificationDecisionV1 {
 
     pub const fn compiler_execution(&self) -> &WorkerV3CompilerExecutionVerificationV1 {
         &self.compiler_execution
+    }
+
+    /// Returns exact decoded compiler proof inputs for a default-build production decision.
+    ///
+    /// The explicit synthetic test feature returns `None`; that lane never represents decoded
+    /// proof-input authority.
+    pub const fn validated_compiler_proof_inputs(&self) -> Option<&ValidatedCompilerProofInputsV3> {
+        match &self.proof_inputs {
+            WorkerV3ProofInputEvidenceV1::Validated(inputs) => Some(inputs),
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            WorkerV3ProofInputEvidenceV1::Synthetic => None,
+        }
     }
 }
 
@@ -1262,6 +1356,62 @@ fn validate_decision<K: CompilerGeneratedKernelExpectationV1>(
             ));
         }
     }
+    validate_decision_proof_inputs(request, decision)?;
+    Ok(())
+}
+
+fn validate_decision_proof_inputs<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    decision: &WorkerV3VerificationDecisionV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    #[cfg(not(feature = "worker-v3-verifier-test-support"))]
+    let WorkerV3ProofInputEvidenceV1::Validated(inputs) = &decision.proof_inputs;
+    #[cfg(feature = "worker-v3-verifier-test-support")]
+    let inputs = match &decision.proof_inputs {
+        WorkerV3ProofInputEvidenceV1::Validated(inputs) => inputs,
+        WorkerV3ProofInputEvidenceV1::Synthetic => return Ok(()),
+    };
+    let receipts = request.handoff.capsule().receipts();
+    for (matches, field) in [
+        (
+            inputs.association().canonical_bytes() == receipts.proof_binding().canonical_preimage(),
+            "proof-binding association",
+        ),
+        (
+            inputs.semantic_mir().canonical_encoding()
+                == receipts.semantic_mir().canonical_preimage(),
+            "semantic MIR",
+        ),
+        (
+            inputs.middle_end().canonical_bytes() == receipts.middle_end().canonical_preimage(),
+            "middle-end evidence",
+        ),
+        (
+            inputs.kernel_ir().canonical_bytes() == receipts.kernel_ir().canonical_preimage(),
+            "Kernel IR",
+        ),
+        (
+            inputs.correspondence().canonical_bytes()
+                == receipts.mir_to_kir_correspondence().canonical_preimage(),
+            "MIR-to-KIR correspondence",
+        ),
+        (
+            inputs.formal_memory().canonical_bytes()
+                == receipts.formal_memory().canonical_preimage(),
+            "formal-memory admission",
+        ),
+    ] {
+        if !matches {
+            return Err(WorkerV3VerificationDecisionErrorV1::ProofInputMismatch(
+                field,
+            ));
+        }
+    }
+    if inputs.receipt_identity() != receipts.proof_binding().identity() {
+        return Err(WorkerV3VerificationDecisionErrorV1::ProofInputMismatch(
+            "proof-binding receipt identity",
+        ));
+    }
     Ok(())
 }
 
@@ -1290,6 +1440,7 @@ pub enum WorkerV3VerificationDecisionErrorV1 {
     IdentityMismatch(&'static str),
     ZeroAuthenticatedIdentity(&'static str),
     MissingSafetyProperty(WorkerV3SafetyPropertyV1),
+    ProofInputMismatch(&'static str),
 }
 
 impl<E: fmt::Display> fmt::Display for WorkerV3VerificationAuthenticationErrorV1<E> {
@@ -1319,6 +1470,12 @@ impl fmt::Display for WorkerV3VerificationDecisionErrorV1 {
             }
             Self::MissingSafetyProperty(property) => {
                 write!(formatter, "missing safety property {property:?}")
+            }
+            Self::ProofInputMismatch(field) => {
+                write!(
+                    formatter,
+                    "validated compiler {field} differs from the exact request"
+                )
             }
         }
     }
