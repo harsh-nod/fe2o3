@@ -12,8 +12,14 @@ Verification requires the embedded key to equal the caller-pinned policy key,
 the challenge to equal the caller's fresh challenge, and the complete nested
 record to equal the expected record. The result grants no authority and does
 not by itself prove protected key custody or external anti-rollback. The
-240-byte client profile binds the exact
-dedicated supervisor UID/GID to one complete caller-pinned issuer policy; it
+1,842-byte external-anchor transaction binds the complete issuer policy,
+attestation request, signed receipt publication, sequence, and prior/current
+internal rollback anchors without including a path, descriptor, or final
+acknowledgment. Its frozen identity derives the transaction digest consumed by
+`fe2o3-external-anchor-protocol`. The transaction is inert: it does not contact,
+advance, or authenticate an external monotonic service. The 240-byte client
+profile binds the exact dedicated supervisor UID/GID to one complete
+caller-pinned issuer policy; it
 contains no endpoint, path, secret, timeout, or authority. The launch manifest
 binds an exact PID/UID/GID tuple to an exact policy identity. A canonical
 supervisor-handoff record additionally

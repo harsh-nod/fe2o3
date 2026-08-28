@@ -4,6 +4,7 @@
 mod attestation;
 mod client_profile;
 mod current_record_verification;
+mod external_anchor_transaction;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
@@ -40,6 +41,12 @@ pub use current_record_verification::{
     CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
     CompilerExecutionCurrentRecordVerificationIdentityV1,
     CompilerExecutionCurrentRecordVerificationV1, VerifiedCompilerExecutionCurrentRecordV1,
+};
+pub use external_anchor_transaction::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1,
+    CompilerExecutionExternalAnchorTransactionErrorV1,
+    CompilerExecutionExternalAnchorTransactionIdentityV1,
+    CompilerExecutionExternalAnchorTransactionV1,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
