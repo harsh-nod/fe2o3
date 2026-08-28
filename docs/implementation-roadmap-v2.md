@@ -723,7 +723,13 @@ host route is deleted. Default builds now seal `WorkerV3VerifierV1`, keep its
 decision constructor private, and omit the synthetic implementation surface.
 Still missing is the crate-owned concrete verifier that can independently
 authenticate the carried evidence before invocation-specific pure-KFD launch
-custody is created. The runtime authority gate and compiler-generated
+custody is created. The protected compiler-execution service now provides the
+policy and exact Worker-ledger part through one terminal transaction: it
+reacquires the canonical record, byte-compares the complete carried receipt,
+and returns authority-free canonical verification evidence. The concrete host
+verifier must consume that transaction through its authenticated inherited
+endpoint and join the external monotonic anchor and owned compiler, KIR, Verus,
+machine, and launch receipts. The runtime authority gate and compiler-generated
 host-memory KFD preparation now bind the exact current HSACO, geometry, effects,
 checked device, and authenticated decision into one private move-only
 invocation. The existing hardware proof uses a synthetic verifier and the

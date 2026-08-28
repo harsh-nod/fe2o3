@@ -5,9 +5,10 @@
 This document fixes the implemented descriptor-relative Worker rollback ledger
 for protected compiler-execution receipts. It is one component of the existing
 Worker V3 pipeline, not an alternate compiler or runtime route. Bounded service
-transport over an admitted connection is implemented. Production distinct-UID
-deployment, lossless load-envelope carriage, production verifier authority,
-and the Cargo-to-KFD run remain open.
+transport and an exact-current carriage verification operation over an admitted
+connection are implemented. Production distinct-UID deployment, the external
+monotonic anchor, production verifier authority, and the Cargo-to-KFD run remain
+open.
 
 The ledger consumes the canonical
 [receipt publication V1](compiler-execution-receipt-publication-v1.md) sidecar.
@@ -63,6 +64,23 @@ reacquires the same canonical record and reproduces the same ACK. A stale
 receipt, sequence gap, wrong prior anchor, request substitution, same-receipt
 sidecar substitution, policy change, or non-successor redo fails closed.
 
+## Exact-Current Verification
+
+The protected service may supply one complete expected receipt carriage to the
+ledger. The ledger first requires exact protected-policy equality, then reopens
+and strictly decodes the canonical Worker record, reconstructs its complete
+carriage, and compares both the typed value and every canonical byte with the
+expected carriage. A stale, substituted, or merely subject-equivalent carriage
+fails closed.
+
+On success, the ledger derives separate domain-separated policy-verification
+and Worker-ledger-verification identities. The former binds the protected policy
+bytes, exact subject, complete carriage, and reacquired record identity. The
+latter binds the complete 1,690-byte reacquired record, complete carriage, and
+policy-verification identity. A canonical 352-byte result carries those
+identities together with every journal and rollback coordinate. This result is
+descriptive wire evidence, not a move-only authority capability.
+
 ## Recovery
 
 Recovery accepts only:
@@ -110,6 +128,12 @@ mutually consistent issuer/Worker snapshot can roll both journals back. A
 production deployment must bind the combined position to the reviewed external
 anti-rollback service or an equivalent monotonic facility.
 
+The current-record verification identities are deterministic hashes of the
+protected comparison inputs. They neither authenticate an arbitrary client
+connection nor add freshness beyond the reacquired local state. The caller must
+authenticate the supervisor-provisioned service endpoint and join the result to
+the external monotonic anchor.
+
 This ledger proves durable publication of an authenticated receipt. It does not
 by itself prove Worker V3 load-envelope custody, Verus correctness,
 source-to-machine refinement, or load/launch authority. Those facts must be
@@ -124,4 +148,6 @@ inputs, wrong policy, truncation and extension, mutation of every one of the
 1,690 record bytes, valid non-successor redo, and both sides of all seven
 durable boundaries for first and successor commits. Cross-journal tests cover
 all three legal crash positions and reject gaps, substituted publications, and
-unrelated ACK records.
+unrelated ACK records. Exact-current tests cover successful complete carriage
+reacquisition, canonical result round trip, distinct nonzero policy/ledger
+verification identities, and stale-carriage rejection after a successor commit.

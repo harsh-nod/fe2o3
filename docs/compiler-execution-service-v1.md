@@ -36,8 +36,13 @@ still establish that exact profile in a deployed distinct-UID service
 entrypoint. Cargo now admits the fixed root-owned client profile and connects
 only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
-bounded restart-safe client state machine, backend acquisition, attempt-scoped
-sidecar transport, and receipt-bearing Cargo/host V2 route are implemented.
+exact-carriage protected verification operation, bounded restart-safe client
+state machine, backend acquisition, attempt-scoped sidecar transport, and
+receipt-bearing Cargo/host V2 route are implemented. `VerifyCurrent` rereads the
+service-owned canonical Worker record, reconstructs the complete carriage,
+compares every byte with the caller's expected carriage, and returns canonical
+policy and Worker-ledger verification evidence. That evidence remains
+authority-free until the client authenticates the provisioned service endpoint.
 The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
@@ -121,7 +126,7 @@ limit is a responsibility of the pending production supervisor.
 
 ## Operations
 
-The session accepts exactly six operation kinds:
+The session accepts exactly seven operation kinds:
 
 | Request | Required durable state | Result |
 | --- | --- | --- |
@@ -131,13 +136,15 @@ The session accepts exactly six operation kinds:
 | `Publish` | Matching `Issued`, or the immediately acknowledged request | Worker commit followed by issuer ACK; terminal exact ACK |
 | `Cancel` | Any valid state | Current rollback position; terminal without mutation |
 | `Recover` | Requested compiler subject | Strict post-fsync reacquisition and complete carriage when the exact current record exists; terminal without mutation. If no Worker record exists yet, return nonterminal `ReceiptAbsent`. A different current subject fails closed. |
+| `VerifyCurrent` | Complete expected receipt carriage | Independently reread the canonical Worker record, reconstruct and byte-compare the complete carriage under the protected policy, and return exact policy/ledger verification evidence; terminal without mutation. |
 
 Each request commits to the caller-pinned policy identity and a
 domain-separated identity over its complete canonical bytes. Prepare names the
 expected sequence and prior rollback anchor. Issue and Publish derive that
 position from their complete nested attestation request. Recover carries the
 complete canonical compiler subject and names no caller-asserted rollback
-position. Every response binds
+position. VerifyCurrent names the expected sequence and current rollback anchor
+and carries the complete 2,058-byte carriage. Every response binds
 the exact request identity, policy identity, resulting position, payload, and
 its own terminal identity.
 
@@ -155,11 +162,13 @@ diagnostic protocol and keeps crash recovery authoritative.
 | Issue request | 1,074 |
 | Publish request | 1,658 |
 | Recover request | 818 |
+| VerifyCurrent request | 2,186 |
 | Ready, Cancelled, or ReceiptAbsent response | 160 |
 | Prepared response | 360 |
 | Issued response | 744 |
 | Published response | 456 |
 | Recovered response | 2,218 |
+| VerifiedCurrent response | 512 |
 
 The implementation uses fixed stack storage sized to the maximum request and
 response. The complete publication ACK or recovered 2,058-byte carriage remains
@@ -192,12 +201,23 @@ or a current record for another subject is never reported as absent. Recovery
 still covers only the current record; immutable history and custody confirmation
 before successor issuance remain part of the production service deployment.
 
+VerifyCurrent performs the same strict durable reread, then reconstructs the
+complete carriage and requires both structural equality and byte-for-byte
+equality with the request. It derives domain-separated policy and Worker-ledger
+verification identities from protected policy bytes, the exact subject and
+carriage, and the complete reacquired Worker record. The 352-byte result repeats
+all relevant coordinates and has its own canonical identity. The identities are
+deterministic evidence labels, not signatures or rollback authority; trust in
+their protected derivation comes from the authenticated service connection.
+
 `fe2o3-compiler-execution-client` implements the corresponding single-session
 machine. It attempts Recover first, correlates every response to the exact
 request and caller-pinned policy, and resumes the minimum legal suffix from
 Ready, Prepared, or Issued. Issued restart reconstructs the exact challenge and
 request from authenticated receipt fields before Publish. Recovery-only clients
 send Cancel after ReceiptAbsent so the service terminates without mutation.
+Verification-only clients use one terminal VerifyCurrent exchange and compare
+every returned carriage coordinate with the original expected carriage.
 
 The same crate now implements the direct-parent channel handoff. The socketpair
 is created after fork inside the rustc child, its client endpoint is installed
@@ -228,13 +248,14 @@ machine-effect evidence and close `CompilerExecutionProvenance`.
 
 ## Qualification
 
-The protocol suite mutates every byte of all six request and seven response
+The protocol suite mutates every byte of all seven request and eight response
 forms and checks exact lengths, canonical re-encoding, nested pairing, policy,
 position, and terminal identities. The service suite covers exact packet
 boundaries, oversize and ancillary rejection, deadline and pidfd cancellation,
 blocked response delivery, all operation transitions and exact replay, complete
-carriage recovery, nonterminal absence, subject and policy substitution without
-mutation, four continuity checks per packet, cancellation, and packet
+carriage recovery, exact-current verification, stale carriage rejection,
+nonterminal absence, subject and policy substitution without mutation, four
+continuity checks per packet, cancellation, and packet
 exhaustion. Compile-fail tests reject direct external access to all issuer
 transition methods.
 
