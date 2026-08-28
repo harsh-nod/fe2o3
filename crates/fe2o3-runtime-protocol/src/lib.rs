@@ -2,9 +2,6 @@
 #![doc = include_str!("../README.md")]
 
 mod application_handoff_v3;
-mod compiler_execution_attestation;
-mod compiler_execution_receipt_publication;
-mod compiler_execution_service;
 mod static_application;
 mod worker_v3_load_envelope;
 mod worker_v3_load_envelope_v2;
@@ -25,26 +22,13 @@ pub use application_handoff_v3::{
     WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceIdentityV1,
     WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1,
 };
-pub use compiler_execution_attestation::{
+pub use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1, COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
-    CompilerExecutionAttestationChallengeIdentityV1, CompilerExecutionAttestationChallengeV1,
-    CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptIdentityV1,
-    CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestIdentityV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
-    CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
-};
-pub use compiler_execution_receipt_publication::{
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
-    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionReceiptCarriageIdentityV1,
-    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckIdentityV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationIdentityV1, CompilerExecutionReceiptPublicationV1,
-};
-pub use compiler_execution_service::{
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_CONTROL_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_CONTROL_RESPONSE_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_ISSUE_REQUEST_BYTES_V1,
@@ -55,12 +39,21 @@ pub use compiler_execution_service::{
     COMPILER_EXECUTION_SERVICE_PUBLISHED_RESPONSE_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_RECOVER_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1,
-    CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServicePublishDispositionV1,
-    CompilerExecutionServiceRequestIdentityV1, CompilerExecutionServiceRequestKindV1,
-    CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseIdentityV1,
-    CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
+    CompilerExecutionAttestationChallengeIdentityV1, CompilerExecutionAttestationChallengeV1,
+    CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptIdentityV1,
+    CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestIdentityV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionReceiptCarriageIdentityV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationAckIdentityV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationIdentityV1,
+    CompilerExecutionReceiptPublicationV1, CompilerExecutionServiceProtocolErrorV1,
+    CompilerExecutionServicePublishDispositionV1, CompilerExecutionServiceRequestIdentityV1,
+    CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
+    CompilerExecutionServiceResponseIdentityV1, CompilerExecutionServiceResponseKindV1,
+    CompilerExecutionServiceResponseV1, CompilerExecutionSubjectBindingV1,
     MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
-    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionAttestationV1,
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,

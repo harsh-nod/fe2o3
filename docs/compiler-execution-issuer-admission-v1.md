@@ -100,9 +100,11 @@ that capability only after independently verifying, committing, and reacquiring
 the exact request and sidecar. The
 [bounded service](compiler-execution-service-v1.md) now exposes that composition
 over the already admitted `SOCK_SEQPACKET` connection and makes the direct
-transition methods private. The remaining issuer deployment work is to launch
-inspection under the production distinct-UID policy using a static issuer
-executable and its supervisor.
+transition methods private. The descriptor-only musl-static issuer entrypoint
+now admits the exact policy, launch manifest, client pidfd, peer, root, key, and
+readiness pipe. It emits readiness only after complete admission and durable
+recovery. The remaining issuer deployment work is the production distinct-UID
+supervisor launch and inspection policy that provisions those descriptors.
 Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification

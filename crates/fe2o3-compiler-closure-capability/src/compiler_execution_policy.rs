@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::fd::RawFd;
 use std::process::Command;
 
-use fe2o3_runtime_protocol::{
+use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, CompilerExecutionIssuerPolicyV1,
 };
 
@@ -104,15 +104,12 @@ mod tests {
     use std::fs::{self, File};
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::Mutex;
 
     use ed25519_dalek::SigningKey;
-    use fe2o3_runtime_protocol::CompilerExecutionIssuerMeasurementV1;
+    use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1;
 
     use super::*;
     use crate::sealed_image::REQUIRED_SEALS;
-
-    static FD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         let key = SigningKey::from_bytes(&[seed; 32]);
@@ -162,7 +159,7 @@ mod tests {
 
     #[test]
     fn inherited_policy_is_retained_at_a_private_descriptor() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let expected = policy(7);
         let capability = CompilerExecutionPolicyCapabilityV1::create(expected.clone()).unwrap();
         let child_fd = 511;
@@ -183,7 +180,7 @@ mod tests {
 
     #[test]
     fn child_receives_only_the_requested_policy_descriptor() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let capability = CompilerExecutionPolicyCapabilityV1::create(policy(7)).unwrap();
         let child_fd = 511;
         let mut command = std::process::Command::new("/bin/sh");
@@ -199,7 +196,7 @@ mod tests {
 
     #[test]
     fn canonical_child_installation_uses_fd_202_and_exact_bytes() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let expected = policy(7);
         let path = std::env::temp_dir().join(format!(
             "fe2o3-compiler-execution-policy-expected-{}",

@@ -13,14 +13,22 @@ use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
 mod compiler_execution_policy;
+mod compiler_execution_service_launch;
 mod rustc_invocation;
 mod sealed_image;
 
 pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
 };
+pub use compiler_execution_service_launch::{
+    COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_CHILD_FD_V1,
+    CompilerExecutionServiceLaunchCapabilityV1,
+};
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
+
+#[cfg(test)]
+pub(crate) static FIXED_DESCRIPTOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const MAGIC: &[u8] = b"FE2O3-COMPILER-CLOSURE-CAPABILITY-V1\0";
 const VERSION: u16 = 1;
@@ -239,7 +247,6 @@ mod tests {
     use std::io::Write;
     use std::os::fd::{AsFd, AsRawFd};
     use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
-    use std::sync::Mutex;
 
     use fe2o3_rustc_invocation::{
         CompileEnvironmentV2, MAX_DESCRIPTOR_BYTES_V3, RustcInvocationDescriptorV2,
@@ -247,8 +254,6 @@ mod tests {
     };
 
     use crate::sealed_image::REQUIRED_SEALS;
-
-    static FD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn closure() -> CompilerClosureV2 {
         CompilerClosureV2::new([1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]).unwrap()
@@ -380,7 +385,7 @@ mod tests {
 
     #[test]
     fn child_inherits_only_the_requested_exact_descriptor() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         let child_fd = 511;
         let mut command = Command::new("/bin/sh");
@@ -396,7 +401,7 @@ mod tests {
 
     #[test]
     fn inherited_descriptor_is_retained_and_revalidated_before_use() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         let child_fd = 511;
         let installed =
@@ -539,7 +544,7 @@ mod tests {
 
     #[test]
     fn canonical_inherited_invocation_is_retained_after_source_close() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         assert_eq!(RUSTC_INVOCATION_CHILD_FD_V1, 199);
         let expected = invocation();
         let capability = RustcInvocationCapabilityV1::create(expected.clone()).unwrap();
@@ -563,7 +568,7 @@ mod tests {
 
     #[test]
     fn invocation_child_installation_uses_fd_199_and_exact_bytes() {
-        let _guard = FD_TEST_LOCK.lock().unwrap();
+        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
         let descriptor = invocation();
         let bytes = encode_descriptor_v3(&descriptor).unwrap();
         let path = temporary_path("expected-invocation");

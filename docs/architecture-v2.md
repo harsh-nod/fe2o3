@@ -89,9 +89,16 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   the three exact cross-journal crash positions. The fixed canonical packet
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay
-  resolves lost responses. A production distinct-UID launcher and inspection
-  policy, load-envelope receipt carriage, external monotonic rollback anchoring,
-  and Worker V3 verifier authority join remain open.
+  resolves lost responses. A descriptor-only musl-static issuer entrypoint now
+  hardens itself and admits fixed FDs 3 through 9. A sealed launch manifest
+  binds exact rustc PID/UID/GID to the exact pinned policy, and the static build
+  gate rejects every dynamic-loader edge and undefined symbol. After complete
+  admission and durable recovery, the issuer emits one canonical readiness
+  record binding its PID, manifest, and policy through an atomic nonblocking
+  pipe. Production
+  distinct-UID supervisor launch and inspection policy, backend acquisition,
+  load-envelope receipt carriage, external monotonic rollback anchoring, and
+  Worker V3 verifier authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
   `ManagedProductionBuild`, whose `Fresh`, `Recovered`, and `Ready` values are
   restart states rather than pipeline variants. The backend configuration and
@@ -125,15 +132,22 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   builds or runs the same selection for the pinned rustc host target with
   ordinary rustc and no device compiler controls. Users cannot select either
   target or choose a different ordering.
-- `fe2o3-runtime-protocol` owns the production load envelope, application
-  handoff, and sealed static-application identity. Feature-free `cargo-fe2o3`
+- `fe2o3-compiler-execution-protocol` owns the canonical inert issuer policy,
+  attestation, receipt carriage, and bounded service packets.
+  `fe2o3-runtime-protocol` owns the production load envelope, application
+  handoff, and sealed static-application identity, and re-exports the compiler
+  records for its existing envelope API. Feature-free `cargo-fe2o3`
   and `fe2o3-host` share the same Worker V3 runtime envelope. The retired Worker V2 bundle is no longer a workspace package. V1/V2/V3 suffixes that remain on
   records are frozen wire versions, not selectable compiler implementations.
 - `fe2o3-compiler-execution-client` owns the one bounded client state machine
   for protected compiler receipt recovery and issuance. It resumes durable
   Ready, Prepared, or Issued state over one unnamed `SOCK_SEQPACKET` peer; it is
   a transport component of the production transaction, not another compiler
-  pipeline.
+  pipeline. Its direct-parent handoff creates that socketpair in the post-fork
+  rustc child, transfers only the service endpoint, and binds it to exact child
+  credentials and a live pidfd. The canonical launch manifest and issuer
+  entrypoint can consume those identities, but Cargo-wrapper readiness and
+  protected-supervisor wiring remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
@@ -328,7 +342,7 @@ continue to point downward according to the machine-checked
 | `fe2o3-amdgcn-model` | Existing strict AMDGPU vocabulary, legalization/lowering, OCML/OCKL selection, and LLVM text generation | Pliron object identity, host borrow policy, artifact/launch authority |
 | `dialect-amdgcn` | Compatibility re-export of `fe2o3-amdgcn-model` | Claiming an implemented `amdgcn.*` Pliron dialect |
 | `fe2o3-compiler-api` | Target-neutral request, snapshot, receipt, diagnostic, and output contracts | Running a compiler or publishing its candidate |
-| `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, sealed closure/invocation/caller-pinned issuer-policy coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, signing-key custody, or load/launch authority |
+| `fe2o3-build-authority`, `fe2o3-rustc-invocation`, `fe2o3-compiler-execution-protocol`, `fe2o3-compiler-closure-capability`, `fe2o3-artifact-transaction` | Canonical compiler provenance, exact invocation, inert execution-attestation records, sealed closure/invocation/caller-pinned issuer-policy coordination, and attempt-scoped handoff/publication records | Compiler semantics, LLVM execution, artifact authorship, signing-key custody, or load/launch authority |
 | `fe2o3-artifacts` | Versioned neutral bundle and identity records | Compilation and loading policy |
 | `fe2o3-host` | Generated Worker V3 arguments, verifier admission, argument ownership, the private joined KFD invocation authority, and the HSA-backed migration implementation | MIR inspection, target lowering, verifier proof production, or raw launch authority |
 | `fe2o3-runtime` | Sole safe pure-KFD composition boundary, invocation identity, authority matching, effect-preserving completed buffers, and terminal execution policy | Constructing Worker V3 proof authority or accepting caller-asserted descriptive identities |

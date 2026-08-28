@@ -8,20 +8,24 @@ are implemented. The loop operates only on an already admitted
 runtime path. Direct challenge, issue, publication, and recovery methods are
 crate-private, so an external caller must use this packet boundary.
 
-This checkpoint is not the complete production deployment. A static issuer
-executable and supervisor still need to establish the real distinct-UID launch
-and ptrace inspection policy before admission. The complete receipt carriage,
-subject-bound current-record recovery operation, and lossless Worker V3 V2
-load-envelope codec and bounded restart-safe client state machine now exist, but
-the static distinct-UID launcher, inherited peer and pinned-policy capability
-integration, V2-only Cargo/host routing, external monotonic rollback anchoring,
-verifier authority, and the exact Cargo-to-KFD run remain open.
+This checkpoint is not the complete production deployment. The repository now
+has a descriptor-only `x86_64-unknown-linux-musl` issuer executable, a strict
+static-ELF build gate, and a sealed launch manifest binding the exact expected
+client PID/UID/GID to the exact caller-pinned policy. A supervisor still needs
+to establish the real distinct-UID launch and ptrace inspection policy and map
+the seven admitted descriptors through the existing static pre-exec launcher.
+The complete receipt carriage, subject-bound current-record recovery operation,
+lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
+machine exist, but protected-supervisor integration, backend acquisition,
+V2-only Cargo/host routing, external monotonic rollback anchoring, verifier
+authority, and the exact Cargo-to-KFD run remain open.
 
-The caller-pinned policy now has a reusable immutable memfd capability in
-`fe2o3-compiler-closure-capability`. It preserves exact canonical policy bytes
-under mode `0400`, complete seals, retained object identity, private
-close-on-exec custody, and fixed child descriptor 202. Cargo/backend and static
-issuer wiring still need to consume that capability.
+The caller-pinned policy and service launch manifest have reusable immutable
+memfd capabilities in `fe2o3-compiler-closure-capability`. Each preserves exact
+canonical bytes under mode `0400`, complete seals, retained object identity,
+and private close-on-exec custody. Policy FD 202 is reserved for rustc; launch
+manifest FD 8 is reserved for the protected issuer. Cargo/backend and
+protected-supervisor wiring still need to consume them.
 
 ## Transport And Ownership
 
@@ -43,6 +47,29 @@ nonblocking syscalls. The service rejects:
 - a dead client, closed/failed peer, invalid descriptor, or expired deadline;
   and
 - more than eight packets in one session.
+
+The static issuer accepts no arguments or environment configuration. Its
+supervisor-to-issuer descriptor contract is fixed:
+
+| FD | Exact role |
+| ---: | --- |
+| 3 | Service-owned durable issuer and Worker-ledger root |
+| 4 | Connected service endpoint whose peer is the exact rustc client |
+| 5 | Live process pidfd for that rustc client |
+| 6 | Sealed caller-pinned issuer policy |
+| 7 | Service-owned sealed Ed25519 signing-key image |
+| 8 | Sealed expected-client and policy launch manifest |
+| 9 | Nonblocking atomic readiness-pipe writer |
+
+The entrypoint hardens itself before admitting these objects, requires policy,
+manifest, peer credentials, and pidfd identity to agree, remeasures its running
+static image, admits key material only after those checks, recovers both durable
+ledgers, emits one canonical readiness record binding its PID, launch manifest,
+and policy, and then consumes the bounded service loop. The writer must be a
+close-on-exec `O_WRONLY | O_NONBLOCK` pipe with an atomic-write bound covering
+the complete record; packet-mode, async, append, blocking, readable, ordinary
+file, socket, and undersized substitutions reject. Its launch inputs and
+readiness bytes are not compiler or publication authority.
 
 Continuity is checked before receive, after receive, after the durable
 operation, and after response delivery. The same absolute monotonic deadline,
@@ -133,6 +160,14 @@ Ready, Prepared, or Issued. Issued restart reconstructs the exact challenge and
 request from authenticated receipt fields before Publish. Recovery-only clients
 send Cancel after ReceiptAbsent so the service terminates without mutation.
 
+The same crate now implements the direct-parent channel handoff. The socketpair
+is created after fork inside the rustc child, its client endpoint is installed
+at fixed FD 195, and only its service endpoint crosses `SCM_RIGHTS` to the
+parent. The parent requires the transferred PID, `SO_PEERCRED`, child PID, and
+live pidfd to agree, and rejects descriptor collision, endpoint replacement,
+truncation, ancillary ambiguity, timeout, or child exit. The binding wrapper
+does not yet transfer these launch inputs to the distinct-UID protected issuer.
+
 ## Authority Limit
 
 The service authenticates and durably publishes one protected compiler
@@ -152,3 +187,10 @@ carriage recovery, nonterminal absence, subject and policy substitution without
 mutation, four continuity checks per packet, cancellation, and packet
 exhaustion. Compile-fail tests reject direct external access to all issuer
 transition methods.
+
+`scripts/build-static-compiler-execution-issuer.sh` builds the pinned musl
+target and rejects an interpreter, dynamic section, runtime dependency, RPATH,
+RUNPATH, executable stack, or undefined symbol. It also starts the issuer with
+FDs 3 through 9 closed and requires silent fail-closed exit status 1. This
+qualifies the executable image shape, not the still-pending distinct-UID
+supervisor deployment.

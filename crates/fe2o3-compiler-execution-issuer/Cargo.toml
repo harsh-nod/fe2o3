@@ -1,0 +1,27 @@
+[package]
+name = "fe2o3-compiler-execution-issuer"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Sealed-static protected compiler-execution issuer entrypoint for fe2o3."
+publish = false
+
+[dependencies]
+fe2o3-broker-authority-service = { path = "../fe2o3-broker-authority-service" }
+fe2o3-compiler-closure-capability.workspace = true
+fe2o3-compiler-execution-protocol.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+
+[lib]
+name = "fe2o3_compiler_execution_issuer"
+
+[[bin]]
+name = "fe2o3-compiler-execution-issuer"
+path = "src/main.rs"
+test = false
+bench = false

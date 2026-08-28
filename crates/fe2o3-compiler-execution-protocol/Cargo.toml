@@ -1,0 +1,17 @@
+[package]
+name = "fe2o3-compiler-execution-protocol"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Canonical compiler-execution attestation and service protocol for fe2o3."
+publish = false
+
+[dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-artifact-transaction.workspace = true
+sha2.workspace = true
+
+[lib]
+name = "fe2o3_compiler_execution_protocol"
