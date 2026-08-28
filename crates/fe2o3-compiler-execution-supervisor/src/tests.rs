@@ -776,6 +776,21 @@ fn accepted_handoff(
     OwnedFd,
     AcceptedCompilerExecutionHandoffV1,
 ) {
+    let (guard, child, sender, receiver) = pending_handoff(supervisor);
+    let accepted = supervisor
+        .accept_handoff_inner::<false>(receiver, Duration::from_secs(2))
+        .unwrap();
+    (guard, child, sender, accepted)
+}
+
+fn pending_handoff(
+    supervisor: &ProtectedIssuerSupervisorV1,
+) -> (
+    MutexGuard<'static, ()>,
+    std::process::Child,
+    OwnedFd,
+    OwnedFd,
+) {
     let (guard, child, launch) = live_launch();
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
@@ -783,10 +798,18 @@ fn accepted_handoff(
     let (service_peer, pidfd) = launch.into_descriptors();
     let (sender, receiver) = seqpacket_pair();
     send_handoff_fixture(&sender, &handoff, &[service_peer.as_fd(), pidfd.as_fd()]);
-    let accepted = supervisor
-        .accept_handoff_inner::<false>(receiver, Duration::from_secs(2))
-        .unwrap();
-    (guard, child, sender, accepted)
+    (guard, child, sender, receiver)
+}
+
+fn session_timeouts() -> ProtectedIssuerSessionTimeoutsV1 {
+    ProtectedIssuerSessionTimeoutsV1::new(
+        Duration::from_secs(2),
+        Duration::from_secs(2),
+        Duration::from_secs(2),
+        Duration::from_secs(2),
+        Duration::from_secs(2),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -1234,6 +1257,102 @@ fn serving_exit_timeout_kills_and_eventually_reaps_exact_child() {
     assert_reaped(pid);
     rustc_child.kill().unwrap();
     rustc_child.wait().unwrap();
+}
+
+#[test]
+fn one_session_operation_runs_every_lifecycle_stage_in_order() {
+    let fixture = Fixture::with_code("complete-session", &naturally_exiting_probe_code(0));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (_reserved_fd_guard, mut rustc_child, cargo_control, service_control) =
+        pending_handoff(&supervisor);
+    let exited = supervisor
+        .run_session_inner::<false, _, _, _>(
+            service_control,
+            session_timeouts(),
+            |prepared| {
+                (
+                    rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap(),
+                    prepared.service_manifest().clone(),
+                )
+            },
+            |(readiness_writer, manifest), launched| {
+                let readiness = CompilerExecutionServiceReadyV1::new(
+                    launched.pid(),
+                    &manifest,
+                    supervisor.policy(),
+                )
+                .unwrap();
+                assert_eq!(
+                    rustix::io::write(&readiness_writer, readiness.canonical_bytes()).unwrap(),
+                    readiness.canonical_bytes().len()
+                );
+                drop(readiness_writer);
+            },
+        )
+        .unwrap();
+    read_published_readiness(&cargo_control, exited.readiness());
+    assert!(exited.termination().succeeded());
+    assert_reaped(rustix::process::Pid::from_raw(exited.pid() as i32).unwrap());
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
+fn session_policy_and_stage_errors_fail_before_later_authority() {
+    assert!(matches!(
+        ProtectedIssuerSessionTimeoutsV1::new(
+            Duration::ZERO,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        ),
+        Err(ProtectedIssuerSessionTimeoutErrorV1::InvalidBoundary(
+            "handoff"
+        ))
+    ));
+    assert!(matches!(
+        ProtectedIssuerSessionTimeoutsV1::new(
+            Duration::from_secs(1),
+            Duration::from_secs(121),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        ),
+        Err(ProtectedIssuerSessionTimeoutErrorV1::InvalidBoundary(
+            "launch"
+        ))
+    ));
+    assert!(matches!(
+        ProtectedIssuerSessionTimeoutsV1::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(24 * 60 * 60 + 1),
+        ),
+        Err(ProtectedIssuerSessionTimeoutErrorV1::InvalidSession)
+    ));
+
+    let fixture = Fixture::new("session-stage-error");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (sender, receiver) = seqpacket_pair();
+    rustix::net::send(&sender, b"short", SendFlags::NOSIGNAL).unwrap();
+    assert!(matches!(
+        supervisor.run_session_inner::<false, _, _, _>(
+            receiver,
+            session_timeouts(),
+            |_| (),
+            |(), _| panic!("launch hook ran after a rejected handoff"),
+        ),
+        Err(ProtectedIssuerSessionErrorV1::Handoff(
+            ProtectedIssuerHandoffErrorV1::MalformedTransfer
+        ))
+    ));
 }
 
 #[test]

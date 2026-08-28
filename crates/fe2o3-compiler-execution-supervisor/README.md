@@ -75,6 +75,15 @@ synchronous path reaps once, and dropped live custody transfers to a fixed
 64-slot reaper. Abrupt supervisor death is covered both by the bootstrap gate
 and the static launcher's parent identity check.
 
+`ProtectedIssuerSupervisorV1::run_session` is the sole complete per-connection
+operation. It consumes one accepted listener connection through handoff
+authentication, launch preparation, gated static exec, issuer readiness, Cargo
+readiness publication, bounded serving, and natural-exit reaping. Its trusted
+timeout policy fixes a separate absolute bound for every stage, and its error
+preserves the exact failed stage. No intermediate move-only state or descriptor
+escapes this operation; failure at any stage closes or cancels all later
+custody.
+
 The launcher deliberately inherits an already established profile instead of
 performing privileged credential transitions after `clone3`. Deployment must
 therefore start the supervisor under the dedicated UID/GID with empty groups
