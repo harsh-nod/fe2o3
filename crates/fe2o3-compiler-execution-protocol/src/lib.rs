@@ -34,10 +34,12 @@ pub use client_profile::{
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
 };
 pub use current_record_verification::{
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V1,
     COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V1,
-    CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionCurrentRecordAttestationIdentityV1,
+    CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
     CompilerExecutionCurrentRecordVerificationIdentityV1,
-    CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionCurrentRecordVerificationV1, VerifiedCompilerExecutionCurrentRecordV1,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
