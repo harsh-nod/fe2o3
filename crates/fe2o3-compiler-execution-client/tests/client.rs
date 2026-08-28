@@ -13,12 +13,14 @@ use fe2o3_compiler_execution_client::{
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
-    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
-    CompilerExecutionReceiptPublicationV1, CompilerExecutionServicePublishDispositionV1,
-    CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
-    CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV1,
+    CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
+    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionServicePublishDispositionV1, CompilerExecutionServiceRequestKindV1,
+    CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseV1,
+    MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
 };
 use sha2::{Digest, Sha256};
@@ -28,6 +30,7 @@ const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identit
 
 #[derive(Clone)]
 struct Fixture {
+    signing_key: SigningKey,
     policy: CompilerExecutionIssuerPolicyV1,
     subject: InertCompilerExecutionSubjectV1,
     challenge: CompilerExecutionAttestationChallengeV1,
@@ -71,6 +74,7 @@ impl Fixture {
         )
         .unwrap();
         Self {
+            signing_key: key,
             policy,
             subject,
             challenge,
@@ -177,18 +181,26 @@ fn exact_current_verification_is_one_terminal_packet() {
         .unwrap()
         .verify_current_only(&fixture.policy, fixture.carriage.clone())
         .unwrap();
+    assert!(verification.authenticates_pinned_signing_key());
+    assert!(verification.authenticates_expected_challenge());
     assert_eq!(
-        verification.carriage_identity(),
+        verification.verification().carriage_identity(),
         *fixture.carriage.identity().as_bytes()
     );
     assert_eq!(
-        verification.protected_policy_verification_identity(),
+        verification
+            .verification()
+            .protected_policy_verification_identity(),
         [0x91; 32]
     );
     assert_eq!(
-        verification.protected_worker_ledger_verification_identity(),
+        verification
+            .verification()
+            .protected_worker_ledger_verification_identity(),
         [0x92; 32]
     );
+    assert!(!verification.authenticates_protected_current_record());
+    assert!(!verification.authenticates_external_rollback_currentness());
     assert!(!verification.grants_authority());
     assert_eq!(handle.join().unwrap(), 1);
 }
@@ -212,8 +224,15 @@ fn current_verification_carriage_substitution_fails_closed() {
             [0x92; 32],
         )
         .unwrap();
+        let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+            &substituted.policy,
+            verification,
+            request.verification_challenge().unwrap(),
+            &substituted.signing_key,
+        )
+        .unwrap();
         let response =
-            CompilerExecutionServiceResponseV1::verified_current(request.identity(), verification)
+            CompilerExecutionServiceResponseV1::verified_current(request.identity(), attestation)
                 .unwrap();
         send_raw(&service, response.canonical_bytes());
     });
@@ -224,6 +243,47 @@ fn current_verification_carriage_substitution_fails_closed() {
     assert!(matches!(
         error,
         CompilerExecutionClientErrorV1::DurableStateChanged
+    ));
+    handle.join().unwrap();
+}
+
+#[test]
+fn stale_current_verification_challenge_fails_closed() {
+    let fixture = Fixture::new();
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    let service_fixture = fixture.clone();
+    let handle = thread::spawn(move || {
+        let request = receive_request(&service);
+        let verification = CompilerExecutionCurrentRecordVerificationV1::new(
+            &service_fixture.subject,
+            &service_fixture.carriage,
+            [0x91; 32],
+            [0x92; 32],
+        )
+        .unwrap();
+        let mut stale_challenge = request.verification_challenge().unwrap();
+        stale_challenge[0] ^= 0x80;
+        let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+            &service_fixture.policy,
+            verification,
+            stale_challenge,
+            &service_fixture.signing_key,
+        )
+        .unwrap();
+        let response =
+            CompilerExecutionServiceResponseV1::verified_current(request.identity(), attestation)
+                .unwrap();
+        send_raw(&service, response.canonical_bytes());
+    });
+    let error = CompilerExecutionClientV1::admit(client, Duration::from_secs(1))
+        .unwrap()
+        .verify_current_only(&fixture.policy, fixture.carriage)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompilerExecutionClientErrorV1::CurrentRecord(
+            CompilerExecutionCurrentRecordVerificationErrorV1::ChallengeMismatch
+        )
     ));
     handle.join().unwrap();
 }
@@ -534,10 +594,17 @@ fn spawn_service(
                         [0x92; 32],
                     )
                     .unwrap();
+                    let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+                        &fixture.policy,
+                        verification,
+                        request.verification_challenge().unwrap(),
+                        &fixture.signing_key,
+                    )
+                    .unwrap();
                     (
                         CompilerExecutionServiceResponseV1::verified_current(
                             request.identity(),
-                            verification,
+                            attestation,
                         )
                         .unwrap(),
                         true,

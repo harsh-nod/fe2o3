@@ -26,6 +26,7 @@ pub use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V1,
     COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V1,
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
@@ -45,7 +46,8 @@ pub use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeIdentityV1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptIdentityV1,
     CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestIdentityV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationIdentityV1,
+    CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
     CompilerExecutionCurrentRecordVerificationIdentityV1,
     CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
@@ -59,6 +61,7 @@ pub use fe2o3_compiler_execution_protocol::{
     CompilerExecutionServiceResponseV1, CompilerExecutionSubjectBindingV1,
     MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionAttestationV1,
+    VerifiedCompilerExecutionCurrentRecordV1,
 };
 pub use static_application::{
     SealedStaticApplicationErrorV1, sealed_static_application_identity_v1,

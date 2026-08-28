@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV1,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
     CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServiceRequestV1,
     CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
-    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV1,
 };
 
 mod child_channel;
@@ -165,14 +165,15 @@ impl CompilerExecutionClientV1 {
 
     /// Verifies one exact carriage against the protected service's current Worker record.
     ///
-    /// This operation is terminal for the connection. The returned canonical record remains
-    /// authority-free until a caller authenticates how this client endpoint was provisioned and
-    /// joins external rollback and refinement evidence.
+    /// This operation is terminal for the connection. It generates a fresh challenge internally
+    /// and verifies the response under the caller-pinned issuer key. The returned result remains
+    /// authority-free until protected key custody, external rollback, and refinement evidence are
+    /// joined by a reviewed production verifier.
     pub fn verify_current_only(
         self,
         policy: &CompilerExecutionIssuerPolicyV1,
         expected_carriage: CompilerExecutionReceiptCarriageV1,
-    ) -> Result<CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionClientErrorV1> {
+    ) -> Result<VerifiedCompilerExecutionCurrentRecordV1, CompilerExecutionClientErrorV1> {
         if expected_carriage.policy() != policy {
             return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
         }
@@ -189,15 +190,21 @@ impl CompilerExecutionClientV1 {
             .receipt()
             .prior_rollback_anchor();
         let expected_current = expected_carriage.acknowledgment().current_rollback_anchor();
-        let request = CompilerExecutionServiceRequestV1::verify_current(policy, expected_carriage)?;
+        let verification_challenge = fresh_verification_challenge()?;
+        let request = CompilerExecutionServiceRequestV1::verify_current(
+            policy,
+            expected_carriage,
+            verification_challenge,
+        )?;
         let response = self.exchange(policy, &request)?;
         require_kind(
             &response,
             CompilerExecutionServiceResponseKindV1::VerifiedCurrent,
         )?;
-        let verification = response.current_record_verification().cloned().ok_or(
-            CompilerExecutionClientErrorV1::MissingPayload("current-record verification"),
+        let attestation = response.current_record_attestation().cloned().ok_or(
+            CompilerExecutionClientErrorV1::MissingPayload("current-record attestation"),
         )?;
+        let verification = attestation.verification().clone();
         if verification.policy_identity() != expected_policy
             || verification.subject_identity() != expected_subject
             || verification.carriage_identity() != expected_carriage_identity
@@ -209,7 +216,9 @@ impl CompilerExecutionClientV1 {
         {
             return Err(CompilerExecutionClientErrorV1::DurableStateChanged);
         }
-        Ok(verification)
+        attestation
+            .verify(policy, &verification, verification_challenge)
+            .map_err(Into::into)
     }
 
     /// Recovers or completes one exact compiler receipt and returns its full carriage.
@@ -684,11 +693,52 @@ fn duration_to_poll_millis(duration: Duration) -> i32 {
     rounded.clamp(1, i32::MAX as u128) as i32
 }
 
+fn fresh_verification_challenge() -> Result<[u8; 32], CompilerExecutionClientErrorV1> {
+    let mut challenge = [0_u8; 32];
+    let mut offset = 0;
+    while offset < challenge.len() {
+        // SAFETY: the suffix is writable for its complete reported length and remains live for the
+        // syscall. Linux getrandom writes at most that length and carries no pointer ownership.
+        let received = unsafe {
+            libc::getrandom(
+                challenge[offset..].as_mut_ptr().cast(),
+                challenge.len() - offset,
+                0,
+            )
+        };
+        if received < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(CompilerExecutionClientErrorV1::Randomness(error));
+        }
+        if received == 0 {
+            return Err(CompilerExecutionClientErrorV1::Randomness(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "getrandom returned no challenge bytes",
+            )));
+        }
+        offset += usize::try_from(received).map_err(|_| {
+            CompilerExecutionClientErrorV1::Randomness(io::Error::other(
+                "getrandom returned an invalid byte count",
+            ))
+        })?;
+    }
+    if challenge == [0; 32] {
+        return Err(CompilerExecutionClientErrorV1::Randomness(
+            io::Error::other("getrandom returned an all-zero challenge"),
+        ));
+    }
+    Ok(challenge)
+}
+
 /// Bounded client admission, transport, correlation, or state-machine failure.
 #[derive(Debug)]
 pub enum CompilerExecutionClientErrorV1 {
     InvalidTimeout,
     DeadlineOverflow,
+    Randomness(io::Error),
     Descriptor(io::Error),
     NotSeqpacket,
     NamedOrNonUnixPeer,
@@ -704,6 +754,7 @@ pub enum CompilerExecutionClientErrorV1 {
     PartialSend,
     Protocol(CompilerExecutionServiceProtocolErrorV1),
     Attestation(CompilerExecutionAttestationErrorV1),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV1),
     Publication(CompilerExecutionReceiptPublicationErrorV1),
     RequestIdentityMismatch,
     SubjectOrPolicyMismatch,
@@ -721,6 +772,12 @@ impl fmt::Display for CompilerExecutionClientErrorV1 {
         match self {
             Self::InvalidTimeout => formatter.write_str("compiler service timeout must be nonzero"),
             Self::DeadlineOverflow => formatter.write_str("compiler service deadline overflowed"),
+            Self::Randomness(error) => {
+                write!(
+                    formatter,
+                    "compiler service challenge generation failed: {error}"
+                )
+            }
             Self::Descriptor(error) => {
                 write!(formatter, "compiler service peer is invalid: {error}")
             }
@@ -743,6 +800,12 @@ impl fmt::Display for CompilerExecutionClientErrorV1 {
             Self::Protocol(error) => write!(formatter, "compiler service protocol failed: {error}"),
             Self::Attestation(error) => {
                 write!(formatter, "compiler receipt attestation failed: {error}")
+            }
+            Self::CurrentRecord(error) => {
+                write!(
+                    formatter,
+                    "compiler current-record attestation failed: {error}"
+                )
             }
             Self::Publication(error) => {
                 write!(formatter, "compiler receipt publication failed: {error}")
@@ -776,11 +839,13 @@ impl Error for CompilerExecutionClientErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Descriptor(error)
+            | Self::Randomness(error)
             | Self::Poll(error)
             | Self::Send(error)
             | Self::Receive(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::Attestation(error) => Some(error),
+            Self::CurrentRecord(error) => Some(error),
             Self::Publication(error) => Some(error),
             _ => None,
         }
@@ -796,6 +861,12 @@ impl From<CompilerExecutionServiceProtocolErrorV1> for CompilerExecutionClientEr
 impl From<CompilerExecutionAttestationErrorV1> for CompilerExecutionClientErrorV1 {
     fn from(error: CompilerExecutionAttestationErrorV1) -> Self {
         Self::Attestation(error)
+    }
+}
+
+impl From<CompilerExecutionCurrentRecordVerificationErrorV1> for CompilerExecutionClientErrorV1 {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV1) -> Self {
+        Self::CurrentRecord(error)
     }
 }
 

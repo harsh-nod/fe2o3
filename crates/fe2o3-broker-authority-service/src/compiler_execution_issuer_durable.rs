@@ -17,10 +17,11 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV1,
+    CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
 use rustix::fs::{FlockOperation, Mode, OFlags, flock};
 use sha2::{Digest, Sha256};
@@ -1323,6 +1324,25 @@ impl ProtectedCompilerExecutionIssuerV1 {
         Ok(verification)
     }
 
+    /// Reacquires one exact current carriage and signs the caller's fresh endpoint challenge.
+    pub(super) fn attest_current_carriage_for_service(
+        &self,
+        expected_carriage: &CompilerExecutionReceiptCarriageV1,
+        verification_challenge: [u8; 32],
+    ) -> Result<CompilerExecutionCurrentRecordAttestationV1, ProtectedCompilerExecutionIssuerErrorV1>
+    {
+        let verification = self.verify_current_carriage_for_service(expected_carriage)?;
+        let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+            self.admission.policy(),
+            verification,
+            verification_challenge,
+            self.admission.signing_key(),
+        )?;
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        Ok(attestation)
+    }
+
     pub(super) fn validate_service_continuity(
         &self,
     ) -> Result<(), ProtectedCompilerExecutionIssuerErrorV1> {
@@ -1584,6 +1604,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     Durable(RetainedDurableDirectoryErrorV1),
     Protocol(CompilerExecutionAttestationErrorV1),
     ReceiptPublication(CompilerExecutionReceiptPublicationErrorV1),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV1),
     WorkerLedger(ProtectedCompilerExecutionWorkerLedgerErrorV1),
     Occurrence(ProtectedCompilerExecutionOccurrenceErrorV1),
     SingletonLock(io::Error),
@@ -1616,6 +1637,12 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::Protocol(error) => write!(formatter, "issuer protocol failed: {error}"),
             Self::ReceiptPublication(error) => {
                 write!(formatter, "issuer receipt publication failed: {error}")
+            }
+            Self::CurrentRecord(error) => {
+                write!(
+                    formatter,
+                    "issuer current-record attestation failed: {error}"
+                )
             }
             Self::WorkerLedger(error) => write!(formatter, "issuer Worker ledger failed: {error}"),
             Self::Occurrence(error) => {
@@ -1664,6 +1691,7 @@ impl Error for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::Durable(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::ReceiptPublication(error) => Some(error),
+            Self::CurrentRecord(error) => Some(error),
             Self::WorkerLedger(error) => Some(error),
             Self::Occurrence(error) => Some(error),
             Self::SingletonLock(error) | Self::Entropy(error) => Some(error),
@@ -1701,6 +1729,14 @@ impl From<CompilerExecutionAttestationErrorV1> for ProtectedCompilerExecutionIss
 impl From<CompilerExecutionReceiptPublicationErrorV1> for ProtectedCompilerExecutionIssuerErrorV1 {
     fn from(error: CompilerExecutionReceiptPublicationErrorV1) -> Self {
         Self::ReceiptPublication(error)
+    }
+}
+
+impl From<CompilerExecutionCurrentRecordVerificationErrorV1>
+    for ProtectedCompilerExecutionIssuerErrorV1
+{
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV1) -> Self {
+        Self::CurrentRecord(error)
     }
 }
 
