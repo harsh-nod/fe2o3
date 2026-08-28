@@ -22,6 +22,14 @@ use fe2o3_static_preexec_manifest::StaticPreexecObjectIdentityV1;
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 use sha2::{Digest, Sha256};
 
+mod authority;
+
+pub use authority::{
+    ISSUER_SERVICE_SECUREBITS_V1, IssuerServiceCredentialProfileErrorV1,
+    IssuerServiceCredentialProfileV1, ProtectedIssuerSupervisorErrorV1,
+    ProtectedIssuerSupervisorV1,
+};
+
 const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;
 const REQUIRED_EXECUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE
     .union(SealFlags::GROW)

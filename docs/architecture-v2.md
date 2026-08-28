@@ -96,13 +96,16 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   gate pins that shim as the ELF entry and rejects every dynamic-loader edge and undefined symbol. After complete
   admission and durable recovery, the issuer emits one canonical readiness
   record binding its PID, manifest, and policy through an atomic nonblocking
-  pipe. The protected supervisor now has an authority-free program-admission
-  stage that validates both source images, binds the issuer to the sealed
+  pipe. The protected supervisor first performs authority-free program
+  admission: it validates both source images, binds the issuer to the sealed
   policy, copies each into a distinct anonymous mode-0555 memfd, requires
   `F_SEAL_EXEC` and complete content seals, reopens it read-only, and repeats
-  measurement and static-profile validation. It accepts no root or key.
-  Production credential/root/key binding, `clone3` launch and readiness
-  lifecycle, distinct-UID inspection policy, backend acquisition,
+  measurement and static-profile validation. A second move-only state binds
+  that chain to the canonical sealed signing-key capability, dedicated non-root
+  service UID/GID, and a retained service-owned mode-0700 root without exposing
+  a descriptor, key, signing operation, or launch API. Full credential,
+  capability, and namespace enforcement, `clone3` launch and readiness lifecycle, distinct-UID
+  inspection policy, backend acquisition,
   load-envelope receipt carriage, external monotonic rollback anchoring, and
   Worker V3 verifier authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as

@@ -15,9 +15,10 @@ client PID/UID/GID to the exact caller-pinned policy. The supervisor's
 authority-free program stage now authenticates and independently seals the
 launcher and issuer before root or key binding; no per-launch input can select
 those images. The supervisor still needs to bind the credential profile, root,
-and key, establish the real distinct-UID launch and inspection policy, map the
-ten source descriptors through the existing static pre-exec launcher, and
-consume readiness under pidfd lifecycle ownership.
+and key now have one move-only prepared-supervisor owner. Production must still
+establish and observe the complete distinct-UID credential/capability/namespace
+profile, map the ten source descriptors through the existing static pre-exec
+launcher, and consume readiness under pidfd lifecycle ownership.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
 machine exist, but protected-supervisor integration, backend acquisition,

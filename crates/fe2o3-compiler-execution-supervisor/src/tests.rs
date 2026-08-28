@@ -3,6 +3,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use ed25519_dalek::SigningKey;
+use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
 };
@@ -22,6 +23,7 @@ impl Fixture {
             std::process::id()
         ));
         fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let image = root.join("entry");
         let bytes = static_elf();
         fs::write(&image, &bytes).unwrap();
@@ -163,6 +165,31 @@ fn policy(issuer: CompilerExecutionIssuerMeasurementV1) -> CompilerExecutionPoli
             key.verifying_key().to_bytes(),
         )
         .unwrap(),
+    )
+    .unwrap()
+}
+
+fn credentials() -> Option<IssuerServiceCredentialProfileV1> {
+    IssuerServiceCredentialProfileV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .ok()
+}
+
+fn signing_key(
+    policy: &fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV1,
+) -> CompilerExecutionSigningKeyCapabilityV1 {
+    let mut seed = [7; 32];
+    CompilerExecutionSigningKeyCapabilityV1::create_and_zeroize(&mut seed, policy).unwrap()
+}
+
+fn admitted_program(fixture: &Fixture) -> AdmittedIssuerProgramV1 {
+    AdmittedIssuerProgramV1::provision(
+        fixture.open(),
+        fixture.measurement(),
+        fixture.open(),
+        policy(fixture.issuer_measurement()),
     )
     .unwrap()
 }
@@ -366,4 +393,208 @@ fn public_debug_contains_no_descriptor_or_source_path() {
     assert!(!rendered.contains("/proc/"));
     assert!(!rendered.contains(fixture.root.to_str().unwrap()));
     assert!(!rendered.contains(&format!("fd: {}", admitted.launcher.image.as_raw_fd())));
+}
+
+#[test]
+fn exact_authority_inputs_bind_one_move_only_supervisor() {
+    let Some(credentials) = credentials() else {
+        return;
+    };
+    let fixture = Fixture::new("authority-bind");
+    let program = admitted_program(&fixture);
+    let key = signing_key(program.policy());
+    let supervisor = ProtectedIssuerSupervisorV1::bind(
+        program,
+        credentials,
+        File::open(&fixture.root).unwrap(),
+        key,
+    )
+    .unwrap();
+    supervisor.revalidate().unwrap();
+    assert_eq!(supervisor.credentials(), credentials);
+    assert_eq!(
+        supervisor.policy().verifying_key(),
+        SigningKey::from_bytes(&[7; 32]).verifying_key().as_bytes()
+    );
+}
+
+#[test]
+fn credential_profile_rejects_privileged_and_sentinel_identities() {
+    assert_eq!(
+        IssuerServiceCredentialProfileV1::new(0, 1),
+        Err(IssuerServiceCredentialProfileErrorV1::InvalidUid)
+    );
+    assert_eq!(
+        IssuerServiceCredentialProfileV1::new(u32::MAX, 1),
+        Err(IssuerServiceCredentialProfileErrorV1::InvalidUid)
+    );
+    assert_eq!(
+        IssuerServiceCredentialProfileV1::new(1, 0),
+        Err(IssuerServiceCredentialProfileErrorV1::InvalidGid)
+    );
+    assert_eq!(
+        IssuerServiceCredentialProfileV1::new(1, u32::MAX),
+        Err(IssuerServiceCredentialProfileErrorV1::InvalidGid)
+    );
+    let profile = IssuerServiceCredentialProfileV1::new(1, 2).unwrap();
+    assert_eq!(profile.uid(), 1);
+    assert_eq!(profile.gid(), 2);
+    assert_eq!(profile.securebits(), ISSUER_SERVICE_SECUREBITS_V1);
+    assert_eq!(ISSUER_SERVICE_SECUREBITS_V1 & (1 << 4), 0);
+}
+
+#[test]
+fn authority_binding_requires_the_configured_service_identity() {
+    let fixture = Fixture::new("wrong-service-identity");
+    let program = admitted_program(&fixture);
+    let key = signing_key(program.policy());
+    let wrong_uid = if rustix::process::geteuid().as_raw() == 1 {
+        2
+    } else {
+        1
+    };
+    let service_gid = match rustix::process::getegid().as_raw() {
+        0 | u32::MAX => 1,
+        gid => gid,
+    };
+    let profile = IssuerServiceCredentialProfileV1::new(wrong_uid, service_gid).unwrap();
+    assert!(matches!(
+        ProtectedIssuerSupervisorV1::bind(
+            program,
+            profile,
+            File::open(&fixture.root).unwrap(),
+            key,
+        ),
+        Err(ProtectedIssuerSupervisorErrorV1::ServiceIdentityMismatch)
+    ));
+}
+
+#[test]
+fn hostile_root_shapes_and_metadata_drift_fail_closed() {
+    let Some(profile) = credentials() else {
+        return;
+    };
+    let fixture = Fixture::new("hostile-root");
+
+    fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o750)).unwrap();
+    let program = admitted_program(&fixture);
+    let key = signing_key(program.policy());
+    assert!(matches!(
+        ProtectedIssuerSupervisorV1::bind(
+            program,
+            profile,
+            File::open(&fixture.root).unwrap(),
+            key,
+        ),
+        Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
+            "mode is not exactly 0700"
+        ))
+    ));
+    fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let ordinary = File::open(&fixture.image).unwrap();
+    assert!(matches!(
+        ProtectedIssuerSupervisorV1::bind(
+            admitted_program(&fixture),
+            profile,
+            ordinary,
+            signing_key(admitted_program(&fixture).policy()),
+        ),
+        Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
+            "object is not a directory"
+        ))
+    ));
+
+    let inheritable = File::open(&fixture.root).unwrap();
+    rustix::io::fcntl_setfd(&inheritable, rustix::io::FdFlags::empty()).unwrap();
+    let program = admitted_program(&fixture);
+    assert!(matches!(
+        ProtectedIssuerSupervisorV1::bind(
+            program,
+            profile,
+            inheritable,
+            signing_key(admitted_program(&fixture).policy()),
+        ),
+        Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
+            "descriptor is inheritable"
+        ))
+    ));
+
+    let path_only = rustix::fs::open(&fixture.root, OFlags::PATH | OFlags::CLOEXEC, Mode::empty())
+        .map(File::from)
+        .unwrap();
+    let program = admitted_program(&fixture);
+    let key = signing_key(program.policy());
+    assert!(matches!(
+        ProtectedIssuerSupervisorV1::bind(program, profile, path_only, key),
+        Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
+            "descriptor is not read-only directory custody"
+        ))
+    ));
+
+    let program = admitted_program(&fixture);
+    let key = signing_key(program.policy());
+    let supervisor = ProtectedIssuerSupervisorV1::bind(
+        program,
+        profile,
+        File::open(&fixture.root).unwrap(),
+        key,
+    )
+    .unwrap();
+    fs::create_dir(fixture.root.join("changes-link-count")).unwrap();
+    assert!(matches!(
+        supervisor.revalidate(),
+        Err(ProtectedIssuerSupervisorErrorV1::RootChanged)
+    ));
+}
+
+#[test]
+fn key_from_another_policy_cannot_bind_to_the_program() {
+    let Some(credentials) = credentials() else {
+        return;
+    };
+    let fixture = Fixture::new("wrong-key-policy");
+    let program = admitted_program(&fixture);
+    let other_key = SigningKey::from_bytes(&[8; 32]);
+    let other_policy = CompilerExecutionIssuerPolicyV1::new(
+        1,
+        fixture.issuer_measurement(),
+        sealed_static_issuer_runtime_measurement_v1(),
+        other_key.verifying_key().to_bytes(),
+    )
+    .unwrap();
+    let mut other_seed = [8; 32];
+    let other_capability =
+        CompilerExecutionSigningKeyCapabilityV1::create_and_zeroize(&mut other_seed, &other_policy)
+            .unwrap();
+    assert!(matches!(
+        ProtectedIssuerSupervisorV1::bind(
+            program,
+            credentials,
+            File::open(&fixture.root).unwrap(),
+            other_capability,
+        ),
+        Err(ProtectedIssuerSupervisorErrorV1::SigningKey(_))
+    ));
+}
+
+#[test]
+fn supervisor_debug_exposes_no_descriptor_path_or_secret_seed() {
+    let Some(credentials) = credentials() else {
+        return;
+    };
+    let fixture = Fixture::new("supervisor-debug");
+    let program = admitted_program(&fixture);
+    let key = signing_key(program.policy());
+    let supervisor = ProtectedIssuerSupervisorV1::bind(
+        program,
+        credentials,
+        File::open(&fixture.root).unwrap(),
+        key,
+    )
+    .unwrap();
+    let rendered = format!("{supervisor:?}");
+    assert!(!rendered.contains(fixture.root.to_str().unwrap()));
+    assert!(!rendered.contains("fd:"));
+    assert!(!rendered.contains("[7, 7, 7"));
 }
