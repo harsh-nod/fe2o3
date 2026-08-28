@@ -89,16 +89,26 @@ production listener at
 `/run/fe2o3/compiler-execution-supervisor.sock`. Admission requires an exact
 nonblocking close-on-exec listening Unix `SOCK_SEQPACKET`, no connected peer,
 no pending socket error, and stable descriptor plus filesystem-socket
-identities. `serve_one` waits under one absolute bound, accepts with
+identities. Each accept operation waits under one absolute bound and uses
 `CLOEXEC | NONBLOCK`, repeats listener and supervisor validation around the
 accept, and dispatches the control descriptor directly into `run_session`.
 Alternate production paths and caller-visible accepted descriptors do not
 exist.
+
+The public service operation is a consuming fixed worker loop. Its validated
+worker count is between one and the same 64-process custody limit used by the
+pidfd reaper. Each worker accepts directly from the retained listener and can
+enter only `run_session`; a bounded completion channel returns inert completed
+or stage-typed rejected outcomes to the owner thread. Session rejection does
+not stop unrelated clients. Listener, supervisor, worker, or channel failure
+requests global stop and is returned after all workers join. An authority-free
+cloneable stop handle provides graceful shutdown with a one-second maximum
+idle accept observation; active sessions retain their trusted timeout bounds.
 
 The launcher deliberately inherits an already established profile instead of
 performing privileged credential transitions after `clone3`. Deployment must
 therefore start the supervisor under the dedicated UID/GID with empty groups
 and capabilities, exact locked securebits, `no_new_privs`, nondumpability,
 zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.
-The fixed-capacity accept loop, Cargo-wrapper service acquisition, and the real
-deployed distinct-UID supervisor entrypoint remain pending.
+Cargo-wrapper service acquisition and the real deployed distinct-UID
+supervisor entrypoint remain pending.

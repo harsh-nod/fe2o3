@@ -5,6 +5,9 @@ use std::fmt;
 use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender};
 use std::time::{Duration, Instant};
 
 use fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1;
@@ -20,6 +23,7 @@ use crate::{
 };
 
 const MAX_ACCEPT_TIMEOUT_V1: Duration = Duration::from_secs(120);
+const SERVICE_ACCEPT_OBSERVATION_V1: Duration = Duration::from_secs(1);
 const PERMISSION_AND_SPECIAL_BITS: u32 = 0o7777;
 
 /// Failure admitting or using the sole protected issuer service listener.
@@ -36,6 +40,12 @@ pub enum ProtectedIssuerServiceErrorV1 {
     Supervisor(ProtectedIssuerSupervisorErrorV1),
     /// One accepted connection failed in its exact lifecycle stage.
     Session(ProtectedIssuerSessionErrorV1),
+    /// The configured worker count is zero or exceeds protected process capacity.
+    InvalidWorkerCount,
+    /// One fixed service worker could not be created.
+    WorkerSpawn(io::Error),
+    /// One fixed service worker panicked or its bounded completion channel broke.
+    WorkerFailed,
     /// A bounded listener operation failed.
     Io {
         /// Operation that failed.
@@ -57,6 +67,11 @@ impl fmt::Display for ProtectedIssuerServiceErrorV1 {
             Self::AcceptTimeout => formatter.write_str("protected issuer accept timed out"),
             Self::Supervisor(error) => write!(formatter, "issuer supervisor changed: {error}"),
             Self::Session(error) => write!(formatter, "issuer session failed: {error}"),
+            Self::InvalidWorkerCount => {
+                formatter.write_str("invalid protected issuer service worker count")
+            }
+            Self::WorkerSpawn(error) => write!(formatter, "cannot spawn issuer worker: {error}"),
+            Self::WorkerFailed => formatter.write_str("protected issuer service worker failed"),
             Self::Io { operation, source } => write!(formatter, "{operation}: {source}"),
         }
     }
@@ -67,9 +82,80 @@ impl Error for ProtectedIssuerServiceErrorV1 {
         match self {
             Self::Supervisor(error) => Some(error),
             Self::Session(error) => Some(error),
+            Self::WorkerSpawn(error) => Some(error),
             Self::Io { source, .. } => Some(source),
-            Self::InvalidListener(_) | Self::InvalidAcceptTimeout | Self::AcceptTimeout => None,
+            Self::InvalidListener(_)
+            | Self::InvalidAcceptTimeout
+            | Self::AcceptTimeout
+            | Self::InvalidWorkerCount
+            | Self::WorkerFailed => None,
         }
+    }
+}
+
+/// Validated fixed concurrency for the protected issuer service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtectedIssuerServiceWorkerCountV1(usize);
+
+impl ProtectedIssuerServiceWorkerCountV1 {
+    /// Constructs a nonzero worker count no larger than protected process capacity.
+    pub const fn new(workers: usize) -> Result<Self, ProtectedIssuerServiceErrorV1> {
+        if workers == 0 || workers > crate::MAX_PROTECTED_ISSUER_PROCESSES_V1 {
+            return Err(ProtectedIssuerServiceErrorV1::InvalidWorkerCount);
+        }
+        Ok(Self(workers))
+    }
+
+    /// Returns the exact fixed worker count.
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// One inert completed or rejected session reported by the fixed worker pool.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProtectedIssuerSessionOutcomeV1 {
+    /// One session crossed every lifecycle stage and was exactly once reaped.
+    Completed(ExitedProtectedIssuerV1),
+    /// One accepted connection failed closed at its reported lifecycle stage.
+    Rejected(ProtectedIssuerSessionErrorV1),
+}
+
+/// Aggregate bounded-worker service activity observed before graceful shutdown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtectedIssuerServiceReportV1 {
+    completed: u64,
+    rejected: u64,
+}
+
+impl ProtectedIssuerServiceReportV1 {
+    /// Returns sessions that completed and were exactly once reaped.
+    pub const fn completed(self) -> u64 {
+        self.completed
+    }
+
+    /// Returns accepted connections that failed closed.
+    pub const fn rejected(self) -> u64 {
+        self.rejected
+    }
+}
+
+/// Cloneable, authority-free request for the fixed service workers to stop accepting.
+#[derive(Clone, Debug)]
+pub struct ProtectedIssuerServiceShutdownV1 {
+    requested: Arc<AtomicBool>,
+}
+
+impl ProtectedIssuerServiceShutdownV1 {
+    /// Requests graceful stop; active sessions retain their configured bounds and custody.
+    pub fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+    }
+
+    /// Reports whether graceful stop has been requested.
+    pub fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::Acquire)
     }
 }
 
@@ -94,6 +180,7 @@ pub struct ProtectedIssuerServiceV1 {
     supervisor: ProtectedIssuerSupervisorV1,
     listener: ProtectedIssuerListenerV1,
     timeouts: ProtectedIssuerSessionTimeoutsV1,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for ProtectedIssuerServiceV1 {
@@ -138,11 +225,155 @@ impl ProtectedIssuerServiceV1 {
             supervisor,
             listener,
             timeouts,
+            shutdown: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// Accepts and runs one complete production session without exposing its control descriptor.
-    pub fn serve_one(
+    /// Returns an authority-free handle that can request graceful accept-loop shutdown.
+    pub fn shutdown_handle(&self) -> ProtectedIssuerServiceShutdownV1 {
+        ProtectedIssuerServiceShutdownV1 {
+            requested: Arc::clone(&self.shutdown),
+        }
+    }
+
+    /// Runs the sole fixed-capacity production accept loop until graceful shutdown.
+    ///
+    /// Each fixed worker accepts directly from the retained listener and invokes only the
+    /// complete [`ProtectedIssuerSupervisorV1::run_session`] operation. The callback runs on the
+    /// owner thread and receives inert completion or stage-typed rejection values. Session
+    /// failures do not stop admission; listener, supervisor, channel, or worker failures do.
+    pub fn run<Observe>(
+        self,
+        workers: ProtectedIssuerServiceWorkerCountV1,
+        mut observe: Observe,
+    ) -> Result<ProtectedIssuerServiceReportV1, ProtectedIssuerServiceErrorV1>
+    where
+        Observe: FnMut(ProtectedIssuerSessionOutcomeV1),
+    {
+        self.revalidate()?;
+        let worker_count = workers.get();
+        let (completion_sender, completion_receiver) = mpsc::sync_channel(
+            worker_count
+                .checked_mul(2)
+                .expect("worker count is bounded"),
+        );
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(worker_count);
+            for index in 0..worker_count {
+                let sender = completion_sender.clone();
+                let service = &self;
+                let worker = std::thread::Builder::new()
+                    .name(format!("fe2o3-issuer-worker-{index}"))
+                    .spawn_scoped(scope, move || {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            service.run_worker(&sender)
+                        }));
+                        if result.is_err() {
+                            service.shutdown.store(true, Ordering::Release);
+                            let _ = sender.send(WorkerEventV1::Failed);
+                        }
+                        let _ = sender.send(WorkerEventV1::Stopped);
+                    });
+                match worker {
+                    Ok(handle) => handles.push(handle),
+                    Err(source) => {
+                        self.shutdown.store(true, Ordering::Release);
+                        drop(completion_sender);
+                        for handle in handles {
+                            let _ = handle.join();
+                        }
+                        return Err(ProtectedIssuerServiceErrorV1::WorkerSpawn(source));
+                    }
+                }
+            }
+            drop(completion_sender);
+
+            let mut report = ProtectedIssuerServiceReportV1 {
+                completed: 0,
+                rejected: 0,
+            };
+            let mut stopped = 0_usize;
+            let mut fatal = None;
+            while stopped < worker_count {
+                let event = completion_receiver
+                    .recv()
+                    .map_err(|_| ProtectedIssuerServiceErrorV1::WorkerFailed)?;
+                match event {
+                    WorkerEventV1::Outcome(ProtectedIssuerSessionOutcomeV1::Completed(exited)) => {
+                        report.completed = report
+                            .completed
+                            .checked_add(1)
+                            .ok_or(ProtectedIssuerServiceErrorV1::WorkerFailed)?;
+                        observe(ProtectedIssuerSessionOutcomeV1::Completed(exited));
+                    }
+                    WorkerEventV1::Outcome(ProtectedIssuerSessionOutcomeV1::Rejected(error)) => {
+                        report.rejected = report
+                            .rejected
+                            .checked_add(1)
+                            .ok_or(ProtectedIssuerServiceErrorV1::WorkerFailed)?;
+                        observe(ProtectedIssuerSessionOutcomeV1::Rejected(error));
+                    }
+                    WorkerEventV1::Fatal(error) => {
+                        self.shutdown.store(true, Ordering::Release);
+                        if fatal.is_none() {
+                            fatal = Some(error);
+                        }
+                    }
+                    WorkerEventV1::Failed => {
+                        self.shutdown.store(true, Ordering::Release);
+                        if fatal.is_none() {
+                            fatal = Some(ProtectedIssuerServiceErrorV1::WorkerFailed);
+                        }
+                    }
+                    WorkerEventV1::Stopped => stopped += 1,
+                }
+            }
+            for handle in handles {
+                if handle.join().is_err() && fatal.is_none() {
+                    fatal = Some(ProtectedIssuerServiceErrorV1::WorkerFailed);
+                }
+            }
+            if let Some(error) = fatal {
+                return Err(error);
+            }
+            self.revalidate()?;
+            Ok(report)
+        })
+    }
+
+    fn run_worker(&self, sender: &SyncSender<WorkerEventV1>) {
+        while !self.shutdown.load(Ordering::Acquire) {
+            match self.serve_one(SERVICE_ACCEPT_OBSERVATION_V1) {
+                Ok(exited) => {
+                    if sender
+                        .send(WorkerEventV1::Outcome(
+                            ProtectedIssuerSessionOutcomeV1::Completed(exited),
+                        ))
+                        .is_err()
+                    {
+                        self.shutdown.store(true, Ordering::Release);
+                    }
+                }
+                Err(ProtectedIssuerServiceErrorV1::AcceptTimeout) => {}
+                Err(ProtectedIssuerServiceErrorV1::Session(error)) => {
+                    if sender
+                        .send(WorkerEventV1::Outcome(
+                            ProtectedIssuerSessionOutcomeV1::Rejected(error),
+                        ))
+                        .is_err()
+                    {
+                        self.shutdown.store(true, Ordering::Release);
+                    }
+                }
+                Err(error) => {
+                    self.shutdown.store(true, Ordering::Release);
+                    let _ = sender.send(WorkerEventV1::Fatal(error));
+                }
+            }
+        }
+    }
+
+    fn serve_one(
         &self,
         accept_timeout: Duration,
     ) -> Result<ExitedProtectedIssuerV1, ProtectedIssuerServiceErrorV1> {
@@ -208,6 +439,13 @@ impl ProtectedIssuerServiceV1 {
             (_, Err(error)) => Err(error),
         }
     }
+}
+
+enum WorkerEventV1 {
+    Outcome(ProtectedIssuerSessionOutcomeV1),
+    Fatal(ProtectedIssuerServiceErrorV1),
+    Failed,
+    Stopped,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

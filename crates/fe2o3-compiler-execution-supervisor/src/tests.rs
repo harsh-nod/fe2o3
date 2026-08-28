@@ -1511,6 +1511,78 @@ fn admitted_listener_rejects_filesystem_identity_removal() {
 }
 
 #[test]
+fn fixed_worker_pool_reports_rejection_and_stops_gracefully() {
+    assert!(matches!(
+        ProtectedIssuerServiceWorkerCountV1::new(0),
+        Err(ProtectedIssuerServiceErrorV1::InvalidWorkerCount)
+    ));
+    assert!(matches!(
+        ProtectedIssuerServiceWorkerCountV1::new(MAX_PROTECTED_ISSUER_PROCESSES_V1 + 1),
+        Err(ProtectedIssuerServiceErrorV1::InvalidWorkerCount)
+    ));
+    let workers = ProtectedIssuerServiceWorkerCountV1::new(1).unwrap();
+
+    let fixture = Fixture::new("fixed-worker-pool");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let _cargo_control = connect_seqpacket(&listener_path);
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let service = ProtectedIssuerServiceV1::bind_inner(
+        supervisor,
+        listener,
+        session_timeouts(),
+        &listener_path,
+    )
+    .unwrap();
+    let shutdown = service.shutdown_handle();
+    let mut observed = 0_u64;
+    let report = service
+        .run(workers, |outcome| {
+            observed += 1;
+            assert!(matches!(
+                outcome,
+                ProtectedIssuerSessionOutcomeV1::Rejected(ProtectedIssuerSessionErrorV1::Handoff(
+                    ProtectedIssuerHandoffErrorV1::ClientAndSupervisorUidMatch
+                ))
+            ));
+            shutdown.request();
+        })
+        .unwrap();
+    assert_eq!(observed, 1);
+    assert_eq!(report.completed(), 0);
+    assert_eq!(report.rejected(), 1);
+    assert!(shutdown.is_requested());
+}
+
+#[test]
+fn pre_requested_shutdown_starts_and_joins_every_fixed_worker() {
+    let fixture = Fixture::new("pre-requested-worker-stop");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let service = ProtectedIssuerServiceV1::bind_inner(
+        supervisor,
+        listener,
+        session_timeouts(),
+        &listener_path,
+    )
+    .unwrap();
+    let shutdown = service.shutdown_handle();
+    shutdown.request();
+    let report = service
+        .run(ProtectedIssuerServiceWorkerCountV1::new(4).unwrap(), |_| {
+            panic!("pre-requested shutdown admitted a session")
+        })
+        .unwrap();
+    assert_eq!(report.completed(), 0);
+    assert_eq!(report.rejected(), 0);
+}
+
+#[test]
 fn closed_cargo_control_fails_publication_and_reaps_the_issuer() {
     let fixture = Fixture::with_code("closed-readiness-control", &launched_probe_code(true));
     let Some(supervisor) = bound_supervisor(&fixture) else {

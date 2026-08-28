@@ -37,7 +37,11 @@ pub use authority::{
 };
 pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
-pub use listener::{ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceV1};
+pub use listener::{
+    ProtectedIssuerServiceErrorV1, ProtectedIssuerServiceReportV1,
+    ProtectedIssuerServiceShutdownV1, ProtectedIssuerServiceV1,
+    ProtectedIssuerServiceWorkerCountV1, ProtectedIssuerSessionOutcomeV1,
+};
 pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,
     ProtectedIssuerLaunchErrorV1, ProtectedIssuerTerminationV1, ReadyProtectedIssuerV1,
