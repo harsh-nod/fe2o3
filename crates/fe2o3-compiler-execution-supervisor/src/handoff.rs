@@ -87,6 +87,18 @@ impl AcceptedCompilerExecutionHandoffV1 {
         {
             return Err(ProtectedIssuerHandoffErrorV1::PolicyMismatch);
         }
+        if !self
+            .handoff
+            .launch_manifest()
+            .matches_external_anchor_service(supervisor.external_anchor_service())
+        {
+            return Err(ProtectedIssuerHandoffErrorV1::ExternalAnchorServiceMismatch);
+        }
+        if self.handoff.launch_manifest().client().pid()
+            == supervisor.external_anchor_process().pid()
+        {
+            return Err(ProtectedIssuerHandoffErrorV1::ClientAndExternalAnchorProcessMatch);
+        }
         if descriptor_snapshot(&self.control)? != self.control_snapshot
             || descriptor_snapshot(&self.service_peer)? != self.service_peer_snapshot
             || descriptor_snapshot(&self.client_pidfd)? != self.client_pidfd_snapshot
@@ -152,10 +164,19 @@ impl ProtectedIssuerSupervisorV1 {
         if !handoff.launch_manifest().matches_policy(self.policy()) {
             return Err(ProtectedIssuerHandoffErrorV1::PolicyMismatch);
         }
+        if !handoff
+            .launch_manifest()
+            .matches_external_anchor_service(self.external_anchor_service())
+        {
+            return Err(ProtectedIssuerHandoffErrorV1::ExternalAnchorServiceMismatch);
+        }
         if submitter != handoff.submitter() {
             return Err(ProtectedIssuerHandoffErrorV1::SubmitterCredentialsMismatch);
         }
         let client = handoff.launch_manifest().client();
+        if client.pid() == self.external_anchor_process().pid() {
+            return Err(ProtectedIssuerHandoffErrorV1::ClientAndExternalAnchorProcessMatch);
+        }
         let service_peer_snapshot = descriptor_snapshot(&service_peer)?;
         let client_pidfd_snapshot = descriptor_snapshot(&client_pidfd)?;
         require_distinct(
@@ -420,6 +441,10 @@ pub enum ProtectedIssuerHandoffErrorV1 {
     CanonicalHandoff(CompilerExecutionSupervisorHandoffErrorV1),
     /// The manifest does not name the supervisor's caller-pinned policy.
     PolicyMismatch,
+    /// The manifest does not name the supervisor-provisioned external-anchor service.
+    ExternalAnchorServiceMismatch,
+    /// The rustc client and external-anchor endpoint name the same process.
+    ClientAndExternalAnchorProcessMatch,
     /// The transferred service endpoint has the wrong socket shape.
     InvalidServicePeer,
     /// The transferred service endpoint does not name the exact rustc process.
@@ -458,6 +483,11 @@ impl fmt::Display for ProtectedIssuerHandoffErrorV1 {
             Self::PolicyMismatch => {
                 formatter.write_str("rustc launch manifest names another issuer policy")
             }
+            Self::ExternalAnchorServiceMismatch => {
+                formatter.write_str("rustc launch manifest names another external-anchor service")
+            }
+            Self::ClientAndExternalAnchorProcessMatch => formatter
+                .write_str("rustc client and external-anchor service name the same process"),
             Self::InvalidServicePeer => {
                 formatter.write_str("rustc service endpoint has the wrong socket shape")
             }

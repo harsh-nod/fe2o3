@@ -64,8 +64,9 @@ copied to distinct read-only anonymous executable memfds with complete content,
 exec, and seal seals. The program value cannot accept a root or key; that
 authority-binding transition is now complete, as is authenticated receipt of
 the direct-parent rustc handoff. The supervisor also materializes the exact
-ten-source table, distinct standard-stream and readiness pipes, cloned
-authority descriptors, and a sealed canonical static pre-exec manifest bound
+  twelve-source table, distinct standard-stream and readiness pipes, cloned
+  authority descriptors, an admitted external-anchor endpoint and pidfd, and a
+  sealed canonical static pre-exec manifest bound
 to its PID and process start time. That state is now consumed by an exact
 `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` launch. A direct-syscall gate
 self-checks the inherited profile and parent-death containment while the
@@ -124,8 +125,12 @@ durable receipt commit. The issuer accepts a publication acknowledgment only
 through a move-only committed-publication capability that callers cannot
 construct from wire bytes. The
 [protected Worker ledger](compiler-execution-worker-ledger-v1.md) now creates
-that capability only after independently verifying, committing, and reacquiring
-the exact request and sidecar. The
+that capability only after durably resolving the exact transaction against the
+admitted external-anchor endpoint, independently verifying and committing the
+request and sidecar, atomically embedding the complete signed proposed-position
+receipt in the Worker V2 record, and reacquiring both that record and the
+byte-identical Published anchor journal. Legacy V1 Worker records and a V2 record
+without its journal fail closed. The
 [bounded service](compiler-execution-service-v1.md) now exposes that composition
 over the already admitted `SOCK_SEQPACKET` connection and makes the direct
 transition methods private. The descriptor-only musl-static issuer entrypoint

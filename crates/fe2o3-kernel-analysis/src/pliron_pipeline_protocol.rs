@@ -10,9 +10,9 @@ use std::{
 };
 
 use dialect_kernel::{
-    BranchArgsOp, DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexLessThanBranchArgsOp, IndexUnsignedCastOp, PipelineCreateOp, PipelineEventKindAttr,
-    PipelineEventOp, RankedViewOp,
+    AccessKindAttr, BranchArgsOp, DeterministicJoinOp, IndexBinaryKindAttr, IndexBinaryOp,
+    IndexConstantOp, IndexLessThanBranchArgsOp, IndexUnsignedCastOp, PipelineCreateOp,
+    PipelineEventKindAttr, PipelineEventOp, RankedAccessOp, RankedViewOp,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -115,9 +115,11 @@ impl fmt::Display for PlironPipelineProtocolFindingV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EpochAwareLoopSummaryV1 {
     prologue: usize,
+    prologue_blocks: Vec<usize>,
     header: usize,
     body: Vec<usize>,
     exit: usize,
+    drain_blocks: Vec<usize>,
     induction: String,
     bound: String,
     step: u64,
@@ -133,11 +135,17 @@ impl EpochAwareLoopSummaryV1 {
     pub const fn header(&self) -> usize {
         self.header
     }
+    pub fn prologue_blocks(&self) -> &[usize] {
+        &self.prologue_blocks
+    }
     pub fn body(&self) -> &[usize] {
         &self.body
     }
     pub const fn exit(&self) -> usize {
         self.exit
+    }
+    pub fn drain_blocks(&self) -> &[usize] {
+        &self.drain_blocks
     }
     pub fn induction(&self) -> &str {
         &self.induction
@@ -167,6 +175,9 @@ pub struct PlironPipelineProtocolCertificateV1 {
     prefetch_distance: u32,
     dynamic_loop: Option<EpochAwareLoopSummaryV1>,
     concrete_epochs: usize,
+    staged_writes: usize,
+    consuming_reads: usize,
+    access_refinement_proven: bool,
 }
 
 impl PlironPipelineProtocolCertificateV1 {
@@ -187,6 +198,15 @@ impl PlironPipelineProtocolCertificateV1 {
     }
     pub const fn concrete_epochs(&self) -> usize {
         self.concrete_epochs
+    }
+    pub const fn staged_writes(&self) -> usize {
+        self.staged_writes
+    }
+    pub const fn consuming_reads(&self) -> usize {
+        self.consuming_reads
+    }
+    pub const fn access_refinement_proven(&self) -> bool {
+        self.access_refinement_proven
     }
 }
 
@@ -347,7 +367,7 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
         } else {
             unknown_class_owner.get_or_insert(*site);
         }
-        creates.push((site.pointer(), *site, create.pipeline_type(context)));
+        creates.push((site.pointer(), *site, create.pipeline_type(context), view));
         create_owners.insert(site.pointer());
     }
     let mut events = HashMap::<Ptr<Operation>, Vec<EventSiteV1>>::new();
@@ -383,8 +403,31 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             slot: event.slot(context),
         });
     }
+    let mut accesses = HashMap::<Value, Vec<AccessSiteV1>>::new();
+    for site in inventory.operations() {
+        let operation = Operation::get_op_dyn(site.pointer(), context);
+        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
+            continue;
+        };
+        let Some(kind) = access.kind(context) else {
+            continue;
+        };
+        let indices = access.indices(context);
+        let Some(slot) = indices.first().copied() else {
+            continue;
+        };
+        accesses
+            .entry(access.view(context))
+            .or_default()
+            .push(AccessSiteV1 {
+                site: *site,
+                kind,
+                slot,
+                indices,
+            });
+    }
     let mut certificates = Vec::new();
-    for (pointer, site, pipeline_type) in creates {
+    for (pointer, site, pipeline_type, view) in creates {
         let Some(pipeline_type) = pipeline_type else {
             push_finding(
                 &mut findings,
@@ -407,6 +450,7 @@ pub(crate) fn run_pliron_pipeline_protocol_check_with_analyses_v1(
             pipeline_type.buffers(),
             pipeline_type.prefetch_distance(),
             &schedule,
+            accesses.get(&view).map_or(&[], Vec::as_slice),
             &loops,
             &uniform_roots,
         ) {
@@ -443,12 +487,20 @@ struct EventSiteV1 {
 }
 
 #[derive(Clone)]
+struct AccessSiteV1 {
+    site: PlironOperationSiteV1,
+    kind: AccessKindAttr,
+    slot: Value,
+    indices: Vec<Value>,
+}
+
+#[derive(Clone)]
 struct CanonicalEpochLoopV1 {
-    entry: usize,
+    prologue: Vec<usize>,
     header: usize,
     body: Vec<usize>,
     body_members: HashSet<usize>,
-    exit: usize,
+    drain: Vec<usize>,
     inductions: HashMap<usize, Value>,
     header_induction: Value,
     bound: Value,
@@ -460,10 +512,11 @@ fn verify_one_pipeline(
     buffers: u32,
     distance: u32,
     schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
     loops: &[CanonicalEpochLoopV1],
     uniform_roots: &HashSet<Value>,
 ) -> Result<PlironPipelineProtocolCertificateV1, PlironPipelineProtocolFindingV1> {
-    let containing = loops
+    let mut containing = loops
         .iter()
         .filter(|summary| {
             schedule
@@ -472,7 +525,8 @@ fn verify_one_pipeline(
         })
         .collect::<Vec<_>>();
     if containing.is_empty() {
-        let epochs = verify_concrete_schedule(context, pipeline, buffers, schedule)?;
+        let (epochs, staged_writes, consuming_reads, access_refinement_proven) =
+            verify_concrete_schedule(context, pipeline, buffers, schedule, accesses)?;
         return Ok(PlironPipelineProtocolCertificateV1 {
             pipeline_block: pipeline.block(),
             pipeline_operation: pipeline.operation(),
@@ -480,22 +534,39 @@ fn verify_one_pipeline(
             prefetch_distance: distance,
             dynamic_loop: None,
             concrete_epochs: epochs,
+            staged_writes,
+            consuming_reads,
+            access_refinement_proven,
         });
     }
-    let [summary] = containing.as_slice() else {
-        return Err(invalid(
-            pipeline,
-            None,
-            "one pipeline lifecycle crosses more than one dynamic loop",
-        ));
+    containing.sort_by_key(|summary| summary.body.len());
+    let Some(summary) = containing.first().copied() else {
+        unreachable!("the empty case returned above")
     };
-    if summary.entry != 0 {
+    if containing[1..].iter().any(|outer| {
+        !summary
+            .body_members
+            .iter()
+            .all(|block| outer.body_members.contains(block))
+    }) {
         return Err(invalid(
             pipeline,
             None,
-            "the dynamic pipeline prologue is not in the function entry block, so full-workgroup participation is unproved",
+            "one pipeline lifecycle crosses non-nested dynamic loops",
         ));
     }
+    let Some(prologue_start) = summary
+        .prologue
+        .iter()
+        .position(|block| *block == pipeline.block())
+    else {
+        return Err(invalid(
+            pipeline,
+            None,
+            "the dynamic pipeline is not created on the canonical linear prologue, so per-entry lifecycle ownership is unproved",
+        ));
+    };
+    let prologue_blocks = summary.prologue[prologue_start..].to_vec();
     if !is_uniform_value(context, summary.bound, uniform_roots, &mut HashSet::new()) {
         return Err(invalid(
             pipeline,
@@ -503,17 +574,21 @@ fn verify_one_pipeline(
             "the runtime loop bound is not proved workgroup-uniform",
         ));
     }
-    verify_dynamic_schedule(context, pipeline, buffers, distance, schedule, summary)?;
+    let (staged_writes, consuming_reads, access_refinement_proven) = verify_dynamic_schedule(
+        context, pipeline, buffers, distance, schedule, accesses, summary,
+    )?;
     Ok(PlironPipelineProtocolCertificateV1 {
         pipeline_block: pipeline.block(),
         pipeline_operation: pipeline.operation(),
         buffers,
         prefetch_distance: distance,
         dynamic_loop: Some(EpochAwareLoopSummaryV1 {
-            prologue: summary.entry,
+            prologue: pipeline.block(),
+            prologue_blocks,
             header: summary.header,
             body: summary.body.clone(),
-            exit: summary.exit,
+            exit: summary.drain[0],
+            drain_blocks: summary.drain.clone(),
             induction: summary.header_induction.unique_name(context).to_string(),
             bound: summary.bound.unique_name(context).to_string(),
             step: 1,
@@ -522,6 +597,9 @@ fn verify_one_pipeline(
             drained_epochs: distance,
         }),
         concrete_epochs: 0,
+        staged_writes,
+        consuming_reads,
+        access_refinement_proven,
     })
 }
 
@@ -566,24 +644,41 @@ fn verify_dynamic_schedule(
     buffers: u32,
     distance: u32,
     schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
     summary: &CanonicalEpochLoopV1,
-) -> Result<(), PlironPipelineProtocolFindingV1> {
+) -> Result<(usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let mut prologue = Vec::new();
     let mut body = Vec::new();
     let mut drain = Vec::new();
-    let positions = summary
+    let prologue_start = summary
+        .prologue
+        .iter()
+        .position(|block| *block == pipeline.block())
+        .expect("pipeline creation was checked against the canonical prologue");
+    let prologue_positions = summary.prologue[prologue_start..]
+        .iter()
+        .enumerate()
+        .map(|(position, block)| (*block, position))
+        .collect::<HashMap<_, _>>();
+    let body_positions = summary
         .body
         .iter()
         .enumerate()
         .map(|(position, block)| (*block, position))
         .collect::<HashMap<_, _>>();
+    let drain_positions = summary
+        .drain
+        .iter()
+        .enumerate()
+        .map(|(position, block)| (*block, position))
+        .collect::<HashMap<_, _>>();
     for event in schedule {
-        if event.site.block() == summary.entry {
-            prologue.push(*event);
-        } else if let Some(position) = positions.get(&event.site.block()).copied() {
+        if let Some(position) = prologue_positions.get(&event.site.block()).copied() {
+            prologue.push((position, *event));
+        } else if let Some(position) = body_positions.get(&event.site.block()).copied() {
             body.push((position, *event));
-        } else if event.site.block() == summary.exit {
-            drain.push(*event);
+        } else if let Some(position) = drain_positions.get(&event.site.block()).copied() {
+            drain.push((position, *event));
         } else {
             return Err(invalid(
                 pipeline,
@@ -592,9 +687,17 @@ fn verify_dynamic_schedule(
             ));
         }
     }
-    prologue.sort_by_key(|event| event.site.operation());
+    prologue.sort_by_key(|(position, event)| (*position, event.site.operation()));
     body.sort_by_key(|(position, event)| (*position, event.site.operation()));
-    drain.sort_by_key(|event| event.site.operation());
+    drain.sort_by_key(|(position, event)| (*position, event.site.operation()));
+    let prologue = prologue
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect::<Vec<_>>();
+    let drain = drain
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect::<Vec<_>>();
 
     let expected_prologue = usize::try_from(distance).unwrap_or(usize::MAX) * 2;
     if prologue.len() != expected_prologue {
@@ -692,7 +795,7 @@ fn verify_dynamic_schedule(
             )?;
         }
     }
-    Ok(())
+    verify_dynamic_accesses(context, pipeline, buffers, schedule, accesses, summary)
 }
 
 #[derive(Clone, Copy)]
@@ -741,6 +844,192 @@ fn require_event(
     Ok(())
 }
 
+#[derive(Clone)]
+enum DynamicPipelineActionV1 {
+    Event(EventSiteV1),
+    Access(AccessSiteV1),
+}
+
+impl DynamicPipelineActionV1 {
+    const fn site(&self) -> PlironOperationSiteV1 {
+        match self {
+            Self::Event(event) => event.site,
+            Self::Access(access) => access.site,
+        }
+    }
+}
+
+fn verify_dynamic_accesses(
+    context: &Context,
+    pipeline: PlironOperationSiteV1,
+    buffers: u32,
+    schedule: &[EventSiteV1],
+    accesses: &[AccessSiteV1],
+    summary: &CanonicalEpochLoopV1,
+) -> Result<(usize, usize, bool), PlironPipelineProtocolFindingV1> {
+    if accesses.is_empty() {
+        return Ok((0, 0, true));
+    }
+    let prologue_start = summary
+        .prologue
+        .iter()
+        .position(|block| *block == pipeline.block())
+        .expect("pipeline creation was checked against the canonical prologue");
+    let mut ordered_blocks = summary.prologue[prologue_start..].to_vec();
+    ordered_blocks.extend(summary.body.iter().copied());
+    ordered_blocks.extend(summary.drain.iter().copied());
+    let positions = ordered_blocks
+        .iter()
+        .enumerate()
+        .map(|(position, block)| (*block, position))
+        .collect::<HashMap<_, _>>();
+    let order_key = |site: PlironOperationSiteV1| {
+        positions
+            .get(&site.block())
+            .copied()
+            .map(|position| (position, site.operation()))
+    };
+    let mut actions = Vec::with_capacity(accesses.len() + schedule.len());
+    for access in accesses {
+        if order_key(access.site).is_none() {
+            return Err(invalid(
+                pipeline,
+                Some(access.site),
+                "pipeline-owned storage is accessed outside the canonical prologue, loop body, or drain block",
+            ));
+        }
+        actions.push(DynamicPipelineActionV1::Access(access.clone()));
+    }
+    for event in schedule {
+        actions.push(DynamicPipelineActionV1::Event(*event));
+    }
+    actions.sort_by_key(|action| {
+        order_key(action.site()).unwrap_or((usize::MAX, action.site().operation()))
+    });
+
+    let mut staging = None::<Value>;
+    let mut consuming = None::<Value>;
+    let mut staging_coordinates = HashSet::<Vec<Value>>::new();
+    let mut consuming_coordinates = HashSet::<Vec<Value>>::new();
+    let mut canonical_coordinates = None::<HashSet<Vec<Value>>>;
+    let mut empty_staging_windows = 0_usize;
+    let mut empty_consuming_windows = 0_usize;
+    let mut staged_writes = 0;
+    let mut consuming_reads = 0;
+    for action in actions {
+        match action {
+            DynamicPipelineActionV1::Event(event) => match event.kind {
+                Some(PipelineEventKindAttr::Stage) => {
+                    staging = Some(event.epoch);
+                    staging_coordinates.clear();
+                }
+                Some(PipelineEventKindAttr::Commit) => {
+                    if staging_coordinates.is_empty() {
+                        empty_staging_windows += 1;
+                    } else {
+                        require_matching_pipeline_coordinates_v1(
+                            pipeline,
+                            event.site,
+                            "staging",
+                            &staging_coordinates,
+                            &mut canonical_coordinates,
+                        )?;
+                    }
+                    staging = None;
+                }
+                Some(PipelineEventKindAttr::Consume) => {
+                    consuming = Some(event.epoch);
+                    consuming_coordinates.clear();
+                }
+                Some(PipelineEventKindAttr::Release) => {
+                    if consuming.is_some() {
+                        if consuming_coordinates.is_empty() {
+                            empty_consuming_windows += 1;
+                        } else {
+                            require_matching_pipeline_coordinates_v1(
+                                pipeline,
+                                event.site,
+                                "consuming",
+                                &consuming_coordinates,
+                                &mut canonical_coordinates,
+                            )?;
+                        }
+                    }
+                    consuming_coordinates.clear();
+                    consuming = None;
+                }
+                Some(PipelineEventKindAttr::Wait | PipelineEventKindAttr::Discard) | None => {}
+            },
+            DynamicPipelineActionV1::Access(access) => {
+                let expected = match access.kind {
+                    AccessKindAttr::Write => staging.map(|epoch| (epoch, true)),
+                    AccessKindAttr::Read => consuming.map(|epoch| (epoch, false)),
+                    _ => None,
+                };
+                let Some((epoch, is_write)) = expected else {
+                    return Err(invalid(
+                        pipeline,
+                        Some(access.site),
+                        &format!(
+                            "{:?} access is outside its legal stage-to-commit or consume-to-release window",
+                            access.kind
+                        ),
+                    ));
+                };
+                if !slot_is_epoch_modulo(context, access.slot, epoch, buffers) {
+                    return Err(invalid(
+                        pipeline,
+                        Some(access.site),
+                        &format!(
+                            "{:?} access does not use the live epoch modulo {buffers} as its leading ring index",
+                            access.kind
+                        ),
+                    ));
+                }
+                if is_write {
+                    staging_coordinates.insert(access.indices[1..].to_vec());
+                    staged_writes += 1;
+                } else {
+                    consuming_coordinates.insert(access.indices[1..].to_vec());
+                    consuming_reads += 1;
+                }
+            }
+        }
+    }
+    if consuming_reads != 0 && (empty_staging_windows != 0 || empty_consuming_windows != 0) {
+        return Err(invalid(
+            pipeline,
+            None,
+            "a consumed symbolic tile is not initialized in every prologue and steady-state epoch",
+        ));
+    }
+    Ok((staged_writes, consuming_reads, true))
+}
+
+fn require_matching_pipeline_coordinates_v1(
+    pipeline: PlironOperationSiteV1,
+    event: PlironOperationSiteV1,
+    phase: &str,
+    coordinates: &HashSet<Vec<Value>>,
+    canonical: &mut Option<HashSet<Vec<Value>>>,
+) -> Result<(), PlironPipelineProtocolFindingV1> {
+    debug_assert!(!coordinates.is_empty());
+    match canonical {
+        None => *canonical = Some(coordinates.clone()),
+        Some(expected) if expected == coordinates => {}
+        Some(_) => {
+            return Err(invalid(
+                pipeline,
+                Some(event),
+                &format!(
+                    "{phase} epoch coordinates do not match the staged/consumed symbolic tile"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SlotStateV1 {
     Free,
@@ -756,13 +1045,14 @@ fn verify_concrete_schedule(
     pipeline: PlironOperationSiteV1,
     buffers: u32,
     schedule: &[EventSiteV1],
-) -> Result<usize, PlironPipelineProtocolFindingV1> {
+    accesses: &[AccessSiteV1],
+) -> Result<(usize, usize, usize, bool), PlironPipelineProtocolFindingV1> {
     let first_block = schedule[0].site.block();
-    if first_block != 0 {
+    if first_block != pipeline.block() {
         return Err(invalid(
             pipeline,
             None,
-            "a straight-line pipeline lifecycle is not in the function entry block, so full-workgroup participation is unproved",
+            "a straight-line pipeline lifecycle is not in its creation block, so per-entry lifecycle ownership is unproved",
         ));
     }
     if schedule
@@ -779,7 +1069,88 @@ fn verify_concrete_schedule(
     ordered.sort_by_key(|event| event.site.operation());
     let mut slots = vec![SlotStateV1::Free; buffers as usize];
     let mut epochs = HashSet::new();
-    for event in ordered {
+    let mut ordered_accesses = accesses.to_vec();
+    ordered_accesses.sort_by_key(|access| access.site.operation());
+    let mut next_event = 0;
+    let mut next_access = 0;
+    let mut staged_writes = 0;
+    let mut consuming_reads = 0;
+    let mut initialized = HashMap::<u64, HashSet<Vec<Value>>>::new();
+    while next_event < ordered.len() || next_access < ordered_accesses.len() {
+        let event_precedes = next_access == ordered_accesses.len()
+            || (next_event < ordered.len()
+                && ordered[next_event].site.operation()
+                    < ordered_accesses[next_access].site.operation());
+        if !event_precedes {
+            let access = ordered_accesses[next_access].clone();
+            next_access += 1;
+            if access.site.block() != first_block {
+                return Err(invalid(
+                    pipeline,
+                    Some(access.site),
+                    "a straight-line pipeline access is outside the entry block",
+                ));
+            }
+            let Some(slot) = index_constant(context, access.slot) else {
+                return Err(invalid(
+                    pipeline,
+                    Some(access.site),
+                    "a straight-line pipeline access has a symbolic ring slot",
+                ));
+            };
+            let Some(state) = usize::try_from(slot)
+                .ok()
+                .and_then(|slot| slots.get(slot))
+                .copied()
+            else {
+                return Err(invalid(
+                    pipeline,
+                    Some(access.site),
+                    &format!("pipeline access slot {slot} is outside {buffers} buffers"),
+                ));
+            };
+            match access.kind {
+                AccessKindAttr::Write if matches!(state, SlotStateV1::Staged(_)) => {
+                    let SlotStateV1::Staged(epoch) = state else {
+                        unreachable!("the guarded state is staged")
+                    };
+                    initialized
+                        .entry(epoch)
+                        .or_default()
+                        .insert(access.indices[1..].to_vec());
+                    staged_writes += 1;
+                }
+                AccessKindAttr::Read if matches!(state, SlotStateV1::Consuming(_)) => {
+                    let SlotStateV1::Consuming(epoch) = state else {
+                        unreachable!("the guarded state is consuming")
+                    };
+                    if !initialized
+                        .get(&epoch)
+                        .is_some_and(|writes| writes.contains(&access.indices[1..]))
+                    {
+                        return Err(invalid(
+                            pipeline,
+                            Some(access.site),
+                            "pipeline read coordinate was not initialized in the same epoch",
+                        ));
+                    }
+                    consuming_reads += 1;
+                }
+                _ => {
+                    return Err(invalid(
+                        pipeline,
+                        Some(access.site),
+                        &format!(
+                            "{:?} access to slot {slot} occurs while that slot is {state:?}",
+                            access.kind
+                        ),
+                    ));
+                }
+            }
+            continue;
+        }
+        let event = ordered[next_event];
+        next_event += 1;
         let Some(kind) = event.kind else {
             return Err(invalid(
                 pipeline,
@@ -851,7 +1222,7 @@ fn verify_concrete_schedule(
             "pipeline exits with committed or consuming epochs that were not released",
         ));
     }
-    Ok(epochs.len())
+    Ok((epochs.len(), staged_writes, consuming_reads, true))
 }
 
 fn discover_epoch_loops(
@@ -865,6 +1236,7 @@ fn discover_epoch_loops(
         .map(|(index, block)| (*block, index))
         .collect::<HashMap<_, _>>();
     let mut predecessors = vec![Vec::new(); inventory.blocks().len()];
+    let mut cfg_successors = vec![Vec::new(); inventory.blocks().len()];
     for (source, block) in inventory.blocks().iter().copied().enumerate() {
         let Some(terminator) = block.deref(context).get_terminator(context) else {
             continue;
@@ -872,6 +1244,7 @@ fn discover_epoch_loops(
         for successor in terminator.deref(context).successors() {
             if let Some(target) = block_indices.get(&successor).copied() {
                 predecessors[target].push(source);
+                cfg_successors[source].push(target);
             }
         }
     }
@@ -982,12 +1355,45 @@ fn discover_epoch_loops(
         {
             continue;
         }
+        let mut prologue = vec![*entry];
+        let mut current = *entry;
+        while let [predecessor] = predecessors[current].as_slice() {
+            if *predecessor == header_index
+                || body_members.contains(predecessor)
+                || predecessors[*predecessor].len() > 1
+                || prologue.contains(predecessor)
+            {
+                break;
+            }
+            prologue.push(*predecessor);
+            current = *predecessor;
+        }
+        prologue.reverse();
+
+        let mut drain = Vec::new();
+        let mut current = exit;
+        loop {
+            if drain.contains(&current) {
+                break;
+            }
+            drain.push(current);
+            let [successor] = cfg_successors[current].as_slice() else {
+                break;
+            };
+            if *successor == header_index
+                || body_members.contains(successor)
+                || predecessors[*successor].len() > 1
+            {
+                break;
+            }
+            current = *successor;
+        }
         loops.push(CanonicalEpochLoopV1 {
-            entry: *entry,
+            prologue,
             header: header_index,
             body,
             body_members,
-            exit,
+            drain,
             inductions,
             header_induction: induction,
             bound: branch.rhs(context),

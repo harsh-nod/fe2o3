@@ -95,7 +95,7 @@ if(BUILD_TESTING)
 
   foreach(case IN ITEMS success signal-state alias alias-mutable-metadata
       manifest-executable-alias target-substitution extra-source missing-source
-      standard-fd duplicate-destination parent-identity)
+      standard-fd duplicate-destination parent-identity pidfd-class-on-pipe)
     string(REPLACE "-" "_" case_name "${case}")
     add_test(NAME "fe2o3-static-preexec-${case}"
       COMMAND "$<TARGET_FILE:fe2o3-static-preexec-supervisor>"

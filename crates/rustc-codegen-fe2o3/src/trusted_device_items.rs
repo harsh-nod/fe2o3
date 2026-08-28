@@ -32,8 +32,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x33, 0x19, 0xbf, 0xf2, 0x01, 0xd5, 0x86, 0xa4, 0x6f, 0xd1, 0xde, 0xe4, 0xe2, 0x8d, 0x8d, 0x9c,
-    0x6f, 0x24, 0x13, 0x7c, 0x21, 0x93, 0xa6, 0x7b, 0xb9, 0x3a, 0x44, 0x5d, 0x98, 0xbe, 0x0b, 0xb2,
+    0x49, 0xdc, 0xd0, 0xd1, 0x18, 0x63, 0x09, 0x43, 0x73, 0x9e, 0x17, 0x78, 0x1a, 0xe5, 0x00, 0xef,
+    0xf8, 0x65, 0x34, 0x7d, 0xc8, 0xd9, 0x42, 0xa4, 0x61, 0x78, 0x13, 0x1a, 0xdf, 0x16, 0x5e, 0xa2,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -182,6 +182,16 @@ pub(crate) enum TrustedDeviceItem {
     WorkgroupLdsScopeCurrent,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
+    WorkgroupPipeline,
+    WorkgroupPipelineCurrent,
+    WorkgroupPipelineStage,
+    WorkgroupPipelineWrite,
+    WorkgroupPipelineCommit,
+    WorkgroupPipelineWait,
+    WorkgroupPipelineConsume,
+    WorkgroupPipelineRead,
+    WorkgroupPipelineDiscard,
+    WorkgroupPipelineRelease,
     Invocation3D,
     Invocation3DCurrent,
     ThreadIndexX,
@@ -384,6 +394,56 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
         "fe2o3_device_dynamic_lds_into_collective_raw_parts_v1",
         "fe2o3_device::DynamicLds::<T>::into_collective_raw_parts",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipeline,
+        "fe2o3_device_workgroup_pipeline_v1",
+        "fe2o3_device::WorkgroupPipeline",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineCurrent,
+        "fe2o3_device_workgroup_pipeline_current_v1",
+        "fe2o3_device::WorkgroupPipeline::current",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineStage,
+        "fe2o3_device_workgroup_pipeline_stage_v1",
+        "fe2o3_device::WorkgroupPipeline::stage",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineWrite,
+        "fe2o3_device_workgroup_pipeline_write_v1",
+        "fe2o3_device::WorkgroupPipeline::write",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineCommit,
+        "fe2o3_device_workgroup_pipeline_commit_v1",
+        "fe2o3_device::WorkgroupPipeline::commit",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineWait,
+        "fe2o3_device_workgroup_pipeline_wait_v1",
+        "fe2o3_device::WorkgroupPipeline::wait",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineConsume,
+        "fe2o3_device_workgroup_pipeline_consume_v1",
+        "fe2o3_device::WorkgroupPipeline::consume",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineRead,
+        "fe2o3_device_workgroup_pipeline_read_v1",
+        "fe2o3_device::WorkgroupPipeline::read",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineDiscard,
+        "fe2o3_device_workgroup_pipeline_discard_v1",
+        "fe2o3_device::WorkgroupPipeline::discard",
+    ),
+    (
+        TrustedDeviceItem::WorkgroupPipelineRelease,
+        "fe2o3_device_workgroup_pipeline_release_v1",
+        "fe2o3_device::WorkgroupPipeline::release",
     ),
     (
         TrustedDeviceItem::Invocation3D,
@@ -1432,6 +1492,16 @@ fn safe_execution_compiler_definition_path(item: TrustedDeviceItem) -> &'static 
         TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
             "fe2o3_device::lds::{impl#4}::into_collective_raw_parts"
         }
+        TrustedDeviceItem::WorkgroupPipeline => "fe2o3_device::lds::WorkgroupPipeline",
+        TrustedDeviceItem::WorkgroupPipelineCurrent => "fe2o3_device::lds::{impl#10}::current",
+        TrustedDeviceItem::WorkgroupPipelineStage => "fe2o3_device::lds::{impl#10}::stage",
+        TrustedDeviceItem::WorkgroupPipelineWrite => "fe2o3_device::lds::{impl#10}::write",
+        TrustedDeviceItem::WorkgroupPipelineCommit => "fe2o3_device::lds::{impl#10}::commit",
+        TrustedDeviceItem::WorkgroupPipelineWait => "fe2o3_device::lds::{impl#10}::wait",
+        TrustedDeviceItem::WorkgroupPipelineConsume => "fe2o3_device::lds::{impl#10}::consume",
+        TrustedDeviceItem::WorkgroupPipelineRead => "fe2o3_device::lds::{impl#10}::read",
+        TrustedDeviceItem::WorkgroupPipelineDiscard => "fe2o3_device::lds::{impl#10}::discard",
+        TrustedDeviceItem::WorkgroupPipelineRelease => "fe2o3_device::lds::{impl#10}::release",
         TrustedDeviceItem::Invocation3D => "fe2o3_device::thread::Invocation3D",
         TrustedDeviceItem::Invocation3DCurrent => "fe2o3_device::thread::{impl#6}::current",
         TrustedDeviceItem::Gfx942CollectivesContext => {
@@ -1614,6 +1684,16 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::WorkgroupLdsScopeCurrent
             | TrustedDeviceItem::DynamicLdsExactCurrent
             | TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
+            | TrustedDeviceItem::WorkgroupPipeline
+            | TrustedDeviceItem::WorkgroupPipelineCurrent
+            | TrustedDeviceItem::WorkgroupPipelineStage
+            | TrustedDeviceItem::WorkgroupPipelineWrite
+            | TrustedDeviceItem::WorkgroupPipelineCommit
+            | TrustedDeviceItem::WorkgroupPipelineWait
+            | TrustedDeviceItem::WorkgroupPipelineConsume
+            | TrustedDeviceItem::WorkgroupPipelineRead
+            | TrustedDeviceItem::WorkgroupPipelineDiscard
+            | TrustedDeviceItem::WorkgroupPipelineRelease
             | TrustedDeviceItem::Invocation3D
             | TrustedDeviceItem::Invocation3DCurrent
             | TrustedDeviceItem::ThreadIndexX
@@ -3051,6 +3131,16 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
             TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
+            TrustedDeviceItem::WorkgroupPipeline,
+            TrustedDeviceItem::WorkgroupPipelineCurrent,
+            TrustedDeviceItem::WorkgroupPipelineStage,
+            TrustedDeviceItem::WorkgroupPipelineWrite,
+            TrustedDeviceItem::WorkgroupPipelineCommit,
+            TrustedDeviceItem::WorkgroupPipelineWait,
+            TrustedDeviceItem::WorkgroupPipelineConsume,
+            TrustedDeviceItem::WorkgroupPipelineRead,
+            TrustedDeviceItem::WorkgroupPipelineDiscard,
+            TrustedDeviceItem::WorkgroupPipelineRelease,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::ThreadIndexX,
@@ -3268,6 +3358,16 @@ mod tests {
             TrustedDeviceItem::WorkgroupLdsScopeCurrent,
             TrustedDeviceItem::DynamicLdsExactCurrent,
             TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts,
+            TrustedDeviceItem::WorkgroupPipeline,
+            TrustedDeviceItem::WorkgroupPipelineCurrent,
+            TrustedDeviceItem::WorkgroupPipelineStage,
+            TrustedDeviceItem::WorkgroupPipelineWrite,
+            TrustedDeviceItem::WorkgroupPipelineCommit,
+            TrustedDeviceItem::WorkgroupPipelineWait,
+            TrustedDeviceItem::WorkgroupPipelineConsume,
+            TrustedDeviceItem::WorkgroupPipelineRead,
+            TrustedDeviceItem::WorkgroupPipelineDiscard,
+            TrustedDeviceItem::WorkgroupPipelineRelease,
             TrustedDeviceItem::Invocation3D,
             TrustedDeviceItem::Invocation3DCurrent,
             TrustedDeviceItem::Gfx942CollectivesContext,

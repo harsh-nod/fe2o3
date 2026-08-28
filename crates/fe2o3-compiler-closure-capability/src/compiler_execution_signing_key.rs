@@ -213,6 +213,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([2; 32], 2).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([3; 32], 3).unwrap(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[seed.wrapping_add(1); KEY_BYTES])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }

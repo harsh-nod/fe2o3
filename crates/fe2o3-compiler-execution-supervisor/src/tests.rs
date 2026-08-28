@@ -9,13 +9,16 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
+use fe2o3_broker_authority_service::ProtectedExternalAnchorServiceAdmissionV1;
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_compiler_execution_client::PendingCompilerExecutionChildChannelV1;
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionIssuerMeasurementV1,
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
-    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffV1,
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionExternalAnchorServiceIdentityV1,
+    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyV1,
+    CompilerExecutionSupervisorHandoffV1,
 };
+use fe2o3_static_preexec_manifest::StaticPreexecObjectClassV1;
 use rustix::net::{
     AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
     SocketType, bind, connect, listen, recv, sendmsg, socket_with, socketpair,
@@ -24,6 +27,58 @@ use rustix::net::{
 use super::*;
 
 static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
+static TEST_ANCHOR_SERVICE_PEERS: Mutex<Vec<OwnedFd>> = Mutex::new(Vec::new());
+const TEST_ANCHOR_DESCRIPTOR_FLOOR: i32 = 512;
+
+fn external_anchor_service() -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+    CompilerExecutionExternalAnchorServiceIdentityV1::new(
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap()
+}
+
+fn external_anchor_admission() -> ProtectedExternalAnchorServiceAdmissionV1 {
+    let (issuer_peer, service_peer) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let issuer_peer = normalize_test_anchor_descriptor(issuer_peer);
+    let service_peer = normalize_test_anchor_descriptor(service_peer);
+    let service_pidfd = normalize_test_anchor_descriptor(
+        rustix::process::pidfd_open(
+            rustix::process::getpid(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .unwrap(),
+    );
+    let admission =
+        ProtectedExternalAnchorServiceAdmissionV1::admit_non_authoritative_same_uid_test(
+            issuer_peer,
+            service_pidfd,
+            external_anchor_service(),
+        )
+        .unwrap();
+    TEST_ANCHOR_SERVICE_PEERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(service_peer);
+    admission
+}
+
+fn normalize_test_anchor_descriptor(descriptor: OwnedFd) -> OwnedFd {
+    let normalized =
+        rustix::io::fcntl_dupfd_cloexec(&descriptor, TEST_ANCHOR_DESCRIPTOR_FLOOR).unwrap();
+    drop(descriptor);
+    assert_ne!(
+        normalized.as_raw_fd(),
+        fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+    );
+    normalized
+}
 
 struct Fixture {
     root: PathBuf,
@@ -238,6 +293,7 @@ fn policy(issuer: CompilerExecutionIssuerMeasurementV1) -> CompilerExecutionPoli
             issuer,
             sealed_static_issuer_runtime_measurement_v1(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
         )
         .unwrap(),
     )
@@ -279,6 +335,7 @@ fn bound_supervisor(fixture: &Fixture) -> Option<ProtectedIssuerSupervisorV1> {
             profile,
             File::open(&fixture.root).unwrap(),
             key,
+            external_anchor_admission(),
         )
         .unwrap(),
     )
@@ -504,6 +561,7 @@ fn invalid_measurements_and_runtime_policy_reject() {
             fixture.issuer_measurement(),
             wrong_runtime,
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
         )
         .unwrap(),
     )
@@ -548,6 +606,7 @@ fn exact_authority_inputs_bind_one_move_only_supervisor() {
         credentials,
         File::open(&fixture.root).unwrap(),
         key,
+        external_anchor_admission(),
     )
     .unwrap();
     supervisor.revalidate().unwrap();
@@ -604,6 +663,7 @@ fn authority_binding_requires_the_configured_service_identity() {
             profile,
             File::open(&fixture.root).unwrap(),
             key,
+            external_anchor_admission(),
         ),
         Err(ProtectedIssuerSupervisorErrorV1::ServiceIdentityMismatch)
     ));
@@ -625,6 +685,7 @@ fn hostile_root_shapes_and_metadata_drift_fail_closed() {
             profile,
             File::open(&fixture.root).unwrap(),
             key,
+            external_anchor_admission(),
         ),
         Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
             "mode is not exactly 0700"
@@ -639,6 +700,7 @@ fn hostile_root_shapes_and_metadata_drift_fail_closed() {
             profile,
             ordinary,
             signing_key(admitted_program(&fixture).policy()),
+            external_anchor_admission(),
         ),
         Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
             "object is not a directory"
@@ -654,6 +716,7 @@ fn hostile_root_shapes_and_metadata_drift_fail_closed() {
             profile,
             inheritable,
             signing_key(admitted_program(&fixture).policy()),
+            external_anchor_admission(),
         ),
         Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
             "descriptor is inheritable"
@@ -666,7 +729,13 @@ fn hostile_root_shapes_and_metadata_drift_fail_closed() {
     let program = admitted_program(&fixture);
     let key = signing_key(program.policy());
     assert!(matches!(
-        ProtectedIssuerSupervisorV1::bind(program, profile, path_only, key),
+        ProtectedIssuerSupervisorV1::bind(
+            program,
+            profile,
+            path_only,
+            key,
+            external_anchor_admission(),
+        ),
         Err(ProtectedIssuerSupervisorErrorV1::InvalidRoot(
             "descriptor is not read-only directory custody"
         ))
@@ -679,6 +748,7 @@ fn hostile_root_shapes_and_metadata_drift_fail_closed() {
         profile,
         File::open(&fixture.root).unwrap(),
         key,
+        external_anchor_admission(),
     )
     .unwrap();
     fs::create_dir(fixture.root.join("changes-link-count")).unwrap();
@@ -701,6 +771,7 @@ fn key_from_another_policy_cannot_bind_to_the_program() {
         fixture.issuer_measurement(),
         sealed_static_issuer_runtime_measurement_v1(),
         other_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
     )
     .unwrap();
     let mut other_seed = [8; 32];
@@ -713,6 +784,7 @@ fn key_from_another_policy_cannot_bind_to_the_program() {
             credentials,
             File::open(&fixture.root).unwrap(),
             other_capability,
+            external_anchor_admission(),
         ),
         Err(ProtectedIssuerSupervisorErrorV1::SigningKey(_))
     ));
@@ -731,6 +803,7 @@ fn supervisor_debug_exposes_no_descriptor_path_or_secret_seed() {
         credentials,
         File::open(&fixture.root).unwrap(),
         key,
+        external_anchor_admission(),
     )
     .unwrap();
     let rendered = format!("{supervisor:?}");
@@ -748,7 +821,11 @@ fn exact_cross_process_handoff_is_admitted_and_revalidated() {
     let (_reserved_fd_guard, mut child, launch) = live_launch();
     let client = launch.client();
     let submitter = launch.submitter();
-    let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        client,
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest.clone()).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
@@ -793,8 +870,11 @@ fn pending_handoff(
     OwnedFd,
 ) {
     let (guard, child, launch) = live_launch();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
@@ -840,7 +920,7 @@ fn connect_seqpacket(path: &Path) -> OwnedFd {
 }
 
 #[test]
-fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
+fn admitted_handoff_materializes_exact_sealed_twelve_source_launch() {
     let fixture = Fixture::new("exact-prepared-launch");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
@@ -848,7 +928,7 @@ fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
     let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
 
-    assert_eq!(prepared.static_manifest().descriptors().len(), 10);
+    assert_eq!(prepared.static_manifest().descriptors().len(), 12);
     assert_eq!(
         prepared.static_manifest().parent_pid(),
         std::process::id() as i32
@@ -862,7 +942,7 @@ fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
             .iter()
             .map(|entry| entry.source_fd())
             .collect::<Vec<_>>(),
-        (200..210).collect::<Vec<_>>()
+        (200..212).collect::<Vec<_>>()
     );
     assert_eq!(
         prepared
@@ -871,7 +951,7 @@ fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
             .iter()
             .map(|entry| entry.destination_fd())
             .collect::<Vec<_>>(),
-        (0..10).collect::<Vec<_>>()
+        (0..12).collect::<Vec<_>>()
     );
 
     let required_manifest_seals =
@@ -897,10 +977,20 @@ fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
     }
     for index in 0..prepared.sources.len() {
         let left = rustix::fs::fstat(&prepared.sources[index]).unwrap();
-        for right in &prepared.sources[..index] {
+        for (right_index, right) in prepared.sources[..index].iter().enumerate() {
             let right = rustix::fs::fstat(right).unwrap();
-            assert_ne!((left.st_dev, left.st_ino), (right.st_dev, right.st_ino));
+            if (right_index, index) != (5, 11) {
+                assert_ne!((left.st_dev, left.st_ino), (right.st_dev, right.st_ino));
+            }
         }
+    }
+    for index in [5, 11] {
+        assert_eq!(
+            prepared.static_manifest().descriptors()[index]
+                .object()
+                .class(),
+            StaticPreexecObjectClassV1::ProcessPidfd
+        );
     }
     assert_eq!(
         rustix::fs::fcntl_getfl(&prepared.sources[0]).unwrap() & OFlags::ACCMODE,
@@ -912,9 +1002,22 @@ fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
             OFlags::WRONLY
         );
     }
+    assert_eq!(
+        rustix::fs::fcntl_getfl(&prepared.sources[10]).unwrap() & OFlags::ACCMODE,
+        OFlags::RDWR
+    );
+    assert!(
+        rustix::fs::fcntl_getfl(&prepared.sources[10])
+            .unwrap()
+            .contains(OFlags::NONBLOCK)
+    );
+    assert_eq!(
+        prepared.service_manifest().external_anchor_service(),
+        supervisor.external_anchor_service()
+    );
     prepared.revalidate(&supervisor).unwrap();
     let rendered = format!("{prepared:?}");
-    assert!(rendered.contains("descriptor_count: 10"));
+    assert!(rendered.contains("descriptor_count: 12"));
     assert!(!rendered.contains("fd:"));
     assert!(!rendered.contains(fixture.root.to_str().unwrap()));
 
@@ -937,6 +1040,39 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
     child.kill().unwrap();
     child.wait().unwrap();
     drop(first_reserved_fd_guard);
+
+    let (anchor_peer_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let (substituted_anchor_peer, _substituted_anchor_service) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    prepared.sources[10] = File::from(substituted_anchor_peer);
+    assert!(matches!(
+        prepared.revalidate(&supervisor),
+        Err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor(
+            ProtectedIssuerSupervisorErrorV1::ExternalAnchor(_)
+        ))
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(anchor_peer_guard);
+
+    let (anchor_pidfd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    prepared.sources[11] = prepared.sources[5].try_clone().unwrap();
+    assert!(matches!(
+        prepared.revalidate(&supervisor),
+        Err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor(
+            ProtectedIssuerSupervisorErrorV1::ExternalAnchor(_)
+        ))
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(anchor_pidfd_guard);
 
     let (second_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
@@ -1030,8 +1166,11 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
             actual_submitter.gid(),
         )
         .unwrap();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let substituted =
         CompilerExecutionSupervisorHandoffV1::new(substituted_submitter, manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
@@ -1056,10 +1195,14 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
         fixture.issuer_measurement(),
         sealed_static_issuer_runtime_measurement_v1(),
         wrong_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
     )
     .unwrap();
-    let wrong_manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &wrong_policy);
+    let wrong_manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        &wrong_policy,
+    );
     let wrong_handoff =
         CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), wrong_manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
@@ -1077,9 +1220,42 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     child.wait().unwrap();
     drop(second_reserved_fd_guard);
 
+    let (anchor_reserved_fd_guard, mut child, launch) = live_launch();
+    let admitted_anchor = external_anchor_service();
+    let substituted_anchor = CompilerExecutionExternalAnchorServiceIdentityV1::new(
+        if admitted_anchor.uid() == 1 { 2 } else { 1 },
+        admitted_anchor.gid(),
+    )
+    .unwrap();
+    let wrong_anchor_manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        substituted_anchor,
+        supervisor.policy(),
+    );
+    let wrong_anchor_handoff =
+        CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), wrong_anchor_manifest)
+            .unwrap();
+    let (service_peer, pidfd) = launch.into_test_descriptors();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(
+        &sender,
+        &wrong_anchor_handoff,
+        &[service_peer.as_fd(), pidfd.as_fd()],
+    );
+    assert!(matches!(
+        supervisor.accept_handoff_inner::<false>(receiver, Duration::from_secs(1)),
+        Err(ProtectedIssuerHandoffErrorV1::ExternalAnchorServiceMismatch)
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(anchor_reserved_fd_guard);
+
     let (third_reserved_fd_guard, mut child, launch) = live_launch();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
     let (service_peer, _pidfd) = launch.into_test_descriptors();
     let duplicate = rustix::io::fcntl_dupfd_cloexec(&service_peer, 0).unwrap();
@@ -1098,8 +1274,11 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     drop(third_reserved_fd_guard);
 
     let (_fourth_reserved_fd_guard, mut child, launch) = live_launch();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
     let extra = File::open("/dev/null").unwrap();
@@ -1395,7 +1574,11 @@ fn fixed_named_listener_dispatches_one_complete_session() {
     let (_reserved_fd_guard, mut rustc_child, launch) = live_launch();
     let handoff = CompilerExecutionSupervisorHandoffV1::new(
         launch.submitter(),
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &policy),
+        CompilerExecutionServiceLaunchManifestV1::new(
+            launch.client(),
+            external_anchor_service(),
+            &policy,
+        ),
     )
     .unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
@@ -1747,6 +1930,7 @@ fn real_static_launcher_crosses_both_exec_boundaries() {
         credentials,
         File::open(&fixture.root).unwrap(),
         key,
+        external_anchor_admission(),
     )
     .unwrap();
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =

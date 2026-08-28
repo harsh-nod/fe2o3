@@ -2,21 +2,54 @@
 
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
-current-record verification, and bounded service packet records. The 352-byte
-current-record verification binds one exact carriage to the policy, subject,
-issuer journal, Worker record, sequence, both rollback anchors, and the
-protected policy and Worker-ledger verification identities. Decoding that
-record proves canonical structure only. It grants no authority unless a caller
-received it over an authenticated protected-service session and independently
-matches every field to the request. The 240-byte client profile binds the exact
-dedicated supervisor UID/GID to one complete caller-pinned issuer policy; it
-contains no endpoint, path, secret, timeout, or authority. The launch manifest
-binds an exact PID/UID/GID tuple to an exact policy identity. A canonical
-supervisor-handoff record additionally
+current-record verification, and bounded service packet records. The sole
+1,440-byte V3 current-record verification binds one exact carriage to the
+policy, subject, issuer journal, Worker record, sequence, both internal rollback
+anchors, policy-pinned external-anchor key, complete 528-byte signed commit
+receipt, complete 528-byte fresh currentness receipt, and protected policy and
+Worker-ledger verification identities. Decoding proves canonical structure and
+re-verifies both receipts under the embedded anchor key. A separate 1,624-byte
+V3 attestation binds that complete record to a nonzero caller challenge and an
+issuer Ed25519 signature. Issuance and verification additionally require both
+keys to equal the caller's policy, every record coordinate to equal the original
+expected carriage, the retained receipt to be a proposed-position advance for
+the exact reconstructed compiler transaction, and the currentness receipt to be
+a proposed-position recovery observation of that same transition. Its recovery
+nonce is derived from the caller's fresh challenge, exact carriage identity, and
+retained commit-receipt identity, so a stale response or cross-record receipt
+cannot be substituted. The result authenticates the signed external commit and
+fresh signed current-head observation, but grants no authority and does not by
+itself prove protected key custody or that the anchor service is independently
+administered, monotonic, and crash durable. The
+1,874-byte external-anchor transaction binds the complete issuer policy,
+attestation request, signed receipt publication, sequence, and prior/current
+internal rollback anchors without including a path, descriptor, or final
+acknowledgment. Its frozen identity derives the transaction digest consumed by
+`fe2o3-external-anchor-protocol`. The transaction is inert: it does not contact,
+advance, or authenticate an external monotonic service. The policy itself pins
+distinct issuer-signing and external-anchor Ed25519 keys; equal or weak keys
+fail closed. A fixed 2,682-byte Worker anchor-journal record preserves that
+complete transaction and one exact advance challenge across
+`PreparedAnchor`, `AnchorCommitted`, `Published`, and `Aborted`. Committed and
+terminal records verify the complete signed external receipt under the
+policy-pinned anchor key; only `Published` binds a nonzero final Worker-record
+identity. The codec enforces legal same-transaction and next-transaction
+transitions but does not persist them, contact the anchor, or grant authority.
+The 280-byte client profile binds the exact dedicated supervisor UID/GID and
+external-anchor service UID/GID to one complete caller-pinned issuer policy; it
+contains no endpoint, path, descriptor, secret, timeout, or authority. The
+112-byte launch manifest binds an exact client PID/UID/GID tuple and that exact
+external-anchor service identity to an exact policy identity. A canonical
+184-byte supervisor-handoff record additionally
 binds the direct Cargo parent PID/UID/GID to that complete manifest; parent and
 rustc must be distinct processes with equal credentials. A separate readiness
 record binds the admitted issuer PID to the exact manifest and policy after
-durable recovery. None of these records grants process or signing authority.
+durable recovery. The supervisor separately admits the manifest-named anchor
+service endpoint and pidfd and transfers them at issuer FDs 10 and 11; the
+issuer revalidates their continuity and binds the transport to the policy-pinned
+anchor key. Receipt publication invokes that transport before committing the
+Worker record or ACK. No descriptor is serialized in these records, and none
+of them grants process or signing authority.
 The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
 socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
 part of the production protocol.

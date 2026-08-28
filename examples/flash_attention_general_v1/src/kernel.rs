@@ -1,15 +1,11 @@
-//! Safe Rust, memory-bounded attention with double-buffered MFMA score fragments.
-//!
-//! The score loop pipelines lane-local register fragments. Shared workgroup
-//! ring storage is represented separately by the target-neutral
-//! `kernel.pipeline` PLIRON protocol and is not synthesized from this source yet.
+//! Safe Rust, memory-bounded attention with double-buffered workgroup staging.
 
 #![allow(missing_docs)]
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
-    KernelResult, Math, Matrix, StridedReadView2D, Subgroup, Tiled2D, Wave64, WaveLane, kernel,
-    thread,
+    Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix, DisjointSlice,
+    F32AccumulatorFragment, Index1D, KernelError, KernelResult, Math, Matrix, StridedReadView2D,
+    Subgroup, Tiled2D, Wave64, WaveLane, WorkgroupLdsScope, WorkgroupPipeline, kernel, thread,
 };
 
 pub const FLASH_ATTENTION_WORKGROUP_V1: [u32; 3] = [64, 1, 1];
@@ -179,26 +175,57 @@ pub fn flash_attention_general_v1(
     let mut numerator1 = 0.0_f32;
     let mut numerator2 = 0.0_f32;
     let mut numerator3 = 0.0_f32;
+    let mut pipeline_scope = WorkgroupLdsScope::current();
+    let mut q_pipeline =
+        WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+    let mut k_pipeline =
+        WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
     let mut key_base = 0_usize;
     // Each key tile advances the stable online (maximum, sum, numerator) state.
     while key_base < keys_padded as usize {
         let key_column = key_base + lane_column;
         let mut scores = F32AccumulatorFragment::zero(&wave_lane);
         let phase_count = (depth as usize + 15) / 16;
-        // The current score operands and the next prefetched epoch form a
-        // two-buffer software pipeline. Logical edges are positive BF16 zero.
-        let mut lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, 0);
-        let mut rhs = k_matrix.load_k16n16(&wave_lane, 0, key_base);
+        let lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, 0);
+        let rhs = k_matrix.load_k16n16(&wave_lane, 0, key_base);
+        q_pipeline.stage(0);
+        q_pipeline.write(0, lane, lhs);
+        q_pipeline.commit(0);
+        k_pipeline.stage(0);
+        k_pipeline.write(0, lane, rhs);
+        k_pipeline.commit(0);
+
         let mut phase_index = 0_usize;
         while phase_index < phase_count {
-            let next_phase = (phase_index + 1) * 16;
+            let future_epoch = phase_index + 1;
+            let next_phase = future_epoch * 16;
             let next_lhs = q_matrix.load_m16k16(&wave_lane, query_row_base, next_phase);
             let next_rhs = k_matrix.load_k16n16(&wave_lane, next_phase, key_base);
+
+            q_pipeline.stage(future_epoch);
+            q_pipeline.write(future_epoch, lane, next_lhs);
+            q_pipeline.commit(future_epoch);
+            k_pipeline.stage(future_epoch);
+            k_pipeline.write(future_epoch, lane, next_rhs);
+            k_pipeline.commit(future_epoch);
+
+            q_pipeline.wait(phase_index);
+            q_pipeline.consume(phase_index);
+            let lhs = q_pipeline.read(phase_index, lane);
+            k_pipeline.wait(phase_index);
+            k_pipeline.consume(phase_index);
+            let rhs = k_pipeline.read(phase_index, lane);
             scores = matrix.multiply_accumulate(lhs, rhs, scores);
-            lhs = next_lhs;
-            rhs = next_rhs;
+            q_pipeline.release(phase_index);
+            k_pipeline.release(phase_index);
             phase_index += 1;
         }
+        q_pipeline.wait(phase_count);
+        q_pipeline.discard(phase_count);
+        q_pipeline.release(phase_count);
+        k_pipeline.wait(phase_count);
+        k_pipeline.discard(phase_count);
+        k_pipeline.release(phase_count);
         let values = scores.into_values();
         let score0 =
             values[0] * scale + mask.load_or(score_row_in_head, key_column, f32::NEG_INFINITY);
@@ -373,14 +400,16 @@ mod tests {
     }
 
     #[test]
-    fn score_mfma_is_not_recomputed() {
+    fn score_mfma_uses_workgroup_double_buffering() {
         let source = include_str!("kernel.rs");
         let key_loop = ["while key_base <", " keys_padded"].concat();
         let mfma = ["matrix.multiply", "_accumulate"].concat();
         assert_eq!(source.matches(&key_loop).count(), 1);
         assert_eq!(source.matches(&mfma).count(), 1);
-        assert!(source.contains("let next_phase = (phase_index + 1) * 16"));
-        assert!(source.contains("lhs = next_lhs"));
-        assert!(source.contains("rhs = next_rhs"));
+        assert!(source.contains("WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>"));
+        assert!(source.contains("WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>"));
+        assert!(source.contains("q_pipeline.read(phase_index, lane)"));
+        assert!(source.contains("k_pipeline.read(phase_index, lane)"));
+        assert!(source.contains("q_pipeline.discard(phase_count)"));
     }
 }

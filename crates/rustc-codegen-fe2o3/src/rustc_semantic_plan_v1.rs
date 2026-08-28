@@ -2954,8 +2954,17 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
         ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
+        ProductionTerminalExpansionV1::WorkgroupPipelineCurrent => 91,
+        ProductionTerminalExpansionV1::WorkgroupPipelineStage => 92,
+        ProductionTerminalExpansionV1::WorkgroupPipelineWrite => 93,
+        ProductionTerminalExpansionV1::WorkgroupPipelineCommit => 94,
+        ProductionTerminalExpansionV1::WorkgroupPipelineWait => 95,
+        ProductionTerminalExpansionV1::WorkgroupPipelineConsume => 96,
+        ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
+        ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
+        ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
         ProductionTerminalExpansionV1::Bf16Conversion(conversion) => {
-            91 + match conversion {
+            100 + match conversion {
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromBits => 0,
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToBits => 1,
                 crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::FromF32RoundTiesEven => 2,
@@ -3142,7 +3151,7 @@ mod tests {
                     crate::production_semantic_terminal_v1::ProductionBf16ConversionV1::ToF32,
                 )),
             ],
-            [91, 92, 93, 94]
+            [100, 101, 102, 103]
         );
     }
 

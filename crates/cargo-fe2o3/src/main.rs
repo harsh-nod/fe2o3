@@ -2266,22 +2266,31 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
                 .to_string(),
         );
     }
-    let application_timeouts = match args[0].to_str() {
-        Some(application_handoff::RUNNER_CONTEXT_VERSION) => {
-            application_handoff::ApplicationTimeouts::PRODUCTION
-        }
+    let (application_timeouts, compiler_service) = match args[0].to_str() {
+        Some(application_handoff::RUNNER_CONTEXT_VERSION) => (
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::Required,
+        ),
+        #[cfg(feature = "worker-v3-envelope-integration-test-only")]
+        Some(application_handoff::RUNNER_ENVELOPE_ONLY_TEST_CONTEXT_VERSION) => (
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        ),
         #[cfg(feature = "application-handoff-fault-injection-test-only")]
-        Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => {
-            application_handoff::ApplicationTimeouts::TEST_SHORT
-        }
+        Some(application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION) => (
+            application_handoff::ApplicationTimeouts::TEST_SHORT,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        ),
         #[cfg(feature = "application-handoff-fault-injection-test-only")]
-        Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => {
-            application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT
-        }
+        Some(application_handoff::RUNNER_SCHEDULER_TOLERANT_TEST_CONTEXT_VERSION) => (
+            application_handoff::ApplicationTimeouts::TEST_SCHEDULER_TOLERANT,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        ),
         #[cfg(feature = "application-handoff-adversarial-fixture")]
-        Some(application_handoff::RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION) => {
-            application_handoff::ApplicationTimeouts::TEST_FAST_FAILURES
-        }
+        Some(application_handoff::RUNNER_FAST_FAILURE_TEST_CONTEXT_VERSION) => (
+            application_handoff::ApplicationTimeouts::TEST_FAST_FAILURES,
+            application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
+        ),
         _ => {
             return Err(format!(
                 "unsupported application runner context {:?}",
@@ -2339,6 +2348,7 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
         application,
         &args[application_index + 1..],
         application_timeouts,
+        compiler_service,
     )
 }
 
@@ -2347,7 +2357,15 @@ fn run_application_with_handoff(
     application: &OsStr,
     application_args: &[OsString],
     application_timeouts: application_handoff::ApplicationTimeouts,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
 ) -> Result<ExitStatus, String> {
+    let compiler_execution_profile = compiler_service
+        .is_required()
+        .then(fe2o3_compiler_closure_capability::CompilerExecutionClientProfileCapabilityV1::from_production_profile)
+        .transpose()
+        .map_err(|error| {
+            format!("cannot admit the fixed compiler-execution client profile: {error}")
+        })?;
     let current_dir = env::current_dir()
         .map_err(|error| format!("failed to resolve application runner directory: {error}"))?;
     let application_path =
@@ -2363,56 +2381,99 @@ fn run_application_with_handoff(
         .map_err(|error| format!("failed to prepare sealed application: {error}"))?;
     child.args(application_args);
     scrub_application_environment(child.as_command_mut());
+    let compiler_execution_boundary = compiler_execution_profile
+        .as_ref()
+        .map(|profile| {
+            compiler_execution_boundary::PreparedCompilerExecutionBoundaryV1::prepare_application_verifier(
+                profile,
+                child.as_command_mut(),
+            )
+        })
+        .transpose()
+        .map_err(|error| error.to_string())?;
     let pending_ack = handoff.configure_child_with_timeouts(
         child.as_command_mut(),
         sealed_application.identity_v3(),
         application_timeouts,
+        compiler_service,
     )?;
     let mut process = process_execution::spawn(child.as_command_mut())
         .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
+    let compiler_execution_readiness = match compiler_execution_boundary {
+        Some(boundary) => match boundary.finish(process.id()) {
+            Ok(readiness) => Some(readiness),
+            Err(error) => {
+                let mut primary = error.to_string();
+                let cleanup = match pending_ack.into_cleanup_after_spawn(&process) {
+                    Ok(cleanup) => cleanup,
+                    Err(failure) => {
+                        let (cleanup_error, cleanup) = failure.into_parts();
+                        primary.push_str("; application sandbox cleanup admission failed: ");
+                        primary.push_str(&cleanup_error);
+                        cleanup
+                    }
+                };
+                drop(handoff);
+                return terminate_application_with_error(process, cleanup, primary);
+            }
+        },
+        None => None,
+    };
     let active_handoff = match pending_ack.await_after_spawn(&mut process) {
         Ok(active_handoff) => active_handoff,
         Err(failure) => {
             let (error, cleanup) = failure.into_parts();
             drop(handoff);
-            return match application_handoff::terminate_application_group(process, cleanup) {
-                Ok(_) => Err(error),
-                Err(containment) => Err(format!(
-                    "{error}; application containment failed: {containment}"
-                )),
-            };
+            return terminate_application_with_error(process, cleanup, error);
         }
     };
-    if let Err(error) = application_handoff::wait_for_application_exit_without_reaping(&process) {
+    if let Some(readiness) = compiler_execution_readiness.as_ref()
+        && let Err(error) = readiness.revalidate()
+    {
         drop(handoff);
-        return match application_handoff::terminate_application_group(
+        return terminate_application_with_error(
             process,
             active_handoff.into_cleanup(),
-        ) {
-            Ok(_) => Err(error),
-            Err(containment) => Err(format!(
-                "{error}; application containment failed: {containment}"
-            )),
-        };
+            error.to_string(),
+        );
+    }
+    if let Err(error) = application_handoff::wait_for_application_exit_without_reaping(&process) {
+        drop(handoff);
+        return terminate_application_with_error(process, active_handoff.into_cleanup(), error);
+    }
+    if let Some(readiness) = compiler_execution_readiness.as_ref()
+        && let Err(error) = readiness.revalidate()
+    {
+        drop(handoff);
+        return terminate_application_with_error(
+            process,
+            active_handoff.into_cleanup(),
+            error.to_string(),
+        );
     }
     // The application retains its currentness token through all descriptor-dependent work.
     // Observe its exit without reaping before reacquiring the runner's token, avoiding a
     // scheduler race while preserving the leader identity for process-group containment.
     if let Err(error) = handoff.validate_retained_currentness() {
         drop(handoff);
-        return match application_handoff::terminate_application_group(
-            process,
-            active_handoff.into_cleanup(),
-        ) {
-            Ok(_) => Err(error),
-            Err(containment) => Err(format!(
-                "{error}; application containment failed: {containment}"
-            )),
-        };
+        return terminate_application_with_error(process, active_handoff.into_cleanup(), error);
     }
     let cleanup = active_handoff.into_cleanup();
     drop(handoff);
     application_handoff::wait_and_contain_application_group(process, cleanup)
+}
+
+fn terminate_application_with_error(
+    process: std::process::Child,
+    cleanup: application_handoff::ApplicationCleanup,
+    error: String,
+) -> Result<ExitStatus, String> {
+    match application_handoff::terminate_application_group(process, cleanup) {
+        Ok(_) => Err(error),
+        Err(containment) => Err(format!(
+            "{error}; application containment failed: {containment}"
+        )),
+    }
 }
 
 fn scrub_application_environment(child: &mut Command) {
@@ -3828,6 +3889,7 @@ mod tests {
         ) -> fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1 {
             use ed25519_dalek::SigningKey;
             use fe2o3_compiler_execution_protocol::{
+                CompilerExecutionExternalAnchorServiceIdentityV1,
                 CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
             };
 
@@ -3838,10 +3900,16 @@ mod tests {
                 SigningKey::from_bytes(&[seed; 32])
                     .verifying_key()
                     .to_bytes(),
+                SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+                    .verifying_key()
+                    .to_bytes(),
             )
             .unwrap();
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
-                1_234, 5_678, policy,
+                1_234,
+                5_678,
+                CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
+                policy,
             )
             .unwrap()
         }

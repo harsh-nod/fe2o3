@@ -10,13 +10,15 @@
 #define FE2O3_PREEXEC_MAX_DESTINATION_FD 127
 #define FE2O3_PREEXEC_MANIFEST_VERSION 1U
 #define FE2O3_PREEXEC_MANIFEST_MAGIC "FE2PXM1\0"
+#define FE2O3_PREEXEC_OBJECT_CLASS_FSTAT 0U
+#define FE2O3_PREEXEC_OBJECT_CLASS_PROCESS_PIDFD 1U
 
 struct fe2o3_preexec_object_identity_v1 {
   uint64_t device;
   uint64_t inode;
   uint64_t size;
   uint32_t mode;
-  uint32_t reserved;
+  uint32_t object_class;
 };
 
 struct fe2o3_preexec_descriptor_v1 {

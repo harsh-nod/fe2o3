@@ -14,15 +14,16 @@ use dialect_gpu::{BarrierOp, ExecutionLayoutOp, FenceOp};
 use dialect_kernel::{
     AccessKindAttr, AllocationEffectOp, AnalysisSplitOp, BranchArgsOp, BranchOp,
     CheckedRowStripedIndex2DOp, CheckedTiledIndex2DOp, DeterministicJoinOp, DimensionOp,
-    IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp, IndexEqualBranchOp,
-    IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp, IndexUnsignedCastOp,
-    InvocationIndexOp, MAX_RANKED_MEMORY_RANK, OwnershipContractOp, PipelineCreateOp,
-    PipelineEventOp, RankedAccessOp, RankedViewOp, RankedViewType, RequireEquivalentOp,
-    RequireFiniteFoldOp, RequireFiniteRecurrenceOp, RequirePermutationGatherOp, ReturnOp,
-    SemanticBinaryOp, SemanticConstantOp, SemanticExpressionCommitmentOp, SemanticSymbolOp,
-    SemanticTypedBinaryOp, SemanticTypedCastOp, SemanticTypedCompareOp, SemanticTypedConstantOp,
-    SemanticTypedExpressionRootOp, SemanticTypedSelectOp, SemanticTypedSymbolOp,
-    SemanticTypedUnaryOp, TensorLayoutOp, TensorResultComponentOp, TrapOp, ranked_view_type,
+    IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp, IndexEqualBranchArgsOp,
+    IndexEqualBranchOp, IndexLessThanBranchArgsOp, IndexLessThanBranchOp, IndexUnknownOp,
+    IndexUnsignedCastOp, InvocationIndexOp, MAX_RANKED_MEMORY_RANK, OwnershipContractOp,
+    PipelineCreateOp, PipelineEventOp, RankedAccessOp, RankedViewOp, RankedViewType,
+    RequireEquivalentOp, RequireFiniteFoldOp, RequireFiniteRecurrenceOp,
+    RequirePermutationGatherOp, ReturnOp, SemanticBinaryOp, SemanticConstantOp,
+    SemanticExpressionCommitmentOp, SemanticSymbolOp, SemanticTypedBinaryOp, SemanticTypedCastOp,
+    SemanticTypedCompareOp, SemanticTypedConstantOp, SemanticTypedExpressionRootOp,
+    SemanticTypedSelectOp, SemanticTypedSymbolOp, SemanticTypedUnaryOp, TensorLayoutOp,
+    TensorResultComponentOp, TrapOp, ranked_view_type,
 };
 use dialect_proof::{
     EvidenceRefOp, ObligationOp, RequireEffectRefinementOp, RequireNumericalRefinementOp,
@@ -1250,6 +1251,7 @@ fn verify_access(
         let index_expr = canonical_index_expr(index, check.context);
         let extent_expr = extent_expr(view, &view_type, dimension, check.context);
         if bound_is_proven(index_expr, extent_expr, check.facts, check.fact_indices)
+            || remainder_bound_is_proven(index, extent_expr, check.context)
             || sparse_bound_is_proven(index, extent_expr, check.sparse_indices)
         {
             continue;
@@ -1319,6 +1321,29 @@ fn verify_access(
         }
     }
     Ok(())
+}
+
+fn remainder_bound_is_proven(index: Value, extent: IndexExpr, context: &Context) -> bool {
+    let IndexExpr::Constant(extent) = extent else {
+        return false;
+    };
+    let Some(definition) = index.defining_op() else {
+        return false;
+    };
+    let operation = Operation::get_op_dyn(definition, context);
+    let Some(remainder) = operation.downcast_ref::<IndexBinaryOp>() else {
+        return false;
+    };
+    if remainder.kind(context) != Some(IndexBinaryKindAttr::Remainder) {
+        return false;
+    }
+    let Some(modulus_definition) = remainder.rhs(context).defining_op() else {
+        return false;
+    };
+    let modulus = Operation::get_op_dyn(modulus_definition, context)
+        .downcast_ref::<IndexConstantOp>()
+        .and_then(|constant| constant.value(context));
+    modulus.is_some_and(|modulus| modulus != 0 && modulus <= extent)
 }
 
 fn sparse_bound_is_proven(

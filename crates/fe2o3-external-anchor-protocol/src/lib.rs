@@ -40,6 +40,7 @@
 //! ```
 
 mod protocol;
+mod receipt;
 mod state;
 
 #[cfg(test)]
@@ -51,6 +52,10 @@ pub use protocol::{
     ChallengeKindV1, EXTERNAL_ANCHOR_AUTHORITY_V1, EXTERNAL_ANCHOR_PROTOCOL_VERSION_V1,
     HashChainHeadV1, PinnedAnchorKeyV1, TRANSACTION_IDENTITY_MAX_LEN_V1, TransactionDigestV1,
     UnsignedAnchorObservationV1, derive_proposed_head_v1, derive_transaction_digest_v1,
+};
+pub use receipt::{
+    ANCHOR_TRANSITION_RECEIPT_BYTES_V1, AnchorTransitionReceiptIdentityV1,
+    AnchorTransitionReceiptV1,
 };
 pub use state::{
     AnchorDecisionV1, AnchoredAbortDecisionV1, AnchoredCommitDecisionV1, AnchoredStateV1,

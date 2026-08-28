@@ -726,10 +726,13 @@ authenticate the carried evidence before invocation-specific pure-KFD launch
 custody is created. The protected compiler-execution service now provides the
 policy and exact Worker-ledger part through one terminal transaction: it
 reacquires the canonical record, byte-compares the complete carried receipt,
-and returns authority-free canonical verification evidence. The concrete host
-verifier must consume that transaction through its authenticated inherited
-endpoint and join the external monotonic anchor and owned compiler, KIR, Verus,
-machine, and launch receipts. The runtime authority gate and compiler-generated
+and returns a pinned-key signature over authority-free canonical verification
+evidence and a fresh challenge. Cargo now provisions the application endpoint
+through the fixed supervisor before ACK, and a one-use host auditor consumes
+the endpoint and checks the exact signed response without granting authority.
+The concrete host verifier must still join protected key custody, the external
+monotonic anchor, and owned compiler, KIR, Verus, machine, and launch receipts.
+The runtime authority gate and compiler-generated
 host-memory KFD preparation now bind the exact current HSACO, geometry, effects,
 checked device, and authenticated decision into one private move-only
 invocation. The existing hardware proof uses a synthetic verifier and the

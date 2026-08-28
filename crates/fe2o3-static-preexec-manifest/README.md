@@ -8,6 +8,10 @@ wire format exactly matches
 The codec validates all constraints represented by the record: versioning,
 reserved bytes, parent identity bounds, descriptor count, ordered source file
 descriptors, bounded and unique destinations, required standard descriptors,
-zero inactive slots, and non-aliasing object keys. The launcher remains
-responsible for facts that cannot be encoded in the record, including seals,
-live object snapshots, descriptor access modes, and closed unused descriptors.
+zero inactive slots, object-validation classes, and non-aliasing object keys.
+Ordinary objects use strict `fstat` identity. Process-pidfd objects additionally
+require a live Linux pidfd in the launcher; multiple pidfds may share Linux's
+anonymous-inode `fstat` key, so their exact target PID and process start time
+must be bound by the receiving service. The launcher remains responsible for
+seals, live snapshots, validation classes, descriptor access modes, and closed
+unused descriptors.

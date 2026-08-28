@@ -9746,6 +9746,17 @@ impl<'a> SemanticFunctionLoweringV1<'a> {
                 ];
                 binding_from_value_defs_with_validation(self.types, *raw_parts, &values, false)?
             }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. }
+            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { .. }
+            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
+            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { .. } => {
+                return Err(unsupported(
+                    0,
+                    Some(block.index()),
+                    None,
+                    "workgroup pipeline terminals require the production ranked PLIRON projection",
+                ));
+            }
             SemanticCompilerIntrinsicOperationV1::MathContextCurrent { .. } => {
                 self.require_call_argument_count(block, call, 0)?;
                 SemanticValueBindingV1::MathContext

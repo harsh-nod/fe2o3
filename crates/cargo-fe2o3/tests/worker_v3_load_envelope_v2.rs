@@ -38,6 +38,9 @@ fn carriage_for_subject(
         CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 12_345).unwrap(),
         CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 67_890).unwrap(),
         signing_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+            .verifying_key()
+            .to_bytes(),
     )
     .unwrap();
     let challenge =
@@ -195,10 +198,10 @@ fn receipt_bearing_envelope_round_trips_with_complete_subject_association() {
     );
     assert_eq!(
         MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
-        MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 2_114
+        MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 2_146
     );
     assert_eq!(
-        2_114,
+        2_146,
         V2_HEADER_BYTES + COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1 + V2_CHECKSUM_BYTES
     );
     assert!(matches!(

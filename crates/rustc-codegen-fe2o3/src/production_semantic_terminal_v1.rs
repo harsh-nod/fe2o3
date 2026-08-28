@@ -47,6 +47,15 @@ pub(crate) enum ProductionTerminalExpansionV1 {
     StridedReadView2DLoadOr,
     DynamicLdsExactCurrent,
     DynamicLdsIntoCollectiveRawParts,
+    WorkgroupPipelineCurrent,
+    WorkgroupPipelineStage,
+    WorkgroupPipelineWrite,
+    WorkgroupPipelineCommit,
+    WorkgroupPipelineWait,
+    WorkgroupPipelineConsume,
+    WorkgroupPipelineRead,
+    WorkgroupPipelineDiscard,
+    WorkgroupPipelineRelease,
     WorkgroupBarrier,
     MathContextCurrent,
     MathF32(F32MathFunction),
@@ -215,6 +224,33 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts => {
                 Self::Expand(ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts)
+            }
+            TrustedDeviceItem::WorkgroupPipelineCurrent => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineCurrent)
+            }
+            TrustedDeviceItem::WorkgroupPipelineStage => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineStage)
+            }
+            TrustedDeviceItem::WorkgroupPipelineWrite => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineWrite)
+            }
+            TrustedDeviceItem::WorkgroupPipelineCommit => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineCommit)
+            }
+            TrustedDeviceItem::WorkgroupPipelineWait => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineWait)
+            }
+            TrustedDeviceItem::WorkgroupPipelineConsume => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineConsume)
+            }
+            TrustedDeviceItem::WorkgroupPipelineRead => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineRead)
+            }
+            TrustedDeviceItem::WorkgroupPipelineDiscard => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineDiscard)
+            }
+            TrustedDeviceItem::WorkgroupPipelineRelease => {
+                Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineRelease)
             }
             TrustedDeviceItem::WorkgroupSyncthreads => {
                 Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier)
@@ -470,6 +506,33 @@ impl ProductionSemanticTerminalRuleV1 {
             }
             Self::Expand(ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts) => {
                 TrustedDeviceItem::DynamicLdsIntoCollectiveRawParts
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineCurrent) => {
+                TrustedDeviceItem::WorkgroupPipelineCurrent
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineStage) => {
+                TrustedDeviceItem::WorkgroupPipelineStage
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineWrite) => {
+                TrustedDeviceItem::WorkgroupPipelineWrite
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineCommit) => {
+                TrustedDeviceItem::WorkgroupPipelineCommit
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineWait) => {
+                TrustedDeviceItem::WorkgroupPipelineWait
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineConsume) => {
+                TrustedDeviceItem::WorkgroupPipelineConsume
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineRead) => {
+                TrustedDeviceItem::WorkgroupPipelineRead
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineDiscard) => {
+                TrustedDeviceItem::WorkgroupPipelineDiscard
+            }
+            Self::Expand(ProductionTerminalExpansionV1::WorkgroupPipelineRelease) => {
+                TrustedDeviceItem::WorkgroupPipelineRelease
             }
             Self::Expand(ProductionTerminalExpansionV1::WorkgroupBarrier) => {
                 TrustedDeviceItem::WorkgroupSyncthreads

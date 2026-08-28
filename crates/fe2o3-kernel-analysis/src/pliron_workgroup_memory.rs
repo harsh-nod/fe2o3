@@ -1,13 +1,16 @@
 //! Workgroup-memory initialization, publication, and race verification.
 
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
-use dialect_kernel::{AccessKindAttr, MemorySpaceAttr, RankedAccessOp, RankedViewOp};
-use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation};
+use dialect_kernel::{
+    AccessKindAttr, MemorySpaceAttr, PipelineCreateOp, RankedAccessOp, RankedViewOp,
+};
+use pliron::{builtin::ops::FuncOp, context::Context, operation::Operation, value::Value};
 
 use crate::pliron_analysis_manager::{PlironAnalysisManagerV1, PlironMemoryOrderAnalysisFailureV1};
 use crate::pliron_barrier::run_pliron_barrier_convergence_check_with_analyses_v1;
 use crate::pliron_memory_order::{PlironMemoryOrderFailureV1, PlironMemoryOrderIssueV1};
+use crate::pliron_pipeline_protocol::run_pliron_pipeline_protocol_check_with_analyses_v1;
 use crate::pliron_ranked_bounds::run_pliron_ranked_bounds_check_with_analyses_v1;
 use crate::{KernelCheckPassKindV1, KernelCheckStatusV1, trace_failure_detail};
 
@@ -188,19 +191,55 @@ pub(crate) fn run_pliron_workgroup_memory_check_with_analyses_v1(
             });
         }
     };
-    if !inventory.operations().iter().any(|site| {
-        let operation = Operation::get_op_dyn(site.pointer(), context);
-        let Some(access) = operation.downcast_ref::<RankedAccessOp>() else {
-            return false;
-        };
-        let Some(definition) = access.view(context).defining_op() else {
-            return false;
-        };
-        Operation::get_op_dyn(definition, context)
-            .downcast_ref::<RankedViewOp>()
-            .is_some_and(|view| view.memory_space(context) == Some(MemorySpaceAttr::Workgroup))
-    }) {
+    let (workgroup_access_views, pipeline_views) = inventory.operations().iter().fold(
+        (HashSet::<Value>::new(), Vec::new()),
+        |(mut accesses, mut pipelines), site| {
+            let operation = Operation::get_op_dyn(site.pointer(), context);
+            if let Some(access) = operation.downcast_ref::<RankedAccessOp>()
+                && access
+                    .view(context)
+                    .defining_op()
+                    .is_some_and(|definition| {
+                        Operation::get_op_dyn(definition, context)
+                            .downcast_ref::<RankedViewOp>()
+                            .is_some_and(|view| {
+                                view.memory_space(context) == Some(MemorySpaceAttr::Workgroup)
+                            })
+                    })
+            {
+                accesses.insert(access.view(context));
+            }
+            if let Some(create) = operation.downcast_ref::<PipelineCreateOp>() {
+                pipelines.push((site.block(), site.operation(), create.view(context)));
+            }
+            (accesses, pipelines)
+        },
+    );
+    if workgroup_access_views.is_empty() {
         return PlironWorkgroupMemoryReportV1 { findings: vec![] };
+    }
+    if !pipeline_views.is_empty() {
+        let pipeline =
+            run_pliron_pipeline_protocol_check_with_analyses_v1(context, function, analyses);
+        if pipeline.is_clean() {
+            let certified = pipeline
+                .certificates()
+                .iter()
+                .filter(|certificate| certificate.access_refinement_proven())
+                .filter_map(|certificate| {
+                    pipeline_views
+                        .iter()
+                        .find(|(block, operation, _)| {
+                            *block == certificate.pipeline_block()
+                                && *operation == certificate.pipeline_operation()
+                        })
+                        .map(|(_, _, view)| *view)
+                })
+                .collect::<HashSet<_>>();
+            if workgroup_access_views.is_subset(&certified) {
+                return PlironWorkgroupMemoryReportV1 { findings: vec![] };
+            }
+        }
     }
     analyses.prepare_memory_order(context, function);
     let memory_order = match analyses.memory_order() {

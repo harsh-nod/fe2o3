@@ -7,21 +7,35 @@ the issuer journal from `Ready`, `Prepared`, or `Issued`. It then publishes the
 exact signed receipt and returns the complete inert receipt carriage.
 
 The terminal `verify_current_only` operation sends one complete expected
-carriage to the protected service. It accepts only a canonical
-`VerifiedCurrent` response bound to the exact request, policy, subject,
-carriage, issuer journal, Worker record, sequence, and rollback anchors. The
-returned record remains descriptive until the endpoint is provisioned through
-the authenticated supervisor handoff and the caller joins external rollback
-and compiler-refinement evidence.
+carriage and a fresh internally generated challenge to the protected service.
+It accepts only a canonical issuer-signed `VerifiedCurrent` response under the
+caller-pinned issuer key, bound to that challenge and the exact request, policy,
+subject, carriage, issuer journal, Worker record, sequence, and rollback
+anchors. The same policy pins a distinct external-anchor key. The sole V3
+response carries both the retained signed transition receipt and a fresh signed
+recovery receipt. The client re-verifies both under the pinned anchor key,
+requires a proposed-position advance for the exact compiler transaction
+reconstructed from its original carriage, and requires a proposed-position
+recovery observation for the same sequence and heads. The recovery nonce is
+derived from the client's challenge, carriage identity, and retained receipt
+identity. The returned move-only evidence therefore authenticates the issuer
+response, external transition commit, and fresh signed current-head observation.
+It remains non-authoritative until protected key custody, independently
+administered monotonic-anchor deployment, and compiler-refinement evidence are
+joined.
 
 The client uses one absolute monotonic deadline, fixed stack packet storage,
 strict request/response identity correlation, pinned-policy validation, and no
 ancillary descriptors. It grants no compiler, artifact, load, or launch
 authority.
 
-The crate also owns the authority-free child-channel handoff used by the direct
-rustc parent. Its post-fork callback creates the unnamed `SOCK_SEQPACKET` pair
-inside the rustc child, installs only the client endpoint at FD 195, and
+The crate also owns the authority-free child-channel handoff used by a selected
+compiler or application parent. Its post-fork callback creates the unnamed
+`SOCK_SEQPACKET` pair inside the selected child. Preparation first reserves FD
+195 with an exact close-on-exec duplicate of the private control endpoint so a
+concurrent descriptor allocation cannot occupy the fixed target between
+preparation and `fork`. The child requires that exact reservation before it
+atomically installs only the client endpoint at FD 195, and
 transfers only the service endpoint to the parent. Parent admission binds the
 transfer to the exact child PID, child-reported direct-parent PID,
 `SO_PEERCRED`, and a live pidfd under one absolute deadline. The resulting
@@ -34,16 +48,20 @@ non-root supervisor UID/GID and positive PID with `SO_PEERCRED`. Callers cannot
 inject another pathname or descriptor. One monotonic deadline of at most two
 minutes covers connection and the canonical transfer.
 
-The transfer sends one canonical direct-parent/launch-manifest record and
+The transfer derives the launch manifest from the client-profile-pinned
+external-anchor service UID/GID and policy. It sends one canonical
+direct-parent/launch-manifest record and
 exactly two ordered `SCM_RIGHTS` descriptors, then retains the same control
-connection for pending readiness. This avoids attributing an
-outer-Cargo-created service socket to rustc or accepting a same-user relay as
+connection for pending readiness. This avoids attributing a parent-created
+service socket to the selected child or accepting a same-user relay as
 the direct parent. After the supervisor admits issuer readiness, it sends that
 same canonical record over the control connection and closes its endpoint. The
 pending client accepts exactly one descriptor-free packet followed by EOF,
-rechecks its launch manifest and pinned policy, and rejects truncation,
-extension, substitution, trailing data, or timeout. Binding-wrapper service
-acquisition, the deployed distinct-UID entrypoint, HSACO publication, and
+rechecks its launch manifest, pinned anchor-service identity, and pinned policy,
+and rejects truncation, extension, substitution, trailing data, or timeout.
+Compiler and application parents both use this channel in the production Cargo
+path. Binding-wrapper service acquisition, the deployed distinct-UID entrypoint,
+external monotonic rollback, final verifier authority, HSACO publication, and
 runtime admission remain outside this checkpoint.
 
 Cargo supplies one absolute monotonic deadline across child admission,

@@ -84,14 +84,22 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   public issuer methods accept no caller-selected occurrence. A separate
   descriptor-relative Worker ledger verifies the signed receipt against the
   exact request and current rollback anchor, durably commits only an immediate
-  successor, reacquires the canonical record, and is the sole source of the
-  issuer's move-only publication ACK capability. Issuer recovery accepts only
-  the three exact cross-journal crash positions. The fixed canonical packet
+  successor, and is the sole source of the issuer's move-only publication ACK
+  capability. Before Worker commit, the issuer durably prepares the exact
+  external-anchor challenge, exchanges it over the supervisor-admitted endpoint,
+  and persists an exact signed proposed-position receipt. The canonical Worker
+  V2 record atomically embeds that complete receipt, and recovery requires exact
+  equality with the local anchor journal while preserving the current receipt
+  across successor preparation. It then reacquires the canonical Worker record
+  and published anchor journal. Legacy V1 records and record-without-journal
+  state fail closed. Issuer recovery accepts
+  only the exact cross-journal crash positions. The fixed canonical packet
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay
   resolves lost responses. A descriptor-only musl-static issuer entrypoint now
   enters through a syscall-only shim that restores nondumpability before musl
-  or Rust startup and admits fixed FDs 3 through 9. A sealed launch manifest
+  or Rust startup and admits fixed FDs 3 through 11. FDs 10 and 11 carry the
+  supervisor-admitted external-anchor endpoint and exact service pidfd. A sealed launch manifest
   binds exact rustc PID/UID/GID to the exact pinned policy, and the static build
   gate pins that shim as the ELF entry and rejects every dynamic-loader edge and undefined symbol. After complete
   admission and durable recovery, the issuer emits one canonical readiness
@@ -107,12 +115,25 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` lifecycle now inherits and
   self-checks the exact locked child profile, independently observes that
   profile and every unchanged namespace in the parent, repeats authority
-  continuity before release, installs FDs 198 through 209, admits exact
+  continuity before release, installs the manifest and issuer at FDs 198 and
+  199 and the twelve sources at FDs 200 through 211, admits exact
   readiness, and owns pidfd cancellation and exactly-once reaping. The
   backend consumes the inherited service and policy descriptors, acquires the
   exact receipt after V3 handoff publication, and carries it through the sole
   top-level V2 load envelope into host admission. Host lineage and the Worker V3
-  verifier request now bind the exact subject and complete carriage. Promotion
+  verifier request now bind the exact subject and complete carriage. The
+  application runner creates a separate child-bound fd 195, reaches the same
+  fixed supervisor before ACK, exposes no policy fd 202, and retains readiness
+  through exit. A one-use host auditor consumes that endpoint and verifies the
+  issuer signature over a fresh challenge and the exact receipt-bearing V3
+  current-record result. The protected service derives a client-verifiable
+  external recovery challenge, queries the admitted anchor, then reacquires the
+  Worker record before signing. The client independently verifies the retained
+  advance receipt, fresh proposed-position recovery receipt, and every
+  transition coordinate against its original carriage. The result authenticates
+  the signed current-head observation but remains authority-free until
+  independently administered monotonic deployment and protected-key custody are
+  established. Promotion
   compares every receipt, occurrence, Worker-ledger, sequence, and rollback
   coordinate and requires nonzero independent protected-policy, ledger, and
   external rollback verification identities. The concrete protected verifier,
@@ -163,19 +184,24 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   Ready, Prepared, or Issued state over one unnamed `SOCK_SEQPACKET` peer; it is
   a transport component of the production transaction, not another compiler
   pipeline. Its direct-parent handoff creates that socketpair in the post-fork
-  rustc child, transfers only the service endpoint, and binds it to exact child
-  credentials and a live pidfd. The protected supervisor authenticates that
-  handoff and now materializes the exact sealed ten-source static-launcher input
+  selected child, transfers only the service endpoint, and binds it to exact
+  child credentials and a live pidfd. The protected supervisor authenticates
+  that handoff and now materializes the exact sealed twelve-source static-launcher input,
+  including the separately admitted external-anchor endpoint and pidfd,
   while retaining private output/readiness endpoints. It now consumes that
   state through gated clone3/pidfd launch, exact readiness typestate, and a
   descriptor-free one-record readiness publication back over the authenticated
   Cargo control connection. The supervisor retains the same pidfd in serving
   custody after Cargo observes EOF. The Cargo wrapper now admits a fixed
   root-owned client profile, installs policy fd 202 and a child-created service
-  channel at fd 195 only for the selected rustc, authenticates the fixed
-  listener's distinct UID/GID, and gates fresh publication on exact readiness.
-  The deployed production supervisor service entrypoint and backend receipt
-  acquisition remain pending.
+  channel at fd 195 for the selected rustc, authenticates the fixed listener's
+  distinct UID/GID, and gates fresh publication on exact readiness. The
+  application runner uses a fresh child-created fd 195 through the same
+  supervisor without inheriting fd 202, and `fe2o3-host` can consume its signed
+  challenge-bound receipt-bearing current-record response as move-only audit
+  evidence. Deployed production supervisor provisioning, an independently
+  operated monotonic anchor backend, protected key custody, and final verifier
+  authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

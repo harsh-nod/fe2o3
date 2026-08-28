@@ -12,10 +12,11 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use fe2o3_broker_authority_service::{
     CompilerExecutionServiceErrorV1, CompilerExecutionServiceExitV1,
     ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
+    ProtectedCompilerExecutionExternalAnchorErrorV1, ProtectedCompilerExecutionExternalAnchorV1,
     ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
     ProtectedCompilerExecutionIssuerErrorV1, ProtectedCompilerExecutionIssuerV1,
-    ProtectedIssuerProcessV1, ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
-    serve_compiler_execution_v1,
+    ProtectedExternalAnchorServiceAdmissionV1, ProtectedIssuerProcessV1,
+    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1, serve_compiler_execution_v1,
 };
 use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionPolicyCapabilityV1,
@@ -41,8 +42,12 @@ pub const COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1: RawFd =
 pub const COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1: RawFd = 8;
 /// Nonblocking pipe writer for exact post-recovery readiness publication.
 pub const COMPILER_EXECUTION_ISSUER_READY_FD_V1: RawFd = 9;
+/// Supervisor-provisioned authenticated external-anchor service endpoint.
+pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1: RawFd = 10;
+/// Pidfd retaining the exact live external-anchor service process identity.
+pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 11;
 
-const PRIVATE_DESCRIPTOR_FLOOR: RawFd = 10;
+const PRIVATE_DESCRIPTOR_FLOOR: RawFd = 12;
 
 const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 > libc::STDERR_FILENO);
 const _: () = assert!(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1 < COMPILER_EXECUTION_ISSUER_PEER_FD_V1);
@@ -58,11 +63,20 @@ const _: () = assert!(
 const _: () = assert!(
     COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1 < COMPILER_EXECUTION_ISSUER_READY_FD_V1
 );
-const _: () = assert!(COMPILER_EXECUTION_ISSUER_READY_FD_V1 < 128);
+const _: () = assert!(
+    COMPILER_EXECUTION_ISSUER_READY_FD_V1 < COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1
+        < COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1
+);
+const _: () =
+    assert!(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1 < PRIVATE_DESCRIPTOR_FLOOR);
+const _: () = assert!(PRIVATE_DESCRIPTOR_FLOOR < 128);
 
 /// Runs one exact protected compiler-execution service occurrence from inherited descriptors.
 ///
-/// This function reads no arguments or environment. The caller must install the seven fixed
+/// This function reads no arguments or environment. The caller must install the nine fixed
 /// descriptors through the freestanding static pre-exec launcher. Admission requires a service
 /// UID distinct from the rustc client UID, a service-owned mode-0700 root, a service-owned sealed
 /// mode-0400 key, the exact sealed-static running image named by the policy, and exact agreement
@@ -90,6 +104,9 @@ pub fn run_inherited_compiler_execution_issuer_v1()
     let peer = take_inherited(COMPILER_EXECUTION_ISSUER_PEER_FD_V1)?;
     let client_pidfd = take_inherited(COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1)?;
     let signing_key = take_inherited(COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1)?;
+    let external_anchor_peer =
+        take_inherited(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1)?;
+    let external_anchor_pidfd = take_inherited(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1)?;
     let signing_key = CompilerExecutionSigningKeyCapabilityV1::from_file(
         File::from(signing_key),
         policy.policy(),
@@ -104,6 +121,17 @@ pub fn run_inherited_compiler_execution_issuer_v1()
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::ServiceAdmission)?;
     let service = ProtectedServiceAdmissionV1::admit(root, peer, live_client)
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::ServiceAdmission)?;
+    let external_anchor_admission = ProtectedExternalAnchorServiceAdmissionV1::admit(
+        external_anchor_peer,
+        external_anchor_pidfd,
+        launch.manifest().external_anchor_service(),
+    )
+    .map_err(CompilerExecutionIssuerEntrypointErrorV1::ServiceAdmission)?;
+    let external_anchor = ProtectedCompilerExecutionExternalAnchorV1::from_issuer_policy(
+        external_anchor_admission,
+        policy.policy(),
+    )
+    .map_err(CompilerExecutionIssuerEntrypointErrorV1::ExternalAnchor)?;
     policy
         .revalidate()
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::PolicyCapability)?;
@@ -115,6 +143,7 @@ pub fn run_inherited_compiler_execution_issuer_v1()
         service,
         policy.policy().clone(),
         signing_key,
+        external_anchor,
     )
     .map_err(CompilerExecutionIssuerEntrypointErrorV1::IssuerAdmission)?;
     let (issuer, _) = ProtectedCompilerExecutionIssuerV1::admit(admission)
@@ -261,6 +290,7 @@ pub enum CompilerExecutionIssuerEntrypointErrorV1 {
     ReadinessProtocol(CompilerExecutionServiceReadyErrorV1),
     ReadinessShortWrite,
     ServiceAdmission(ProtectedServiceAdmissionErrorV1),
+    ExternalAnchor(ProtectedCompilerExecutionExternalAnchorErrorV1),
     IssuerAdmission(ProtectedCompilerExecutionIssuerAdmissionErrorV1),
     Issuer(ProtectedCompilerExecutionIssuerErrorV1),
     Service(CompilerExecutionServiceErrorV1),
@@ -304,6 +334,12 @@ impl fmt::Display for CompilerExecutionIssuerEntrypointErrorV1 {
             Self::ServiceAdmission(error) => {
                 write!(formatter, "issuer service admission failed: {error}")
             }
+            Self::ExternalAnchor(error) => {
+                write!(
+                    formatter,
+                    "issuer external-anchor admission failed: {error}"
+                )
+            }
             Self::IssuerAdmission(error) => {
                 write!(formatter, "issuer process admission failed: {error}")
             }
@@ -320,6 +356,7 @@ impl Error for CompilerExecutionIssuerEntrypointErrorV1 {
             Self::ReadinessDescriptor(error) => Some(error),
             Self::ReadinessProtocol(error) => Some(error),
             Self::ServiceAdmission(error) => Some(error),
+            Self::ExternalAnchor(error) => Some(error),
             Self::IssuerAdmission(error) => Some(error),
             Self::Issuer(error) => Some(error),
             Self::Service(error) => Some(error),
@@ -341,8 +378,9 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_execution_protocol::{
-        CompilerExecutionClientProcessIdentityV1, CompilerExecutionIssuerMeasurementV1,
-        CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
+        CompilerExecutionClientProcessIdentityV1, CompilerExecutionExternalAnchorServiceIdentityV1,
+        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionServiceLaunchManifestV1,
     };
 
     use super::*;
@@ -367,10 +405,12 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([8; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([9; 32], 456).unwrap(),
             signing_key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[10; 32]).verifying_key().to_bytes(),
         )
         .unwrap();
         let launch = CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
             &policy,
         );
         CompilerExecutionServiceReadyV1::new(5678, &launch, &policy).unwrap()
@@ -386,6 +426,8 @@ mod tests {
             COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
             COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
             COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+            COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+            COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
         ];
         assert!(
             descriptors

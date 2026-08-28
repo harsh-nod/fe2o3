@@ -111,8 +111,8 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_execution_protocol::{
-        CompilerExecutionClientProcessIdentityV1, CompilerExecutionIssuerMeasurementV1,
-        CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionClientProcessIdentityV1, CompilerExecutionExternalAnchorServiceIdentityV1,
+        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
     };
 
     use super::*;
@@ -125,10 +125,14 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 456).unwrap(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap();
         CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
             &policy,
         )
     }

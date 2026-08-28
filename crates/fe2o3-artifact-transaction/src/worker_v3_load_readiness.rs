@@ -57,7 +57,7 @@ pub const MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1: usize = RECEIPT_BODY_BY
 pub const MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1: usize = 256 * 1024 * 1024;
 // The V2 custody ceiling preserves that full replay plus fixed receipt-bearing framing. The
 // schema-neutral custody layer still does not interpret either format.
-const RECEIPT_BEARING_ENVELOPE_FRAMING_BYTES: usize = 2_114;
+const RECEIPT_BEARING_ENVELOPE_FRAMING_BYTES: usize = 2_146;
 /// Hard ceiling for opaque receipt-bearing Worker V3 V2 envelope custody.
 pub const MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2: usize =
     MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + RECEIPT_BEARING_ENVELOPE_FRAMING_BYTES;
@@ -2315,7 +2315,7 @@ mod tests {
     fn codecs_reserve_fallibly_and_reject_unbounded_lengths() {
         assert_eq!(
             MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2,
-            MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 2_114
+            MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 2_146
         );
         assert_eq!(
             fallible_vec(usize::MAX),

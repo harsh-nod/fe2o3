@@ -7,14 +7,14 @@ struct ScratchDirectory {
 }
 
 impl ScratchDirectory {
-    fn new() -> Self {
+    fn new(label: &str) -> Self {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock after Unix epoch")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "fe2o3-production-general-matrix-{}-{nonce}",
-            std::process::id()
+            "fe2o3-production-{label}-{}-{nonce}",
+            std::process::id(),
         ));
         std::fs::create_dir(&path).expect("create production matrix scratch directory");
         Self { path }
@@ -37,8 +37,30 @@ fn workspace() -> PathBuf {
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof() {
-    let scratch = ScratchDirectory::new();
-    let example = workspace().join("examples/tiled_gemm_general_v1");
+    assert_workgroup_pipeline_reaches_race_boundary(
+        "general-matrix",
+        "examples/tiled_gemm_general_v1",
+        "fe2o3_tiled_gemm_general_v1",
+    );
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn dynamic_attention_kernel_fails_closed_after_pipeline_verification() {
+    assert_workgroup_pipeline_reaches_race_boundary(
+        "general-attention",
+        "examples/flash_attention_general_v1",
+        "fe2o3_flash_attention_general_v1",
+    );
+}
+
+fn assert_workgroup_pipeline_reaches_race_boundary(
+    label: &str,
+    example_path: &str,
+    crate_name: &str,
+) {
+    let scratch = ScratchDirectory::new(label);
+    let example = workspace().join(example_path);
     let llvm_path = scratch.path.join("kernel.ll");
     let binding_path = scratch.path.join("crate-binding-v1");
     let output = Command::new(env!("CARGO"))
@@ -47,10 +69,7 @@ fn dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof() {
             "RUSTC_WORKSPACE_WRAPPER",
             env!("CARGO_BIN_EXE_fe2o3-rustc-extract"),
         )
-        .env(
-            "FE2O3_EXTRACT_CRATE_V1",
-            "fe2o3_tiled_gemm_general_v1",
-        )
+        .env("FE2O3_EXTRACT_CRATE_V1", crate_name)
         .env("FE2O3_EXTRACT_CRATE_BINDING_PATH_V1", &binding_path)
         .env("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1", &llvm_path)
         .env_remove("RUSTFLAGS")
@@ -75,7 +94,7 @@ fn dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof() {
     let stderr = String::from_utf8(output.stderr).expect("rustc diagnostic is UTF-8");
     assert!(
         !output.status.success(),
-        "dynamic matrix kernel unexpectedly bypassed the production race proof boundary"
+        "{crate_name} unexpectedly bypassed the production race proof boundary"
     );
     assert!(
         stderr.contains(
@@ -83,7 +102,10 @@ fn dynamic_matrix_kernel_fails_closed_before_lowering_without_race_proof() {
         ) && stderr.contains(
             "help: retain a bounded launch contract or supply a symbolic disjointness proof"
         ) && stderr.contains("ranked PLIRON before rejected lowering:")
-            && stderr.contains("lowering stopped before target IR or artifact emission"),
+            && stderr.contains("lowering stopped before target IR or artifact emission")
+            && stderr.contains("kernel.pipeline_create")
+            && stderr.contains("kernel.pipeline_event")
+            && stderr.contains("Workgroup"),
         "production extraction omitted the exact fail-closed race diagnostic:\n{stderr}"
     );
     for forbidden in [

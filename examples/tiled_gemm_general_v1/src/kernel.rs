@@ -3,8 +3,9 @@
 #![allow(missing_docs)] // Generated typed-kernel modules lack rustdoc in V1.
 
 use fe2o3_device::{
-    Bf16MfmaAMatrix, Bf16MfmaBMatrix, DisjointSlice, F32AccumulatorFragment, Index1D, KernelError,
-    KernelResult, Matrix, Tiled2D, Wave64, WaveLane, kernel, thread,
+    Bf16MfmaAFragment, Bf16MfmaAMatrix, Bf16MfmaBFragment, Bf16MfmaBMatrix, DisjointSlice,
+    F32AccumulatorFragment, Index1D, KernelError, KernelResult, Matrix, Tiled2D, Wave64, WaveLane,
+    WorkgroupLdsScope, WorkgroupPipeline, kernel, thread,
 };
 
 /// Exact workgroup dimensions required by the wave64 matrix profile.
@@ -72,20 +73,53 @@ pub fn tiled_gemm_general_v1(
     let matrix = Matrix::current();
     let mut accumulator = F32AccumulatorFragment::zero(&wave_lane);
     let phase_count = (k as usize + 15) / 16;
-    // Keep the current and next operand epochs live at the same time. The
-    // zero-filled matrix loads make the speculative final prefetch harmless.
-    let mut lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, 0);
-    let mut rhs = b_matrix.load_k16n16(&wave_lane, 0, tile_column * 16);
+    let lane = raw_index % 64;
+    let mut pipeline_scope = WorkgroupLdsScope::current();
+    let mut lhs_pipeline =
+        WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+    let mut rhs_pipeline =
+        WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+
+    let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, 0);
+    let rhs = b_matrix.load_k16n16(&wave_lane, 0, tile_column * 16);
+    lhs_pipeline.stage(0);
+    lhs_pipeline.write(0, lane, lhs);
+    lhs_pipeline.commit(0);
+    rhs_pipeline.stage(0);
+    rhs_pipeline.write(0, lane, rhs);
+    rhs_pipeline.commit(0);
+
     let mut phase_index = 0_usize;
     while phase_index < phase_count {
-        let next_phase = (phase_index + 1) * 16;
+        let future_epoch = phase_index + 1;
+        let next_phase = future_epoch * 16;
         let next_lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, next_phase);
         let next_rhs = b_matrix.load_k16n16(&wave_lane, next_phase, tile_column * 16);
+
+        lhs_pipeline.stage(future_epoch);
+        lhs_pipeline.write(future_epoch, lane, next_lhs);
+        lhs_pipeline.commit(future_epoch);
+        rhs_pipeline.stage(future_epoch);
+        rhs_pipeline.write(future_epoch, lane, next_rhs);
+        rhs_pipeline.commit(future_epoch);
+
+        lhs_pipeline.wait(phase_index);
+        lhs_pipeline.consume(phase_index);
+        let lhs = lhs_pipeline.read(phase_index, lane);
+        rhs_pipeline.wait(phase_index);
+        rhs_pipeline.consume(phase_index);
+        let rhs = rhs_pipeline.read(phase_index, lane);
         accumulator = matrix.multiply_accumulate(lhs, rhs, accumulator);
-        lhs = next_lhs;
-        rhs = next_rhs;
+        lhs_pipeline.release(phase_index);
+        rhs_pipeline.release(phase_index);
         phase_index += 1;
     }
+    lhs_pipeline.wait(phase_count);
+    lhs_pipeline.discard(phase_count);
+    lhs_pipeline.release(phase_count);
+    rhs_pipeline.wait(phase_count);
+    rhs_pipeline.discard(phase_count);
+    rhs_pipeline.release(phase_count);
 
     let values = accumulator.into_values();
     if let Some(output_tile) = output_tile {

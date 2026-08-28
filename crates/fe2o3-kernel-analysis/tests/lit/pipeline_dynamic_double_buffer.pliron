@@ -10,6 +10,7 @@ builtin.func @pipeline_dynamic_double_buffer: builtin.function <(kernel.index ) 
     one_v3 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 1]: <() -> (kernel.index )>;
     two_v4 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 2]: <() -> (kernel.index )>;
     kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Stage]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.access (v0, zero_v2, zero_v2) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <16,true,[2,256]>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Commit]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
     kernel.br_args (zero_v2) [^header_block2v1] []: <(kernel.index ) -> ()>
 
@@ -21,9 +22,11 @@ builtin.func @pipeline_dynamic_double_buffer: builtin.function <(kernel.index ) 
     future_slot_v9 = kernel.index_binary (future_v8, two_v4) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
     current_slot_v10 = kernel.index_binary (body_i_v7, two_v4) [] [kernel_index_binary_kind: kernel.index_binary_kind Remainder]: <(kernel.index , kernel.index ) -> (kernel.index )>;
     kernel.pipeline_event (p1, future_v8, future_slot_v9) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Stage]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.access (v0, future_slot_v9, zero_v2) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <16,true,[2,256]>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, future_v8, future_slot_v9) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Commit]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Wait]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Consume]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.access (v0, current_slot_v10, zero_v2) [] [kernel_access_kind: kernel.access_kind Read]: <(kernel.ranked_view <16,true,[2,256]>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, body_i_v7, current_slot_v10) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Release]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
     kernel.br_args (future_v8) [^header_block2v1] []: <(kernel.index ) -> ()>
 

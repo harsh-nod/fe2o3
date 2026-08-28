@@ -52,7 +52,7 @@ const OBJECT_DEVICE_OFFSET: usize = 0;
 const OBJECT_INODE_OFFSET: usize = 8;
 const OBJECT_SIZE_OFFSET: usize = 16;
 const OBJECT_MODE_OFFSET: usize = 24;
-const OBJECT_RESERVED_OFFSET: usize = 28;
+const OBJECT_CLASS_OFFSET: usize = 28;
 
 const STDIN_FILENO: i32 = 0;
 const STDOUT_FILENO: i32 = 1;
@@ -85,12 +85,14 @@ pub enum StaticPreexecManifestErrorV1 {
     InvalidDescriptorCount(usize),
     /// A descriptor index cannot be represented by the bounded V1 table.
     InvalidDescriptorIndex(usize),
-    /// The executable object identity has a nonzero reserved field.
-    NonzeroExecutableReserved,
-    /// An active descriptor object identity has a nonzero reserved field.
-    NonzeroDescriptorReserved {
+    /// The executable object does not use ordinary `fstat` validation.
+    InvalidExecutableObjectClass(u32),
+    /// An active descriptor declares an unsupported object-validation class.
+    InvalidDescriptorObjectClass {
         /// Index of the malformed active descriptor.
         index: usize,
+        /// Unsupported encoded class.
+        class: u32,
     },
     /// An inactive descriptor slot contains nonzero data.
     NonzeroInactiveDescriptor {
@@ -170,13 +172,13 @@ impl fmt::Display for StaticPreexecManifestErrorV1 {
             ErrorV1::InvalidDescriptorIndex(index) => {
                 write!(formatter, "invalid descriptor index {index}")
             }
-            ErrorV1::NonzeroExecutableReserved => {
-                formatter.write_str("executable object reserved field is nonzero")
+            ErrorV1::InvalidExecutableObjectClass(class) => {
+                write!(formatter, "invalid executable object class {class}")
             }
-            ErrorV1::NonzeroDescriptorReserved { index } => {
+            ErrorV1::InvalidDescriptorObjectClass { index, class } => {
                 write!(
                     formatter,
-                    "descriptor {index} object reserved field is nonzero"
+                    "descriptor {index} has unsupported object class {class}"
                 )
             }
             ErrorV1::NonzeroInactiveDescriptor { index } => {
@@ -229,13 +231,34 @@ impl fmt::Display for StaticPreexecManifestErrorV1 {
 
 impl Error for StaticPreexecManifestErrorV1 {}
 
-/// Immutable `st_dev`, `st_ino`, size, and mode snapshot encoded by V1.
+/// Kernel validation applied to one source-object snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum StaticPreexecObjectClassV1 {
+    /// Validate the exact `fstat` snapshot and require a unique device/inode key.
+    Fstat = 0,
+    /// Validate the `fstat` snapshot and require a live Linux process pidfd.
+    ProcessPidfd = 1,
+}
+
+impl StaticPreexecObjectClassV1 {
+    const fn decode(encoded: u32) -> Option<Self> {
+        match encoded {
+            0 => Some(Self::Fstat),
+            1 => Some(Self::ProcessPidfd),
+            _ => None,
+        }
+    }
+}
+
+/// Immutable `st_dev`, `st_ino`, size, mode, and validation-class snapshot encoded by V1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StaticPreexecObjectIdentityV1 {
     device: u64,
     inode: u64,
     size: u64,
     mode: u32,
+    class: StaticPreexecObjectClassV1,
 }
 
 impl StaticPreexecObjectIdentityV1 {
@@ -246,6 +269,18 @@ impl StaticPreexecObjectIdentityV1 {
             inode,
             size,
             mode,
+            class: StaticPreexecObjectClassV1::Fstat,
+        }
+    }
+
+    /// Constructs an identity for a live process pidfd whose exact target is checked later.
+    pub const fn new_process_pidfd(device: u64, inode: u64, size: u64, mode: u32) -> Self {
+        Self {
+            device,
+            inode,
+            size,
+            mode,
+            class: StaticPreexecObjectClassV1::ProcessPidfd,
         }
     }
 
@@ -269,8 +304,18 @@ impl StaticPreexecObjectIdentityV1 {
         self.mode
     }
 
+    /// Returns the required kernel validation class.
+    pub const fn class(&self) -> StaticPreexecObjectClassV1 {
+        self.class
+    }
+
     const fn has_same_key(&self, other: &Self) -> bool {
         self.device == other.device && self.inode == other.inode
+    }
+
+    const fn may_share_key_with(&self, other: &Self) -> bool {
+        matches!(self.class, StaticPreexecObjectClassV1::ProcessPidfd)
+            && matches!(other.class, StaticPreexecObjectClassV1::ProcessPidfd)
     }
 }
 
@@ -375,26 +420,35 @@ impl StaticPreexecManifestV1 {
         }
         let parent_pid = read_i32(bytes, PARENT_PID_OFFSET_V1);
         let parent_start_time = read_u64(bytes, PARENT_START_TIME_OFFSET_V1);
-        let executable_reserved = read_u32(bytes, EXECUTABLE_OFFSET_V1 + OBJECT_RESERVED_OFFSET);
-        if executable_reserved != 0 {
-            return Err(StaticPreexecManifestErrorV1::NonzeroExecutableReserved);
+        let executable_class = read_u32(bytes, EXECUTABLE_OFFSET_V1 + OBJECT_CLASS_OFFSET);
+        if executable_class != StaticPreexecObjectClassV1::Fstat as u32 {
+            return Err(StaticPreexecManifestErrorV1::InvalidExecutableObjectClass(
+                executable_class,
+            ));
         }
-        let executable = decode_object(bytes, EXECUTABLE_OFFSET_V1);
+        let executable = decode_object(
+            bytes,
+            EXECUTABLE_OFFSET_V1,
+            StaticPreexecObjectClassV1::Fstat,
+        );
 
         let mut descriptors = Vec::with_capacity(descriptor_count);
         for index in 0..descriptor_count {
             let offset = descriptor_offset(index);
-            if read_u32(
+            let encoded_class = read_u32(
                 bytes,
-                offset + DESCRIPTOR_OBJECT_OFFSET + OBJECT_RESERVED_OFFSET,
-            ) != 0
-            {
-                return Err(StaticPreexecManifestErrorV1::NonzeroDescriptorReserved { index });
-            }
+                offset + DESCRIPTOR_OBJECT_OFFSET + OBJECT_CLASS_OFFSET,
+            );
+            let class = StaticPreexecObjectClassV1::decode(encoded_class).ok_or(
+                StaticPreexecManifestErrorV1::InvalidDescriptorObjectClass {
+                    index,
+                    class: encoded_class,
+                },
+            )?;
             descriptors.push(StaticPreexecDescriptorV1 {
                 source_fd: read_i32(bytes, offset + SOURCE_FD_OFFSET),
                 destination_fd: read_i32(bytes, offset + DESTINATION_FD_OFFSET),
-                object: decode_object(bytes, offset + DESCRIPTOR_OBJECT_OFFSET),
+                object: decode_object(bytes, offset + DESCRIPTOR_OBJECT_OFFSET, class),
             });
         }
         for index in descriptor_count..PREEXEC_MAX_DESCRIPTORS {
@@ -487,6 +541,11 @@ impl StaticPreexecManifestV1 {
     }
 
     fn validate(&self) -> Result<(), StaticPreexecManifestErrorV1> {
+        if self.executable.class != StaticPreexecObjectClassV1::Fstat {
+            return Err(StaticPreexecManifestErrorV1::InvalidExecutableObjectClass(
+                self.executable.class as u32,
+            ));
+        }
         if self.parent_pid < MIN_PARENT_PID {
             return Err(StaticPreexecManifestErrorV1::InvalidParentPid(
                 self.parent_pid,
@@ -531,10 +590,10 @@ impl StaticPreexecManifestV1 {
                     descriptor: index,
                 });
             }
-            if let Some(first) = self.descriptors[..index]
-                .iter()
-                .position(|previous| descriptor.object.has_same_key(&previous.object))
-            {
+            if let Some(first) = self.descriptors[..index].iter().position(|previous| {
+                descriptor.object.has_same_key(&previous.object)
+                    && !descriptor.object.may_share_key_with(&previous.object)
+            }) {
                 return Err(StaticPreexecManifestErrorV1::DescriptorObjectAlias {
                     first,
                     second: index,
@@ -556,13 +615,18 @@ const fn descriptor_offset(index: usize) -> usize {
     DESCRIPTORS_OFFSET_V1 + index * PREEXEC_DESCRIPTOR_BYTES_V1
 }
 
-fn decode_object(bytes: &[u8], offset: usize) -> StaticPreexecObjectIdentityV1 {
-    StaticPreexecObjectIdentityV1::new(
-        read_u64(bytes, offset + OBJECT_DEVICE_OFFSET),
-        read_u64(bytes, offset + OBJECT_INODE_OFFSET),
-        read_u64(bytes, offset + OBJECT_SIZE_OFFSET),
-        read_u32(bytes, offset + OBJECT_MODE_OFFSET),
-    )
+fn decode_object(
+    bytes: &[u8],
+    offset: usize,
+    class: StaticPreexecObjectClassV1,
+) -> StaticPreexecObjectIdentityV1 {
+    StaticPreexecObjectIdentityV1 {
+        device: read_u64(bytes, offset + OBJECT_DEVICE_OFFSET),
+        inode: read_u64(bytes, offset + OBJECT_INODE_OFFSET),
+        size: read_u64(bytes, offset + OBJECT_SIZE_OFFSET),
+        mode: read_u32(bytes, offset + OBJECT_MODE_OFFSET),
+        class,
+    }
 }
 
 fn encode_object(bytes: &mut [u8], offset: usize, object: &StaticPreexecObjectIdentityV1) {
@@ -570,6 +634,7 @@ fn encode_object(bytes: &mut [u8], offset: usize, object: &StaticPreexecObjectId
     write_u64(bytes, offset + OBJECT_INODE_OFFSET, object.inode);
     write_u64(bytes, offset + OBJECT_SIZE_OFFSET, object.size);
     write_u32(bytes, offset + OBJECT_MODE_OFFSET, object.mode);
+    write_u32(bytes, offset + OBJECT_CLASS_OFFSET, object.class as u32);
 }
 
 fn read_i32(bytes: &[u8], offset: usize) -> i32 {

@@ -3,7 +3,7 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::thread;
 use std::time::Duration;
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use fe2o3_artifact_transaction::{
     INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1,
     INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1, InertCompilerExecutionSubjectV1,
@@ -13,13 +13,19 @@ use fe2o3_compiler_execution_client::{
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV3,
+    CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionExternalAnchorTransactionV1,
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationV1, CompilerExecutionServicePublishDispositionV1,
     CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
     CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1,
+};
+use fe2o3_external_anchor_protocol::{
+    AnchorPositionV1, AnchorTransitionReceiptV1, AnchoredStateV1, CallerNonceV1, HashChainHeadV1,
+    PinnedAnchorKeyV1, UnsignedAnchorObservationV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -28,6 +34,8 @@ const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identit
 
 #[derive(Clone)]
 struct Fixture {
+    signing_key: SigningKey,
+    anchor_signing_key: SigningKey,
     policy: CompilerExecutionIssuerPolicyV1,
     subject: InertCompilerExecutionSubjectV1,
     challenge: CompilerExecutionAttestationChallengeV1,
@@ -44,11 +52,13 @@ impl Fixture {
 
     fn with_subject(subject_seed: u8) -> Self {
         let key = SigningKey::from_bytes(&[0x51; 32]);
+        let anchor_signing_key = SigningKey::from_bytes(&[0x52; 32]);
         let policy = CompilerExecutionIssuerPolicyV1::new(
             7,
             CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([0x62; 32], 456).unwrap(),
             key.verifying_key().to_bytes(),
+            anchor_signing_key.verifying_key().to_bytes(),
         )
         .unwrap();
         let subject = subject(subject_seed);
@@ -71,6 +81,8 @@ impl Fixture {
         )
         .unwrap();
         Self {
+            signing_key: key,
+            anchor_signing_key,
             policy,
             subject,
             challenge,
@@ -79,6 +91,59 @@ impl Fixture {
             acknowledgment,
             carriage,
         }
+    }
+
+    fn anchor_receipt(&self) -> AnchorTransitionReceiptV1 {
+        let transaction = CompilerExecutionExternalAnchorTransactionV1::new(
+            self.policy.clone(),
+            self.request.clone(),
+            self.publication.clone(),
+        )
+        .unwrap();
+        let key = PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+            .unwrap();
+        let pending = AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32]))
+            .prepare(transaction.external_anchor_digest(), &key)
+            .unwrap()
+            .begin_advance(CallerNonceV1::from_bytes([0x67; 32]), &key)
+            .unwrap();
+        let unsigned = UnsignedAnchorObservationV1::from_challenge(
+            pending.challenge(),
+            AnchorPositionV1::Proposed,
+        );
+        let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
+        AnchorTransitionReceiptV1::new(
+            pending.challenge().clone(),
+            &unsigned.attach_signature(signature.to_bytes()),
+            &key,
+        )
+        .unwrap()
+    }
+
+    fn currentness_receipt(
+        &self,
+        carriage: &CompilerExecutionReceiptCarriageV1,
+        commit_receipt: &AnchorTransitionReceiptV1,
+        verification_challenge: [u8; 32],
+        position: AnchorPositionV1,
+    ) -> AnchorTransitionReceiptV1 {
+        let challenge =
+            CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                carriage,
+                commit_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+        let key = PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+            .unwrap();
+        let unsigned = UnsignedAnchorObservationV1::from_challenge(&challenge, position);
+        let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
+        AnchorTransitionReceiptV1::new(
+            challenge,
+            &unsigned.attach_signature(signature.to_bytes()),
+            &key,
+        )
+        .unwrap()
     }
 }
 
@@ -177,18 +242,31 @@ fn exact_current_verification_is_one_terminal_packet() {
         .unwrap()
         .verify_current_only(&fixture.policy, fixture.carriage.clone())
         .unwrap();
+    assert!(verification.authenticates_pinned_signing_key());
+    assert!(verification.authenticates_expected_challenge());
     assert_eq!(
-        verification.carriage_identity(),
+        verification.verification().carriage_identity(),
         *fixture.carriage.identity().as_bytes()
     );
     assert_eq!(
-        verification.protected_policy_verification_identity(),
+        verification
+            .verification()
+            .protected_policy_verification_identity(),
         [0x91; 32]
     );
     assert_eq!(
-        verification.protected_worker_ledger_verification_identity(),
+        verification
+            .verification()
+            .protected_worker_ledger_verification_identity(),
         [0x92; 32]
     );
+    assert!(!verification.authenticates_protected_current_record());
+    assert!(verification.authenticates_external_anchor_commit());
+    assert_ne!(
+        verification.external_rollback_verification_identity(),
+        [0; 32]
+    );
+    assert!(verification.authenticates_external_rollback_currentness());
     assert!(!verification.grants_authority());
     assert_eq!(handle.join().unwrap(), 1);
 }
@@ -205,15 +283,33 @@ fn current_verification_carriage_substitution_fails_closed() {
             request.kind(),
             CompilerExecutionServiceRequestKindV1::VerifyCurrent
         );
-        let verification = CompilerExecutionCurrentRecordVerificationV1::new(
-            &substituted.subject,
+        let verification_challenge = request.verification_challenge().unwrap();
+        let commit_receipt = substituted.anchor_receipt();
+        let currentness_receipt = substituted.currentness_receipt(
             &substituted.carriage,
+            &commit_receipt,
+            verification_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+            &substituted.carriage,
+            commit_receipt,
+            currentness_receipt,
+            verification_challenge,
             [0x91; 32],
             [0x92; 32],
         )
         .unwrap();
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
+            &substituted.policy,
+            &substituted.carriage,
+            verification,
+            verification_challenge,
+            &substituted.signing_key,
+        )
+        .unwrap();
         let response =
-            CompilerExecutionServiceResponseV1::verified_current(request.identity(), verification)
+            CompilerExecutionServiceResponseV1::verified_current(request.identity(), attestation)
                 .unwrap();
         send_raw(&service, response.canonical_bytes());
     });
@@ -223,7 +319,60 @@ fn current_verification_carriage_substitution_fails_closed() {
         .unwrap_err();
     assert!(matches!(
         error,
-        CompilerExecutionClientErrorV1::DurableStateChanged
+        CompilerExecutionClientErrorV1::CurrentRecord(
+            CompilerExecutionCurrentRecordVerificationErrorV3::VerificationMismatch
+        )
+    ));
+    handle.join().unwrap();
+}
+
+#[test]
+fn stale_current_verification_challenge_fails_closed() {
+    let fixture = Fixture::new();
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    let service_fixture = fixture.clone();
+    let handle = thread::spawn(move || {
+        let request = receive_request(&service);
+        let mut stale_challenge = request.verification_challenge().unwrap();
+        stale_challenge[0] ^= 0x80;
+        let commit_receipt = service_fixture.anchor_receipt();
+        let currentness_receipt = service_fixture.currentness_receipt(
+            &service_fixture.carriage,
+            &commit_receipt,
+            stale_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+            &service_fixture.carriage,
+            commit_receipt,
+            currentness_receipt,
+            stale_challenge,
+            [0x91; 32],
+            [0x92; 32],
+        )
+        .unwrap();
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
+            &service_fixture.policy,
+            &service_fixture.carriage,
+            verification,
+            stale_challenge,
+            &service_fixture.signing_key,
+        )
+        .unwrap();
+        let response =
+            CompilerExecutionServiceResponseV1::verified_current(request.identity(), attestation)
+                .unwrap();
+        send_raw(&service, response.canonical_bytes());
+    });
+    let error = CompilerExecutionClientV1::admit(client, Duration::from_secs(1))
+        .unwrap()
+        .verify_current_only(&fixture.policy, fixture.carriage)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompilerExecutionClientErrorV1::CurrentRecord(
+            CompilerExecutionCurrentRecordVerificationErrorV3::ChallengeMismatch
+        )
     ));
     handle.join().unwrap();
 }
@@ -527,17 +676,35 @@ fn spawn_service(
                 CompilerExecutionServiceRequestKindV1::VerifyCurrent => {
                     assert!(matches!(stage, DurableStage::Published));
                     assert_eq!(request.carriage(), Some(&fixture.carriage));
-                    let verification = CompilerExecutionCurrentRecordVerificationV1::new(
-                        &fixture.subject,
+                    let verification_challenge = request.verification_challenge().unwrap();
+                    let commit_receipt = fixture.anchor_receipt();
+                    let currentness_receipt = fixture.currentness_receipt(
                         &fixture.carriage,
+                        &commit_receipt,
+                        verification_challenge,
+                        AnchorPositionV1::Proposed,
+                    );
+                    let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+                        &fixture.carriage,
+                        commit_receipt,
+                        currentness_receipt,
+                        verification_challenge,
                         [0x91; 32],
                         [0x92; 32],
+                    )
+                    .unwrap();
+                    let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
+                        &fixture.policy,
+                        &fixture.carriage,
+                        verification,
+                        verification_challenge,
+                        &fixture.signing_key,
                     )
                     .unwrap();
                     (
                         CompilerExecutionServiceResponseV1::verified_current(
                             request.identity(),
-                            verification,
+                            attestation,
                         )
                         .unwrap(),
                         true,

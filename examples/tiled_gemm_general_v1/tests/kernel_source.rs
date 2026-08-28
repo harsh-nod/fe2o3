@@ -140,11 +140,11 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
         "Bf16MfmaAMatrix::row_major",
         "Bf16MfmaBMatrix::row_major",
         "F32AccumulatorFragment::zero",
+        "WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current",
+        "WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current",
         "let phase_count = (k as usize + 15) / 16",
         "while phase_index < phase_count",
-        "let next_phase = (phase_index + 1) * 16",
-        "lhs = next_lhs",
-        "rhs = next_rhs",
+        "let future_epoch = phase_index + 1",
         "alpha * values[0] + beta * *output",
     ] {
         assert!(KERNEL_SOURCE.contains(required), "missing `{required}`");
@@ -156,6 +156,14 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
         "multiply_accumulate",
         "into_values",
         "get_tiled_2d_mut",
+        "stage",
+        "write",
+        "commit",
+        "wait",
+        "consume",
+        "read",
+        "discard",
+        "release",
     ] {
         assert!(
             facts.method_calls.iter().any(|call| call == required),

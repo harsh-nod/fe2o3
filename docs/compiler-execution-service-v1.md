@@ -18,12 +18,14 @@ those images. Program, credential profile, root, and key now have one move-only
 prepared-supervisor owner. A canonical outer handoff binds the child-reported
 direct Cargo parent PID/UID/GID to the complete launch manifest. The client
 transfers that record plus exactly the rustc service peer and pidfd over an
-authenticated control connection; the supervisor independently admits and
-retains all three process identities and descriptors. It now consumes that
-handoff into a sealed 704-byte static pre-exec manifest and an exact ten-source
-table for destinations `0..=9`, retaining distinct stdout, stderr, and
-readiness readers. The supervisor now installs the manifest, issuer, and
-sources at FDs 198, 199, and `200..209` through a gated
+authenticated control connection; the supervisor independently admits those
+process identities and descriptors. It separately owns an admitted external-
+anchor endpoint and exact service pidfd, requires their service identity to
+equal the launch manifest, and transfers both to the issuer. It now consumes
+that handoff into a sealed 704-byte static pre-exec manifest and an exact
+twelve-source table for destinations `0..=11`, retaining distinct stdout,
+stderr, and readiness readers. The supervisor now installs the manifest and
+issuer at FDs 198 and 199 and sources at FDs `200..211` through a gated
 `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child. The child self-checks its
 inherited process profile and parent-death signal; the parent independently
 checks procfs credentials, all capability sets, tracing, umask, and unchanged
@@ -31,24 +33,35 @@ user/mount/PID/network/IPC/UTS/cgroup/time namespaces before release. Exact
 readiness transitions move-only launch custody to live ready custody, while
 one exact descriptor-free readiness packet and EOF transition ready custody to
 serving custody without surrendering the pidfd. Pidfd cancellation and
-fixed-capacity deferred cleanup provide exactly-once reaping. Production must
-still establish that exact profile in a deployed distinct-UID service
-entrypoint. Cargo now admits the fixed root-owned client profile and connects
-only to the fixed authenticated listener path.
+fixed-capacity deferred cleanup provide exactly-once reaping. The issuer
+re-admits the anchor endpoint and pidfd against both the manifest service
+identity and policy-pinned anchor key. Receipt publication now drives that
+transport and requires a durably recorded exact proposed-position observation
+before the Worker record or ACK can advance. Production must still establish
+that exact profile in a deployed distinct-UID service entrypoint and supply an
+independently operated monotonic backend. Cargo now admits the fixed root-owned
+client profile and connects only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 exact-carriage protected verification operation, bounded restart-safe client
 state machine, backend acquisition, attempt-scoped sidecar transport, and
-receipt-bearing Cargo/host V2 route are implemented. `VerifyCurrent` rereads the
+receipt-bearing Cargo/host route are implemented. `VerifyCurrent` rereads the
 service-owned canonical Worker record, reconstructs the complete carriage,
-compares every byte with the caller's expected carriage, and returns canonical
-policy and Worker-ledger verification evidence. That evidence remains
-authority-free until the client authenticates the provisioned service endpoint.
+compares every byte with the caller's expected carriage, queries the admitted
+anchor with a client-bound recovery challenge, reacquires the Worker record,
+and signs a canonical policy, Worker-ledger, commit, and currentness record with
+the caller's challenge. The sole V3 record embeds both the retained signed
+advance receipt and fresh signed recovery receipt. The client requires both
+keys to equal its pinned policy, every nested coordinate to equal its original
+expected carriage, and both receipts to report the exact proposed transition.
+That evidence remains authority-free: it authenticates the signed external
+commit and fresh current-head observation but does not prove protected key
+custody or independently administered monotonic service deployment.
 The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
 and external rollback verification identities. The concrete protected verifier,
-external monotonic rollback anchor, deployed distinct-UID service entrypoint,
-and exact Cargo-to-KFD run remain open.
+independently operated monotonic rollback backend, protected key custody,
+deployed distinct-UID service entrypoint, and exact Cargo-to-KFD run remain open.
 
 The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
 have reusable immutable memfd capabilities in
@@ -102,6 +115,8 @@ supervisor-to-issuer descriptor contract is fixed:
 | 7 | Service-owned sealed Ed25519 signing-key image |
 | 8 | Sealed expected-client and policy launch manifest |
 | 9 | Nonblocking atomic readiness-pipe writer |
+| 10 | Connected external-anchor service endpoint |
+| 11 | Live process pidfd for that external-anchor service |
 
 The production ELF enters through a syscall-only x86-64 shim that restores
 nondumpability after `exec`, reasserts `no_new_privs` and the zero core limit,
@@ -136,15 +151,16 @@ The session accepts exactly seven operation kinds:
 | `Publish` | Matching `Issued`, or the immediately acknowledged request | Worker commit followed by issuer ACK; terminal exact ACK |
 | `Cancel` | Any valid state | Current rollback position; terminal without mutation |
 | `Recover` | Requested compiler subject | Strict post-fsync reacquisition and complete carriage when the exact current record exists; terminal without mutation. If no Worker record exists yet, return nonterminal `ReceiptAbsent`. A different current subject fails closed. |
-| `VerifyCurrent` | Complete expected receipt carriage | Independently reread the canonical Worker record, reconstruct and byte-compare the complete carriage under the protected policy, and return exact policy/ledger verification evidence; terminal without mutation. |
+| `VerifyCurrent` | Complete expected receipt carriage and fresh 32-byte challenge | Independently reread the canonical Worker V2 record, reconstruct and byte-compare the complete carriage, query the admitted external anchor with an exact client-bound recovery challenge, reread the same Worker record, and sign the exact policy/ledger/commit/currentness evidence; terminal without local mutation. |
 
 Each request commits to the caller-pinned policy identity and a
 domain-separated identity over its complete canonical bytes. Prepare names the
 expected sequence and prior rollback anchor. Issue and Publish derive that
 position from their complete nested attestation request. Recover carries the
 complete canonical compiler subject and names no caller-asserted rollback
-position. VerifyCurrent names the expected sequence and current rollback anchor
-and carries the complete 2,058-byte carriage. Every response binds
+position. VerifyCurrent names the expected sequence and current rollback anchor,
+carries the complete 2,090-byte carriage, and adds a nonzero 32-byte caller
+challenge. Every response binds
 the exact request identity, policy identity, resulting position, payload, and
 its own terminal identity.
 
@@ -162,16 +178,16 @@ diagnostic protocol and keeps crash recovery authoritative.
 | Issue request | 1,074 |
 | Publish request | 1,658 |
 | Recover request | 818 |
-| VerifyCurrent request | 2,186 |
+| VerifyCurrent request | 2,250 |
 | Ready, Cancelled, or ReceiptAbsent response | 160 |
 | Prepared response | 360 |
 | Issued response | 744 |
 | Published response | 456 |
-| Recovered response | 2,218 |
-| VerifiedCurrent response | 512 |
+| Recovered response | 2,250 |
+| VerifiedCurrent response | 1,784 |
 
 The implementation uses fixed stack storage sized to the maximum request and
-response. The complete publication ACK or recovered 2,058-byte carriage remains
+response. The complete publication ACK or recovered 2,090-byte carriage remains
 inline in the terminal result; the authority boundary does not add a fallible
 heap allocation path.
 
@@ -181,16 +197,27 @@ Publish performs one ordered composition:
 
 1. validate the issuer and Worker journal position;
 2. verify the exact request and signed publication sidecar;
-3. durably commit and reacquire the canonical Worker record;
-4. derive the move-only committed-publication witness from that reacquisition;
-5. durably acknowledge the same publication in the issuer journal; and
-6. return the authority-free Worker ACK with `Advanced` or
+3. durably prepare or recover the exact external-anchor transaction and
+   challenge;
+4. unless an exact prior attempt already recorded anchor commit, exchange that
+   challenge over the admitted endpoint and durably record the signed
+   observation; an exact prior-position observation aborts the transaction;
+5. durably commit and reacquire the canonical Worker V2 record with the complete
+   exact proposed-position receipt embedded in the same atomic record;
+6. durably mark the matching anchor journal `Published` and reacquire it;
+7. derive the move-only committed-publication witness from the exact Worker
+   reacquisition;
+8. durably acknowledge the same publication in the issuer journal; and
+9. return the authority-free Worker ACK with `Advanced` or
    `AlreadyAcknowledged` disposition.
 
-The issuer never acknowledges before the Worker record is durable. Repeating
-the exact Publish after a lost response returns the same ACK with
-`AlreadyAcknowledged`; changing the request, sidecar, Worker identity, policy,
-sequence, or anchor fails closed.
+The issuer never acknowledges before both the proposed anchor receipt and Worker
+record are durable, the receipt in both records is byte-identical, and the anchor
+journal is `Published`. Repeating the exact
+Publish after a lost response reuses the durable challenge or completes from an
+already committed stage, then returns the same ACK with `AlreadyAcknowledged`;
+changing the request, sidecar, Worker identity, policy, sequence, challenge,
+observation, or anchor fails closed.
 
 Recover rereads the canonical Worker record, repeats strict policy, signature,
 request, publication, identity, and ACK validation, and requires exact compiler
@@ -201,14 +228,31 @@ or a current record for another subject is never reported as absent. Recovery
 still covers only the current record; immutable history and custody confirmation
 before successor issuance remain part of the production service deployment.
 
-VerifyCurrent performs the same strict durable reread, then reconstructs the
-complete carriage and requires both structural equality and byte-for-byte
-equality with the request. It derives domain-separated policy and Worker-ledger
-verification identities from protected policy bytes, the exact subject and
-carriage, and the complete reacquired Worker record. The 352-byte result repeats
-all relevant coordinates and has its own canonical identity. The identities are
-deterministic evidence labels, not signatures or rollback authority; trust in
-their protected derivation comes from the authenticated service connection.
+VerifyCurrent performs the same strict durable reread, including verification
+of the Worker V2 record's embedded signed external-anchor commit receipt, then
+reconstructs the complete carriage and requires both structural equality and
+byte-for-byte equality with the request. It derives a recovery nonce from the
+caller's fresh challenge, exact carriage identity, and retained commit-receipt
+identity; reconstructs the same external transition as a `Recover` challenge;
+and exchanges that challenge over the already admitted external-anchor endpoint.
+Only an exact signed `Proposed` observation is current. A signed `Prior`
+observation, stale nonce, wrong phase, changed transition, later/unrelated head,
+transport failure, or duplicate response fails closed. After the exchange the
+service reopens and byte-compares the Worker record again before forming any
+result.
+
+The sole 1,440-byte V3 result repeats every relevant coordinate, embeds the
+policy-pinned external-anchor key, complete 528-byte retained advance receipt,
+complete 528-byte fresh recovery receipt, and deterministic protected policy
+and Worker-ledger evidence labels. The service signs that complete result with
+the caller challenge in a 1,624-byte V3 attestation. Client verification starts
+from the original expected carriage and challenge, reconstructs the compiler
+anchor transaction and recovery challenge independently, and requires both
+strict signatures and every sequence, prior head, proposed head, transaction,
+key, kind, position, and nonce coordinate to match. This authenticates the
+signed commit and fresh signed current-head observation. It grants no authority;
+protected key custody and independently administered, monotonic, crash-durable
+anchor deployment remain separate production joins.
 
 `fe2o3-compiler-execution-client` implements the corresponding single-session
 machine. It attempts Recover first, correlates every response to the exact
@@ -216,11 +260,15 @@ request and caller-pinned policy, and resumes the minimum legal suffix from
 Ready, Prepared, or Issued. Issued restart reconstructs the exact challenge and
 request from authenticated receipt fields before Publish. Recovery-only clients
 send Cancel after ReceiptAbsent so the service terminates without mutation.
-Verification-only clients use one terminal VerifyCurrent exchange and compare
-every returned carriage coordinate with the original expected carriage.
+Verification-only clients generate a fresh challenge, use one terminal
+VerifyCurrent exchange, verify the issuer signature under the pinned policy
+key, compare every returned coordinate with the original expected carriage,
+and independently re-verify both external receipts and the reconstructed
+recovery challenge under the policy-pinned anchor key. No response-derived
+verification clone is used as the expected value.
 
 The same crate now implements the direct-parent channel handoff. The socketpair
-is created after fork inside the rustc child, its client endpoint is installed
+is created after fork inside the selected child, its client endpoint is installed
 at fixed FD 195, and only its service endpoint crosses `SCM_RIGHTS` to the
 parent. The parent requires the transferred child and direct-parent PIDs,
 `SO_PEERCRED`, spawned child PID, current parent identity, and live pidfd to
@@ -236,7 +284,15 @@ binding wrapper now invokes this path for the selected protected kernel root,
 waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
 Fresh publication fails closed unless the parent still retains both exact
 rustc-invocation and compiler-execution-readiness custody. A deployed service
-entrypoint and backend receipt acquisition remain separate requirements.
+entrypoint, backend receipt acquisition, external monotonic rollback, and final
+verifier/runtime authority joins remain separate requirements. The production
+application runner uses the same child-created channel and fixed supervisor path
+without exposing policy FD 202, establishes readiness before waiting for its
+ACK, and retains that custody through exit. `fe2o3-host` exports a move-only
+one-use auditor that consumes the inherited endpoint and verifies the signed
+current-record transaction without constructing verifier, load, or launch
+authority.
+
 One absolute monotonic deadline now spans child admission, supervisor transfer,
 and readiness; production does not restart a full timeout at each transition.
 
@@ -252,7 +308,9 @@ machine-effect evidence and close `CompilerExecutionProvenance`.
 
 The protocol suite mutates every byte of all seven request and eight response
 forms and checks exact lengths, canonical re-encoding, nested pairing, policy,
-position, and terminal identities. The service suite covers exact packet
+position, terminal identities, the complete V2 receipt, wrong anchor keys,
+wrong compiler transactions, and prior-position substitution. The service suite
+covers exact packet
 boundaries, oversize and ancillary rejection, deadline and pidfd cancellation,
 blocked response delivery, all operation transitions and exact replay, complete
 carriage recovery, exact-current verification, stale carriage rejection,
@@ -265,14 +323,14 @@ transition methods.
 target and rejects an interpreter, dynamic section, runtime dependency, RPATH,
 RUNPATH, executable stack, undefined symbol, or an ELF entry address other than
 the syscall-only secure-start symbol. It also starts the issuer with
-FDs 3 through 9 closed and requires silent fail-closed exit status 1. This
+FDs 3 through 11 closed and requires silent fail-closed exit status 1. This
 qualifies the executable image shape and pre-runtime hardening edge. The
 supervisor image-admission suite independently qualifies exact source
 measurements, static-profile validation, anonymous read-only executable memfd
 custody, complete content/exec seals, caller-policy agreement, mutation and
 substitution rejection, and move-only descriptor hiding on Linux and MI300X.
 The suite also qualifies authority binding, same-process hostile handoff cases,
-the exact ten-entry prepared table, manifest seals and canonical bytes, parent
+the exact twelve-entry prepared table, manifest seals and canonical bytes, parent
 continuity, source and manifest substitution, and post-preparation rustc death.
 The lifecycle suite additionally covers atomic clone3 pidfd launch, isolated
 stdio, profile parsing, namespace continuity, readiness success, PID

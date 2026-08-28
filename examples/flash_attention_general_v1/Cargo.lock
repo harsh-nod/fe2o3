@@ -228,11 +228,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-client"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-artifact-transaction",
+ "fe2o3-compiler-execution-protocol",
+ "libc",
+ "rustix",
+]
+
+[[package]]
 name = "fe2o3-compiler-execution-protocol"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
  "fe2o3-artifact-transaction",
+ "fe2o3-external-anchor-protocol",
  "sha2 0.11.0",
 ]
 
@@ -285,6 +296,14 @@ name = "fe2o3-drm-uapi"
 version = "0.1.0"
 
 [[package]]
+name = "fe2o3-external-anchor-protocol"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-flash-attention-general-v1"
 version = "0.1.0"
 dependencies = [
@@ -307,6 +326,7 @@ dependencies = [
  "fe2o3-aql",
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
+ "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
  "fe2o3-core",
  "fe2o3-device",

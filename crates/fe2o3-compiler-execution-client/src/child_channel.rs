@@ -103,10 +103,13 @@ impl CompilerExecutionServiceLaunchV1 {
 ///
 /// Preparation registers one async-signal-safe `pre_exec` callback. The command is one-use after
 /// preparation: a second spawn cannot produce another admitted handoff after this receiver is
-/// consumed. The command retains the control sender until it is dropped; all waits are therefore
-/// bounded by the caller-supplied absolute deadline rather than EOF.
+/// consumed. The pending value reserves FD 195 with the exact private control socket until the
+/// child has crossed `fork`, preventing an unrelated concurrent descriptor allocation from
+/// occupying the fixed target. The command retains the control sender until it is dropped; all
+/// waits are therefore bounded by the caller-supplied absolute deadline rather than EOF.
 pub struct PendingCompilerExecutionChildChannelV1 {
     receiver: OwnedFd,
+    _reserved_child_fd: OwnedFd,
 }
 
 impl fmt::Debug for PendingCompilerExecutionChildChannelV1 {
@@ -122,14 +125,38 @@ impl PendingCompilerExecutionChildChannelV1 {
     /// Registers exact child-side channel creation on one rustc command.
     pub fn prepare(command: &mut Command) -> Result<Self, CompilerExecutionChildChannelErrorV1> {
         require_reserved_descriptor_unused()?;
-        let (receiver, sender) = seqpacket_pair()?;
+        let (mut receiver, mut sender) = seqpacket_pair()?;
+        if receiver.as_raw_fd() == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
+            mem::swap(&mut receiver, &mut sender);
+        }
+        let reserved_child_fd = if sender.as_raw_fd() == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
+            let control = rustix::io::fcntl_dupfd_cloexec(&sender, 0).map_err(|error| {
+                CompilerExecutionChildChannelErrorV1::Descriptor(io::Error::from(error))
+            })?;
+            let reserved = sender;
+            sender = control;
+            reserved
+        } else {
+            let reserved =
+                rustix::io::fcntl_dupfd_cloexec(&sender, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1)
+                    .map_err(|error| {
+                        CompilerExecutionChildChannelErrorV1::Descriptor(io::Error::from(error))
+                    })?;
+            if reserved.as_raw_fd() != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
+                return Err(CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse);
+            }
+            reserved
+        };
         // The command owns this descriptor through every spawn. The callback creates the actual
         // service channel after fork, so SO_PEERCRED records the rustc child's PID rather than its
         // parent wrapper. Every operation below is an async-signal-safe Linux descriptor syscall.
         unsafe {
             command.pre_exec(move || child_create_and_transfer(sender.as_raw_fd()));
         }
-        Ok(Self { receiver })
+        Ok(Self {
+            receiver,
+            _reserved_child_fd: reserved_child_fd,
+        })
     }
 
     /// Receives and validates the exact service endpoint for one still-live spawned rustc PID.
@@ -247,13 +274,7 @@ fn seqpacket_pair() -> Result<(OwnedFd, OwnedFd), CompilerExecutionChildChannelE
 }
 
 fn child_create_and_transfer(control: RawFd) -> io::Result<()> {
-    // A preexisting target would let another callback or inherited ambient state substitute the
-    // backend endpoint after parent-side preparation.
-    // SAFETY: F_GETFD reports descriptor validity without dereferencing memory.
-    let target = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
-    if target >= 0 || io::Error::last_os_error().raw_os_error() != Some(libc::EBADF) {
-        return Err(io::Error::from_raw_os_error(libc::EBUSY));
-    }
+    require_exact_child_reservation(control)?;
 
     let mut peers = [-1_i32; 2];
     // SAFETY: successful socketpair initializes both child-local output slots.
@@ -268,41 +289,58 @@ fn child_create_and_transfer(control: RawFd) -> io::Result<()> {
     {
         return Err(io::Error::last_os_error());
     }
-    let (service, client) = if peers[0] == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
-        (peers[1], peers[0])
-    } else {
-        (peers[0], peers[1])
-    };
+    let (service, client) = (peers[0], peers[1]);
 
     let result = (|| {
-        if client == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
-            // SAFETY: F_SETFD consumes only the inherited descriptor flag value.
-            if unsafe { libc::fcntl(client, libc::F_SETFD, 0) } != 0 {
-                return Err(io::Error::last_os_error());
-            }
-        } else {
-            // SAFETY: dup3 atomically installs the live socket endpoint at the reserved target.
-            if unsafe { libc::dup3(client, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, 0) }
-                != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
-            {
-                return Err(io::Error::last_os_error());
-            }
+        // SAFETY: dup3 atomically replaces the exact validated reservation with the live endpoint.
+        if unsafe { libc::dup3(client, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, 0) }
+            != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+        {
+            return Err(io::Error::last_os_error());
         }
         send_service_peer(control, service)
     })();
 
-    // SAFETY: these are child-local descriptors returned by socketpair. Avoid closing the
-    // installed target when socketpair itself selected FD 195 for the client endpoint.
+    // SAFETY: these are child-local descriptors returned by socketpair. The validated reservation
+    // prevents either new endpoint from occupying FD 195 before dup3 replaces it.
     unsafe {
         libc::close(service);
-        if client != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
-            libc::close(client);
-        }
+        libc::close(client);
         if result.is_err() {
             libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1);
         }
     }
     result
+}
+
+fn require_exact_child_reservation(control: RawFd) -> io::Result<()> {
+    // The reservation must remain close-on-exec until this callback replaces it. A later callback
+    // cannot substitute an inherited object without changing the exact socket identity below.
+    // SAFETY: F_GETFD consumes only the scalar descriptor value.
+    let flags = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
+    if flags < 0 || flags & libc::FD_CLOEXEC == 0 {
+        return Err(io::Error::from_raw_os_error(libc::EBUSY));
+    }
+
+    // SAFETY: zero is a valid initial representation and fstat initializes each output on success.
+    let mut expected = unsafe { mem::zeroed::<libc::stat>() };
+    // SAFETY: see above; control is retained by the command callback.
+    if unsafe { libc::fstat(control, &mut expected) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: see above; FD 195 was validated as open immediately before this call.
+    let mut actual = unsafe { mem::zeroed::<libc::stat>() };
+    if unsafe { libc::fstat(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, &mut actual) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if actual.st_dev != expected.st_dev
+        || actual.st_ino != expected.st_ino
+        || actual.st_mode != expected.st_mode
+        || actual.st_rdev != expected.st_rdev
+    {
+        return Err(io::Error::from_raw_os_error(libc::EBUSY));
+    }
+    Ok(())
 }
 
 fn send_service_peer(control: RawFd, service: RawFd) -> io::Result<()> {

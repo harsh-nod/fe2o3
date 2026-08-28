@@ -14,12 +14,16 @@ provisioning and is never accepted in a per-launch request.
 
 The admitted program is move-only and exposes no descriptor. A second move-only
 state now binds that exact program and policy to the canonical signing-key
-capability, a dedicated non-root UID/GID profile, and a retained service-owned
-root. Root admission requires a close-on-exec read-only directory descriptor,
+capability, a dedicated non-root UID/GID profile, a retained service-owned
+root, and one supervisor-provisioned external-anchor endpoint plus its live
+service pidfd. Root admission requires a close-on-exec read-only directory descriptor,
 exact owner UID and GID, mode `0700`, nonzero link count, and no file capability
 or POSIX access/default ACL. Program, policy, key, service identity, and root
-security metadata are all revalidated together. The key, root descriptor,
-source paths, and signing operation remain inaccessible.
+security metadata are all revalidated together. External-anchor admission
+requires an unnamed connected nonblocking Unix `SOCK_SEQPACKET`, exact pinned
+peer UID/GID, an exact live peer-process pidfd, and a service UID distinct from
+the issuer UID. The key, root descriptor, source paths, and signing operation
+remain inaccessible.
 
 The credential profile fixes the eventual child state: equal
 real/effective/saved/filesystem IDs, no supplementary groups, empty capability
@@ -32,14 +36,18 @@ with exactly two `SCM_RIGHTS` descriptors. Admission requires the control
 socket's exact submitter PID/UID/GID, nested policy, rustc service-peer
 `SO_PEERCRED`, pidfd target/liveness, descriptor identities, and all role
 non-aliasing checks to agree; all observations are repeated without exposing a
-descriptor.
+descriptor. The nested launch manifest now also carries the canonical
+external-anchor service UID/GID selected by the root-owned client profile.
+Handoff admission requires those credentials to equal the identity of the
+supervisor-provisioned anchor endpoint before any launch material is created.
 
 One accepted handoff can now be consumed into a move-only prepared launch. The
 supervisor clones and revalidates the exact launcher, issuer, root, service
-peer, rustc pidfd, policy, signing key, and sealed service-launch capability;
+peer, rustc pidfd, policy, signing key, sealed service-launch capability,
+external-anchor endpoint, and external-anchor pidfd;
 creates distinct nonblocking close-on-exec pipes for stdin, stdout, stderr, and
-readiness; and constructs the fixed ten-entry source table for issuer FDs
-`0..=9`. It binds that table and the issuer image to the current supervisor PID
+readiness; and constructs the fixed twelve-entry source table for issuer FDs
+`0..=11`. It binds that table and the issuer image to the current supervisor PID
 and exact procfs start time in one canonical 704-byte manifest. The manifest is
 stored in an anonymous read-only mode-`0400` memfd with exact `WRITE`, `GROW`,
 `SHRINK`, and `SEAL` seals. Revalidation repeats all authority, client-liveness,
@@ -54,7 +62,7 @@ arms and verifies `PDEATHSIG=SIGKILL`, self-checks the inherited service
 profile, reports through a private gate, and cannot execute until the parent
 independently rechecks the profile, all ten namespaces, and the complete
 prepared authority set. It then isolates standard streams, installs the
-manifest at FD 198, issuer at FD 199, sources at FDs `200..209`, and executes
+manifest at FD 198, issuer at FD 199, sources at FDs `200..211`, and executes
 the authenticated static launcher with one fixed argument and an empty
 environment.
 
@@ -110,5 +118,7 @@ performing privileged credential transitions after `clone3`. Deployment must
 therefore start the supervisor under the dedicated UID/GID with empty groups
 and capabilities, exact locked securebits, `no_new_privs`, nondumpability,
 zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.
-Cargo-wrapper fixed-path service acquisition is implemented. The real deployed
-distinct-UID supervisor entrypoint remains pending.
+Cargo-wrapper fixed-path service acquisition is implemented. Deployment must
+also provision the supervisor with the already connected external-anchor peer
+and matching live pidfd; neither Cargo nor rustc can select or replace them.
+The real deployed distinct-UID supervisor entrypoint remains pending.

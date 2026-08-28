@@ -5104,6 +5104,16 @@ pub struct SemanticMfmaAccumulatorContractV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum SemanticWorkgroupPipelineEventV1 {
+    Stage,
+    Commit,
+    Wait,
+    Consume,
+    Discard,
+    Release,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SemanticCompilerIntrinsicOperationV1 {
     ThreadIndex(SemanticAxisV1),
     WorkgroupIndex(SemanticAxisV1),
@@ -5123,6 +5133,29 @@ pub enum SemanticCompilerIntrinsicOperationV1 {
         dynamic_lds: SemanticTypeIdV1,
         raw_parts: SemanticTypeIdV1,
         element_storage: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
+    /// Creates one compiler-owned disjoint ring allocation in workgroup memory.
+    WorkgroupPipelineCreate {
+        scope: SemanticTypeIdV1,
+        pipeline: SemanticTypeIdV1,
+        buffers: u32,
+        elements: u64,
+        prefetch_distance: u32,
+    },
+    /// Records one epoch lifecycle transition on a workgroup pipeline.
+    WorkgroupPipelineEvent {
+        pipeline: SemanticTypeIdV1,
+        event: SemanticWorkgroupPipelineEventV1,
+    },
+    /// Stores one payload at a compiler-derived ring slot and explicit element index.
+    WorkgroupPipelineWrite {
+        pipeline: SemanticTypeIdV1,
+        element: SemanticTypeIdV1,
+    },
+    /// Loads one payload at a compiler-derived ring slot and explicit element index.
+    WorkgroupPipelineRead {
+        pipeline: SemanticTypeIdV1,
         element: SemanticTypeIdV1,
     },
     WorkgroupBarrier,
@@ -7384,6 +7417,10 @@ fn record_intrinsic_capability_claims(
         | SemanticCompilerIntrinsicOperationV1::Trap
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsExactCurrent { .. }
         | SemanticCompilerIntrinsicOperationV1::DynamicLdsIntoCollectiveRawParts { .. }
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. }
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { .. }
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { .. }
         | SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
         | SemanticCompilerIntrinsicOperationV1::WaveBarrier
@@ -7566,6 +7603,48 @@ fn compiler_intrinsic_signature_matches(
                 && dynamic_lds_storage_type_matches(request, dynamic_lds, element_storage)
                 && dynamic_lds_element_storage_matches(request, element_storage, element)
                 && dynamic_lds_raw_parts_type_matches(request, raw_parts, element)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+            scope,
+            pipeline,
+            buffers,
+            elements,
+            prefetch_distance,
+        } => {
+            inputs.len() == 1
+                && output == pipeline
+                && mutable_reference_to(request, inputs[0], scope)
+                && (2..=8).contains(&buffers)
+                && elements != 0
+                && prefetch_distance != 0
+                && prefetch_distance < buffers
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { pipeline, .. } => {
+            inputs.len() == 2
+                && mutable_reference_to(request, inputs[0], pipeline)
+                && is_unsigned_integer_with_bits(request, inputs[1], 64)
+                && matches!(
+                    request.types[output.0 as usize].shape,
+                    SemanticTypeShapeV1::Unit
+                )
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element } => {
+            inputs.len() == 4
+                && mutable_reference_to(request, inputs[0], pipeline)
+                && is_unsigned_integer_with_bits(request, inputs[1], 64)
+                && is_unsigned_integer_with_bits(request, inputs[2], 64)
+                && inputs[3] == element
+                && matches!(
+                    request.types[output.0 as usize].shape,
+                    SemanticTypeShapeV1::Unit
+                )
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
+            inputs.len() == 3
+                && mutable_reference_to(request, inputs[0], pipeline)
+                && is_unsigned_integer_with_bits(request, inputs[1], 64)
+                && is_unsigned_integer_with_bits(request, inputs[2], 64)
+                && output == element
         }
         SemanticCompilerIntrinsicOperationV1::ColdPath
         | SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
@@ -14395,6 +14474,20 @@ fn enqueue_compiler_intrinsic_type_references(
             pending.push_back(element_storage);
             pending.push_back(element);
         }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+            scope, pipeline, ..
+        } => {
+            pending.push_back(scope);
+            pending.push_back(pipeline);
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { pipeline, .. } => {
+            pending.push_back(pipeline);
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element }
+        | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
+            pending.push_back(pipeline);
+            pending.push_back(element);
+        }
         SemanticCompilerIntrinsicOperationV1::MathContextCurrent { context }
         | SemanticCompilerIntrinsicOperationV1::MathF32 { context, .. } => {
             pending.push_back(context);
@@ -16092,6 +16185,42 @@ fn encode_compiler_intrinsic_operation(
             writer.u32(element_storage.0)?;
             writer.u32(element.0)
         }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+            scope,
+            pipeline,
+            buffers,
+            elements,
+            prefetch_distance,
+        } => {
+            writer.u8(55)?;
+            writer.u32(scope.0)?;
+            writer.u32(pipeline.0)?;
+            writer.u32(buffers)?;
+            writer.u64(elements)?;
+            writer.u32(prefetch_distance)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { pipeline, event } => {
+            writer.u8(56)?;
+            writer.u32(pipeline.0)?;
+            writer.u8(match event {
+                SemanticWorkgroupPipelineEventV1::Stage => 0,
+                SemanticWorkgroupPipelineEventV1::Commit => 1,
+                SemanticWorkgroupPipelineEventV1::Wait => 2,
+                SemanticWorkgroupPipelineEventV1::Consume => 3,
+                SemanticWorkgroupPipelineEventV1::Discard => 4,
+                SemanticWorkgroupPipelineEventV1::Release => 5,
+            })
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element } => {
+            writer.u8(57)?;
+            writer.u32(pipeline.0)?;
+            writer.u32(element.0)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
+            writer.u8(58)?;
+            writer.u32(pipeline.0)?;
+            writer.u32(element.0)
+        }
         SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier => writer.u8(4),
         SemanticCompilerIntrinsicOperationV1::WaveBarrier => writer.u8(5),
         SemanticCompilerIntrinsicOperationV1::FabsF32 => writer.u8(6),
@@ -16384,7 +16513,7 @@ fn encode_compiler_intrinsic_operation(
             input,
             output,
         } => {
-            writer.u8(55)?;
+            writer.u8(59)?;
             writer.u8(match kind {
                 SemanticBf16ConversionKindV1::FromBits => 0,
                 SemanticBf16ConversionKindV1::ToBits => 1,

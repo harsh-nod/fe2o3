@@ -21,7 +21,10 @@ use rustix::fs::FileType;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-use crate::{ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1};
+use crate::{
+    ProtectedCompilerExecutionExternalAnchorV1, ProtectedServiceAdmissionErrorV1,
+    ProtectedServiceAdmissionV1,
+};
 
 /// Maximum admitted byte length of the protected issuer executable.
 pub const MAX_COMPILER_EXECUTION_ISSUER_IMAGE_BYTES_V1: u64 = 256 * 1024 * 1024;
@@ -427,7 +430,7 @@ impl ProtectedIssuerSigningKeyV1 {
     }
 }
 
-/// Move-only admitted process, static executable, policy, service channel, and signing key.
+/// Move-only admitted process, static executable, policy, service channels, and signing key.
 ///
 /// This value intentionally has no signing API and grants no compiler, publication, load, or
 /// launch authority. The durable issuer state machine will consume it.
@@ -444,6 +447,7 @@ pub struct ProtectedCompilerExecutionIssuerAdmissionV1 {
     policy: CompilerExecutionIssuerPolicyV1,
     executable: RetainedStaticIssuerExecutableV1,
     signing_key: ProtectedIssuerSigningKeyV1,
+    external_anchor: ProtectedCompilerExecutionExternalAnchorV1,
 }
 
 impl fmt::Debug for ProtectedCompilerExecutionIssuerAdmissionV1 {
@@ -467,11 +471,21 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
         service: ProtectedServiceAdmissionV1,
         policy: CompilerExecutionIssuerPolicyV1,
         signing_key: CompilerExecutionSigningKeyCapabilityV1,
+        external_anchor: ProtectedCompilerExecutionExternalAnchorV1,
     ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
         process.validate()?;
         service
             .validate_continuity()
             .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        external_anchor
+            .validate_continuity()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        if !external_anchor.matches_policy(&policy) {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::ExternalAnchorKeyMismatch,
+                "external-anchor transport does not use the caller-pinned policy key",
+            ));
+        }
         let executable = RetainedStaticIssuerExecutableV1::observe()?;
         let measurements = executable.measurements;
         if measurements.executable != policy.executable() {
@@ -491,12 +505,16 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
         service
             .validate_continuity()
             .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        external_anchor
+            .validate_continuity()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
         let admitted = Self {
             process,
             service,
             policy,
             executable,
             signing_key,
+            external_anchor,
         };
         admitted.validate_continuity()?;
         Ok(admitted)
@@ -511,6 +529,9 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
         self.service
             .validate_continuity()
             .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
+        self.external_anchor
+            .validate_continuity()
+            .map_err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::ServiceAdmission)?;
         self.signing_key.validate(&self.policy)?;
         if self.executable.measurements.executable != self.policy.executable()
             || self.executable.measurements.runtime != self.policy.runtime()
@@ -518,6 +539,12 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
             return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
                 IssuerAdmissionErrorKindV1::PolicyChanged,
                 "retained issuer measurements no longer match the pinned policy",
+            ));
+        }
+        if !self.external_anchor.matches_policy(&self.policy) {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::ExternalAnchorKeyMismatch,
+                "retained external-anchor key no longer matches the pinned policy",
             ));
         }
         Ok(())
@@ -557,6 +584,12 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
 
     pub(crate) fn client_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
         self.service.client_pidfd()
+    }
+
+    pub(crate) const fn external_anchor_mut(
+        &mut self,
+    ) -> &mut ProtectedCompilerExecutionExternalAnchorV1 {
+        &mut self.external_anchor
     }
 
     pub(crate) const fn signing_key(&self) -> &SigningKey {
@@ -629,6 +662,7 @@ pub enum IssuerAdmissionErrorKindV1 {
     SigningKeyMismatch,
     PolicyChanged,
     ServiceAdmission,
+    ExternalAnchorKeyMismatch,
     Protocol,
 }
 
@@ -719,6 +753,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([1; 32], 1).unwrap(),
             sealed_static_issuer_runtime_measurement_v1(),
             key.verifying_key().to_bytes(),
+            SigningKey::from_bytes(&[0x71; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
     }
@@ -758,6 +795,7 @@ mod tests {
             SigningKey::from_bytes(&[0x7f; 32])
                 .verifying_key()
                 .to_bytes(),
+            *policy.external_anchor_verifying_key(),
         )
         .unwrap();
         let error =

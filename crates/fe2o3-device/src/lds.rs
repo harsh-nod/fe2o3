@@ -17,8 +17,9 @@ use core::slice;
 /// it instantiates a view whose element requires it.
 pub const MAX_DYNAMIC_LDS_ALIGNMENT: usize = 16;
 
-mod sealed {
+pub(crate) mod sealed {
     pub trait Sealed {}
+    pub trait WorkgroupPipelineSealed {}
 }
 
 /// A plain scalar or scalar array that can reside in dynamic LDS.
@@ -452,11 +453,169 @@ fn validate_layout(
     Ok(allocated_bytes / element_size)
 }
 
+macro_rules! pipeline_scalars {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl sealed::WorkgroupPipelineSealed for $ty {}
+
+            // SAFETY: these are the same stable, byte-movable device scalars
+            // admitted by `LdsElement`.
+            unsafe impl WorkgroupPipelineElement for $ty {}
+        )+
+    };
+}
+
+pipeline_scalars!(u8, i8, u16, i16, u32, i32, u64, i64, usize, isize, f32, f64);
+pipeline_scalars!(crate::F16, crate::Bf16, crate::Bf16x2);
+pipeline_scalars!(
+    crate::Fp8E4M3Fnuz,
+    crate::Fp8E4M3Fnuzx4,
+    crate::Fp8E5M2Fnuz,
+    crate::Fp8E5M2Fnuzx4,
+);
+
+impl<T: WorkgroupPipelineElement, const N: usize> sealed::WorkgroupPipelineSealed for [T; N] {}
+
+// SAFETY: arrays preserve the admitted payload representation.
+unsafe impl<T: WorkgroupPipelineElement, const N: usize> WorkgroupPipelineElement for [T; N] {}
+
+/// A sealed value representation that may be staged through a workgroup pipeline.
+///
+/// Unlike [`LdsElement`], this contract also admits compiler-authenticated GPU
+/// register fragments whose lifetime brands are zero-sized. Implementations
+/// contain no actual references or destructor and have a compiler-known device
+/// representation.
+///
+/// # Safety
+///
+/// Implementations must contain no runtime references or destructor and must
+/// have a stable device representation that can be moved through workgroup
+/// memory without changing its semantic type contract.
+pub unsafe trait WorkgroupPipelineElement: sealed::WorkgroupPipelineSealed {}
+
+/// Linear compiler-owned staging storage indexed by epoch and element.
+///
+/// The type intentionally exposes no LDS pointer or Rust reference. Calls are
+/// compiler terminals: the source projector derives `slot = epoch % BUFFERS`,
+/// proves the lifecycle and indexed effects in PLIRON, and rejects every path
+/// that reads outside a consume window or writes outside a stage window.
+#[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_v1"]
+pub struct WorkgroupPipeline<
+    'workgroup,
+    T: WorkgroupPipelineElement,
+    const BUFFERS: usize,
+    const ELEMENTS: usize,
+    const PREFETCH: usize,
+> {
+    _storage: PhantomData<&'workgroup mut [T]>,
+    _not_send_sync: PhantomData<*mut ()>,
+}
+
+impl<
+    'workgroup,
+    T: WorkgroupPipelineElement,
+    const BUFFERS: usize,
+    const ELEMENTS: usize,
+    const PREFETCH: usize,
+> WorkgroupPipeline<'workgroup, T, BUFFERS, ELEMENTS, PREFETCH>
+{
+    /// Creates one compiler-owned, disjoint workgroup staging allocation.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_current_v1"]
+    pub fn current(_scope: &mut WorkgroupLdsScope<'workgroup>) -> Self {
+        const {
+            assert!(
+                BUFFERS >= 2,
+                "a workgroup pipeline needs at least two buffers"
+            );
+            assert!(
+                BUFFERS <= 8,
+                "the workgroup pipeline buffer count exceeds the compiler limit"
+            );
+            assert!(ELEMENTS > 0, "a workgroup pipeline epoch cannot be empty");
+            assert!(
+                PREFETCH > 0,
+                "a workgroup pipeline must prefetch at least one epoch"
+            );
+            assert!(
+                PREFETCH < BUFFERS,
+                "prefetch distance must be smaller than the ring"
+            );
+            assert!(size_of::<T>() > 0, "pipeline payloads cannot be zero-sized");
+            let elements = match BUFFERS.checked_mul(ELEMENTS) {
+                Some(elements) => elements,
+                None => panic!("workgroup pipeline element extent overflows"),
+            };
+            assert!(
+                elements.checked_mul(size_of::<T>()).is_some(),
+                "workgroup pipeline storage extent overflows"
+            );
+        }
+        unreachable!("workgroup pipelines must be created by authenticated lowering")
+    }
+
+    /// Begins the write window for `epoch`.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_stage_v1"]
+    pub fn stage(&mut self, _epoch: usize) {
+        unreachable!("pipeline stage must be lowered by the compiler")
+    }
+
+    /// Writes one value in the active staging epoch.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_write_v1"]
+    pub fn write(&mut self, _epoch: usize, _index: usize, _value: T) {
+        unreachable!("pipeline writes must be lowered by the compiler")
+    }
+
+    /// Publishes every write for `epoch` and closes its staging window.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_commit_v1"]
+    pub fn commit(&mut self, _epoch: usize) {
+        unreachable!("pipeline commit must be lowered by the compiler")
+    }
+
+    /// Waits until the committed epoch is visible to its workgroup consumers.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_wait_v1"]
+    pub fn wait(&mut self, _epoch: usize) {
+        unreachable!("pipeline wait must be lowered by the compiler")
+    }
+
+    /// Begins the read window for `epoch`.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_consume_v1"]
+    pub fn consume(&mut self, _epoch: usize) {
+        unreachable!("pipeline consume must be lowered by the compiler")
+    }
+
+    /// Reads one value in the active consumption epoch.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_read_v1"]
+    pub fn read(&mut self, _epoch: usize, _index: usize) -> T {
+        unreachable!("pipeline reads must be lowered by the compiler")
+    }
+
+    /// Marks a waited speculative epoch as intentionally unused.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_discard_v1"]
+    pub fn discard(&mut self, _epoch: usize) {
+        unreachable!("pipeline discard must be lowered by the compiler")
+    }
+
+    /// Releases one consumed or discarded ring slot for reuse.
+    #[inline(never)]
+    #[rustc_diagnostic_item = "fe2o3_device_workgroup_pipeline_release_v1"]
+    pub fn release(&mut self, _epoch: usize) {
+        unreachable!("pipeline release must be lowered by the compiler")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         DynamicLds, DynamicLdsError, LdsInitialized, MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,
-        validate_layout,
+        WorkgroupPipeline, validate_layout,
     };
     use core::mem::{MaybeUninit, align_of, size_of};
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -468,6 +627,17 @@ mod tests {
             catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = WorkgroupLdsScope::for_host_test();
                 let _ = DynamicLds::<u32>::exact_current::<64>(&mut scope);
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn compiler_owned_pipeline_fails_closed_on_host() {
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let mut scope = WorkgroupLdsScope::for_host_test();
+                let _ = WorkgroupPipeline::<u32, 2, 64, 1>::current(&mut scope);
             }))
             .is_err()
         );

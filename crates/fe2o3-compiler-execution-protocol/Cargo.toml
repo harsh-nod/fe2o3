@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction.workspace = true
+fe2o3-external-anchor-protocol.workspace = true
 sha2.workspace = true
 
 [lib]

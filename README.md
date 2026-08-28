@@ -139,36 +139,71 @@ its complete receipt carriage, or reports nonterminal absence only when no
 canonical Worker record exists; a different or damaged current record fails
 closed. VerifyCurrent independently reacquires that record under the protected
 policy, byte-compares the complete expected carriage, and returns canonical
-policy/Worker-ledger verification evidence in one terminal exchange. The result
-remains authority-free until the service endpoint is authenticated and external
-rollback and refinement evidence are joined. The issuer's direct transition
+policy/Worker-ledger, external-anchor commit, and fresh signed current-head
+evidence in one terminal exchange. Its 2,250-byte request includes a fresh
+client challenge; its 1,784-byte response contains a 1,624-byte Ed25519 V3
+attestation over that challenge and the complete 1,440-byte V3 record. The
+record embeds the exact 528-byte signed advance receipt retained by the
+reacquired Worker V2 record and a fresh 528-byte signed recovery receipt. The
+external recovery nonce is derived from the client challenge, exact carriage
+identity, and retained commit-receipt identity. The client requires both keys to
+equal the pinned policy, every record coordinate to equal its original expected
+carriage, the retained receipt to be an exact proposed-position advance, and
+the fresh receipt to report the same proposed head under the exact recovery
+challenge. This cryptographically authenticates commit and current-head claims;
+independent administration, monotonic persistence, and protected anchor-key
+custody remain deployment requirements. That same
+policy now pins a distinct external-anchor Ed25519 key; weak or equal issuer and
+anchor keys fail closed. A staged protected boundary now also admits one
+supervisor-provisioned nonblocking unnamed seqpacket and exact live service
+pidfd under a separately pinned non-root UID/GID. Its fixed-deadline transport
+sends only the canonical anchor challenge and accepts only one exact,
+ancillary-free signed observation verified under the policy key. The production
+supervisor now retains that exact endpoint and pidfd, binds their admitted
+service identity to the launch manifest, and transfers both through the static
+launcher for independent issuer admission at FDs 10 and 11. Receipt publication
+now durably prepares the exact anchor challenge, exchanges it over that retained
+endpoint, persists an exact signed proposed-position observation, and only then
+commits and reacquires the Worker record and returns its publication ACK. Restart
+re-emits the same prepared challenge, finishes an already anchor-committed local
+publication without a second exchange, and durably aborts on an exact signed
+prior-position observation. This ordering does not prove that the external
+service is independently operated, monotonic, crash durable, or backed by a
+protected signing key. The result remains authority-free until those external
+rollback properties, protected key custody, and refinement evidence are joined.
+The issuer's direct transition
 methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
 absolute deadline, including exact issued-request reconstruction. Its child
-channel now creates the peer after fork inside rustc, installs fd 195, transfers
-only the service endpoint to the direct parent, and binds it to exact child
-credentials, child-reported direct-parent identity, and a live pidfd. A
+channel now creates the peer after fork inside the selected child, installs fd
+195, transfers only the service endpoint to the direct parent, and binds it to
+exact child credentials, child-reported direct-parent identity, and a live
+pidfd. A
 canonical outer handoff binds that exact direct parent to the sealed launch
 manifest, and the client can transfer its service peer and pidfd over one
 authenticated `SOCK_SEQPACKET` connection to the distinct-UID supervisor. The
 supervisor repeats direct-parent `SO_PEERCRED`, policy, rustc peer credentials,
-pidfd target/liveness, descriptor identity, and alias checks. It now consumes
-one accepted handoff into an exact ten-source prepared launch for destination
-FDs `0..=9`, with distinct isolated stdio/readiness pipes, cloned authority
-descriptors, and a canonical 704-byte manifest bound to the supervisor PID and
-procfs start time. That manifest is an anonymous read-only mode-`0400` memfd
+pidfd target/liveness, descriptor identity, and alias checks. It also retains a
+separately admitted external-anchor endpoint and exact service pidfd. It now
+consumes one accepted handoff into an exact twelve-source prepared launch for
+destination FDs `0..=11`, with distinct isolated stdio/readiness pipes, cloned
+authority and anchor descriptors, and a canonical 704-byte manifest bound to
+the supervisor PID and procfs start time. That manifest is an anonymous read-only mode-`0400` memfd
 with complete content seals; every object, byte, access mode, capability, live
 client, and non-aliasing relation is revalidated without exposing descriptor
-custody. A gated `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child now
+custody. The two process-pidfd entries use a dedicated manifest object class
+because Linux pidfds may share one anonymous-inode `fstat` key; the launcher
+validates the class while the receiving services bind each pidfd to its exact
+process target. A gated `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child now
 self-checks the inherited locked service profile and parent-death containment.
 Before release, the parent independently rechecks procfs profile fields, every
 unchanged namespace, live rustc, and all authority objects. The bootstrap
-isolates stdio, installs the manifest, issuer, and ten sources at FDs 198
-through 209, and executes only the authenticated static launcher. The launch
+isolates stdio, installs the manifest and issuer at FDs 198 and 199 and the
+twelve sources at FDs 200 through 211, and executes only the authenticated static launcher. The launch
 manifest binds the exact rustc PID/UID/GID to the pinned policy, and the
 descriptor-only musl-static issuer enters through a syscall-only shim that
 restores nondumpability before musl or Rust startup and then consumes fixed FDs
-3 through 9. After complete
+3 through 11. After complete
 admission and durable recovery it emits one canonical PID/manifest/policy-bound
 readiness record through an atomic nonblocking pipe. Its build gate rejects
 dynamic-loader edges, undefined symbols, a displaced secure entry point, and
@@ -187,26 +222,37 @@ and retains pidfd serving custody; cancellation and drop use pidfd signaling
 plus exactly-once bounded reaping. The pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. The protected
 release contract now admits and binds the sole fixed root-owned client profile.
-The Cargo wrapper transports that profile through its authenticated broker,
-creates the selected rustc's service endpoint at fd 195 after fork, installs
-the exact policy at fd 202, transfers the live endpoint and pidfd only to the
-fixed distinct-UID supervisor socket, and gates fresh Worker V3 publication on
-canonical readiness while retaining exact invocation custody. Backend receipt
-acquisition, lossless V2 carriage, exact protected Worker-record verification,
-and the receipt-complete Worker V3 promotion boundary are implemented.
-Distinct-UID service deployment, the concrete protected verifier, and external
-monotonic anchor remain absent. A fixed
+The Cargo wrapper transports that profile through its authenticated broker.
+For rustc it creates the service endpoint at fd 195 after fork, installs the
+exact policy at fd 202, transfers the live endpoint and pidfd only to the fixed
+distinct-UID supervisor socket, and gates fresh Worker V3 publication on
+canonical readiness while retaining exact invocation custody. The application
+runner now creates a separate child-bound fd 195 and reaches the same fixed
+supervisor before waiting for the application ACK; fd 202 remains parent-only.
+It validates and exposes only the connected `SOCK_SEQPACKET` endpoint through
+the seccomp boundary and contains the complete application process group on a
+handoff failure. `fe2o3-host` owns a one-use auditor that consumes fd 195,
+checks the fresh signed response, and returns move-only authority-free evidence.
+Backend receipt acquisition, lossless V2 carriage, exact protected
+Worker-record verification, receipt-bearing V3 VerifyCurrent response, and the
+receipt-complete Worker V3 promotion boundary are implemented.
+Deployed distinct-UID service provisioning, the concrete protected verifier,
+and external monotonic anchor remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
 journal V2 retains that complete ACK across every later state, accepts no raw
 receipt-digest acknowledgment, signs the occurrence identity, and rejects a
-subject-equivalent replacement after restart. A separate 1,690-byte Worker
-journal retains the complete request and sidecar, verifies the signed receipt
-against its own current anchor, commits only an immediate successor, reacquires
-the exact canonical bytes, and is the sole producer of the move-only ACK
-capability. Issuer admission accepts only the three legal cross-journal crash
-positions. Consequently
+subject-equivalent replacement after restart. A separate 2,218-byte Worker V2
+record retains the complete request, sidecar, and exact 528-byte signed
+proposed-position external-anchor receipt. It verifies both receipts against
+their pinned keys and exact transaction, commits only an immediate successor,
+reacquires the exact canonical bytes, and is the sole producer of the move-only
+ACK capability. The local anchor journal and Worker record must name the same
+receipt; legacy V1 files and record-without-journal state fail closed. A
+successor preparation cannot displace the current record's retained receipt.
+Issuer admission accepts only the three legal cross-journal crash positions.
+Consequently
 `CompilerExecutionProvenance` remains open. See
 [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md)
 and [durable issuer state V2](docs/compiler-execution-issuer-durable-v2.md).
@@ -775,9 +821,12 @@ is complete, and the recorded runs grant no current production authority.
   its decision constructor is private, and synthetic construction is available
   only under the explicit integration-test feature. A concrete protected
   verifier remains open. The protected service can now independently reacquire
-  current policy and exact Worker-ledger state for one complete carriage, but
-  the host verifier must still consume that transaction over an authenticated
-  endpoint and join the external monotonic rollback authority. Recovery and
+  current policy and exact Worker-ledger state for one complete carriage. The
+  production application receives the child-created endpoint, and the host
+  exports a one-use auditor that verifies a fresh signed response under the
+  pinned key without granting authority. The final verifier must still join
+  protected key custody, the external monotonic rollback authority, and the
+  owned compiler/proof/machine evidence. Recovery and
   verification admission are device-independent; the canonical KFD transition
   binds one checked physical device only when it joins generated host-memory
   packing to the exact current artifact, geometry, effects, and authenticated

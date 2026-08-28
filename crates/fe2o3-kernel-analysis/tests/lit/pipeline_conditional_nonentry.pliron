@@ -1,8 +1,7 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
 // EXPECT: REJECT
 // CHECK: error[FE2O3-PIPELINE-001]
-// CHECK: lifecycle is not in the function entry block
-// CHECK: full-workgroup participation is unproved
+// CHECK: lifecycle is not in its creation block
 // CHECK: help[FE2O3-FIX-PIPELINE]
 builtin.func @pipeline_conditional_nonentry: builtin.function <() -> ()>
 {

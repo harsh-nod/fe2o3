@@ -153,8 +153,16 @@ current rollback anchor, verifies the receipt against that anchor, durably
 advances it, and independently reacquires the exact durable record named by the
 canonical [publication ACK](compiler-execution-receipt-publication-v1.md). Raw
 ACK bytes cannot construct the move-only committed-publication token accepted
-by the issuer. Lossless Worker V3 custody and production verifier authority are
-still required before `CompilerExecutionProvenance` can close.
+by the issuer. Publish now durably prepares and resolves the Worker external-
+anchor journal through the supervisor-admitted endpoint before it can commit the
+Worker record or construct that token. The Worker V2 record embeds the complete
+signed proposed-position receipt, and recovery joins it byte-for-byte to the
+anchor journal even after that journal begins preparing a successor. Legacy V1
+records fail closed and require explicit migration. This ordering is fail-closed
+and restart safe, but the repository does not yet supply the independently
+operated monotonic backend behind the endpoint. Lossless Worker V3 custody and
+production verifier authority are still required before
+`CompilerExecutionProvenance` can close.
 
 ## Shared Process Validation
 
@@ -196,7 +204,9 @@ The package suite checks all three stage encodings, truncation and extension,
 wrong key and policy, request/subject/occurrence substitutions, singleton
 exclusion, exact challenge and receipt re-emission, idempotent acknowledgment,
 and mutation of every one of the 2,788 issued and acknowledged record bytes.
-It also rejects legacy V1 journal presence and same-receipt/different-Worker
+It also covers externally anchored first publication, exact replay, prepared and
+anchor-committed restart, signed-prior abort, endpoint failure before Worker
+commit, and rejects legacy V1 journal presence and same-receipt/different-Worker
 ACK replay. Deterministic fault
 injection exercises both sides of all seven retained-directory boundaries for
 genesis and each of the three legal transitions. Recovery must produce only

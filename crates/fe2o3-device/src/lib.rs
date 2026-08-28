@@ -73,7 +73,7 @@ pub use half::{Bf16, Bf16x2, F16};
 pub use kernel_result::{KernelError, KernelResult};
 pub use lds::{
     DynamicLds, DynamicLdsError, LdsElement, LdsInitialized, LdsUninitialized,
-    MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope,
+    MAX_DYNAMIC_LDS_ALIGNMENT, WorkgroupLdsScope, WorkgroupPipeline, WorkgroupPipelineElement,
 };
 /// Target-neutral name for the compiler-issued device math capability.
 pub use math::DeviceMath as Math;

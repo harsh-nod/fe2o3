@@ -20,7 +20,7 @@ use fe2o3_compiler_execution_protocol::{
 const COMPILER_EXECUTION_BOUNDARY_TIMEOUT: Duration =
     MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1;
 
-/// One prepared, single-use path from the selected rustc child to the fixed supervisor.
+/// One prepared, single-use path from the selected child to the fixed supervisor.
 pub(crate) struct PreparedCompilerExecutionBoundaryV1 {
     profile: CompilerExecutionClientProfileCapabilityV1,
     policy: CompilerExecutionPolicyCapabilityV1,
@@ -28,9 +28,30 @@ pub(crate) struct PreparedCompilerExecutionBoundaryV1 {
 }
 
 impl PreparedCompilerExecutionBoundaryV1 {
+    /// Prepares a compiler child that must inherit the exact issuer policy at FD 202.
     pub(crate) fn prepare(
         source_profile: &CompilerExecutionClientProfileCapabilityV1,
         command: &mut Command,
+    ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
+        Self::prepare_inner(source_profile, command, ChildPolicyExposureV1::Inherit)
+    }
+
+    /// Prepares an application verifier without exposing the issuer-policy capability.
+    pub(crate) fn prepare_application_verifier(
+        source_profile: &CompilerExecutionClientProfileCapabilityV1,
+        command: &mut Command,
+    ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
+        Self::prepare_inner(
+            source_profile,
+            command,
+            ChildPolicyExposureV1::RetainInParent,
+        )
+    }
+
+    fn prepare_inner(
+        source_profile: &CompilerExecutionClientProfileCapabilityV1,
+        command: &mut Command,
+        policy_exposure: ChildPolicyExposureV1,
     ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
         source_profile
             .revalidate()
@@ -50,9 +71,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
         let policy =
             CompilerExecutionPolicyCapabilityV1::create(profile.profile().policy().clone())
                 .map_err(CompilerExecutionBoundaryErrorV1::Policy)?;
-        policy
-            .inherit_for_child(command)
-            .map_err(CompilerExecutionBoundaryErrorV1::Policy)?;
+        if policy_exposure == ChildPolicyExposureV1::Inherit {
+            policy
+                .inherit_for_child(command)
+                .map_err(CompilerExecutionBoundaryErrorV1::Policy)?;
+        }
         let child_channel = PendingCompilerExecutionChildChannelV1::prepare(command)
             .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
 
@@ -84,11 +107,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
         )
         .map_err(CompilerExecutionBoundaryErrorV1::SupervisorCredentials)?;
         let pending = launch
-            .transfer_to_supervisor_until(supervisor, policy.policy(), deadline)
+            .transfer_to_supervisor_until(profile.profile(), deadline)
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorTransfer)?;
         let manifest = pending.manifest().clone();
         let readiness = pending
-            .await_readiness_until(policy.policy(), deadline)
+            .await_readiness_until(profile.profile(), deadline)
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorReadiness)?;
 
         ParentCompilerExecutionReadinessCustodyV1::admit(
@@ -97,7 +120,13 @@ impl PreparedCompilerExecutionBoundaryV1 {
     }
 }
 
-/// Move-only parent custody proving that one exact selected rustc reached a ready issuer.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ChildPolicyExposureV1 {
+    Inherit,
+    RetainInParent,
+}
+
+/// Move-only parent custody proving that one exact selected child reached a ready issuer.
 ///
 /// The value contains public, inert evidence and sealed public trust configuration only. It grants
 /// no compiler, signing, linking, publication, loading, launch, or execution authority.
@@ -165,15 +194,18 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
             || self.child_pid == 0
             || self.manifest.client().pid() != self.child_pid
             || !self.manifest.matches_policy(self.policy.policy())
+            || !self
+                .manifest
+                .matches_external_anchor_service(profile.external_anchor_service())
         {
             return Err(CompilerExecutionBoundaryErrorV1::Evidence(
-                "retained launch manifest differs from the selected rustc child or policy"
+                "retained launch manifest differs from the selected child, anchor service, or policy"
                     .to_owned(),
             ));
         }
         if self.manifest.client().uid() == self.supervisor.uid() {
             return Err(CompilerExecutionBoundaryErrorV1::Evidence(
-                "selected rustc and protected supervisor do not have distinct UIDs".to_owned(),
+                "selected child and protected supervisor do not have distinct UIDs".to_owned(),
             ));
         }
 
@@ -303,7 +335,7 @@ impl CompilerExecutionBoundaryErrorV1 {
             Self::DeadlineOverflow => "compiler-execution boundary deadline",
             Self::Profile(_) => "client-profile retention",
             Self::Policy(_) => "issuer-policy installation",
-            Self::ChildChannel(_) => "rustc child-channel admission",
+            Self::ChildChannel(_) => "selected child-channel admission",
             Self::SupervisorCredentials(_) => "supervisor credential admission",
             Self::SupervisorTransfer(_) => "fixed supervisor transfer",
             Self::SupervisorReadiness(_) => "supervisor readiness",
@@ -346,15 +378,21 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::CommandExt;
+    use std::sync::Mutex;
+
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1;
     use fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
     use fe2o3_compiler_execution_protocol::{
         COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
-        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+        CompilerExecutionIssuerPolicyV1,
     };
 
     use super::*;
+
+    static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         CompilerExecutionIssuerPolicyV1::new(
@@ -362,6 +400,9 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 123).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 456).unwrap(),
             SigningKey::from_bytes(&[seed; 32])
+                .verifying_key()
+                .to_bytes(),
+            SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
                 .verifying_key()
                 .to_bytes(),
         )
@@ -373,6 +414,7 @@ mod tests {
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
                 supervisor_uid,
                 5_678,
+                external_anchor_service(),
                 policy(seed),
             )
             .unwrap(),
@@ -390,10 +432,15 @@ mod tests {
     ) {
         let manifest = CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(child_pid, child_uid, 1_000).unwrap(),
+            external_anchor_service(),
             policy,
         );
         let readiness = CompilerExecutionServiceReadyV1::new(9_999, &manifest, policy).unwrap();
         (manifest, readiness)
+    }
+
+    fn external_anchor_service() -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap()
     }
 
     fn admit(
@@ -424,6 +471,9 @@ mod tests {
 
     #[test]
     fn preparation_installs_exact_policy_and_child_created_service_channel() {
+        let _guard = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let source_profile = client_profile(7, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
@@ -443,6 +493,47 @@ mod tests {
             .unwrap();
         assert_eq!(launch.client().pid(), child_pid);
         assert_eq!(launch.submitter().pid(), std::process::id());
+        drop(launch);
+        assert!(child.wait().unwrap().success());
+        profile.revalidate().unwrap();
+        policy.revalidate().unwrap();
+    }
+
+    #[test]
+    fn application_verifier_gets_service_channel_without_policy_capability() {
+        let _guard = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let source_profile = client_profile(8, 1_234);
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(format!(
+            "test ! -e /proc/self/fd/{COMPILER_EXECUTION_POLICY_CHILD_FD_V1} && test \"$(stat -Lc %F /proc/self/fd/{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1})\" = socket && sleep 2"
+        ));
+        let prepared = PreparedCompilerExecutionBoundaryV1::prepare_application_verifier(
+            &source_profile,
+            &mut command,
+        )
+        .unwrap();
+        // SAFETY: this models the production callback registered after child-channel creation.
+        unsafe {
+            command.pre_exec(|| {
+                crate::application_exec::protect_all_nonstdio_descriptors()?;
+                crate::application_exec::validate_and_expose_connected_seqpacket_descriptor(
+                    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+                )
+            });
+        }
+        let PreparedCompilerExecutionBoundaryV1 {
+            profile,
+            policy,
+            child_channel,
+        } = prepared;
+        let mut child = command.spawn().unwrap();
+        let child_pid = child.id();
+        let launch = child_channel
+            .finish(child_pid, Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(launch.client().pid(), child_pid);
         drop(launch);
         assert!(child.wait().unwrap().success());
         profile.revalidate().unwrap();
@@ -492,6 +583,30 @@ mod tests {
                 supervisor,
                 8_765,
                 manifest,
+                substituted_readiness,
+            )
+            .is_err()
+        );
+
+        let profile = client_profile(7, 1_234);
+        let retained_policy = profile.profile().policy().clone();
+        let policy = CompilerExecutionPolicyCapabilityV1::create(retained_policy.clone()).unwrap();
+        let supervisor = CompilerExecutionSupervisorCredentialsV1::new(1_234, 5_678).unwrap();
+        let substituted_manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            CompilerExecutionClientProcessIdentityV1::new(8_765, 1_000, 1_000).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_001, 7_001).unwrap(),
+            &retained_policy,
+        );
+        let substituted_readiness =
+            CompilerExecutionServiceReadyV1::new(9_999, &substituted_manifest, &retained_policy)
+                .unwrap();
+        assert!(
+            ParentCompilerExecutionReadinessCustodyV1::admit(
+                profile,
+                policy,
+                supervisor,
+                8_765,
+                substituted_manifest,
                 substituted_readiness,
             )
             .is_err()

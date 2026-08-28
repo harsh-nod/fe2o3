@@ -472,6 +472,7 @@ pub enum AnchorProtocolErrorV1 {
     WeakVerifyingKey,
     AnchorKeyIdentityMismatch,
     SignatureRejected,
+    ReceiptIdentityMismatch,
 }
 
 impl fmt::Display for AnchorProtocolErrorV1 {
@@ -514,6 +515,9 @@ impl fmt::Display for AnchorProtocolErrorV1 {
                 formatter.write_str("pinned key identity does not match prepared transition")
             }
             Self::SignatureRejected => formatter.write_str("Ed25519 signature rejected"),
+            Self::ReceiptIdentityMismatch => {
+                formatter.write_str("external anchor receipt identity mismatch")
+            }
         }
     }
 }

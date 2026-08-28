@@ -4,11 +4,14 @@
 mod attestation;
 mod client_profile;
 mod current_record_verification;
+mod external_anchor_service;
+mod external_anchor_transaction;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
 mod service_ready;
 mod supervisor_handoff;
+mod worker_anchor_journal;
 
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
@@ -34,12 +37,22 @@ pub use client_profile::{
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
 };
 pub use current_record_verification::{
-    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V1,
-    COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V1,
-    CompilerExecutionCurrentRecordAttestationIdentityV1,
-    CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
-    CompilerExecutionCurrentRecordVerificationIdentityV1,
-    CompilerExecutionCurrentRecordVerificationV1, VerifiedCompilerExecutionCurrentRecordV1,
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3,
+    COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V3,
+    CompilerExecutionCurrentRecordAttestationIdentityV3,
+    CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationIdentityV3,
+    CompilerExecutionCurrentRecordVerificationV3, VerifiedCompilerExecutionCurrentRecordV3,
+};
+pub use external_anchor_service::{
+    CompilerExecutionExternalAnchorServiceIdentityErrorV1,
+    CompilerExecutionExternalAnchorServiceIdentityV1,
+};
+pub use external_anchor_transaction::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_TRANSACTION_BYTES_V1,
+    CompilerExecutionExternalAnchorTransactionErrorV1,
+    CompilerExecutionExternalAnchorTransactionIdentityV1,
+    CompilerExecutionExternalAnchorTransactionV1,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
@@ -81,4 +94,9 @@ pub use service_ready::{
 pub use supervisor_handoff::{
     COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, CompilerExecutionSupervisorHandoffErrorV1,
     CompilerExecutionSupervisorHandoffIdentityV1, CompilerExecutionSupervisorHandoffV1,
+};
+pub use worker_anchor_journal::{
+    COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionWorkerAnchorJournalErrorV1,
+    CompilerExecutionWorkerAnchorJournalIdentityV1, CompilerExecutionWorkerAnchorJournalStageV1,
+    CompilerExecutionWorkerAnchorJournalV1,
 };

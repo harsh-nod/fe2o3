@@ -47,7 +47,7 @@ if [[ -n "${undefined_symbols}" ]]; then
 fi
 
 set +e
-smoke_output="$(/usr/bin/env -i "${executable}" 3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 2>&1)"
+smoke_output="$(/usr/bin/env -i "${executable}" 3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- 10<&- 11<&- 2>&1)"
 smoke_status=$?
 set -e
 if [[ ${smoke_status} -ne 1 || -n "${smoke_output}" ]]; then

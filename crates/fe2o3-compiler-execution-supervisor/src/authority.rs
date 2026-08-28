@@ -4,6 +4,9 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
 
+use fe2o3_broker_authority_service::{
+    ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
+};
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use rustix::fs::{FileType, OFlags};
 
@@ -20,6 +23,11 @@ const SECBIT_NO_SETUID_FIXUP_LOCKED: u32 = 1 << 3;
 const SECBIT_KEEP_CAPS_LOCKED: u32 = 1 << 5;
 const SECBIT_NO_CAP_AMBIENT_RAISE: u32 = 1 << 6;
 const SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED: u32 = 1 << 7;
+
+pub(super) struct ExternalAnchorLaunchClonesV1<'a> {
+    pub(super) peer: &'a File,
+    pub(super) pidfd: &'a File,
+}
 
 /// Exact securebits value required in the protected issuer child.
 ///
@@ -109,6 +117,8 @@ pub enum ProtectedIssuerSupervisorErrorV1 {
     Program(IssuerProgramAdmissionErrorV1),
     /// Signing-key custody or policy binding failed.
     SigningKey(String),
+    /// The supervisor-provisioned external-anchor endpoint failed continuity validation.
+    ExternalAnchor(ProtectedServiceAdmissionErrorV1),
     /// The durable root has an invalid descriptor, type, access, owner, mode, or ACL.
     InvalidRoot(&'static str),
     /// The retained durable root identity or security metadata changed.
@@ -132,6 +142,12 @@ impl fmt::Display for ProtectedIssuerSupervisorErrorV1 {
             Self::SigningKey(error) => {
                 write!(formatter, "protected issuer signing key changed: {error}")
             }
+            Self::ExternalAnchor(error) => {
+                write!(
+                    formatter,
+                    "protected external-anchor endpoint changed: {error}"
+                )
+            }
             Self::InvalidRoot(reason) => {
                 write!(formatter, "invalid protected issuer root: {reason}")
             }
@@ -147,6 +163,7 @@ impl Error for ProtectedIssuerSupervisorErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Program(error) => Some(error),
+            Self::ExternalAnchor(error) => Some(error),
             Self::Io { source, .. } => Some(source),
             Self::ServiceIdentityMismatch
             | Self::SigningKey(_)
@@ -179,6 +196,7 @@ pub struct ProtectedIssuerSupervisorV1 {
     credentials: IssuerServiceCredentialProfileV1,
     root: ProtectedIssuerRootV1,
     signing_key: CompilerExecutionSigningKeyCapabilityV1,
+    external_anchor: ProtectedExternalAnchorServiceAdmissionV1,
 }
 
 impl fmt::Debug for ProtectedIssuerSupervisorV1 {
@@ -188,6 +206,10 @@ impl fmt::Debug for ProtectedIssuerSupervisorV1 {
             .field("authority", &"prepared-launch-custody-only")
             .field("program", &self.program)
             .field("credentials", &self.credentials)
+            .field(
+                "external_anchor_service",
+                &self.external_anchor.service_identity(),
+            )
             .field("root", &"retained-service-owned-0700-directory")
             .finish_non_exhaustive()
     }
@@ -200,6 +222,7 @@ impl ProtectedIssuerSupervisorV1 {
         credentials: IssuerServiceCredentialProfileV1,
         root: File,
         signing_key: CompilerExecutionSigningKeyCapabilityV1,
+        external_anchor: ProtectedExternalAnchorServiceAdmissionV1,
     ) -> Result<Self, ProtectedIssuerSupervisorErrorV1> {
         require_current_service_identity(credentials)?;
         program
@@ -208,12 +231,16 @@ impl ProtectedIssuerSupervisorV1 {
         signing_key
             .revalidate(program.policy())
             .map_err(ProtectedIssuerSupervisorErrorV1::SigningKey)?;
+        external_anchor
+            .validate_continuity()
+            .map_err(ProtectedIssuerSupervisorErrorV1::ExternalAnchor)?;
         let root = ProtectedIssuerRootV1::admit(root, credentials)?;
         let supervisor = Self {
             program,
             credentials,
             root,
             signing_key,
+            external_anchor,
         };
         supervisor.revalidate()?;
         Ok(supervisor)
@@ -228,6 +255,9 @@ impl ProtectedIssuerSupervisorV1 {
         self.signing_key
             .revalidate(self.program.policy())
             .map_err(ProtectedIssuerSupervisorErrorV1::SigningKey)?;
+        self.external_anchor
+            .validate_continuity()
+            .map_err(ProtectedIssuerSupervisorErrorV1::ExternalAnchor)?;
         self.root.revalidate(self.credentials)
     }
 
@@ -241,6 +271,19 @@ impl ProtectedIssuerSupervisorV1 {
         &self,
     ) -> &fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV1 {
         self.program.policy()
+    }
+
+    /// Returns the authenticated external-anchor service identity without exposing its endpoint.
+    pub const fn external_anchor_service(
+        &self,
+    ) -> fe2o3_compiler_execution_protocol::CompilerExecutionExternalAnchorServiceIdentityV1 {
+        self.external_anchor.service_identity()
+    }
+
+    pub(super) const fn external_anchor_process(
+        &self,
+    ) -> fe2o3_broker_authority_service::ExpectedClientProcessIdentityV1 {
+        self.external_anchor.service_process_identity()
     }
 
     pub(super) fn clone_launcher_for_launch(
@@ -280,6 +323,17 @@ impl ProtectedIssuerSupervisorV1 {
             .map_err(ProtectedIssuerSupervisorErrorV1::SigningKey)
     }
 
+    pub(super) fn clone_external_anchor_for_launch(
+        &self,
+    ) -> Result<(File, File), ProtectedIssuerSupervisorErrorV1> {
+        self.revalidate()?;
+        let (peer, service_pidfd) = self
+            .external_anchor
+            .try_clone_for_transfer()
+            .map_err(ProtectedIssuerSupervisorErrorV1::ExternalAnchor)?;
+        Ok((File::from(peer), File::from(service_pidfd)))
+    }
+
     pub(super) fn revalidate_launch_clones(
         &self,
         launcher: &File,
@@ -287,6 +341,7 @@ impl ProtectedIssuerSupervisorV1 {
         root: &File,
         policy: &File,
         signing_key: &File,
+        external_anchor: ExternalAnchorLaunchClonesV1<'_>,
     ) -> Result<(), ProtectedIssuerSupervisorErrorV1> {
         self.revalidate()?;
         self.program
@@ -316,6 +371,9 @@ impl ProtectedIssuerSupervisorV1 {
                 "protected issuer signing-key identity changed".to_owned(),
             ));
         }
+        self.external_anchor
+            .validate_transfer(external_anchor.peer, external_anchor.pidfd)
+            .map_err(ProtectedIssuerSupervisorErrorV1::ExternalAnchor)?;
         Ok(())
     }
 }

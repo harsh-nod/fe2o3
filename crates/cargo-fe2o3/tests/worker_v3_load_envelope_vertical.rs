@@ -80,6 +80,9 @@ fn carriage_for_subject(
         CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 12_345).unwrap(),
         CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 67_890).unwrap(),
         signing_key.verifying_key().to_bytes(),
+        SigningKey::from_bytes(&[seed.wrapping_add(1); 32])
+            .verifying_key()
+            .to_bytes(),
     )
     .unwrap();
     let challenge =
@@ -841,7 +844,7 @@ fn v3_application_runner_command_for(
     fixture: &PreparedV3ApplicationFixture,
     application: &Path,
 ) -> Command {
-    v3_application_runner_command_for_context(fixture, application, "3")
+    v3_application_runner_command_for_context(fixture, application, "3-test-envelope-only")
 }
 
 fn v3_application_runner_command_for_context(

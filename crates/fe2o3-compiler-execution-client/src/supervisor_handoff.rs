@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+    CompilerExecutionClientProfileV1, CompilerExecutionExternalAnchorServiceIdentityV1,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
     CompilerExecutionServiceReadyErrorV1, CompilerExecutionServiceReadyV1,
     CompilerExecutionSupervisorHandoffErrorV1, CompilerExecutionSupervisorHandoffV1,
@@ -100,24 +101,30 @@ impl PendingCompilerExecutionSupervisorV1 {
     /// Consumes the control connection and admits one exact supervisor readiness acknowledgment.
     pub fn await_readiness(
         self,
-        policy: &CompilerExecutionIssuerPolicyV1,
+        profile: &CompilerExecutionClientProfileV1,
         timeout: Duration,
     ) -> Result<CompilerExecutionServiceReadyV1, CompilerExecutionHandoffErrorV1> {
         validate_boundary_timeout(timeout)?;
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
-        self.await_readiness_until(policy, deadline)
+        self.await_readiness_until(profile, deadline)
     }
 
     /// Consumes the control connection and admits readiness before an absolute deadline.
     pub fn await_readiness_until(
         self,
-        policy: &CompilerExecutionIssuerPolicyV1,
+        profile: &CompilerExecutionClientProfileV1,
         deadline: Instant,
     ) -> Result<CompilerExecutionServiceReadyV1, CompilerExecutionHandoffErrorV1> {
         validate_boundary_deadline(deadline)?;
-        if !self.handoff.launch_manifest().matches_policy(policy) {
+        let policy = profile.policy();
+        if !self.handoff.launch_manifest().matches_policy(policy)
+            || !self
+                .handoff
+                .launch_manifest()
+                .matches_external_anchor_service(profile.external_anchor_service())
+        {
             return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
         }
         let bytes = receive_readiness(&self.control, deadline)?;
@@ -151,46 +158,46 @@ impl CompilerExecutionServiceLaunchV1 {
     /// ```compile_fail
     /// use std::os::fd::OwnedFd;
     /// use std::time::Duration;
-    /// use fe2o3_compiler_execution_client::{
-    ///     CompilerExecutionServiceLaunchV1, CompilerExecutionSupervisorCredentialsV1,
-    /// };
-    /// use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV1;
+    /// use fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1;
+    /// use fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1;
     /// fn inject(
     ///     launch: CompilerExecutionServiceLaunchV1,
     ///     control: OwnedFd,
-    ///     credentials: CompilerExecutionSupervisorCredentialsV1,
-    ///     policy: &CompilerExecutionIssuerPolicyV1,
+    ///     profile: &CompilerExecutionClientProfileV1,
     /// ) {
     ///     let _ = launch.transfer_to_supervisor(
-    ///         control, credentials, policy, Duration::from_secs(1),
+    ///         control, profile, Duration::from_secs(1),
     ///     );
     /// }
     /// ```
     pub fn transfer_to_supervisor(
         self,
-        expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
-        policy: &CompilerExecutionIssuerPolicyV1,
+        profile: &CompilerExecutionClientProfileV1,
         timeout: Duration,
     ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
         validate_boundary_timeout(timeout)?;
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
-        self.transfer_to_supervisor_until(expected_supervisor, policy, deadline)
+        self.transfer_to_supervisor_until(profile, deadline)
     }
 
-    /// Transfers this exact rustc session to the supervisor before an absolute deadline.
+    /// Transfers this exact client session to the supervisor before an absolute deadline.
     pub fn transfer_to_supervisor_until(
         self,
-        expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
-        policy: &CompilerExecutionIssuerPolicyV1,
+        profile: &CompilerExecutionClientProfileV1,
         deadline: Instant,
     ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
+        let expected_supervisor = CompilerExecutionSupervisorCredentialsV1::new(
+            profile.supervisor_uid(),
+            profile.supervisor_gid(),
+        )?;
         transfer_to_supervisor_at_until_inner::<true>(
             self,
             Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
             expected_supervisor,
-            policy,
+            profile.external_anchor_service(),
+            profile.policy(),
             deadline,
         )
     }
@@ -201,6 +208,7 @@ fn transfer_to_supervisor_at_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch: CompilerExecutionServiceLaunchV1,
     path: &Path,
     expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
+    external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     policy: &CompilerExecutionIssuerPolicyV1,
     timeout: Duration,
 ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
@@ -212,6 +220,7 @@ fn transfer_to_supervisor_at_inner<const REQUIRE_DISTINCT_UID: bool>(
         launch,
         path,
         expected_supervisor,
+        external_anchor_service,
         policy,
         deadline,
     )
@@ -221,6 +230,7 @@ fn transfer_to_supervisor_at_until_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch: CompilerExecutionServiceLaunchV1,
     path: &Path,
     expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
+    external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     policy: &CompilerExecutionIssuerPolicyV1,
     deadline: Instant,
 ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
@@ -233,6 +243,7 @@ fn transfer_to_supervisor_at_until_inner<const REQUIRE_DISTINCT_UID: bool>(
         launch,
         control,
         expected_supervisor,
+        external_anchor_service,
         policy,
         deadline,
     )
@@ -242,6 +253,7 @@ fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch: CompilerExecutionServiceLaunchV1,
     control: OwnedFd,
     expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
+    external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     policy: &CompilerExecutionIssuerPolicyV1,
     deadline: Instant,
 ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
@@ -250,7 +262,11 @@ fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch
         .revalidate_for_supervisor_handoff()
         .map_err(CompilerExecutionHandoffErrorV1::RustcLaunch)?;
-    let manifest = CompilerExecutionServiceLaunchManifestV1::new(launch.client(), policy);
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service,
+        policy,
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest)
         .map_err(CompilerExecutionHandoffErrorV1::CanonicalHandoff)?;
     let (service_peer, client_pidfd) = launch.into_descriptors();
@@ -809,8 +825,20 @@ mod tests {
             CompilerExecutionIssuerMeasurementV1::new([1; 32], 1).unwrap(),
             CompilerExecutionIssuerMeasurementV1::new([2; 32], 1).unwrap(),
             [3; 32],
+            ed25519_dalek::SigningKey::from_bytes(&[4; 32])
+                .verifying_key()
+                .to_bytes(),
         )
         .unwrap()
+    }
+
+    fn external_anchor_service() -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap()
+    }
+
+    fn client_profile() -> CompilerExecutionClientProfileV1 {
+        CompilerExecutionClientProfileV1::new(5_000, 5_001, external_anchor_service(), policy())
+            .unwrap()
     }
 
     fn control_pair() -> (OwnedFd, OwnedFd) {
@@ -824,7 +852,7 @@ mod tests {
     }
 
     fn pending_readiness(
-        expected_policy: &CompilerExecutionIssuerPolicyV1,
+        expected_profile: &CompilerExecutionClientProfileV1,
     ) -> (
         PendingCompilerExecutionSupervisorV1,
         OwnedFd,
@@ -840,11 +868,18 @@ mod tests {
                 101, 1000, 1001,
             )
             .unwrap();
-        let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, expected_policy);
+        let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            client,
+            expected_profile.external_anchor_service(),
+            expected_profile.policy(),
+        );
         let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest).unwrap();
-        let readiness =
-            CompilerExecutionServiceReadyV1::new(200, handoff.launch_manifest(), expected_policy)
-                .unwrap();
+        let readiness = CompilerExecutionServiceReadyV1::new(
+            200,
+            handoff.launch_manifest(),
+            expected_profile.policy(),
+        )
+        .unwrap();
         let (control, supervisor) = control_pair();
         (
             PendingCompilerExecutionSupervisorV1 { control, handoff },
@@ -855,8 +890,8 @@ mod tests {
 
     #[test]
     fn exact_supervisor_readiness_is_admitted_once_after_eof() {
-        let expected_policy = policy();
-        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        let expected_profile = client_profile();
+        let (pending, supervisor, readiness) = pending_readiness(&expected_profile);
         assert_eq!(
             rustix::net::send(
                 &supervisor,
@@ -869,7 +904,7 @@ mod tests {
         drop(supervisor);
         assert_eq!(
             pending
-                .await_readiness(&expected_policy, Duration::from_secs(1))
+                .await_readiness(&expected_profile, Duration::from_secs(1))
                 .unwrap(),
             readiness
         );
@@ -877,27 +912,28 @@ mod tests {
 
     #[test]
     fn malformed_mismatched_trailing_and_timed_out_readiness_fail_closed() {
-        let expected_policy = policy();
+        let expected_profile = client_profile();
+        let expected_policy = expected_profile.policy().clone();
 
-        let (pending, supervisor, _) = pending_readiness(&expected_policy);
+        let (pending, supervisor, _) = pending_readiness(&expected_profile);
         rustix::net::send(&supervisor, b"short", SendFlags::NOSIGNAL).unwrap();
         drop(supervisor);
         assert!(matches!(
-            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            pending.await_readiness(&expected_profile, Duration::from_secs(1)),
             Err(CompilerExecutionHandoffErrorV1::MalformedReadiness)
         ));
 
-        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        let (pending, supervisor, readiness) = pending_readiness(&expected_profile);
         let mut corrupted = *readiness.canonical_bytes();
         corrupted[0] ^= 0xff;
         rustix::net::send(&supervisor, &corrupted, SendFlags::NOSIGNAL).unwrap();
         drop(supervisor);
         assert!(matches!(
-            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            pending.await_readiness(&expected_profile, Duration::from_secs(1)),
             Err(CompilerExecutionHandoffErrorV1::ReadinessProtocol(_))
         ));
 
-        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        let (pending, supervisor, readiness) = pending_readiness(&expected_profile);
         let extra = std::fs::File::open("/dev/null").unwrap();
         let descriptors = [extra.as_fd()];
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
@@ -915,18 +951,21 @@ mod tests {
         );
         drop(supervisor);
         assert!(matches!(
-            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            pending.await_readiness(&expected_profile, Duration::from_secs(1)),
             Err(CompilerExecutionHandoffErrorV1::MalformedReadiness)
         ));
 
-        let (pending, supervisor, _readiness) = pending_readiness(&expected_policy);
+        let (pending, supervisor, _readiness) = pending_readiness(&expected_profile);
         let other_client =
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1::new(
                 102, 1000, 1001,
             )
             .unwrap();
-        let other_manifest =
-            CompilerExecutionServiceLaunchManifestV1::new(other_client, &expected_policy);
+        let other_manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            other_client,
+            external_anchor_service(),
+            &expected_policy,
+        );
         let substituted =
             CompilerExecutionServiceReadyV1::new(200, &other_manifest, &expected_policy).unwrap();
         rustix::net::send(
@@ -937,11 +976,11 @@ mod tests {
         .unwrap();
         drop(supervisor);
         assert!(matches!(
-            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            pending.await_readiness(&expected_profile, Duration::from_secs(1)),
             Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch)
         ));
 
-        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        let (pending, supervisor, readiness) = pending_readiness(&expected_profile);
         rustix::net::send(
             &supervisor,
             readiness.canonical_bytes(),
@@ -951,14 +990,27 @@ mod tests {
         rustix::net::send(&supervisor, b"trailing", SendFlags::NOSIGNAL).unwrap();
         drop(supervisor);
         assert!(matches!(
-            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            pending.await_readiness(&expected_profile, Duration::from_secs(1)),
             Err(CompilerExecutionHandoffErrorV1::TrailingReadiness)
         ));
 
-        let (pending, _supervisor, _) = pending_readiness(&expected_policy);
+        let (pending, _supervisor, _) = pending_readiness(&expected_profile);
         assert!(matches!(
-            pending.await_readiness(&expected_policy, Duration::from_millis(20)),
+            pending.await_readiness(&expected_profile, Duration::from_millis(20)),
             Err(CompilerExecutionHandoffErrorV1::Timeout)
+        ));
+
+        let (pending, _supervisor, _) = pending_readiness(&expected_profile);
+        let substituted_profile = CompilerExecutionClientProfileV1::new(
+            expected_profile.supervisor_uid(),
+            expected_profile.supervisor_gid(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_001, 7_001).unwrap(),
+            expected_policy,
+        )
+        .unwrap();
+        assert!(matches!(
+            pending.await_readiness(&substituted_profile, Duration::from_secs(1)),
+            Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch)
         ));
     }
 
@@ -989,6 +1041,7 @@ mod tests {
             launch,
             &listener.path,
             credentials,
+            external_anchor_service(),
             &expected_policy,
             Duration::from_secs(2),
         )
@@ -1081,8 +1134,15 @@ mod tests {
         let launch = pending_child
             .finish(child.id(), Duration::from_secs(2))
             .unwrap();
+        let same_uid_profile = CompilerExecutionClientProfileV1::new(
+            current_uid,
+            current_gid,
+            external_anchor_service(),
+            policy(),
+        )
+        .unwrap();
         assert!(matches!(
-            launch.transfer_to_supervisor(credentials, &policy(), Duration::from_secs(2)),
+            launch.transfer_to_supervisor(&same_uid_profile, Duration::from_secs(2)),
             Err(CompilerExecutionHandoffErrorV1::ClientAndSupervisorUidMatch)
         ));
         child.kill().unwrap();
