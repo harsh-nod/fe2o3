@@ -34,8 +34,21 @@ socket's exact submitter PID/UID/GID, nested policy, rustc service-peer
 non-aliasing checks to agree; all observations are repeated without exposing a
 descriptor.
 
+One accepted handoff can now be consumed into a move-only prepared launch. The
+supervisor clones and revalidates the exact launcher, issuer, root, service
+peer, rustc pidfd, policy, signing key, and sealed service-launch capability;
+creates distinct nonblocking close-on-exec pipes for stdin, stdout, stderr, and
+readiness; and constructs the fixed ten-entry source table for issuer FDs
+`0..=9`. It binds that table and the issuer image to the current supervisor PID
+and exact procfs start time in one canonical 704-byte manifest. The manifest is
+stored in an anonymous read-only mode-`0400` memfd with exact `WRITE`, `GROW`,
+`SHRINK`, and `SEAL` seals. Revalidation repeats all authority, client-liveness,
+capability, access-mode, object-snapshot, byte, parent-continuity, and role
+non-aliasing checks. The retained stdout, stderr, and readiness readers remain
+private, and no prepared value exposes a descriptor.
+
 The supervisor still exposes no process-launch method and does not claim the
-complete child profile. The next checkpoint must construct and seal the exact
-ten-entry static pre-exec manifest, launch with `clone3(CLONE_PIDFD)`, enforce
-and observe the complete child profile, and own readiness, cancellation,
-restart, and exactly-once reaping.
+complete child profile. The next checkpoint must install the prepared objects
+at launcher FDs `198`, `199`, and `200..209`, launch with
+`clone3(CLONE_PIDFD)`, enforce and observe the complete child profile, and own
+readiness, cancellation, restart, and exactly-once reaping.

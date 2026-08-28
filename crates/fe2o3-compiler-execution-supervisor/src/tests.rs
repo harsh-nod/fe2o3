@@ -696,6 +696,170 @@ fn exact_cross_process_handoff_is_admitted_and_revalidated() {
     ));
 }
 
+fn accepted_handoff(
+    supervisor: &ProtectedIssuerSupervisorV1,
+) -> (
+    std::process::Child,
+    OwnedFd,
+    AcceptedCompilerExecutionHandoffV1,
+) {
+    let (child, launch) = live_launch();
+    let manifest =
+        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
+    let (service_peer, pidfd) = launch.into_descriptors();
+    let (sender, receiver) = seqpacket_pair();
+    send_handoff_fixture(&sender, &handoff, &[service_peer.as_fd(), pidfd.as_fd()]);
+    let accepted = supervisor
+        .accept_handoff_inner::<false>(receiver, Duration::from_secs(2))
+        .unwrap();
+    (child, sender, accepted)
+}
+
+#[test]
+fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
+    let fixture = Fixture::new("exact-prepared-launch");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+
+    assert_eq!(prepared.static_manifest().descriptors().len(), 10);
+    assert_eq!(
+        prepared.static_manifest().parent_pid(),
+        std::process::id() as i32
+    );
+    assert_ne!(prepared.static_manifest().parent_start_time(), 0);
+    assert_eq!(prepared.service_manifest(), prepared.accepted.manifest());
+    assert_eq!(
+        prepared
+            .static_manifest()
+            .descriptors()
+            .iter()
+            .map(|entry| entry.source_fd())
+            .collect::<Vec<_>>(),
+        (200..210).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        prepared
+            .static_manifest()
+            .descriptors()
+            .iter()
+            .map(|entry| entry.destination_fd())
+            .collect::<Vec<_>>(),
+        (0..10).collect::<Vec<_>>()
+    );
+
+    let required_manifest_seals =
+        SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+    assert_eq!(
+        rustix::fs::fcntl_get_seals(&prepared.static_manifest_file).unwrap(),
+        required_manifest_seals
+    );
+    assert_eq!(
+        prepared.static_manifest_file.metadata().unwrap().mode(),
+        libc::S_IFREG | 0o400
+    );
+    assert_eq!(
+        prepared.static_manifest_file.metadata().unwrap().len(),
+        fe2o3_static_preexec_manifest::PREEXEC_MANIFEST_BYTES_V1 as u64
+    );
+    for source in &prepared.sources {
+        assert!(
+            rustix::io::fcntl_getfd(source)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+    }
+    for index in 0..prepared.sources.len() {
+        let left = rustix::fs::fstat(&prepared.sources[index]).unwrap();
+        for right in &prepared.sources[..index] {
+            let right = rustix::fs::fstat(right).unwrap();
+            assert_ne!((left.st_dev, left.st_ino), (right.st_dev, right.st_ino));
+        }
+    }
+    assert_eq!(
+        rustix::fs::fcntl_getfl(&prepared.sources[0]).unwrap() & OFlags::ACCMODE,
+        OFlags::RDONLY
+    );
+    for index in [1, 2, 9] {
+        assert_eq!(
+            rustix::fs::fcntl_getfl(&prepared.sources[index]).unwrap() & OFlags::ACCMODE,
+            OFlags::WRONLY
+        );
+    }
+    prepared.revalidate(&supervisor).unwrap();
+    let rendered = format!("{prepared:?}");
+    assert!(rendered.contains("descriptor_count: 10"));
+    assert!(!rendered.contains("fd:"));
+    assert!(!rendered.contains(fixture.root.to_str().unwrap()));
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
+    let fixture = Fixture::new("hostile-prepared-launch");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+
+    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    prepared.sources.swap(1, 2);
+    assert!(prepared.revalidate(&supervisor).is_err());
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    prepared.static_manifest_file = File::open("/dev/null").unwrap();
+    assert!(prepared.revalidate(&supervisor).is_err());
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let wrong_parent = prepared
+        .static_manifest()
+        .parent_pid()
+        .checked_add(1)
+        .unwrap();
+    prepared.static_manifest = fe2o3_static_preexec_manifest::StaticPreexecManifestV1::new(
+        wrong_parent,
+        prepared.static_manifest().parent_start_time(),
+        *prepared.static_manifest().executable(),
+        prepared.static_manifest().descriptors().to_vec(),
+    )
+    .unwrap();
+    assert!(matches!(
+        prepared.revalidate(&supervisor),
+        Err(ProtectedIssuerLaunchPreparationErrorV1::ParentChanged)
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn prepared_launch_revalidation_detects_rustc_exit() {
+    let fixture = Fixture::new("prepared-launch-rustc-exit");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(matches!(
+        prepared.revalidate(&supervisor),
+        Err(ProtectedIssuerLaunchPreparationErrorV1::Handoff(
+            ProtectedIssuerHandoffErrorV1::Pidfd(_)
+        ))
+    ));
+}
+
 #[test]
 fn production_handoff_rejects_a_same_uid_submitter_before_receive() {
     let fixture = Fixture::new("same-uid-handoff");

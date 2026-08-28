@@ -154,9 +154,10 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   a transport component of the production transaction, not another compiler
   pipeline. Its direct-parent handoff creates that socketpair in the post-fork
   rustc child, transfers only the service endpoint, and binds it to exact child
-  credentials and a live pidfd. The canonical launch manifest and issuer
-  entrypoint can consume those identities, but Cargo-wrapper readiness and
-  protected-supervisor wiring remain pending.
+  credentials and a live pidfd. The protected supervisor authenticates that
+  handoff and now materializes the exact sealed ten-source static-launcher input
+  while retaining private output/readiness endpoints. Process creation,
+  Cargo-wrapper readiness, and production supervisor wiring remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

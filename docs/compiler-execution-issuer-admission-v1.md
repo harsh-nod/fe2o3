@@ -63,8 +63,12 @@ caller policy supplies the issuer measurement, and both exact images are
 copied to distinct read-only anonymous executable memfds with complete content,
 exec, and seal seals. The program value cannot accept a root or key; that
 authority-binding transition is now complete, as is authenticated receipt of
-the direct-parent rustc handoff. Exact static-manifest construction and the
-actual issuer launch remain pending.
+the direct-parent rustc handoff. The supervisor also materializes the exact
+ten-source table, distinct standard-stream and readiness pipes, cloned
+authority descriptors, and a sealed canonical static pre-exec manifest bound
+to its PID and process start time. The actual `clone3` issuer launch, complete
+child-profile observation, readiness admission, cancellation, and reaping
+remain pending.
 
 A sealed-static issuer has no user-space DSO inventory. Its runtime policy
 therefore uses SHA-256 and length of the fixed canonical
