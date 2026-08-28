@@ -23,6 +23,7 @@ mod functional_refinement_receipt_v2;
 mod functional_refinement_runtime_v1;
 mod generated_verus_proof_input_v3;
 mod mir_pliron_per_compilation_verus_v1;
+mod mir_pliron_verus_execution_evidence_v1;
 mod model;
 mod monomorphization_dead_binding;
 mod multi_kernel_proof;
@@ -113,6 +114,12 @@ pub use mir_pliron_per_compilation_verus_v1::{
     ProductionMirPlironPerCompilationVerusReportV1, ProductionVerusVerifiedMirPlironKernelV1,
     execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1,
     execute_mir_pliron_semantic_contract_per_compilation_v1,
+};
+pub use mir_pliron_verus_execution_evidence_v1::{
+    CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    PRODUCTION_MIR_PLIRON_VERUS_EXECUTION_EVIDENCE_BYTES_V1,
+    ProductionMirPlironVerusExecutionClaimsV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    ProductionMirPlironVerusExecutionEvidenceIdentityV1,
 };
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
