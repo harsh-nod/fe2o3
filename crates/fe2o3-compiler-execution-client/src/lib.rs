@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::mem;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
@@ -87,6 +87,38 @@ impl fmt::Debug for CompilerExecutionClientV1 {
 }
 
 impl CompilerExecutionClientV1 {
+    /// Consumes the service peer inherited at the canonical rustc descriptor.
+    ///
+    /// Admission first retains a private close-on-exec duplicate, then closes the public child
+    /// slot on every successful duplication path. The returned client is therefore the only owner
+    /// used by the backend and cannot leak the canonical descriptor into later subprocesses.
+    pub fn admit_inherited_child(
+        timeout: Duration,
+    ) -> Result<Self, CompilerExecutionClientErrorV1> {
+        let child_fd = COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
+        // SAFETY: F_DUPFD_CLOEXEC consumes one scalar descriptor and returns a distinct owned
+        // descriptor on success.
+        let retained = unsafe { libc::fcntl(child_fd, libc::F_DUPFD_CLOEXEC, 3) };
+        let duplicate_error = (retained < 0).then(io::Error::last_os_error);
+        // SAFETY: close consumes only the scalar inherited slot and reports absence through EBADF.
+        let close_result = unsafe { libc::close(child_fd) };
+        if retained < 0 {
+            return Err(CompilerExecutionClientErrorV1::Descriptor(
+                duplicate_error.expect("failed duplication retained its descriptor error"),
+            ));
+        }
+        if close_result != 0 {
+            let error = io::Error::last_os_error();
+            // SAFETY: `retained` is the distinct descriptor returned by F_DUPFD_CLOEXEC.
+            unsafe { libc::close(retained) };
+            return Err(CompilerExecutionClientErrorV1::Descriptor(error));
+        }
+        // SAFETY: successful F_DUPFD_CLOEXEC returned unique ownership and the error path above
+        // closed it before returning.
+        let retained = unsafe { OwnedFd::from_raw_fd(retained) };
+        Self::admit(retained, timeout)
+    }
+
     /// Admits one owned connected peer and fixes the absolute deadline for its complete session.
     pub fn admit(peer: OwnedFd, timeout: Duration) -> Result<Self, CompilerExecutionClientErrorV1> {
         if timeout.is_zero() {
