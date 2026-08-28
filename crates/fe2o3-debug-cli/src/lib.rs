@@ -117,6 +117,7 @@ struct AdmittedSourceVariablesV2 {
     by_identity: BTreeMap<OpaqueIdentityV1, usize>,
     by_name: BTreeMap<(usize, String), Vec<usize>>,
     by_function: BTreeMap<usize, Vec<usize>>,
+    scope_parents: BTreeMap<OpaqueIdentityV1, Option<OpaqueIdentityV1>>,
 }
 
 #[derive(Debug)]
@@ -390,6 +391,16 @@ fn admit_source_map_v2(
             .and_then(|function| function.body.as_ref())
             .ok_or_else(|| "source scope function has no admitted KIR body".to_owned())?;
     }
+    let scope_parents = document
+        .scopes()
+        .iter()
+        .map(|scope| {
+            (
+                nonzero_identity(scope.identity()),
+                scope.parent_identity().map(nonzero_identity),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut variables = Vec::new();
     variables
         .try_reserve_exact(document.variables().len())
@@ -477,7 +488,7 @@ fn admit_source_map_v2(
             locations,
         });
     }
-    let variables = index_source_variables_v2(variables)?;
+    let variables = index_source_variables_v2(variables, scope_parents)?;
     Ok(AdmittedSourceMapV2 {
         identity,
         bundle_subject_identity: expected_bundle_subject,
@@ -544,6 +555,7 @@ fn admit_function_index_v2(
 
 fn index_source_variables_v2(
     mut variables: Vec<AdmittedSourceVariableV2>,
+    scope_parents: BTreeMap<OpaqueIdentityV1, Option<OpaqueIdentityV1>>,
 ) -> Result<AdmittedSourceVariablesV2, String> {
     variables.sort_unstable_by_key(|variable| variable.identity);
     let mut by_identity = BTreeMap::new();
@@ -567,6 +579,7 @@ fn index_source_variables_v2(
         by_identity,
         by_name,
         by_function,
+        scope_parents,
     })
 }
 
@@ -1457,6 +1470,38 @@ fn source_variable_effective_binding_at_v2(
     ))
 }
 
+fn source_variable_scopes_form_chain_v2(
+    index: &AdmittedSourceVariablesV2,
+    candidates: &[usize],
+    deepest_scope: OpaqueIdentityV1,
+) -> Result<bool, ()> {
+    let maximum_depth = candidates
+        .iter()
+        .map(|candidate| index.variables[*candidate].scope_depth)
+        .max()
+        .unwrap_or(0);
+    let capacity = usize::try_from(maximum_depth)
+        .ok()
+        .and_then(|depth| depth.checked_add(1))
+        .ok_or(())?;
+    let mut ancestors = Vec::new();
+    ancestors.try_reserve_exact(capacity).map_err(|_| ())?;
+    let mut current = Some(deepest_scope);
+    while let Some(scope) = current {
+        ancestors.push(scope);
+        current = *index.scope_parents.get(&scope).ok_or(())?;
+        if ancestors.len() > capacity {
+            return Ok(false);
+        }
+    }
+    ancestors.sort_unstable();
+    Ok(candidates.iter().all(|candidate| {
+        ancestors
+            .binary_search(&index.variables[*candidate].scope_identity)
+            .is_ok()
+    }))
+}
+
 fn source_variable_value_v2(
     variable: &AdmittedSourceVariableV2,
     frame: &SimulationDebugFrameV1,
@@ -2163,14 +2208,64 @@ fn write_source_variable_response_v2<W: Write>(
     response: &SourceVariableResponseV2,
     limits: ProtocolLimitsV1,
 ) -> Result<(), String> {
-    let bytes = encode_source_variable_response_line_v2(response, limits)
-        .map_err(|error| format!("failed to encode source-variable V2 response: {error}"))?;
-    writer
-        .write_all(&bytes)
-        .map_err(|_| "failed to write source-variable V2 response".to_owned())?;
+    match encode_source_variable_response_line_v2(response, limits) {
+        Ok(bytes) => writer
+            .write_all(&bytes)
+            .map_err(|_| "failed to write source-variable V2 response".to_owned()),
+        Err(ProtocolCodecErrorV1::ResponseTooLarge) => {
+            let fallback = SourceVariableResponseV2::Error {
+                schema: SourceVariableResponseSchemaV2::V2,
+                request_id: source_variable_response_request_id_v2(response),
+                operation: source_variable_response_operation_v2(response),
+                session: source_variable_response_session_v2(response),
+                error: DebugErrorV1 {
+                    stage: DebugErrorStageV1::Output,
+                    code: DebugErrorCodeV1::ResponseTooLarge,
+                    message: "response exceeds the configured JSONL bound".to_owned(),
+                    state_changed: false,
+                },
+            };
+            let bytes =
+                encode_source_variable_response_line_v2(&fallback, limits).map_err(|error| {
+                    format!("failed to encode bounded source-variable V2 fallback: {error}")
+                })?;
+            writer.write_all(&bytes).map_err(|_| {
+                "failed to write bounded source-variable V2 fallback response".to_owned()
+            })
+        }
+        Err(error) => Err(format!(
+            "failed to encode source-variable V2 response: {error}"
+        )),
+    }?;
     writer
         .flush()
         .map_err(|_| "failed to flush source-variable V2 response".to_owned())
+}
+
+fn source_variable_response_request_id_v2(response: &SourceVariableResponseV2) -> Option<u64> {
+    match response {
+        SourceVariableResponseV2::Ok { request_id, .. }
+        | SourceVariableResponseV2::Unavailable { request_id, .. } => Some(*request_id),
+        SourceVariableResponseV2::Error { request_id, .. } => *request_id,
+    }
+}
+
+fn source_variable_response_operation_v2(
+    response: &SourceVariableResponseV2,
+) -> SourceVariableOperationV2 {
+    match response {
+        SourceVariableResponseV2::Ok { operation, .. }
+        | SourceVariableResponseV2::Unavailable { operation, .. }
+        | SourceVariableResponseV2::Error { operation, .. } => *operation,
+    }
+}
+
+fn source_variable_response_session_v2(response: &SourceVariableResponseV2) -> SessionViewV1 {
+    match response {
+        SourceVariableResponseV2::Ok { session, .. }
+        | SourceVariableResponseV2::Unavailable { session, .. }
+        | SourceVariableResponseV2::Error { session, .. } => *session,
+    }
 }
 
 fn write_response<W: Write>(
@@ -2603,25 +2698,6 @@ impl SimulatorBackendV1 {
                     .by_name
                     .get(&(selected_frame.function_ordinal, name.clone()))
                     .map_or(&[][..], Vec::as_slice);
-                let maximum_depth = named
-                    .iter()
-                    .filter_map(|candidate| {
-                        let variable = &index.variables[*candidate];
-                        let (_, binding) = source_variable_effective_binding_at_v2(
-                            variable,
-                            selected_frame.block,
-                            next_operation,
-                        );
-                        (!matches!(binding, DebugSourceVariableBindingV2::NotInScope))
-                            .then_some(variable.scope_depth)
-                    })
-                    .max();
-                let Some(maximum_depth) = maximum_depth else {
-                    return self.source_variable_unavailable_v2(
-                        request_id,
-                        SourceVariableQueryUnavailableReasonV2::NameNotInScope,
-                    );
-                };
                 if retained_name_candidates
                     .try_reserve_exact(named.len())
                     .is_err()
@@ -2633,19 +2709,50 @@ impl SimulatorBackendV1 {
                     );
                 }
                 retained_name_candidates.extend(named.iter().copied().filter(|candidate| {
-                    let variable = &index.variables[*candidate];
-                    variable.scope_depth == maximum_depth
-                        && !matches!(
-                            source_variable_effective_binding_at_v2(
-                                variable,
-                                selected_frame.block,
-                                next_operation,
-                            )
-                            .1,
-                            DebugSourceVariableBindingV2::NotInScope
+                    !matches!(
+                        source_variable_effective_binding_at_v2(
+                            &index.variables[*candidate],
+                            selected_frame.block,
+                            next_operation,
                         )
+                        .1,
+                        DebugSourceVariableBindingV2::NotInScope
+                    )
                 }));
-                ambiguous_name = retained_name_candidates.len() > 1;
+                let Some(deepest) = retained_name_candidates
+                    .iter()
+                    .copied()
+                    .max_by_key(|candidate| index.variables[*candidate].scope_depth)
+                else {
+                    return self.source_variable_unavailable_v2(
+                        request_id,
+                        SourceVariableQueryUnavailableReasonV2::NameNotInScope,
+                    );
+                };
+                let deepest_scope = index.variables[deepest].scope_identity;
+                let scopes_form_chain = match source_variable_scopes_form_chain_v2(
+                    index,
+                    &retained_name_candidates,
+                    deepest_scope,
+                ) {
+                    Ok(result) => result,
+                    Err(()) => {
+                        return self.source_variable_error_v2(
+                            Some(request_id),
+                            DebugErrorCodeV1::ResourceLimit,
+                            "source variable scope resolution allocation failed",
+                        );
+                    }
+                };
+                if scopes_form_chain {
+                    let maximum_depth = index.variables[deepest].scope_depth;
+                    retained_name_candidates.retain(|candidate| {
+                        index.variables[*candidate].scope_depth == maximum_depth
+                    });
+                    ambiguous_name = retained_name_candidates.len() > 1;
+                } else {
+                    ambiguous_name = true;
+                }
                 &retained_name_candidates
             }
         };
@@ -5147,6 +5254,158 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn oversized_max_page_returns_correlated_v2_error_and_keeps_stream_usable() {
+        let scope = [0x31; 32];
+        let scopes = vec![test_source_scope_v2(scope, None, 0)];
+        let mut variables = Vec::new();
+        variables
+            .try_reserve_exact(MAX_RESPONSE_ITEMS_V1)
+            .expect("reserve bounded source-variable fixture");
+        for ordinal in 0..MAX_RESPONSE_ITEMS_V1 {
+            let mut identity = [0x41; 32];
+            identity[24..].copy_from_slice(&(ordinal as u64).to_be_bytes());
+            let suffix = format!("{ordinal:04x}");
+            let mut name = "v".repeat(MAX_TEXT_BYTES_V1 - suffix.len());
+            name.push_str(&suffix);
+            variables.push(test_source_variable_v2(
+                identity,
+                &name,
+                scope,
+                DebugSourceVariableFallbackV2::OptimizedOut,
+                Vec::new(),
+            ));
+        }
+        let mut backend = backend_with_test_source_map_v2(scopes, variables);
+        seek_test_checkpoint(&mut backend, 0);
+        let session = backend.session_view();
+        let requests = [
+            SourceVariableRequestV2::InspectSourceVariables {
+                schema: SourceVariableRequestSchemaV2::V2,
+                request_id: 70,
+                expected_revision: backend.revision,
+                scope: ExecutionScopeSelectorV1::Dispatch,
+                frame: Some(1),
+                selector: SourceVariableSelectorV2::All,
+                page: PageRequestV1 {
+                    cursor: None,
+                    limit: MAX_PAGE_ITEMS_V1,
+                },
+            },
+            SourceVariableRequestV2::InspectSourceVariables {
+                schema: SourceVariableRequestSchemaV2::V2,
+                request_id: 71,
+                expected_revision: backend.revision,
+                scope: ExecutionScopeSelectorV1::Dispatch,
+                frame: Some(1),
+                selector: SourceVariableSelectorV2::All,
+                page: PageRequestV1 {
+                    cursor: None,
+                    limit: 1,
+                },
+            },
+        ];
+        let mut input = Vec::new();
+        for request in requests {
+            serde_json::to_writer(&mut input, &request).unwrap();
+            input.push(b'\n');
+        }
+        let mut output = Vec::new();
+        run_jsonl_v1(
+            backend,
+            &mut std::io::BufReader::new(input.as_slice()),
+            &mut output,
+        )
+        .unwrap();
+        let responses = output
+            .split_inclusive(|byte| *byte == b'\n')
+            .map(|line| {
+                decode_source_variable_response_line_v2(line, ProtocolLimitsV1::default()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            &responses[0],
+            SourceVariableResponseV2::Error {
+                request_id: Some(70),
+                operation: SourceVariableOperationV2::InspectSourceVariables,
+                session: actual_session,
+                error: DebugErrorV1 {
+                    stage: DebugErrorStageV1::Output,
+                    code: DebugErrorCodeV1::ResponseTooLarge,
+                    state_changed: false,
+                    ..
+                },
+                ..
+            } if *actual_session == session
+        ));
+        assert!(matches!(
+            &responses[1],
+            SourceVariableResponseV2::Ok {
+                request_id: 71,
+                values,
+                next_cursor: Some(PageCursorV1 { position: 1, .. }),
+                ..
+            } if values.len() == 1
+        ));
+    }
+
+    #[test]
+    fn unrelated_active_scope_trees_are_name_ambiguous_even_at_unequal_depths() {
+        let left_root = [0x51; 32];
+        let left_scope = [0x52; 32];
+        let right_root = [0x61; 32];
+        let right_scope = [0x62; 32];
+        let right_inner = [0x63; 32];
+        let scopes = vec![
+            test_source_scope_v2(left_root, None, 0),
+            test_source_scope_v2(left_scope, Some(left_root), 1),
+            test_source_scope_v2(right_root, None, 0),
+            test_source_scope_v2(right_scope, Some(right_root), 1),
+            test_source_scope_v2(right_inner, Some(right_scope), 2),
+        ];
+        let variables = vec![
+            test_source_variable_v2(
+                [0x71; 32],
+                "item",
+                left_scope,
+                DebugSourceVariableFallbackV2::NotInScope,
+                vec![test_source_location_v2(
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
+                )],
+            ),
+            test_source_variable_v2(
+                [0x72; 32],
+                "item",
+                right_inner,
+                DebugSourceVariableFallbackV2::OptimizedOut,
+                Vec::new(),
+            ),
+        ];
+        let mut backend = backend_with_test_source_map_v2(scopes, variables);
+        seek_test_checkpoint(&mut backend, 0);
+        let SourceVariableResponseV2::Ok { values, .. } = inspect_source_variables_v2(
+            &mut backend,
+            72,
+            Some(1),
+            SourceVariableSelectorV2::Name {
+                name: "item".into(),
+            },
+            PageRequestV1 {
+                cursor: None,
+                limit: 8,
+            },
+        ) else {
+            panic!("unrelated active source scopes must produce typed results")
+        };
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(|value| matches!(
+            value.availability,
+            SourceVariableValueAvailabilityV2::Ambiguous
+        )));
     }
 
     #[test]

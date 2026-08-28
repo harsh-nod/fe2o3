@@ -174,6 +174,53 @@ fn response_supports_typed_ambiguity_without_v1_enum_changes() {
         decode_source_variable_response_line_v2(&hostile, ProtocolLimitsV1::default()).is_err()
     );
 
+    for provenance in [
+        ValueProvenanceV1::HardwareObservation,
+        ValueProvenanceV1::Reconstructed,
+    ] {
+        let mut hostile_provenance = response.clone();
+        let SourceVariableResponseV2::Ok { values, .. } = &mut hostile_provenance else {
+            unreachable!()
+        };
+        values[0].availability = SourceVariableValueAvailabilityV2::Value {
+            value: ValueAvailabilityV1::Captured {
+                value_type: DebugValueTypeV1::Integer {
+                    signed: false,
+                    bits: 32,
+                },
+                value: CapturedValueV1::Bits {
+                    bits: "0x0000002a".into(),
+                },
+                provenance,
+            },
+        };
+        let mut hostile = serde_json::to_vec(&hostile_provenance).unwrap();
+        hostile.push(b'\n');
+        assert!(matches!(
+            decode_source_variable_response_line_v2(&hostile, ProtocolLimitsV1::default()),
+            Err(ProtocolCodecErrorV1::Validation(
+                ProtocolValidationErrorV1::InvalidTruthClassification
+            ))
+        ));
+    }
+
+    let mut hardware_session = response.clone();
+    let SourceVariableResponseV2::Ok { session, .. } = &mut hardware_session else {
+        unreachable!()
+    };
+    session.backend = DebugBackendV1::KfdHardware;
+    session.execution_kind = ExecutionKindV1::KfdHardware;
+    session.simulated = false;
+    session.hardware_observed = true;
+    let mut hostile = serde_json::to_vec(&hardware_session).unwrap();
+    hostile.push(b'\n');
+    assert!(matches!(
+        decode_source_variable_response_line_v2(&hostile, ProtocolLimitsV1::default()),
+        Err(ProtocolCodecErrorV1::Validation(
+            ProtocolValidationErrorV1::InvalidTruthClassification
+        ))
+    ));
+
     let SourceVariableResponseV2::Ok { values, .. } = &mut zero_generation else {
         unreachable!()
     };

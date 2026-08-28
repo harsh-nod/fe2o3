@@ -5,9 +5,10 @@ use std::io::{self, BufRead, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DebugErrorV1, DebugRequestV1, DebugSnapshotAnchorV1, ExecutionScopeSelectorV1,
-    OpaqueIdentityV1, PageCursorV1, PageRequestV1, ProtocolCodecErrorV1, ProtocolLimitsV1,
-    ProtocolValidationErrorV1, SessionViewV1, ValueAvailabilityV1, ValueUnavailableReasonV1,
+    DebugBackendV1, DebugErrorV1, DebugRequestV1, DebugSnapshotAnchorV1, ExecutionKindV1,
+    ExecutionScopeSelectorV1, OpaqueIdentityV1, PageCursorV1, PageRequestV1, ProtocolCodecErrorV1,
+    ProtocolLimitsV1, ProtocolValidationErrorV1, SessionViewV1, ValueAvailabilityV1,
+    ValueProvenanceV1, ValueUnavailableReasonV1,
 };
 
 pub const SOURCE_VARIABLE_REQUEST_SCHEMA_V2: &str = "fe2o3-debug-source-variable-request-v2";
@@ -223,6 +224,7 @@ impl SourceVariableResponseV2 {
                     return Err(ProtocolValidationErrorV1::ZeroRequestId);
                 }
                 session.validate()?;
+                validate_source_variable_session_v2(*session)?;
                 snapshot.validate()?;
                 if snapshot.cursor != session.cursor {
                     return Err(ProtocolValidationErrorV1::IdentityMismatch(
@@ -236,6 +238,14 @@ impl SourceVariableResponseV2 {
                 }
                 for value in values {
                     value.validate()?;
+                    if matches!(
+                        &value.availability,
+                        SourceVariableValueAvailabilityV2::Value {
+                            value: ValueAvailabilityV1::Captured { provenance, .. }
+                        } if *provenance != ValueProvenanceV1::SimulatedObservation
+                    ) {
+                        return Err(ProtocolValidationErrorV1::InvalidTruthClassification);
+                    }
                 }
                 if next_cursor.is_some_and(|cursor| cursor.position == 0) {
                     return Err(ProtocolValidationErrorV1::ZeroIdentity);
@@ -250,7 +260,8 @@ impl SourceVariableResponseV2 {
                 if *request_id == 0 {
                     return Err(ProtocolValidationErrorV1::ZeroRequestId);
                 }
-                session.validate()
+                session.validate()?;
+                validate_source_variable_session_v2(*session)
             }
             Self::Error {
                 request_id,
@@ -262,9 +273,25 @@ impl SourceVariableResponseV2 {
                     return Err(ProtocolValidationErrorV1::ZeroRequestId);
                 }
                 session.validate()?;
+                validate_source_variable_session_v2(*session)?;
                 error.validate()
             }
         }
+    }
+}
+
+fn validate_source_variable_session_v2(
+    session: SessionViewV1,
+) -> Result<(), ProtocolValidationErrorV1> {
+    if session.backend == DebugBackendV1::CpuKirSimulator
+        && session.execution_kind == ExecutionKindV1::CpuKirSimulation
+        && session.simulated
+        && !session.hardware_observed
+        && !session.performance_prediction
+    {
+        Ok(())
+    } else {
+        Err(ProtocolValidationErrorV1::InvalidTruthClassification)
     }
 }
 
