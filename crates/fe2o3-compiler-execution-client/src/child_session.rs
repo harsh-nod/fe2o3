@@ -174,6 +174,28 @@ impl CompilerExecutionChildSessionV1 {
     }
 
     /// Transfers the service endpoint to one authenticated distinct-UID supervisor.
+    ///
+    /// The fixed production connector is created internally; callers cannot inject a control
+    /// descriptor or alternate path.
+    ///
+    /// ```compile_fail
+    /// use std::os::fd::OwnedFd;
+    /// use std::time::Duration;
+    /// use fe2o3_compiler_execution_client::{
+    ///     CompilerExecutionChildSessionV1, CompilerExecutionSupervisorCredentialsV1,
+    /// };
+    /// fn inject(
+    ///     session: CompilerExecutionChildSessionV1,
+    ///     control: OwnedFd,
+    ///     credentials: CompilerExecutionSupervisorCredentialsV1,
+    /// ) {
+    ///     let _ = session.transfer_to_supervisor(
+    ///         control,
+    ///         credentials,
+    ///         Duration::from_secs(1),
+    ///     );
+    /// }
+    /// ```
     pub fn transfer_to_supervisor(
         self,
         expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
