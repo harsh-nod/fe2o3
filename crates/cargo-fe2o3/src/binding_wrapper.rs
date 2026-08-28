@@ -24,8 +24,8 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_process_identity::PinnedWorkingDirectoryV3;
 use fe2o3_runtime_protocol::{
-    CompilerExecutionReceiptCarriageV1, RecoveredWorkerV3LoadEnvelopeV2,
-    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2, recover_worker_v3_load_envelope_v2,
+    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
+    recover_worker_v3_load_envelope_v1,
 };
 use fe2o3_rustc_invocation::{
     CARGO_METADATA_BUILD_OBSERVATION_ENV_V2, CargoMetadataBuildObservationV2, RustcArgsErrorV2,
@@ -1590,10 +1590,10 @@ fn pre_spawn_failure(
     }
 }
 
-fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV2) -> bool {
+fn worker_v3_readiness_is_absent(error: &WorkerV3LoadEnvelopeErrorV1) -> bool {
     matches!(
         error,
-        WorkerV3LoadEnvelopeErrorV2::LoadReadiness(
+        WorkerV3LoadEnvelopeErrorV1::LoadReadiness(
             fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::AttemptState
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingEnvelope
                 | fe2o3_artifact_transaction::WorkerV3LoadReadinessErrorV1::MissingClaim
@@ -1612,7 +1612,7 @@ enum ManagedProductionBuild {
         compiler_closure: CompilerClosureV2,
     },
     Ready {
-        envelope: Box<RecoveredWorkerV3LoadEnvelopeV2>,
+        envelope: Box<RecoveredWorkerV3LoadEnvelopeV1>,
     },
 }
 
@@ -1647,7 +1647,7 @@ fn prepare_managed_production_build(
 ) -> Result<(BuildAttempt, ManagedProductionBuild, bool), BindingWrapperError> {
     let attempt = begin_build_attempt(output_dir, producer, invocation, session)
         .map_err(BindingWrapperError::Artifact)?;
-    let recovered_envelope = match recover_worker_v3_load_envelope_v2(output_dir, attempt) {
+    let recovered_envelope = match recover_worker_v3_load_envelope_v1(output_dir, attempt) {
         Ok(envelope) => Some(envelope),
         Err(error) if worker_v3_readiness_is_absent(&error) => None,
         Err(error) => {
@@ -1971,32 +1971,24 @@ fn complete_recovered_production_artifact(
             "strict V3 finalized-HSACO publication failed: {error}"
         ))
     })?;
-    complete_published_production_artifact(managed, published, None)
+    complete_published_production_artifact(managed, published)
 }
 
 fn complete_published_production_artifact(
     managed: &ManagedProductionAttempt,
     published: PublishedProtectedWorkerV3HsacoV1,
-    compiler_execution: Option<CompilerExecutionReceiptCarriageV1>,
 ) -> Result<(), CompletionFailure> {
-    let compiler_execution = compiler_execution.ok_or_else(|| {
-        CompletionFailure::PreserveAttempt(
-            "strict V3 receipt-bearing load readiness requires the exact protected compiler-execution carriage; live Cargo/compiler-service acquisition is not wired"
-                .to_owned(),
-        )
-    })?;
     let intent_identity = published.recovered_evidence().storage_record().identity();
-    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, compiler_execution)
-        .map_err(|error| {
+    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).map_err(|error| {
         CompletionFailure::PreserveAttempt(format!(
-            "strict V3 receipt-bearing load-envelope custody construction failed: {error}"
+            "strict V3 load-envelope custody construction failed: {error}"
         ))
     })?;
     let readiness = envelope
-        .persist_durable_replay_custody_v2(&managed.output_dir)
+        .persist_durable_replay_custody_v1(&managed.output_dir)
         .map_err(|error| {
             CompletionFailure::PreserveAttempt(format!(
-                "strict V3 receipt-bearing load-envelope custody persistence failed: {error}"
+                "strict V3 load-envelope custody persistence failed: {error}"
             ))
         })?;
     retire_worker_v3_publication_intent_after_load_readiness_v1(
@@ -2021,13 +2013,9 @@ fn complete_published_production_artifact(
 
 fn complete_ready_production_artifact(
     managed: &ManagedProductionAttempt,
-    envelope: RecoveredWorkerV3LoadEnvelopeV2,
+    envelope: RecoveredWorkerV3LoadEnvelopeV1,
 ) -> Result<(), CompletionFailure> {
-    let intent_identity = envelope
-        .wire()
-        .replay()
-        .publication_intent_record()
-        .identity();
+    let intent_identity = envelope.wire().publication_intent_record().identity();
     match retire_worker_v3_publication_intent_after_load_readiness_v1(
         &managed.output_dir,
         &managed.producer,

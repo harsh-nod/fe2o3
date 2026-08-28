@@ -16,10 +16,7 @@ use fe2o3_kernel_descriptor::{
     CANONICAL_CODE_OBJECT_DIGEST_OFFSET, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId,
     encode_device_descriptor_table_v1,
 };
-use fe2o3_runtime_protocol::{
-    CompilerExecutionReceiptCarriageV1, RecoveredWorkerV3LoadEnvelopeV2,
-    WorkerV3LoadEnvelopeErrorV2,
-};
+use fe2o3_runtime_protocol::{RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeErrorV1};
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
@@ -83,7 +80,7 @@ impl WorkerV3HostLineageEvidenceV1 {
 /// The value owns the move-only recovered envelope and its current publication lease, but exposes
 /// no HSACO bytes or load/launch transition.
 pub struct RecoveredWorkerV3PinnedDescriptorV1 {
-    envelope: RecoveredWorkerV3LoadEnvelopeV2,
+    envelope: RecoveredWorkerV3LoadEnvelopeV1,
     outer_handoff: InertSemanticCompilerModuleHandoffV3,
     inspection: FinalizedDescriptorInspection,
     descriptor_index: usize,
@@ -137,19 +134,18 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
             .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
         self.envelope
             .wire()
-            .validate_reacquired_publication_lease_v2(self.envelope.current_publication_lease())
+            .validate_reacquired_publication_lease_v1(self.envelope.current_publication_lease())
             .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
         let inspected = validate_finalized_identity(
-            self.envelope.wire().replay().publication_intent_record(),
+            self.envelope.wire().publication_intent_record(),
             current.exact_artifact_bytes(),
         )?;
         if inspected != self.inspection {
             return Err(RecoveredWorkerV3AdmissionErrorV1::InspectionChanged);
         }
-        let outer_handoff = InertSemanticCompilerModuleHandoffV3::decode(
-            self.envelope.wire().replay().outer_handoff(),
-        )
-        .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
+        let outer_handoff =
+            InertSemanticCompilerModuleHandoffV3::decode(self.envelope.wire().outer_handoff())
+                .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
         if outer_handoff != self.outer_handoff {
             return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerHandoffChanged);
         }
@@ -204,11 +200,6 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         &self.outer_handoff
     }
 
-    /// Borrows the exact authority-free carriage retained from the V2 envelope.
-    pub const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
-        self.envelope.wire().compiler_execution_receipt()
-    }
-
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
         self.inspection.hsaco().target()
     }
@@ -242,12 +233,12 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
 
 /// Consumes recovered Worker V3 custody into one independently checked inert host descriptor.
 pub fn admit_recovered_worker_v3_descriptor_v1(
-    envelope: RecoveredWorkerV3LoadEnvelopeV2,
+    envelope: RecoveredWorkerV3LoadEnvelopeV1,
     kernel_id: KernelId,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3AdmissionErrorV1> {
     envelope
         .wire()
-        .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
+        .validate_reacquired_publication_lease_v1(envelope.current_publication_lease())
         .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
     let current = envelope
         .current_publication_lease()
@@ -258,19 +249,18 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
         .map_err(RecoveredWorkerV3AdmissionErrorV1::CurrentPublication)?;
 
     let inspection = validate_finalized_identity(
-        envelope.wire().replay().publication_intent_record(),
+        envelope.wire().publication_intent_record(),
         current.exact_artifact_bytes(),
     )?;
-    let outer =
-        InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().replay().outer_handoff())
-            .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
+    let outer = InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().outer_handoff())
+        .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
     validate_compiler_source_and_exports(&outer, &inspection)?;
     validate_target_and_code_object(&outer, &inspection)?;
     let (descriptor_index, physical_kernel_index) =
         select_exact_kernel(&outer, &inspection, kernel_id)?;
     let lineage = derive_host_lineage_identity(
         &outer,
-        envelope.wire().replay().publication_intent_record(),
+        envelope.wire().publication_intent_record(),
         &inspection,
         kernel_id,
     );
@@ -568,7 +558,7 @@ fn select_exact_kernel(
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RecoveredWorkerV3AdmissionErrorV1 {
-    Envelope(WorkerV3LoadEnvelopeErrorV2),
+    Envelope(WorkerV3LoadEnvelopeErrorV1),
     CurrentPublication(DurableLinkPublicationError),
     FinalizedLengthMismatch,
     FinalizedIdentityMismatch,

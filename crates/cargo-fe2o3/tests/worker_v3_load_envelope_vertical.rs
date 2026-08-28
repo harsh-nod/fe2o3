@@ -17,10 +17,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ed25519_dalek::SigningKey;
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifact_transaction::{
-    BuildAttempt, InertCompilerExecutionSubjectV1, WorkerV3LoadReadinessReceiptV1,
+    BuildAttempt, WorkerV3LoadReadinessReceiptV1,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_artifacts::{
@@ -52,12 +51,8 @@ use fe2o3_host::{
 };
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
-    CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
-    RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeWireV1,
-    WorkerV3LoadEnvelopeWireV2, recover_worker_v3_load_envelope_v2,
+    RecoveredWorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeV1, WorkerV3LoadEnvelopeWireV1,
+    recover_worker_v3_load_envelope_v1,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -66,32 +61,6 @@ mod worker_v3_fixture;
 
 const TEST_MARKER_BINDING: [u8; 32] = [0xa1; 32];
 const TEST_HOST_CONTRACT: [u8; 32] = [0xb2; 32];
-
-fn carriage_for_subject(
-    subject: &InertCompilerExecutionSubjectV1,
-    seed: u8,
-) -> CompilerExecutionReceiptCarriageV1 {
-    let signing_key = SigningKey::from_bytes(&[seed; 32]);
-    let policy = CompilerExecutionIssuerPolicyV1::new(
-        u64::from(seed),
-        CompilerExecutionIssuerMeasurementV1::new([seed + 1; 32], 12_345).unwrap(),
-        CompilerExecutionIssuerMeasurementV1::new([seed + 2; 32], 67_890).unwrap(),
-        signing_key.verifying_key().to_bytes(),
-    )
-    .unwrap();
-    let challenge =
-        CompilerExecutionAttestationChallengeV1::new(&policy, subject, [seed + 3; 32], 1, [0; 32])
-            .unwrap();
-    let request = CompilerExecutionAttestationRequestV1::new(challenge, subject.clone()).unwrap();
-    let receipt =
-        CompilerExecutionAttestationReceiptV1::issue(&policy, &request, &signing_key).unwrap();
-    let publication =
-        CompilerExecutionReceiptPublicationV1::new([seed + 4; 32], [seed + 5; 32], receipt)
-            .unwrap();
-    let acknowledgment =
-        CompilerExecutionReceiptPublicationAckV1::new(&publication, [seed + 6; 32]).unwrap();
-    CompilerExecutionReceiptCarriageV1::new(policy, request, publication, acknowledgment).unwrap()
-}
 
 struct StaticV3ApplicationFixtures {
     host_consumer: PathBuf,
@@ -563,7 +532,7 @@ unsafe impl ReviewedHsaImplicitKernargAdapterV1 for ReviewedTestHsaAdapter {
 
 fn recovered_host_fixture() -> (
     worker_v3_fixture::TestDirectory,
-    RecoveredWorkerV3LoadEnvelopeV2,
+    RecoveredWorkerV3LoadEnvelopeV1,
 ) {
     recover_published_worker_v3_fixture(worker_v3_fixture::published_worker_v3_fixture())
 }
@@ -572,7 +541,7 @@ fn recover_published_worker_v3_fixture(
     fixture: worker_v3_fixture::PublishedWorkerV3Fixture,
 ) -> (
     worker_v3_fixture::TestDirectory,
-    RecoveredWorkerV3LoadEnvelopeV2,
+    RecoveredWorkerV3LoadEnvelopeV1,
 ) {
     let worker_v3_fixture::PublishedWorkerV3Fixture {
         directory,
@@ -580,19 +549,10 @@ fn recover_published_worker_v3_fixture(
         attempt,
         published,
     } = fixture;
-    let subject = published.compiler_execution_subject_v1().unwrap();
-    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
-        published,
-        carriage_for_subject(&subject, 0x41),
-    )
-    .unwrap();
-    let intent = envelope
-        .wire()
-        .replay()
-        .publication_intent_record()
-        .identity();
+    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).unwrap();
+    let intent = envelope.wire().publication_intent_record().identity();
     let readiness = envelope
-        .persist_durable_replay_custody_v2(&directory.0)
+        .persist_durable_replay_custody_v1(&directory.0)
         .unwrap();
     retire_worker_v3_publication_intent_after_load_readiness_v1(
         &directory.0,
@@ -603,7 +563,7 @@ fn recover_published_worker_v3_fixture(
     )
     .unwrap();
     drop(envelope);
-    let recovered = recover_worker_v3_load_envelope_v2(&directory.0, attempt).unwrap();
+    let recovered = recover_worker_v3_load_envelope_v1(&directory.0, attempt).unwrap();
     (directory, recovered)
 }
 
@@ -623,20 +583,11 @@ fn prepared_v3_application_fixture() -> PreparedV3ApplicationFixture {
         attempt,
         published,
     } = worker_v3_fixture::published_worker_v3_fixture();
-    let subject = published.compiler_execution_subject_v1().unwrap();
-    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
-        published,
-        carriage_for_subject(&subject, 0x42),
-    )
-    .unwrap();
-    let intent = envelope
-        .wire()
-        .replay()
-        .publication_intent_record()
-        .identity();
+    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).unwrap();
+    let intent = envelope.wire().publication_intent_record().identity();
     let exact_envelope = envelope.encode_canonical().unwrap();
     let readiness = envelope
-        .persist_durable_replay_custody_v2(&directory.0)
+        .persist_durable_replay_custody_v1(&directory.0)
         .unwrap();
     let readiness_receipt = readiness.receipt();
     let envelope_path = readiness.envelope_path().to_path_buf();
@@ -747,7 +698,7 @@ fn cargo_supervisor_and_static_host_consumer_complete_strict_v3_handoff() {
     assert_eq!(report["current"], true);
 
     let recovered =
-        recover_worker_v3_load_envelope_v2(&fixture.directory.0, fixture.attempt).unwrap();
+        recover_worker_v3_load_envelope_v1(&fixture.directory.0, fixture.attempt).unwrap();
     assert_eq!(recovered.receipt(), fixture.readiness);
 }
 
@@ -1056,20 +1007,11 @@ fn strict_v3_stalled_ack_times_out_without_spinning_and_reaps_application() {
 fn strict_v3_handoff_rejects_stale_envelope_after_publication_turnover() {
     let directory = worker_v3_fixture::TestDirectory::new();
     let first = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x61);
-    let first_subject = first.published.compiler_execution_subject_v1().unwrap();
-    let first_envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
-        first.published,
-        carriage_for_subject(&first_subject, 0x61),
-    )
-    .unwrap();
-    let first_intent = first_envelope
-        .wire()
-        .replay()
-        .publication_intent_record()
-        .identity();
+    let first_envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(first.published).unwrap();
+    let first_intent = first_envelope.wire().publication_intent_record().identity();
     let first_exact_envelope = first_envelope.encode_canonical().unwrap();
     let first_readiness = first_envelope
-        .persist_durable_replay_custody_v2(&directory.0)
+        .persist_durable_replay_custody_v1(&directory.0)
         .unwrap();
     let first_path = first_readiness.envelope_path().to_path_buf();
     retire_worker_v3_publication_intent_after_load_readiness_v1(
@@ -1083,20 +1025,15 @@ fn strict_v3_handoff_rejects_stale_envelope_after_publication_turnover() {
     drop(first_envelope);
 
     let second = worker_v3_fixture::publish_worker_v3_fixture_in_directory(&directory, 0x62);
-    let second_subject = second.published.compiler_execution_subject_v1().unwrap();
-    let second_envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(
-        second.published,
-        carriage_for_subject(&second_subject, 0x62),
-    )
-    .unwrap();
+    let second_envelope =
+        WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(second.published).unwrap();
     let second_intent = second_envelope
         .wire()
-        .replay()
         .publication_intent_record()
         .identity();
     let exact_envelope = second_envelope.encode_canonical().unwrap();
     let second_readiness = second_envelope
-        .persist_durable_replay_custody_v2(&directory.0)
+        .persist_durable_replay_custody_v1(&directory.0)
         .unwrap();
     let second_path = second_readiness.envelope_path().to_path_buf();
     retire_worker_v3_publication_intent_after_load_readiness_v1(
@@ -1167,30 +1104,24 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
         .exact_finalized_hsaco()
         .to_vec();
 
-    let subject = published.compiler_execution_subject_v1().unwrap();
-    let expected_carriage = carriage_for_subject(&subject, 0x51);
-    let envelope =
-        WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, expected_carriage.clone())
-            .unwrap();
+    let envelope = WorkerV3LoadEnvelopeV1::from_published_hsaco_v1(published).unwrap();
     assert_eq!(envelope.exact_artifact_bytes(), exact_artifact);
     assert!(!envelope.grants_load_authority());
     assert!(!envelope.grants_launch_authority());
 
     let canonical = envelope.encode_canonical().unwrap();
-    let inert = WorkerV3LoadEnvelopeWireV2::decode_canonical(&canonical).unwrap();
+    let inert = WorkerV3LoadEnvelopeWireV1::decode_canonical(&canonical).unwrap();
     inert
-        .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
+        .validate_reacquired_publication_lease_v1(envelope.current_publication_lease())
         .unwrap();
     assert_eq!(inert.encode_canonical().unwrap(), canonical);
-    assert_eq!(inert.compiler_execution_receipt(), &expected_carriage);
-    assert!(WorkerV3LoadEnvelopeWireV1::decode_canonical(&canonical).is_err());
-    assert!(!inert.replay().grants_publication_authority());
+    assert!(!inert.grants_publication_authority());
     assert!(!inert.grants_load_authority());
     assert!(!inert.grants_launch_authority());
 
-    let intent = inert.replay().publication_intent_record().identity();
+    let intent = inert.publication_intent_record().identity();
     let readiness = envelope
-        .persist_durable_replay_custody_v2(&output_dir)
+        .persist_durable_replay_custody_v1(&output_dir)
         .unwrap();
     assert_eq!(readiness.exact_envelope_bytes(), canonical);
     assert!(!readiness.authenticates_descriptor_source());
@@ -1208,11 +1139,11 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     .unwrap();
     drop(envelope);
 
-    let recovered = recover_worker_v3_load_envelope_v2(&output_dir, attempt).unwrap();
+    let recovered = recover_worker_v3_load_envelope_v1(&output_dir, attempt).unwrap();
     assert_eq!(recovered.receipt(), readiness.receipt());
     assert_eq!(recovered.wire().encode_canonical().unwrap(), canonical);
     assert_eq!(recovered.exact_artifact_bytes(), exact_artifact);
-    assert!(!recovered.authenticates_compiler_origin());
+    assert!(!recovered.authenticates_descriptor_source());
     assert!(!recovered.grants_load_authority());
     assert!(!recovered.grants_launch_authority());
 
@@ -1230,7 +1161,6 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
     assert_eq!(admitted.descriptor_binding().kernel_index(), 0);
     assert_eq!(admitted.target().to_string(), "gfx942:xnack-");
     assert_eq!(admitted.code_object_version().number(), 6);
-    assert_eq!(admitted.compiler_execution_receipt(), &expected_carriage);
     assert!(admitted.authenticates_descriptor_source());
     assert!(!admitted.authenticates_compiler_origin());
     assert!(!admitted.authenticates_verification_authority());

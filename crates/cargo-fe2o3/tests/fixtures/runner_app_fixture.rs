@@ -12,13 +12,13 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_runtime_protocol::{
-    MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
+    MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
     WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1, WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
     WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
-    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
+    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV1,
 };
 
 const TEST_ACK_READY_FD_ENV: &str = "FE2O3_INTERNAL_TEST_ACK_READY_FD";
@@ -444,10 +444,10 @@ fn validate_handoff(controls: &FixtureControls) -> Result<ValidatedHandoff, Stri
 
     let mut bytes = Vec::new();
     Read::by_ref(&mut envelope_file)
-        .take((MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2 + 1) as u64)
+        .take((MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("read inherited envelope: {error}"))?;
-    let envelope = WorkerV3LoadEnvelopeWireV2::decode_canonical(&bytes)
+    let envelope = WorkerV3LoadEnvelopeWireV1::decode_canonical(&bytes)
         .map_err(|error| format!("decode inherited envelope: {error}"))?;
     if envelope
         .encode_canonical()

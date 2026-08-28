@@ -21,14 +21,14 @@ use fe2o3_artifact_transaction::{
     DurableCurrentLinkPublicationLeaseV1, reacquire_current_hsaco_publication_lease_v3,
 };
 use fe2o3_runtime_protocol::{
-    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
+    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1, WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
     WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_ACK_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1, WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
     WorkerV3ApplicationHandoffAckV1, WorkerV3ApplicationHandoffChallengeV1,
     WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationIdentityV1,
     WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
-    WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2,
+    WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV1,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, ResolveFlags, fstat, openat2, statat};
 
@@ -564,7 +564,7 @@ pub(crate) struct PinnedApplicationEnvelope<'directory> {
     file: File,
     snapshot: FileSnapshot,
     exact_bytes: Vec<u8>,
-    envelope: WorkerV3LoadEnvelopeWireV2,
+    envelope: WorkerV3LoadEnvelopeWireV1,
     artifact_directory_file: File,
     current_lease: Option<DurableCurrentLinkPublicationLeaseV1>,
 }
@@ -643,7 +643,7 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         let size = usize::try_from(initial.st_size).map_err(|_| {
             format!("canonical {schema} envelope has a negative or unrepresentable size")
         })?;
-        let maximum = MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2;
+        let maximum = MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1;
         if size == 0 || size > maximum {
             return Err(format!(
                 "canonical {schema} envelope size {size} is outside 1..={maximum}"
@@ -903,8 +903,8 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
 fn decode_worker_v3_envelope(
     name: &str,
     exact_bytes: &[u8],
-) -> Result<WorkerV3LoadEnvelopeWireV2, String> {
-    let envelope = WorkerV3LoadEnvelopeWireV2::decode_canonical(exact_bytes)
+) -> Result<WorkerV3LoadEnvelopeWireV1, String> {
+    let envelope = WorkerV3LoadEnvelopeWireV1::decode_canonical(exact_bytes)
         .map_err(|error| format!("invalid canonical Worker V3 envelope {name}: {error}"))?;
     if envelope
         .encode_canonical()

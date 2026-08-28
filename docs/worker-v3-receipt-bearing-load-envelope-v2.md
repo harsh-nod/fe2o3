@@ -7,17 +7,11 @@ and strict restart recovery are implemented in `fe2o3-runtime-protocol`.
 Construction consumes the existing complete Worker V3 replay plus one
 `CompilerExecutionReceiptCarriageV1` and rejects any compiler subject mismatch.
 
-The protected production recovery route, Cargo-to-application descriptor
-transfer, and host admission consume only V2 and reject a top-level V1 replay.
-`ManagedProductionBuild::Ready`, `PinnedApplicationEnvelope`, and
-`RecoveredWorkerV3PinnedDescriptorV1` retain the complete V2 owner through the
-handoff. Host admission exposes a borrowed authority-free carriage for the
-future protected-verifier join.
-
-Fresh Cargo completion still fails closed before load-readiness publication:
-the protected issuer launch is materialized, but live Cargo/compiler-service
-wiring does not yet produce the exact carriage required by the V2 constructor.
-No ambient or synthetic carriage fallback exists.
+This is a production-format foundation, not yet the active production route.
+`cargo-fe2o3`, application descriptor transfer, host admission, and the protected
+Worker verifier still consume the frozen V1 replay envelope. Their migration must
+land together and reject top-level V1 in production so the wire version does not
+become a selectable compiler pipeline.
 
 ## Wire
 
@@ -70,6 +64,9 @@ grant compiler authority; load and launch remain separate move-only transitions.
 
 - obtain and durably recover the complete carriage before current HSACO
   publication;
+- make Cargo persist and recover only `WorkerV3LoadEnvelopeV2`;
+- make application and host descriptor handoff decode only V2;
+- retain the carriage through recovered descriptor custody;
 - bind its identity into the Worker verification request and decision;
 - compare protected policy and monotonic rollback state; and
 - remove root-exported live V1 construction and recovery after all callers move.

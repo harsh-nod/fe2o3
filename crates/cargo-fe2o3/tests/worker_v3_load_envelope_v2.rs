@@ -28,35 +28,6 @@ const V2_HEADER_BYTES: usize = 24;
 const V2_CHECKSUM_BYTES: usize = 32;
 const BODY_MUTATION_SAMPLES: usize = 384;
 
-#[test]
-fn production_consumers_name_only_the_receipt_bearing_envelope_schema() {
-    let consumers = [
-        (
-            include_str!("../src/binding_wrapper.rs"),
-            "recover_worker_v3_load_envelope_v2",
-        ),
-        (
-            include_str!("../src/application_handoff.rs"),
-            "WorkerV3LoadEnvelopeWireV2",
-        ),
-        (
-            include_str!("../../fe2o3-host/src/application_descriptor_handoff.rs"),
-            "recover_worker_v3_load_envelope_v2",
-        ),
-        (
-            include_str!("../../fe2o3-host/src/recovered_worker_v3_admission.rs"),
-            "RecoveredWorkerV3LoadEnvelopeV2",
-        ),
-    ];
-    for (source, required_v2_api) in consumers {
-        assert!(source.contains(required_v2_api));
-        assert!(!source.contains("WorkerV3LoadEnvelopeV1"));
-        assert!(!source.contains("RecoveredWorkerV3LoadEnvelopeV1"));
-        assert!(!source.contains("WorkerV3LoadEnvelopeWireV1"));
-        assert!(!source.contains("recover_worker_v3_load_envelope_v1"));
-    }
-}
-
 fn carriage_for_subject(
     subject: &InertCompilerExecutionSubjectV1,
     seed: u8,
