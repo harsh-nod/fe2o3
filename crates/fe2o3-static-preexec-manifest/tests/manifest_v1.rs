@@ -5,10 +5,10 @@ use fe2o3_static_preexec_manifest::{
     PREEXEC_MANIFEST_FD, PREEXEC_MANIFEST_MAGIC, PREEXEC_MANIFEST_VERSION, PREEXEC_MAX_DESCRIPTORS,
     PREEXEC_MAX_DESTINATION_FD, PREEXEC_OBJECT_IDENTITY_BYTES_V1, PREEXEC_SOURCE_FD_BASE,
     StaticPreexecDescriptorV1, StaticPreexecManifestErrorV1, StaticPreexecManifestV1,
-    StaticPreexecObjectIdentityV1, VERSION_OFFSET_V1,
+    StaticPreexecObjectClassV1, StaticPreexecObjectIdentityV1, VERSION_OFFSET_V1,
 };
 
-const OBJECT_RESERVED_OFFSET: usize = 28;
+const OBJECT_CLASS_OFFSET: usize = 28;
 const DESCRIPTOR_OBJECT_OFFSET: usize = 8;
 
 fn object(seed: u8) -> StaticPreexecObjectIdentityV1 {
@@ -158,22 +158,15 @@ fn every_accepted_single_byte_mutation_is_canonical() {
 }
 
 #[test]
-fn every_magic_reserved_and_inactive_byte_mutation_rejects() {
+fn every_magic_reserved_executable_class_and_inactive_byte_mutation_rejects() {
     let canonical = fixture().encode();
     let mut required_rejections = Vec::new();
     required_rejections.extend(MAGIC_OFFSET_V1..VERSION_OFFSET_V1);
     required_rejections.extend(MANIFEST_RESERVED_OFFSET_V1..PARENT_START_TIME_OFFSET_V1);
     required_rejections.extend(
-        EXECUTABLE_OFFSET_V1 + OBJECT_RESERVED_OFFSET
+        EXECUTABLE_OFFSET_V1 + OBJECT_CLASS_OFFSET
             ..EXECUTABLE_OFFSET_V1 + PREEXEC_OBJECT_IDENTITY_BYTES_V1,
     );
-    for index in 0..3 {
-        let reserved = DESCRIPTORS_OFFSET_V1
-            + index * PREEXEC_DESCRIPTOR_BYTES_V1
-            + DESCRIPTOR_OBJECT_OFFSET
-            + OBJECT_RESERVED_OFFSET;
-        required_rejections.extend(reserved..reserved + 4);
-    }
     required_rejections
         .extend(DESCRIPTORS_OFFSET_V1 + 3 * PREEXEC_DESCRIPTOR_BYTES_V1..PREEXEC_MANIFEST_BYTES_V1);
 
@@ -183,6 +176,33 @@ fn every_magic_reserved_and_inactive_byte_mutation_rejects() {
         assert!(
             StaticPreexecManifestV1::decode(&mutated).is_err(),
             "noncanonical byte {offset} was accepted"
+        );
+    }
+}
+
+#[test]
+fn descriptor_object_classes_are_strict_and_canonical() {
+    let canonical = fixture().encode();
+    for index in 0..3 {
+        let class_offset = DESCRIPTORS_OFFSET_V1
+            + index * PREEXEC_DESCRIPTOR_BYTES_V1
+            + DESCRIPTOR_OBJECT_OFFSET
+            + OBJECT_CLASS_OFFSET;
+        let mut pidfd = canonical;
+        pidfd[class_offset..class_offset + 4]
+            .copy_from_slice(&(StaticPreexecObjectClassV1::ProcessPidfd as u32).to_le_bytes());
+        let decoded = StaticPreexecManifestV1::decode(&pidfd).unwrap();
+        assert_eq!(
+            decoded.descriptors()[index].object().class(),
+            StaticPreexecObjectClassV1::ProcessPidfd
+        );
+        assert_eq!(decoded.encode(), pidfd);
+
+        let mut unsupported = canonical;
+        unsupported[class_offset..class_offset + 4].copy_from_slice(&2_u32.to_le_bytes());
+        assert_eq!(
+            StaticPreexecManifestV1::decode(&unsupported),
+            Err(StaticPreexecManifestErrorV1::InvalidDescriptorObjectClass { index, class: 2 })
         );
     }
 }
@@ -388,6 +408,60 @@ fn object_aliases_use_only_device_and_inode_like_the_launcher() {
             second: 1,
         })
     ));
+}
+
+#[test]
+fn process_pidfd_snapshots_may_share_the_kernel_anonymous_inode_key() {
+    let shared = object(5);
+    let first_pidfd = StaticPreexecObjectIdentityV1::new_process_pidfd(
+        shared.device(),
+        shared.inode(),
+        shared.size(),
+        shared.mode(),
+    );
+    let second_pidfd = StaticPreexecObjectIdentityV1::new_process_pidfd(
+        shared.device(),
+        shared.inode(),
+        shared.size(),
+        shared.mode(),
+    );
+    let manifest = StaticPreexecManifestV1::new(
+        2,
+        1,
+        object(1),
+        vec![
+            descriptor(0, 0, 2),
+            descriptor(1, 1, 3),
+            descriptor(2, 2, 4),
+            StaticPreexecDescriptorV1::for_index(3, 5, first_pidfd).unwrap(),
+            StaticPreexecDescriptorV1::for_index(4, 11, second_pidfd).unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        StaticPreexecManifestV1::decode(&manifest.encode()).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        manifest.descriptors()[3].object().class(),
+        StaticPreexecObjectClassV1::ProcessPidfd
+    );
+
+    assert_eq!(
+        StaticPreexecManifestV1::new(
+            2,
+            1,
+            first_pidfd,
+            vec![
+                descriptor(0, 0, 2),
+                descriptor(1, 1, 3),
+                descriptor(2, 2, 4),
+            ]
+        ),
+        Err(StaticPreexecManifestErrorV1::InvalidExecutableObjectClass(
+            1
+        ))
+    );
 }
 
 #[test]

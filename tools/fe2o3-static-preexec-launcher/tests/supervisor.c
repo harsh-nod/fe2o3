@@ -39,6 +39,7 @@ enum case_kind {
   CASE_DUPLICATE_DESTINATION,
   CASE_PARENT_IDENTITY,
   CASE_SIGNAL_STATE,
+  CASE_PIDFD_CLASS_ON_PIPE,
 };
 
 struct launch_inputs {
@@ -147,7 +148,7 @@ create_manifest_executable_alias(struct fe2o3_preexec_manifest_v1 *manifest) {
   manifest->executable.inode = (uint64_t)info.st_ino;
   manifest->executable.size = sizeof(*manifest);
   manifest->executable.mode = (uint32_t)info.st_mode;
-  manifest->executable.reserved = 0U;
+  manifest->executable.object_class = FE2O3_PREEXEC_OBJECT_CLASS_FSTAT;
   if (write_all(fd, manifest, sizeof(*manifest)) != 0 ||
       lseek(fd, 0, SEEK_SET) != 0 ||
       fcntl(fd, F_ADD_SEALS, REQUIRED_EXECUTABLE_SEALS) != 0) {
@@ -168,7 +169,7 @@ static int identity(int fd, struct fe2o3_preexec_object_identity_v1 *object) {
   object->inode = (uint64_t)info.st_ino;
   object->size = (uint64_t)info.st_size;
   object->mode = (uint32_t)info.st_mode;
-  object->reserved = 0U;
+  object->object_class = FE2O3_PREEXEC_OBJECT_CLASS_FSTAT;
   return 0;
 }
 
@@ -309,6 +310,9 @@ static int prepare_inputs(const char *target_path, enum case_kind kind,
     manifest.descriptors[3].destination_fd = 2;
   } else if (kind == CASE_PARENT_IDENTITY) {
     ++manifest.parent_start_time;
+  } else if (kind == CASE_PIDFD_CLASS_ON_PIPE) {
+    manifest.descriptors[3].object.object_class =
+        FE2O3_PREEXEC_OBJECT_CLASS_PROCESS_PIDFD;
   }
   inputs->manifest_fd = kind == CASE_MANIFEST_EXECUTABLE_ALIAS
                             ? create_manifest_executable_alias(&manifest)
@@ -424,6 +428,7 @@ static int parse_case(const char *name, enum case_kind *kind) {
       {"duplicate-destination", CASE_DUPLICATE_DESTINATION},
       {"parent-identity", CASE_PARENT_IDENTITY},
       {"signal-state", CASE_SIGNAL_STATE},
+      {"pidfd-class-on-pipe", CASE_PIDFD_CLASS_ON_PIPE},
   };
   for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
     if (strcmp(name, cases[index].name) == 0) {

@@ -23,6 +23,9 @@
 #ifndef FE2O3_PREEXEC_TEST_FORCE_CLOSE_FALLBACK
 #define FE2O3_PREEXEC_TEST_FORCE_CLOSE_FALLBACK 0
 #endif
+#ifndef SYS_pidfd_send_signal
+#define SYS_pidfd_send_signal 424
+#endif
 
 #if FE2O3_PREEXEC_TEST_ONLY != 0 && FE2O3_PREEXEC_TEST_ONLY != 1
 #error "FE2O3_PREEXEC_TEST_ONLY must be zero or one"
@@ -377,9 +380,8 @@ static bool same_key(const struct fe2o3_object_snapshot *left,
 static bool
 snapshot_matches_record(const struct fe2o3_object_snapshot *snapshot,
                         const struct fe2o3_preexec_object_identity_v1 *record) {
-  return record->reserved == 0U && snapshot->device == record->device &&
-         snapshot->inode == record->inode && snapshot->size == record->size &&
-         snapshot->mode == record->mode;
+  return snapshot->device == record->device && snapshot->inode == record->inode &&
+         snapshot->size == record->size && snapshot->mode == record->mode;
 }
 
 static bool
@@ -392,6 +394,24 @@ static bool
 record_has_snapshot_key(const struct fe2o3_preexec_object_identity_v1 *record,
                         const struct fe2o3_object_snapshot *snapshot) {
   return record->device == snapshot->device && record->inode == snapshot->inode;
+}
+
+static bool object_classes_may_share_key(
+    const struct fe2o3_preexec_object_identity_v1 *left,
+    const struct fe2o3_preexec_object_identity_v1 *right) {
+  return left->object_class == FE2O3_PREEXEC_OBJECT_CLASS_PROCESS_PIDFD &&
+         right->object_class == FE2O3_PREEXEC_OBJECT_CLASS_PROCESS_PIDFD;
+}
+
+static int validate_object_class(int fd, uint32_t object_class) {
+  if (object_class == FE2O3_PREEXEC_OBJECT_CLASS_FSTAT) {
+    return 0;
+  }
+  if (object_class != FE2O3_PREEXEC_OBJECT_CLASS_PROCESS_PIDFD) {
+    return -1;
+  }
+  const long result = linux_syscall4(SYS_pidfd_send_signal, (long)fd, 0L, 0L, 0L);
+  return result == 0L || result == -EPERM ? 0 : -1;
 }
 
 static int file_control(int fd, int command, long argument) {
@@ -441,7 +461,7 @@ validate_manifest_file(struct fe2o3_preexec_manifest_v1 *manifest,
       manifest->reserved != 0U || manifest->parent_pid <= 1 ||
       manifest->parent_start_time == 0U || manifest->descriptor_count < 3U ||
       manifest->descriptor_count > FE2O3_PREEXEC_MAX_DESCRIPTORS ||
-      manifest->executable.reserved != 0U) {
+      manifest->executable.object_class != FE2O3_PREEXEC_OBJECT_CLASS_FSTAT) {
     return -1;
   }
   for (uint32_t index = manifest->descriptor_count;
@@ -536,7 +556,8 @@ static int validate_descriptor_manifest(
     const int expected_source = FE2O3_PREEXEC_SOURCE_FD_BASE + (int)index;
     if (entry->source_fd != expected_source || entry->destination_fd < 0 ||
         entry->destination_fd > FE2O3_PREEXEC_MAX_DESTINATION_FD ||
-        destinations[entry->destination_fd] || entry->object.reserved != 0U ||
+        destinations[entry->destination_fd] ||
+        entry->object.object_class > FE2O3_PREEXEC_OBJECT_CLASS_PROCESS_PIDFD ||
         records_have_same_key(&entry->object, &manifest->executable) ||
         record_has_snapshot_key(&entry->object, manifest_object)) {
       return -1;
@@ -544,7 +565,9 @@ static int validate_descriptor_manifest(
     destinations[entry->destination_fd] = true;
     for (uint32_t previous = 0U; previous < index; ++previous) {
       if (records_have_same_key(&entry->object,
-                                &manifest->descriptors[previous].object)) {
+                                &manifest->descriptors[previous].object) &&
+          !object_classes_may_share_key(
+              &entry->object, &manifest->descriptors[previous].object)) {
         return -1;
       }
     }
@@ -561,7 +584,8 @@ static int validate_descriptor_manifest(
     if (descriptor_access_is_valid(entry->source_fd, entry->destination_fd) !=
             0 ||
         object_snapshot(entry->source_fd, &observed) != 0 ||
-        !snapshot_matches_record(&observed, &entry->object)) {
+        !snapshot_matches_record(&observed, &entry->object) ||
+        validate_object_class(entry->source_fd, entry->object.object_class) != 0) {
       return -1;
     }
   }

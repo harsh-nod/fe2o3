@@ -2,8 +2,8 @@
 
 This tool is a Linux x86-64 pre-exec containment mechanism. It has
 `AUTHORITY=none`: it does not decide whether an image is trusted and cannot
-reserve, publish, load, or launch GPU work. A future authority-bearing
-supervisor must make those decisions before supplying this process with fixed
+reserve, publish, load, or launch GPU work. The authority-bearing supervisor
+makes those decisions before supplying this process with fixed
 descriptors.
 
 ## Fixed descriptor contract
@@ -17,8 +17,9 @@ descriptors.
 - FDs 200 through 215 are ordered source slots. Only the first
   `descriptor_count` slots may be open.
 - Destination FDs are unique values from 0 through 127. FDs 0, 1, and 2 must
-  each occur exactly once. Source objects, the manifest, and the executable
-  may not alias one another.
+  each occur exactly once. Ordinary source objects, the manifest, and the
+  executable may not alias one another. Process-pidfd sources are explicitly
+  classed and may share Linux's anonymous-inode snapshot key.
 - The parent PID and Linux process start time must match before containment is
   armed and again after `PR_SET_NO_NEW_PRIVS` and `PR_SET_PDEATHSIG(SIGKILL)`.
 
@@ -28,9 +29,13 @@ header as an independent layout oracle and require byte-for-byte agreement.
 The launcher remains responsible for live descriptor snapshots, seals, access
 modes, closure, process controls, and target execution.
 
-Alias decisions use only the immutable live-object key `(st_dev, st_ino)`.
-File type, size, mode, seals, access mode, and close-on-exec policy are separate
-state checks and cannot make two handles for one live object appear distinct.
+Ordinary-object alias decisions use only the immutable live-object key
+`(st_dev, st_ino)`. File type, size, mode, seals, access mode, and close-on-exec
+policy are separate state checks and cannot make two handles for one live
+object appear distinct. A process-pidfd class requires
+`pidfd_send_signal(fd, 0, NULL, 0)` to prove the source is a live pidfd; because
+Linux pidfds can share one anonymous-inode key, the receiving service must
+independently bind each pidfd to its exact expected PID and process start time.
 The launcher validates the manifest, executable, and every source before
 installation, retains the manifest through descriptor closure, and revalidates
 the manifest, executable, and every installed destination before closing the

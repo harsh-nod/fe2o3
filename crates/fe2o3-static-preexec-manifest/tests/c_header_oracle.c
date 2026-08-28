@@ -28,8 +28,9 @@ _Static_assert(offsetof(struct fe2o3_preexec_object_identity_v1, size) == 16,
                "V1 object size offset changed");
 _Static_assert(offsetof(struct fe2o3_preexec_object_identity_v1, mode) == 24,
                "V1 object mode offset changed");
-_Static_assert(offsetof(struct fe2o3_preexec_object_identity_v1, reserved) == 28,
-               "V1 object reserved offset changed");
+_Static_assert(offsetof(struct fe2o3_preexec_object_identity_v1, object_class) ==
+                   28,
+               "V1 object class offset changed");
 
 _Static_assert(sizeof(struct fe2o3_preexec_descriptor_v1) == 40,
                "V1 descriptor size changed");
@@ -66,7 +67,7 @@ static void set_object(struct fe2o3_preexec_object_identity_v1 *object,
   object->inode = inode;
   object->size = size;
   object->mode = mode;
-  object->reserved = 0U;
+  object->object_class = FE2O3_PREEXEC_OBJECT_CLASS_FSTAT;
 }
 
 int main(void) {
