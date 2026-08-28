@@ -2,16 +2,21 @@
 
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
-current-record verification, and bounded service packet records. The 352-byte
-current-record verification binds one exact carriage to the policy, subject,
-issuer journal, Worker record, sequence, both rollback anchors, and the
-protected policy and Worker-ledger verification identities. Decoding that
-record proves canonical structure only. A separate 536-byte attestation binds
-that complete record to a nonzero caller challenge and an Ed25519 signature.
-Verification requires the embedded key to equal the caller-pinned policy key,
-the challenge to equal the caller's fresh challenge, and the complete nested
-record to equal the expected record. The result grants no authority and does
-not by itself prove protected key custody or external anti-rollback. The
+current-record verification, and bounded service packet records. The sole
+912-byte V2 current-record verification binds one exact carriage to the policy,
+subject, issuer journal, Worker record, sequence, both internal rollback
+anchors, policy-pinned external-anchor key, complete 528-byte signed anchor
+receipt, and protected policy and Worker-ledger verification identities.
+Decoding proves canonical structure and re-verifies the embedded receipt under
+the embedded anchor key. A separate 1,096-byte V2 attestation binds that
+complete record to a nonzero caller challenge and an Ed25519 signature.
+Issuance and verification additionally require both keys to equal the caller's
+policy, the challenge to equal the caller's fresh challenge, every record
+coordinate to equal the original expected carriage, and the anchor receipt to
+be a proposed-position advance for the exact reconstructed compiler
+transaction. The result authenticates that external transition's commit, but
+grants no authority and does not by itself prove protected key custody or that
+no newer external head exists. The
 1,874-byte external-anchor transaction binds the complete issuer policy,
 attestation request, signed receipt publication, sequence, and prior/current
 internal rollback anchors without including a path, descriptor, or final
@@ -38,9 +43,9 @@ record binds the admitted issuer PID to the exact manifest and policy after
 durable recovery. The supervisor separately admits the manifest-named anchor
 service endpoint and pidfd and transfers them at issuer FDs 10 and 11; the
 issuer revalidates their continuity and binds the transport to the policy-pinned
-anchor key. No descriptor is serialized in these records, and receipt
-publication does not yet invoke the transferred transport. None of these
-records grants process or signing authority.
+anchor key. Receipt publication invokes that transport before committing the
+Worker record or ACK. No descriptor is serialized in these records, and none
+of them grants process or signing authority.
 The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
 socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
 part of the production protocol.

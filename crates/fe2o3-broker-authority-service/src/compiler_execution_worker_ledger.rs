@@ -17,8 +17,8 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1,
     COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV1,
-    CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV2,
+    CompilerExecutionCurrentRecordVerificationV2,
     CompilerExecutionExternalAnchorTransactionErrorV1,
     CompilerExecutionExternalAnchorTransactionV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
@@ -753,7 +753,7 @@ impl WorkerReceiptLedgerV1 {
         &self,
         expected_carriage: &CompilerExecutionReceiptCarriageV1,
     ) -> Result<
-        CompilerExecutionCurrentRecordVerificationV1,
+        CompilerExecutionCurrentRecordVerificationV2,
         ProtectedCompilerExecutionWorkerLedgerErrorV1,
     > {
         if expected_carriage.policy() != &self.policy {
@@ -783,9 +783,9 @@ impl WorkerReceiptLedgerV1 {
                 &protected_policy_verification_identity,
             ],
         );
-        CompilerExecutionCurrentRecordVerificationV1::new(
-            expected_subject,
+        CompilerExecutionCurrentRecordVerificationV2::new(
             expected_carriage,
+            record.external_anchor_receipt().clone(),
             protected_policy_verification_identity,
             protected_worker_ledger_verification_identity,
         )
@@ -1232,7 +1232,7 @@ pub enum ProtectedCompilerExecutionWorkerLedgerErrorV1 {
     ExternalAnchorReceiptMismatch,
     ExternalAnchorNotCommitted,
     CarriageMismatch,
-    Verification(CompilerExecutionCurrentRecordVerificationErrorV1),
+    Verification(CompilerExecutionCurrentRecordVerificationErrorV2),
     Poisoned,
 }
 
@@ -1386,10 +1386,10 @@ impl From<CompilerExecutionWorkerAnchorJournalErrorV1>
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV1>
+impl From<CompilerExecutionCurrentRecordVerificationErrorV2>
     for ProtectedCompilerExecutionWorkerLedgerErrorV1
 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV1) -> Self {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
         Self::Verification(error)
     }
 }
@@ -1678,6 +1678,14 @@ mod tests {
             verification.current_rollback_anchor(),
             record.current_rollback_anchor
         );
+        assert_eq!(
+            verification.external_anchor_receipt(),
+            record.external_anchor_receipt()
+        );
+        assert_eq!(
+            verification.external_rollback_verification_identity(),
+            *record.external_anchor_receipt().identity().as_bytes()
+        );
         assert_ne!(
             verification.protected_policy_verification_identity(),
             [0; 32]
@@ -1692,7 +1700,7 @@ mod tests {
         );
         assert!(!verification.grants_authority());
         assert_eq!(
-            CompilerExecutionCurrentRecordVerificationV1::decode(verification.canonical_bytes())
+            CompilerExecutionCurrentRecordVerificationV2::decode(verification.canonical_bytes())
                 .unwrap(),
             verification
         );

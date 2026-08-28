@@ -37,12 +37,12 @@ pub use client_profile::{
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
 };
 pub use current_record_verification::{
-    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V1,
-    COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V1,
-    CompilerExecutionCurrentRecordAttestationIdentityV1,
-    CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
-    CompilerExecutionCurrentRecordVerificationIdentityV1,
-    CompilerExecutionCurrentRecordVerificationV1, VerifiedCompilerExecutionCurrentRecordV1,
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V2,
+    COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V2,
+    CompilerExecutionCurrentRecordAttestationIdentityV2,
+    CompilerExecutionCurrentRecordAttestationV2, CompilerExecutionCurrentRecordVerificationErrorV2,
+    CompilerExecutionCurrentRecordVerificationIdentityV2,
+    CompilerExecutionCurrentRecordVerificationV2, VerifiedCompilerExecutionCurrentRecordV2,
 };
 pub use external_anchor_service::{
     CompilerExecutionExternalAnchorServiceIdentityErrorV1,

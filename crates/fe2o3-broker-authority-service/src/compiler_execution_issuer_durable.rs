@@ -17,9 +17,9 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV1,
-    CompilerExecutionCurrentRecordVerificationErrorV1,
-    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV2,
+    CompilerExecutionCurrentRecordVerificationErrorV2,
+    CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
@@ -1311,7 +1311,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
     pub(super) fn verify_current_carriage_for_service(
         &self,
         expected_carriage: &CompilerExecutionReceiptCarriageV1,
-    ) -> Result<CompilerExecutionCurrentRecordVerificationV1, ProtectedCompilerExecutionIssuerErrorV1>
+    ) -> Result<CompilerExecutionCurrentRecordVerificationV2, ProtectedCompilerExecutionIssuerErrorV1>
     {
         self.admission.validate_continuity()?;
         validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
@@ -1337,11 +1337,12 @@ impl ProtectedCompilerExecutionIssuerV1 {
         &self,
         expected_carriage: &CompilerExecutionReceiptCarriageV1,
         verification_challenge: [u8; 32],
-    ) -> Result<CompilerExecutionCurrentRecordAttestationV1, ProtectedCompilerExecutionIssuerErrorV1>
+    ) -> Result<CompilerExecutionCurrentRecordAttestationV2, ProtectedCompilerExecutionIssuerErrorV1>
     {
         let verification = self.verify_current_carriage_for_service(expected_carriage)?;
-        let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+        let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
             self.admission.policy(),
+            expected_carriage,
             verification,
             verification_challenge,
             self.admission.signing_key(),
@@ -1628,7 +1629,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     Durable(RetainedDurableDirectoryErrorV1),
     Protocol(CompilerExecutionAttestationErrorV1),
     ReceiptPublication(CompilerExecutionReceiptPublicationErrorV1),
-    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV1),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV2),
     WorkerLedger(ProtectedCompilerExecutionWorkerLedgerErrorV1),
     ExternalAnchor(ProtectedCompilerExecutionExternalAnchorErrorV1),
     Occurrence(ProtectedCompilerExecutionOccurrenceErrorV1),
@@ -1761,10 +1762,10 @@ impl From<CompilerExecutionReceiptPublicationErrorV1> for ProtectedCompilerExecu
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV1>
+impl From<CompilerExecutionCurrentRecordVerificationErrorV2>
     for ProtectedCompilerExecutionIssuerErrorV1
 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV1) -> Self {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
         Self::CurrentRecord(error)
     }
 }

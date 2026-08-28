@@ -7,9 +7,9 @@ use std::time::Duration;
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_compiler_execution_client::{CompilerExecutionClientErrorV1, CompilerExecutionClientV1};
 use fe2o3_runtime_protocol::{
-    CompilerExecutionCurrentRecordAttestationIdentityV1,
-    CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionReceiptCarriageV1,
-    VerifiedCompilerExecutionCurrentRecordV1,
+    CompilerExecutionCurrentRecordAttestationIdentityV2,
+    CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionReceiptCarriageV1,
+    VerifiedCompilerExecutionCurrentRecordV2,
 };
 
 use crate::{
@@ -32,17 +32,17 @@ pub const WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1: Duration = Duratio
 /// ```
 #[derive(Debug)]
 pub struct WorkerV3CompilerCurrentRecordAuditV1 {
-    verified: VerifiedCompilerExecutionCurrentRecordV1,
+    verified: VerifiedCompilerExecutionCurrentRecordV2,
 }
 
 impl WorkerV3CompilerCurrentRecordAuditV1 {
-    pub const fn verification(&self) -> &CompilerExecutionCurrentRecordVerificationV1 {
+    pub const fn verification(&self) -> &CompilerExecutionCurrentRecordVerificationV2 {
         self.verified.verification()
     }
 
     pub const fn attestation_identity(
         &self,
-    ) -> CompilerExecutionCurrentRecordAttestationIdentityV1 {
+    ) -> CompilerExecutionCurrentRecordAttestationIdentityV2 {
         self.verified.attestation().identity()
     }
 
@@ -60,6 +60,14 @@ impl WorkerV3CompilerCurrentRecordAuditV1 {
 
     pub const fn authenticates_protected_current_record(&self) -> bool {
         self.verified.authenticates_protected_current_record()
+    }
+
+    pub const fn authenticates_external_anchor_commit(&self) -> bool {
+        self.verified.authenticates_external_anchor_commit()
+    }
+
+    pub const fn external_rollback_verification_identity(&self) -> [u8; 32] {
+        self.verified.external_rollback_verification_identity()
     }
 
     pub const fn authenticates_external_rollback_currentness(&self) -> bool {
@@ -197,19 +205,23 @@ mod tests {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     use std::thread;
 
-    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::{Signer, SigningKey};
     use fe2o3_artifact_transaction::{
         INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V1, INERT_COMPILER_EXECUTION_SUBJECT_MAGIC_V1,
         INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1,
     };
+    use fe2o3_external_anchor_protocol::{
+        AnchorPositionV1, AnchorTransitionReceiptV1, AnchoredStateV1, CallerNonceV1,
+        HashChainHeadV1, PinnedAnchorKeyV1, UnsignedAnchorObservationV1,
+    };
     use fe2o3_runtime_protocol::{
         CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-        CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV1,
-        CompilerExecutionCurrentRecordVerificationV1, CompilerExecutionIssuerMeasurementV1,
-        CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptPublicationAckV1,
-        CompilerExecutionReceiptPublicationV1, CompilerExecutionServiceRequestKindV1,
-        CompilerExecutionServiceRequestV1, CompilerExecutionServiceResponseV1,
-        MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
+        CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV2,
+        CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionExternalAnchorTransactionV1,
+        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
+        CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
+        CompilerExecutionServiceResponseV1, MAX_COMPILER_EXECUTION_SERVICE_REQUEST_BYTES_V1,
     };
     use sha2::{Digest, Sha256};
 
@@ -220,6 +232,7 @@ mod tests {
 
     struct Fixture {
         signing_key: SigningKey,
+        anchor_signing_key: SigningKey,
         policy: CompilerExecutionIssuerPolicyV1,
         subject: InertCompilerExecutionSubjectV1,
         carriage: CompilerExecutionReceiptCarriageV1,
@@ -228,14 +241,13 @@ mod tests {
     impl Fixture {
         fn new(subject_seed: u8) -> Self {
             let signing_key = SigningKey::from_bytes(&[0x51; 32]);
+            let anchor_signing_key = SigningKey::from_bytes(&[0x52; 32]);
             let policy = CompilerExecutionIssuerPolicyV1::new(
                 7,
                 CompilerExecutionIssuerMeasurementV1::new([0x61; 32], 123).unwrap(),
                 CompilerExecutionIssuerMeasurementV1::new([0x62; 32], 456).unwrap(),
                 signing_key.verifying_key().to_bytes(),
-                SigningKey::from_bytes(&[0x52; 32])
-                    .verifying_key()
-                    .to_bytes(),
+                anchor_signing_key.verifying_key().to_bytes(),
             )
             .unwrap();
             let subject = subject(subject_seed);
@@ -262,10 +274,40 @@ mod tests {
             .unwrap();
             Self {
                 signing_key,
+                anchor_signing_key,
                 policy,
                 subject,
                 carriage,
             }
+        }
+
+        fn anchor_receipt(&self) -> AnchorTransitionReceiptV1 {
+            let transaction = CompilerExecutionExternalAnchorTransactionV1::new(
+                self.policy.clone(),
+                self.carriage.request().clone(),
+                self.carriage.publication().clone(),
+            )
+            .unwrap();
+            let key =
+                PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+                    .unwrap();
+            let pending =
+                AnchoredStateV1::from_local_state(0, HashChainHeadV1::from_bytes([0; 32]))
+                    .prepare(transaction.external_anchor_digest(), &key)
+                    .unwrap()
+                    .begin_advance(CallerNonceV1::from_bytes([0x67; 32]), &key)
+                    .unwrap();
+            let unsigned = UnsignedAnchorObservationV1::from_challenge(
+                pending.challenge(),
+                AnchorPositionV1::Proposed,
+            );
+            let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
+            AnchorTransitionReceiptV1::new(
+                pending.challenge().clone(),
+                &unsigned.attach_signature(signature.to_bytes()),
+                &key,
+            )
+            .unwrap()
         }
     }
 
@@ -273,10 +315,10 @@ mod tests {
     fn signed_current_record_is_owned_once_without_authority() {
         let fixture = Fixture::new(0x20);
         let (client, service) = socket_pair();
-        let service_subject = fixture.subject.clone();
         let service_carriage = fixture.carriage.clone();
         let service_policy = fixture.policy.clone();
         let service_key = fixture.signing_key.clone();
+        let service_anchor_receipt = fixture.anchor_receipt();
         let service = thread::spawn(move || {
             let request = receive_request(&service);
             assert_eq!(
@@ -284,15 +326,16 @@ mod tests {
                 CompilerExecutionServiceRequestKindV1::VerifyCurrent
             );
             assert_eq!(request.carriage(), Some(&service_carriage));
-            let verification = CompilerExecutionCurrentRecordVerificationV1::new(
-                &service_subject,
+            let verification = CompilerExecutionCurrentRecordVerificationV2::new(
                 &service_carriage,
+                service_anchor_receipt,
                 [0x91; 32],
                 [0x92; 32],
             )
             .unwrap();
-            let attestation = CompilerExecutionCurrentRecordAttestationV1::issue(
+            let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
                 &service_policy,
+                &service_carriage,
                 verification,
                 request.verification_challenge().unwrap(),
                 &service_key,
@@ -327,6 +370,8 @@ mod tests {
         assert_ne!(evidence.attestation_identity().as_bytes(), &[0; 32]);
         assert!(!evidence.authenticates_protected_key_custody());
         assert!(!evidence.authenticates_protected_current_record());
+        assert!(evidence.authenticates_external_anchor_commit());
+        assert_ne!(evidence.external_rollback_verification_identity(), [0; 32]);
         assert!(!evidence.authenticates_external_rollback_currentness());
         assert!(!evidence.grants_verification_authority());
         assert!(!evidence.grants_authority());

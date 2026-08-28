@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV2,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
     CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServiceRequestV1,
     CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
-    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV1,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV2,
 };
 
 mod child_channel;
@@ -173,23 +173,10 @@ impl CompilerExecutionClientV1 {
         self,
         policy: &CompilerExecutionIssuerPolicyV1,
         expected_carriage: CompilerExecutionReceiptCarriageV1,
-    ) -> Result<VerifiedCompilerExecutionCurrentRecordV1, CompilerExecutionClientErrorV1> {
+    ) -> Result<VerifiedCompilerExecutionCurrentRecordV2, CompilerExecutionClientErrorV1> {
         if expected_carriage.policy() != policy {
             return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
         }
-        let expected_policy = *policy.identity().as_bytes();
-        let expected_subject = *expected_carriage.request().subject().identity().sha256();
-        let expected_carriage_identity = *expected_carriage.identity().as_bytes();
-        let expected_issuer_journal = expected_carriage.acknowledgment().issuer_journal_identity();
-        let expected_worker_record = expected_carriage
-            .acknowledgment()
-            .worker_ledger_record_identity();
-        let expected_sequence = expected_carriage.acknowledgment().sequence();
-        let expected_prior = expected_carriage
-            .publication()
-            .receipt()
-            .prior_rollback_anchor();
-        let expected_current = expected_carriage.acknowledgment().current_rollback_anchor();
         let verification_challenge = fresh_verification_challenge()?;
         let request = CompilerExecutionServiceRequestV1::verify_current(
             policy,
@@ -204,20 +191,14 @@ impl CompilerExecutionClientV1 {
         let attestation = response.current_record_attestation().cloned().ok_or(
             CompilerExecutionClientErrorV1::MissingPayload("current-record attestation"),
         )?;
-        let verification = attestation.verification().clone();
-        if verification.policy_identity() != expected_policy
-            || verification.subject_identity() != expected_subject
-            || verification.carriage_identity() != expected_carriage_identity
-            || verification.issuer_journal_identity() != expected_issuer_journal
-            || verification.worker_ledger_record_identity() != expected_worker_record
-            || verification.sequence() != expected_sequence
-            || verification.prior_rollback_anchor() != expected_prior
-            || verification.current_rollback_anchor() != expected_current
-        {
-            return Err(CompilerExecutionClientErrorV1::DurableStateChanged);
-        }
+        let expected_carriage =
+            request
+                .carriage()
+                .ok_or(CompilerExecutionClientErrorV1::MissingPayload(
+                    "VerifyCurrent request carriage",
+                ))?;
         attestation
-            .verify(policy, &verification, verification_challenge)
+            .verify(policy, expected_carriage, verification_challenge)
             .map_err(Into::into)
     }
 
@@ -754,7 +735,7 @@ pub enum CompilerExecutionClientErrorV1 {
     PartialSend,
     Protocol(CompilerExecutionServiceProtocolErrorV1),
     Attestation(CompilerExecutionAttestationErrorV1),
-    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV1),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV2),
     Publication(CompilerExecutionReceiptPublicationErrorV1),
     RequestIdentityMismatch,
     SubjectOrPolicyMismatch,
@@ -864,8 +845,8 @@ impl From<CompilerExecutionAttestationErrorV1> for CompilerExecutionClientErrorV
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV1> for CompilerExecutionClientErrorV1 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV1) -> Self {
+impl From<CompilerExecutionCurrentRecordVerificationErrorV2> for CompilerExecutionClientErrorV1 {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
         Self::CurrentRecord(error)
     }
 }

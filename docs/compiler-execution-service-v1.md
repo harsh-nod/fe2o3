@@ -47,11 +47,15 @@ state machine, backend acquisition, attempt-scoped sidecar transport, and
 receipt-bearing Cargo/host V2 route are implemented. `VerifyCurrent` rereads the
 service-owned canonical Worker record, reconstructs the complete carriage,
 compares every byte with the caller's expected carriage, and signs a canonical
-policy and Worker-ledger verification record together with the caller's fresh
-challenge. The client requires the signing key to equal its pinned policy key,
-the challenge to match, and every nested coordinate to equal the expected
-carriage. That evidence remains authority-free: the signature does not by
-itself prove protected key custody or external anti-rollback.
+policy, Worker-ledger, and external-anchor verification record together with
+the caller's fresh challenge. The sole V2 record embeds the complete signed
+receipt retained by the reacquired Worker record. The client requires both
+signing keys to equal its pinned policy keys, the challenge to match, every
+nested coordinate to equal its original expected carriage, and the receipt to
+be a proposed-position advance for the exact reconstructed compiler
+transaction. That evidence remains authority-free: it proves the external
+transition committed, but does not by itself prove protected key custody or
+that the receipt's proposed head is still externally current.
 The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
@@ -148,7 +152,7 @@ The session accepts exactly seven operation kinds:
 | `Publish` | Matching `Issued`, or the immediately acknowledged request | Worker commit followed by issuer ACK; terminal exact ACK |
 | `Cancel` | Any valid state | Current rollback position; terminal without mutation |
 | `Recover` | Requested compiler subject | Strict post-fsync reacquisition and complete carriage when the exact current record exists; terminal without mutation. If no Worker record exists yet, return nonterminal `ReceiptAbsent`. A different current subject fails closed. |
-| `VerifyCurrent` | Complete expected receipt carriage and fresh 32-byte challenge | Independently reread the canonical Worker record, reconstruct and byte-compare the complete carriage under the protected policy, and sign the exact challenge-bound policy/ledger verification evidence; terminal without mutation. |
+| `VerifyCurrent` | Complete expected receipt carriage and fresh 32-byte challenge | Independently reread the canonical Worker V2 record, reconstruct and byte-compare the complete carriage, re-verify its retained external-anchor receipt, and sign the exact challenge-bound policy/ledger/anchor evidence; terminal without mutation. |
 
 Each request commits to the caller-pinned policy identity and a
 domain-separated identity over its complete canonical bytes. Prepare names the
@@ -181,7 +185,7 @@ diagnostic protocol and keeps crash recovery authoritative.
 | Issued response | 744 |
 | Published response | 456 |
 | Recovered response | 2,250 |
-| VerifiedCurrent response | 696 |
+| VerifiedCurrent response | 1,256 |
 
 The implementation uses fixed stack storage sized to the maximum request and
 response. The complete publication ACK or recovered 2,090-byte carriage remains
@@ -230,16 +234,18 @@ of the Worker V2 record's embedded signed external-anchor receipt, then
 reconstructs the complete carriage and requires both structural equality and
 byte-for-byte equality with the request. It derives domain-separated policy and
 Worker-ledger verification identities from protected policy bytes, the exact
-subject and carriage, and the complete reacquired Worker record. The 352-byte
-result repeats
-all relevant coordinates and has its own canonical identity. The service signs
-that complete result together with the caller's fresh challenge in a 536-byte
-attestation. The nested verification identities remain deterministic evidence
-labels rather than rollback authority; the signature authenticates only the
-pinned-key response and exact challenge. Protected key custody and external
-monotonic currentness remain separate joins. The V1 result binds the receipt
-transitively through the complete Worker-record identity but does not yet expose
-it for independent client verification.
+subject and carriage, and the complete reacquired Worker record. The sole
+912-byte V2 result repeats every relevant coordinate, embeds the policy-pinned
+external-anchor key and complete 528-byte signed receipt, and has its own
+canonical identity. The service signs that complete result together with the
+caller's fresh challenge in a 1,096-byte V2 attestation. Issuance and client
+verification reconstruct the exact compiler anchor transaction from the
+original expected carriage and require the embedded receipt to be an exact
+signed proposed-position advance under the pinned anchor key. The nested
+verification identities remain deterministic evidence labels rather than
+authority. The receipt proves that exact transition committed; protected key
+custody and a fresh external query proving that its proposed head remains
+current are separate joins.
 
 `fe2o3-compiler-execution-client` implements the corresponding single-session
 machine. It attempts Recover first, correlates every response to the exact
@@ -249,8 +255,10 @@ request from authenticated receipt fields before Publish. Recovery-only clients
 send Cancel after ReceiptAbsent so the service terminates without mutation.
 Verification-only clients generate a fresh challenge, use one terminal
 VerifyCurrent exchange, verify the Ed25519 signature under the pinned policy
-key, and compare every returned carriage coordinate with the original expected
-carriage.
+key, compare every returned coordinate with the original expected carriage,
+and independently re-verify the embedded external receipt and exact transaction
+under the policy-pinned anchor key. No response-derived verification clone is
+used as the expected value.
 
 The same crate now implements the direct-parent channel handoff. The socketpair
 is created after fork inside the selected child, its client endpoint is installed
@@ -288,7 +296,9 @@ machine-effect evidence and close `CompilerExecutionProvenance`.
 
 The protocol suite mutates every byte of all seven request and eight response
 forms and checks exact lengths, canonical re-encoding, nested pairing, policy,
-position, and terminal identities. The service suite covers exact packet
+position, terminal identities, the complete V2 receipt, wrong anchor keys,
+wrong compiler transactions, and prior-position substitution. The service suite
+covers exact packet
 boundaries, oversize and ancillary rejection, deadline and pidfd cancellation,
 blocked response delivery, all operation transitions and exact replay, complete
 carriage recovery, exact-current verification, stale carriage rejection,
