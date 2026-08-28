@@ -36,11 +36,12 @@ pub use compiler_execution_attestation::{
     CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
 };
 pub use compiler_execution_receipt_publication::{
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
-    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1,
-    CompilerExecutionReceiptPublicationAckIdentityV1, CompilerExecutionReceiptPublicationAckV1,
-    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationIdentityV1,
-    CompilerExecutionReceiptPublicationV1,
+    COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionReceiptCarriageIdentityV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckIdentityV1,
+    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
+    CompilerExecutionReceiptPublicationIdentityV1, CompilerExecutionReceiptPublicationV1,
 };
 pub use compiler_execution_service::{
     COMPILER_EXECUTION_SERVICE_CONTROL_REQUEST_BYTES_V1,

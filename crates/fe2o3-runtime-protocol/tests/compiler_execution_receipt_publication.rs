@@ -4,12 +4,13 @@ use fe2o3_artifact_transaction::{
     INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1, InertCompilerExecutionSubjectV1,
 };
 use fe2o3_runtime_protocol::{
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestV1,
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
-    CompilerExecutionReceiptPublicationV1,
+    CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
+    CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
 use sha2::{Digest, Sha256};
 
@@ -18,6 +19,7 @@ const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identit
 
 struct Fixture {
     policy: CompilerExecutionIssuerPolicyV1,
+    request: CompilerExecutionAttestationRequestV1,
     receipt: CompilerExecutionAttestationReceiptV1,
 }
 
@@ -43,13 +45,105 @@ impl Fixture {
         let request = CompilerExecutionAttestationRequestV1::new(challenge, subject).unwrap();
         let receipt =
             CompilerExecutionAttestationReceiptV1::issue(&policy, &request, &signing_key).unwrap();
-        Self { policy, receipt }
+        Self {
+            policy,
+            request,
+            receipt,
+        }
     }
 
     fn publication(&self) -> CompilerExecutionReceiptPublicationV1 {
         CompilerExecutionReceiptPublicationV1::new([0x81; 32], [0x82; 32], self.receipt.clone())
             .unwrap()
     }
+
+    fn carriage(&self) -> CompilerExecutionReceiptCarriageV1 {
+        let publication = self.publication();
+        let acknowledgment =
+            CompilerExecutionReceiptPublicationAckV1::new(&publication, [0x83; 32]).unwrap();
+        CompilerExecutionReceiptCarriageV1::new(
+            self.policy.clone(),
+            self.request.clone(),
+            publication,
+            acknowledgment,
+        )
+        .unwrap()
+    }
+}
+
+#[test]
+fn complete_carriage_round_trips_without_granting_authority() {
+    assert_eq!(COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1, 2058);
+    let fixture = Fixture::new(0x51);
+    let carriage = fixture.carriage();
+    let decoded = CompilerExecutionReceiptCarriageV1::decode(carriage.canonical_bytes()).unwrap();
+    assert_eq!(decoded, carriage);
+    assert_eq!(decoded.policy(), &fixture.policy);
+    assert_eq!(decoded.request(), &fixture.request);
+    assert_eq!(decoded.publication(), &fixture.publication());
+    decoded
+        .acknowledgment()
+        .matches_publication(decoded.publication())
+        .unwrap();
+    assert!(
+        decoded
+            .identity()
+            .matches_canonical_bytes(decoded.canonical_bytes())
+    );
+    assert!(decoded.requires_protected_policy_verification());
+    assert!(!decoded.grants_compiler_authority());
+    assert!(!decoded.grants_load_authority());
+    assert!(!decoded.grants_launch_authority());
+}
+
+#[test]
+fn every_carriage_byte_mutation_and_wrong_length_rejects() {
+    let carriage = Fixture::new(0x51).carriage();
+    assert_mutations_rejected(carriage.canonical_bytes(), |bytes| {
+        CompilerExecutionReceiptCarriageV1::decode(bytes).is_err()
+    });
+    assert_wrong_lengths(carriage.canonical_bytes(), |bytes| {
+        CompilerExecutionReceiptCarriageV1::decode(bytes).is_err()
+    });
+}
+
+#[test]
+fn carriage_rejects_independently_valid_nested_substitutions() {
+    let first = Fixture::new(0x51);
+    let second = Fixture::new(0x61);
+    let first_publication = first.publication();
+    let first_ack =
+        CompilerExecutionReceiptPublicationAckV1::new(&first_publication, [0x83; 32]).unwrap();
+    assert!(
+        CompilerExecutionReceiptCarriageV1::new(
+            second.policy.clone(),
+            first.request.clone(),
+            first_publication.clone(),
+            first_ack.clone(),
+        )
+        .is_err()
+    );
+    assert!(
+        CompilerExecutionReceiptCarriageV1::new(
+            first.policy.clone(),
+            second.request.clone(),
+            first_publication.clone(),
+            first_ack.clone(),
+        )
+        .is_err()
+    );
+    let second_publication = second.publication();
+    let second_ack =
+        CompilerExecutionReceiptPublicationAckV1::new(&second_publication, [0x93; 32]).unwrap();
+    assert!(
+        CompilerExecutionReceiptCarriageV1::new(
+            first.policy.clone(),
+            first.request.clone(),
+            first_publication,
+            second_ack,
+        )
+        .is_err()
+    );
 }
 
 #[test]

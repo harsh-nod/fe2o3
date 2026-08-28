@@ -41,6 +41,13 @@ prove that its named Worker record is durable. Only independent protected-ledger
 reacquisition may construct the move-only result that allows the issuer to
 discard an issued receipt.
 
+The 2,058-byte carriage record preserves the complete policy, request, sidecar,
+and ACK without projection. Construction and decoding verify every nested
+record, the signature against the carried policy and request, and the ACK
+relationship. The carried policy is still inert input: a production verifier
+must compare it with protected configuration and enforce rollback currentness
+before granting compiler authority.
+
 ## Compiler-execution service V1
 
 The packet codec carries the attestation lifecycle over one connected Unix

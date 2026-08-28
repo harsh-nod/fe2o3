@@ -5,9 +5,11 @@ use std::{error::Error, fmt};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationReceiptIdentityV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionIssuerPolicyIdentityV1,
+    COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,
+    COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1, COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1,
+    CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptIdentityV1,
+    CompilerExecutionAttestationReceiptV1, CompilerExecutionAttestationRequestV1,
+    CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
 };
 
 const SHA256_BYTES: usize = 32;
@@ -16,8 +18,10 @@ const VERSION_V1: u16 = 1;
 
 const PUBLICATION_MAGIC: [u8; 8] = *b"F2O3CES1";
 const ACK_MAGIC: [u8; 8] = *b"F2O3CEA1";
+const CARRIAGE_MAGIC: [u8; 8] = *b"F2O3CRG1";
 const PUBLICATION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-PUBLICATION/V1\0";
 const ACK_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-PUBLICATION-ACK/V1\0";
+const CARRIAGE_IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-RECEIPT-CARRIAGE/V1\0";
 
 const PUBLICATION_PREIMAGE_BYTES: usize =
     HEADER_BYTES + (4 * SHA256_BYTES) + COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1;
@@ -29,6 +33,15 @@ const ACK_PREIMAGE_BYTES: usize = HEADER_BYTES + (6 * SHA256_BYTES) + 8 + SHA256
 /// Exact canonical byte length of one compiler-execution receipt publication acknowledgment V1.
 pub const COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1: usize =
     ACK_PREIMAGE_BYTES + SHA256_BYTES;
+
+const CARRIAGE_PREIMAGE_BYTES: usize = HEADER_BYTES
+    + COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1
+    + COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1
+    + COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1
+    + COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1;
+/// Exact canonical byte length of one complete compiler-execution receipt carriage V1.
+pub const COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1: usize =
+    CARRIAGE_PREIMAGE_BYTES + SHA256_BYTES;
 
 macro_rules! identity_type {
     ($name:ident, $domain:ident, $size:ident, $preimage:ident) => {
@@ -72,6 +85,12 @@ identity_type!(
     ACK_IDENTITY_DOMAIN,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
     ACK_PREIMAGE_BYTES
+);
+identity_type!(
+    CompilerExecutionReceiptCarriageIdentityV1,
+    CARRIAGE_IDENTITY_DOMAIN,
+    COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
+    CARRIAGE_PREIMAGE_BYTES
 );
 
 impl CompilerExecutionReceiptPublicationIdentityV1 {
@@ -526,6 +545,169 @@ impl fmt::Debug for CompilerExecutionReceiptPublicationAckV1 {
                 &self.worker_ledger_record_identity,
             )
             .field("sequence", &self.sequence)
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Complete authority-free evidence needed to verify one published compiler receipt.
+///
+/// The record carries the caller-pinned policy, complete signed request, issuer publication
+/// sidecar, and Worker publication ACK without projecting or reinterpreting any nested field. Its
+/// constructor verifies the receipt against the carried policy and request and checks the exact
+/// ACK relationship. A consumer must still compare the policy with protected configuration and
+/// atomically enforce rollback before constructing compiler authority.
+#[derive(Clone, Eq, PartialEq)]
+pub struct CompilerExecutionReceiptCarriageV1 {
+    policy: CompilerExecutionIssuerPolicyV1,
+    request: CompilerExecutionAttestationRequestV1,
+    publication: CompilerExecutionReceiptPublicationV1,
+    acknowledgment: CompilerExecutionReceiptPublicationAckV1,
+    identity: CompilerExecutionReceiptCarriageIdentityV1,
+    canonical_bytes: [u8; COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1],
+}
+
+impl CompilerExecutionReceiptCarriageV1 {
+    /// Constructs one exact internally consistent carriage record.
+    pub fn new(
+        policy: CompilerExecutionIssuerPolicyV1,
+        request: CompilerExecutionAttestationRequestV1,
+        publication: CompilerExecutionReceiptPublicationV1,
+        acknowledgment: CompilerExecutionReceiptPublicationAckV1,
+    ) -> Result<Self, CompilerExecutionReceiptPublicationErrorV1> {
+        publication.receipt().clone().verify(
+            &policy,
+            &request,
+            request.challenge().prior_rollback_anchor(),
+        )?;
+        acknowledgment.matches_publication(&publication)?;
+
+        let mut canonical_bytes = [0_u8; COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1];
+        let mut offset = encode_header(&mut canonical_bytes, CARRIAGE_MAGIC);
+        put(&mut canonical_bytes, &mut offset, policy.canonical_bytes());
+        put(&mut canonical_bytes, &mut offset, request.canonical_bytes());
+        put(
+            &mut canonical_bytes,
+            &mut offset,
+            publication.canonical_bytes(),
+        );
+        put(
+            &mut canonical_bytes,
+            &mut offset,
+            acknowledgment.canonical_bytes(),
+        );
+        debug_assert_eq!(offset, CARRIAGE_PREIMAGE_BYTES);
+        let identity = CompilerExecutionReceiptCarriageIdentityV1(derive_identity(
+            CARRIAGE_IDENTITY_DOMAIN,
+            &canonical_bytes[..offset],
+        ));
+        put(&mut canonical_bytes, &mut offset, identity.as_bytes());
+        debug_assert_eq!(offset, canonical_bytes.len());
+
+        Ok(Self {
+            policy,
+            request,
+            publication,
+            acknowledgment,
+            identity,
+            canonical_bytes,
+        })
+    }
+
+    /// Strictly decodes every complete nested record and rechecks all relationships.
+    pub fn decode(bytes: &[u8]) -> Result<Self, CompilerExecutionReceiptPublicationErrorV1> {
+        require_length(
+            bytes,
+            COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
+            "compiler receipt carriage",
+        )?;
+        let mut reader = Reader::new(bytes);
+        decode_header(
+            &mut reader,
+            CARRIAGE_MAGIC,
+            bytes.len(),
+            "compiler receipt carriage",
+        )?;
+        let policy = CompilerExecutionIssuerPolicyV1::decode(
+            reader.take(COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1)?,
+        )?;
+        let request = CompilerExecutionAttestationRequestV1::decode(
+            reader.take(COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1)?,
+        )?;
+        let publication = CompilerExecutionReceiptPublicationV1::decode(
+            reader.take(COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1)?,
+        )?;
+        let acknowledgment = CompilerExecutionReceiptPublicationAckV1::decode(
+            reader.take(COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1)?,
+        )?;
+        let declared_identity = reader.fixed::<SHA256_BYTES>()?;
+        if !reader.is_empty() {
+            return Err(CompilerExecutionReceiptPublicationErrorV1::TrailingBytes);
+        }
+        let decoded = Self::new(policy, request, publication, acknowledgment)?;
+        if declared_identity != *decoded.identity.as_bytes()
+            || decoded.canonical_bytes.as_slice() != bytes
+        {
+            return Err(
+                CompilerExecutionReceiptPublicationErrorV1::IdentityMismatch(
+                    "compiler receipt carriage",
+                ),
+            );
+        }
+        Ok(decoded)
+    }
+
+    pub const fn policy(&self) -> &CompilerExecutionIssuerPolicyV1 {
+        &self.policy
+    }
+
+    pub const fn request(&self) -> &CompilerExecutionAttestationRequestV1 {
+        &self.request
+    }
+
+    pub const fn publication(&self) -> &CompilerExecutionReceiptPublicationV1 {
+        &self.publication
+    }
+
+    pub const fn acknowledgment(&self) -> &CompilerExecutionReceiptPublicationAckV1 {
+        &self.acknowledgment
+    }
+
+    pub const fn identity(&self) -> CompilerExecutionReceiptCarriageIdentityV1 {
+        self.identity
+    }
+
+    pub const fn canonical_bytes(&self) -> &[u8; COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1] {
+        &self.canonical_bytes
+    }
+
+    /// The carried policy must still be compared with protected verifier configuration.
+    pub const fn requires_protected_policy_verification(&self) -> bool {
+        true
+    }
+
+    /// Carriage bytes alone do not establish durable rollback currentness.
+    pub const fn grants_compiler_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Debug for CompilerExecutionReceiptCarriageV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompilerExecutionReceiptCarriageV1")
+            .field("policy_identity", &self.policy.identity())
+            .field("request_identity", &self.request.identity())
+            .field("publication_identity", &self.publication.identity())
+            .field("acknowledgment_identity", &self.acknowledgment.identity())
             .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
