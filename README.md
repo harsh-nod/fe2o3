@@ -146,7 +146,14 @@ canonical outer handoff binds that exact direct parent to the sealed launch
 manifest, and the client can transfer its service peer and pidfd over one
 authenticated `SOCK_SEQPACKET` connection to the distinct-UID supervisor. The
 supervisor repeats direct-parent `SO_PEERCRED`, policy, rustc peer credentials,
-pidfd target/liveness, descriptor identity, and alias checks. The launch
+pidfd target/liveness, descriptor identity, and alias checks. It now consumes
+one accepted handoff into an exact ten-source prepared launch for destination
+FDs `0..=9`, with distinct isolated stdio/readiness pipes, cloned authority
+descriptors, and a canonical 704-byte manifest bound to the supervisor PID and
+procfs start time. That manifest is an anonymous read-only mode-`0400` memfd
+with complete content seals; every object, byte, access mode, capability, live
+client, and non-aliasing relation is revalidated without exposing descriptor
+custody. The launch
 manifest binds the exact rustc PID/UID/GID to the pinned policy, and a
 descriptor-only musl-static issuer
 enters through a syscall-only shim that restores nondumpability before musl or
@@ -160,10 +167,10 @@ against that sealed policy before copying both into distinct read-only
 mode-0555 memfds with complete content and executable seals. The resulting
 move-only program is now consumed into one prepared supervisor together with
 the canonical signing-key capability, dedicated non-root UID/GID profile, and
-an exact service-owned mode-0700 root. Accepted handoffs remain move-only and
-expose no descriptor, key, signing operation, or launch API. Complete child
-credential/capability/namespace enforcement, ten-entry manifest construction,
-`clone3` launch, and readiness consumption remain; the pinned policy has an
+an exact service-owned mode-0700 root. Accepted handoffs and prepared launches
+remain move-only and expose no descriptor, key, signing operation, or process
+API. Complete child credential/capability/namespace enforcement, `clone3`
+launch, readiness consumption, cancellation, and reaping remain; the pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
 supervisor launch and inspection policy and the Worker V3 authority join remain
 absent. A fixed

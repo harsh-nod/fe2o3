@@ -1080,6 +1080,16 @@ fn inspect_process_start_time_ticks(pid: u32) -> Result<u64, ProtectedServiceAdm
     parse_process_start_time_ticks(&contents, pid)
 }
 
+/// Returns the current process's exact Linux procfs `starttime` tick field.
+///
+/// The observation first proves that `/proc/self` and `/proc/<getpid>` name the
+/// same process entry in the selected procfs mount, then applies the same
+/// bounded and strict parser used for retained pidfd identities. The result is
+/// inert process identity data and grants no process or descriptor authority.
+pub fn current_process_start_time_ticks_v1() -> Result<u64, ProtectedServiceAdmissionErrorV1> {
+    inspect_process_start_time_ticks(std::process::id())
+}
+
 fn parse_process_start_time_ticks(
     contents: &[u8],
     expected_pid: u32,
@@ -1689,6 +1699,10 @@ mod tests {
     fn live_current_process_pidfd_is_admitted() {
         let identity = live_identity(current_process_identity());
         assert_ne!(identity.start_time_ticks, 0);
+        assert_eq!(
+            current_process_start_time_ticks_v1().unwrap(),
+            identity.start_time_ticks
+        );
         identity.validate_liveness().unwrap();
         let debug = format!("{identity:?}");
         assert!(debug.contains("authority: \"none\""));

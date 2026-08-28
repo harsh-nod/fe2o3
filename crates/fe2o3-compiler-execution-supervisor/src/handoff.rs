@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, IoSliceMut};
 use std::mem::MaybeUninit;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_broker_authority_service::{
@@ -322,8 +322,8 @@ fn control_peer_identity(
     .map_err(|_| ProtectedIssuerHandoffErrorV1::SubmitterCredentialsMismatch)
 }
 
-fn validate_service_peer(
-    peer: &OwnedFd,
+pub(super) fn validate_service_peer(
+    peer: &impl AsFd,
     expected: CompilerExecutionClientProcessIdentityV1,
 ) -> Result<(), ProtectedIssuerHandoffErrorV1> {
     if !has_cloexec(peer)? {
@@ -358,7 +358,7 @@ fn validate_service_peer(
     Ok(())
 }
 
-fn has_cloexec(descriptor: &OwnedFd) -> Result<bool, ProtectedIssuerHandoffErrorV1> {
+fn has_cloexec(descriptor: &impl AsFd) -> Result<bool, ProtectedIssuerHandoffErrorV1> {
     let flags = rustix::io::fcntl_getfd(descriptor).map_err(io::Error::from)?;
     Ok(flags.contains(rustix::io::FdFlags::CLOEXEC))
 }
@@ -371,7 +371,7 @@ struct DescriptorSnapshotV1 {
 }
 
 fn descriptor_snapshot(
-    descriptor: &OwnedFd,
+    descriptor: &impl AsFd,
 ) -> Result<DescriptorSnapshotV1, ProtectedIssuerHandoffErrorV1> {
     let stat = rustix::fs::fstat(descriptor).map_err(io::Error::from)?;
     Ok(DescriptorSnapshotV1 {

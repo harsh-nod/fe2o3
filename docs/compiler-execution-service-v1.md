@@ -19,10 +19,13 @@ prepared-supervisor owner. A canonical outer handoff binds the child-reported
 direct Cargo parent PID/UID/GID to the complete launch manifest. The client
 transfers that record plus exactly the rustc service peer and pidfd over an
 authenticated control connection; the supervisor independently admits and
-retains all three process identities and descriptors. Production must still
-establish and observe the complete child credential/capability/namespace
-profile, map the ten source descriptors through the existing static pre-exec
-launcher, and consume readiness under pidfd lifecycle ownership.
+retains all three process identities and descriptors. It now consumes that
+handoff into a sealed 704-byte static pre-exec manifest and an exact ten-source
+table for destinations `0..=9`, retaining distinct stdout, stderr, and
+readiness readers. Production must still establish and observe the complete
+child credential/capability/namespace profile, install those prepared sources
+at launcher FDs `200..209`, and consume readiness under pidfd lifecycle
+ownership.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
 machine exist, but protected-supervisor integration, backend acquisition,
@@ -37,8 +40,9 @@ custody. The signing-key capability additionally requires anonymous
 service-owned read-only custody, zeroizes caller seed buffers, binds the public
 key to the policy, and exposes neither bytes nor a signing operation. Policy FD
 202 is reserved for rustc; launch-manifest FD 8 and signing-key FD 7 are
-reserved for the protected issuer. Cargo/backend and protected-supervisor
-wiring still need to consume them.
+reserved for the protected issuer. The prepared supervisor now materializes
+both issuer descriptors; Cargo/backend submission and live process wiring still
+need to consume the resulting service.
 
 ## Transport And Ownership
 
@@ -185,8 +189,11 @@ direct-parent/manifest packet and transfer exactly the service peer and pidfd to
 an authenticated distinct-UID supervisor control connection. The supervisor
 requires its observed control `SO_PEERCRED` to equal the canonical direct
 parent, then repeats policy, service-peer, pidfd target/liveness, socket shape,
-descriptor identity, and alias checks. The binding wrapper does not yet invoke
-this path, and the supervisor does not yet launch the issuer.
+descriptor identity, and alias checks. It can consume the accepted value into
+the exact sealed static-launcher input set, repeating those checks together with
+all source-object, capability, parent, pipe, and canonical-manifest checks. The
+binding wrapper does not yet invoke this path, and the supervisor does not yet
+launch the issuer.
 
 ## Authority Limit
 
@@ -218,6 +225,8 @@ supervisor image-admission suite independently qualifies exact source
 measurements, static-profile validation, anonymous read-only executable memfd
 custody, complete content/exec seals, caller-policy agreement, mutation and
 substitution rejection, and move-only descriptor hiding on Linux and MI300X.
-The suite also qualifies authority binding and same-process hostile handoff
-cases. A real distinct-UID launcher, child-profile enforcement, readiness, and
+The suite also qualifies authority binding, same-process hostile handoff cases,
+the exact ten-entry prepared table, manifest seals and canonical bytes, parent
+continuity, source and manifest substitution, and post-preparation rustc death.
+A real distinct-UID launcher, child-profile enforcement, readiness, and
 lifecycle qualification remain pending.
