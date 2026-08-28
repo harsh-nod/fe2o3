@@ -66,9 +66,15 @@ authority-binding transition is now complete, as is authenticated receipt of
 the direct-parent rustc handoff. The supervisor also materializes the exact
 ten-source table, distinct standard-stream and readiness pipes, cloned
 authority descriptors, and a sealed canonical static pre-exec manifest bound
-to its PID and process start time. The actual `clone3` issuer launch, complete
-child-profile observation, readiness admission, cancellation, and reaping
-remain pending.
+to its PID and process start time. That state is now consumed by an exact
+`clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` launch. A direct-syscall gate
+self-checks the inherited profile and parent-death containment while the
+parent independently revalidates the complete profile, namespaces, authority
+objects, and live rustc. The supervisor owns static-launcher exec, exact
+PID/manifest/policy-bound readiness, pidfd cancellation, restart-safe fresh
+launch, and exactly-once synchronous or bounded deferred reaping. Deployment
+still needs the distinct-UID service entrypoint that establishes the inherited
+profile and wires this lifecycle to Cargo.
 
 A sealed-static issuer has no user-space DSO inventory. Its runtime policy
 therefore uses SHA-256 and length of the fixed canonical
@@ -124,8 +130,9 @@ over the already admitted `SOCK_SEQPACKET` connection and makes the direct
 transition methods private. The descriptor-only musl-static issuer entrypoint
 now admits the exact policy, launch manifest, client pidfd, peer, root, key, and
 readiness pipe. It emits readiness only after complete admission and durable
-recovery. The remaining issuer deployment work is the production distinct-UID
-supervisor launch and inspection policy that provisions those descriptors.
+recovery. The supervisor now provisions, launches, inspects, and owns those
+descriptors and that exact child. The remaining issuer deployment work is the
+production distinct-UID service entrypoint and Cargo-side acquisition path.
 Until that complete chain lands, `CompilerExecutionProvenance` remains open.
 
 ## Qualification

@@ -47,8 +47,32 @@ capability, access-mode, object-snapshot, byte, parent-continuity, and role
 non-aliasing checks. The retained stdout, stderr, and readiness readers remain
 private, and no prepared value exposes a descriptor.
 
-The supervisor still exposes no process-launch method and does not claim the
-complete child profile. The next checkpoint must install the prepared objects
-at launcher FDs `198`, `199`, and `200..209`, launch with
-`clone3(CLONE_PIDFD)`, enforce and observe the complete child profile, and own
-readiness, cancellation, restart, and exactly-once reaping.
+Production launch consumes that prepared state through one `clone3` call with
+exactly `CLONE_PIDFD | CLONE_CLEAR_SIGHAND` and `SIGCHLD`. Every launcher input
+is first duplicated above FD 215. The direct-syscall child resets signals,
+arms and verifies `PDEATHSIG=SIGKILL`, self-checks the inherited service
+profile, reports through a private gate, and cannot execute until the parent
+independently rechecks the profile, all ten namespaces, and the complete
+prepared authority set. It then isolates standard streams, installs the
+manifest at FD 198, issuer at FD 199, sources at FDs `200..209`, and executes
+the authenticated static launcher with one fixed argument and an empty
+environment.
+
+The move-only result has two states. `LaunchedProtectedIssuerV1` owns the
+atomically returned close-on-exec pidfd but grants no issuer authority.
+`await_readiness` accepts exactly one canonical record followed by EOF, binds
+it to that PID, launch manifest, and policy, and returns
+`ReadyProtectedIssuerV1` only while the same pidfd child is live. Wrong,
+truncated, extended, stale, or timed-out readiness fails closed. Explicit
+cancellation uses `pidfd_send_signal`; every synchronous path reaps once with
+`waitid(P_PIDFD)`, and dropped live custody transfers to a fixed 64-slot
+reaper. Abrupt supervisor death is covered both by the bootstrap gate and the
+static launcher's parent identity check.
+
+The launcher deliberately inherits an already established profile instead of
+performing privileged credential transitions after `clone3`. Deployment must
+therefore start the supervisor under the dedicated UID/GID with empty groups
+and capabilities, exact locked securebits, `no_new_privs`, nondumpability,
+zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.
+Cargo-wrapper service acquisition and the real deployed distinct-UID
+supervisor entrypoint remain pending.

@@ -79,6 +79,13 @@ manifest/executable aliasing, both descriptor-closure implementations, and a
 target that successfully crosses `execveat`, reports readiness, then is killed
 and reaped after its direct parent exits.
 
+The repository-owned `src/layout.ld` fixes the sealed-static ELF layout used
+by supervisor admission: one read-only `PT_PHDR`, a read-only header load,
+separate RX text, read-only data, RW non-executable data, and a non-executable
+stack. The build test requires exactly one `PT_PHDR` and rejects a writable and
+executable load segment, so the generated production launcher cannot silently
+drift back to the linker default that supervisor admission rejects.
+
 ## Deliberate limits
 
 This foundation does not authenticate the supervisor, hash image contents,

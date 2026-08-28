@@ -1,17 +1,18 @@
 use std::fs::{self, OpenOptions};
-use std::io::IoSlice;
+use std::io::{IoSlice, Write as _};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_compiler_execution_client::PendingCompilerExecutionChildChannelV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionSupervisorHandoffV1,
+    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyV1,
+    CompilerExecutionSupervisorHandoffV1,
 };
 use rustix::net::{
     AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
@@ -28,6 +29,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
+        Self::with_code(name, &[0xc3])
+    }
+
+    fn with_code(name: &str, code: &[u8]) -> Self {
         let root = std::env::temp_dir().join(format!(
             "fe2o3-supervisor-image-{name}-{}",
             std::process::id()
@@ -35,7 +40,7 @@ impl Fixture {
         fs::create_dir_all(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let image = root.join("entry");
-        let bytes = static_elf();
+        let bytes = static_elf_with_code(code);
         fs::write(&image, &bytes).unwrap();
         fs::set_permissions(&image, fs::Permissions::from_mode(0o555)).unwrap();
         sealed_static_application_identity_v1(&bytes).unwrap();
@@ -63,12 +68,13 @@ impl Fixture {
     }
 }
 
-fn static_elf() -> Vec<u8> {
+fn static_elf_with_code(code: &[u8]) -> Vec<u8> {
     const HEADER: usize = 64;
     const PROGRAM: usize = 56;
     const PROGRAMS: usize = 4;
     const CODE_OFFSET: usize = 0x1000;
-    let mut bytes = vec![0_u8; CODE_OFFSET + 1];
+    assert!(!code.is_empty());
+    let mut bytes = vec![0_u8; CODE_OFFSET + code.len()];
     bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
     bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
     bytes[18..20].copy_from_slice(&62_u16.to_le_bytes());
@@ -114,8 +120,8 @@ fn static_elf() -> Vec<u8> {
             flags: 5,
             offset: CODE_OFFSET as u64,
             virtual_address: 0x401000,
-            file_size: 1,
-            memory_size: 1,
+            file_size: code.len() as u64,
+            memory_size: code.len() as u64,
             alignment: 0x1000,
         },
     );
@@ -132,8 +138,41 @@ fn static_elf() -> Vec<u8> {
             alignment: 16,
         },
     );
-    bytes[CODE_OFFSET] = 0xc3;
+    bytes[CODE_OFFSET..].copy_from_slice(code);
     bytes
+}
+
+fn launched_probe_code(close_readiness: bool) -> Vec<u8> {
+    // write(1, "LAUNCHED\n", 9), optionally close(209), then pause forever.
+    let mut code = vec![
+        0xb8, 1, 0, 0, 0, // mov eax, SYS_write
+        0xbf, 1, 0, 0, 0, // mov edi, 1
+        0x48, 0x8d, 0x35, 0, 0, 0, 0, // lea rsi, [rip + marker]
+        0xba, 9, 0, 0, 0, // mov edx, 9
+        0x0f, 0x05, // syscall
+    ];
+    if close_readiness {
+        for descriptor in [9_u32, 209] {
+            code.extend_from_slice(&[
+                0xb8, 3, 0, 0, 0, // mov eax, SYS_close
+                0xbf,
+            ]);
+            code.extend_from_slice(&descriptor.to_le_bytes());
+            code.extend_from_slice(&[0x0f, 0x05]); // syscall
+        }
+    }
+    let pause_offset = code.len();
+    code.extend_from_slice(&[
+        0xb8, 34, 0, 0, 0, // mov eax, SYS_pause
+        0x0f, 0x05, // syscall
+        0xeb, 0xf7, // jump back to mov eax
+    ]);
+    let marker_offset = code.len();
+    code.extend_from_slice(b"LAUNCHED\n");
+    let displacement = i32::try_from(marker_offset).unwrap() - 17;
+    code[13..17].copy_from_slice(&displacement.to_le_bytes());
+    assert_eq!(pause_offset + 9, marker_offset);
+    code
 }
 
 struct ProgramFixture {
@@ -254,7 +293,11 @@ fn live_launch() -> (
     fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1,
 ) {
     let mut command = Command::new("/bin/sleep");
-    command.arg("30");
+    command
+        .arg("30")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
     let child = command.spawn().unwrap();
     let launch = pending.finish(child.id(), Duration::from_secs(2)).unwrap();
@@ -984,4 +1027,274 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     ));
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+fn read_exact_nonblocking(descriptor: &OwnedFd, expected: &[u8]) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut observed = vec![0_u8; expected.len()];
+    let mut used = 0;
+    while used < observed.len() {
+        match rustix::io::read(descriptor, &mut observed[used..]) {
+            Ok(0) => panic!("probe stdout ended before its exact marker"),
+            Ok(count) => used += count,
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                assert!(Instant::now() < deadline, "probe stdout timed out");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("probe stdout failed: {error}"),
+        }
+    }
+    assert_eq!(observed, expected);
+}
+
+fn assert_reaped(pid: rustix::process::Pid) {
+    assert!(matches!(
+        rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
+        Err(rustix::io::Errno::CHILD)
+    ));
+}
+
+#[test]
+fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
+    let fixture = Fixture::with_code("pidfd-ready", &launched_probe_code(true));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+    let launch_manifest = prepared.service_manifest().clone();
+
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    assert!(launched.is_live().unwrap());
+    let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+    read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
+
+    let readiness =
+        CompilerExecutionServiceReadyV1::new(launched.pid(), &launch_manifest, supervisor.policy())
+            .unwrap();
+    assert_eq!(
+        rustix::io::write(&injected_readiness, readiness.canonical_bytes()).unwrap(),
+        readiness.canonical_bytes().len()
+    );
+    drop(injected_readiness);
+    let ready = launched.await_readiness(Duration::from_secs(2)).unwrap();
+    assert_eq!(ready.readiness(), &readiness);
+    ready.revalidate().unwrap();
+    let rendered = format!("{ready:?}");
+    assert!(rendered.contains(&format!("pid: {}", pid.as_raw_pid())));
+    assert!(!rendered.contains("fd:"));
+    ready.cancel().unwrap();
+    assert_reaped(pid);
+
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
+fn readiness_pid_substitution_and_trailing_bytes_fail_closed() {
+    for trailing in [false, true] {
+        let name = if trailing {
+            "readiness-trailing"
+        } else {
+            "readiness-pid-substitution"
+        };
+        let fixture = Fixture::with_code(name, &launched_probe_code(true));
+        let Some(supervisor) = bound_supervisor(&fixture) else {
+            return;
+        };
+        let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+        let prepared = supervisor.prepare_launch(accepted).unwrap();
+        let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+        let launch_manifest = prepared.service_manifest().clone();
+        let launched = supervisor
+            .launch_inner::<false>(prepared, Duration::from_secs(2))
+            .unwrap();
+        let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+        let readiness_pid = if trailing {
+            launched.pid()
+        } else {
+            launched.pid().checked_add(1).unwrap()
+        };
+        let readiness = CompilerExecutionServiceReadyV1::new(
+            readiness_pid,
+            &launch_manifest,
+            supervisor.policy(),
+        )
+        .unwrap();
+        assert_eq!(
+            rustix::io::write(&injected_readiness, readiness.canonical_bytes()).unwrap(),
+            readiness.canonical_bytes().len()
+        );
+        if trailing {
+            assert_eq!(rustix::io::write(&injected_readiness, &[0x7f]).unwrap(), 1);
+        }
+        drop(injected_readiness);
+        let error = launched
+            .await_readiness(Duration::from_secs(2))
+            .unwrap_err();
+        if trailing {
+            assert!(matches!(
+                error,
+                ProtectedIssuerLaunchErrorV1::ReadinessTrailingBytes
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                ProtectedIssuerLaunchErrorV1::ReadinessMismatch
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        assert_reaped(pid);
+        rustc_child.kill().unwrap();
+        rustc_child.wait().unwrap();
+    }
+}
+
+#[test]
+fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
+    let fixture = Fixture::with_code("readiness-timeout", &launched_probe_code(false));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut first_rustc, _first_control, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    let first_pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+    assert!(matches!(
+        launched.await_readiness(Duration::from_millis(20)),
+        Err(ProtectedIssuerLaunchErrorV1::Timeout(
+            "exact issuer readiness"
+        ))
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_reaped(first_pid);
+    first_rustc.kill().unwrap();
+    first_rustc.wait().unwrap();
+
+    let (mut second_rustc, _second_control, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    let second_pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+    launched.cancel().unwrap();
+    assert_reaped(second_pid);
+    second_rustc.kill().unwrap();
+    second_rustc.wait().unwrap();
+}
+
+#[test]
+#[ignore = "requires FE2O3_STATIC_PREEXEC_LAUNCHER from the freestanding CMake build"]
+fn real_static_launcher_crosses_both_exec_boundaries() {
+    let launcher_path = std::env::var_os("FE2O3_STATIC_PREEXEC_LAUNCHER")
+        .expect("FE2O3_STATIC_PREEXEC_LAUNCHER must name the qualified static launcher");
+    let launcher_bytes = fs::read(&launcher_path).unwrap();
+    let launcher_measurement = ProvisionedStaticExecutableMeasurementV1::new(
+        Sha256::digest(&launcher_bytes).into(),
+        launcher_bytes.len() as u64,
+    )
+    .unwrap();
+    let fixture = Fixture::with_code("real-static-launcher", &launched_probe_code(true));
+    let Some(credentials) = credentials() else {
+        return;
+    };
+    let program = AdmittedIssuerProgramV1::provision(
+        File::open(launcher_path).unwrap(),
+        launcher_measurement,
+        fixture.open(),
+        policy(fixture.issuer_measurement()),
+    )
+    .unwrap();
+    let key = signing_key(program.policy());
+    let supervisor = ProtectedIssuerSupervisorV1::bind(
+        program,
+        credentials,
+        File::open(&fixture.root).unwrap(),
+        key,
+    )
+    .unwrap();
+    let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+    let launch_manifest = prepared.service_manifest().clone();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    read_exact_nonblocking(launched.stdout_reader_for_test(), b"LAUNCHED\n");
+    let readiness =
+        CompilerExecutionServiceReadyV1::new(launched.pid(), &launch_manifest, supervisor.policy())
+            .unwrap();
+    assert_eq!(
+        rustix::io::write(&injected_readiness, readiness.canonical_bytes()).unwrap(),
+        readiness.canonical_bytes().len()
+    );
+    drop(injected_readiness);
+    let ready = launched.await_readiness(Duration::from_secs(2)).unwrap();
+    ready.revalidate().unwrap();
+    ready.cancel().unwrap();
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
+#[ignore = "subprocess helper for abrupt supervisor-parent death"]
+fn clone3_parent_death_helper() {
+    let fixture = Fixture::with_code("parent-death-helper", &launched_probe_code(false));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+    fs::remove_dir_all(&fixture.root).unwrap();
+    println!("FE2O3_ISSUER_CHILD_PID={}", launched.pid());
+    std::io::stdout().flush().unwrap();
+    std::process::exit(0);
+}
+
+#[test]
+fn gated_child_cannot_outlive_an_abrupt_supervisor_parent_exit() {
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "tests::clone3_parent_death_helper",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "helper stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let pid = stdout
+        .lines()
+        .find_map(|line| {
+            line.split_once("FE2O3_ISSUER_CHILD_PID=")
+                .map(|(_, pid)| pid)
+        })
+        .unwrap_or_else(|| panic!("helper omitted child PID: {stdout}"))
+        .parse::<u32>()
+        .unwrap();
+    let process = PathBuf::from(format!("/proc/{pid}"));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while process.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !process.exists(),
+        "pidfd child survived its abrupt supervisor-parent exit"
+    );
 }
