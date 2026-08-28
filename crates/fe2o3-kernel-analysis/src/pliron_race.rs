@@ -954,31 +954,13 @@ fn symbolically_proves_disjoint(
             }) {
                 continue;
             }
-            let mut representative = None;
-            for effect in effects {
-                let Some(first) = representative else {
-                    if !effect_affine_map_is_injective(
-                        effect,
-                        sparse,
-                        launch_extents,
-                        invocation_bounds,
-                    ) {
-                        return false;
-                    }
-                    representative = Some(&effect.indices);
-                    continue;
-                };
-                if !effect_affine_map_is_injective(
-                    effect,
-                    sparse,
-                    launch_extents,
-                    invocation_bounds,
-                ) {
-                    return false;
-                }
-                if !same_index_formula(first, &effect.indices, sparse) {
-                    return false;
-                }
+            if !effect_family_is_symbolically_disjoint(
+                effects,
+                sparse,
+                launch_extents,
+                invocation_bounds,
+            ) {
+                return false;
             }
             continue;
         }
@@ -997,26 +979,13 @@ fn symbolically_proves_disjoint(
                     )
             })
             .collect::<Vec<_>>();
-        let mut representative = None;
-        for effect in relevant {
-            let Some(first) = representative else {
-                if !effect_affine_map_is_injective(
-                    effect,
-                    sparse,
-                    launch_extents,
-                    invocation_bounds,
-                ) {
-                    return false;
-                }
-                representative = Some(&effect.indices);
-                continue;
-            };
-            if !effect_affine_map_is_injective(effect, sparse, launch_extents, invocation_bounds) {
-                return false;
-            }
-            if !same_index_formula(first, &effect.indices, sparse) {
-                return false;
-            }
+        if !effect_family_is_symbolically_disjoint(
+            &relevant,
+            sparse,
+            launch_extents,
+            invocation_bounds,
+        ) {
+            return false;
         }
     }
     true
@@ -1170,6 +1139,84 @@ fn same_index_formula(first: &[Value], second: &[Value], sparse: &SparseIndexAna
             .all(|(first, second)| sparse.fact(*first) == sparse.fact(*second))
 }
 
+fn effect_family_is_symbolically_disjoint(
+    effects: &[&EffectV1],
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    if effects.iter().any(|effect| {
+        !effect_affine_map_is_injective(effect, sparse, launch_extents, invocation_bounds)
+    }) {
+        return false;
+    }
+    for first in 0..effects.len() {
+        for second in first + 1..effects.len() {
+            if !same_index_formula(&effects[first].indices, &effects[second].indices, sparse)
+                && !one_dimensional_affine_residues_are_disjoint(
+                    effects[first],
+                    effects[second],
+                    sparse,
+                    launch_extents,
+                    invocation_bounds,
+                )
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn one_dimensional_affine_residues_are_disjoint(
+    first: &EffectV1,
+    second: &EffectV1,
+    sparse: &SparseIndexAnalysisV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> bool {
+    let ([first_index], [second_index]) = (first.indices.as_slice(), second.indices.as_slice())
+    else {
+        return false;
+    };
+    let first_fact = sparse.fact(*first_index);
+    let second_fact = sparse.fact(*second_index);
+    let (Some(first_affine), Some(second_affine)) = (first_fact.affine(), second_fact.affine())
+    else {
+        return false;
+    };
+    if first_affine.coefficients() != second_affine.coefficients() {
+        return false;
+    }
+    let mut active = launch_extents
+        .iter()
+        .enumerate()
+        .filter_map(|(dimension, extent)| (*extent != 1).then_some(dimension));
+    let Some(dimension) = active.next() else {
+        return false;
+    };
+    if active.next().is_some() {
+        return false;
+    }
+    let Some(stride) = first_affine.coefficients().get(dimension).copied() else {
+        return false;
+    };
+    if stride == 0
+        || first_affine
+            .coefficients()
+            .iter()
+            .enumerate()
+            .any(|(candidate, coefficient)| candidate != dimension && *coefficient != 0)
+    {
+        return false;
+    }
+    let first_extents = effective_launch_extents(first, launch_extents, invocation_bounds);
+    let second_extents = effective_launch_extents(second, launch_extents, invocation_bounds);
+    affine_is_total_over_launch(first_affine, &first_extents)
+        && affine_is_total_over_launch(second_affine, &second_extents)
+        && first_affine.constant_term() % stride != second_affine.constant_term() % stride
+}
+
 fn affine_map_is_injective(
     indices: &[Value],
     sparse: &SparseIndexAnalysisV1,
@@ -1191,6 +1238,15 @@ fn effect_affine_map_is_injective(
     launch_extents: &[u64],
     invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
 ) -> bool {
+    let effective_extents = effective_launch_extents(effect, launch_extents, invocation_bounds);
+    affine_map_is_injective(&effect.indices, sparse, &effective_extents)
+}
+
+fn effective_launch_extents(
+    effect: &EffectV1,
+    launch_extents: &[u64],
+    invocation_bounds: Option<&[[Option<u64>; MAX_RANKED_MEMORY_RANK]]>,
+) -> Vec<u64> {
     let mut effective_extents = launch_extents.to_vec();
     if let Some(bounds) = invocation_bounds.and_then(|bounds| bounds.get(effect.location.block)) {
         for (dimension, extent) in effective_extents.iter_mut().enumerate() {
@@ -1201,7 +1257,7 @@ fn effect_affine_map_is_injective(
             }
         }
     }
-    affine_map_is_injective(&effect.indices, sparse, &effective_extents)
+    effective_extents
 }
 
 fn invocation_upper_bounds_by_block(
