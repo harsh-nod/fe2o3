@@ -29,7 +29,10 @@ use fe2o3_pliron::{
 use fe2o3_proof_contracts::DigestV1;
 use sha2::{Digest as _, Sha256};
 
-use crate::functional_refinement_receipt_v2::execute_and_import_generated_mir_pliron_composition_locally_v1;
+use crate::functional_refinement_receipt_v2::{
+    RetainedImportedFunctionalRefinementReceiptV2,
+    execute_and_import_generated_mir_pliron_composition_locally_v1,
+};
 use crate::{
     CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusExecutionErrorV2,
     FunctionalRefinementVerusRuntimeLeaseV1,
@@ -51,6 +54,8 @@ pub struct ProductionMirPlironPerCompilationVerusReportV1 {
     composition_template_identity: DigestV1,
     generated_source_identity: DigestV1,
     obligation_identity: DigestV1,
+    binding: FunctionalRefinementBindingV2,
+    signer_identity: DigestV1,
     toolchain: VerusToolchainIdentityV2,
     execution_identity: DigestV1,
     receipt_identity: FunctionalRefinementReceiptIdentityV2,
@@ -75,6 +80,12 @@ impl ProductionMirPlironPerCompilationVerusReportV1 {
     }
     pub const fn obligation_identity(self) -> DigestV1 {
         self.obligation_identity
+    }
+    pub const fn binding(self) -> FunctionalRefinementBindingV2 {
+        self.binding
+    }
+    pub const fn signer_identity(self) -> DigestV1 {
+        self.signer_identity
     }
     pub const fn toolchain(self) -> VerusToolchainIdentityV2 {
         self.toolchain
@@ -119,6 +130,37 @@ impl ProductionMirPlironPerCompilationVerusReportV1 {
     }
 }
 
+/// Move-only owner of the aggregate report and the exact signed receipt that
+/// established it inside the retained Verus runtime.
+#[must_use = "dropping this value abandons the exact signed aggregate Verus receipt"]
+#[derive(Debug)]
+pub struct ProductionMirPlironPerCompilationVerusExecutionV1 {
+    report: ProductionMirPlironPerCompilationVerusReportV1,
+    retained: RetainedImportedFunctionalRefinementReceiptV2,
+}
+
+impl ProductionMirPlironPerCompilationVerusExecutionV1 {
+    pub const fn report(&self) -> ProductionMirPlironPerCompilationVerusReportV1 {
+        self.report
+    }
+
+    pub const fn signed_receipt_wire(&self) -> &[u8] {
+        self.retained.wire()
+    }
+
+    pub const fn receipt_verifying_key(&self) -> &[u8; 32] {
+        self.retained.verifying_key()
+    }
+
+    pub const fn retains_strictly_imported_signed_receipt(&self) -> bool {
+        self.retained.proof().signature_and_policy_verified()
+    }
+
+    pub const fn grants_llvm_or_later_authority(&self) -> bool {
+        false
+    }
+}
+
 /// Move-only owner admitted through both structural and executed Verus gates.
 ///
 /// ```compile_fail
@@ -131,7 +173,7 @@ pub struct ProductionVerusVerifiedMirPlironKernelV1 {
     structural: ProductionReconciledMirPlironKernelV1,
     parallel_contract: ParallelReferenceContractV1,
     parallel_report: ProductionParallelReferenceContractReportV1,
-    aggregate: ProductionMirPlironPerCompilationVerusReportV1,
+    aggregate: ProductionMirPlironPerCompilationVerusExecutionV1,
     _staging_policy: ProductionRefinementStagingPolicyV2,
 }
 
@@ -142,7 +184,12 @@ impl ProductionVerusVerifiedMirPlironKernelV1 {
     pub const fn per_compilation_verus_report(
         &self,
     ) -> ProductionMirPlironPerCompilationVerusReportV1 {
-        self.aggregate
+        self.aggregate.report()
+    }
+    pub const fn per_compilation_verus_execution(
+        &self,
+    ) -> &ProductionMirPlironPerCompilationVerusExecutionV1 {
+        &self.aggregate
     }
     pub const fn parallel_contract(&self) -> &ParallelReferenceContractV1 {
         &self.parallel_contract
@@ -302,7 +349,7 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
     timeout_seconds: u32,
 ) -> Result<
     (
-        ProductionMirPlironPerCompilationVerusReportV1,
+        ProductionMirPlironPerCompilationVerusExecutionV1,
         ProductionRefinementStagingPolicyV2,
     ),
     ProductionMirPlironPerCompilationVerusErrorV1,
@@ -346,13 +393,14 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
         .map_err(|error| {
             ProductionMirPlironPerCompilationVerusErrorV1::GeneratedSource(error.to_string())
         })?;
-    let (imported, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
+    let (retained, policy) = execute_and_import_generated_mir_pliron_composition_locally_v1(
         runtime,
         source,
         binding,
         timeout_seconds,
     )
     .map_err(ProductionMirPlironPerCompilationVerusErrorV1::Execution)?;
+    let imported = retained.proof();
     if imported.binding() != binding
         || imported.boundary() != FunctionalRefinementBoundaryV2::SafeReferenceMirToLivePliron
         || !policy.accepts_signer(imported.signer_identity())
@@ -371,12 +419,20 @@ pub fn execute_mir_pliron_semantic_contract_per_compilation_borrowed_v1(
         composition_template_identity: composition_template_identity_v1(),
         generated_source_identity,
         obligation_identity,
+        binding,
+        signer_identity: imported.signer_identity(),
         toolchain: imported.toolchain(),
         execution_identity: imported.execution_identity(),
         receipt_identity: imported.receipt_identity(),
         retained_policy_checked_staging,
     };
-    Ok((aggregate, policy))
+    Ok((
+        ProductionMirPlironPerCompilationVerusExecutionV1 {
+            report: aggregate,
+            retained,
+        },
+        policy,
+    ))
 }
 
 fn derive_compiler_subjects(
