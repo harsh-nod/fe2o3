@@ -45,6 +45,14 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn ranked_bounds_fixture_line(containing: &str) -> usize {
+    include_str!("fixtures/production-ranked-bounds-device/src/lib.rs")
+        .lines()
+        .position(|line| line.contains(containing))
+        .map(|index| index + 1)
+        .unwrap_or_else(|| panic!("ranked-bounds fixture omitted {containing:?}"))
+}
+
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
@@ -105,11 +113,15 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         !oob.status.success(),
         "out-of-bounds Rust kernel was accepted"
     );
+    let oob_source_location = format!(
+        ":{}:20",
+        ranked_bounds_fixture_line("let selected = input[64];")
+    );
     assert!(
         oob.stderr.contains("error[FE2O3-BOUNDS-001]")
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
-            && oob.stderr.contains(":63:20")
+            && oob.stderr.contains(&oob_source_location)
             && oob.stderr.contains("kernel.index_constant 64")
             && oob
                 .stderr
