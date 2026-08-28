@@ -1,8 +1,10 @@
 # General Typed Dispatch V1
 
 Status: living interface contract for the sole Worker V3 production route. The
-compiler-to-HSACO slice and generic host lifecycle are implemented; production
-verification authority and end-to-end hardware replay remain open.
+compiler-to-HSACO slice and generic host lifecycle are implemented. The Worker
+V3 verifier API is sealed and decision construction is private in production;
+the concrete protected verification authority and end-to-end hardware replay
+remain open.
 
 This milestone connects the existing general scalar/slice ABI model and
 packing plan to typed kernels selected from one authenticated Worker V3
@@ -29,7 +31,10 @@ Two retired Worker V2 execution tests recorded raw and generated-safe hardware
 observations for that digest. They are historical evidence, not selectable
 routes or current production coverage.
 
-The remaining composition requires a production Worker V3 verifier. Cargo now
+The remaining composition requires the crate-owned concrete Worker V3
+verifier. Default builds cannot implement the sealed trait or construct a
+decision, and the synthetic hook exists only under the explicit integration
+test feature. Cargo now
 durably publishes the bounded
 Worker V3 load-readiness envelope, recovers it from exact retained inputs, and
 transfers the canonical envelope and artifact-directory descriptors to the application
@@ -102,8 +107,9 @@ Cargo artifact-container adapter remains inert and exposes no authority
 accessor. Cargo's canonical envelope crosses the application boundary through
 pinned descriptors while Cargo retains and revalidates its recovered lease.
 The accepted host consumer composes that handoff with recovered admission and
-fails at the missing genuine verification authority. No production Worker V3
-verifier currently satisfies that authentication contract. Retired Worker V2
+fails at the missing genuine verification authority. The production API is
+sealed against caller authority, but no concrete Worker V3 verifier currently
+satisfies that authentication contract. Retired Worker V2
 test authority is not an alternate route.
 
 Cargo validates and pins the exact initial ELF64 x86-64 static image. One valid
@@ -277,7 +283,8 @@ refinement, or repository-wide CUDA-Oxide parity.
    envelope with a freshly reacquired lease, transfers read-only pinned
    descriptors to an identity-pinned sealed application, and binds them to a
    fresh occurrence. The separate recovered Worker V2 host admission and launch
-   bridge are deleted. A production `WorkerV3VerifierV1` implementation and a
+   bridge are deleted. The production verifier boundary is sealed and its
+   decision constructor is private; a concrete crate-owned implementation and a
    generated-safe MI300X replay without the external HSACO test handoff remain
    open.
 5. Implemented inert foundation: bounded physical machine-effect evidence and
@@ -288,9 +295,10 @@ refinement, or repository-wide CUDA-Oxide parity.
    proof inputs, tools, identities, and freshness. They grant no proof authority,
    are not compiler or machine-code refinement, and are not production-bound to
    the final payload.
-7. Implement a production `WorkerV3VerifierV1` only after the compiler, Verus,
-   proof-to-executable, Rust-layout, and machine-effect inputs are reviewed and
-   immutable; reject mutation and stale replay.
+7. Implement the concrete crate-owned `WorkerV3VerifierV1` behind the sealed
+   boundary only after the compiler, Verus, proof-to-executable, Rust-layout,
+   and machine-effect inputs are reviewed and immutable; reject mutation and
+   stale replay.
 8. Implemented API foundation: safe mutable splits retain exact disjoint
    allocation-relative regions with unit and compile-fail coverage. Mechanical
    Verus correspondence and general same-allocation MI300X execution remain.

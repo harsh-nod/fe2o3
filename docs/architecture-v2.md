@@ -189,9 +189,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   authority only for a joined, move-only invocation constructed from an
   authenticated Worker V3 executable, macro-generated arguments, retained
   current publication, runtime preparation, and the same checked device. A
-  scalar-GEMM test passes this path with a synthetic verifier. No reviewed
-  production verifier exists yet, so ordinary generated application execution
-  remains fail-closed.
+  scalar-GEMM test passes this path only with the explicit synthetic-verifier
+  test feature. In default builds the verifier trait is sealed against external
+  implementations and the decision constructor is crate-private. No reviewed
+  concrete production verifier exists yet, so ordinary generated application
+  execution remains fail-closed rather than accepting caller-asserted hashes or
+  safety bits.
 - Verus models and proof-carrying artifact schemas exist for bounded kernels
   and safety obligations. There is no general reviewed source-to-machine or
   Verus-to-machine refinement proof, so source proof, compiler evidence,

@@ -627,7 +627,11 @@ is complete, and the recorded runs grant no current production authority.
   consumes authenticated evidence, those generated arguments, current artifact
   custody, geometry, and one checked device into a private move-only authority;
   no raw request or authority can be extracted. The scalar-GEMM hardware lane
-  passes through this joined path with a synthetic verifier. The public
+  passes through this joined path only under the explicit
+  `worker-v3-verifier-test-support` feature with a synthetic verifier. Default
+  builds seal `WorkerV3VerifierV1` against downstream implementations and keep
+  `WorkerV3VerificationDecisionV1` construction crate-private, so callers
+  cannot manufacture verifier or dispatch authority. The public
   `prepare_inherited_worker_v3_kfd_application_v1` transition now consumes the
   inherited Cargo handoff, derives the selected kernel from its generated type,
   authenticates it, and returns only that joined invocation. The production
@@ -758,7 +762,10 @@ is complete, and the recorded runs grant no current production authority.
   `qualification_worker_v2` macro option, embedded vecadd artifact contract,
   generated `Kernel`/`Prepared` API, and example feature have been deleted.
   The receipt-complete Worker V3 promotion boundary is implemented, including
-  exhaustive substitution checks. A concrete protected verifier that
+  exhaustive substitution checks. Its verifier trait is sealed in production,
+  its decision constructor is private, and synthetic construction is available
+  only under the explicit integration-test feature. A concrete protected
+  verifier that
   independently reacquires current policy, Worker-ledger, and external
   monotonic rollback authority remains open. Recovery and
   verification admission are device-independent; the canonical KFD transition
@@ -957,7 +964,10 @@ is complete, and the recorded runs grant no current production authority.
   descriptor handoff, but it grants no prerequisite, load, or launch authority.
 
   No production Worker V3 verifier yet promotes compiler, Verus/proof, Rust
-  ABI, and machine-effect evidence into safe dispatch. Retired Worker V2 test
+  ABI, and machine-effect evidence into safe dispatch. Default builds now
+  expose no downstream implementation or decision-construction route; they
+  therefore fail closed until the crate-owned protected verifier exists.
+  Retired Worker V2 test
   authority is not an alternate route and cannot be selected in any build.
 - Checked mutable views now support simultaneously live disjoint subviews via
   `split_at_mut`, with exclusivity enforced by Rust borrowing. The mechanical
