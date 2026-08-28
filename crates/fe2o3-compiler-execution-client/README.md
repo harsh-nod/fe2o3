@@ -24,8 +24,11 @@ authority.
 
 The crate also owns the authority-free child-channel handoff used by a selected
 compiler or application parent. Its post-fork callback creates the unnamed
-`SOCK_SEQPACKET` pair inside the selected child, installs only the client
-endpoint at FD 195, and
+`SOCK_SEQPACKET` pair inside the selected child. Preparation first reserves FD
+195 with an exact close-on-exec duplicate of the private control endpoint so a
+concurrent descriptor allocation cannot occupy the fixed target between
+preparation and `fork`. The child requires that exact reservation before it
+atomically installs only the client endpoint at FD 195, and
 transfers only the service endpoint to the parent. Parent admission binds the
 transfer to the exact child PID, child-reported direct-parent PID,
 `SO_PEERCRED`, and a live pidfd under one absolute deadline. The resulting

@@ -373,6 +373,7 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::CommandExt;
+    use std::sync::Mutex;
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_closure_capability::COMPILER_EXECUTION_POLICY_CHILD_FD_V1;
@@ -384,6 +385,8 @@ mod tests {
     };
 
     use super::*;
+
+    static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         CompilerExecutionIssuerPolicyV1::new(
@@ -462,6 +465,9 @@ mod tests {
 
     #[test]
     fn preparation_installs_exact_policy_and_child_created_service_channel() {
+        let _guard = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let source_profile = client_profile(7, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(
@@ -489,6 +495,9 @@ mod tests {
 
     #[test]
     fn application_verifier_gets_service_channel_without_policy_capability() {
+        let _guard = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let source_profile = client_profile(8, 1_234);
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(format!(

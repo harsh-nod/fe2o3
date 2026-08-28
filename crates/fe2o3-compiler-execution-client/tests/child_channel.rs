@@ -16,6 +16,9 @@ static RESERVED_FD_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn child_creates_exact_pid_bound_service_channel() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
@@ -38,7 +41,9 @@ fn child_creates_exact_pid_bound_service_channel() {
 
 #[test]
 fn occupied_reserved_descriptor_is_rejected_before_spawn() {
-    let _guard = RESERVED_FD_LOCK.lock().unwrap();
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: dup2 either returns a fresh owned alias at the requested descriptor or reports an
     // error; the resulting File closes exactly that alias on drop.
     let occupied = unsafe {
@@ -56,7 +61,68 @@ fn occupied_reserved_descriptor_is_rejected_before_spawn() {
 }
 
 #[test]
+fn pending_channel_reserves_exact_descriptor_until_drop() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut first_command = Command::new("/bin/true");
+    let first = PendingCompilerExecutionChildChannelV1::prepare(&mut first_command).unwrap();
+    // SAFETY: F_GETFD only observes the exact descriptor reserved by the pending value.
+    let flags = unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) };
+    assert!(flags >= 0);
+    assert_ne!(flags & libc::FD_CLOEXEC, 0);
+
+    let mut overlapping_command = Command::new("/bin/true");
+    assert!(matches!(
+        PendingCompilerExecutionChildChannelV1::prepare(&mut overlapping_command),
+        Err(CompilerExecutionChildChannelErrorV1::ReservedDescriptorInUse)
+    ));
+
+    drop(first);
+    // SAFETY: F_GETFD reports release of the pending value's exact reservation through EBADF.
+    assert_eq!(
+        unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EBADF)
+    );
+
+    let mut next_command = Command::new("/bin/true");
+    let next = PendingCompilerExecutionChildChannelV1::prepare(&mut next_command).unwrap();
+    drop(next);
+}
+
+#[test]
+fn child_rejects_substituted_reservation_before_exec() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut command = Command::new("/bin/true");
+    let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
+    let substitute = File::open("/dev/null").unwrap();
+    // SAFETY: this hostile test deliberately replaces the pending value's numeric descriptor.
+    // The pending value remains the sole owner and closes the replacement on drop.
+    assert_eq!(
+        unsafe {
+            libc::dup2(
+                substitute.as_raw_fd(),
+                COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+            )
+        },
+        COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+    );
+    let error = command.spawn().unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(libc::EBUSY));
+    drop(pending);
+}
+
+#[test]
 fn invalid_finish_inputs_fail_without_waiting() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut command = Command::new("/bin/true");
     let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
     assert!(matches!(
@@ -74,6 +140,9 @@ fn invalid_finish_inputs_fail_without_waiting() {
 
 #[test]
 fn child_exit_before_admission_fails_closed() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut command = Command::new("/bin/true");
     let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
     let mut child = command.spawn().unwrap();
@@ -92,6 +161,9 @@ fn child_exit_before_admission_fails_closed() {
 
 #[test]
 fn later_child_callback_cannot_remove_the_installed_client_peer() {
+    let _guard = RESERVED_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut command = Command::new("/bin/sleep");
     command.arg("30");
     let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
