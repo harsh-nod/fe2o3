@@ -2,17 +2,20 @@
 
 use std::error::Error;
 use std::fmt;
-use std::io::{self, IoSlice};
+use std::io::{self, IoSlice, IoSliceMut};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
-    CompilerExecutionSupervisorHandoffErrorV1, CompilerExecutionSupervisorHandoffV1,
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyErrorV1,
+    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffErrorV1,
+    CompilerExecutionSupervisorHandoffV1,
 };
 use rustix::net::{
-    AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketType, sendmsg,
+    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags,
+    SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketType, recv, recvmsg, sendmsg,
 };
 
 use crate::{CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1};
@@ -59,6 +62,13 @@ impl CompilerExecutionSupervisorCredentialsV1 {
 /// fn require_clone<T: Clone>() {}
 /// require_clone::<PendingCompilerExecutionSupervisorV1>();
 /// ```
+///
+/// ```compile_fail
+/// use std::os::fd::AsFd;
+/// use fe2o3_compiler_execution_client::PendingCompilerExecutionSupervisorV1;
+/// fn require_as_fd<T: AsFd>() {}
+/// require_as_fd::<PendingCompilerExecutionSupervisorV1>();
+/// ```
 pub struct PendingCompilerExecutionSupervisorV1 {
     control: OwnedFd,
     handoff: CompilerExecutionSupervisorHandoffV1,
@@ -79,6 +89,35 @@ impl PendingCompilerExecutionSupervisorV1 {
     /// Returns the exact launch manifest whose descriptors were transferred.
     pub const fn manifest(&self) -> &CompilerExecutionServiceLaunchManifestV1 {
         self.handoff.launch_manifest()
+    }
+
+    /// Consumes the control connection and admits one exact supervisor readiness acknowledgment.
+    pub fn await_readiness(
+        self,
+        policy: &CompilerExecutionIssuerPolicyV1,
+        timeout: Duration,
+    ) -> Result<CompilerExecutionServiceReadyV1, CompilerExecutionHandoffErrorV1> {
+        if timeout.is_zero() {
+            return Err(CompilerExecutionHandoffErrorV1::InvalidTimeout);
+        }
+        if !self.handoff.launch_manifest().matches_policy(policy) {
+            return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
+        let bytes = receive_readiness(&self.control, deadline)?;
+        let readiness = CompilerExecutionServiceReadyV1::decode(&bytes)
+            .map_err(CompilerExecutionHandoffErrorV1::ReadinessProtocol)?;
+        if !readiness.matches_launch(
+            readiness.issuer_pid(),
+            self.handoff.launch_manifest(),
+            policy,
+        ) {
+            return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
+        }
+        require_control_eof(&self.control, deadline)?;
+        Ok(readiness)
     }
 }
 
@@ -194,6 +233,71 @@ fn send_handoff(
     }
 }
 
+fn receive_readiness(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<[u8; COMPILER_EXECUTION_SERVICE_READY_BYTES_V1], CompilerExecutionHandoffErrorV1> {
+    loop {
+        wait_readable(control, deadline)?;
+        let mut bytes = [0_u8; COMPILER_EXECUTION_SERVICE_READY_BYTES_V1];
+        let received = {
+            let mut vectors = [IoSliceMut::new(&mut bytes)];
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+            let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+            match recvmsg(
+                control,
+                &mut vectors,
+                &mut ancillary,
+                RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+            ) {
+                Ok(received) => {
+                    let mut has_ancillary = false;
+                    for message in ancillary.drain() {
+                        match message {
+                            RecvAncillaryMessage::ScmRights(descriptors) => {
+                                has_ancillary |= descriptors.count() != 0;
+                            }
+                            _ => has_ancillary = true,
+                        }
+                    }
+                    Some((received.bytes, received.flags, has_ancillary))
+                }
+                Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => None,
+                Err(error) => return Err(CompilerExecutionHandoffErrorV1::Io(error.into())),
+            }
+        };
+        let Some((count, flags, has_ancillary)) = received else {
+            continue;
+        };
+        if count == 0 {
+            return Err(CompilerExecutionHandoffErrorV1::ControlClosed);
+        }
+        if count != bytes.len()
+            || flags.intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+            || has_ancillary
+        {
+            return Err(CompilerExecutionHandoffErrorV1::MalformedReadiness);
+        }
+        return Ok(bytes);
+    }
+}
+
+fn require_control_eof(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    loop {
+        wait_readable(control, deadline)?;
+        let mut trailing = [0_u8; 1];
+        match recv(control, &mut trailing, RecvFlags::DONTWAIT) {
+            Ok((0, _)) => return Ok(()),
+            Ok(_) => return Err(CompilerExecutionHandoffErrorV1::TrailingReadiness),
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {}
+            Err(error) => return Err(CompilerExecutionHandoffErrorV1::Io(error.into())),
+        }
+    }
+}
+
 fn wait_writable(
     control: &OwnedFd,
     deadline: Instant,
@@ -230,6 +334,46 @@ fn wait_writable(
         }
         if descriptor.revents & libc::POLLOUT != 0 {
             return Ok(());
+        }
+    }
+}
+
+fn wait_readable(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(CompilerExecutionHandoffErrorV1::Timeout);
+        }
+        let mut descriptor = libc::pollfd {
+            fd: control.as_fd().as_raw_fd(),
+            events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
+            revents: 0,
+        };
+        // SAFETY: descriptor is a live one-element pollfd array for the complete call.
+        let result = unsafe { libc::poll(&mut descriptor, 1, duration_to_poll_millis(remaining)) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(CompilerExecutionHandoffErrorV1::Io(error));
+        }
+        if result == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
+            return Err(CompilerExecutionHandoffErrorV1::Timeout);
+        }
+        if descriptor.revents & libc::POLLNVAL != 0 {
+            return Err(CompilerExecutionHandoffErrorV1::InvalidControl(
+                "descriptor became invalid",
+            ));
+        }
+        if descriptor.revents & (libc::POLLIN | libc::POLLHUP) != 0 {
+            return Ok(());
+        }
+        if descriptor.revents & libc::POLLERR != 0 {
+            return Err(CompilerExecutionHandoffErrorV1::ControlClosed);
         }
     }
 }
@@ -271,6 +415,14 @@ pub enum CompilerExecutionHandoffErrorV1 {
     ControlClosed,
     /// A `SOCK_SEQPACKET` send did not consume the complete canonical record.
     PartialSend,
+    /// Supervisor readiness ended before one exact canonical packet.
+    MalformedReadiness,
+    /// Supervisor readiness contained a second packet or trailing bytes.
+    TrailingReadiness,
+    /// The canonical supervisor readiness packet failed strict decoding.
+    ReadinessProtocol(CompilerExecutionServiceReadyErrorV1),
+    /// Supervisor readiness names another launch manifest or issuer policy.
+    ReadinessMismatch,
     /// A bounded descriptor or socket operation failed.
     Io(io::Error),
 }
@@ -300,6 +452,18 @@ impl fmt::Display for CompilerExecutionHandoffErrorV1 {
             Self::PartialSend => {
                 formatter.write_str("supervisor handoff packet was partially sent")
             }
+            Self::MalformedReadiness => {
+                formatter.write_str("supervisor readiness packet is malformed")
+            }
+            Self::TrailingReadiness => {
+                formatter.write_str("supervisor readiness contains trailing data")
+            }
+            Self::ReadinessProtocol(error) => {
+                write!(formatter, "supervisor readiness is invalid: {error}")
+            }
+            Self::ReadinessMismatch => {
+                formatter.write_str("supervisor readiness names another launch or policy")
+            }
             Self::Io(error) => write!(formatter, "supervisor handoff operation failed: {error}"),
         }
     }
@@ -310,6 +474,7 @@ impl Error for CompilerExecutionHandoffErrorV1 {
         match self {
             Self::RustcLaunch(error) => Some(error),
             Self::CanonicalHandoff(error) => Some(error),
+            Self::ReadinessProtocol(error) => Some(error),
             Self::Io(error) => Some(error),
             _ => None,
         }
@@ -326,7 +491,7 @@ impl From<io::Error> for CompilerExecutionHandoffErrorV1 {
 mod tests {
     use std::io::IoSliceMut;
     use std::mem::MaybeUninit;
-    use std::os::fd::AsRawFd;
+    use std::os::fd::{AsFd, AsRawFd};
     use std::process::Command;
 
     use rustix::net::{
@@ -356,6 +521,145 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    fn pending_readiness(
+        expected_policy: &CompilerExecutionIssuerPolicyV1,
+    ) -> (
+        PendingCompilerExecutionSupervisorV1,
+        OwnedFd,
+        CompilerExecutionServiceReadyV1,
+    ) {
+        let submitter =
+            fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1::new(
+                100, 1000, 1001,
+            )
+            .unwrap();
+        let client =
+            fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1::new(
+                101, 1000, 1001,
+            )
+            .unwrap();
+        let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, expected_policy);
+        let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest).unwrap();
+        let readiness =
+            CompilerExecutionServiceReadyV1::new(200, handoff.launch_manifest(), expected_policy)
+                .unwrap();
+        let (control, supervisor) = control_pair();
+        (
+            PendingCompilerExecutionSupervisorV1 { control, handoff },
+            supervisor,
+            readiness,
+        )
+    }
+
+    #[test]
+    fn exact_supervisor_readiness_is_admitted_once_after_eof() {
+        let expected_policy = policy();
+        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        assert_eq!(
+            rustix::net::send(
+                &supervisor,
+                readiness.canonical_bytes(),
+                SendFlags::NOSIGNAL,
+            )
+            .unwrap(),
+            readiness.canonical_bytes().len()
+        );
+        drop(supervisor);
+        assert_eq!(
+            pending
+                .await_readiness(&expected_policy, Duration::from_secs(1))
+                .unwrap(),
+            readiness
+        );
+    }
+
+    #[test]
+    fn malformed_mismatched_trailing_and_timed_out_readiness_fail_closed() {
+        let expected_policy = policy();
+
+        let (pending, supervisor, _) = pending_readiness(&expected_policy);
+        rustix::net::send(&supervisor, b"short", SendFlags::NOSIGNAL).unwrap();
+        drop(supervisor);
+        assert!(matches!(
+            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            Err(CompilerExecutionHandoffErrorV1::MalformedReadiness)
+        ));
+
+        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        let mut corrupted = *readiness.canonical_bytes();
+        corrupted[0] ^= 0xff;
+        rustix::net::send(&supervisor, &corrupted, SendFlags::NOSIGNAL).unwrap();
+        drop(supervisor);
+        assert!(matches!(
+            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            Err(CompilerExecutionHandoffErrorV1::ReadinessProtocol(_))
+        ));
+
+        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        let extra = std::fs::File::open("/dev/null").unwrap();
+        let descriptors = [extra.as_fd()];
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+        let mut ancillary = SendAncillaryBuffer::new(&mut space);
+        assert!(ancillary.push(SendAncillaryMessage::ScmRights(&descriptors)));
+        assert_eq!(
+            sendmsg(
+                &supervisor,
+                &[IoSlice::new(readiness.canonical_bytes())],
+                &mut ancillary,
+                SendFlags::NOSIGNAL,
+            )
+            .unwrap(),
+            readiness.canonical_bytes().len()
+        );
+        drop(supervisor);
+        assert!(matches!(
+            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            Err(CompilerExecutionHandoffErrorV1::MalformedReadiness)
+        ));
+
+        let (pending, supervisor, _readiness) = pending_readiness(&expected_policy);
+        let other_client =
+            fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1::new(
+                102, 1000, 1001,
+            )
+            .unwrap();
+        let other_manifest =
+            CompilerExecutionServiceLaunchManifestV1::new(other_client, &expected_policy);
+        let substituted =
+            CompilerExecutionServiceReadyV1::new(200, &other_manifest, &expected_policy).unwrap();
+        rustix::net::send(
+            &supervisor,
+            substituted.canonical_bytes(),
+            SendFlags::NOSIGNAL,
+        )
+        .unwrap();
+        drop(supervisor);
+        assert!(matches!(
+            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch)
+        ));
+
+        let (pending, supervisor, readiness) = pending_readiness(&expected_policy);
+        rustix::net::send(
+            &supervisor,
+            readiness.canonical_bytes(),
+            SendFlags::NOSIGNAL,
+        )
+        .unwrap();
+        rustix::net::send(&supervisor, b"trailing", SendFlags::NOSIGNAL).unwrap();
+        drop(supervisor);
+        assert!(matches!(
+            pending.await_readiness(&expected_policy, Duration::from_secs(1)),
+            Err(CompilerExecutionHandoffErrorV1::TrailingReadiness)
+        ));
+
+        let (pending, _supervisor, _) = pending_readiness(&expected_policy);
+        assert!(matches!(
+            pending.await_readiness(&expected_policy, Duration::from_millis(20)),
+            Err(CompilerExecutionHandoffErrorV1::Timeout)
+        ));
     }
 
     #[test]

@@ -23,6 +23,10 @@ canonical direct-parent/launch-manifest record and exactly two ordered
 `SCM_RIGHTS` descriptors. It authenticates the supervisor UID/GID first and
 retains the control connection for the pending readiness exchange. This avoids
 attributing an outer-Cargo-created socket to rustc or accepting a same-user
-relay as the direct parent. Binding-wrapper integration, issuer readiness,
-distinct-UID child launch, HSACO publication, and runtime admission remain
-outside this checkpoint.
+relay as the direct parent. After the supervisor admits issuer readiness, it
+sends that same canonical record over the control connection and closes its
+endpoint. The pending client accepts exactly one descriptor-free packet
+followed by EOF, rechecks its launch manifest and pinned policy, and rejects
+truncation, extension, substitution, or timeout. Binding-wrapper service
+acquisition, the deployed distinct-UID entrypoint, HSACO publication, and
+runtime admission remain outside this checkpoint.

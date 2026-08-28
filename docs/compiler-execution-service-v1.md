@@ -29,9 +29,11 @@ inherited process profile and parent-death signal; the parent independently
 checks procfs credentials, all capability sets, tracing, umask, and unchanged
 user/mount/PID/network/IPC/UTS/cgroup/time namespaces before release. Exact
 readiness transitions move-only launch custody to live ready custody, while
-pidfd cancellation and fixed-capacity deferred cleanup provide exactly-once
-reaping. Production must still establish that exact profile in a distinct-UID
-service entrypoint and connect Cargo to this supervisor lifecycle.
+one exact descriptor-free readiness packet and EOF transition ready custody to
+serving custody without surrendering the pidfd. Pidfd cancellation and
+fixed-capacity deferred cleanup provide exactly-once reaping. Production must
+still establish that exact profile in a distinct-UID service entrypoint and
+give Cargo an authenticated listener-acquisition path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
 machine exist, but protected-supervisor integration, backend acquisition,
@@ -239,5 +241,9 @@ stdio, profile parsing, namespace continuity, readiness success, PID
 substitution, trailing bytes, timeout cleanup, fresh launch after termination,
 synchronous exactly-once reaping, and abrupt supervisor-parent death. A real
 freestanding-launcher integration crosses both `execveat` boundaries and
-admits exact readiness from the resulting pidfd occurrence. A deployed
-distinct-UID service-profile fixture and Cargo acquisition remain pending.
+admits exact readiness from the resulting pidfd occurrence. The client and
+supervisor suites also qualify exact descriptor-free Cargo publication,
+mandatory EOF, malformed and substituted packets, ancillary descriptors,
+trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
+A deployed distinct-UID service-profile fixture and Cargo listener acquisition
+remain pending.

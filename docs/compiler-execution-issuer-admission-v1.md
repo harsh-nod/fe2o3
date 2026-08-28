@@ -72,9 +72,10 @@ self-checks the inherited profile and parent-death containment while the
 parent independently revalidates the complete profile, namespaces, authority
 objects, and live rustc. The supervisor owns static-launcher exec, exact
 PID/manifest/policy-bound readiness, pidfd cancellation, restart-safe fresh
-launch, and exactly-once synchronous or bounded deferred reaping. Deployment
-still needs the distinct-UID service entrypoint that establishes the inherited
-profile and wires this lifecycle to Cargo.
+launch, one-record readiness publication to Cargo, serving pidfd custody, and
+exactly-once synchronous or bounded deferred reaping. Deployment still needs
+the distinct-UID service entrypoint that establishes the inherited profile and
+provides Cargo with the authenticated control connection.
 
 A sealed-static issuer has no user-space DSO inventory. Its runtime policy
 therefore uses SHA-256 and length of the fixed canonical

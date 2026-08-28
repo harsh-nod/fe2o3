@@ -172,13 +172,15 @@ against that sealed policy before copying both into distinct read-only
 mode-0555 memfds with complete content and executable seals. The resulting
 move-only program is now consumed into one prepared supervisor together with
 the canonical signing-key capability, dedicated non-root UID/GID profile, and
-an exact service-owned mode-0700 root. Prepared, launched, and ready states are
-move-only and expose no descriptor, key, or signing operation. Readiness must
-be one exact PID/manifest/policy record followed by EOF while the same pidfd
-child is live; cancellation and drop use pidfd signaling plus exactly-once
-bounded reaping. The pinned policy has an
+an exact service-owned mode-0700 root. Prepared, launched, ready, and serving
+states are move-only and expose no descriptor, key, or signing operation.
+Readiness must be one exact PID/manifest/policy record followed by EOF while
+the same pidfd child is live. The supervisor then publishes those exact bytes
+once over the authenticated Cargo control connection, drops that connection,
+and retains pidfd serving custody; cancellation and drop use pidfd signaling
+plus exactly-once bounded reaping. The pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
-service-profile establishment, Cargo supervisor acquisition, and the Worker V3
+service-profile establishment, Cargo listener acquisition, and the Worker V3
 authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

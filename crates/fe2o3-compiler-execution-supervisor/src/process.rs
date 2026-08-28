@@ -18,6 +18,7 @@ use fe2o3_compiler_execution_protocol::{
 use fe2o3_static_preexec_manifest::{
     PREEXEC_EXECUTABLE_FD, PREEXEC_MANIFEST_FD, PREEXEC_MAX_DESCRIPTORS, PREEXEC_SOURCE_FD_BASE,
 };
+use rustix::net::SendFlags;
 use rustix::pipe::{PipeFlags, pipe_with};
 
 use crate::{
@@ -296,6 +297,7 @@ impl Error for ProtectedIssuerLaunchErrorV1 {
 /// ```
 pub struct LaunchedProtectedIssuerV1 {
     process: ProtectedIssuerChildV1,
+    control: OwnedFd,
     stdout_reader: OwnedFd,
     stderr_reader: OwnedFd,
     readiness_reader: OwnedFd,
@@ -344,6 +346,7 @@ impl LaunchedProtectedIssuerV1 {
         }
         let Self {
             process,
+            control,
             stdout_reader,
             stderr_reader,
             readiness_reader,
@@ -353,6 +356,7 @@ impl LaunchedProtectedIssuerV1 {
         drop(readiness_reader);
         Ok(ReadyProtectedIssuerV1 {
             process,
+            control,
             _stdout_reader: stdout_reader,
             _stderr_reader: stderr_reader,
             readiness,
@@ -392,6 +396,7 @@ impl LaunchedProtectedIssuerV1 {
 /// ```
 pub struct ReadyProtectedIssuerV1 {
     process: ProtectedIssuerChildV1,
+    control: OwnedFd,
     _stdout_reader: OwnedFd,
     _stderr_reader: OwnedFd,
     readiness: CompilerExecutionServiceReadyV1,
@@ -435,7 +440,109 @@ impl ReadyProtectedIssuerV1 {
         Ok(())
     }
 
+    /// Publishes the admitted readiness record to Cargo and enters serving custody.
+    pub fn publish_readiness(
+        self,
+        timeout: Duration,
+    ) -> Result<ServingProtectedIssuerV1, ProtectedIssuerLaunchErrorV1> {
+        let deadline = bounded_deadline(timeout)?;
+        self.revalidate()?;
+        publish_control_readiness(
+            &self.control,
+            self.readiness.canonical_bytes(),
+            &self.process,
+            deadline,
+        )?;
+        let Self {
+            process,
+            control,
+            _stdout_reader,
+            _stderr_reader,
+            readiness,
+            launch_manifest,
+            policy,
+        } = self;
+        drop(control);
+        Ok(ServingProtectedIssuerV1 {
+            process,
+            _stdout_reader,
+            _stderr_reader,
+            readiness,
+            launch_manifest,
+            policy,
+        })
+    }
+
     /// Cancels the exact child through its pidfd and synchronously reaps it once.
+    pub fn cancel(mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+        self.process.cancel_and_reap()
+    }
+}
+
+/// Move-only custody of one ready issuer after Cargo received exact readiness.
+///
+/// This value owns the same pidfd child for the complete service session. It
+/// exposes no descriptor, signing operation, publication authority, loading
+/// authority, or GPU authority.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_execution_supervisor::ServingProtectedIssuerV1;
+/// fn require_clone<T: Clone>() {}
+/// require_clone::<ServingProtectedIssuerV1>();
+/// ```
+///
+/// ```compile_fail
+/// use std::os::fd::AsFd;
+/// use fe2o3_compiler_execution_supervisor::ServingProtectedIssuerV1;
+/// fn require_as_fd<T: AsFd>() {}
+/// require_as_fd::<ServingProtectedIssuerV1>();
+/// ```
+pub struct ServingProtectedIssuerV1 {
+    process: ProtectedIssuerChildV1,
+    _stdout_reader: OwnedFd,
+    _stderr_reader: OwnedFd,
+    readiness: CompilerExecutionServiceReadyV1,
+    launch_manifest: CompilerExecutionServiceLaunchManifestV1,
+    policy: CompilerExecutionIssuerPolicyV1,
+}
+
+impl fmt::Debug for ServingProtectedIssuerV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServingProtectedIssuerV1")
+            .field("authority", &"announced-live-issuer-custody-only")
+            .field("pid", &self.pid())
+            .field("readiness", &self.readiness.identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ServingProtectedIssuerV1 {
+    /// Returns the exact pidfd-bound issuer PID.
+    pub fn pid(&self) -> u32 {
+        self.process.pid_u32()
+    }
+
+    /// Returns the exact readiness record acknowledged by Cargo.
+    pub const fn readiness(&self) -> &CompilerExecutionServiceReadyV1 {
+        &self.readiness
+    }
+
+    /// Revalidates the acknowledged launch binding and pidfd liveness.
+    pub fn revalidate(&self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+        if !self
+            .readiness
+            .matches_launch(self.pid(), &self.launch_manifest, &self.policy)
+        {
+            return Err(ProtectedIssuerLaunchErrorV1::ReadinessMismatch);
+        }
+        if !self.process.is_live()? {
+            return Err(self.process.exited_error("is no longer serving"));
+        }
+        Ok(())
+    }
+
+    /// Cancels the exact serving child and synchronously reaps it once.
     pub fn cancel(mut self) -> Result<(), ProtectedIssuerLaunchErrorV1> {
         self.process.cancel_and_reap()
     }
@@ -597,6 +704,7 @@ impl ProtectedIssuerSupervisorV1 {
             }
 
             let PreparedProtectedIssuerLaunchV1 {
+                accepted,
                 stdout_reader,
                 stderr_reader,
                 readiness_reader,
@@ -604,6 +712,7 @@ impl ProtectedIssuerSupervisorV1 {
             } = prepared;
             Ok(LaunchedProtectedIssuerV1 {
                 process,
+                control: accepted.into_control(),
                 stdout_reader,
                 stderr_reader,
                 readiness_reader,
@@ -1075,6 +1184,41 @@ fn await_readiness_record(
         return Err(ProtectedIssuerLaunchErrorV1::ReadinessMismatch);
     }
     Ok(readiness)
+}
+
+fn publish_control_readiness(
+    control: &OwnedFd,
+    bytes: &[u8],
+    process: &ProtectedIssuerChildV1,
+    deadline: Instant,
+) -> Result<(), ProtectedIssuerLaunchErrorV1> {
+    loop {
+        match rustix::net::send(control, bytes, SendFlags::DONTWAIT | SendFlags::NOSIGNAL) {
+            Ok(count) if count == bytes.len() => return Ok(()),
+            Ok(_) => {
+                return Err(ProtectedIssuerLaunchErrorV1::InvalidProcessState(
+                    "Cargo control accepted a partial readiness packet",
+                ));
+            }
+            Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
+                if !process.is_live()? {
+                    return Err(process.exited_error("exited before Cargo readiness publication"));
+                }
+                if Instant::now() >= deadline {
+                    return Err(ProtectedIssuerLaunchErrorV1::Timeout(
+                        "Cargo readiness publication",
+                    ));
+                }
+                std::thread::sleep(POLL_INTERVAL_V1);
+            }
+            Err(source) => {
+                return Err(io_error(
+                    "publish protected issuer readiness to Cargo",
+                    source.into(),
+                ));
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
