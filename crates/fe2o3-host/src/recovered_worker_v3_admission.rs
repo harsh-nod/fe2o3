@@ -1,4 +1,4 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, marker::PhantomData};
 
 use fe2o3_amd_target::{AmdTargetId, ProductionAmdTargetProfileV1};
 use fe2o3_artifact_transaction::{
@@ -26,6 +26,9 @@ use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
 use crate::application_descriptor_handoff::RetainedWorkerV3ApplicationDescriptorsV1;
+use crate::{
+    CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
+};
 
 const WORKER_V3_HOST_LINEAGE_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-lineage.v1\0";
 
@@ -76,48 +79,17 @@ impl WorkerV3HostLineageEvidenceV1 {
     }
 }
 
-/// Read-only host admission for one restart-recovered Worker V3 publication.
-///
-/// Construction independently binds the exact durable artifact to the linked precursor,
-/// compiler descriptor source, export manifest, physical metadata and ELF symbols, requested
-/// logical kernel, and exact production target. Physical device identity is deliberately absent:
-/// a runtime-specific transition must bind the authenticated artifact to a checked live device.
-/// The value owns the move-only recovered envelope and its current publication lease, but exposes
-/// no HSACO bytes or load/launch transition.
-pub struct RecoveredWorkerV3PinnedDescriptorV1 {
+struct RecoveredWorkerV3ArtifactStateV1 {
     envelope: RecoveredWorkerV3LoadEnvelopeV2,
     compiler_execution_subject: InertCompilerExecutionSubjectV1,
     outer_handoff: InertSemanticCompilerModuleHandoffV3,
     inspection: FinalizedDescriptorInspection,
-    descriptor_index: usize,
-    physical_kernel_index: usize,
-    lineage: WorkerV3HostLineageEvidenceV1,
     #[cfg(target_os = "linux")]
     application_descriptors: Option<RetainedWorkerV3ApplicationDescriptorsV1>,
 }
 
-impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RecoveredWorkerV3PinnedDescriptorV1")
-            .field("published", &self.published())
-            .field("descriptor", self.descriptor())
-            .field("target", &self.target())
-            .field("code_object_version", &self.code_object_version())
-            .field("lineage", &self.lineage.identity)
-            .finish_non_exhaustive()
-    }
-}
-
-impl RecoveredWorkerV3PinnedDescriptorV1 {
-    /// Revalidates the current durable generation and exact pinned artifact occurrence.
-    pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        let current = self.acquire_retained_currentness_token()?;
-        drop(current);
-        Ok(())
-    }
-
-    pub(crate) fn acquire_retained_currentness_token(
+impl RecoveredWorkerV3ArtifactStateV1 {
+    fn acquire_retained_currentness_token(
         &self,
     ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
         let current = self
@@ -129,7 +101,7 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         Ok(current)
     }
 
-    pub(crate) fn revalidate_retained_currentness_token(
+    fn revalidate_retained_currentness_token(
         &self,
         current: &DurableCurrentLinkPublicationTokenV1,
     ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
@@ -181,66 +153,262 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
-    pub(crate) fn retain_application_descriptors(
-        mut self,
-        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
-    ) -> Self {
-        debug_assert!(self.application_descriptors.is_none());
-        self.application_descriptors = Some(descriptors);
-        self
-    }
-
-    pub fn published(&self) -> PublishedLinkArtifactV1 {
+    fn published(&self) -> PublishedLinkArtifactV1 {
         self.envelope.current_publication_lease().published()
     }
 
-    pub fn descriptor(&self) -> &KernelDescriptorV1 {
-        &self.inspection.descriptor_table().kernels()[self.descriptor_index]
-    }
-
-    pub(crate) fn descriptor_table(&self) -> &DeviceDescriptorTableV1 {
+    fn descriptor_table(&self) -> &DeviceDescriptorTableV1 {
         self.inspection.descriptor_table()
     }
 
-    pub fn physical_kernel(&self) -> &InspectedKernel {
-        &self.inspection.hsaco().kernels()[self.physical_kernel_index]
+    const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
+        &self.outer_handoff
     }
 
-    pub fn descriptor_binding(&self) -> KernelDescriptorBinding {
-        self.inspection.kernel_bindings().bindings()[self.physical_kernel_index]
+    const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        &self.compiler_execution_subject
+    }
+
+    const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
+        self.envelope.wire().compiler_execution_receipt()
+    }
+
+    fn target(&self) -> fe2o3_amd_target::AmdTargetId {
+        self.inspection.hsaco().target()
+    }
+
+    fn code_object_version(&self) -> CodeObjectVersion {
+        self.inspection.hsaco().code_object_version()
+    }
+}
+
+/// One inert, exactly selected entrypoint within a recovered Worker V3 artifact.
+///
+/// Entrypoints are move-only metadata. The containing admission retains the sole
+/// recovered envelope and current-publication lease.
+pub struct RecoveredWorkerV3EntrypointV1 {
+    ordinal: usize,
+    descriptor_index: usize,
+    physical_kernel_index: usize,
+    lineage: WorkerV3HostLineageEvidenceV1,
+}
+
+impl RecoveredWorkerV3EntrypointV1 {
+    pub const fn ordinal(&self) -> usize {
+        self.ordinal
     }
 
     pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
         self.lineage.identity
     }
+}
 
-    pub(crate) const fn lineage_evidence(&self) -> WorkerV3HostLineageEvidenceV1 {
-        self.lineage
+impl fmt::Debug for RecoveredWorkerV3EntrypointV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveredWorkerV3EntrypointV1")
+            .field("ordinal", &self.ordinal)
+            .field("lineage", &self.lineage.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Read-only admission of one exact ordered compiler-generated kernel roster.
+///
+/// The value owns one recovered envelope for the complete descriptor table. Its
+/// entrypoints are inert and grant no verification, load, or launch authority.
+pub struct RecoveredWorkerV3PinnedRosterV1<R> {
+    artifact: RecoveredWorkerV3ArtifactStateV1,
+    entrypoints: Vec<RecoveredWorkerV3EntrypointV1>,
+    _roster: PhantomData<fn() -> R>,
+}
+
+impl<R> fmt::Debug for RecoveredWorkerV3PinnedRosterV1<R> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveredWorkerV3PinnedRosterV1")
+            .field("published", &self.published())
+            .field("entrypoint_count", &self.entrypoints.len())
+            .field("target", &self.target())
+            .field("code_object_version", &self.code_object_version())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R> RecoveredWorkerV3PinnedRosterV1<R> {
+    pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        let current = self.artifact.acquire_retained_currentness_token()?;
+        drop(current);
+        Ok(())
     }
 
-    pub(crate) const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
-        &self.outer_handoff
+    pub fn published(&self) -> PublishedLinkArtifactV1 {
+        self.artifact.published()
     }
 
-    pub(crate) const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
-        &self.compiler_execution_subject
+    pub fn entrypoints(&self) -> &[RecoveredWorkerV3EntrypointV1] {
+        &self.entrypoints
     }
 
-    pub(crate) const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
-        self.envelope.wire().compiler_execution_receipt()
+    pub fn descriptor(&self, ordinal: usize) -> Option<&KernelDescriptorV1> {
+        let entrypoint = self.entrypoints.get(ordinal)?;
+        self.artifact
+            .inspection
+            .descriptor_table()
+            .kernels()
+            .get(entrypoint.descriptor_index)
+    }
+
+    pub fn physical_kernel(&self, ordinal: usize) -> Option<&InspectedKernel> {
+        let entrypoint = self.entrypoints.get(ordinal)?;
+        self.artifact
+            .inspection
+            .hsaco()
+            .kernels()
+            .get(entrypoint.physical_kernel_index)
+    }
+
+    pub fn descriptor_binding(&self, ordinal: usize) -> Option<KernelDescriptorBinding> {
+        let entrypoint = self.entrypoints.get(ordinal)?;
+        self.artifact
+            .inspection
+            .kernel_bindings()
+            .bindings()
+            .get(entrypoint.physical_kernel_index)
+            .copied()
     }
 
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
-        self.inspection.hsaco().target()
+        self.artifact.target()
     }
 
     pub fn code_object_version(&self) -> CodeObjectVersion {
-        self.inspection.hsaco().code_object_version()
+        self.artifact.code_object_version()
     }
 
     /// Exact descriptor-source association was independently checked during construction.
     /// This does not authenticate compiler process origin or formal verification authority.
+    pub const fn authenticates_descriptor_source(&self) -> bool {
+        true
+    }
+
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+
+    pub const fn authenticates_verification_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_load_authority(&self) -> bool {
+        false
+    }
+
+    pub const fn grants_launch_authority(&self) -> bool {
+        false
+    }
+}
+
+/// Read-only host admission for one selected entrypoint in a recovered Worker V3 publication.
+///
+/// This source-compatible single-kernel view owns the same common artifact state
+/// used by roster admission and still grants no load or launch authority.
+pub struct RecoveredWorkerV3PinnedDescriptorV1 {
+    artifact: RecoveredWorkerV3ArtifactStateV1,
+    entrypoint: RecoveredWorkerV3EntrypointV1,
+}
+
+impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveredWorkerV3PinnedDescriptorV1")
+            .field("published", &self.published())
+            .field("descriptor", self.descriptor())
+            .field("target", &self.target())
+            .field("code_object_version", &self.code_object_version())
+            .field("lineage", &self.entrypoint.lineage.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RecoveredWorkerV3PinnedDescriptorV1 {
+    pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        let current = self.acquire_retained_currentness_token()?;
+        drop(current);
+        Ok(())
+    }
+
+    pub(crate) fn acquire_retained_currentness_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
+        self.artifact.acquire_retained_currentness_token()
+    }
+
+    pub(crate) fn revalidate_retained_currentness_token(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.artifact.revalidate_retained_currentness_token(current)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn retain_application_descriptors(
+        mut self,
+        descriptors: RetainedWorkerV3ApplicationDescriptorsV1,
+    ) -> Self {
+        debug_assert!(self.artifact.application_descriptors.is_none());
+        self.artifact.application_descriptors = Some(descriptors);
+        self
+    }
+
+    pub fn published(&self) -> PublishedLinkArtifactV1 {
+        self.artifact.published()
+    }
+
+    pub fn descriptor(&self) -> &KernelDescriptorV1 {
+        &self.artifact.inspection.descriptor_table().kernels()[self.entrypoint.descriptor_index]
+    }
+
+    pub(crate) fn descriptor_table(&self) -> &DeviceDescriptorTableV1 {
+        self.artifact.descriptor_table()
+    }
+
+    pub fn physical_kernel(&self) -> &InspectedKernel {
+        &self.artifact.inspection.hsaco().kernels()[self.entrypoint.physical_kernel_index]
+    }
+
+    pub fn descriptor_binding(&self) -> KernelDescriptorBinding {
+        self.artifact.inspection.kernel_bindings().bindings()[self.entrypoint.physical_kernel_index]
+    }
+
+    pub const fn lineage_identity(&self) -> WorkerV3HostLineageIdentityV1 {
+        self.entrypoint.lineage.identity
+    }
+
+    pub(crate) const fn lineage_evidence(&self) -> WorkerV3HostLineageEvidenceV1 {
+        self.entrypoint.lineage
+    }
+
+    pub(crate) const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
+        self.artifact.outer_handoff()
+    }
+
+    pub(crate) const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        self.artifact.compiler_execution_subject()
+    }
+
+    pub(crate) const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
+        self.artifact.compiler_execution_receipt()
+    }
+
+    pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
+        self.artifact.target()
+    }
+
+    pub fn code_object_version(&self) -> CodeObjectVersion {
+        self.artifact.code_object_version()
+    }
+
     pub const fn authenticates_descriptor_source(&self) -> bool {
         true
     }
@@ -267,6 +435,61 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
     envelope: RecoveredWorkerV3LoadEnvelopeV2,
     kernel_id: KernelId,
 ) -> Result<RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3AdmissionErrorV1> {
+    let (artifact, current) = admit_recovered_worker_v3_artifact_v1(envelope)?;
+    let entrypoint = select_entrypoint(&artifact, kernel_id)?;
+    drop(current);
+
+    Ok(RecoveredWorkerV3PinnedDescriptorV1 {
+        artifact,
+        entrypoint,
+    })
+}
+
+/// Consumes one recovered envelope into an exact, ordered, inert marker roster.
+///
+/// This transition matches every marker's logical name, export name, and
+/// binding identity to the complete receipt-bound compiler descriptor table.
+/// Generated host-contract identities remain inert until a later sealed
+/// verification transition.
+pub fn admit_recovered_worker_v3_roster_v1<R>(
+    envelope: RecoveredWorkerV3LoadEnvelopeV2,
+) -> Result<RecoveredWorkerV3PinnedRosterV1<R>, RecoveredWorkerV3AdmissionErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    let (artifact, current) = admit_recovered_worker_v3_artifact_v1(envelope)?;
+    validate_exact_roster(R::ENTRIES, artifact.descriptor_table().kernels())?;
+    let mut entrypoints = Vec::with_capacity(R::ENTRIES.len());
+    for (ordinal, expected) in R::ENTRIES.iter().enumerate() {
+        let entrypoint = select_entrypoint(
+            &artifact,
+            KernelId::from_bytes(expected.kernel_binding_id()),
+        )?;
+        if entrypoint.descriptor_index != ordinal {
+            return Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntryReordered {
+                expected_ordinal: ordinal,
+                actual_ordinal: entrypoint.descriptor_index,
+            });
+        }
+        entrypoints.push(entrypoint);
+    }
+    drop(current);
+    Ok(RecoveredWorkerV3PinnedRosterV1 {
+        artifact,
+        entrypoints,
+        _roster: PhantomData,
+    })
+}
+
+fn admit_recovered_worker_v3_artifact_v1(
+    envelope: RecoveredWorkerV3LoadEnvelopeV2,
+) -> Result<
+    (
+        RecoveredWorkerV3ArtifactStateV1,
+        DurableCurrentLinkPublicationTokenV1,
+    ),
+    RecoveredWorkerV3AdmissionErrorV1,
+> {
     envelope
         .wire()
         .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
@@ -292,28 +515,43 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
         .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
     validate_compiler_source_and_exports(&outer, &inspection)?;
     validate_target_and_code_object(&outer, &inspection)?;
-    let (descriptor_index, physical_kernel_index) =
-        select_exact_kernel(&outer, &inspection, kernel_id)?;
-    let lineage = derive_host_lineage_identity(
-        &outer,
-        envelope.wire().replay().publication_intent_record(),
-        &inspection,
-        kernel_id,
-        &compiler_execution_subject,
-        envelope.wire().compiler_execution_receipt(),
-    );
-    drop(current);
 
-    Ok(RecoveredWorkerV3PinnedDescriptorV1 {
-        envelope,
-        compiler_execution_subject,
-        outer_handoff: outer,
-        inspection,
+    Ok((
+        RecoveredWorkerV3ArtifactStateV1 {
+            envelope,
+            compiler_execution_subject,
+            outer_handoff: outer,
+            inspection,
+            #[cfg(target_os = "linux")]
+            application_descriptors: None,
+        },
+        current,
+    ))
+}
+
+fn select_entrypoint(
+    artifact: &RecoveredWorkerV3ArtifactStateV1,
+    kernel_id: KernelId,
+) -> Result<RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3AdmissionErrorV1> {
+    let (descriptor_index, physical_kernel_index) =
+        select_exact_kernel(&artifact.outer_handoff, &artifact.inspection, kernel_id)?;
+    let lineage = derive_host_lineage_identity(
+        &artifact.outer_handoff,
+        artifact
+            .envelope
+            .wire()
+            .replay()
+            .publication_intent_record(),
+        &artifact.inspection,
+        kernel_id,
+        &artifact.compiler_execution_subject,
+        artifact.envelope.wire().compiler_execution_receipt(),
+    );
+    Ok(RecoveredWorkerV3EntrypointV1 {
+        ordinal: descriptor_index,
         descriptor_index,
         physical_kernel_index,
         lineage,
-        #[cfg(target_os = "linux")]
-        application_descriptors: None,
     })
 }
 
@@ -543,39 +781,154 @@ fn production_profile_for_artifact_target(
     ProductionAmdTargetProfileV1::from_device_target(&target.to_string())
 }
 
+#[derive(Clone, Copy)]
+struct DescriptorRosterIdentityV1<'identity> {
+    logical_name: &'identity str,
+    export_name: &'identity str,
+    kernel_binding_id: [u8; 32],
+}
+
+fn validate_exact_roster(
+    expected: &[CompilerGeneratedKernelExpectationRosterEntryV1],
+    descriptors: &[KernelDescriptorV1],
+) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+    let actual = descriptors
+        .iter()
+        .map(|descriptor| DescriptorRosterIdentityV1 {
+            logical_name: descriptor.logical_name().as_str(),
+            export_name: descriptor.entry_name().as_str(),
+            kernel_binding_id: *descriptor.kernel_id().as_bytes(),
+        })
+        .collect::<Vec<_>>();
+    validate_exact_roster_identities(expected, &actual)
+}
+
+fn validate_exact_roster_identities(
+    expected: &[CompilerGeneratedKernelExpectationRosterEntryV1],
+    actual: &[DescriptorRosterIdentityV1<'_>],
+) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+    if expected.is_empty() {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::EmptyRoster);
+    }
+    for duplicate_ordinal in 0..expected.len() {
+        if let Some(first_ordinal) = expected[..duplicate_ordinal]
+            .iter()
+            .position(|first| roster_expectations_conflict(first, &expected[duplicate_ordinal]))
+        {
+            return Err(RecoveredWorkerV3AdmissionErrorV1::DuplicateRosterEntry {
+                first_ordinal,
+                duplicate_ordinal,
+            });
+        }
+    }
+    for duplicate_ordinal in 0..actual.len() {
+        if let Some(first_ordinal) = actual[..duplicate_ordinal].iter().position(|first| {
+            descriptor_roster_identities_conflict(first, &actual[duplicate_ordinal])
+        }) {
+            return Err(
+                RecoveredWorkerV3AdmissionErrorV1::DuplicateDescriptorRosterEntry {
+                    first_ordinal,
+                    duplicate_ordinal,
+                },
+            );
+        }
+    }
+    if expected.len() != actual.len() {
+        return Err(RecoveredWorkerV3AdmissionErrorV1::RosterLengthMismatch {
+            expected: expected.len(),
+            actual: actual.len(),
+        });
+    }
+    for (ordinal, (expected_entry, actual_entry)) in expected.iter().zip(actual.iter()).enumerate()
+    {
+        if roster_entry_matches_descriptor(expected_entry, actual_entry) {
+            continue;
+        }
+        if let Some(actual_ordinal) = actual
+            .iter()
+            .position(|entry| roster_entry_matches_descriptor(expected_entry, entry))
+        {
+            return Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntryReordered {
+                expected_ordinal: ordinal,
+                actual_ordinal,
+            });
+        }
+        return Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntrySubstituted { ordinal });
+    }
+    Ok(())
+}
+
+fn roster_expectations_conflict(
+    left: &CompilerGeneratedKernelExpectationRosterEntryV1,
+    right: &CompilerGeneratedKernelExpectationRosterEntryV1,
+) -> bool {
+    left.logical_name() == right.logical_name()
+        || left.export_name() == right.export_name()
+        || left.kernel_binding_id() == right.kernel_binding_id()
+}
+
+fn descriptor_roster_identities_conflict(
+    left: &DescriptorRosterIdentityV1<'_>,
+    right: &DescriptorRosterIdentityV1<'_>,
+) -> bool {
+    left.logical_name == right.logical_name
+        || left.export_name == right.export_name
+        || left.kernel_binding_id == right.kernel_binding_id
+}
+
+fn roster_entry_matches_descriptor(
+    expected: &CompilerGeneratedKernelExpectationRosterEntryV1,
+    actual: &DescriptorRosterIdentityV1<'_>,
+) -> bool {
+    expected.logical_name() == actual.logical_name
+        && expected.export_name() == actual.export_name
+        && expected.kernel_binding_id() == actual.kernel_binding_id
+}
+
+fn select_unique_index(
+    mut matching_indices: impl Iterator<Item = usize>,
+    missing: RecoveredWorkerV3AdmissionErrorV1,
+    ambiguous: RecoveredWorkerV3AdmissionErrorV1,
+) -> Result<usize, RecoveredWorkerV3AdmissionErrorV1> {
+    let selected = matching_indices.next().ok_or(missing)?;
+    if matching_indices.next().is_some() {
+        return Err(ambiguous);
+    }
+    Ok(selected)
+}
+
 fn select_exact_kernel(
     outer: &InertSemanticCompilerModuleHandoffV3,
     inspection: &FinalizedDescriptorInspection,
     kernel_id: KernelId,
 ) -> Result<(usize, usize), RecoveredWorkerV3AdmissionErrorV1> {
-    let mut descriptors = inspection
-        .descriptor_table()
-        .kernels()
-        .iter()
-        .enumerate()
-        .filter(|(_, descriptor)| descriptor.kernel_id() == kernel_id);
-    let (descriptor_index, descriptor) = descriptors
-        .next()
-        .ok_or(RecoveredWorkerV3AdmissionErrorV1::KernelNotFound)?;
-    if descriptors.next().is_some() {
-        return Err(RecoveredWorkerV3AdmissionErrorV1::AmbiguousKernel);
-    }
+    let descriptor_index = select_unique_index(
+        inspection
+            .descriptor_table()
+            .kernels()
+            .iter()
+            .enumerate()
+            .filter(|(_, descriptor)| descriptor.kernel_id() == kernel_id)
+            .map(|(index, _)| index),
+        RecoveredWorkerV3AdmissionErrorV1::KernelNotFound,
+        RecoveredWorkerV3AdmissionErrorV1::AmbiguousKernel,
+    )?;
+    let descriptor = &inspection.descriptor_table().kernels()[descriptor_index];
 
-    let mut physical = inspection
-        .hsaco()
-        .kernels()
-        .iter()
-        .enumerate()
-        .filter(|(_, kernel)| {
-            kernel.name() == descriptor.entry_name().as_str()
-                && kernel.symbol() == descriptor.descriptor_symbol().as_str()
-        });
-    let (physical_index, _) = physical
-        .next()
-        .ok_or(RecoveredWorkerV3AdmissionErrorV1::PhysicalKernelNotFound)?;
-    if physical.next().is_some() {
-        return Err(RecoveredWorkerV3AdmissionErrorV1::AmbiguousPhysicalKernel);
-    }
+    let physical_index = select_unique_index(
+        inspection
+            .hsaco()
+            .kernels()
+            .iter()
+            .enumerate()
+            .filter(|(_, kernel)| {
+                kernel.name() == descriptor.entry_name().as_str()
+                    && kernel.symbol() == descriptor.descriptor_symbol().as_str()
+            })
+            .map(|(index, _)| index),
+        RecoveredWorkerV3AdmissionErrorV1::PhysicalKernelNotFound,
+        RecoveredWorkerV3AdmissionErrorV1::AmbiguousPhysicalKernel,
+    )?;
     let binding = inspection
         .kernel_bindings()
         .bindings()
@@ -618,6 +971,26 @@ pub enum RecoveredWorkerV3AdmissionErrorV1 {
     UnsupportedTarget,
     TargetMismatch,
     CodeObjectVersionMismatch,
+    EmptyRoster,
+    DuplicateRosterEntry {
+        first_ordinal: usize,
+        duplicate_ordinal: usize,
+    },
+    DuplicateDescriptorRosterEntry {
+        first_ordinal: usize,
+        duplicate_ordinal: usize,
+    },
+    RosterLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    RosterEntryReordered {
+        expected_ordinal: usize,
+        actual_ordinal: usize,
+    },
+    RosterEntrySubstituted {
+        ordinal: usize,
+    },
     KernelNotFound,
     AmbiguousKernel,
     PhysicalKernelNotFound,
@@ -687,6 +1060,38 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
             }
             Self::CodeObjectVersionMismatch => formatter
                 .write_str("Worker V3 host admission requires code-object V6 on every boundary"),
+            Self::EmptyRoster => {
+                formatter.write_str("Worker V3 marker roster must contain at least one entry")
+            }
+            Self::DuplicateRosterEntry {
+                first_ordinal,
+                duplicate_ordinal,
+            } => write!(
+                formatter,
+                "Worker V3 marker roster entry {duplicate_ordinal} conflicts with entry {first_ordinal}"
+            ),
+            Self::DuplicateDescriptorRosterEntry {
+                first_ordinal,
+                duplicate_ordinal,
+            } => write!(
+                formatter,
+                "Worker V3 descriptor roster entry {duplicate_ordinal} conflicts with entry {first_ordinal}"
+            ),
+            Self::RosterLengthMismatch { expected, actual } => write!(
+                formatter,
+                "Worker V3 marker roster has {expected} entries but its exact compiler descriptor has {actual}"
+            ),
+            Self::RosterEntryReordered {
+                expected_ordinal,
+                actual_ordinal,
+            } => write!(
+                formatter,
+                "Worker V3 marker roster entry {expected_ordinal} occurs at compiler descriptor ordinal {actual_ordinal}"
+            ),
+            Self::RosterEntrySubstituted { ordinal } => write!(
+                formatter,
+                "Worker V3 marker roster entry {ordinal} differs from its compiler descriptor entry"
+            ),
             Self::KernelNotFound => {
                 formatter.write_str("requested kernel is absent from the Worker V3 descriptor")
             }
@@ -738,6 +1143,131 @@ impl Error for RecoveredWorkerV3AdmissionErrorV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn roster_entry(
+        logical_name: &'static str,
+        export_name: &'static str,
+        binding: u8,
+    ) -> CompilerGeneratedKernelExpectationRosterEntryV1 {
+        CompilerGeneratedKernelExpectationRosterEntryV1::from_parts(
+            logical_name,
+            export_name,
+            [binding; 32],
+            [binding.wrapping_add(1); 32],
+        )
+    }
+
+    fn descriptor_identity(
+        logical_name: &'static str,
+        export_name: &'static str,
+        binding: u8,
+    ) -> DescriptorRosterIdentityV1<'static> {
+        DescriptorRosterIdentityV1 {
+            logical_name,
+            export_name,
+            kernel_binding_id: [binding; 32],
+        }
+    }
+
+    #[test]
+    fn exact_roster_order_is_complete_and_identity_bound() {
+        let expected = [
+            roster_entry("alpha", "alpha_export", 1),
+            roster_entry("beta", "beta_export", 2),
+        ];
+        let exact = [
+            descriptor_identity("alpha", "alpha_export", 1),
+            descriptor_identity("beta", "beta_export", 2),
+        ];
+        assert!(validate_exact_roster_identities(&expected, &exact).is_ok());
+
+        let reordered = [exact[1], exact[0]];
+        assert!(matches!(
+            validate_exact_roster_identities(&expected, &reordered),
+            Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntryReordered {
+                expected_ordinal: 0,
+                actual_ordinal: 1,
+            })
+        ));
+
+        let substituted = [
+            descriptor_identity("alpha", "alpha_export", 1),
+            descriptor_identity("gamma", "gamma_export", 3),
+        ];
+        assert!(matches!(
+            validate_exact_roster_identities(&expected, &substituted),
+            Err(RecoveredWorkerV3AdmissionErrorV1::RosterEntrySubstituted { ordinal: 1 })
+        ));
+    }
+
+    #[test]
+    fn exact_roster_rejects_duplicate_missing_and_extra_entries() {
+        let expected = [
+            roster_entry("alpha", "alpha_export", 1),
+            roster_entry("beta", "beta_export", 2),
+        ];
+        let actual = [
+            descriptor_identity("alpha", "alpha_export", 1),
+            descriptor_identity("beta", "beta_export", 2),
+        ];
+
+        assert!(matches!(
+            validate_exact_roster_identities(&[], &[]),
+            Err(RecoveredWorkerV3AdmissionErrorV1::EmptyRoster)
+        ));
+
+        let duplicate_expected = [expected[0], expected[0]];
+        assert!(matches!(
+            validate_exact_roster_identities(&duplicate_expected, &actual),
+            Err(RecoveredWorkerV3AdmissionErrorV1::DuplicateRosterEntry { .. })
+        ));
+
+        let duplicate_actual = [actual[0], actual[0]];
+        assert!(matches!(
+            validate_exact_roster_identities(&expected, &duplicate_actual),
+            Err(RecoveredWorkerV3AdmissionErrorV1::DuplicateDescriptorRosterEntry { .. })
+        ));
+
+        assert!(matches!(
+            validate_exact_roster_identities(&expected, &actual[..1]),
+            Err(RecoveredWorkerV3AdmissionErrorV1::RosterLengthMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        ));
+        let extra = [
+            actual[0],
+            actual[1],
+            descriptor_identity("gamma", "gamma_export", 3),
+        ];
+        assert!(matches!(
+            validate_exact_roster_identities(&expected, &extra),
+            Err(RecoveredWorkerV3AdmissionErrorV1::RosterLengthMismatch {
+                expected: 2,
+                actual: 3,
+            })
+        ));
+    }
+
+    #[test]
+    fn physical_selection_rejects_missing_and_ambiguous_matches() {
+        assert!(matches!(
+            select_unique_index(
+                std::iter::empty(),
+                RecoveredWorkerV3AdmissionErrorV1::PhysicalKernelNotFound,
+                RecoveredWorkerV3AdmissionErrorV1::AmbiguousPhysicalKernel,
+            ),
+            Err(RecoveredWorkerV3AdmissionErrorV1::PhysicalKernelNotFound)
+        ));
+        assert!(matches!(
+            select_unique_index(
+                [2, 3].into_iter(),
+                RecoveredWorkerV3AdmissionErrorV1::PhysicalKernelNotFound,
+                RecoveredWorkerV3AdmissionErrorV1::AmbiguousPhysicalKernel,
+            ),
+            Err(RecoveredWorkerV3AdmissionErrorV1::AmbiguousPhysicalKernel)
+        ));
+    }
 
     #[test]
     fn production_artifact_target_profile_is_exact_and_never_relabels() {

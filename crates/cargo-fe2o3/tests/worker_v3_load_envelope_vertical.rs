@@ -53,7 +53,8 @@ use fe2o3_host::{
     WorkerV3SafetyPropertiesV1, WorkerV3SyntheticVerifierAdapterV1, WorkerV3SyntheticVerifierV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
-    admit_recovered_worker_v3_descriptor_v1, audit_recovered_worker_v3_verification_v1,
+    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
+    audit_recovered_worker_v3_verification_v1,
 };
 use fe2o3_kernel_descriptor::KernelId;
 use fe2o3_runtime_protocol::{
@@ -204,6 +205,10 @@ unsafe impl CompilerGeneratedKernelExpectationV1 for WorkerV3VecAddMarker {
     const PROFILE: CompilerGeneratedKernelProfileV1 =
         CompilerGeneratedKernelProfileV1::new(TEST_HOST_CONTRACT);
     const KERNEL_BINDING_ID_V1: [u8; 32] = TEST_MARKER_BINDING;
+}
+
+fe2o3_host::compiler_generated_kernel_expectation_roster_v1! {
+    struct WorkerV3VecAddRoster = [WorkerV3VecAddMarker];
 }
 
 struct WorkerV3VecAddArguments<'allocation> {
@@ -1620,6 +1625,29 @@ fn v3_host_admission_rejects_an_unknown_kernel_identity() {
         admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xff; 32])),
         Err(RecoveredWorkerV3AdmissionErrorV1::KernelNotFound)
     ));
+}
+
+#[test]
+fn v3_host_roster_admission_retains_one_inert_envelope_for_the_exact_table() {
+    let (_directory, recovered) = recovered_host_fixture();
+    let admitted = admit_recovered_worker_v3_roster_v1::<WorkerV3VecAddRoster>(recovered).unwrap();
+    assert_eq!(admitted.entrypoints().len(), 1);
+    assert_eq!(admitted.entrypoints()[0].ordinal(), 0);
+    assert_eq!(
+        admitted.descriptor(0).unwrap().kernel_id().as_bytes(),
+        &TEST_MARKER_BINDING
+    );
+    assert_eq!(admitted.physical_kernel(0).unwrap().name(), "vecadd");
+    assert_eq!(admitted.descriptor_binding(0).unwrap().kernel_index(), 0);
+    assert!(admitted.descriptor(1).is_none());
+    assert!(admitted.physical_kernel(1).is_none());
+    assert!(admitted.descriptor_binding(1).is_none());
+    assert!(admitted.authenticates_descriptor_source());
+    assert!(!admitted.authenticates_compiler_origin());
+    assert!(!admitted.authenticates_verification_authority());
+    assert!(!admitted.grants_load_authority());
+    assert!(!admitted.grants_launch_authority());
+    admitted.revalidate_currentness().unwrap();
 }
 
 #[test]

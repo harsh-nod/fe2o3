@@ -297,6 +297,101 @@ pub unsafe trait CompilerGeneratedKernelExpectationV1: KernelMarkerV1 {
     }
 }
 
+/// Metadata for one marker in an exact compiler-generated kernel roster.
+///
+/// This value carries no artifact bytes and grants no verification, load, or
+/// launch authority. Host admission compares the complete ordered roster with
+/// the independently recovered compiler descriptor table.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct CompilerGeneratedKernelExpectationRosterEntryV1 {
+    logical_name: &'static str,
+    export_name: &'static str,
+    kernel_binding_id: [u8; 32],
+    generated_host_contract_identity: [u8; 32],
+}
+
+impl CompilerGeneratedKernelExpectationRosterEntryV1 {
+    pub(crate) const fn from_parts(
+        logical_name: &'static str,
+        export_name: &'static str,
+        kernel_binding_id: [u8; 32],
+        generated_host_contract_identity: [u8; 32],
+    ) -> Self {
+        Self {
+            logical_name,
+            export_name,
+            kernel_binding_id,
+            generated_host_contract_identity,
+        }
+    }
+
+    #[doc(hidden)]
+    pub const fn for_marker<K: CompilerGeneratedKernelExpectationV1>() -> Self {
+        Self::from_parts(
+            K::LOGICAL_NAME,
+            K::EXPORT_NAME,
+            K::KERNEL_BINDING_ID_V1,
+            K::PROFILE.generated_host_contract_identity(),
+        )
+    }
+
+    pub const fn logical_name(&self) -> &'static str {
+        self.logical_name
+    }
+
+    pub const fn export_name(&self) -> &'static str {
+        self.export_name
+    }
+
+    pub const fn kernel_binding_id(&self) -> [u8; 32] {
+        self.kernel_binding_id
+    }
+
+    pub const fn generated_host_contract_identity(&self) -> [u8; 32] {
+        self.generated_host_contract_identity
+    }
+}
+
+/// Exact ordered set of compiler-generated kernel expectations for one artifact.
+///
+/// Implementations are metadata only. They grant no authority and are checked
+/// against the complete receipt-bound compiler descriptor table during host
+/// admission. The generated host-contract identity is retained for the later
+/// sealed verification transition; descriptor admission itself matches only
+/// the ordered logical name, export name, and kernel binding carried on both
+/// boundaries. Prefer [`compiler_generated_kernel_expectation_roster_v1!`] so
+/// every entry is derived directly from its generated marker.
+#[doc(hidden)]
+pub trait CompilerGeneratedKernelExpectationRosterV1: Send + Sync + 'static {
+    const ENTRIES: &'static [CompilerGeneratedKernelExpectationRosterEntryV1];
+}
+
+/// Declares an exact ordered roster from compiler-generated kernel markers.
+#[macro_export]
+#[doc(hidden)]
+macro_rules! compiler_generated_kernel_expectation_roster_v1 {
+    (
+        $(#[$metadata:meta])*
+        $visibility:vis struct $roster:ident = [$($marker:ty),+ $(,)?];
+    ) => {
+        $(#[$metadata])*
+        $visibility struct $roster;
+
+        impl $crate::CompilerGeneratedKernelExpectationRosterV1 for $roster {
+            const ENTRIES: &'static [
+                $crate::CompilerGeneratedKernelExpectationRosterEntryV1
+            ] = &[
+                $(
+                    $crate::CompilerGeneratedKernelExpectationRosterEntryV1::for_marker::<
+                        $marker
+                    >()
+                ),+
+            ];
+        }
+    };
+}
+
 /// Obtains an opaque semantic-authority token for one exact generated
 /// expectation and rejects cross-kernel token substitution.
 #[doc(hidden)]
@@ -829,6 +924,44 @@ mod tests {
         const PROFILE: CompilerGeneratedKernelProfileV1 =
             CompilerGeneratedKernelProfileV1::new([0x42; 32]);
         const KERNEL_BINDING_ID_V1: [u8; 32] = [0x41; 32];
+    }
+
+    struct SecondExpectation;
+
+    fn second_marker_function() {}
+
+    unsafe impl KernelMarkerV1 for SecondExpectation {
+        type Function = fn();
+        type Registration = ();
+
+        const LOGICAL_NAME: &'static str = "second";
+        const EXPORT_NAME: &'static str = "second_export";
+        const FUNCTION: Self::Function = second_marker_function;
+        const REGISTRATION: &'static Self::Registration = &();
+    }
+
+    unsafe impl CompilerGeneratedKernelExpectationV1 for SecondExpectation {
+        const PROFILE: CompilerGeneratedKernelProfileV1 =
+            CompilerGeneratedKernelProfileV1::new([0x52; 32]);
+        const KERNEL_BINDING_ID_V1: [u8; 32] = [0x51; 32];
+    }
+
+    crate::compiler_generated_kernel_expectation_roster_v1! {
+        struct OrderedTestRoster = [ExpectationWithoutBackend, SecondExpectation];
+    }
+
+    #[test]
+    fn generated_expectation_roster_preserves_marker_order_and_identity() {
+        let entries = OrderedTestRoster::ENTRIES;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].logical_name(), "general");
+        assert_eq!(entries[0].export_name(), "general");
+        assert_eq!(entries[0].kernel_binding_id(), [0x41; 32]);
+        assert_eq!(entries[0].generated_host_contract_identity(), [0x42; 32]);
+        assert_eq!(entries[1].logical_name(), "second");
+        assert_eq!(entries[1].export_name(), "second_export");
+        assert_eq!(entries[1].kernel_binding_id(), [0x51; 32]);
+        assert_eq!(entries[1].generated_host_contract_identity(), [0x52; 32]);
     }
 
     fn general_v3_semantic_witness_bytes(

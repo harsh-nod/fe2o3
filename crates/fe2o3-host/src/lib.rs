@@ -101,6 +101,7 @@ pub use artifact_binding::{
 };
 #[doc(hidden)]
 pub use artifact_binding::{
+    CompilerGeneratedKernelExpectationRosterEntryV1, CompilerGeneratedKernelExpectationRosterV1,
     CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
     CompilerGeneratedSemanticWitnessErrorV1, ValidatedCompilerGeneratedSemanticWitnessV1,
     semantic_witness_from_backend_v1, validate_compiler_generated_semantic_witness_v1,
@@ -175,8 +176,10 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v3_admission::{
-    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3PinnedDescriptorV1,
+    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3EntrypointV1,
+    RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
     WorkerV3HostLineageIdentityV1, admit_recovered_worker_v3_descriptor_v1,
+    admit_recovered_worker_v3_roster_v1,
 };
 pub use tile_interop::{
     GFX942_XOR4_BF16_TILE_COLUMNS_V1, GFX942_XOR4_BF16_TILE_ELEMENTS_V1,
@@ -209,7 +212,8 @@ pub mod __generated {
     };
 
     pub use crate::{
-        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
+        CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterEntryV1,
+        CompilerGeneratedKernelExpectationRosterV1, CompilerGeneratedKernelExpectationV1,
         CompilerGeneratedKernelProfileV1, CompilerGeneratedKfdArguments,
         CompilerGeneratedSemanticWitnessErrorV1, CompilerGeneratedWorkerV3ArgumentsV1,
         GeneratedArgumentFieldProperty, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
