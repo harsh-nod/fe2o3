@@ -11,9 +11,13 @@ crate-private, so an external caller must use this packet boundary.
 This checkpoint is not the complete production deployment. The repository now
 has a descriptor-only `x86_64-unknown-linux-musl` issuer executable, a strict
 static-ELF build gate, and a sealed launch manifest binding the exact expected
-client PID/UID/GID to the exact caller-pinned policy. A supervisor still needs
-to establish the real distinct-UID launch and ptrace inspection policy and map
-the seven admitted descriptors through the existing static pre-exec launcher.
+client PID/UID/GID to the exact caller-pinned policy. The supervisor's
+authority-free program stage now authenticates and independently seals the
+launcher and issuer before root or key binding; no per-launch input can select
+those images. The supervisor still needs to bind the credential profile, root,
+and key, establish the real distinct-UID launch and inspection policy, map the
+ten source descriptors through the existing static pre-exec launcher, and
+consume readiness under pidfd lifecycle ownership.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
 machine exist, but protected-supervisor integration, backend acquisition,
@@ -195,5 +199,9 @@ target and rejects an interpreter, dynamic section, runtime dependency, RPATH,
 RUNPATH, executable stack, undefined symbol, or an ELF entry address other than
 the syscall-only secure-start symbol. It also starts the issuer with
 FDs 3 through 9 closed and requires silent fail-closed exit status 1. This
-qualifies the executable image shape and pre-runtime hardening edge, not the
-still-pending supervisor-side image authentication or distinct-UID deployment.
+qualifies the executable image shape and pre-runtime hardening edge. The
+supervisor image-admission suite independently qualifies exact source
+measurements, static-profile validation, anonymous read-only executable memfd
+custody, complete content/exec seals, caller-policy agreement, mutation and
+substitution rejection, and move-only descriptor hiding on Linux and MI300X.
+It does not qualify the still-pending authority binding or distinct-UID launch.

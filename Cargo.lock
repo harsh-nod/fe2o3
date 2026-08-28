@@ -813,6 +813,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-compiler-execution-supervisor"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-broker-authority-service",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-runtime-protocol",
+ "fe2o3-static-preexec-manifest",
+ "libc",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-compiler-ffi"
 version = "0.1.0"
 dependencies = [

@@ -56,7 +56,13 @@ and a zero `RLIMIT_CORE`, verifies the two process controls, and then jumps to
 the static runtime entry while preserving its initial stack state. The static
 build gate requires the ELF entry address to equal that symbol. Supervisor-side
 authorization of the same sealed image remains required before key transfer;
-self-measurement after entry cannot authorize a substituted executable.
+self-measurement after entry cannot authorize a substituted executable. The
+dedicated supervisor now implements the preceding authority-free program
+stage: trusted provisioning supplies the launcher measurement, the sealed
+caller policy supplies the issuer measurement, and both exact images are
+copied to distinct read-only anonymous executable memfds with complete content,
+exec, and seal seals. The program value cannot accept a root or key; that
+authority-binding transition and the actual launch remain pending.
 
 A sealed-static issuer has no user-space DSO inventory. Its runtime policy
 therefore uses SHA-256 and length of the fixed canonical

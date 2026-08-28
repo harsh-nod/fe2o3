@@ -146,8 +146,12 @@ Rust startup and then consumes fixed FDs 3 through 9. After complete
 admission and durable recovery it emits one canonical PID/manifest/policy-bound
 readiness record through an atomic nonblocking pipe. Its build gate rejects
 dynamic-loader edges, undefined symbols, a displaced secure entry point, and
-non-fail-closed startup.
-Binding-wrapper/supervisor integration still remains; the pinned policy has an
+non-fail-closed startup. A dedicated supervisor crate now authenticates the
+provisioned launcher against a service release measurement and the issuer
+against that sealed policy before copying both into distinct read-only
+mode-0555 memfds with complete content and executable seals. The resulting
+move-only program has no key or root authority. Protected root/key binding,
+`clone3` launch, and readiness consumption still remain; the pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
 supervisor launch and inspection policy and the Worker V3 authority join remain
 absent. A fixed
