@@ -20,8 +20,9 @@ use std::{
 use ed25519_dalek::SigningKey;
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifact_transaction::{
-    BuildAttempt, DurablePublishedClaimReacquisitionErrorV3, InertCompilerExecutionSubjectV1,
-    WorkerV3LoadReadinessReceiptV1, reacquire_current_hsaco_publication_lease_v3,
+    BuildAttempt, DurablePublishedClaimReacquisitionErrorV3, DurablePublishedHsacoClaimV3,
+    InertCompilerExecutionSubjectV1, WorkerV3LoadReadinessReceiptV1,
+    reacquire_current_hsaco_publication_lease_v3,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_artifacts::{
@@ -294,6 +295,12 @@ struct ReviewedTestWorkerV3Verifier {
     fault: ReviewedTestWorkerV3VerifierFault,
 }
 
+struct CurrentnessProbingWorkerV3Verifier {
+    output_dir: PathBuf,
+    claim: DurablePublishedHsacoClaimV3,
+    observed_busy: bool,
+}
+
 struct ReviewedTestWorkerV3Auditor;
 
 impl<K> WorkerV3AuditorV1<K> for ReviewedTestWorkerV3Auditor
@@ -456,6 +463,33 @@ where
             [0xc5; 32],
             WorkerV3SafetyPropertiesV1::required(),
         ))
+    }
+}
+
+// SAFETY: this synthetic integration verifier only probes the cooperative publication lock before
+// delegating to the test-only verifier above. It cannot exist in a default or production build.
+unsafe impl<K> WorkerV3SyntheticVerifierV1<K> for CurrentnessProbingWorkerV3Verifier
+where
+    K: CompilerGeneratedKernelExpectationV1,
+{
+    type Error = Infallible;
+
+    unsafe fn verify_synthetic(
+        &mut self,
+        request: &WorkerV3VerificationRequestV1<'_, K>,
+    ) -> Result<WorkerV3VerificationDecisionV1, Self::Error> {
+        self.observed_busy = matches!(
+            reacquire_current_hsaco_publication_lease_v3(&self.output_dir, &self.claim),
+            Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+        );
+        assert!(self.observed_busy);
+        // SAFETY: both implementations are confined to the explicit synthetic-verifier feature.
+        unsafe {
+            ReviewedTestWorkerV3Verifier {
+                fault: ReviewedTestWorkerV3VerifierFault::None,
+            }
+            .verify_synthetic(request)
+        }
     }
 }
 
@@ -1544,13 +1578,17 @@ fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
     let admitted =
         admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
             .unwrap();
+    let mut verifier = CurrentnessProbingWorkerV3Verifier {
+        output_dir: directory.0.clone(),
+        claim: claim.clone(),
+        observed_busy: false,
+    };
     let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
         admitted,
-        &mut ReviewedTestWorkerV3Verifier {
-            fault: ReviewedTestWorkerV3VerifierFault::None,
-        },
+        &mut verifier,
     )
     .unwrap();
+    assert!(verifier.observed_busy);
     authenticated.revalidate_currentness().unwrap();
 
     assert!(matches!(
