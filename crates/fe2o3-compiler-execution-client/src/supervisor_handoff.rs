@@ -139,7 +139,7 @@ impl CompilerExecutionServiceLaunchV1 {
     }
 }
 
-fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
+pub(crate) fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch: CompilerExecutionServiceLaunchV1,
     control: OwnedFd,
     expected_supervisor: CompilerExecutionSupervisorCredentialsV1,

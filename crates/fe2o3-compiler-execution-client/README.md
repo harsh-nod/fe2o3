@@ -38,11 +38,28 @@ truncated, ancillary, trailing, wrong-policy, and wrong-subject packets. The
 compiler-service client can consume fixed child FD 195 into private
 close-on-exec custody before performing the bounded acquisition.
 
-Production still needs a deployed distinct-UID entrypoint with authenticated
-listener acquisition and a binding-wrapper lifecycle that retains both parent
-receivers, completes issuer readiness, makes policy FD 202 and service FD 195
-available to the rustc backend, and joins the returned carriage to the exact
-compiler subject before constructing the V2 load envelope. The active Cargo
-path does not synthesize a receipt or acquire one from ambient authority; fresh
-completion therefore continues to fail closed until that orchestration exists.
-HSACO publication and runtime admission remain outside this crate.
+`PendingCompilerExecutionChildSessionV1` is the move-only join over those two
+channels and an explicitly supplied sealed policy capability. It preflights FD
+195, FD 196, and policy FD 202, installs all three on one unspawned rustc
+command, and admits both parent endpoints against one exact PID under one
+absolute deadline. Its next transition transfers only the service endpoint to
+the authenticated distinct-UID supervisor while retaining the policy and
+receipt-return endpoint. Exact supervisor readiness must then match that
+retained policy before receipt reception becomes available. Completion exists
+only after FD 196 returns one real canonical carriage matching both the retained
+policy and the caller's exact compiler subject; no transition creates or
+synthesizes a carriage. On the other endpoint,
+`ProtectedIssuerServiceV1::serve_one` composes fixed-listener acceptance,
+authenticated handoff, static launch, readiness publication, natural service
+exit, and exact reaping.
+
+Production still needs externally provisioned custody for the admitted static
+launcher and issuer images, distinct supervisor UID/GID, service-owned root,
+sealed signing key, and a deployed service process receiving the fixed listener
+descriptor. Those authorities cannot be derived from the production build
+config or environment. The active Cargo binding wrapper therefore cannot yet
+construct this session or connect to the fixed service, and the rustc/backend
+path does not yet consume FD 195 and return its acquired carriage on FD 196.
+Fresh Cargo completion continues to fail closed before the V2 load envelope
+until those deployment inputs and backend transitions exist. HSACO publication
+and runtime admission remain outside this crate.
