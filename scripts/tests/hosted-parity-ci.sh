@@ -210,6 +210,11 @@ if ! sed -n '/^  generic-validation:/,$p' "${GENERIC_WORKFLOW}" |
   exit 1
 fi
 require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh generic-core'
+if ! sed -n '/^  generic-core:/,/^  rustc-codegen-shards:/p' "${GENERIC_WORKFLOW}" |
+  rg -Fx '          sudo apt-get install --yes llvm ripgrep' >/dev/null; then
+  printf 'generic core must install the llvm-as provider and ripgrep\n' >&2
+  exit 1
+fi
 require_text "${GENERIC_WORKFLOW}" 'run: scripts/ci-local.sh rustc-codegen-shard "${{ matrix.shard }}"'
 require_text "${GENERIC_WORKFLOW}" 'fail-fast: false'
 require_text "${GENERIC_WORKFLOW}" 'CARGO_TARGET_DIR: ${{ github.workspace }}/target/ci/generic-core'
