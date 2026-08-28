@@ -27,6 +27,22 @@ relay as the direct parent. After the supervisor admits issuer readiness, it
 sends that same canonical record over the control connection and closes its
 endpoint. The pending client accepts exactly one descriptor-free packet
 followed by EOF, rechecks its launch manifest and pinned policy, and rejects
-truncation, extension, substitution, or timeout. Binding-wrapper service
-acquisition, the deployed distinct-UID entrypoint, HSACO publication, and
-runtime admission remain outside this checkpoint.
+truncation, extension, substitution, or timeout.
+
+The crate also provides a separate authority-free return channel at fixed child
+FD 196. The rustc child creates this `SOCK_SEQPACKET` endpoint after fork, and
+the parent admits it against the spawned PID, child-reported parent PID,
+`SO_PEERCRED`, and a live pidfd. The child can send exactly one canonical inert
+receipt carriage followed by clean EOF; the receiver rejects short, extended,
+truncated, ancillary, trailing, wrong-policy, and wrong-subject packets. The
+compiler-service client can consume fixed child FD 195 into private
+close-on-exec custody before performing the bounded acquisition.
+
+Production still needs a deployed distinct-UID entrypoint with authenticated
+listener acquisition and a binding-wrapper lifecycle that retains both parent
+receivers, completes issuer readiness, makes policy FD 202 and service FD 195
+available to the rustc backend, and joins the returned carriage to the exact
+compiler subject before constructing the V2 load envelope. The active Cargo
+path does not synthesize a receipt or acquire one from ambient authority; fresh
+completion therefore continues to fail closed until that orchestration exists.
+HSACO publication and runtime admission remain outside this crate.

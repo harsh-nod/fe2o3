@@ -1,5 +1,6 @@
 use std::mem;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -9,7 +10,8 @@ use fe2o3_artifact_transaction::{
     INERT_COMPILER_EXECUTION_SUBJECT_VERSION_V1, InertCompilerExecutionSubjectV1,
 };
 use fe2o3_compiler_execution_client::{
-    CompilerExecutionClientErrorV1, CompilerExecutionClientV1, CompilerExecutionReceiptRecoveryV1,
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionClientErrorV1,
+    CompilerExecutionClientV1, CompilerExecutionReceiptRecoveryV1,
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
@@ -25,6 +27,8 @@ use sha2::{Digest, Sha256};
 
 const SUBJECT_IDENTITY_DOMAIN: &[u8] = b"FE2O3/INERT-COMPILER-EXECUTION-SUBJECT/V1\0";
 const COMPILER_CLOSURE_IDENTITY_DOMAIN: &[u8] = b"fe2o3-compiler-closure-identity-v2\0";
+
+static INHERITED_PEER_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone)]
 struct Fixture {
@@ -346,6 +350,67 @@ fn admission_rejects_zero_timeout_stream_and_unconnected_sockets() {
         CompilerExecutionClientV1::admit(socket, Duration::from_secs(1)),
         Err(CompilerExecutionClientErrorV1::NamedOrNonUnixPeer)
     ));
+}
+
+#[test]
+fn inherited_child_admission_consumes_only_exact_fixed_peer() {
+    let _guard = INHERITED_PEER_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    install_inherited_peer(client, false);
+    let handle = spawn_service(service, fixture.clone(), DurableStage::Published);
+    let carriage = CompilerExecutionClientV1::admit_inherited_child(Duration::from_secs(1))
+        .unwrap()
+        .acquire(&fixture.policy, fixture.subject.clone())
+        .unwrap();
+    assert_eq!(carriage, fixture.carriage);
+    // SAFETY: F_GETFD reports that admission removed the inherited fixed alias.
+    assert_eq!(
+        unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) },
+        -1
+    );
+    assert_eq!(handle.join().unwrap(), 1);
+
+    assert!(matches!(
+        CompilerExecutionClientV1::admit_inherited_child(Duration::from_secs(1)),
+        Err(CompilerExecutionClientErrorV1::MissingInheritedPeer)
+    ));
+
+    let (client, _service) = socket_pair(libc::SOCK_SEQPACKET);
+    install_inherited_peer(client, true);
+    assert!(matches!(
+        CompilerExecutionClientV1::admit_inherited_child(Duration::from_secs(1)),
+        Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec)
+    ));
+    // SAFETY: this test owns the hostile fixed alias after admission rejects it.
+    assert_eq!(
+        unsafe { libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1) },
+        0
+    );
+}
+
+fn install_inherited_peer(peer: OwnedFd, close_on_exec: bool) {
+    let flags = if close_on_exec { libc::FD_CLOEXEC } else { 0 };
+    if peer.as_raw_fd() == COMPILER_EXECUTION_SERVICE_CHILD_FD_V1 {
+        // SAFETY: this test owns `peer`; forgetting it transfers ownership to fixed-FD admission.
+        assert_eq!(
+            unsafe { libc::fcntl(peer.as_raw_fd(), libc::F_SETFD, flags) },
+            0
+        );
+        mem::forget(peer);
+        return;
+    }
+    // SAFETY: dup3 creates the test-owned fixed alias with the requested descriptor flags.
+    assert_eq!(
+        unsafe {
+            libc::dup3(
+                peer.as_raw_fd(),
+                COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+                if close_on_exec { libc::O_CLOEXEC } else { 0 },
+            )
+        },
+        COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
+    );
 }
 
 fn spawn_service(

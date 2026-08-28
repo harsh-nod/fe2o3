@@ -200,8 +200,27 @@ parent, then repeats policy, service-peer, pidfd target/liveness, socket shape,
 descriptor identity, and alias checks. It can consume the accepted value into
 the exact sealed static-launcher input set, repeating those checks together with
 all source-object, capability, parent, pipe, and canonical-manifest checks. The
-binding wrapper does not yet invoke this path, and the supervisor does not yet
-launch the issuer.
+supervisor now launches, admits readiness from, publishes that exact readiness
+to Cargo over the retained control connection, and holds serving pidfd custody
+until exactly-once termination and reaping.
+
+A second child-created `SOCK_SEQPACKET` channel at fixed rustc FD 196 returns
+one canonical inert receipt carriage to the direct parent. Both endpoints are
+move-only; the parent authenticates the spawned PID, reported direct-parent
+PID, `SO_PEERCRED`, and live pidfd, while the final receive repeats exact policy
+and compiler-subject joins and requires one canonical packet followed by clean
+EOF, rejecting malformed, truncated, extended, trailing, or ancillary packets.
+Rustc can independently consume fixed service FD 195 into a
+private close-on-exec client before acquisition. This transport does not
+provision the distinct-UID service or grant signing, compilation, publication,
+load, or launch authority.
+
+The binding wrapper does not yet retain and coordinate both child-created
+channels with a ready protected issuer, install caller-pinned policy FD 202 for
+the backend, or return the acquired carriage from the backend to V2 envelope
+construction. Until that explicit orchestration exists, the active fresh Cargo
+completion path remains fail closed rather than fabricating a receipt or using
+ambient service authority.
 
 ## Authority Limit
 
