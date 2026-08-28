@@ -3828,6 +3828,7 @@ mod tests {
         ) -> fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1 {
             use ed25519_dalek::SigningKey;
             use fe2o3_compiler_execution_protocol::{
+                CompilerExecutionExternalAnchorServiceIdentityV1,
                 CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
             };
 
@@ -3844,7 +3845,10 @@ mod tests {
             )
             .unwrap();
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
-                1_234, 5_678, policy,
+                1_234,
+                5_678,
+                CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
+                policy,
             )
             .unwrap()
         }

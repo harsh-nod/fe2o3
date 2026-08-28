@@ -6,7 +6,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionExternalAnchorServiceIdentityErrorV1,
+    CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerPolicyV1,
 };
 
 const MAGIC: [u8; 8] = *b"F2O3CEP1";
@@ -16,7 +17,8 @@ const HEADER_BYTES: usize = 8 + 2 + 2 + 4;
 const IDENTITY_BYTES: usize = 32;
 const INVALID_ID: u32 = u32::MAX;
 const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-CLIENT-PROFILE/V1\0";
-const PREIMAGE_BYTES: usize = HEADER_BYTES + 4 + 4 + COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1;
+const PREIMAGE_BYTES: usize =
+    HEADER_BYTES + 4 + 4 + 4 + 4 + COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1;
 
 /// Exact canonical byte length of one compiler-execution client profile V1.
 pub const COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1: usize = PREIMAGE_BYTES + IDENTITY_BYTES;
@@ -50,12 +52,14 @@ impl fmt::Debug for CompilerExecutionClientProfileIdentityV1 {
 
 /// Public trust configuration used by Cargo to authenticate the sole protected supervisor.
 ///
-/// This record contains only the dedicated non-root service identity and caller-pinned issuer
-/// policy. It grants no compiler, signing, publication, loading, launch, or execution authority.
+/// This record contains only the dedicated non-root supervisor identity, dedicated external-anchor
+/// service identity, and caller-pinned issuer policy. It grants no compiler, signing, publication,
+/// loading, launch, or execution authority.
 #[derive(Clone, Eq, PartialEq)]
 pub struct CompilerExecutionClientProfileV1 {
     supervisor_uid: u32,
     supervisor_gid: u32,
+    external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     policy: CompilerExecutionIssuerPolicyV1,
     identity: CompilerExecutionClientProfileIdentityV1,
     canonical_bytes: [u8; COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1],
@@ -66,6 +70,7 @@ impl CompilerExecutionClientProfileV1 {
     pub fn new(
         supervisor_uid: u32,
         supervisor_gid: u32,
+        external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
         policy: CompilerExecutionIssuerPolicyV1,
     ) -> Result<Self, CompilerExecutionClientProfileErrorV1> {
         validate_uid(supervisor_uid)?;
@@ -85,7 +90,9 @@ impl CompilerExecutionClientProfileV1 {
             .copy_from_slice(&(COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1 as u32).to_le_bytes());
         bytes[16..20].copy_from_slice(&supervisor_uid.to_le_bytes());
         bytes[20..24].copy_from_slice(&supervisor_gid.to_le_bytes());
-        bytes[24..PREIMAGE_BYTES].copy_from_slice(policy.canonical_bytes());
+        bytes[24..28].copy_from_slice(&external_anchor_service.uid().to_le_bytes());
+        bytes[28..32].copy_from_slice(&external_anchor_service.gid().to_le_bytes());
+        bytes[32..PREIMAGE_BYTES].copy_from_slice(policy.canonical_bytes());
         let identity =
             CompilerExecutionClientProfileIdentityV1(derive_identity(&bytes[..PREIMAGE_BYTES]));
         bytes[PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
@@ -93,6 +100,7 @@ impl CompilerExecutionClientProfileV1 {
         Ok(Self {
             supervisor_uid,
             supervisor_gid,
+            external_anchor_service,
             policy,
             identity,
             canonical_bytes: bytes,
@@ -125,7 +133,12 @@ impl CompilerExecutionClientProfileV1 {
         let supervisor_gid = u32::from_le_bytes(bytes[20..24].try_into().expect("fixed slice"));
         validate_uid(supervisor_uid)?;
         validate_gid(supervisor_gid)?;
-        let policy = CompilerExecutionIssuerPolicyV1::decode(&bytes[24..PREIMAGE_BYTES])
+        let external_anchor_service = CompilerExecutionExternalAnchorServiceIdentityV1::new(
+            u32::from_le_bytes(bytes[24..28].try_into().expect("fixed slice")),
+            u32::from_le_bytes(bytes[28..32].try_into().expect("fixed slice")),
+        )
+        .map_err(CompilerExecutionClientProfileErrorV1::ExternalAnchorServiceIdentity)?;
+        let policy = CompilerExecutionIssuerPolicyV1::decode(&bytes[32..PREIMAGE_BYTES])
             .map_err(CompilerExecutionClientProfileErrorV1::Policy)?;
         let declared_identity: [u8; IDENTITY_BYTES] =
             bytes[PREIMAGE_BYTES..].try_into().expect("fixed slice");
@@ -134,7 +147,12 @@ impl CompilerExecutionClientProfileV1 {
         {
             return Err(CompilerExecutionClientProfileErrorV1::Identity);
         }
-        let decoded = Self::new(supervisor_uid, supervisor_gid, policy)?;
+        let decoded = Self::new(
+            supervisor_uid,
+            supervisor_gid,
+            external_anchor_service,
+            policy,
+        )?;
         if decoded.canonical_bytes.as_slice() != bytes {
             return Err(CompilerExecutionClientProfileErrorV1::Canonical);
         }
@@ -149,6 +167,13 @@ impl CompilerExecutionClientProfileV1 {
     /// Returns the expected protected-supervisor effective GID.
     pub const fn supervisor_gid(&self) -> u32 {
         self.supervisor_gid
+    }
+
+    /// Returns the exact pinned external-anchor service credential identity.
+    pub const fn external_anchor_service(
+        &self,
+    ) -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        self.external_anchor_service
     }
 
     /// Returns the exact caller-pinned issuer policy.
@@ -173,6 +198,7 @@ impl fmt::Debug for CompilerExecutionClientProfileV1 {
             .debug_struct("CompilerExecutionClientProfileV1")
             .field("supervisor_uid", &self.supervisor_uid)
             .field("supervisor_gid", &self.supervisor_gid)
+            .field("external_anchor_service", &self.external_anchor_service)
             .field("policy", &self.policy)
             .field("identity", &self.identity)
             .finish_non_exhaustive()
@@ -197,6 +223,8 @@ pub enum CompilerExecutionClientProfileErrorV1 {
     InvalidSupervisorUid,
     /// GID zero or the Linux `-1` sentinel cannot identify the dedicated supervisor.
     InvalidSupervisorGid,
+    /// The pinned external-anchor service credential identity is invalid.
+    ExternalAnchorServiceIdentity(CompilerExecutionExternalAnchorServiceIdentityErrorV1),
     /// The nested issuer policy is malformed.
     Policy(CompilerExecutionAttestationErrorV1),
     /// The nested policy does not carry its independently rederived identity.
@@ -231,6 +259,12 @@ impl fmt::Display for CompilerExecutionClientProfileErrorV1 {
             Self::InvalidSupervisorGid => {
                 formatter.write_str("invalid compiler-execution supervisor GID")
             }
+            Self::ExternalAnchorServiceIdentity(error) => {
+                write!(
+                    formatter,
+                    "invalid compiler external-anchor service identity: {error}"
+                )
+            }
             Self::Policy(error) => write!(formatter, "invalid compiler-execution policy: {error}"),
             Self::PolicyIdentity => {
                 formatter.write_str("compiler-execution policy identity mismatch")
@@ -248,6 +282,7 @@ impl fmt::Display for CompilerExecutionClientProfileErrorV1 {
 impl Error for CompilerExecutionClientProfileErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ExternalAnchorServiceIdentity(error) => Some(error),
             Self::Policy(error) => Some(error),
             _ => None,
         }
@@ -298,15 +333,29 @@ mod tests {
         .unwrap()
     }
 
+    fn external_anchor_service(seed: u32) -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000 + seed, 7_000 + seed).unwrap()
+    }
+
     #[test]
     fn exact_profile_round_trips_and_binds_every_byte() {
-        let profile = CompilerExecutionClientProfileV1::new(1_234, 5_678, policy(7)).unwrap();
+        let profile = CompilerExecutionClientProfileV1::new(
+            1_234,
+            5_678,
+            external_anchor_service(1),
+            policy(7),
+        )
+        .unwrap();
         assert_eq!(
             profile.canonical_bytes().len(),
             COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1
         );
         assert_eq!(profile.supervisor_uid(), 1_234);
         assert_eq!(profile.supervisor_gid(), 5_678);
+        assert_eq!(
+            profile.external_anchor_service(),
+            external_anchor_service(1)
+        );
         assert_eq!(profile.policy(), &policy(7));
         assert!(
             profile
@@ -332,26 +381,86 @@ mod tests {
     fn invalid_service_identities_fail_closed() {
         for uid in [0, u32::MAX] {
             assert!(matches!(
-                CompilerExecutionClientProfileV1::new(uid, 5_678, policy(7)),
+                CompilerExecutionClientProfileV1::new(
+                    uid,
+                    5_678,
+                    external_anchor_service(1),
+                    policy(7)
+                ),
                 Err(CompilerExecutionClientProfileErrorV1::InvalidSupervisorUid)
             ));
         }
         for gid in [0, u32::MAX] {
             assert!(matches!(
-                CompilerExecutionClientProfileV1::new(1_234, gid, policy(7)),
+                CompilerExecutionClientProfileV1::new(
+                    1_234,
+                    gid,
+                    external_anchor_service(1),
+                    policy(7)
+                ),
                 Err(CompilerExecutionClientProfileErrorV1::InvalidSupervisorGid)
+            ));
+        }
+
+        let profile = CompilerExecutionClientProfileV1::new(
+            1_234,
+            5_678,
+            external_anchor_service(1),
+            policy(7),
+        )
+        .unwrap();
+        for range in [24..28, 28..32] {
+            let mut bytes = *profile.canonical_bytes();
+            bytes[range].fill(0);
+            let identity = derive_identity(&bytes[..PREIMAGE_BYTES]);
+            bytes[PREIMAGE_BYTES..].copy_from_slice(&identity);
+            assert!(matches!(
+                CompilerExecutionClientProfileV1::decode(&bytes),
+                Err(CompilerExecutionClientProfileErrorV1::ExternalAnchorServiceIdentity(_))
             ));
         }
     }
 
     #[test]
     fn independently_resealed_substitutions_remain_distinct() {
-        let first = CompilerExecutionClientProfileV1::new(1_234, 5_678, policy(7)).unwrap();
-        let uid = CompilerExecutionClientProfileV1::new(1_235, 5_678, policy(7)).unwrap();
-        let gid = CompilerExecutionClientProfileV1::new(1_234, 5_679, policy(7)).unwrap();
-        let issuer = CompilerExecutionClientProfileV1::new(1_234, 5_678, policy(8)).unwrap();
+        let first = CompilerExecutionClientProfileV1::new(
+            1_234,
+            5_678,
+            external_anchor_service(1),
+            policy(7),
+        )
+        .unwrap();
+        let uid = CompilerExecutionClientProfileV1::new(
+            1_235,
+            5_678,
+            external_anchor_service(1),
+            policy(7),
+        )
+        .unwrap();
+        let gid = CompilerExecutionClientProfileV1::new(
+            1_234,
+            5_679,
+            external_anchor_service(1),
+            policy(7),
+        )
+        .unwrap();
+        let anchor = CompilerExecutionClientProfileV1::new(
+            1_234,
+            5_678,
+            external_anchor_service(2),
+            policy(7),
+        )
+        .unwrap();
+        let issuer = CompilerExecutionClientProfileV1::new(
+            1_234,
+            5_678,
+            external_anchor_service(1),
+            policy(8),
+        )
+        .unwrap();
         assert_ne!(first.identity(), uid.identity());
         assert_ne!(first.identity(), gid.identity());
+        assert_ne!(first.identity(), anchor.identity());
         assert_ne!(first.identity(), issuer.identity());
     }
 }

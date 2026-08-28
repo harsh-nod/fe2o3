@@ -254,7 +254,10 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::{CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1};
+    use crate::{
+        CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+        CompilerExecutionIssuerPolicyV1,
+    };
 
     fn manifest() -> CompilerExecutionServiceLaunchManifestV1 {
         let signing_key = SigningKey::from_bytes(&[7; 32]);
@@ -268,6 +271,7 @@ mod tests {
         .unwrap();
         CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(200, 1000, 1001).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
             &policy,
         )
     }

@@ -244,7 +244,10 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::{CompilerExecutionClientProcessIdentityV1, CompilerExecutionIssuerMeasurementV1};
+    use crate::{
+        CompilerExecutionClientProcessIdentityV1, CompilerExecutionExternalAnchorServiceIdentityV1,
+        CompilerExecutionIssuerMeasurementV1,
+    };
 
     fn policy(seed: u8) -> CompilerExecutionIssuerPolicyV1 {
         let key = SigningKey::from_bytes(&[seed; 32]);
@@ -263,6 +266,7 @@ mod tests {
     fn launch(seed: u8) -> CompilerExecutionServiceLaunchManifestV1 {
         CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
             &policy(seed),
         )
     }

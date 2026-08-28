@@ -32,7 +32,10 @@ with exactly two `SCM_RIGHTS` descriptors. Admission requires the control
 socket's exact submitter PID/UID/GID, nested policy, rustc service-peer
 `SO_PEERCRED`, pidfd target/liveness, descriptor identities, and all role
 non-aliasing checks to agree; all observations are repeated without exposing a
-descriptor.
+descriptor. The nested launch manifest now also carries the canonical
+external-anchor service UID/GID selected by the root-owned client profile. This
+checkpoint preserves those bytes but does not yet join them to a
+supervisor-provisioned anchor endpoint.
 
 One accepted handoff can now be consumed into a move-only prepared launch. The
 supervisor clones and revalidates the exact launcher, issuer, root, service

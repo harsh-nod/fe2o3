@@ -38,14 +38,17 @@ non-root supervisor UID/GID and positive PID with `SO_PEERCRED`. Callers cannot
 inject another pathname or descriptor. One monotonic deadline of at most two
 minutes covers connection and the canonical transfer.
 
-The transfer sends one canonical direct-parent/launch-manifest record and
+The transfer derives the launch manifest from the client-profile-pinned
+external-anchor service UID/GID and policy. It sends one canonical
+direct-parent/launch-manifest record and
 exactly two ordered `SCM_RIGHTS` descriptors, then retains the same control
 connection for pending readiness. This avoids attributing a parent-created
 service socket to the selected child or accepting a same-user relay as
 the direct parent. After the supervisor admits issuer readiness, it sends that
 same canonical record over the control connection and closes its endpoint. The
 pending client accepts exactly one descriptor-free packet followed by EOF,
-rechecks its launch manifest and pinned policy, and rejects truncation,
+rechecks its launch manifest, pinned anchor-service identity, and pinned policy,
+and rejects truncation,
 extension, substitution, trailing data, or timeout. Compiler and application
 parents both use this channel in the production Cargo path. Deployed
 distinct-UID provisioning, external monotonic rollback, and final verifier and

@@ -105,11 +105,11 @@ impl PreparedCompilerExecutionBoundaryV1 {
         )
         .map_err(CompilerExecutionBoundaryErrorV1::SupervisorCredentials)?;
         let pending = launch
-            .transfer_to_supervisor(supervisor, policy.policy(), SUPERVISOR_HANDOFF_TIMEOUT)
+            .transfer_to_supervisor(profile.profile(), SUPERVISOR_HANDOFF_TIMEOUT)
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorTransfer)?;
         let manifest = pending.manifest().clone();
         let readiness = pending
-            .await_readiness(policy.policy(), SUPERVISOR_READINESS_TIMEOUT)
+            .await_readiness(profile.profile(), SUPERVISOR_READINESS_TIMEOUT)
             .map_err(CompilerExecutionBoundaryErrorV1::SupervisorReadiness)?;
 
         ParentCompilerExecutionReadinessCustodyV1::admit(
@@ -192,9 +192,13 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
             || self.child_pid == 0
             || self.manifest.client().pid() != self.child_pid
             || !self.manifest.matches_policy(self.policy.policy())
+            || !self
+                .manifest
+                .matches_external_anchor_service(profile.external_anchor_service())
         {
             return Err(CompilerExecutionBoundaryErrorV1::Evidence(
-                "retained launch manifest differs from the selected child or policy".to_owned(),
+                "retained launch manifest differs from the selected child, anchor service, or policy"
+                    .to_owned(),
             ));
         }
         if self.manifest.client().uid() == self.supervisor.uid() {
@@ -375,7 +379,8 @@ mod tests {
     use fe2o3_compiler_execution_client::COMPILER_EXECUTION_SERVICE_CHILD_FD_V1;
     use fe2o3_compiler_execution_protocol::{
         COMPILER_EXECUTION_ISSUER_POLICY_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
-        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerMeasurementV1,
+        CompilerExecutionIssuerPolicyV1,
     };
 
     use super::*;
@@ -400,6 +405,7 @@ mod tests {
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
                 supervisor_uid,
                 5_678,
+                external_anchor_service(),
                 policy(seed),
             )
             .unwrap(),
@@ -417,10 +423,15 @@ mod tests {
     ) {
         let manifest = CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(child_pid, child_uid, 1_000).unwrap(),
+            external_anchor_service(),
             policy,
         );
         let readiness = CompilerExecutionServiceReadyV1::new(9_999, &manifest, policy).unwrap();
         (manifest, readiness)
+    }
+
+    fn external_anchor_service() -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap()
     }
 
     fn admit(
@@ -557,6 +568,30 @@ mod tests {
                 supervisor,
                 8_765,
                 manifest,
+                substituted_readiness,
+            )
+            .is_err()
+        );
+
+        let profile = client_profile(7, 1_234);
+        let retained_policy = profile.profile().policy().clone();
+        let policy = CompilerExecutionPolicyCapabilityV1::create(retained_policy.clone()).unwrap();
+        let supervisor = CompilerExecutionSupervisorCredentialsV1::new(1_234, 5_678).unwrap();
+        let substituted_manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            CompilerExecutionClientProcessIdentityV1::new(8_765, 1_000, 1_000).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_001, 7_001).unwrap(),
+            &retained_policy,
+        );
+        let substituted_readiness =
+            CompilerExecutionServiceReadyV1::new(9_999, &substituted_manifest, &retained_policy)
+                .unwrap();
+        assert!(
+            ParentCompilerExecutionReadinessCustodyV1::admit(
+                profile,
+                policy,
+                supervisor,
+                8_765,
+                substituted_manifest,
                 substituted_readiness,
             )
             .is_err()

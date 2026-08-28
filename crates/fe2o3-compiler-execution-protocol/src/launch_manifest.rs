@@ -4,11 +4,15 @@ use std::{error::Error, fmt};
 
 use sha2::{Digest, Sha256};
 
-use crate::{CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1};
+use crate::{
+    CompilerExecutionExternalAnchorServiceIdentityErrorV1,
+    CompilerExecutionExternalAnchorServiceIdentityV1, CompilerExecutionIssuerPolicyIdentityV1,
+    CompilerExecutionIssuerPolicyV1,
+};
 
 const SHA256_BYTES: usize = 32;
 const HEADER_BYTES: usize = 24;
-const PREIMAGE_BYTES: usize = HEADER_BYTES + 16 + SHA256_BYTES;
+const PREIMAGE_BYTES: usize = HEADER_BYTES + 16 + 8 + SHA256_BYTES;
 const MAGIC: [u8; 8] = *b"F2O3CEL1";
 const VERSION_V1: u16 = 1;
 const IDENTITY_DOMAIN: &[u8] = b"FE2O3/COMPILER-EXECUTION-SERVICE-LAUNCH-MANIFEST/V1\0";
@@ -87,11 +91,13 @@ impl fmt::Debug for CompilerExecutionServiceLaunchManifestIdentityV1 {
 
 /// Canonical inert binding supplied by the protected issuer supervisor.
 ///
-/// The manifest binds the exact expected client credentials to the exact caller-pinned issuer
-/// policy. It grants no process, signing, compiler, publication, loading, or execution authority.
+/// The manifest binds the exact expected client credentials and external-anchor service identity
+/// to the exact caller-pinned issuer policy. It grants no process, signing, compiler, publication,
+/// loading, or execution authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilerExecutionServiceLaunchManifestV1 {
     client: CompilerExecutionClientProcessIdentityV1,
+    external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
     policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
     identity: CompilerExecutionServiceLaunchManifestIdentityV1,
     bytes: [u8; COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1],
@@ -101,13 +107,15 @@ impl CompilerExecutionServiceLaunchManifestV1 {
     /// Constructs one canonical expected-client and issuer-policy binding.
     pub fn new(
         client: CompilerExecutionClientProcessIdentityV1,
+        external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
         policy: &CompilerExecutionIssuerPolicyV1,
     ) -> Self {
-        Self::from_parts(client, policy.identity())
+        Self::from_parts(client, external_anchor_service, policy.identity())
     }
 
     fn from_parts(
         client: CompilerExecutionClientProcessIdentityV1,
+        external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
         policy_identity: CompilerExecutionIssuerPolicyIdentityV1,
     ) -> Self {
         let mut bytes = [0_u8; COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1];
@@ -115,13 +123,16 @@ impl CompilerExecutionServiceLaunchManifestV1 {
         bytes[24..28].copy_from_slice(&client.pid.to_le_bytes());
         bytes[28..32].copy_from_slice(&client.uid.to_le_bytes());
         bytes[32..36].copy_from_slice(&client.gid.to_le_bytes());
-        bytes[40..72].copy_from_slice(policy_identity.as_bytes());
+        bytes[40..44].copy_from_slice(&external_anchor_service.uid().to_le_bytes());
+        bytes[44..48].copy_from_slice(&external_anchor_service.gid().to_le_bytes());
+        bytes[48..80].copy_from_slice(policy_identity.as_bytes());
         let identity = CompilerExecutionServiceLaunchManifestIdentityV1(derive_identity(
             &bytes[..PREIMAGE_BYTES],
         ));
         bytes[PREIMAGE_BYTES..].copy_from_slice(identity.as_bytes());
         Self {
             client,
+            external_anchor_service,
             policy_identity,
             identity,
             bytes,
@@ -142,7 +153,12 @@ impl CompilerExecutionServiceLaunchManifestV1 {
             read_u32(bytes, 28),
             read_u32(bytes, 32),
         )?;
-        let policy_identity_bytes: [u8; SHA256_BYTES] = bytes[40..72]
+        let external_anchor_service = CompilerExecutionExternalAnchorServiceIdentityV1::new(
+            read_u32(bytes, 40),
+            read_u32(bytes, 44),
+        )
+        .map_err(CompilerExecutionServiceLaunchManifestErrorV1::ExternalAnchorServiceIdentity)?;
+        let policy_identity_bytes: [u8; SHA256_BYTES] = bytes[48..80]
             .try_into()
             .expect("policy identity has a fixed width");
         if policy_identity_bytes == [0; SHA256_BYTES] {
@@ -158,12 +174,13 @@ impl CompilerExecutionServiceLaunchManifestV1 {
         if !identity.matches_canonical_bytes(bytes) {
             return Err(CompilerExecutionServiceLaunchManifestErrorV1::Identity);
         }
-        let canonical = Self::from_parts(client, policy_identity);
+        let canonical = Self::from_parts(client, external_anchor_service, policy_identity);
         if canonical.policy_identity != policy_identity || canonical.bytes.as_slice() != bytes {
             return Err(CompilerExecutionServiceLaunchManifestErrorV1::Canonical);
         }
         Ok(Self {
             client,
+            external_anchor_service,
             policy_identity,
             identity,
             bytes: bytes.try_into().expect("manifest length checked"),
@@ -173,6 +190,13 @@ impl CompilerExecutionServiceLaunchManifestV1 {
     /// Returns the exact expected client identity.
     pub const fn client(&self) -> CompilerExecutionClientProcessIdentityV1 {
         self.client
+    }
+
+    /// Returns the exact pinned external-anchor service credential identity.
+    pub const fn external_anchor_service(
+        &self,
+    ) -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        self.external_anchor_service
     }
 
     /// Returns the exact expected issuer-policy identity.
@@ -195,6 +219,14 @@ impl CompilerExecutionServiceLaunchManifestV1 {
     /// Requires this manifest to name the exact supplied caller-pinned policy.
     pub fn matches_policy(&self, policy: &CompilerExecutionIssuerPolicyV1) -> bool {
         self.policy_identity == policy.identity()
+    }
+
+    /// Requires this manifest to name the exact supplied external-anchor service identity.
+    pub fn matches_external_anchor_service(
+        &self,
+        external_anchor_service: CompilerExecutionExternalAnchorServiceIdentityV1,
+    ) -> bool {
+        self.external_anchor_service == external_anchor_service
     }
 }
 
@@ -242,6 +274,7 @@ pub enum CompilerExecutionServiceLaunchManifestErrorV1 {
     Version,
     Reserved,
     ClientPid,
+    ExternalAnchorServiceIdentity(CompilerExecutionExternalAnchorServiceIdentityErrorV1),
     PolicyIdentity,
     Identity,
     Canonical,
@@ -255,6 +288,9 @@ impl fmt::Display for CompilerExecutionServiceLaunchManifestErrorV1 {
             Self::Version => "compiler service launch manifest has the wrong version",
             Self::Reserved => "compiler service launch manifest has nonzero reserved bytes",
             Self::ClientPid => "compiler service launch manifest has a zero client PID",
+            Self::ExternalAnchorServiceIdentity(_) => {
+                "compiler service launch manifest has an invalid external-anchor service identity"
+            }
             Self::PolicyIdentity => {
                 "compiler service launch manifest has an invalid policy identity"
             }
@@ -264,7 +300,14 @@ impl fmt::Display for CompilerExecutionServiceLaunchManifestErrorV1 {
     }
 }
 
-impl Error for CompilerExecutionServiceLaunchManifestErrorV1 {}
+impl Error for CompilerExecutionServiceLaunchManifestErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ExternalAnchorServiceIdentity(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -287,16 +330,30 @@ mod tests {
         .unwrap()
     }
 
+    fn external_anchor_service(seed: u32) -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+        CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000 + seed, 7_000 + seed).unwrap()
+    }
+
     #[test]
     fn exact_manifest_round_trips_and_binds_client_and_policy() {
         let issuer_policy = policy(7);
         let client = CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap();
-        let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, &issuer_policy);
+        let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            client,
+            external_anchor_service(1),
+            &issuer_policy,
+        );
         assert_eq!(
             manifest.canonical_bytes().len(),
             COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1
         );
         assert_eq!(manifest.client(), client);
+        assert_eq!(
+            manifest.external_anchor_service(),
+            external_anchor_service(1)
+        );
+        assert!(manifest.matches_external_anchor_service(external_anchor_service(1)));
+        assert!(!manifest.matches_external_anchor_service(external_anchor_service(2)));
         assert!(manifest.matches_policy(&issuer_policy));
         assert_eq!(
             CompilerExecutionServiceLaunchManifestV1::decode(manifest.canonical_bytes()).unwrap(),
@@ -305,7 +362,21 @@ mod tests {
 
         let other_client = CompilerExecutionClientProcessIdentityV1::new(1235, 1000, 1001).unwrap();
         assert_ne!(
-            CompilerExecutionServiceLaunchManifestV1::new(other_client, &issuer_policy).identity(),
+            CompilerExecutionServiceLaunchManifestV1::new(
+                other_client,
+                external_anchor_service(1),
+                &issuer_policy
+            )
+            .identity(),
+            manifest.identity()
+        );
+        assert_ne!(
+            CompilerExecutionServiceLaunchManifestV1::new(
+                client,
+                external_anchor_service(2),
+                &issuer_policy
+            )
+            .identity(),
             manifest.identity()
         );
         assert!(!manifest.matches_policy(&policy(8)));
@@ -315,6 +386,7 @@ mod tests {
     fn every_byte_mutation_and_wrong_length_rejects() {
         let manifest = CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap(),
+            external_anchor_service(1),
             &policy(7),
         );
         for index in 0..manifest.canonical_bytes().len() {
@@ -344,6 +416,7 @@ mod tests {
         );
         let manifest = CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap(),
+            external_anchor_service(1),
             &policy(7),
         );
 
@@ -369,8 +442,20 @@ mod tests {
             Err(CompilerExecutionServiceLaunchManifestErrorV1::ClientPid)
         );
 
+        for range in [40..44, 44..48] {
+            let mut invalid_anchor_service = *manifest.canonical_bytes();
+            invalid_anchor_service[range].fill(0);
+            reseal(&mut invalid_anchor_service);
+            assert!(matches!(
+                CompilerExecutionServiceLaunchManifestV1::decode(&invalid_anchor_service),
+                Err(
+                    CompilerExecutionServiceLaunchManifestErrorV1::ExternalAnchorServiceIdentity(_)
+                )
+            ));
+        }
+
         let mut zero_policy = *manifest.canonical_bytes();
-        zero_policy[40..72].fill(0);
+        zero_policy[48..80].fill(0);
         reseal(&mut zero_policy);
         assert_eq!(
             CompilerExecutionServiceLaunchManifestV1::decode(&zero_policy),

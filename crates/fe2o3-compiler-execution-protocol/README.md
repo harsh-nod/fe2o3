@@ -26,12 +26,12 @@ terminal records verify the complete signed external receipt under the
 policy-pinned anchor key; only `Published` binds a nonzero final Worker-record
 identity. The codec enforces legal same-transaction and next-transaction
 transitions but does not persist them, contact the anchor, or grant authority.
-The 272-byte client
-profile binds the exact dedicated supervisor UID/GID to one complete
-caller-pinned issuer policy; it
-contains no endpoint, path, secret, timeout, or authority. The launch manifest
-binds an exact PID/UID/GID tuple to an exact policy identity. A canonical
-supervisor-handoff record additionally
+The 280-byte client profile binds the exact dedicated supervisor UID/GID and
+external-anchor service UID/GID to one complete caller-pinned issuer policy; it
+contains no endpoint, path, descriptor, secret, timeout, or authority. The
+112-byte launch manifest binds an exact client PID/UID/GID tuple and that exact
+external-anchor service identity to an exact policy identity. A canonical
+184-byte supervisor-handoff record additionally
 binds the direct Cargo parent PID/UID/GID to that complete manifest; parent and
 rustc must be distinct processes with equal credentials. A separate readiness
 record binds the admitted issuer PID to the exact manifest and policy after

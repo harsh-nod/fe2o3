@@ -12,9 +12,10 @@ use ed25519_dalek::SigningKey;
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_compiler_execution_client::PendingCompilerExecutionChildChannelV1;
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionIssuerMeasurementV1,
-    CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
-    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffV1,
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionExternalAnchorServiceIdentityV1,
+    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyV1,
+    CompilerExecutionSupervisorHandoffV1,
 };
 use rustix::net::{
     AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
@@ -24,6 +25,10 @@ use rustix::net::{
 use super::*;
 
 static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
+
+fn external_anchor_service() -> CompilerExecutionExternalAnchorServiceIdentityV1 {
+    CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap()
+}
 
 struct Fixture {
     root: PathBuf,
@@ -751,7 +756,11 @@ fn exact_cross_process_handoff_is_admitted_and_revalidated() {
     let (_reserved_fd_guard, mut child, launch) = live_launch();
     let client = launch.client();
     let submitter = launch.submitter();
-    let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        client,
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest.clone()).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
@@ -796,8 +805,11 @@ fn pending_handoff(
     OwnedFd,
 ) {
     let (guard, child, launch) = live_launch();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
     let (sender, receiver) = seqpacket_pair();
@@ -1033,8 +1045,11 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
             actual_submitter.gid(),
         )
         .unwrap();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let substituted =
         CompilerExecutionSupervisorHandoffV1::new(substituted_submitter, manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
@@ -1062,8 +1077,11 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
         SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes(),
     )
     .unwrap();
-    let wrong_manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &wrong_policy);
+    let wrong_manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        &wrong_policy,
+    );
     let wrong_handoff =
         CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), wrong_manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
@@ -1082,8 +1100,11 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     drop(second_reserved_fd_guard);
 
     let (third_reserved_fd_guard, mut child, launch) = live_launch();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
     let (service_peer, _pidfd) = launch.into_test_descriptors();
     let duplicate = rustix::io::fcntl_dupfd_cloexec(&service_peer, 0).unwrap();
@@ -1102,8 +1123,11 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     drop(third_reserved_fd_guard);
 
     let (_fourth_reserved_fd_guard, mut child, launch) = live_launch();
-    let manifest =
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
+    let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+        launch.client(),
+        external_anchor_service(),
+        supervisor.policy(),
+    );
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();
     let extra = File::open("/dev/null").unwrap();
@@ -1399,7 +1423,11 @@ fn fixed_named_listener_dispatches_one_complete_session() {
     let (_reserved_fd_guard, mut rustc_child, launch) = live_launch();
     let handoff = CompilerExecutionSupervisorHandoffV1::new(
         launch.submitter(),
-        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &policy),
+        CompilerExecutionServiceLaunchManifestV1::new(
+            launch.client(),
+            external_anchor_service(),
+            &policy,
+        ),
     )
     .unwrap();
     let (service_peer, pidfd) = launch.into_test_descriptors();

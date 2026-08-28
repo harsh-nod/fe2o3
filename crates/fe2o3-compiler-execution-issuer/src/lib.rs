@@ -341,8 +341,9 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_execution_protocol::{
-        CompilerExecutionClientProcessIdentityV1, CompilerExecutionIssuerMeasurementV1,
-        CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
+        CompilerExecutionClientProcessIdentityV1, CompilerExecutionExternalAnchorServiceIdentityV1,
+        CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
+        CompilerExecutionServiceLaunchManifestV1,
     };
 
     use super::*;
@@ -372,6 +373,7 @@ mod tests {
         .unwrap();
         let launch = CompilerExecutionServiceLaunchManifestV1::new(
             CompilerExecutionClientProcessIdentityV1::new(1234, 1000, 1001).unwrap(),
+            CompilerExecutionExternalAnchorServiceIdentityV1::new(6_000, 7_000).unwrap(),
             &policy,
         );
         CompilerExecutionServiceReadyV1::new(5678, &launch, &policy).unwrap()
