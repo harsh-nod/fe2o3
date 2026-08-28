@@ -10,6 +10,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
+dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-kernel-ir.workspace = true

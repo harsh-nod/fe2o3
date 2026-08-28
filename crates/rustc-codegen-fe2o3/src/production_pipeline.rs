@@ -41,6 +41,7 @@ pub(crate) enum ProductionPipelineError {
     RankedProjection(crate::production_ranked_projection_v1::ProductionRankedProjectionErrorV1),
     RankedVerification(crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1),
     TargetNeutralLowering(fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1),
+    MissingMirPlironTranslationValidation,
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
     SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
@@ -85,6 +86,9 @@ impl fmt::Display for ProductionPipelineError {
             Self::TargetNeutralLowering(error) => {
                 write!(formatter, "production compilation target-neutral lowering failed: {error}")
             }
+            Self::MissingMirPlironTranslationValidation => formatter.write_str(
+                "production compilation reached target-neutral custody without independent MIR-to-PLIRON translation validation",
+            ),
             Self::SimulationKernelIrV7(error) => write!(
                 formatter,
                 "production compilation cannot project the already-lowered module to exact simulation Kernel IR V7: {error}"
@@ -177,6 +181,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::CompilerExecutionSubject(error) => Some(error),
             Self::CustomLlvmConfiguration
             | Self::EmptyCollectedDeviceClosure
+            | Self::MissingMirPlironTranslationValidation
             | Self::RustcLineageMismatch
             | Self::SimulationProductionKirV9
             | Self::SimulationDebugMapCorrespondence(_)
@@ -1448,6 +1453,9 @@ impl RankedVerifiedProductionCompilation {
                 source_rank,
             )
             .map_err(ProductionPipelineError::TargetNeutralLowering)?;
+        if lowered.mir_pliron_translation_validation().is_none() {
+            return Err(ProductionPipelineError::MissingMirPlironTranslationValidation);
+        }
         Ok(TargetNeutralProductionCompilation {
             lowered,
             ranked_verification,

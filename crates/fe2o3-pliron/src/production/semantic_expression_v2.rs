@@ -11,6 +11,8 @@ use super::ranked::ProductionRankedValueV1;
 
 pub const MAX_PRODUCTION_SEMANTIC_EXPRESSION_NODES_V2: usize = 8_192;
 pub const MAX_PRODUCTION_SEMANTIC_EXPRESSION_DEPTH_V2: usize = 128;
+/// First symbol reserved for positional scalar kernel arguments.
+pub const PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2: u32 = 1_u32 << 30;
 /// Symbols at or above this value are reserved for exact ranked load leaves.
 pub const PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2: u32 = 0xc000_0000;
 
@@ -198,7 +200,11 @@ pub struct ProductionSemanticLoadV2 {
 }
 
 impl ProductionSemanticLoadV2 {
-    /// Collision-free namespace within the production ranked resource limits.
+    /// Collision-free symbol within the production ranked resource limits.
+    ///
+    /// Typed PLIRON expressions materialize a load leaf as this symbol. The
+    /// ranked-kernel validator separately binds the symbol's block and
+    /// operation to the full allocation, view, and index metadata above.
     pub const fn proof_symbol(&self) -> u32 {
         PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 | (self.block << 16) | self.operation
     }
@@ -659,7 +665,7 @@ impl ProductionSemanticExpressionV2 {
     pub fn canonical_sha256(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"fe2o3/production-semantic-expression/v2\0");
-        hash_expression(&mut digest, self);
+        hash_expression(&mut digest, self, LoadCommitmentModeV2::CompleteMetadata);
         digest.finalize().into()
     }
 
@@ -672,6 +678,31 @@ impl ProductionSemanticExpressionV2 {
         digest.update(self.canonical_sha256());
         hash_numerical_contract(&mut digest, numerical_contract);
         digest.finalize().into()
+    }
+
+    /// Commits the typed expression tree materialized in PLIRON.
+    ///
+    /// A validated ranked load is represented in that tree by its reserved
+    /// proof symbol. This transcript is therefore suitable only for checking
+    /// the materialized PLIRON tree. It is not the semantic identity of this
+    /// expression: Self::canonical_transcript_sha256 additionally commits
+    /// every load's allocation, view, and index metadata.
+    pub(crate) fn materialized_pliron_transcript_sha256(
+        &self,
+        numerical_contract: ProductionNumericalContractV2,
+    ) -> [u8; 32] {
+        let mut expression = Sha256::new();
+        expression.update(b"fe2o3/production-semantic-expression/v2\0");
+        hash_expression(
+            &mut expression,
+            self,
+            LoadCommitmentModeV2::MaterializedProofSymbol,
+        );
+        let mut transcript = Sha256::new();
+        transcript.update(b"fe2o3/production-semantic-expression-transcript/v2\0");
+        transcript.update(expression.finalize());
+        hash_numerical_contract(&mut transcript, numerical_contract);
+        transcript.finalize().into()
     }
 }
 
@@ -811,7 +842,17 @@ fn hash_numerical_contract(digest: &mut Sha256, contract: ProductionNumericalCon
     }
 }
 
-fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressionV2) {
+#[derive(Clone, Copy)]
+enum LoadCommitmentModeV2 {
+    CompleteMetadata,
+    MaterializedProofSymbol,
+}
+
+fn hash_expression(
+    digest: &mut Sha256,
+    expression: &ProductionSemanticExpressionV2,
+    load_mode: LoadCommitmentModeV2,
+) {
     match expression {
         ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
             digest.update([0]);
@@ -823,18 +864,25 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
             digest.update(scalar_tag(*scalar));
             digest.update(bits.to_le_bytes());
         }
-        ProductionSemanticExpressionV2::Load(load) => {
-            digest.update([7]);
-            digest.update(scalar_tag(load.scalar));
-            digest.update(load.block.to_le_bytes());
-            digest.update(load.operation.to_le_bytes());
-            digest.update(load.allocation_origin.to_le_bytes());
-            hash_ranked_value(digest, load.view);
-            digest.update((load.indices.len() as u64).to_le_bytes());
-            for index in &load.indices {
-                hash_ranked_value(digest, *index);
+        ProductionSemanticExpressionV2::Load(load) => match load_mode {
+            LoadCommitmentModeV2::CompleteMetadata => {
+                digest.update([7]);
+                digest.update(scalar_tag(load.scalar));
+                digest.update(load.block.to_le_bytes());
+                digest.update(load.operation.to_le_bytes());
+                digest.update(load.allocation_origin.to_le_bytes());
+                hash_ranked_value(digest, load.view);
+                digest.update((load.indices.len() as u64).to_le_bytes());
+                for index in &load.indices {
+                    hash_ranked_value(digest, *index);
+                }
             }
-        }
+            LoadCommitmentModeV2::MaterializedProofSymbol => {
+                digest.update([0]);
+                digest.update(scalar_tag(load.scalar));
+                digest.update(load.proof_symbol().to_le_bytes());
+            }
+        },
         ProductionSemanticExpressionV2::Unary {
             operation,
             scalar,
@@ -842,7 +890,7 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
         } => {
             digest.update([2, *operation as u8]);
             digest.update(scalar_tag(*scalar));
-            hash_expression(digest, operand);
+            hash_expression(digest, operand, load_mode);
         }
         ProductionSemanticExpressionV2::Binary {
             operation,
@@ -853,8 +901,8 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
         } => {
             digest.update([3, *operation as u8, *overflow as u8]);
             digest.update(scalar_tag(*scalar));
-            hash_expression(digest, lhs);
-            hash_expression(digest, rhs);
+            hash_expression(digest, lhs, load_mode);
+            hash_expression(digest, rhs, load_mode);
         }
         ProductionSemanticExpressionV2::Compare {
             operation,
@@ -864,8 +912,8 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
         } => {
             digest.update([4, *operation as u8]);
             digest.update(scalar_tag(*operand_scalar));
-            hash_expression(digest, lhs);
-            hash_expression(digest, rhs);
+            hash_expression(digest, lhs, load_mode);
+            hash_expression(digest, rhs, load_mode);
         }
         ProductionSemanticExpressionV2::Select {
             scalar,
@@ -875,9 +923,9 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
         } => {
             digest.update([5]);
             digest.update(scalar_tag(*scalar));
-            hash_expression(digest, condition);
-            hash_expression(digest, when_true);
-            hash_expression(digest, when_false);
+            hash_expression(digest, condition, load_mode);
+            hash_expression(digest, when_true, load_mode);
+            hash_expression(digest, when_false, load_mode);
         }
         ProductionSemanticExpressionV2::Cast {
             kind,
@@ -888,7 +936,7 @@ fn hash_expression(digest: &mut Sha256, expression: &ProductionSemanticExpressio
             digest.update([6, *kind as u8]);
             digest.update(scalar_tag(*source));
             digest.update(scalar_tag(*target));
-            hash_expression(digest, operand);
+            hash_expression(digest, operand, load_mode);
         }
     }
 }
@@ -1323,5 +1371,48 @@ mod tests {
                 Err(ProductionSemanticExpressionErrorV2::ReservedSymbol),
             );
         }
+    }
+
+    #[test]
+    fn load_semantic_identity_retains_metadata_beyond_the_pliron_leaf() {
+        let scalar = ProductionSemanticScalarTypeV2::Integer {
+            signed: false,
+            bits: 32,
+        };
+        let contract = ProductionNumericalContractV2::ExactBitVectorOperatorCongruence;
+        let expression = |block, allocation_origin, view, index| {
+            ProductionSemanticExpressionV2::Load(ProductionSemanticLoadV2 {
+                block,
+                operation: 7,
+                scalar,
+                allocation_origin,
+                view: ProductionRankedValueV1::Argument(view),
+                indices: vec![ProductionRankedValueV1::Argument(index)].into_boxed_slice(),
+            })
+        };
+        let base = expression(2, 11, 0, 1);
+        assert!(base.validate().is_ok());
+
+        for metadata_mutation in [
+            expression(2, 12, 0, 1),
+            expression(2, 11, 2, 1),
+            expression(2, 11, 0, 3),
+        ] {
+            assert_ne!(
+                base.canonical_transcript_sha256(contract),
+                metadata_mutation.canonical_transcript_sha256(contract),
+            );
+            assert_eq!(
+                base.materialized_pliron_transcript_sha256(contract),
+                metadata_mutation.materialized_pliron_transcript_sha256(contract),
+                "the PLIRON tree commits the positional proof symbol; live-load validation binds its metadata",
+            );
+        }
+
+        assert_ne!(
+            base.materialized_pliron_transcript_sha256(contract),
+            expression(3, 11, 0, 1).materialized_pliron_transcript_sha256(contract),
+            "the materialized proof symbol must retain the ranked effect site",
+        );
     }
 }

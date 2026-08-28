@@ -1140,6 +1140,7 @@ name = "fe2o3-lower-mir-kernel"
 version = "0.1.0"
 dependencies = [
  "dialect-amdgcn",
+ "dialect-gpu",
  "dialect-kernel",
  "dialect-mir",
  "fe2o3-kernel-ir",

@@ -41,7 +41,8 @@ pub(crate) const MAX_REFERENCE_HELPER_ARGUMENTS_V2: usize = 64;
 /// Keeps logical kernel-scalar arguments disjoint from the three point-axis
 /// symbols used by the functional-refinement formula.
 pub(crate) fn kernel_scalar_symbol_v2(argument: u32) -> Option<u32> {
-    (1_u32 << 30).checked_add(argument)
+    let symbol = fe2o3_pliron::PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2.checked_add(argument)?;
+    (symbol < fe2o3_pliron::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2).then_some(symbol)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -4897,4 +4898,27 @@ mod tests {
                 .contains("cumulative expression work nodes")
         );
     }
+}
+#[test]
+fn kernel_scalar_symbols_cannot_enter_the_ranked_load_namespace() {
+    assert_eq!(
+        kernel_scalar_symbol_v2(0),
+        Some(fe2o3_pliron::PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2),
+    );
+    assert_eq!(
+        kernel_scalar_symbol_v2(
+            fe2o3_pliron::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2
+                - fe2o3_pliron::PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2
+                - 1,
+        ),
+        Some(fe2o3_pliron::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2 - 1),
+    );
+    assert_eq!(
+        kernel_scalar_symbol_v2(
+            fe2o3_pliron::PRODUCTION_SEMANTIC_LOAD_SYMBOL_BASE_V2
+                - fe2o3_pliron::PRODUCTION_KERNEL_SCALAR_SYMBOL_BASE_V2,
+        ),
+        None,
+    );
+    assert_eq!(kernel_scalar_symbol_v2(u32::MAX), None);
 }

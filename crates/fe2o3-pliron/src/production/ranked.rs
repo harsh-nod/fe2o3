@@ -2720,7 +2720,7 @@ pub fn typed_semantic_commitment_reconciliation_v2(
                 expression,
                 numerical_contract,
                 ..
-            } => Some(expression.canonical_transcript_sha256(*numerical_contract)),
+            } => Some(expression.materialized_pliron_transcript_sha256(*numerical_contract)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -5129,7 +5129,7 @@ fn materialize_operation(
             expression,
             numerical_contract,
         } => {
-            let digest = expression.canonical_transcript_sha256(*numerical_contract);
+            let digest = expression.materialized_pliron_transcript_sha256(*numerical_contract);
             let expression = materialize_typed_semantic_expression(context, block, expression)?;
             let (policy, rounding, exceptional_values) =
                 typed_numerical_contract(*numerical_contract)?;
@@ -5414,7 +5414,7 @@ fn expected_typed_root_commitments(kernel: &ProductionRankedKernelV1) -> Vec<[u6
                 numerical_contract,
                 ..
             } => Some(digest_words_v2(
-                expression.canonical_transcript_sha256(*numerical_contract),
+                expression.materialized_pliron_transcript_sha256(*numerical_contract),
             )),
             _ => None,
         })

@@ -1803,7 +1803,7 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
         )
         .unwrap();
         let receipt =
-            ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
+            ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
                 semantic_owner(false, false),
                 ranked,
                 "func @semantic_kir_test { kernel.return }".to_owned(),
@@ -1818,6 +1818,12 @@ fn ranked_checks_remain_in_custody_through_kir_and_formal_memory() {
         .unwrap();
 
         assert!(lowered.retains_mandatory_generic_checks());
+        let translation = lowered
+            .mir_pliron_translation_validation()
+            .expect("production ranked custody requires independent translation validation");
+        assert!(!translation.reconciled_projection_remains_trusted());
+        assert!(!translation.claims_indexed_address_equivalence());
+        assert!(!translation.claims_complete_operational_equivalence());
         assert_eq!(lowered.module().kernels[0].domain, expected_domain);
         assert_eq!(
             lowered.module().kernels[0].workgroup_size,
@@ -1887,21 +1893,22 @@ fn normalized_ranked_recipe_remains_in_custody_through_kir_lowering() {
         ProductionRankedOperationV1::IndexConstant { value: 42, .. }
     ));
 
-    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
-        semantic_owner(false, false),
-        ranked,
-        concat!(
-            "func @semantic_kir_test {\n",
-            "  %0 = kernel.index_constant 6\n",
-            "  %1 = kernel.index_constant 7\n",
-            "  %2 = kernel.index_constant 42\n",
-            "  kernel.return\n",
-            "}\n",
+    let receipt =
+        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
+            semantic_owner(false, false),
+            ranked,
+            concat!(
+                "func @semantic_kir_test {\n",
+                "  %0 = kernel.index_constant 6\n",
+                "  %1 = kernel.index_constant 7\n",
+                "  %2 = kernel.index_constant 42\n",
+                "  kernel.return\n",
+                "}\n",
+            )
+            .to_owned(),
+            vec![],
         )
-        .to_owned(),
-        vec![],
-    )
-    .expect("projection receipt");
+        .expect("projection receipt");
     assert!(matches!(
         receipt.lowering().kernel().blocks()[0].operations()[2],
         ProductionRankedOperationV1::IndexConstant { value: 42, .. }
@@ -1914,6 +1921,7 @@ fn normalized_ranked_recipe_remains_in_custody_through_kir_lowering() {
     )
     .expect("KIR lowering");
     assert!(lowered.retains_mandatory_generic_checks());
+    assert!(lowered.mir_pliron_translation_validation().is_some());
     lowered.verify_equivalence().expect("KIR equivalence");
 }
 
@@ -1933,13 +1941,14 @@ fn ranked_trap_reaches_gfx942_llvm_as_trap_then_unreachable() {
     let ranked =
         compile_ranked_kernel_for_lowering_v1(construction, ProductionSessionLimitsV1::default())
             .unwrap();
-    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
-        bounds_assert_owner(),
-        ranked,
-        "func @semantic_bounds_trap_test { kernel.trap }".to_owned(),
-        vec![],
-    )
-    .unwrap();
+    let receipt =
+        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
+            bounds_assert_owner(),
+            ranked,
+            "func @semantic_bounds_trap_test { kernel.trap }".to_owned(),
+            vec![],
+        )
+        .unwrap();
     let lowered = ProductionSemanticKirOwnerV1::try_lower_after_ranked_checks(
         receipt,
         ProductionSemanticKirLimitsV1::default(),

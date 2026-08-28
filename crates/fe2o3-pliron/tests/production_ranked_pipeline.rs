@@ -99,6 +99,13 @@ fn typed_load_kernel(
         0,
         vec![ProductionRankedBlockV1::new(
             vec![
+                ProductionRankedOperationV1::ExecutionLayout {
+                    grid_identity: 1,
+                    global_extents: [4, 1, 1],
+                    workgroup_extents: [4, 1, 1],
+                    subgroup_size: 1,
+                    full_physical_workgroups: true,
+                },
                 ProductionRankedOperationV1::ViewInSpace {
                     result: VIEW,
                     element_width: 32,
@@ -139,15 +146,23 @@ fn typed_load_kernel(
 
 #[test]
 fn typed_load_leaf_is_reconciled_to_the_exact_live_ranked_read() {
-    assert!(typed_load_kernel(2, 1).is_ok());
+    assert!(typed_load_kernel(3, 1).is_ok());
     assert_eq!(
-        typed_load_kernel(1, 1),
+        typed_load_kernel(2, 1),
         Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
     );
     assert_eq!(
-        typed_load_kernel(2, 9),
+        typed_load_kernel(3, 9),
         Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
     );
+
+    let kernel = typed_load_kernel(3, 1).expect("exact live load is structurally valid");
+    let _lowering = compile_ranked_kernel_for_lowering_v1(
+        ProductionConstructionV1::ranked_kernel("typed_load_module", kernel)
+            .expect("typed load construction must succeed"),
+        ProductionSessionLimitsV1::default(),
+    )
+    .expect("typed load commitment must match the live PLIRON expression");
 }
 
 fn dynamic_kernel(guarded: bool) -> ProductionRankedKernelV1 {

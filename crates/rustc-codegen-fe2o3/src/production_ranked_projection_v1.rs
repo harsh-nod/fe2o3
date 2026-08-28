@@ -1163,13 +1163,14 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
         .map_err(ProductionRankedProjectionErrorV1::ReferenceEffectJoin)?
     };
     let ranked_ir = format_ranked_cfg(function_name(root_function)?, lowering.kernel().blocks())?;
-    let receipt = ProductionRankedSemanticProjectionReceiptV1::assert_compiler_internal_projection(
-        semantic_owner,
-        lowering,
-        ranked_ir,
-        access_sources,
-    )
-    .map_err(ProductionRankedProjectionErrorV1::Custody)?;
+    let receipt =
+        ProductionRankedSemanticProjectionReceiptV1::from_unvalidated_projection_candidate(
+            semantic_owner,
+            lowering,
+            ranked_ir,
+            access_sources,
+        )
+        .map_err(ProductionRankedProjectionErrorV1::Custody)?;
     Ok(ProductionRankedSemanticProgramV1 { receipt })
 }
 
@@ -11896,6 +11897,16 @@ fn project_terminator_accesses(
     }
 }
 
+const fn requires_ranked_workgroup_barrier_v1(
+    operation: &SemanticCompilerIntrinsicOperationV1,
+) -> bool {
+    matches!(
+        operation,
+        SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier
+            | SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish { .. }
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_direct_call_accesses(
     callables: &[SemanticCallableDeclV1],
@@ -11915,13 +11926,16 @@ fn project_direct_call_accesses(
     next_value: &mut u32,
     ranked_ir: &mut String,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
-    if matches!(
-        callables.get(call.callee().index() as usize),
-        Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
-            ..
+    if callables
+        .get(call.callee().index() as usize)
+        .is_some_and(|callable| {
+            matches!(
+                callable,
+                SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }
+                    if requires_ranked_workgroup_barrier_v1(operation)
+            )
         })
-    ) {
+    {
         reserve_operation(operations)?;
         operations.push(ProductionRankedOperationV1::Barrier {
             execution_scope: HierarchyAttr::Workgroup,
@@ -14475,6 +14489,28 @@ mod tests {
         .unwrap();
         assert!(lowering.barrier_report().is_clean());
         assert!(lowering.workgroup_report().is_clean());
+    }
+
+    #[test]
+    fn implicit_publish_and_explicit_barrier_share_one_ranked_contract() {
+        assert!(requires_ranked_workgroup_barrier_v1(
+            &SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
+        ));
+        assert!(requires_ranked_workgroup_barrier_v1(
+            &SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposePublish {
+                input_tile: SCALAR_TYPE,
+                output_tile: SCALAR_TYPE,
+                format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            },
+        ));
+        assert!(!requires_ranked_workgroup_barrier_v1(
+            &SemanticCompilerIntrinsicOperationV1::Gfx950LdsTransposeStage {
+                input_tile: SCALAR_TYPE,
+                output_tile: SCALAR_TYPE,
+                view: SCALAR_TYPE,
+                format: SemanticGfx950LdsTransposeFormatV1::Fp8E4M3,
+            },
+        ));
     }
 
     #[test]
