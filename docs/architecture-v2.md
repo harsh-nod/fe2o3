@@ -164,8 +164,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   state through gated clone3/pidfd launch, exact readiness typestate, and a
   descriptor-free one-record readiness publication back over the authenticated
   Cargo control connection. The supervisor retains the same pidfd in serving
-  custody after Cargo observes EOF. Cargo-wrapper listener acquisition and the
-  production supervisor service entrypoint remain pending.
+  custody after Cargo observes EOF. The Cargo wrapper now admits a fixed
+  root-owned client profile, installs policy fd 202 and a child-created service
+  channel at fd 195 only for the selected rustc, authenticates the fixed
+  listener's distinct UID/GID, and gates fresh publication on exact readiness.
+  The deployed production supervisor service entrypoint and backend receipt
+  acquisition remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

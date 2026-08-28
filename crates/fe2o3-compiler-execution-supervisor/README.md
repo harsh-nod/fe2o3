@@ -110,5 +110,5 @@ performing privileged credential transitions after `clone3`. Deployment must
 therefore start the supervisor under the dedicated UID/GID with empty groups
 and capabilities, exact locked securebits, `no_new_privs`, nondumpability,
 zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.
-Cargo-wrapper service acquisition and the real deployed distinct-UID
-supervisor entrypoint remain pending.
+Cargo-wrapper fixed-path service acquisition is implemented. The real deployed
+distinct-UID supervisor entrypoint remains pending.

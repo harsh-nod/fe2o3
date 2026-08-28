@@ -32,12 +32,13 @@ readiness transitions move-only launch custody to live ready custody, while
 one exact descriptor-free readiness packet and EOF transition ready custody to
 serving custody without surrendering the pidfd. Pidfd cancellation and
 fixed-capacity deferred cleanup provide exactly-once reaping. Production must
-still establish that exact profile in a distinct-UID service entrypoint and
-give Cargo an authenticated listener-acquisition path.
+still establish that exact profile in a deployed distinct-UID service
+entrypoint. Cargo now admits the fixed root-owned client profile and connects
+only to the fixed authenticated listener path.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
-machine exist, but protected-supervisor integration, backend acquisition,
-V2-only Cargo/host routing, external monotonic rollback anchoring, verifier
+machine exist, but backend acquisition, receipt-bearing Cargo/host routing,
+external monotonic rollback anchoring, verifier
 authority, and the exact Cargo-to-KFD run remain open.
 
 The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
@@ -49,8 +50,10 @@ service-owned read-only custody, zeroizes caller seed buffers, binds the public
 key to the policy, and exposes neither bytes nor a signing operation. Policy FD
 202 is reserved for rustc; launch-manifest FD 8 and signing-key FD 7 are
 reserved for the protected issuer. The prepared supervisor now materializes
-both issuer descriptors; Cargo/backend submission and live process wiring still
-need to consume the resulting service.
+both issuer descriptors. Cargo now installs the policy and child-created
+service channel for the selected rustc, performs the authenticated supervisor
+handoff, and retains readiness through fresh publication. The backend still
+needs to consume the service and carry its receipt into Worker V3.
 
 ## Transport And Ownership
 
@@ -200,8 +203,11 @@ parent, then repeats policy, service-peer, pidfd target/liveness, socket shape,
 descriptor identity, and alias checks. It can consume the accepted value into
 the exact sealed static-launcher input set, repeating those checks together with
 all source-object, capability, parent, pipe, and canonical-manifest checks. The
-binding wrapper does not yet invoke this path, and the supervisor does not yet
-launch the issuer.
+binding wrapper now invokes this path for the selected protected kernel root,
+waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
+Fresh publication fails closed unless the parent still retains both exact
+rustc-invocation and compiler-execution-readiness custody. A deployed service
+entrypoint and backend receipt acquisition remain separate requirements.
 
 ## Authority Limit
 
@@ -245,5 +251,6 @@ admits exact readiness from the resulting pidfd occurrence. The client and
 supervisor suites also qualify exact descriptor-free Cargo publication,
 mandatory EOF, malformed and substituted packets, ancillary descriptors,
 trailing packets, timeout, closed-peer cleanup, and serving typestate custody.
-A deployed distinct-UID service-profile fixture and Cargo listener acquisition
-remain pending.
+A deployed distinct-UID service-profile fixture remains pending. Cargo's fixed
+listener acquisition, child-channel transfer, and readiness gate are covered by
+unit suites; they have not yet been qualified against that deployed fixture.

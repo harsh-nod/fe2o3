@@ -23,8 +23,12 @@ rustc runtime tree, and backend pins, constructs the canonical
 `CompilerClosureV2`, and snapshots the complete raw argument vector and
 environment. The closure also binds transition protocol version 1 and derives
 its aggregate identity from that protocol and the six ordered pins. It
-then executes the sealed image with fixed contract, control, launcher-image,
-and cwd descriptors. The child independently checks its own image, its live
+then admits the sole root-owned canonical compiler-execution client profile at
+`/etc/fe2o3/compiler-execution/client-profile-v1` and executes the sealed image
+with fixed contract, control, launcher-image, cwd, and client-profile
+descriptors. The V3 release contract identity covers the profile descriptor
+object and complete profile identity. The child independently seals and
+revalidates that profile, checks its own image, its live
 parent's PID/start time/uid/image, the retained backing objects, exact argv,
 environment, cwd, descriptor manifest, and compiler closure before completing
 a fresh two-way one-shot grant. Before exec, the child arms `PR_SET_PDEATHSIG`
@@ -78,9 +82,10 @@ authority. The release contract makes no stronger claims.
 ### Compiler provenance wiring
 
 For protected builds, the capability broker sends a sealed raw
-`CompilerClosureV2` capability to the binding wrapper. The wrapper revalidates
-the complete closure, captures the exact prepared V2 rustc process and child
-environment, and upgrades that in-memory observation to
+`CompilerClosureV2` capability and the exact sealed compiler-execution client
+profile to the binding wrapper. The wrapper revalidates both, captures the
+exact prepared V2 rustc process and child environment, and upgrades that
+in-memory observation to
 `RustcInvocationDescriptorV3`. The rustc and backend pins duplicated by V2 and
 the closure must match.
 
@@ -92,10 +97,24 @@ moves the exact invocation custody into Worker V3 publication. This closes the
 Cargo-to-backend transport boundary; proof promotion and runtime authorization
 remain separate downstream gates.
 
+For the selected kernel root only, the wrapper also derives and seals the exact
+issuer policy at rustc fd 202 and creates the compiler-service endpoint at
+rustc fd 195 after fork. The parent binds that endpoint to the spawned rustc's
+credentials and live pidfd, transfers both to the sole fixed
+`/run/fe2o3/compiler-execution-supervisor.sock` endpoint after authenticating
+the profile's distinct supervisor UID/GID, and requires one canonical
+issuer-readiness record plus EOF. Fresh Worker V3 publication retains and
+revalidates both invocation and readiness custody. Any post-spawn handoff or
+readiness failure kills and reaps rustc before invalidating the build attempt.
+Host dependency units receive none of these descriptors. Backend receipt
+acquisition and receipt-bearing Worker V3 publication are the next boundary;
+readiness alone grants no compiler or artifact authority.
+
 ## External Cargo projects
 
-`cargo fe2o3 build` and `cargo fe2o3 run` operate from standalone Cargo
-projects and workspace members. Production constructs one fixed two-phase
+`cargo fe2o3 authority release build` and
+`cargo fe2o3 authority release run` operate from standalone Cargo projects and
+workspace members. Production constructs one fixed two-phase
 plan: it first runs Cargo `build` for `amdgcn-amd-amdhsa` through the fe2o3
 device compiler, commits the exact generated-artifact generation, and then
 runs the requested `build` or `run` for the pinned rustc host target with
