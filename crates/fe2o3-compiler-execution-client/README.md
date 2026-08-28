@@ -37,3 +37,8 @@ rechecks its launch manifest and pinned policy, and rejects truncation,
 extension, substitution, trailing data, or timeout. Binding-wrapper service
 acquisition, the deployed distinct-UID entrypoint, HSACO publication, and
 runtime admission remain outside this checkpoint.
+
+Cargo supplies one absolute monotonic deadline across child admission,
+supervisor connection and transfer, and readiness. Individual duration-based
+operations remain available, but production does not reset the timeout between
+those transitions.

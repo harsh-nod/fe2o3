@@ -212,6 +212,8 @@ waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
 Fresh publication fails closed unless the parent still retains both exact
 rustc-invocation and compiler-execution-readiness custody. A deployed service
 entrypoint and backend receipt acquisition remain separate requirements.
+One absolute monotonic deadline now spans child admission, supervisor transfer,
+and readiness; production does not restart a full timeout at each transition.
 
 ## Authority Limit
 

@@ -6,6 +6,7 @@ use std::os::fd::BorrowedFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
+use std::time::{Duration, Instant};
 
 use fe2o3_artifact_transaction::{
     BuildAttempt, BuildInvocation, BuildSession, EmitError, ProducerIdentity,
@@ -91,6 +92,8 @@ const OBSERVED_PARENT_START_TIME_BUILD_OBSERVATION_ENV_V2: &str =
 const BUILD_ATTEMPT_INPUT_DOMAIN: &[u8] = b"FE2O3/BUILD-ATTEMPT-INPUT/V2\0";
 // Frozen legacy domain bytes remain part of persisted build-attempt identities.
 const BUILD_CONFIG_ID_DOMAIN: &[u8] = b"FE2O3/WORKER-V2-CONFIG-ID/V1\0";
+const RUSTC_TERMINATION_REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const RUSTC_TERMINATION_REAP_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CompileBuildObservationV2 {
@@ -662,20 +665,43 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
 }
 
 fn terminate_spawned_rustc(child: &mut Child) -> Option<String> {
-    if let Ok(Some(_)) = child.try_wait() {
-        return None;
+    let mut failures = Vec::new();
+    match child.try_wait() {
+        Ok(Some(_)) => return None,
+        Ok(None) => {}
+        Err(error) => failures.push(format!("initial rustc status check failed: {error}")),
     }
 
-    let kill_error = child.kill().err();
-    match child.wait() {
-        Ok(_) => None,
-        Err(wait_error) => Some(match kill_error {
-            Some(kill_error) => {
-                format!("kill failed: {kill_error}; wait/reap failed: {wait_error}")
-            }
-            None => format!("wait/reap failed after successful kill: {wait_error}"),
-        }),
+    if let Err(error) = child.kill() {
+        failures.push(format!("kill failed: {error}"));
     }
+    let deadline = Instant::now()
+        .checked_add(RUSTC_TERMINATION_REAP_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return (!failures.is_empty()).then(|| failures.join("; "));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                failures.push(format!("status check while reaping failed: {error}"));
+                break;
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(remaining.min(RUSTC_TERMINATION_REAP_POLL_INTERVAL));
+    }
+
+    failures.push(format!(
+        "rustc pid {} remained unreaped after {:?}",
+        child.id(),
+        RUSTC_TERMINATION_REAP_TIMEOUT
+    ));
+    Some(failures.join("; "))
 }
 
 fn selected_kernel_root(
@@ -2205,7 +2231,9 @@ mod lifecycle_tests {
     #[test]
     fn spawned_rustc_cleanup_kills_and_reaps_the_child() {
         let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
+        let started = Instant::now();
         assert!(terminate_spawned_rustc(&mut child).is_none());
+        assert!(started.elapsed() <= RUSTC_TERMINATION_REAP_TIMEOUT + Duration::from_secs(1));
         assert!(child.try_wait().unwrap().is_some());
     }
 }

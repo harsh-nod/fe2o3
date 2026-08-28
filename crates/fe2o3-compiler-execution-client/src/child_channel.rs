@@ -147,6 +147,19 @@ impl PendingCompilerExecutionChildChannelV1 {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(CompilerExecutionChildChannelErrorV1::DeadlineOverflow)?;
+        self.finish_until(child_pid, deadline)
+    }
+
+    /// Receives and validates the exact service endpoint before one absolute deadline.
+    pub fn finish_until(
+        self,
+        child_pid: u32,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        if child_pid == 0 {
+            return Err(CompilerExecutionChildChannelErrorV1::InvalidChildPid);
+        }
+        require_child_channel_deadline(deadline)?;
         let client_pidfd = open_pidfd(child_pid)?;
         wait_for_transfer(&self.receiver, &client_pidfd, deadline)?;
         let (service_peer, transferred_pid, transferred_parent_pid) =
@@ -175,12 +188,23 @@ impl PendingCompilerExecutionChildChannelV1 {
         if submitter.uid() != client.uid() || submitter.gid() != client.gid() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
         }
+        require_child_channel_deadline(deadline)?;
         Ok(CompilerExecutionServiceLaunchV1 {
             service_peer,
             client_pidfd,
             client,
             submitter,
         })
+    }
+}
+
+fn require_child_channel_deadline(
+    deadline: Instant,
+) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+    if deadline.saturating_duration_since(Instant::now()).is_zero() {
+        Err(CompilerExecutionChildChannelErrorV1::Timeout)
+    } else {
+        Ok(())
     }
 }
 

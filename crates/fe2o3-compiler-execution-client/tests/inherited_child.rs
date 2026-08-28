@@ -26,12 +26,24 @@ fn canonical_inherited_child_slot_is_consumed_for_valid_and_invalid_peers() {
 
     assert!(matches!(
         CompilerExecutionClientV1::admit_inherited_child(Duration::from_secs(1)),
-        Err(CompilerExecutionClientErrorV1::Descriptor(_))
+        Err(CompilerExecutionClientErrorV1::MissingInheritedPeer)
+    ));
+    assert_reserved_slot_absent();
+
+    let (close_on_exec, _service) = socket_pair(libc::SOCK_SEQPACKET);
+    install_reserved_with_flags(close_on_exec, libc::O_CLOEXEC);
+    assert!(matches!(
+        CompilerExecutionClientV1::admit_inherited_child(Duration::from_secs(1)),
+        Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec)
     ));
     assert_reserved_slot_absent();
 }
 
 fn install_reserved(source: OwnedFd) {
+    install_reserved_with_flags(source, 0);
+}
+
+fn install_reserved_with_flags(source: OwnedFd, flags: i32) {
     assert_ne!(source.as_raw_fd(), COMPILER_EXECUTION_SERVICE_CHILD_FD_V1);
     // SAFETY: the reserved target was proven absent and dup3 installs a duplicate of the live
     // source descriptor without transferring source ownership.
@@ -40,7 +52,7 @@ fn install_reserved(source: OwnedFd) {
             libc::dup3(
                 source.as_raw_fd(),
                 COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
-                0,
+                flags,
             )
         },
         COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
