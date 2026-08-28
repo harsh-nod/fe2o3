@@ -6,9 +6,13 @@ current-record verification, and bounded service packet records. The 352-byte
 current-record verification binds one exact carriage to the policy, subject,
 issuer journal, Worker record, sequence, both rollback anchors, and the
 protected policy and Worker-ledger verification identities. Decoding that
-record proves canonical structure only. It grants no authority unless a caller
-received it over an authenticated protected-service session and independently
-matches every field to the request. The 240-byte client profile binds the exact
+record proves canonical structure only. A separate 536-byte attestation binds
+that complete record to a nonzero caller challenge and an Ed25519 signature.
+Verification requires the embedded key to equal the caller-pinned policy key,
+the challenge to equal the caller's fresh challenge, and the complete nested
+record to equal the expected record. The result grants no authority and does
+not by itself prove protected key custody or external anti-rollback. The
+240-byte client profile binds the exact
 dedicated supervisor UID/GID to one complete caller-pinned issuer policy; it
 contains no endpoint, path, secret, timeout, or authority. The launch manifest
 binds an exact PID/UID/GID tuple to an exact policy identity. A canonical

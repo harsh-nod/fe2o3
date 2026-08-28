@@ -7,21 +7,23 @@ the issuer journal from `Ready`, `Prepared`, or `Issued`. It then publishes the
 exact signed receipt and returns the complete inert receipt carriage.
 
 The terminal `verify_current_only` operation sends one complete expected
-carriage to the protected service. It accepts only a canonical
-`VerifiedCurrent` response bound to the exact request, policy, subject,
-carriage, issuer journal, Worker record, sequence, and rollback anchors. The
-returned record remains descriptive until the endpoint is provisioned through
-the authenticated supervisor handoff and the caller joins external rollback
-and compiler-refinement evidence.
+carriage and a fresh internally generated challenge to the protected service.
+It accepts only a canonical issuer-signed `VerifiedCurrent` response under the
+caller-pinned policy key, bound to that challenge and the exact request,
+policy, subject, carriage, issuer journal, Worker record, sequence, and
+rollback anchors. The returned move-only evidence authenticates the pinned-key
+response, but remains non-authoritative until protected key custody, external
+rollback, and compiler-refinement evidence are joined.
 
 The client uses one absolute monotonic deadline, fixed stack packet storage,
 strict request/response identity correlation, pinned-policy validation, and no
 ancillary descriptors. It grants no compiler, artifact, load, or launch
 authority.
 
-The crate also owns the authority-free child-channel handoff used by the direct
-rustc parent. Its post-fork callback creates the unnamed `SOCK_SEQPACKET` pair
-inside the rustc child, installs only the client endpoint at FD 195, and
+The crate also owns the authority-free child-channel handoff used by a selected
+compiler or application parent. Its post-fork callback creates the unnamed
+`SOCK_SEQPACKET` pair inside the selected child, installs only the client
+endpoint at FD 195, and
 transfers only the service endpoint to the parent. Parent admission binds the
 transfer to the exact child PID, child-reported direct-parent PID,
 `SO_PEERCRED`, and a live pidfd under one absolute deadline. The resulting
@@ -36,12 +38,13 @@ minutes covers connection and the canonical transfer.
 
 The transfer sends one canonical direct-parent/launch-manifest record and
 exactly two ordered `SCM_RIGHTS` descriptors, then retains the same control
-connection for pending readiness. This avoids attributing an
-outer-Cargo-created service socket to rustc or accepting a same-user relay as
+connection for pending readiness. This avoids attributing a parent-created
+service socket to the selected child or accepting a same-user relay as
 the direct parent. After the supervisor admits issuer readiness, it sends that
 same canonical record over the control connection and closes its endpoint. The
 pending client accepts exactly one descriptor-free packet followed by EOF,
 rechecks its launch manifest and pinned policy, and rejects truncation,
-extension, substitution, trailing data, or timeout. Binding-wrapper service
-acquisition, the deployed distinct-UID entrypoint, HSACO publication, and
-runtime admission remain outside this checkpoint.
+extension, substitution, trailing data, or timeout. Compiler and application
+parents both use this channel in the production Cargo path. Deployed
+distinct-UID provisioning, external monotonic rollback, and final verifier and
+runtime authority joins remain outside this transport component.

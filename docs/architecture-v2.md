@@ -112,7 +112,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   backend consumes the inherited service and policy descriptors, acquires the
   exact receipt after V3 handoff publication, and carries it through the sole
   top-level V2 load envelope into host admission. Host lineage and the Worker V3
-  verifier request now bind the exact subject and complete carriage. Promotion
+  verifier request now bind the exact subject and complete carriage. The
+  application runner creates a separate child-bound fd 195, reaches the same
+  fixed supervisor before ACK, exposes no policy fd 202, and retains readiness
+  through exit. A one-use host auditor consumes that endpoint and verifies the
+  issuer signature over a fresh challenge and the exact current-record result;
+  this remains authority-free. Promotion
   compares every receipt, occurrence, Worker-ledger, sequence, and rollback
   coordinate and requires nonzero independent protected-policy, ledger, and
   external rollback verification identities. The concrete protected verifier,
@@ -163,19 +168,22 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   Ready, Prepared, or Issued state over one unnamed `SOCK_SEQPACKET` peer; it is
   a transport component of the production transaction, not another compiler
   pipeline. Its direct-parent handoff creates that socketpair in the post-fork
-  rustc child, transfers only the service endpoint, and binds it to exact child
-  credentials and a live pidfd. The protected supervisor authenticates that
-  handoff and now materializes the exact sealed ten-source static-launcher input
+  selected child, transfers only the service endpoint, and binds it to exact
+  child credentials and a live pidfd. The protected supervisor authenticates
+  that handoff and now materializes the exact sealed ten-source static-launcher input
   while retaining private output/readiness endpoints. It now consumes that
   state through gated clone3/pidfd launch, exact readiness typestate, and a
   descriptor-free one-record readiness publication back over the authenticated
   Cargo control connection. The supervisor retains the same pidfd in serving
   custody after Cargo observes EOF. The Cargo wrapper now admits a fixed
   root-owned client profile, installs policy fd 202 and a child-created service
-  channel at fd 195 only for the selected rustc, authenticates the fixed
-  listener's distinct UID/GID, and gates fresh publication on exact readiness.
-  The deployed production supervisor service entrypoint and backend receipt
-  acquisition remain pending.
+  channel at fd 195 for the selected rustc, authenticates the fixed listener's
+  distinct UID/GID, and gates fresh publication on exact readiness. The
+  application runner uses a fresh child-created fd 195 through the same
+  supervisor without inheriting fd 202, and `fe2o3-host` can consume its signed
+  challenge-bound current-record response as move-only audit evidence. Deployed
+  production supervisor provisioning, external rollback, and final verifier
+  authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

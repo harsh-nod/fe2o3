@@ -129,10 +129,12 @@ production deployment must bind the combined position to the reviewed external
 anti-rollback service or an equivalent monotonic facility.
 
 The current-record verification identities are deterministic hashes of the
-protected comparison inputs. They neither authenticate an arbitrary client
-connection nor add freshness beyond the reacquired local state. The caller must
-authenticate the supervisor-provisioned service endpoint and join the result to
-the external monotonic anchor.
+protected comparison inputs. The service now signs the complete record together
+with a fresh caller challenge, and the client verifies that signature under the
+pinned policy key. This prevents unsigned endpoint substitution and stale
+response replay, but the signature does not itself prove protected key custody
+or add external rollback freshness. The final verifier must join the result to
+the deployed service measurement and external monotonic anchor.
 
 This ledger proves durable publication of an authenticated receipt. It does not
 by itself prove Worker V3 load-envelope custody, Verus correctness,

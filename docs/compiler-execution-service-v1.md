@@ -40,9 +40,12 @@ exact-carriage protected verification operation, bounded restart-safe client
 state machine, backend acquisition, attempt-scoped sidecar transport, and
 receipt-bearing Cargo/host V2 route are implemented. `VerifyCurrent` rereads the
 service-owned canonical Worker record, reconstructs the complete carriage,
-compares every byte with the caller's expected carriage, and returns canonical
-policy and Worker-ledger verification evidence. That evidence remains
-authority-free until the client authenticates the provisioned service endpoint.
+compares every byte with the caller's expected carriage, and signs a canonical
+policy and Worker-ledger verification record together with the caller's fresh
+challenge. The client requires the signing key to equal its pinned policy key,
+the challenge to match, and every nested coordinate to equal the expected
+carriage. That evidence remains authority-free: the signature does not by
+itself prove protected key custody or external anti-rollback.
 The Worker V3 verifier request and decision now losslessly bind the exact
 subject, carriage, policy, occurrence, Worker-ledger record, sequence, and
 rollback anchors, and fail closed without independent protected-policy, ledger,
@@ -136,15 +139,16 @@ The session accepts exactly seven operation kinds:
 | `Publish` | Matching `Issued`, or the immediately acknowledged request | Worker commit followed by issuer ACK; terminal exact ACK |
 | `Cancel` | Any valid state | Current rollback position; terminal without mutation |
 | `Recover` | Requested compiler subject | Strict post-fsync reacquisition and complete carriage when the exact current record exists; terminal without mutation. If no Worker record exists yet, return nonterminal `ReceiptAbsent`. A different current subject fails closed. |
-| `VerifyCurrent` | Complete expected receipt carriage | Independently reread the canonical Worker record, reconstruct and byte-compare the complete carriage under the protected policy, and return exact policy/ledger verification evidence; terminal without mutation. |
+| `VerifyCurrent` | Complete expected receipt carriage and fresh 32-byte challenge | Independently reread the canonical Worker record, reconstruct and byte-compare the complete carriage under the protected policy, and sign the exact challenge-bound policy/ledger verification evidence; terminal without mutation. |
 
 Each request commits to the caller-pinned policy identity and a
 domain-separated identity over its complete canonical bytes. Prepare names the
 expected sequence and prior rollback anchor. Issue and Publish derive that
 position from their complete nested attestation request. Recover carries the
 complete canonical compiler subject and names no caller-asserted rollback
-position. VerifyCurrent names the expected sequence and current rollback anchor
-and carries the complete 2,058-byte carriage. Every response binds
+position. VerifyCurrent names the expected sequence and current rollback anchor,
+carries the complete 2,058-byte carriage, and adds a nonzero 32-byte caller
+challenge. Every response binds
 the exact request identity, policy identity, resulting position, payload, and
 its own terminal identity.
 
@@ -162,13 +166,13 @@ diagnostic protocol and keeps crash recovery authoritative.
 | Issue request | 1,074 |
 | Publish request | 1,658 |
 | Recover request | 818 |
-| VerifyCurrent request | 2,186 |
+| VerifyCurrent request | 2,218 |
 | Ready, Cancelled, or ReceiptAbsent response | 160 |
 | Prepared response | 360 |
 | Issued response | 744 |
 | Published response | 456 |
 | Recovered response | 2,218 |
-| VerifiedCurrent response | 512 |
+| VerifiedCurrent response | 696 |
 
 The implementation uses fixed stack storage sized to the maximum request and
 response. The complete publication ACK or recovered 2,058-byte carriage remains
@@ -206,9 +210,12 @@ complete carriage and requires both structural equality and byte-for-byte
 equality with the request. It derives domain-separated policy and Worker-ledger
 verification identities from protected policy bytes, the exact subject and
 carriage, and the complete reacquired Worker record. The 352-byte result repeats
-all relevant coordinates and has its own canonical identity. The identities are
-deterministic evidence labels, not signatures or rollback authority; trust in
-their protected derivation comes from the authenticated service connection.
+all relevant coordinates and has its own canonical identity. The service signs
+that complete result together with the caller's fresh challenge in a 536-byte
+attestation. The nested verification identities remain deterministic evidence
+labels rather than rollback authority; the signature authenticates only the
+pinned-key response and exact challenge. Protected key custody and external
+monotonic currentness remain separate joins.
 
 `fe2o3-compiler-execution-client` implements the corresponding single-session
 machine. It attempts Recover first, correlates every response to the exact
@@ -216,11 +223,13 @@ request and caller-pinned policy, and resumes the minimum legal suffix from
 Ready, Prepared, or Issued. Issued restart reconstructs the exact challenge and
 request from authenticated receipt fields before Publish. Recovery-only clients
 send Cancel after ReceiptAbsent so the service terminates without mutation.
-Verification-only clients use one terminal VerifyCurrent exchange and compare
-every returned carriage coordinate with the original expected carriage.
+Verification-only clients generate a fresh challenge, use one terminal
+VerifyCurrent exchange, verify the Ed25519 signature under the pinned policy
+key, and compare every returned carriage coordinate with the original expected
+carriage.
 
 The same crate now implements the direct-parent channel handoff. The socketpair
-is created after fork inside the rustc child, its client endpoint is installed
+is created after fork inside the selected child, its client endpoint is installed
 at fixed FD 195, and only its service endpoint crosses `SCM_RIGHTS` to the
 parent. The parent requires the transferred child and direct-parent PIDs,
 `SO_PEERCRED`, spawned child PID, current parent identity, and live pidfd to
@@ -236,7 +245,12 @@ binding wrapper now invokes this path for the selected protected kernel root,
 waits for exact issuer readiness, and kills/reaps rustc on any failed handoff.
 Fresh publication fails closed unless the parent still retains both exact
 rustc-invocation and compiler-execution-readiness custody. A deployed service
-entrypoint and backend receipt acquisition remain separate requirements.
+entrypoint remains a separate requirement. The production application runner
+uses the same child-created channel and fixed supervisor path without exposing
+policy FD 202, establishes readiness before waiting for its ACK, and retains
+that custody through exit. `fe2o3-host` now exports a move-only one-use auditor
+that consumes the inherited endpoint and verifies the signed current-record
+transaction without constructing verifier, load, or launch authority.
 
 ## Authority Limit
 
