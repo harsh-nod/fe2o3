@@ -1997,6 +1997,7 @@ fn generated_general_typed_arguments_v1(
                 argument,
                 GeneralTypedArgumentKindV1::SharedSlice(_)
                     | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                    | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
             )
             .then(|| format_ident!("__Fe2o3MemoryArgument{index}"))
         })
@@ -2007,20 +2008,12 @@ fn generated_general_typed_arguments_v1(
         .map(|(argument, type_parameter)| match argument {
             GeneralTypedArgumentKindV1::Scalar(scalar) => scalar.rust_type_tokens(),
             GeneralTypedArgumentKindV1::SharedSlice(_)
-            | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+            | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _) => {
                 let type_parameter = type_parameter
                     .as_ref()
                     .expect("slice arguments have generated capability parameters");
                 quote!(#type_parameter)
-            }
-            GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
-                let scalar = scalar.rust_type_tokens();
-                quote!(
-                    __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
-                        'allocation,
-                        #scalar
-                    >
-                )
             }
             GeneralTypedArgumentKindV1::GlobalMutPointer(scalar) => {
                 let scalar = scalar.rust_type_tokens();
@@ -2045,6 +2038,15 @@ fn generated_general_typed_arguments_v1(
                     )
                 }
                 GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+                    let scalar = scalar.rust_type_tokens();
+                    quote!(
+                        __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
+                            'allocation,
+                            #scalar
+                        >
+                    )
+                }
+                GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
                     let scalar = scalar.rust_type_tokens();
                     quote!(
                         __fe2o3_kernel_host::__generated::GeneratedReadWriteDeviceSlice<
@@ -2209,18 +2211,81 @@ fn generated_general_typed_arguments_v1(
     }
 }
 
+fn generated_disjoint_index_space_v1(
+    index_space: RustDisjointIndexSpaceV1,
+) -> proc_macro2::TokenStream {
+    match index_space {
+        RustDisjointIndexSpaceV1::Index1D => {
+            quote!(__fe2o3_kernel_host::__generated::RustDisjointIndexSpaceV1::Index1D)
+        }
+        RustDisjointIndexSpaceV1::ShiftedIndex1D { offset } => quote!(
+            __fe2o3_kernel_host::__generated::RustDisjointIndexSpaceV1::ShiftedIndex1D {
+                offset: #offset,
+            }
+        ),
+        RustDisjointIndexSpaceV1::GridExclusive => {
+            quote!(__fe2o3_kernel_host::__generated::RustDisjointIndexSpaceV1::GridExclusive)
+        }
+        RustDisjointIndexSpaceV1::BlockedIndex1D {
+            lanes_per_block,
+            elements_per_lane,
+        } => {
+            let lanes_per_block = lanes_per_block.get();
+            let elements_per_lane = elements_per_lane.get();
+            quote!(
+                __fe2o3_kernel_host::__generated::RustDisjointIndexSpaceV1::blocked_index_1d(
+                    #lanes_per_block,
+                    #elements_per_lane,
+                ).expect("compiler-generated blocked index space is valid")
+            )
+        }
+        RustDisjointIndexSpaceV1::Tiled2DIndex1D {
+            lanes_per_tile,
+            tile_rows,
+            tile_columns,
+            elements_per_lane,
+        } => {
+            let lanes_per_tile = lanes_per_tile.get();
+            let tile_rows = tile_rows.get();
+            let tile_columns = tile_columns.get();
+            let elements_per_lane = elements_per_lane.get();
+            quote!(
+                __fe2o3_kernel_host::__generated::RustDisjointIndexSpaceV1::tiled_2d_index_1d(
+                    #lanes_per_tile,
+                    #tile_rows,
+                    #tile_columns,
+                    #elements_per_lane,
+                ).expect("compiler-generated tiled index space is valid")
+            )
+        }
+        RustDisjointIndexSpaceV1::RowStriped2DIndex1D {
+            lanes_per_row,
+            elements_per_lane,
+        } => {
+            let lanes_per_row = lanes_per_row.get();
+            let elements_per_lane = elements_per_lane.get();
+            quote!(
+                __fe2o3_kernel_host::__generated::RustDisjointIndexSpaceV1::
+                    row_striped_2d_index_1d(
+                        #lanes_per_row,
+                        #elements_per_lane,
+                    ).expect("compiler-generated row-striped index space is valid")
+            )
+        }
+        _ => unreachable!("general typed validation accepts only known disjoint index spaces"),
+    }
+}
+
 fn generated_worker_v3_adapter_v1(
     input: &ItemFn,
     model: &GeneralTypedSignatureModelV1,
 ) -> proc_macro2::TokenStream {
-    if model.arguments.iter().any(|argument| {
-        matches!(
-            argument,
-            GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
-                | GeneralTypedArgumentKindV1::GlobalMutPointer(_)
-        )
-    }) {
-        // Descriptor V1 does not preserve mapped index-space identities or global pointers.
+    if model
+        .arguments
+        .iter()
+        .any(|argument| matches!(argument, GeneralTypedArgumentKindV1::GlobalMutPointer(_)))
+    {
+        // Worker V3 Descriptor V1 still has no generated global-pointer capability adapter.
         return quote! {};
     }
 
@@ -2278,14 +2343,20 @@ fn generated_worker_v3_adapter_v1(
         .iter()
         .zip(&fields)
         .enumerate()
-        .filter(|(_, (argument, _))| {
-            matches!(
-                argument,
-                GeneralTypedArgumentKindV1::SharedSlice(_)
-                    | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
-            )
+        .filter_map(|(index, (argument, field))| match argument {
+            GeneralTypedArgumentKindV1::SharedSlice(_)
+            | GeneralTypedArgumentKindV1::ExclusiveSlice(_) => {
+                Some(quote!(self.#field.bind_argument(plan, #index)?))
+            }
+            GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
+                let index_space = generated_disjoint_index_space_v1(*index_space);
+                Some(quote!(
+                    self.#field.bind_mapped_argument(plan, #index, #index_space)?
+                ))
+            }
+            GeneralTypedArgumentKindV1::Scalar(_)
+            | GeneralTypedArgumentKindV1::GlobalMutPointer(_) => None,
         })
-        .map(|(index, (_, field))| quote!(self.#field.bind_argument(plan, #index)?))
         .collect::<Vec<_>>();
     let kfd_memory_types = model
         .arguments
@@ -2300,7 +2371,8 @@ fn generated_worker_v3_adapter_v1(
                     >
                 ))
             }
-            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => {
+            GeneralTypedArgumentKindV1::ExclusiveSlice(scalar)
+            | GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, _) => {
                 let scalar = scalar.rust_type_tokens();
                 Some(quote!(
                     __fe2o3_kernel_host::__generated::GeneratedKfdReadWriteSlice<
@@ -2318,6 +2390,13 @@ fn generated_worker_v3_adapter_v1(
             argument,
             GeneralTypedArgumentKindV1::SharedSlice(_)
                 | GeneralTypedArgumentKindV1::ExclusiveSlice(_)
+                | GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
+        )
+    });
+    let has_mapped_slice = model.arguments.iter().any(|argument| {
+        matches!(
+            argument,
+            GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
         )
     });
     let arguments_type = if retains_borrows {
@@ -2330,7 +2409,9 @@ fn generated_worker_v3_adapter_v1(
     } else {
         quote!(Arguments)
     };
-    let prepare_impl = if retains_borrows {
+    let prepare_impl = if has_mapped_slice {
+        quote! {}
+    } else if retains_borrows {
         quote! {
             impl<'allocation> Arguments<'allocation> {
                 /// Prepares this exact verified Worker V3 invocation for one-shot dispatch.
@@ -2385,7 +2466,10 @@ fn generated_worker_v3_adapter_v1(
             }
         }
     };
-    quote! {
+    let hsa_adapter = if has_mapped_slice {
+        quote! {}
+    } else {
+        quote! {
         // SAFETY: the implementation is generated from the same parsed signature, canonical ABI,
         // and marker as the compiler-visible V3 registration. Memory inputs and access records are
         // emitted together by retained, non-forgeable capabilities.
@@ -2418,6 +2502,13 @@ fn generated_worker_v3_adapter_v1(
             }
         }
 
+        #prepare_impl
+        }
+    };
+
+    quote! {
+        #hsa_adapter
+
         // SAFETY: this implementation is emitted from the same parsed signature, canonical ABI,
         // marker, and effect model as the compiler registration. KFD capabilities produce owned
         // address-free buffers and zero pointer placeholders together with their exact fixups.
@@ -2449,8 +2540,6 @@ fn generated_worker_v3_adapter_v1(
                 )
             }
         }
-
-        #prepare_impl
     }
 }
 
@@ -2464,13 +2553,44 @@ fn generated_worker_v3_layout_v1(model: &GeneralTypedSignatureModelV1) -> proc_m
     let size = model.abi.size();
     let alignment = model.abi.alignment();
 
-    quote! {
-        __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
-            #size,
-            #alignment,
-            __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
-            [#(#fields),*].into_iter().collect(),
-        )
+    if model
+        .arguments
+        .iter()
+        .any(|kind| matches!(kind, GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)))
+    {
+        let disjoint_index_spaces = model
+            .arguments
+            .iter()
+            .map(|kind| match kind {
+                GeneralTypedArgumentKindV1::ExclusiveSlice(_) => quote!(None),
+                GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, index_space) => {
+                    let index_space = generated_disjoint_index_space_v1(*index_space);
+                    quote!(Some(#index_space))
+                }
+                GeneralTypedArgumentKindV1::Scalar(_)
+                | GeneralTypedArgumentKindV1::SharedSlice(_)
+                | GeneralTypedArgumentKindV1::GlobalMutPointer(_) => quote!(None),
+            })
+            .collect::<Vec<_>>();
+        quote! {
+            __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::
+                new_with_disjoint_index_spaces_v1(
+                #size,
+                #alignment,
+                __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                [#(#fields),*].into_iter().collect(),
+                [#(#disjoint_index_spaces),*].into_iter().collect(),
+            )
+        }
+    } else {
+        quote! {
+            __fe2o3_kernel_host::__generated::CompilerGeneratedArgumentLayoutV1::new(
+                #size,
+                #alignment,
+                __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                [#(#fields),*].into_iter().collect(),
+            )
+        }
     }
 }
 
@@ -2482,12 +2602,14 @@ fn generated_worker_v3_field_v1(
     let offset = field.offset();
     let size = field.size();
     let alignment = field.alignment();
-    let (scalar, shared, exclusive) = match kind {
-        GeneralTypedArgumentKindV1::Scalar(scalar) => (scalar, false, false),
-        GeneralTypedArgumentKindV1::SharedSlice(scalar) => (scalar, true, false),
-        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, true),
-        GeneralTypedArgumentKindV1::MappedExclusiveSlice(_, _)
-        | GeneralTypedArgumentKindV1::GlobalMutPointer(_) => {
+    let (scalar, shared, exclusive, mapped_index_space) = match kind {
+        GeneralTypedArgumentKindV1::Scalar(scalar) => (scalar, false, false, None),
+        GeneralTypedArgumentKindV1::SharedSlice(scalar) => (scalar, true, false, None),
+        GeneralTypedArgumentKindV1::ExclusiveSlice(scalar) => (scalar, false, true, None),
+        GeneralTypedArgumentKindV1::MappedExclusiveSlice(scalar, index_space) => {
+            (scalar, false, true, Some(index_space))
+        }
+        GeneralTypedArgumentKindV1::GlobalMutPointer(_) => {
             unreachable!("unsupported V3 descriptor kinds do not generate an adapter")
         }
     };
@@ -2511,6 +2633,13 @@ fn generated_worker_v3_field_v1(
                 quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
                 shared_slice_type_identity_v1(
                     __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                ))
+            } else if let Some(index_space) = mapped_index_space {
+                let index_space = generated_disjoint_index_space_v1(index_space);
+                quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
+                disjoint_slice_type_identity_for_index_space_v1(
+                    __fe2o3_kernel_host::__generated::PointerWidth::Bits64,
+                    #index_space,
                 ))
             } else {
                 quote!(<#rust_type as __fe2o3_kernel_host::__generated::GeneratedDeviceScalarV1>::
@@ -5321,19 +5450,44 @@ mod tests {
     }
 
     #[test]
-    fn worker_v3_dispatch_generation_fails_closed_for_unrepresented_descriptor_kinds() {
+    fn mapped_worker_v3_dispatch_generates_only_the_exact_kfd_adapter() {
         let options = parse_kernel_options(quote!(typed)).unwrap();
-        for input in [
-            parse_quote! {
-                pub fn shifted(output: DisjointSlice<f32, Shifted<Index1D, 7>>) {}
-            },
-            parse_quote! {
-                pub fn global(target: fe2o3_device::DeviceGlobalMutPtr<u32>) {}
-            },
+        let input: ItemFn = parse_quote! {
+            pub fn swiglu(
+                gate: &[u16],
+                up: &[u16],
+                output: DisjointSlice<u16, Blocked<Index1D, 1, 8>>,
+            ) {}
+        };
+        let model = model_general_typed_signature_v1(&input, &options, [0x36; 32]).unwrap();
+        let generated = generated_worker_v3_adapter_v1(&input, &model).to_string();
+
+        for expected in [
+            "CompilerGeneratedKfdArguments",
+            "GeneratedKfdReadSlice",
+            "GeneratedKfdReadWriteSlice",
+            "bind_mapped_argument",
+            "new_with_disjoint_index_spaces_v1",
+            "blocked_index_1d (1u64 , 8u64 ,)",
+            "disjoint_slice_type_identity_for_index_space_v1",
         ] {
-            let model = model_general_typed_signature_v1(&input, &options, [0x36; 32]).unwrap();
-            assert!(generated_worker_v3_adapter_v1(&input, &model).is_empty());
+            assert!(
+                generated.contains(expected),
+                "missing `{expected}` in {generated}"
+            );
         }
+        assert!(!generated.contains("CompilerGeneratedWorkerV3ArgumentsV1"));
+        assert!(!generated.contains("prepare_worker_v3"));
+    }
+
+    #[test]
+    fn worker_v3_dispatch_generation_fails_closed_for_global_mut_pointer() {
+        let input: ItemFn = parse_quote! {
+            pub fn global(target: fe2o3_device::DeviceGlobalMutPtr<u32>) {}
+        };
+        let options = parse_kernel_options(quote!(typed)).unwrap();
+        let model = model_general_typed_signature_v1(&input, &options, [0x36; 32]).unwrap();
+        assert!(generated_worker_v3_adapter_v1(&input, &model).is_empty());
     }
 
     #[test]

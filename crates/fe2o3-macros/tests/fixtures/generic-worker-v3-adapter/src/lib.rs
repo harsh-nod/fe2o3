@@ -1,4 +1,4 @@
-use gpu_device::{DisjointSlice, kernel};
+use gpu_device::{Blocked, DisjointSlice, Index1D, kernel};
 
 #[kernel(
     typed,
@@ -44,6 +44,19 @@ pub fn multi_argument_kernel(
     );
 }
 
+#[kernel(
+    typed,
+    namespace = "d4c75aecdeaa38326f57d8deca5225f5644e9f08b31a64758ac79e06c4d082cf",
+    launch(required = [256, 1, 1], max = [256, 1, 1])
+)]
+pub fn mapped_output_kernel(
+    first: &[u16],
+    second: &[u16],
+    destination: DisjointSlice<u16, Blocked<Index1D, 1, 8>>,
+) {
+    let _ = (first, second, destination);
+}
+
 pub fn assert_generated_adapters() {
     fn assert_adapter<'allocation, K, Arguments>()
     where
@@ -74,6 +87,32 @@ pub fn assert_generated_adapters() {
             gpu_host::__generated::GeneratedKfdReadWriteSlice<'static, f32>,
         >,
     >();
+    assert_kfd_adapter::<
+        mapped_output_kernel_gpu::Marker,
+        mapped_output_kernel_gpu::Arguments<
+            'static,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, u16>,
+            gpu_host::__generated::GeneratedKfdReadSlice<'static, u16>,
+            gpu_host::__generated::GeneratedKfdReadWriteSlice<'static, u16>,
+        >,
+    >();
+}
+
+pub fn mapped_kfd_arguments<'allocation>(
+    first: &'allocation [u16],
+    second: &'allocation [u16],
+    destination: &'allocation mut [u16],
+) -> mapped_output_kernel_gpu::Arguments<
+    'allocation,
+    gpu_host::__generated::GeneratedKfdReadSlice<'allocation, u16>,
+    gpu_host::__generated::GeneratedKfdReadSlice<'allocation, u16>,
+    gpu_host::__generated::GeneratedKfdReadWriteSlice<'allocation, u16>,
+> {
+    mapped_output_kernel_gpu::Arguments::new(
+        gpu_host::__generated::GeneratedKfdReadSlice::new(first),
+        gpu_host::__generated::GeneratedKfdReadSlice::new(second),
+        gpu_host::__generated::GeneratedKfdReadWriteSlice::new(destination),
+    )
 }
 
 pub fn prepare_transform<'loaded, 'allocation, A>(

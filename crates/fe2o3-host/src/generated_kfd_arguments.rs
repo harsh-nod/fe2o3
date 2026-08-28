@@ -21,6 +21,7 @@ use crate::{
     AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedKernelExpectationV1,
     RecoveredWorkerV3AdmissionErrorV1,
 };
+use fe2o3_artifacts::RustDisjointIndexSpaceV1;
 
 /// Compiler-generated address-free argument bridge for one exact kernel signature.
 ///
@@ -182,13 +183,40 @@ impl<'allocation, T: GeneratedDeviceScalarV1> GeneratedKfdReadWriteSlice<'alloca
         plan: &GeneratedArgumentPackingPlanV1,
         argument_index: usize,
     ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
-        let input = plan
-            .bind_generated_address_free_read_write_slice_v1::<T>(
+        self.bind_argument_with_index_space(plan, argument_index, None)
+    }
+
+    /// Binds this address-free capability with the exact compiler-retained disjoint mapping.
+    #[doc(hidden)]
+    pub fn bind_mapped_argument(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+        index_space: RustDisjointIndexSpaceV1,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+        self.bind_argument_with_index_space(plan, argument_index, Some(index_space))
+    }
+
+    fn bind_argument_with_index_space(
+        self,
+        plan: &GeneratedArgumentPackingPlanV1,
+        argument_index: usize,
+        index_space: Option<RustDisjointIndexSpaceV1>,
+    ) -> Result<GeneratedKfdSliceBinding<'allocation>, GeneratedKfdArgumentError> {
+        let input = match index_space {
+            Some(index_space) => plan.bind_generated_address_free_mapped_read_write_slice_v1::<T>(
+                argument_index,
+                self.values.len(),
+                index_space,
+                GeneratedArgumentBorrowV1::new(),
+            ),
+            None => plan.bind_generated_address_free_read_write_slice_v1::<T>(
                 argument_index,
                 self.values.len(),
                 GeneratedArgumentBorrowV1::new(),
-            )
-            .map_err(GeneratedKfdArgumentError::Pack)?;
+            ),
+        }
+        .map_err(GeneratedKfdArgumentError::Pack)?;
         if self.values.is_empty() {
             return Ok(GeneratedKfdSliceBinding {
                 argument_index,
@@ -770,5 +798,100 @@ mod tests {
     #[test]
     fn value_bytes_preserve_exact_little_endian_host_representation() {
         assert_eq!(encode_values(&[0x0102_u16, 0x0304]), [2, 1, 4, 3]);
+    }
+
+    #[test]
+    fn mapped_read_write_binding_preserves_exact_identity_fixup_and_writeback() {
+        let blocked = RustDisjointIndexSpaceV1::blocked_index_1d(1, 8).unwrap();
+        let field = AbiField::new(
+            Name::new("output").unwrap(),
+            0,
+            16,
+            8,
+            AbiKind::Slice {
+                element_size: 2,
+                element_alignment: 2,
+            },
+            Mutability::Mutable,
+            Access::ReadWrite,
+            AddressSpace::Global,
+            u16::disjoint_slice_type_identity_for_index_space_v1(PointerWidth::Bits64, blocked),
+            ArgumentOwnership::UniqueBorrow,
+            AliasClass::Exclusive,
+        )
+        .unwrap();
+        let manifest = AbiLayout::new(16, 8, PointerWidth::Bits64, vec![field.clone()]).unwrap();
+        let generated = CompilerGeneratedArgumentLayoutV1::new_with_disjoint_index_spaces_v1(
+            16,
+            8,
+            PointerWidth::Bits64,
+            vec![field],
+            vec![Some(blocked)],
+        )
+        .unwrap();
+        let plan =
+            validate_argument_packing(KernelId::from_bytes([0x43; 32]), &manifest, &generated)
+                .unwrap();
+
+        for substituted in [
+            RustDisjointIndexSpaceV1::Index1D,
+            RustDisjointIndexSpaceV1::blocked_index_1d(1, 4).unwrap(),
+        ] {
+            let mut rejected = [0_u16; 3];
+            assert!(matches!(
+                GeneratedKfdReadWriteSlice::new(&mut rejected).bind_mapped_argument(
+                    &plan,
+                    0,
+                    substituted,
+                ),
+                Err(GeneratedKfdArgumentError::Pack(
+                    GeneratedArgumentPackError::FieldMismatch {
+                        argument_index: 0,
+                        property: crate::GeneratedArgumentFieldProperty::TypeIdentity,
+                    }
+                ))
+            ));
+        }
+
+        let mut output = [0xaaaa_u16, 0xbbbb, 0xcccc];
+        let binding = GeneratedKfdReadWriteSlice::new(&mut output)
+            .bind_mapped_argument(&plan, 0, blocked)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+        assert_eq!(&packed.explicit_kernarg()[0..8], &[0; 8]);
+        assert_eq!(&packed.explicit_kernarg()[8..16], &3_u64.to_le_bytes());
+        assert_eq!(packed.buffers().len(), 1);
+        assert_eq!(
+            packed.buffers()[0].access(),
+            Gfx942RuntimeBufferAccessV1::ReadWrite
+        );
+        assert_eq!(
+            packed.pointer_fixups(),
+            [Gfx942KfdDispatchPointerFixupV1::new(0, 0, 0, 2)]
+        );
+        drop(packed);
+        assert_eq!(output, [0xaaaa, 0xbbbb, 0xcccc]);
+
+        let mut binding = GeneratedKfdReadWriteSlice::new(&mut output)
+            .bind_mapped_argument(&plan, 0, blocked)
+            .unwrap();
+        binding.writeback.take().unwrap().apply(&[1, 0, 2, 0, 3, 0]);
+        drop(binding);
+        assert_eq!(output, [1, 2, 3]);
+
+        let mut empty = [];
+        let binding = GeneratedKfdReadWriteSlice::<u16>::new(&mut empty)
+            .bind_mapped_argument(&plan, 0, blocked)
+            .unwrap();
+        let packed =
+            GeneratedKfdArgumentBinding::from_compiler_generated_parts(Vec::new(), vec![binding])
+                .pack(&plan)
+                .unwrap();
+        assert!(packed.buffers().is_empty());
+        assert!(packed.pointer_fixups().is_empty());
+        assert_eq!(packed.explicit_kernarg(), &[0; 16]);
     }
 }

@@ -53,9 +53,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -224,6 +224,15 @@ dependencies = [
 name = "fe2o3-build-authority"
 version = "0.1.0"
 dependencies = [
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-compiler-execution-protocol"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
  "sha2 0.11.0",
 ]
 
@@ -418,8 +427,8 @@ version = "0.1.0"
 name = "fe2o3-runtime-protocol"
 version = "0.1.0"
 dependencies = [
- "ed25519-dalek",
  "fe2o3-artifact-transaction",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
  "sha2 0.11.0",
@@ -645,7 +654,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
 
