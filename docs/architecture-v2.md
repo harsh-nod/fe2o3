@@ -103,9 +103,13 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   measurement and static-profile validation. A second move-only state binds
   that chain to the canonical sealed signing-key capability, dedicated non-root
   service UID/GID, and a retained service-owned mode-0700 root without exposing
-  a descriptor, key, signing operation, or launch API. Full credential,
-  capability, and namespace enforcement, `clone3` launch and readiness lifecycle, distinct-UID
-  inspection policy, backend acquisition,
+  a descriptor, key, or signing operation. One gated
+  `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` lifecycle now inherits and
+  self-checks the exact locked child profile, independently observes that
+  profile and every unchanged namespace in the parent, repeats authority
+  continuity before release, installs FDs 198 through 209, admits exact
+  readiness, and owns pidfd cancellation and exactly-once reaping. The
+  distinct-UID service entrypoint that establishes that profile, backend acquisition,
   load-envelope receipt carriage, external monotonic rollback anchoring, and
   Worker V3 verifier authority join remain open.
 - Production has one unselected compilation transaction. Cargo owns it as
@@ -156,8 +160,10 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   rustc child, transfers only the service endpoint, and binds it to exact child
   credentials and a live pidfd. The protected supervisor authenticates that
   handoff and now materializes the exact sealed ten-source static-launcher input
-  while retaining private output/readiness endpoints. Process creation,
-  Cargo-wrapper readiness, and production supervisor wiring remain pending.
+  while retaining private output/readiness endpoints. It now consumes that
+  state through gated clone3/pidfd launch and exact readiness typestate.
+  Cargo-wrapper acquisition and production supervisor service wiring remain
+  pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

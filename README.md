@@ -153,11 +153,16 @@ descriptors, and a canonical 704-byte manifest bound to the supervisor PID and
 procfs start time. That manifest is an anonymous read-only mode-`0400` memfd
 with complete content seals; every object, byte, access mode, capability, live
 client, and non-aliasing relation is revalidated without exposing descriptor
-custody. The launch
-manifest binds the exact rustc PID/UID/GID to the pinned policy, and a
-descriptor-only musl-static issuer
-enters through a syscall-only shim that restores nondumpability before musl or
-Rust startup and then consumes fixed FDs 3 through 9. After complete
+custody. A gated `clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child now
+self-checks the inherited locked service profile and parent-death containment.
+Before release, the parent independently rechecks procfs profile fields, every
+unchanged namespace, live rustc, and all authority objects. The bootstrap
+isolates stdio, installs the manifest, issuer, and ten sources at FDs 198
+through 209, and executes only the authenticated static launcher. The launch
+manifest binds the exact rustc PID/UID/GID to the pinned policy, and the
+descriptor-only musl-static issuer enters through a syscall-only shim that
+restores nondumpability before musl or Rust startup and then consumes fixed FDs
+3 through 9. After complete
 admission and durable recovery it emits one canonical PID/manifest/policy-bound
 readiness record through an atomic nonblocking pipe. Its build gate rejects
 dynamic-loader edges, undefined symbols, a displaced secure entry point, and
@@ -167,13 +172,14 @@ against that sealed policy before copying both into distinct read-only
 mode-0555 memfds with complete content and executable seals. The resulting
 move-only program is now consumed into one prepared supervisor together with
 the canonical signing-key capability, dedicated non-root UID/GID profile, and
-an exact service-owned mode-0700 root. Accepted handoffs and prepared launches
-remain move-only and expose no descriptor, key, signing operation, or process
-API. Complete child credential/capability/namespace enforcement, `clone3`
-launch, readiness consumption, cancellation, and reaping remain; the pinned policy has an
+an exact service-owned mode-0700 root. Prepared, launched, and ready states are
+move-only and expose no descriptor, key, or signing operation. Readiness must
+be one exact PID/manifest/policy record followed by EOF while the same pidfd
+child is live; cancellation and drop use pidfd signaling plus exactly-once
+bounded reaping. The pinned policy has an
 immutable sealed memfd capability reserved at rustc fd 202. Distinct-UID
-supervisor launch and inspection policy and the Worker V3 authority join remain
-absent. A fixed
+service-profile establishment, Cargo supervisor acquisition, and the Worker V3
+authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The

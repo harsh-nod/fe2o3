@@ -22,10 +22,16 @@ authenticated control connection; the supervisor independently admits and
 retains all three process identities and descriptors. It now consumes that
 handoff into a sealed 704-byte static pre-exec manifest and an exact ten-source
 table for destinations `0..=9`, retaining distinct stdout, stderr, and
-readiness readers. Production must still establish and observe the complete
-child credential/capability/namespace profile, install those prepared sources
-at launcher FDs `200..209`, and consume readiness under pidfd lifecycle
-ownership.
+readiness readers. The supervisor now installs the manifest, issuer, and
+sources at FDs 198, 199, and `200..209` through a gated
+`clone3(CLONE_PIDFD | CLONE_CLEAR_SIGHAND)` child. The child self-checks its
+inherited process profile and parent-death signal; the parent independently
+checks procfs credentials, all capability sets, tracing, umask, and unchanged
+user/mount/PID/network/IPC/UTS/cgroup/time namespaces before release. Exact
+readiness transitions move-only launch custody to live ready custody, while
+pidfd cancellation and fixed-capacity deferred cleanup provide exactly-once
+reaping. Production must still establish that exact profile in a distinct-UID
+service entrypoint and connect Cargo to this supervisor lifecycle.
 The complete receipt carriage, subject-bound current-record recovery operation,
 lossless Worker V3 V2 load-envelope codec, and bounded restart-safe client state
 machine exist, but protected-supervisor integration, backend acquisition,
@@ -228,5 +234,10 @@ substitution rejection, and move-only descriptor hiding on Linux and MI300X.
 The suite also qualifies authority binding, same-process hostile handoff cases,
 the exact ten-entry prepared table, manifest seals and canonical bytes, parent
 continuity, source and manifest substitution, and post-preparation rustc death.
-A real distinct-UID launcher, child-profile enforcement, readiness, and
-lifecycle qualification remain pending.
+The lifecycle suite additionally covers atomic clone3 pidfd launch, isolated
+stdio, profile parsing, namespace continuity, readiness success, PID
+substitution, trailing bytes, timeout cleanup, fresh launch after termination,
+synchronous exactly-once reaping, and abrupt supervisor-parent death. A real
+freestanding-launcher integration crosses both `execveat` boundaries and
+admits exact readiness from the resulting pidfd occurrence. A deployed
+distinct-UID service-profile fixture and Cargo acquisition remain pending.
