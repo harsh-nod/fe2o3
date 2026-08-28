@@ -90,9 +90,10 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay
   resolves lost responses. A descriptor-only musl-static issuer entrypoint now
-  hardens itself and admits fixed FDs 3 through 9. A sealed launch manifest
+  enters through a syscall-only shim that restores nondumpability before musl
+  or Rust startup and admits fixed FDs 3 through 9. A sealed launch manifest
   binds exact rustc PID/UID/GID to the exact pinned policy, and the static build
-  gate rejects every dynamic-loader edge and undefined symbol. After complete
+  gate pins that shim as the ELF entry and rejects every dynamic-loader edge and undefined symbol. After complete
   admission and durable recovery, the issuer emits one canonical readiness
   record binding its PID, manifest, and policy through an atomic nonblocking
   pipe. Production

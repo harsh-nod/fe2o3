@@ -61,7 +61,9 @@ supervisor-to-issuer descriptor contract is fixed:
 | 8 | Sealed expected-client and policy launch manifest |
 | 9 | Nonblocking atomic readiness-pipe writer |
 
-The entrypoint hardens itself before admitting these objects, requires policy,
+The production ELF enters through a syscall-only x86-64 shim that restores
+nondumpability after `exec`, reasserts `no_new_privs` and the zero core limit,
+verifies the process controls, and only then enters musl and Rust. The entrypoint requires policy,
 manifest, peer credentials, and pidfd identity to agree, remeasures its running
 static image, admits key material only after those checks, recovers both durable
 ledgers, emits one canonical readiness record binding its PID, launch manifest,
@@ -190,7 +192,8 @@ transition methods.
 
 `scripts/build-static-compiler-execution-issuer.sh` builds the pinned musl
 target and rejects an interpreter, dynamic section, runtime dependency, RPATH,
-RUNPATH, executable stack, or undefined symbol. It also starts the issuer with
+RUNPATH, executable stack, undefined symbol, or an ELF entry address other than
+the syscall-only secure-start symbol. It also starts the issuer with
 FDs 3 through 9 closed and requires silent fail-closed exit status 1. This
-qualifies the executable image shape, not the still-pending distinct-UID
-supervisor deployment.
+qualifies the executable image shape and pre-runtime hardening edge, not the
+still-pending supervisor-side image authentication or distinct-UID deployment.

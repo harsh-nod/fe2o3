@@ -18,12 +18,23 @@ CARGO_TARGET_DIR="${target_dir}" cargo rustc \
   -C target-feature=+crt-static \
   -C relocation-model=static \
   -C link-arg=-static \
-  -C link-arg=-no-pie
+  -C link-arg=-no-pie \
+  -C link-arg=-Wl,-e,fe2o3_secure_start_v1
 
 readonly report="${target_dir}/fe2o3-compiler-execution-issuer.readelf.txt"
 /usr/bin/readelf -hW -lW -dW -sW -- "${executable}" >"${report}"
 /usr/bin/grep -Eq 'Class:[[:space:]]+ELF64' "${report}"
 /usr/bin/grep -Eq 'Type:[[:space:]]+EXEC' "${report}"
+entry_address="$(/usr/bin/awk '/Entry point address:/ { print $4 }' "${report}")"
+secure_start_address="$(
+  /usr/bin/nm -n --defined-only -- "${executable}" \
+    | /usr/bin/awk '$3 == "fe2o3_secure_start_v1" { print "0x" $1 }'
+)"
+if [[ -z "${entry_address}" || -z "${secure_start_address}" \
+  || $((entry_address)) -ne $((secure_start_address)) ]]; then
+  printf 'compiler-execution issuer does not enter through its secure pre-runtime shim\n' >&2
+  exit 1
+fi
 if /usr/bin/grep -Eq 'INTERP|DYNAMIC|\(NEEDED\)|\(RPATH\)|\(RUNPATH\)' "${report}"; then
   printf 'compiler-execution issuer contains a dynamic-loader dependency\n' >&2
   exit 1
