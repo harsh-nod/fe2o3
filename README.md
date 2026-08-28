@@ -234,12 +234,16 @@ carry the exact journal, occurrence, receipt, Worker record, sequence, and
 advanced rollback anchor without granting authority from wire bytes. The
 journal V2 retains that complete ACK across every later state, accepts no raw
 receipt-digest acknowledgment, signs the occurrence identity, and rejects a
-subject-equivalent replacement after restart. A separate 1,690-byte Worker
-journal retains the complete request and sidecar, verifies the signed receipt
-against its own current anchor, commits only an immediate successor, reacquires
-the exact canonical bytes, and is the sole producer of the move-only ACK
-capability. Issuer admission accepts only the three legal cross-journal crash
-positions. Consequently
+subject-equivalent replacement after restart. A separate 2,218-byte Worker V2
+record retains the complete request, sidecar, and exact 528-byte signed
+proposed-position external-anchor receipt. It verifies both receipts against
+their pinned keys and exact transaction, commits only an immediate successor,
+reacquires the exact canonical bytes, and is the sole producer of the move-only
+ACK capability. The local anchor journal and Worker record must name the same
+receipt; legacy V1 files and record-without-journal state fail closed. A
+successor preparation cannot displace the current record's retained receipt.
+Issuer admission accepts only the three legal cross-journal crash positions.
+Consequently
 `CompilerExecutionProvenance` remains open. See
 [protected issuer admission V1](docs/compiler-execution-issuer-admission-v1.md)
 and [durable issuer state V2](docs/compiler-execution-issuer-durable-v2.md).

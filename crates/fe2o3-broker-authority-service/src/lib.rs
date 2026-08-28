@@ -180,7 +180,7 @@ pub use compiler_execution_supervision::{
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_worker_ledger::{
-    COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V1, ProtectedCompilerExecutionWorkerLedgerErrorV1,
+    COMPILER_EXECUTION_WORKER_LEDGER_RECORD_BYTES_V2, ProtectedCompilerExecutionWorkerLedgerErrorV1,
 };
 #[cfg(target_os = "linux")]
 pub use durable_session_consume::{

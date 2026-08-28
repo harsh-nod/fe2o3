@@ -1,4 +1,4 @@
-# Protected Compiler-Execution Worker Ledger V1
+# Protected Compiler-Execution Worker Ledger V1, Durable Record V2
 
 ## Status
 
@@ -23,16 +23,18 @@ record is not accepted.
 
 ## Canonical Record
 
-The ledger has no synthetic genesis record. Absence of both managed names means
-`next_sequence=1` and a zero current rollback anchor. Every committed state is
-one fixed 1,690-byte record:
+The ledger has no synthetic genesis record. Absence of both managed V2 names and
+both legacy V1 names means `next_sequence=1` and a zero current rollback anchor.
+The managed names are `compiler-execution-worker-v2.state` and
+`compiler-execution-worker-v2.redo`. Every committed state is one fixed
+2,218-byte record:
 
 | Offset | Bytes | Field |
 |---:|---:|---|
-| 0 | 8 | magic `F2O3CEW1` |
-| 8 | 2 | version `1` |
+| 0 | 8 | magic `F2O3CEW2` |
+| 8 | 2 | version `2` |
 | 10 | 2 | zero flags |
-| 12 | 8 | total byte length `1690` |
+| 12 | 8 | total byte length `2218` |
 | 20 | 4 | zero reserved bytes |
 | 24 | 32 | caller-pinned issuer-policy identity |
 | 56 | 8 | nonzero receipt and rollback sequence |
@@ -40,13 +42,18 @@ one fixed 1,690-byte record:
 | 96 | 32 | nonzero resulting current rollback anchor |
 | 128 | 946 | complete canonical attestation request |
 | 1074 | 584 | complete canonical receipt sidecar |
-| 1658 | 32 | domain-separated Worker-record identity |
+| 1658 | 528 | complete canonical signed proposed-position external-anchor receipt |
+| 2186 | 32 | domain-separated Worker-record identity |
 
-The terminal identity covers bytes `0..1658` under
-`FE2O3/COMPILER-EXECUTION-WORKER-LEDGER-RECORD/V1`. It establishes exact byte
+The terminal identity covers bytes `0..2186` under
+`FE2O3/COMPILER-EXECUTION-WORKER-LEDGER-RECORD/V2`. It establishes exact byte
 identity, not independent signature authority. Decoding also verifies the
 nested Ed25519 receipt against the complete request, pinned policy, recorded
 prior anchor, sequence, subject, challenge, and resulting anchor, then requires
+the external receipt to be a valid proposed Advance under the separately pinned
+anchor key for the exact policy, request, sidecar, transaction digest, and
+sequence. Sequence one requires the zero external prior head, while every later
+sequence requires a nonzero prior head. The decoder finally requires
 byte-for-byte canonical re-encoding.
 
 ## Commit And Reacquisition
@@ -59,15 +66,17 @@ live ledger; only restart recovery may resolve the result.
 After a successful commit, the Worker reopens the canonical name relative to
 the retained directory, strictly decodes it, and compares every byte and its
 terminal identity with the record it attempted to commit. Only that exact
-reacquisition can form `ReacquiredWorkerReceiptRecordV1`, and only that
+reacquisition can form `ReacquiredWorkerReceiptRecordV2`, and only that
 move-only private witness can construct the committed-publication capability
 consumed by the issuer. Raw sidecar, ACK, digest, or record bytes cannot invoke
 the issuer transition.
 
-An exact retry of the latest request and sidecar performs no write. It
-reacquires the same canonical record and reproduces the same ACK. A stale
+An exact retry of the latest request and sidecar reacquires the same Published
+anchor journal, including its exact receipt, and performs no write. It reacquires
+the same canonical record and reproduces the same ACK. A stale
 receipt, sequence gap, wrong prior anchor, request substitution, same-receipt
-sidecar substitution, policy change, or non-successor redo fails closed.
+sidecar substitution, external-receipt substitution, policy change, or
+non-successor redo fails closed.
 
 ## External-Anchor Journal
 
@@ -92,6 +101,16 @@ issuer policy and durably commits the resulting full transition receipt before
 the Worker record can advance. Exact observation and publication retries are
 idempotent; a changed observation, policy, transaction, stage, challenge, key,
 or Worker-record identity fails closed.
+
+The V2 Worker record atomically embeds the complete receipt copied from the
+durably reacquired `AnchorCommitted` journal. Recovery requires exact receipt
+equality whenever the journal and current record describe the same committed
+transaction. This is stronger than comparing transaction coordinates: a second
+validly signed challenge for the same transaction cannot be substituted. Once a
+record is Published, its embedded receipt remains its currentness evidence while
+the rolling journal advances to a successor `PreparedAnchor`, `Aborted`, or
+replacement preparation. Every such successor must use the embedded receipt's
+proposed head as its exact external prior head.
 
 Worker-record commit and journal publication are intentionally separate durable
 writes. Recovery accepts `AnchorCommitted` with either no matching Worker record
@@ -151,10 +170,13 @@ fails closed.
 On success, the ledger derives separate domain-separated policy-verification
 and Worker-ledger-verification identities. The former binds the protected policy
 bytes, exact subject, complete carriage, and reacquired record identity. The
-latter binds the complete 1,690-byte reacquired record, complete carriage, and
+latter binds the complete 2,218-byte reacquired record, complete carriage, and
 policy-verification identity. A canonical 352-byte result carries those
 identities together with every journal and rollback coordinate. This result is
-descriptive wire evidence, not a move-only authority capability.
+descriptive wire evidence, not a move-only authority capability. Its Worker
+identity transitively binds the embedded receipt, but the V1 verification wire
+record does not yet carry that receipt for independent client verification; that
+is the next currentness-protocol revision.
 
 ## Recovery
 
@@ -169,6 +191,12 @@ Recovery accepts only:
 
 No implicit migration, truncation repair, reset, or selection of a later
 sequence occurs.
+
+Presence of either `compiler-execution-worker-v1.state` or
+`compiler-execution-worker-v1.redo` fails before V2 recovery or genesis. V1 does
+not retain the external receipt and therefore requires an explicit offline
+migration policy. A V2 Worker record without its anchor journal also fails
+closed.
 
 Anchor-journal recovery follows the same synced-temp, durable-redo,
 rename-to-canonical, directory-sync, strict-decode, and exact-reacquisition
@@ -204,11 +232,9 @@ state without a second Worker transition.
 
 The retained root is owner-only, descriptor-relative, identity-checked, and
 held by the dedicated protected service. The Worker record identity is not a
-second signature and same-host storage, including the local anchor journal, is
-not an external monotonic anchor. The production path now requires a signed
-observation over the admitted endpoint, but this repository does not yet
-implement or qualify the independently operated monotonic backend behind that
-endpoint. An
+second signature. Its embedded receipt authenticates the exact external
+observation, but the repository does not yet implement or qualify the
+independently operated monotonic backend behind that endpoint. An
 actor able to replace the complete service-owned directory with an older
 mutually consistent issuer/Worker snapshot can roll both journals back. A
 production deployment must supply and qualify the reviewed external
@@ -233,7 +259,10 @@ execution.
 Tests cover exact layout and round trip, post-commit byte reacquisition,
 write-free idempotent replay, a two-step rollback chain, stale and substituted
 inputs, wrong policy, truncation and extension, mutation of every one of the
-1,690 record bytes, valid non-successor redo, and both sides of all seven
+2,218 record bytes, legacy V1 rejection, invalid external genesis position,
+alternate-valid-receipt substitution, retention across successor
+prepare/abort/replacement, forged successor external head, valid non-successor
+redo, and both sides of all seven
 durable boundaries for first and successor commits. Cross-journal tests cover
 all three legal crash positions and reject gaps, substituted publications, and
 unrelated ACK records. Exact-current tests cover successful complete carriage

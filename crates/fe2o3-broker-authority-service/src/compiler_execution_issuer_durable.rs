@@ -27,7 +27,7 @@ use rustix::fs::{FlockOperation, Mode, OFlags, flock};
 use sha2::{Digest, Sha256};
 
 use crate::compiler_execution_worker_ledger::{
-    ProtectedCompilerExecutionWorkerLedgerErrorV1, ReacquiredWorkerReceiptRecordV1,
+    ProtectedCompilerExecutionWorkerLedgerErrorV1, ReacquiredWorkerReceiptRecordV2,
     WorkerExternalAnchorPublicationPlanV1, WorkerReceiptLedgerV1,
 };
 use crate::{
@@ -975,7 +975,7 @@ pub struct CommittedCompilerExecutionReceiptPublicationV1 {
 }
 
 impl CommittedCompilerExecutionReceiptPublicationV1 {
-    pub(super) fn from_reacquired_worker_record(record: ReacquiredWorkerReceiptRecordV1) -> Self {
+    pub(super) fn from_reacquired_worker_record(record: ReacquiredWorkerReceiptRecordV2) -> Self {
         Self {
             ack: record.into_acknowledgment(),
         }
@@ -1381,7 +1381,7 @@ fn commit_externally_anchored_worker_publication(
     external_anchor: &mut crate::ProtectedCompilerExecutionExternalAnchorV1,
     request: CompilerExecutionAttestationRequestV1,
     publication: CompilerExecutionReceiptPublicationV1,
-) -> Result<ReacquiredWorkerReceiptRecordV1, ProtectedCompilerExecutionIssuerErrorV1> {
+) -> Result<ReacquiredWorkerReceiptRecordV2, ProtectedCompilerExecutionIssuerErrorV1> {
     let plan = worker_ledger.prepare_external_anchor_publication(request, publication)?;
     if let WorkerExternalAnchorPublicationPlanV1::Exchange(challenge) = plan {
         let receipt = external_anchor.exchange(&challenge)?;
@@ -2053,6 +2053,26 @@ mod tests {
         unsigned.attach_signature(signature)
     }
 
+    fn commit_worker_publication(
+        worker: &mut WorkerReceiptLedgerV1,
+        request: CompilerExecutionAttestationRequestV1,
+        publication: CompilerExecutionReceiptPublicationV1,
+    ) -> Result<ReacquiredWorkerReceiptRecordV2, ProtectedCompilerExecutionWorkerLedgerErrorV1>
+    {
+        match worker.prepare_external_anchor_publication(request, publication)? {
+            WorkerExternalAnchorPublicationPlanV1::Exchange(challenge) => {
+                let observation = signed_anchor_observation(
+                    &challenge,
+                    AnchorPositionV1::Proposed,
+                    &SigningKey::from_bytes(&[0x52; 32]),
+                );
+                worker.record_external_anchor_observation(&observation)?;
+            }
+            WorkerExternalAnchorPublicationPlanV1::CommitLocally => {}
+        }
+        worker.commit_anchored_publication()
+    }
+
     fn spawn_anchor_response(
         service: OwnedFd,
         expected: Option<AnchorChallengeV1>,
@@ -2339,9 +2359,8 @@ mod tests {
         validate_worker_ledger_join(&prepared, &worker).unwrap();
         validate_worker_ledger_join(&issued, &worker).unwrap();
 
-        let reacquired = worker
-            .commit_publication(request.clone(), publication.clone())
-            .unwrap();
+        let reacquired =
+            commit_worker_publication(&mut worker, request.clone(), publication.clone()).unwrap();
         validate_worker_ledger_join(&issued, &worker).unwrap();
         let committed =
             CommittedCompilerExecutionReceiptPublicationV1::from_reacquired_worker_record(
@@ -2358,7 +2377,7 @@ mod tests {
         validate_worker_ledger_join(&acknowledged, &worker).unwrap();
         validate_publication_input(&acknowledged, &worker, &request, &publication).unwrap();
 
-        let replay = worker.commit_publication(request, publication).unwrap();
+        let replay = commit_worker_publication(&mut worker, request, publication).unwrap();
         let replay =
             CommittedCompilerExecutionReceiptPublicationV1::from_reacquired_worker_record(replay);
         let (_, outcome) = acknowledged
@@ -2421,7 +2440,7 @@ mod tests {
             Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(_))
         ));
 
-        worker.commit_publication(request, publication).unwrap();
+        commit_worker_publication(&mut worker, request, publication).unwrap();
         assert!(matches!(
             validate_worker_ledger_join(&acknowledged, &worker),
             Err(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(_))

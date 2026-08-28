@@ -87,8 +87,12 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   successor, and is the sole source of the issuer's move-only publication ACK
   capability. Before Worker commit, the issuer durably prepares the exact
   external-anchor challenge, exchanges it over the supervisor-admitted endpoint,
-  and persists an exact signed proposed-position receipt. It then reacquires the
-  canonical Worker record and published anchor journal. Issuer recovery accepts
+  and persists an exact signed proposed-position receipt. The canonical Worker
+  V2 record atomically embeds that complete receipt, and recovery requires exact
+  equality with the local anchor journal while preserving the current receipt
+  across successor preparation. It then reacquires the canonical Worker record
+  and published anchor journal. Legacy V1 records and record-without-journal
+  state fail closed. Issuer recovery accepts
   only the exact cross-journal crash positions. The fixed canonical packet
   codec and allocation-free bounded `SOCK_SEQPACKET` service now consume that
   admitted issuer; all direct transition methods are private and exact replay

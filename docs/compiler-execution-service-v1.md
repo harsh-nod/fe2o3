@@ -199,7 +199,8 @@ Publish performs one ordered composition:
 4. unless an exact prior attempt already recorded anchor commit, exchange that
    challenge over the admitted endpoint and durably record the signed
    observation; an exact prior-position observation aborts the transaction;
-5. durably commit and reacquire the canonical Worker record;
+5. durably commit and reacquire the canonical Worker V2 record with the complete
+   exact proposed-position receipt embedded in the same atomic record;
 6. durably mark the matching anchor journal `Published` and reacquire it;
 7. derive the move-only committed-publication witness from the exact Worker
    reacquisition;
@@ -208,7 +209,8 @@ Publish performs one ordered composition:
    `AlreadyAcknowledged` disposition.
 
 The issuer never acknowledges before both the proposed anchor receipt and Worker
-record are durable and the anchor journal is `Published`. Repeating the exact
+record are durable, the receipt in both records is byte-identical, and the anchor
+journal is `Published`. Repeating the exact
 Publish after a lost response reuses the durable challenge or completes from an
 already committed stage, then returns the same ACK with `AlreadyAcknowledged`;
 changing the request, sidecar, Worker identity, policy, sequence, challenge,
@@ -223,17 +225,21 @@ or a current record for another subject is never reported as absent. Recovery
 still covers only the current record; immutable history and custody confirmation
 before successor issuance remain part of the production service deployment.
 
-VerifyCurrent performs the same strict durable reread, then reconstructs the
-complete carriage and requires both structural equality and byte-for-byte
-equality with the request. It derives domain-separated policy and Worker-ledger
-verification identities from protected policy bytes, the exact subject and
-carriage, and the complete reacquired Worker record. The 352-byte result repeats
+VerifyCurrent performs the same strict durable reread, including verification
+of the Worker V2 record's embedded signed external-anchor receipt, then
+reconstructs the complete carriage and requires both structural equality and
+byte-for-byte equality with the request. It derives domain-separated policy and
+Worker-ledger verification identities from protected policy bytes, the exact
+subject and carriage, and the complete reacquired Worker record. The 352-byte
+result repeats
 all relevant coordinates and has its own canonical identity. The service signs
 that complete result together with the caller's fresh challenge in a 536-byte
 attestation. The nested verification identities remain deterministic evidence
 labels rather than rollback authority; the signature authenticates only the
 pinned-key response and exact challenge. Protected key custody and external
-monotonic currentness remain separate joins.
+monotonic currentness remain separate joins. The V1 result binds the receipt
+transitively through the complete Worker-record identity but does not yet expose
+it for independent client verification.
 
 `fe2o3-compiler-execution-client` implements the corresponding single-session
 machine. It attempts Recover first, correlates every response to the exact

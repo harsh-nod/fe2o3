@@ -155,11 +155,14 @@ canonical [publication ACK](compiler-execution-receipt-publication-v1.md). Raw
 ACK bytes cannot construct the move-only committed-publication token accepted
 by the issuer. Publish now durably prepares and resolves the Worker external-
 anchor journal through the supervisor-admitted endpoint before it can commit the
-Worker record or construct that token. This ordering is fail-closed and restart
-safe, but the repository does not yet supply the independently operated
-monotonic backend behind the endpoint. Lossless Worker V3 custody and production
-verifier authority are still required before `CompilerExecutionProvenance` can
-close.
+Worker record or construct that token. The Worker V2 record embeds the complete
+signed proposed-position receipt, and recovery joins it byte-for-byte to the
+anchor journal even after that journal begins preparing a successor. Legacy V1
+records fail closed and require explicit migration. This ordering is fail-closed
+and restart safe, but the repository does not yet supply the independently
+operated monotonic backend behind the endpoint. Lossless Worker V3 custody and
+production verifier authority are still required before
+`CompilerExecutionProvenance` can close.
 
 ## Shared Process Validation
 

@@ -127,8 +127,10 @@ construct from wire bytes. The
 [protected Worker ledger](compiler-execution-worker-ledger-v1.md) now creates
 that capability only after durably resolving the exact transaction against the
 admitted external-anchor endpoint, independently verifying and committing the
-request and sidecar, and reacquiring both the Worker record and published anchor
-journal. The
+request and sidecar, atomically embedding the complete signed proposed-position
+receipt in the Worker V2 record, and reacquiring both that record and the
+byte-identical Published anchor journal. Legacy V1 Worker records and a V2 record
+without its journal fail closed. The
 [bounded service](compiler-execution-service-v1.md) now exposes that composition
 over the already admitted `SOCK_SEQPACKET` connection and makes the direct
 transition methods private. The descriptor-only musl-static issuer entrypoint
