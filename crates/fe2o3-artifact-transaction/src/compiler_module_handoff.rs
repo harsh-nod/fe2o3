@@ -4077,6 +4077,39 @@ mod semantic_v3 {
         recover_compiler_execution_receipt_transport_inner_v1(output_dir, producer, subject)
     }
 
+    /// Recovers the exact sidecar while one matching V3 consumption token holds currentness.
+    ///
+    /// This is the intake path for a live compiler handoff. It observes the strictly decoded
+    /// handoff, its subject-bound receipt bytes, and the eventual one-shot consumption under the
+    /// same cooperative lock instead of dropping currentness to use path-based recovery.
+    pub fn recover_compiler_execution_receipt_transport_with_currentness_v1(
+        lease: &CompilerModuleHandoffCurrentnessLeaseV3,
+        token: &CompilerModuleHandoffConsumptionTokenV3,
+        subject: &crate::InertCompilerExecutionSubjectV1,
+    ) -> Result<
+        RecoveredCompilerExecutionReceiptTransportV1,
+        CompilerExecutionReceiptTransportErrorV1,
+    > {
+        lease.validate_current_token(token)?;
+        token.revalidate_locked_currentness()?;
+        let reconstructed = crate::InertCompilerExecutionSubjectV1::from_publication(
+            lease.receipt(),
+            token.handoff(),
+        )
+        .map_err(|_| CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)?;
+        if &reconstructed != subject {
+            return Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch);
+        }
+        let exact_bytes = read_compiler_execution_receipt_bytes_v1(&token.binding.slot_directory)?
+            .ok_or(CompilerExecutionReceiptTransportErrorV1::NotPublished)?;
+        token.revalidate_locked_currentness()?;
+        let receipt = compiler_execution_receipt_transport_receipt_v1(subject, &exact_bytes);
+        Ok(RecoveredCompilerExecutionReceiptTransportV1 {
+            receipt,
+            exact_bytes: Arc::from(exact_bytes),
+        })
+    }
+
     /// Publishes the default V3 slot and returns a move-only currentness lease.
     ///
     /// This additive API preserves the inert receipt API while giving an in-process consumer exact
@@ -5788,6 +5821,69 @@ mod semantic_v3 {
         }
 
         #[test]
+        fn compiler_execution_receipt_transport_is_read_under_the_exact_currentness_token() {
+            let temp = TestDirectory::new();
+            let producer = producer("compiler_execution_receipt_currentness_v1");
+            let attempt = begin(&temp.0, &producer, 42);
+            let handoff = outer(43);
+            let handoff_receipt =
+                publish_compiler_module_handoff_v3(&temp.0, &producer, attempt, &handoff).unwrap();
+            let subject =
+                crate::InertCompilerExecutionSubjectV1::from_publication(handoff_receipt, &handoff)
+                    .unwrap();
+            let exact_receipt = b"receipt observed under the handoff lock";
+            let published = publish_compiler_execution_receipt_transport_v1(
+                &temp.0,
+                &producer,
+                &subject,
+                exact_receipt,
+            )
+            .unwrap();
+            let lease = acquire_currentness(&temp.0, &producer, handoff_receipt);
+            let unrelated_lease = acquire_currentness(&temp.0, &producer, handoff_receipt);
+            let token = acquire_token(&lease);
+
+            let recovered = recover_compiler_execution_receipt_transport_with_currentness_v1(
+                &lease, &token, &subject,
+            )
+            .unwrap();
+            assert_eq!(recovered.receipt(), published);
+            assert_eq!(recovered.exact_bytes(), exact_receipt);
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_with_currentness_v1(
+                    &unrelated_lease,
+                    &token,
+                    &subject,
+                ),
+                Err(CompilerExecutionReceiptTransportErrorV1::Handoff(
+                    CompilerModuleHandoffErrorV3::MismatchedCurrentnessToken
+                ))
+            ));
+            let substituted = crate::InertCompilerExecutionSubjectV1::from_replay_evidence(
+                attempt,
+                CompilerModuleHandoffSlotV3::Production,
+                CompilerModuleHandoffTransactionIdentityV3::from_bytes([0xb6; 32]),
+                &handoff,
+            )
+            .unwrap();
+            assert!(matches!(
+                recover_compiler_execution_receipt_transport_with_currentness_v1(
+                    &lease,
+                    &token,
+                    &substituted,
+                ),
+                Err(CompilerExecutionReceiptTransportErrorV1::SubjectBindingMismatch)
+            ));
+
+            let consumed =
+                consume_compiler_module_handoff_with_currentness_v3(&lease, token).unwrap();
+            assert_eq!(
+                crate::InertCompilerExecutionSubjectV1::from_consumed(&consumed).unwrap(),
+                subject
+            );
+        }
+
+        #[test]
         fn compiler_execution_receipt_transport_rejects_absence_conflict_and_substitution() {
             let temp = TestDirectory::new();
             let producer = producer("compiler_execution_receipt_rejection_v1");
@@ -6871,6 +6967,7 @@ pub use semantic_v3::{
     publish_compiler_module_handoff_in_slot_with_currentness_v3,
     publish_compiler_module_handoff_v3, publish_compiler_module_handoff_with_currentness_v3,
     recover_compiler_execution_receipt_transport_v1,
+    recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
 };
 
