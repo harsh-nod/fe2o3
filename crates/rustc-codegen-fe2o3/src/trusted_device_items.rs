@@ -32,8 +32,8 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0xe7, 0xe7, 0x2d, 0xf5, 0x80, 0x1b, 0x99, 0x39, 0xce, 0x30, 0x77, 0xf9, 0xef, 0x88, 0x48, 0x1b,
-    0x09, 0x84, 0x84, 0xf1, 0x62, 0x0d, 0x90, 0xa2, 0x48, 0xa8, 0xd2, 0x2d, 0x45, 0x4d, 0xb2, 0x68,
+    0x32, 0xf4, 0x08, 0x39, 0xff, 0x96, 0xbb, 0xca, 0xbe, 0xb8, 0xeb, 0xb7, 0x2d, 0xb9, 0x38, 0x22,
+    0xca, 0x05, 0x96, 0x30, 0x97, 0x30, 0xd2, 0xc7, 0x1a, 0xd8, 0x78, 0x98, 0x49, 0xec, 0x57, 0x74,
 ];
 
 const PROVIDER_SEMANTIC_DEFINITION_TRANSCRIPT_DOMAIN_V1: &[u8] =
@@ -2638,6 +2638,32 @@ mod tests {
                 .unwrap(),
             digest("36349edbdabe77499ba36d983bf758f7c00e982d7fbd930397042192af1e7416")
         );
+    }
+
+    #[test]
+    fn reviewed_bf16_conversion_terminals_remain_out_of_line() {
+        let source =
+            fs::read_to_string(Path::new(super::REVIEWED_FE2O3_DEVICE_SOURCE_ROOT).join("half.rs"))
+                .unwrap();
+        let bf16_impl = source
+            .split_once("impl Bf16 {")
+            .unwrap()
+            .1
+            .split_once("pub struct Bf16x2")
+            .unwrap()
+            .0;
+
+        for signature in [
+            "pub const fn from_bits(bits: u16) -> Self",
+            "pub const fn to_bits(self) -> u16",
+            "pub const fn from_f32(value: f32) -> Self",
+            "pub const fn to_f32(self) -> f32",
+        ] {
+            assert!(
+                bf16_impl.contains(&format!("#[inline(never)]\n    {signature}")),
+                "reviewed BF16 terminal `{signature}` may inline into optimized external MIR"
+            );
+        }
     }
 
     #[test]
