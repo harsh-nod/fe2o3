@@ -9,6 +9,8 @@
 
 mod capture_query;
 pub use capture_query::*;
+mod counter_query;
+pub use counter_query::*;
 
 use std::error::Error;
 use std::fmt;

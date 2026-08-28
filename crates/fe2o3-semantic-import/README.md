@@ -3,7 +3,7 @@
 `fe2o3-semantic-import` converts bounded profiler evidence into
 canonical Semantic Trace V1 without loading a GPU runtime or opening a device.
 It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
-It also owns Semantic Capture V1, a strict canonical JSON container for a
+It also owns Semantic Capture V1 and Semantic Counter Capture V2, strict canonical JSON containers for a
 bounded set of profiler dispatch envelopes. The container complements rather
 than replaces per-dispatch Trace V1.
 
@@ -21,6 +21,13 @@ than replaces per-dispatch Trace V1.
   domain-separated redacted device identities from recorded agent handles, and
   source-and-ordinal-derived dispatch identities. Raw process, device, queue,
   kernel, and dispatch handles never enter the capture.
+- `rocprofv3-counter-capture` accepts the rocprofiler-sdk 1.1 dispatch-counter
+  JSON shape. This contract was checked against ROCm 7.2.4 SDK revision
+  `97f5574fe2fdc7bef44fb01545347912ee9f1779`, its installed
+  `source/docs/rocprofv3-schema.json`, and live `rocprofv3 --pmc ... -f json`
+  output. It joins process-local `counters` definitions to
+  `callback_records.counter_collection` records by exact agent/counter handles,
+  then redacts those handles into source-bound identities.
 - `rocprofv3-att-manifest` accepts the `filenames.json` file emitted for the
   rocprofv3 compute-viewer UI format. It recognizes the installed
   rocprofiler-sdk 1.1 shape (`wave_filenames`, `se_filenames`,
@@ -73,6 +80,22 @@ separately, loss as `unknown`/`unavailable`. Completeness is
 in the input was imported. Counter records, PC samples, ATT wave events, KIR
 site history, and register/value state remain unavailable.
 
+## Semantic Counter Capture V2
+
+Counter Capture V2 is a separate versioned format, so closed Capture V1 bytes
+and decoding behavior do not change. It preserves each finite binary64 counter
+value as exact bits with `observed` origin, the dispatch launch/timing envelope,
+the counter catalog, and source-global record ordinals. KIR, artifact, and
+source-map identities remain caller declarations. Loss is explicitly unknown.
+
+The rocprofv3 1.1 raw counter record has a counter ID but no hardware-instance
+ID even though the catalog lists counter instances. The importer therefore
+marks instance/dimension correlation unavailable and does not guess a mapping.
+PC samples, ATT events, source/ISA correlation, semantic execution history, and
+execution control also remain typed unavailable. Query-side sums group raw
+records by dispatch and counter identity and are labeled `inferred`; raw values
+remain `observed`.
+
 ## CLI
 
 The CLI accepts evidence only on stdin and writes canonical binary Trace V1 or
@@ -95,6 +118,10 @@ fe2o3-trace-import rocprofv3-capture \
   --source-map-format 1 \
   < results.json > run.fe2o3cap1
 
+fe2o3-trace-import rocprofv3-counter-capture \
+  --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
+  < counters_results.json > run.fe2o3ccap2
+
 fe2o3-trace-import rocprofv3-att-manifest \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
@@ -105,7 +132,8 @@ fe2o3-trace-import rocprofv3-att-manifest \
 together. They are optional metadata for profiler inputs. Duplicate flags are
 rejected. The three `--source-map-*` flags are likewise atomic and apply only
 to `rocprofv3-capture`. Use `fe2o3-trace-query` for Trace V1 and
-`fe2o3-capture-query` for Capture V1.
+`fe2o3-capture-query` for Capture V1, and `CounterQuerySessionV2` for bounded
+Counter Capture V2 operations.
 
 Raw `.att`/`.out`, compute-viewer wave JSON, PCs, register values, source-line
 text, and inferred performance are outside this adapter. They need a future

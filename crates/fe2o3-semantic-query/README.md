@@ -102,3 +102,13 @@ discovery reports counter records, PC samples, ATT wave events, semantic
 execution history, and execution control as typed unavailable capabilities.
 The query surface never invokes rocprofv3, opens a device, reads a path, or
 grants execution authority.
+
+`CounterQuerySessionV2` extends the same content-bound, read-only protocol to
+Semantic Counter Capture V2. It lists counter definitions, dispatch envelopes,
+and exact raw values; filters values by dispatch/counter identity; inspects a
+dispatch; and ranks sums by `(dispatch, counter)`. Raw values are `observed`.
+Sums are `inferred` and identify the aggregation rule and input count. Cursors
+bind the capture, operation, and both filters. Capabilities explicitly report
+hardware-instance, source, ISA, PC-sample, ATT, execution-history, and
+execution-control data as unavailable. `query_json` enforces the configured
+response ceiling and emits deterministic JSON for agent callers.

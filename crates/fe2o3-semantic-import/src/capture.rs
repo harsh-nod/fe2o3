@@ -180,7 +180,7 @@ impl IdentityFactV1 {
         }
     }
 
-    fn validate(self) -> Result<(), CaptureErrorV1> {
+    pub(crate) fn validate(self) -> Result<(), CaptureErrorV1> {
         match (self.origin, self.value, self.unavailable_reason) {
             (TruthOriginV1::Unavailable, None, Some(_)) => Ok(()),
             (TruthOriginV1::Unavailable, _, _) => Err(CaptureErrorV1::InvalidUnavailableFact),

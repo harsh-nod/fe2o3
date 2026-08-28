@@ -31,18 +31,33 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
     let request = parse_arguments()?;
     let limits = ImportLimitsV1::default();
     let input = read_bounded_stdin(limits.max_source_bytes())?;
-    if request.command == CommandV1::Capture {
-        let capture = import_rocprofv3_capture_v1(
-            &input,
-            RocprofCaptureBindingV1 {
-                kernel_ir_claim: request.kernel_ir_claim()?,
-                artifact: request.artifact_claim()?,
-                source_map: request.source_map_claim()?,
-                wave_width: request.wave_width()?,
-            },
-            limits,
-        )
-        .map_err(|_| {
+    if matches!(
+        request.command,
+        CommandV1::Capture | CommandV1::CounterCapture
+    ) {
+        let binding = RocprofCaptureBindingV1 {
+            kernel_ir_claim: request.kernel_ir_claim()?,
+            artifact: request.artifact_claim()?,
+            source_map: request.source_map_claim()?,
+            wave_width: request.wave_width()?,
+        };
+        if request.command == CommandV1::CounterCapture {
+            let capture =
+                import_rocprofv3_counter_capture_v2(&input, binding, limits).map_err(|_| {
+                    CliErrorV1::new(
+                        "import",
+                        "source evidence failed bounded counter capture validation",
+                    )
+                })?;
+            drop(input);
+            return encode_counter_capture_v2(&capture).map_err(|_| {
+                CliErrorV1::new(
+                    "encode",
+                    "could not encode canonical Semantic Counter Capture V2",
+                )
+            });
+        }
+        let capture = import_rocprofv3_capture_v1(&input, binding, limits).map_err(|_| {
             CliErrorV1::new(
                 "import",
                 "source evidence failed bounded capture validation",
@@ -79,6 +94,7 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
             limits,
         ),
         CommandV1::Capture => unreachable!("capture returned before trace import"),
+        CommandV1::CounterCapture => unreachable!("counter capture returned before trace import"),
     }
     .map_err(|_| CliErrorV1::new("import", "source evidence failed bounded import validation"))?;
     drop(input);
@@ -98,6 +114,7 @@ enum CommandV1 {
     Json,
     AttManifest,
     Capture,
+    CounterCapture,
 }
 
 #[derive(Debug)]
@@ -223,6 +240,7 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
         Some("rocprofv3-json") => CommandV1::Json,
         Some("rocprofv3-att-manifest") => CommandV1::AttManifest,
         Some("rocprofv3-capture") => CommandV1::Capture,
+        Some("rocprofv3-counter-capture") => CommandV1::CounterCapture,
         _ => return Err(CliErrorV1::new("arguments", usage())),
     };
     let mut request = ParsedRequestV1 {
@@ -293,9 +311,12 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
     let capture_only = request.source_map_sha256.is_some()
         || request.source_map_len.is_some()
         || request.source_map_format.is_some();
-    if matches!(command, CommandV1::Json | CommandV1::Capture) && sparse_only
+    if matches!(
+        command,
+        CommandV1::Json | CommandV1::Capture | CommandV1::CounterCapture
+    ) && sparse_only
         || command != CommandV1::Json && rocprof_only
-        || command != CommandV1::Capture && capture_only
+        || !matches!(command, CommandV1::Capture | CommandV1::CounterCapture) && capture_only
     {
         return Err(CliErrorV1::new(
             "arguments",
@@ -483,7 +504,7 @@ fn parse_triplet(value: &str) -> Result<[u64; 3], CliErrorV1> {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-trace-import {rocprofv3-json|rocprofv3-att-manifest|rocprofv3-capture} --kir-sha256 HEX --kir-len N --wave-width {32|64} [command-specific flags]"
+    "usage: fe2o3-trace-import {rocprofv3-json|rocprofv3-att-manifest|rocprofv3-capture|rocprofv3-counter-capture} --kir-sha256 HEX --kir-len N --wave-width {32|64} [command-specific flags]"
 }
 
 #[derive(Debug)]

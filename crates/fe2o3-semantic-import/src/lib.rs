@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 
 mod capture;
 pub use capture::*;
+mod counter_capture;
+pub use counter_capture::*;
 
 pub const MAX_IMPORT_SOURCE_BYTES_V1: u64 = 8 * 1024 * 1024;
 pub const MAX_IMPORT_OUTPUT_BYTES_V1: u64 = 64 * 1024;
@@ -99,6 +101,237 @@ pub struct RocprofCaptureBindingV1 {
     /// Caller-supplied content claim. Import does not authenticate correlation.
     pub source_map: Option<ContentIdentityV1>,
     pub wave_width: WaveWidthV1,
+}
+
+pub type RocprofCounterCaptureBindingV2 = RocprofCaptureBindingV1;
+
+/// Imports dispatch-synchronous counter records emitted by rocprofv3 1.1 JSON.
+///
+/// Catalog and record handles are used only for exact admission correlation;
+/// no raw collector handle is retained or granted authority.
+pub fn import_rocprofv3_counter_capture_v2(
+    source: &[u8],
+    binding: RocprofCounterCaptureBindingV2,
+    limits: ImportLimitsV1,
+) -> Result<SemanticCounterCaptureV2, ImportErrorV1> {
+    validate_source_size(source, limits)?;
+    let source_identity = source_identity(ROCPROF_JSON_SOURCE_IDENTITY_DOMAIN_V1, source)?;
+    let document: RocprofDocument =
+        serde_json::from_slice(source).map_err(|_| ImportErrorV1::InvalidRocprofJson)?;
+    let source_record = ContentIdentityRecordV1::from(source_identity);
+    let run_identity =
+        capture::derive_identity(capture::RUN_IDENTITY_DOMAIN_V1, source_record.digest, 0)
+            .map_err(ImportErrorV1::Capture)?;
+    let artifact = binding
+        .artifact
+        .map(|value| {
+            value
+                .content_identity()
+                .map(ContentIdentityRecordV1::from)
+                .map(IdentityFactV1::declared)
+        })
+        .transpose()?
+        .unwrap_or_else(|| IdentityFactV1::unavailable(CaptureUnavailableReasonV1::NotProvided));
+    let source_map = binding
+        .source_map
+        .map(|value| IdentityFactV1::declared(value.into()))
+        .unwrap_or_else(|| IdentityFactV1::unavailable(CaptureUnavailableReasonV1::NotProvided));
+
+    let mut definitions = Vec::new();
+    let mut catalogs = Vec::new();
+    let mut devices = std::collections::BTreeSet::new();
+    let mut definition_ordinal = 0_u64;
+    for process in document.processes.iter() {
+        let mut catalog = std::collections::BTreeMap::new();
+        for definition in process.counters.iter() {
+            if definition.name.is_empty()
+                || definition.name.len() > MAX_COUNTER_NAME_BYTES_V2
+                || definition.name.contains('\0')
+                || definition.is_constant > 1
+                || definition.is_derived > 1
+            {
+                return Err(ImportErrorV1::InvalidCounterCatalog);
+            }
+            let key = (definition.agent_id.handle, definition.id.handle);
+            if catalog.contains_key(&key) {
+                return Err(ImportErrorV1::InvalidCounterCatalog);
+            }
+            let device_identity: CaptureIdentityV1 = derived_handle_identity(
+                b"fe2o3.rocprofv3-json.device.v1\0",
+                source_identity.digest(),
+                key.0,
+            )?
+            .into();
+            devices.insert(device_identity);
+            let identity = capture::derive_identity(
+                COUNTER_DEFINITION_IDENTITY_DOMAIN_V2,
+                source_record.digest,
+                definition_ordinal,
+            )
+            .map_err(ImportErrorV1::Capture)?;
+            catalog.insert(key, identity);
+            definitions.push(CounterDefinitionV2 {
+                identity,
+                identity_origin: TruthOriginV1::Observed,
+                source_definition_ordinal: definition_ordinal,
+                device_identity,
+                name: definition.name.clone(),
+                name_origin: TruthOriginV1::Observed,
+                is_constant: definition.is_constant == 1,
+                is_derived: definition.is_derived == 1,
+            });
+            definition_ordinal = definition_ordinal
+                .checked_add(1)
+                .ok_or(ImportErrorV1::SizeOverflow)?;
+        }
+        catalogs.push(catalog);
+    }
+    if definitions.is_empty() || definitions.len() > MAX_COUNTER_DEFINITIONS_V2 {
+        return Err(ImportErrorV1::InvalidCounterCatalog);
+    }
+
+    let mut dispatches = Vec::new();
+    let mut collection_ordinal = 0_u64;
+    let mut value_ordinal = 0_u64;
+    for (process_index, process) in document.processes.iter().enumerate() {
+        for (collection_index, collection) in process
+            .callback_records
+            .counter_collection
+            .iter()
+            .enumerate()
+        {
+            if collection.records.is_empty()
+                || collection.dispatch_data.start_timestamp > collection.dispatch_data.end_timestamp
+            {
+                return Err(ImportErrorV1::InvalidCounterCollection);
+            }
+            let info = collection.dispatch_data.dispatch_info;
+            let agent = info
+                .agent_id
+                .ok_or(ImportErrorV1::MissingCaptureDeviceIdentity)?;
+            let device_identity: CaptureIdentityV1 = derived_handle_identity(
+                b"fe2o3.rocprofv3-json.device.v1\0",
+                source_identity.digest(),
+                agent.handle,
+            )?
+            .into();
+            if !devices.contains(&device_identity) {
+                return Err(ImportErrorV1::InvalidCounterCatalog);
+            }
+            let mut values = Vec::new();
+            for record in collection.records.iter() {
+                if !record.value.is_finite() {
+                    return Err(ImportErrorV1::InvalidCounterCollection);
+                }
+                let counter_identity = catalogs[process_index]
+                    .get(&(agent.handle, record.counter_id.handle))
+                    .copied()
+                    .ok_or(ImportErrorV1::CounterDefinitionNotFound)?;
+                values.push(CounterValueV2 {
+                    identity: capture::derive_identity(
+                        COUNTER_VALUE_IDENTITY_DOMAIN_V2,
+                        source_record.digest,
+                        value_ordinal,
+                    )
+                    .map_err(ImportErrorV1::Capture)?,
+                    origin: TruthOriginV1::Observed,
+                    counter_identity,
+                    source_record_ordinal: value_ordinal,
+                    value_f64_bits: record.value.to_bits(),
+                });
+                value_ordinal = value_ordinal
+                    .checked_add(1)
+                    .ok_or(ImportErrorV1::SizeOverflow)?;
+                if value_ordinal
+                    > u64::try_from(MAX_COUNTER_VALUES_V2)
+                        .map_err(|_| ImportErrorV1::SizeOverflow)?
+                {
+                    return Err(ImportErrorV1::CounterValueCountOutOfRange);
+                }
+            }
+            let launch = launch_from_dispatch(info, binding.wave_width)?;
+            dispatches.push(CounterDispatchV2 {
+                identity: capture::derive_identity(
+                    COUNTER_DISPATCH_IDENTITY_DOMAIN_V2,
+                    source_record.digest,
+                    collection_ordinal,
+                )
+                .map_err(ImportErrorV1::Capture)?,
+                identity_origin: TruthOriginV1::Observed,
+                run_identity,
+                device_identity,
+                process_index: u32::try_from(process_index)
+                    .map_err(|_| ImportErrorV1::SizeOverflow)?,
+                collection_index: u32::try_from(collection_index)
+                    .map_err(|_| ImportErrorV1::SizeOverflow)?,
+                source_collection_ordinal: collection_ordinal,
+                kernel_ir: binding.kernel_ir_claim.into(),
+                artifact,
+                source_map,
+                source_and_isa_correlation:
+                    CounterCorrelationStatusV2::UnavailableNoAuthenticatedSourceOrIsaMap,
+                launch_origin: TruthOriginV1::Observed,
+                launch: launch.into(),
+                timing_origin: TruthOriginV1::Observed,
+                start_timestamp: collection.dispatch_data.start_timestamp,
+                end_timestamp: collection.dispatch_data.end_timestamp,
+                duration_ticks: collection.dispatch_data.end_timestamp
+                    - collection.dispatch_data.start_timestamp,
+                values,
+            });
+            collection_ordinal = collection_ordinal
+                .checked_add(1)
+                .ok_or(ImportErrorV1::SizeOverflow)?;
+            if dispatches.len() > MAX_COUNTER_DISPATCHES_V2 {
+                return Err(ImportErrorV1::CounterCollectionCountOutOfRange);
+            }
+        }
+    }
+    if dispatches.is_empty() {
+        return Err(ImportErrorV1::CounterCollectionCountOutOfRange);
+    }
+    let collection_count =
+        u64::try_from(dispatches.len()).map_err(|_| ImportErrorV1::SizeOverflow)?;
+    let capture = SemanticCounterCaptureV2 {
+        schema_version: COUNTER_CAPTURE_SCHEMA_VERSION_V2,
+        source_kind: CounterCaptureSourceKindV2::Rocprofv3DispatchCounterJson,
+        runs: vec![CaptureRunV1 {
+            identity: run_identity,
+            identity_origin: TruthOriginV1::Observed,
+            source: source_record,
+        }],
+        devices: devices
+            .into_iter()
+            .map(|identity| CaptureDeviceV1 {
+                identity,
+                identity_origin: TruthOriginV1::Observed,
+            })
+            .collect(),
+        counter_definitions: definitions,
+        dispatches,
+        coverage: CounterCaptureCoverageV2 {
+            origin: TruthOriginV1::Declared,
+            scope: CompletenessScopeV1::PartialSemanticExecutionHistory,
+            source_collection_records: collection_count,
+            captured_collection_records: collection_count,
+            source_counter_value_records: value_ordinal,
+            captured_counter_value_records: value_ordinal,
+            sampling: CounterSamplingStatusV2 {
+                origin: TruthOriginV1::Declared,
+                mode: CounterSamplingModeV2::DispatchSynchronous,
+            },
+            loss: LossStatusV1 {
+                origin: TruthOriginV1::Unavailable,
+                state: LossStateV1::Unknown,
+                lost_records: None,
+                unavailable_reason: Some(CaptureUnavailableReasonV1::CollectorLossUnknown),
+            },
+            dimension_correlation:
+                CounterDimensionCorrelationV2::UnavailableRecordHasNoInstanceIdentity,
+        },
+    };
+    capture.validate().map_err(ImportErrorV1::CounterCapture)?;
+    Ok(capture)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -726,6 +959,44 @@ struct RocprofDocument {
 #[derive(Deserialize)]
 struct RocprofProcess {
     buffer_records: RocprofBufferRecords,
+    #[serde(default)]
+    counters: BoundedVec<RocprofCounterDefinition, MAX_COUNTER_DEFINITIONS_V2>,
+    #[serde(default)]
+    callback_records: RocprofCallbackRecords,
+}
+
+#[derive(Default, Deserialize)]
+struct RocprofCallbackRecords {
+    #[serde(default)]
+    counter_collection: BoundedVec<RocprofCounterCollection, MAX_COUNTER_DISPATCHES_V2>,
+}
+
+#[derive(Deserialize)]
+struct RocprofCounterDefinition {
+    agent_id: RocprofHandle,
+    id: RocprofHandle,
+    is_constant: u8,
+    is_derived: u8,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RocprofCounterCollection {
+    dispatch_data: RocprofCounterDispatchData,
+    records: BoundedVec<RocprofCounterRecord, MAX_COUNTER_VALUES_V2>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct RocprofCounterDispatchData {
+    start_timestamp: u64,
+    end_timestamp: u64,
+    dispatch_info: RocprofDispatchInfo,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct RocprofCounterRecord {
+    counter_id: RocprofHandle,
+    value: f64,
 }
 
 #[derive(Deserialize)]
@@ -969,12 +1240,18 @@ pub enum ImportErrorV1 {
     ProcessNotFound,
     DispatchNotFound,
     CaptureDispatchCountOutOfRange { actual: usize, max: usize },
+    InvalidCounterCatalog,
+    CounterDefinitionNotFound,
+    InvalidCounterCollection,
+    CounterCollectionCountOutOfRange,
+    CounterValueCountOutOfRange,
     MissingCaptureDeviceIdentity,
     TimestampOrder,
     InvalidLaunchGeometry,
     InvalidAttManifest,
     Trace(TraceValidationErrorV1),
     Capture(CaptureErrorV1),
+    CounterCapture(CounterCaptureErrorV2),
 }
 
 impl fmt::Display for ImportErrorV1 {
@@ -998,6 +1275,18 @@ impl fmt::Display for ImportErrorV1 {
                 formatter,
                 "rocprofv3 capture has {actual} dispatch records; allowed range is 1..={max}"
             ),
+            Self::InvalidCounterCatalog => formatter.write_str("invalid rocprofv3 counter catalog"),
+            Self::CounterDefinitionNotFound => formatter.write_str(
+                "counter record has no exact process-local agent/counter catalog definition",
+            ),
+            Self::InvalidCounterCollection => {
+                formatter.write_str("invalid rocprofv3 counter collection")
+            }
+            Self::CounterCollectionCountOutOfRange => formatter
+                .write_str("rocprofv3 counter collection count is outside the admitted range"),
+            Self::CounterValueCountOutOfRange => {
+                formatter.write_str("rocprofv3 counter record count exceeds the admitted bound")
+            }
             Self::MissingCaptureDeviceIdentity => formatter
                 .write_str("rocprofv3 capture dispatch is missing dispatch_info.agent_id.handle"),
             Self::TimestampOrder => formatter.write_str("dispatch timestamps are reversed"),
@@ -1014,6 +1303,10 @@ impl fmt::Display for ImportErrorV1 {
                 formatter,
                 "Semantic Capture V1 rejected the import: {error}"
             ),
+            Self::CounterCapture(error) => write!(
+                formatter,
+                "Semantic Counter Capture V2 rejected the import: {error}"
+            ),
         }
     }
 }
@@ -1023,6 +1316,7 @@ impl Error for ImportErrorV1 {
         match self {
             Self::Trace(error) => Some(error),
             Self::Capture(error) => Some(error),
+            Self::CounterCapture(error) => Some(error),
             _ => None,
         }
     }
