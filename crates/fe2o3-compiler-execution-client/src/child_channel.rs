@@ -16,8 +16,8 @@ use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFl
 
 use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, validate_seqpacket_peer};
 
-const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC1\0";
-const TRANSFER_VERSION: u32 = 1;
+const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
+const TRANSFER_VERSION: u32 = 2;
 const TRANSFER_BYTES: usize = 24;
 
 /// Move-only service launch inputs bound to one still-live rustc child.
@@ -34,6 +34,7 @@ pub struct CompilerExecutionServiceLaunchV1 {
     service_peer: OwnedFd,
     client_pidfd: OwnedFd,
     client: CompilerExecutionClientProcessIdentityV1,
+    submitter: CompilerExecutionClientProcessIdentityV1,
 }
 
 impl fmt::Debug for CompilerExecutionServiceLaunchV1 {
@@ -42,6 +43,7 @@ impl fmt::Debug for CompilerExecutionServiceLaunchV1 {
             .debug_struct("CompilerExecutionServiceLaunchV1")
             .field("authority", &"none")
             .field("client", &self.client)
+            .field("submitter", &self.submitter)
             .finish_non_exhaustive()
     }
 }
@@ -50,6 +52,11 @@ impl CompilerExecutionServiceLaunchV1 {
     /// Returns the exact rustc process identity associated with both retained descriptors.
     pub const fn client(&self) -> CompilerExecutionClientProcessIdentityV1 {
         self.client
+    }
+
+    /// Returns the exact direct-parent identity that received this child-created channel.
+    pub const fn submitter(&self) -> CompilerExecutionClientProcessIdentityV1 {
+        self.submitter
     }
 
     /// Borrows the service endpoint whose peer is the rustc endpoint at fixed FD 195.
@@ -65,6 +72,26 @@ impl CompilerExecutionServiceLaunchV1 {
     /// Consumes the inert launch inputs for one protected-supervisor transfer.
     pub fn into_descriptors(self) -> (OwnedFd, OwnedFd) {
         (self.service_peer, self.client_pidfd)
+    }
+
+    pub(crate) fn revalidate_for_supervisor_handoff(
+        &self,
+    ) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+        if self.submitter.pid() != std::process::id()
+            || self.submitter.uid() != rustix::process::geteuid().as_raw()
+            || self.submitter.gid() != rustix::process::getegid().as_raw()
+        {
+            return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
+        }
+        validate_seqpacket_peer(&self.service_peer)
+            .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
+        require_close_on_exec(&self.service_peer)?;
+        require_close_on_exec(&self.client_pidfd)?;
+        if peer_identity(&self.service_peer)? != self.client {
+            return Err(CompilerExecutionChildChannelErrorV1::PeerCredentialsMismatch);
+        }
+        require_service_peer_live(&self.service_peer)?;
+        require_pidfd_live(&self.client_pidfd)
     }
 }
 
@@ -118,9 +145,13 @@ impl PendingCompilerExecutionChildChannelV1 {
             .ok_or(CompilerExecutionChildChannelErrorV1::DeadlineOverflow)?;
         let client_pidfd = open_pidfd(child_pid)?;
         wait_for_transfer(&self.receiver, &client_pidfd, deadline)?;
-        let (service_peer, transferred_pid) = receive_service_peer(&self.receiver)?;
+        let (service_peer, transferred_pid, transferred_parent_pid) =
+            receive_service_peer(&self.receiver)?;
         if transferred_pid != child_pid {
             return Err(CompilerExecutionChildChannelErrorV1::ChildPidMismatch);
+        }
+        if transferred_parent_pid != std::process::id() {
+            return Err(CompilerExecutionChildChannelErrorV1::ParentPidMismatch);
         }
         validate_seqpacket_peer(&service_peer)
             .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
@@ -131,10 +162,20 @@ impl PendingCompilerExecutionChildChannelV1 {
         }
         require_service_peer_live(&service_peer)?;
         require_pidfd_live(&client_pidfd)?;
+        let submitter = CompilerExecutionClientProcessIdentityV1::new(
+            transferred_parent_pid,
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+        )
+        .map_err(|_| CompilerExecutionChildChannelErrorV1::ParentPidMismatch)?;
+        if submitter.uid() != client.uid() || submitter.gid() != client.gid() {
+            return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
+        }
         Ok(CompilerExecutionServiceLaunchV1 {
             service_peer,
             client_pidfd,
             client,
+            submitter,
         })
     }
 }
@@ -239,11 +280,17 @@ fn child_create_and_transfer(control: RawFd) -> io::Result<()> {
 fn send_service_peer(control: RawFd, service: RawFd) -> io::Result<()> {
     let pid = u32::try_from(unsafe { libc::getpid() })
         .map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+    let parent_pid = u32::try_from(unsafe { libc::getppid() })
+        .map_err(|_| io::Error::from_raw_os_error(libc::EOVERFLOW))?;
+    if parent_pid == 0 {
+        return Err(io::Error::from_raw_os_error(libc::ESRCH));
+    }
     let mut payload = [0_u8; TRANSFER_BYTES];
     payload[..8].copy_from_slice(&TRANSFER_MAGIC);
     payload[8..12].copy_from_slice(&TRANSFER_VERSION.to_le_bytes());
     payload[12..16].copy_from_slice(&pid.to_le_bytes());
     payload[16..20].copy_from_slice(&COMPILER_EXECUTION_SERVICE_CHILD_FD_V1.to_le_bytes());
+    payload[20..24].copy_from_slice(&parent_pid.to_le_bytes());
 
     let mut vector = libc::iovec {
         iov_base: payload.as_mut_ptr().cast(),
@@ -357,7 +404,7 @@ fn wait_for_transfer(
 
 fn receive_service_peer(
     receiver: &OwnedFd,
-) -> Result<(OwnedFd, u32), CompilerExecutionChildChannelErrorV1> {
+) -> Result<(OwnedFd, u32, u32), CompilerExecutionChildChannelErrorV1> {
     let mut payload = [0_u8; TRANSFER_BYTES];
     let mut vectors = [IoSliceMut::new(&mut payload)];
     let mut control = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
@@ -397,7 +444,6 @@ fn receive_service_peer(
         || u32::from_le_bytes(payload[8..12].try_into().unwrap()) != TRANSFER_VERSION
         || i32::from_le_bytes(payload[16..20].try_into().unwrap())
             != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
-        || payload[20..].iter().any(|byte| *byte != 0)
     {
         return Err(CompilerExecutionChildChannelErrorV1::MalformedTransfer);
     }
@@ -405,8 +451,12 @@ fn receive_service_peer(
     if child_pid == 0 {
         return Err(CompilerExecutionChildChannelErrorV1::MalformedTransfer);
     }
+    let parent_pid = u32::from_le_bytes(payload[20..24].try_into().unwrap());
+    if parent_pid == 0 || parent_pid == child_pid {
+        return Err(CompilerExecutionChildChannelErrorV1::MalformedTransfer);
+    }
 
-    Ok((descriptor, child_pid))
+    Ok((descriptor, child_pid, parent_pid))
 }
 
 fn peer_identity(
@@ -498,6 +548,8 @@ pub enum CompilerExecutionChildChannelErrorV1 {
     ControlClosed,
     MalformedTransfer,
     ChildPidMismatch,
+    ParentPidMismatch,
+    ParentCredentialsMismatch,
     InvalidServicePeer,
     ServicePeerClosed,
     PeerCredentials(io::Error),
@@ -532,6 +584,11 @@ impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
             Self::ChildPidMismatch => {
                 formatter.write_str("rustc channel transfer names another PID")
             }
+            Self::ParentPidMismatch => {
+                formatter.write_str("rustc channel transfer names another direct parent")
+            }
+            Self::ParentCredentialsMismatch => formatter
+                .write_str("rustc child credentials differ from its direct-parent credentials"),
             Self::InvalidServicePeer => {
                 formatter.write_str("rustc service endpoint has the wrong socket shape")
             }

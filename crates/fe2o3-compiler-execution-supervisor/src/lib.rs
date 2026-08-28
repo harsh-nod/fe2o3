@@ -23,12 +23,14 @@ use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 use sha2::{Digest, Sha256};
 
 mod authority;
+mod handoff;
 
 pub use authority::{
     ISSUER_SERVICE_SECUREBITS_V1, IssuerServiceCredentialProfileErrorV1,
     IssuerServiceCredentialProfileV1, ProtectedIssuerSupervisorErrorV1,
     ProtectedIssuerSupervisorV1,
 };
+pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
 
 const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;
 const REQUIRED_EXECUTABLE_SEALS_V1: SealFlags = SealFlags::WRITE

@@ -45,6 +45,8 @@ pub(crate) enum ProductionPipelineError {
     SimulationKernelIrV7(fe2o3_kernel_ir::VerifiedCanonicalKernelIrErrorV7),
     SimulationBundle(fe2o3_kernel_ir::SimulationBundleErrorV1),
     SimulationDebugMap(fe2o3_kernel_ir::DebugSourceMapErrorV1),
+    SimulationBundleV2(fe2o3_kernel_ir::SimulationBundleErrorV2),
+    SimulationDebugMapV2(fe2o3_kernel_ir::DebugSourceMapErrorV2),
     SimulationDebugMapCorrespondence(&'static str),
     SimulationSourceLineage(fe2o3_compiler_lineage::LineageErrorV3),
     SimulationProductionKirV9,
@@ -99,6 +101,14 @@ impl fmt::Display for ProductionPipelineError {
             Self::SimulationDebugMap(error) => write!(
                 formatter,
                 "production compilation simulation debug map failed: {error}"
+            ),
+            Self::SimulationBundleV2(error) => write!(
+                formatter,
+                "production compilation simulation bundle V2 failed: {error}"
+            ),
+            Self::SimulationDebugMapV2(error) => write!(
+                formatter,
+                "production compilation simulation debug map V2 failed: {error}"
             ),
             Self::SimulationDebugMapCorrespondence(detail) => write!(
                 formatter,
@@ -168,6 +178,8 @@ impl std::error::Error for ProductionPipelineError {
             Self::SimulationKernelIrV7(error) => Some(error),
             Self::SimulationBundle(error) => Some(error),
             Self::SimulationDebugMap(error) => Some(error),
+            Self::SimulationBundleV2(error) => Some(error),
+            Self::SimulationDebugMapV2(error) => Some(error),
             Self::SimulationSourceLineage(error) => Some(error),
             Self::FormalMemoryAdmission(error) => Some(error),
             Self::Geometry(error) => Some(error),
@@ -206,6 +218,7 @@ pub(super) struct CollectedRustStage<'tcx> {
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
+    debug_source_capture: crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2,
     transaction: ProductionTransactionBindings,
 }
 
@@ -264,6 +277,8 @@ struct AuthenticatedProductionBindings {
     rustc_target: crate::production_target_v1::AuthenticatedProductionTargetV1,
     reference_effect_bindings: crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
+    debug_source_scopes: Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2]>,
+    debug_source_variables: Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2]>,
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindings,
 }
@@ -365,10 +380,17 @@ impl AuthenticatedProductionTargetModule {
 }
 
 impl TargetNeutralProductionCompilation {
-    fn into_simulation_bundle_v1(
+    fn into_prepared_simulation_bundle_v1(
         self,
         compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
-    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
+    ) -> Result<
+        (
+            fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+            AuthenticatedProductionBindings,
+            fe2o3_kernel_ir::PreparedSimulationBundleV1,
+        ),
+        ProductionPipelineError,
+    > {
         let Self {
             lowered,
             ranked_verification: _,
@@ -427,11 +449,40 @@ impl TargetNeutralProductionCompilation {
             canonical_v7,
         )
         .map_err(ProductionPipelineError::SimulationBundle)?;
+        Ok((lowered, bindings, prepared))
+    }
+
+    fn into_simulation_bundle_v1(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV1, ProductionPipelineError> {
+        let (lowered, bindings, prepared) =
+            self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
         let debug_map =
             compiler_debug_source_map_v1(&lowered, &bindings.debug_source_files, &prepared)?;
         prepared
             .finalize_with_source_map(debug_map)
             .map_err(ProductionPipelineError::SimulationBundle)
+    }
+
+    fn into_simulation_bundle_v2(
+        self,
+        compiler_execution_binding: fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV2, ProductionPipelineError> {
+        let (lowered, bindings, prepared) =
+            self.into_prepared_simulation_bundle_v1(compiler_execution_binding)?;
+        let debug_map = compiler_debug_source_map_v2(
+            &lowered,
+            &bindings.debug_source_files,
+            &bindings.debug_source_scopes,
+            &bindings.debug_source_variables,
+            &prepared,
+        )?;
+        let inner = prepared
+            .finalize_without_source_map()
+            .map_err(ProductionPipelineError::SimulationBundle)?;
+        fe2o3_kernel_ir::VerifiedSimulationBundleV2::new(inner, debug_map)
+            .map_err(ProductionPipelineError::SimulationBundleV2)
     }
 
     fn admit_formal_memory(
@@ -683,6 +734,8 @@ impl TargetLoweredProductionCompilation {
             rustc_target,
             reference_effect_bindings: _,
             debug_source_files: _,
+            debug_source_scopes: _,
+            debug_source_variables: _,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -745,6 +798,8 @@ impl TargetLoweredProductionCompilation {
             rustc_target,
             reference_effect_bindings,
             debug_source_files: _,
+            debug_source_scopes: _,
+            debug_source_variables: _,
             typed_descriptor_roots,
             transaction,
         } = bindings;
@@ -1010,6 +1065,230 @@ fn compiler_debug_source_map_v1(
     .map_err(ProductionPipelineError::SimulationDebugMap)
 }
 
+fn compiler_debug_source_map_v2(
+    lowered: &fe2o3_lower_mir_kernel::ProductionSemanticKirOwnerV1,
+    captured_files: &[fe2o3_kernel_ir::DebugSourceMapFileV1],
+    captured_scopes: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2],
+    captured_variables: &[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2],
+    prepared: &fe2o3_kernel_ir::PreparedSimulationBundleV1,
+) -> Result<fe2o3_kernel_ir::DebugSourceMapDocumentV2, ProductionPipelineError> {
+    let base = compiler_debug_source_map_v1(lowered, captured_files, prepared)?;
+    let (function_ordinal, _) = sole_debug_map_body_v1(lowered.module())?;
+    let function_ordinal = u64::try_from(function_ordinal).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "KIR function ordinal does not fit the source-map V2 wire",
+        )
+    })?;
+    let selected_semantic_function = lowered
+        .correspondence()
+        .blocks()
+        .first()
+        .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "lowering correspondence has no selected semantic function",
+        ))?
+        .semantic_function();
+
+    let mut parameter_by_local = BTreeMap::new();
+    for binding in lowered.correspondence().parameter_bindings() {
+        if binding.semantic_function() != selected_semantic_function
+            || parameter_by_local
+                .insert(binding.semantic_local(), binding.kernel_ir_value())
+                .is_some()
+        {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "KIR parameter correspondence is not unique for the selected semantic function",
+            ));
+        }
+    }
+
+    let selected_scope_count = captured_scopes
+        .iter()
+        .filter(|scope| scope.function == selected_semantic_function)
+        .count();
+    if selected_scope_count > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2 {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "compiler source scopes exceed the bounded V2 map domain",
+        ));
+    }
+    let mut scopes = Vec::new();
+    scopes
+        .try_reserve_exact(selected_scope_count)
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source-scope map allocation failed",
+            )
+        })?;
+    for scope in captured_scopes
+        .iter()
+        .filter(|scope| scope.function == selected_semantic_function)
+    {
+        scopes.push(
+            fe2o3_kernel_ir::DebugSourceScopeV2::new(
+                scope.identity,
+                function_ordinal,
+                scope.parent_identity,
+                scope.depth,
+                debug_source_scope_span_v2(scope.source)?,
+            )
+            .map_err(ProductionPipelineError::SimulationDebugMapV2)?,
+        );
+    }
+    let scope_identities = scopes
+        .iter()
+        .map(|scope| scope.identity())
+        .collect::<BTreeSet<_>>();
+
+    let selected_variable_count = captured_variables
+        .iter()
+        .filter(|variable| variable.function == selected_semantic_function)
+        .count();
+    if selected_variable_count > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 {
+        return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "compiler source variables exceed the bounded V2 map domain",
+        ));
+    }
+    let mut variables = Vec::new();
+    variables
+        .try_reserve_exact(selected_variable_count)
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source-variable map allocation failed",
+            )
+        })?;
+    for variable in captured_variables
+        .iter()
+        .filter(|variable| variable.function == selected_semantic_function)
+    {
+        if !scope_identities.contains(&variable.scope_identity) {
+            return Err(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source variable references an unretained lexical scope",
+            ));
+        }
+        let name = variable.name.clone().ok_or(
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "rustc source-variable name is empty, control-containing, or exceeds the V2 bound",
+            ),
+        )?;
+        let (fallback, parameter) = match variable.class {
+            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Local(local) => {
+                match parameter_by_local
+                    .get(&local)
+                    .copied()
+                    .filter(|_| variable.entry_value_preserved)
+                {
+                    Some(value) => (
+                        fe2o3_kernel_ir::DebugSourceVariableFallbackV2::NotInScope,
+                        Some(value),
+                    ),
+                    None => (
+                        fe2o3_kernel_ir::DebugSourceVariableFallbackV2::Unrepresented,
+                        None,
+                    ),
+                }
+            }
+            crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableClassV2::Unrepresented => (
+                fe2o3_kernel_ir::DebugSourceVariableFallbackV2::Unrepresented,
+                None,
+            ),
+        };
+        let mut emitted = fe2o3_kernel_ir::DebugSourceVariableV2::new(
+            variable.identity,
+            name,
+            function_ordinal,
+            variable.scope_identity,
+            fallback,
+            Vec::new(),
+        )
+        .map_err(ProductionPipelineError::SimulationDebugMapV2)?;
+        if let Some(value) = parameter {
+            emitted = emitted
+                .with_function_binding(
+                    fe2o3_kernel_ir::DebugSourceVariableFunctionBindingV2::new(
+                        1,
+                        u64::from(value.0),
+                    )
+                    .map_err(ProductionPipelineError::SimulationDebugMapV2)?,
+                )
+                .map_err(ProductionPipelineError::SimulationDebugMapV2)?;
+        }
+        variables.push(emitted);
+    }
+
+    let captured_files = captured_files
+        .iter()
+        .map(|file| (file.identity(), file.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut files = base
+        .files()
+        .iter()
+        .map(|file| (file.identity(), file.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for scope in &scopes {
+        let identity = scope.span().file_identity();
+        if !files.contains_key(&identity) {
+            let file = captured_files.get(&identity).cloned().ok_or(
+                ProductionPipelineError::SimulationDebugMapCorrespondence(
+                    "source-variable scope has no same-session rustc file observation",
+                ),
+            )?;
+            files.insert(identity, file);
+        }
+    }
+    let mut file_values = Vec::new();
+    file_values.try_reserve_exact(files.len()).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "compiler source-map V2 file allocation failed",
+        )
+    })?;
+    file_values.extend(files.into_values());
+    let mut sites = Vec::new();
+    sites.try_reserve_exact(base.sites().len()).map_err(|_| {
+        ProductionPipelineError::SimulationDebugMapCorrespondence(
+            "compiler source-map V2 site allocation failed",
+        )
+    })?;
+    sites.extend_from_slice(base.sites());
+    let mut eliminated = Vec::new();
+    eliminated
+        .try_reserve_exact(base.eliminated().len())
+        .map_err(|_| {
+            ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "compiler source-map V2 eliminated-span allocation failed",
+            )
+        })?;
+    eliminated.extend_from_slice(base.eliminated());
+    fe2o3_kernel_ir::DebugSourceMapDocumentV2::new(
+        base.binding(),
+        file_values,
+        sites,
+        eliminated,
+        scopes,
+        variables,
+    )
+    .map_err(ProductionPipelineError::SimulationDebugMapV2)
+}
+
+fn debug_source_scope_span_v2(
+    source: fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1,
+) -> Result<fe2o3_kernel_ir::DebugSourceMapSpanV1, ProductionPipelineError> {
+    let origin =
+        source
+            .call_site()
+            .ok_or(ProductionPipelineError::SimulationDebugMapCorrespondence(
+                "source-variable scope has no resolved source call site",
+            ))?;
+    let (byte_start, byte_end) = origin.byte_range();
+    let (line, column) = origin.start_coordinate();
+    fe2o3_kernel_ir::DebugSourceMapSpanV1::new_eliminated(
+        *origin.file().as_bytes(),
+        byte_start,
+        byte_end,
+        line,
+        column,
+    )
+    .map_err(ProductionPipelineError::SimulationDebugMap)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn insert_debug_operation_range_v1(
     function_ordinal: u64,
@@ -1197,6 +1476,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             producer,
             output_dir,
             ProductionCompilerCustody::protected(invocation, build_attempt),
+            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
         )
     }
 
@@ -1212,6 +1492,23 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             producer,
             output_dir,
             ProductionCompilerCustody::extraction_only(),
+            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+        )
+    }
+
+    pub(crate) fn from_collected_device_closure_for_simulation_v2(
+        tcx: TyCtxt<'tcx>,
+        closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+        producer: ProducerIdentity,
+        output_dir: PathBuf,
+    ) -> Result<Self, ProductionPipelineError> {
+        Self::from_collected_device_closure_with_custody(
+            tcx,
+            closure,
+            producer,
+            output_dir,
+            ProductionCompilerCustody::extraction_only(),
+            crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::SourceVariables,
         )
     }
 
@@ -1221,6 +1518,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         producer: ProducerIdentity,
         output_dir: PathBuf,
         compiler_custody: ProductionCompilerCustody,
+        debug_source_capture: crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2,
     ) -> Result<Self, ProductionPipelineError> {
         if closure.function_count() == 0 {
             return Err(ProductionPipelineError::EmptyCollectedDeviceClosure);
@@ -1234,6 +1532,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 tcx,
                 closure,
                 typed_descriptor_roots,
+                debug_source_capture,
                 transaction: ProductionTransactionBindings {
                     producer,
                     output_dir,
@@ -1253,6 +1552,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             tcx,
             closure,
             typed_descriptor_roots,
+            debug_source_capture,
             transaction,
         } = self.stage;
         let crate::collector::ConstructedProductionSemanticMirV1 {
@@ -1262,8 +1562,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             rustc_target,
             reference_effect_bindings,
             debug_source_files,
-        } = crate::collector::construct_production_semantic_mir_v1(tcx, closure)
-            .map_err(ProductionPipelineError::SemanticImport)?;
+            debug_source_scopes,
+            debug_source_variables,
+        } = crate::collector::construct_production_semantic_mir_v1(
+            tcx,
+            closure,
+            debug_source_capture,
+        )
+        .map_err(ProductionPipelineError::SemanticImport)?;
         Ok(ProductionCompilation {
             stage: AdmittedSemanticMirStage {
                 semantic_mir,
@@ -1273,6 +1579,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                     rustc_target,
                     reference_effect_bindings,
                     debug_source_files,
+                    debug_source_scopes,
+                    debug_source_variables,
                     typed_descriptor_roots,
                     transaction,
                 },
@@ -1318,6 +1626,22 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .verify_general_kernel_checks()?
             .lower_target_neutral()?
             .into_simulation_bundle_v1(
+                fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
+            )
+    }
+
+    /// Emits the explicit V2 simulation envelope with compiler-produced,
+    /// exact-KIR-bound source-variable metadata. This remains inert and grants
+    /// no compiler, proof, artifact, hardware, load, or launch authority.
+    pub(crate) fn export_simulation_bundle_v2(
+        self,
+    ) -> Result<fe2o3_kernel_ir::VerifiedSimulationBundleV2, ProductionPipelineError> {
+        let admitted = self.import_semantic_mir()?;
+        admitted
+            .construct_semantic_middle_end()?
+            .verify_general_kernel_checks()?
+            .lower_target_neutral()?
+            .into_simulation_bundle_v2(
                 fe2o3_kernel_ir::SimulationCompilerExecutionBindingV1::UnavailableExtractionOnly,
             )
     }

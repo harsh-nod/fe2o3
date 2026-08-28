@@ -21,12 +21,17 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 mod child_channel;
+mod supervisor_handoff;
 
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
     PendingCompilerExecutionChildChannelV1,
 };
 pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
+pub use supervisor_handoff::{
+    CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
+    PendingCompilerExecutionSupervisorV1,
+};
 
 /// Fixed rustc descriptor reserved for the compiler-execution service peer.
 pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;

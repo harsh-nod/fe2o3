@@ -4,6 +4,7 @@
 mod codec;
 mod hardware_v2;
 mod model;
+mod source_variables_v2;
 
 pub use codec::{
     ProtocolCodecErrorV1, decode_request_line_v1, decode_response_line_v1, encode_response_line_v1,
@@ -11,3 +12,4 @@ pub use codec::{
 };
 pub use hardware_v2::*;
 pub use model::*;
+pub use source_variables_v2::*;

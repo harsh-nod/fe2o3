@@ -8,6 +8,9 @@ rust-version.workspace = true
 publish = false
 
 [features]
+debug_scalar = []
+debug_long_name = []
+debug_mutated_argument = []
 oob = []
 shifted = []
 grid_exclusive = []

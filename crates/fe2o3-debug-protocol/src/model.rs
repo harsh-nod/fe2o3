@@ -636,7 +636,7 @@ pub enum ExecutionScopeSelectorV1 {
 }
 
 impl ExecutionScopeSelectorV1 {
-    fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
+    pub(crate) fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
         if let Self::Lane { lane, .. } = self
             && lane >= 64
         {
@@ -1179,7 +1179,7 @@ pub struct PageRequestV1 {
 }
 
 impl PageRequestV1 {
-    fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
+    pub(crate) fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
         if self.limit == 0 || self.limit > MAX_PAGE_ITEMS_V1 {
             return Err(ProtocolValidationErrorV1::CountOutOfRange("page limit"));
         }
@@ -1388,7 +1388,7 @@ pub struct SessionViewV1 {
 }
 
 impl SessionViewV1 {
-    fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
+    pub(crate) fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
         if self.configuration_identity != self.cursor.configuration_identity {
             return Err(ProtocolValidationErrorV1::IdentityMismatch(
                 "session cursor",
@@ -1745,7 +1745,7 @@ pub struct DebugErrorV1 {
 }
 
 impl DebugErrorV1 {
-    fn validate(&self) -> Result<(), ProtocolValidationErrorV1> {
+    pub(crate) fn validate(&self) -> Result<(), ProtocolValidationErrorV1> {
         if self.state_changed {
             return Err(ProtocolValidationErrorV1::ErrorChangedState);
         }
@@ -1954,7 +1954,7 @@ pub enum StackValuesAvailabilityV1 {
 }
 
 impl DebugSnapshotAnchorV1 {
-    fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
+    pub(crate) fn validate(self) -> Result<(), ProtocolValidationErrorV1> {
         self.scope.validate()?;
         if let Some(site) = self.site {
             site.source.validate()?;
@@ -2083,7 +2083,7 @@ pub enum ValueAvailabilityV1 {
 }
 
 impl ValueAvailabilityV1 {
-    fn validate(&self) -> Result<(), ProtocolValidationErrorV1> {
+    pub(crate) fn validate(&self) -> Result<(), ProtocolValidationErrorV1> {
         if let Self::Captured {
             value_type, value, ..
         } = self

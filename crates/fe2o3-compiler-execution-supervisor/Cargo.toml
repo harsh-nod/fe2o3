@@ -15,11 +15,12 @@ fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-runtime-protocol.workspace = true
 fe2o3-static-preexec-manifest.workspace = true
 libc.workspace = true
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["event", "process"] }
 sha2.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-compiler-execution-client.workspace = true
 
 [lints.rust]
 unsafe_code = "deny"

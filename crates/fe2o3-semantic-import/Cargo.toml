@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Bounded import adapters from debugger and profiler evidence to Semantic Trace V1."
+description = "Bounded profiler/debugger evidence adapters for semantic traces and captures."
 
 [dependencies]
 fe2o3-semantic-trace.workspace = true

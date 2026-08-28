@@ -5,9 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Bounded read-only semantic debugger queries over fe2o3 Trace V1."
+description = "Bounded read-only debugger and profiler queries over fe2o3 semantic evidence."
 
 [dependencies]
+fe2o3-semantic-import.workspace = true
 fe2o3-semantic-trace.workspace = true
 serde.workspace = true
 serde_json = "1"

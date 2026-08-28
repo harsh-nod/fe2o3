@@ -45,6 +45,14 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn ranked_bounds_fixture_line(containing: &str) -> usize {
+    include_str!("fixtures/production-ranked-bounds-device/src/lib.rs")
+        .lines()
+        .position(|line| line.contains(containing))
+        .map(|index| index + 1)
+        .unwrap_or_else(|| panic!("ranked-bounds fixture omitted {containing:?}"))
+}
+
 #[test]
 #[ignore = "requires the pinned nightly rust-src component and AMD target"]
 fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
@@ -105,11 +113,15 @@ fn ordinary_rust_bounds_and_production_pliron_pipeline_fail_closed() {
         !oob.status.success(),
         "out-of-bounds Rust kernel was accepted"
     );
+    let oob_source_location = format!(
+        ":{}:20",
+        ranked_bounds_fixture_line("let selected = input[64];")
+    );
     assert!(
         oob.stderr.contains("error[FE2O3-BOUNDS-001]")
             && oob.stderr.contains("required: 64 < 64")
             && oob.stderr.contains("Rust source")
-            && oob.stderr.contains(":63:20")
+            && oob.stderr.contains(&oob_source_location)
             && oob.stderr.contains("kernel.index_constant 64")
             && oob
                 .stderr
@@ -520,6 +532,316 @@ fn ordinary_kernel_source_exports_the_exact_gfx950_simulation_target() {
     assert!(!bundle.grants_launch_authority());
 }
 
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn ordinary_kernel_sources_export_and_query_exact_v2_source_variables() {
+    let target = ScratchTarget::new();
+    let debug_target = target.path().join("debug-cli-target");
+    let build_debugger = Command::new(env!("CARGO"))
+        .current_dir(workspace())
+        .args([
+            "build",
+            "--quiet",
+            "--locked",
+            "-p",
+            "fe2o3-debug-cli",
+            "--bin",
+            "fe2o3-debug",
+            "--target-dir",
+        ])
+        .arg(&debug_target)
+        .output()
+        .expect("build debugger for production V2 source-variable integration");
+    assert!(
+        build_debugger.status.success(),
+        "debugger build failed:\n{}",
+        String::from_utf8_lossy(&build_debugger.stderr)
+    );
+
+    let cases = [
+        (
+            "debug_scalar",
+            "debug_scalar",
+            json!([
+                {"kind": "scalar", "type": "f32", "bits": "0x3f800000"},
+                {
+                    "kind": "buffer",
+                    "element": "f32",
+                    "access": "read_only",
+                    "alignment": 4,
+                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                },
+                {
+                    "kind": "buffer",
+                    "element": "f32",
+                    "access": "read_write",
+                    "alignment": 4,
+                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                },
+            ]),
+            &["value", "input"][..],
+            &["output", "element"][..],
+        ),
+        (
+            "shifted",
+            "checked_shifted",
+            json!([{
+                "kind": "buffer",
+                "element": "f32",
+                "access": "read_write",
+                "alignment": 4,
+                "bytes": format!("0x{}", "00".repeat(68 * 4)),
+            }]),
+            &[][..],
+            &["output", "index"][..],
+        ),
+        (
+            "debug_mutated_argument",
+            "debug_mutated_argument",
+            json!([
+                {"kind": "scalar", "type": "f32", "bits": "0x3f800000"},
+                {
+                    "kind": "buffer",
+                    "element": "f32",
+                    "access": "read_write",
+                    "alignment": 4,
+                    "bytes": format!("0x{}", "00".repeat(64 * 4)),
+                },
+            ]),
+            &[][..],
+            &["value", "output"][..],
+        ),
+    ];
+    let mut exported = Vec::new();
+    for (feature, kernel, arguments, parameter_names, unrepresented_names) in cases {
+        let bundle_path = target.path().join(format!("{feature}-v2.fe2sim"));
+        let export_target = target.path().join(format!("{feature}-export-target"));
+        let result = output(
+            simulation_export_command_v2("gfx942", &bundle_path, &export_target, feature),
+            "run production V2 simulation-bundle extraction",
+        );
+        assert!(
+            result.status.success()
+                && result.stderr.contains("explicit simulation bundle V2")
+                && result.stderr.contains("compiler-produced source variables")
+                && result
+                    .stderr
+                    .contains("compiler_execution_binding=extraction_only_unavailable")
+                && result
+                    .stderr
+                    .contains("authenticates_compiler_execution=false")
+                && result
+                    .stderr
+                    .contains("proof/artifact/compiler/hardware/load/launch authority false"),
+            "production V2 export failed or overclaimed authority for {feature}:\n{}",
+            result.stderr,
+        );
+        let bundle = fe2o3_kernel_ir::VerifiedSimulationBundleV2::from_canonical_bytes(
+            std::fs::read(&bundle_path).expect("read production V2 bundle"),
+        )
+        .expect("decode production V2 bundle");
+        let map = fe2o3_kernel_ir::DebugSourceMapDocumentV2::from_canonical_json_bytes(
+            bundle.debug_map(),
+        )
+        .expect("decode compiler-produced source-variable map");
+        assert_eq!(
+            map.binding().bundle_subject_identity(),
+            *bundle.inner_v1().subject_identity()
+        );
+        assert_eq!(
+            map.binding().canonical_kir().digest(),
+            *bundle.inner_v1().canonical_kir_v7_identity().digest()
+        );
+        assert!(!bundle.authenticates_compiler_execution());
+        assert!(!bundle.grants_compiler_authority());
+        assert!(!bundle.grants_load_authority());
+        assert!(!bundle.grants_launch_authority());
+        for name in parameter_names {
+            let variable = map
+                .variables()
+                .iter()
+                .find(|variable| variable.name() == *name)
+                .unwrap_or_else(|| panic!("missing exact {name} parameter in {feature} map"));
+            let binding = variable
+                .function_binding()
+                .unwrap_or_else(|| panic!("{name} is not bound to an exact KIR parameter"));
+            assert_eq!(binding.generation(), 1);
+            assert!(variable.locations().is_empty());
+        }
+        for name in unrepresented_names {
+            let unavailable = map
+                .variables()
+                .iter()
+                .find(|variable| variable.name() == *name)
+                .unwrap_or_else(|| {
+                    panic!("missing exact {name} unavailable variable in {feature} map")
+                });
+            assert_eq!(
+                unavailable.fallback(),
+                fe2o3_kernel_ir::DebugSourceVariableFallbackV2::Unrepresented
+            );
+            assert!(unavailable.function_binding().is_none());
+        }
+
+        let request_path = target.path().join(format!("{feature}-request.json"));
+        std::fs::write(
+            &request_path,
+            serde_json::to_vec(&json!({
+                "schema": "fe2o3-simulation-request-v1",
+                "kernel": kernel,
+                "grid": [1, 1, 1],
+                "workgroup": [64, 1, 1],
+                "arguments": arguments,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let protocol_input = concat!(
+            "{\"operation\":\"step\",\"schema\":\"fe2o3-debug-request-v1\",\"request_id\":1,\"expected_revision\":0,\"direction\":\"forward\",\"granularity\":\"operation\",\"count\":1}\n",
+            "{\"operation\":\"inspect_source_variables\",\"schema\":\"fe2o3-debug-source-variable-request-v2\",\"request_id\":2,\"expected_revision\":1,\"scope\":{\"level\":\"dispatch\"},\"frame\":1,\"selector\":{\"selector\":\"all\"},\"page\":{\"limit\":64}}\n",
+        );
+        let mut debugger = Command::new(debug_target.join("debug/fe2o3-debug"))
+            .args(["sim", "--bundle-v2"])
+            .arg(&bundle_path)
+            .arg("--request")
+            .arg(&request_path)
+            .args(["--protocol", "jsonl", "--wave-width", "64"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run debugger on compiler-produced V2 bundle");
+        debugger
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(protocol_input.as_bytes())
+            .unwrap();
+        let debug_output = debugger.wait_with_output().unwrap();
+        assert!(
+            debug_output.status.success(),
+            "debugger rejected {feature} production bundle:\n{}",
+            String::from_utf8_lossy(&debug_output.stderr)
+        );
+        assert!(debug_output.stderr.is_empty());
+        let responses = debug_output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0]["status"], "ok");
+        assert_eq!(responses[1]["status"], "ok");
+        let values = responses[1]["values"]
+            .as_array()
+            .expect("source-variable response has values");
+        for name in parameter_names {
+            let value = values
+                .iter()
+                .find(|value| value["name"] == *name)
+                .unwrap_or_else(|| panic!("debugger omitted {name} for {feature}"));
+            assert_eq!(value["generation"], 1);
+            assert_eq!(value["availability"]["status"], "value");
+            assert_eq!(value["availability"]["value"]["status"], "captured");
+            assert_eq!(
+                value["availability"]["value"]["provenance"],
+                "simulated_observation"
+            );
+            assert_ne!(
+                value["availability"]["value"]["value"]["encoding"],
+                "native_address"
+            );
+            if *name == "input" {
+                assert_eq!(
+                    value["availability"]["value"]["value"]["encoding"],
+                    "allocation_relative_pointer"
+                );
+            }
+        }
+        for name in unrepresented_names {
+            let unavailable = values
+                .iter()
+                .find(|value| value["name"] == *name)
+                .unwrap_or_else(|| panic!("debugger omitted {name} for {feature}"));
+            assert_eq!(unavailable["availability"]["status"], "value");
+            assert_eq!(
+                unavailable["availability"]["value"]["status"],
+                "unavailable"
+            );
+            assert_eq!(
+                unavailable["availability"]["value"]["reason"],
+                "not_represented"
+            );
+        }
+        exported.push((bundle.inner_v1().canonical_bytes().to_vec(), map));
+    }
+
+    let stale_inner =
+        fe2o3_kernel_ir::VerifiedSimulationBundleV1::from_canonical_bytes(exported[0].0.clone())
+            .unwrap();
+    let stale_map = exported.pop().unwrap().1;
+    assert!(matches!(
+        fe2o3_kernel_ir::VerifiedSimulationBundleV2::new(stale_inner, stale_map),
+        Err(fe2o3_kernel_ir::SimulationBundleErrorV2::DebugMapBindingMismatch)
+    ));
+}
+
+#[test]
+#[ignore = "requires the pinned nightly rust-src component and AMD target"]
+fn v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1() {
+    let target = ScratchTarget::new();
+    let default_path = target.path().join("debug-long-name-default-v1.fe2sim");
+    let explicit_path = target.path().join("debug-long-name-explicit-v1.fe2sim");
+    let default = output(
+        simulation_export_command_for_feature(
+            "gfx942",
+            &default_path,
+            &target.path().join("default-v1-target"),
+            None,
+            "debug_long_name",
+        ),
+        "run default V1 export without V2 debug inspection",
+    );
+    let explicit = output(
+        simulation_export_command_for_feature(
+            "gfx942",
+            &explicit_path,
+            &target.path().join("explicit-v1-target"),
+            Some(1),
+            "debug_long_name",
+        ),
+        "run explicit V1 export without V2 debug inspection",
+    );
+    assert!(
+        default.status.success() && explicit.status.success(),
+        "V1 inspected or rejected V2 metadata:\ndefault:\n{}\nexplicit:\n{}",
+        default.stderr,
+        explicit.stderr,
+    );
+    assert_eq!(
+        std::fs::read(&default_path).unwrap(),
+        std::fs::read(&explicit_path).unwrap(),
+        "default and explicit V1 exports must remain byte-for-byte identical",
+    );
+
+    let v2_path = target.path().join("debug-long-name-v2.fe2sim");
+    let v2 = output(
+        simulation_export_command_v2(
+            "gfx942",
+            &v2_path,
+            &target.path().join("v2-target"),
+            "debug_long_name",
+        ),
+        "run V2 export with an overbound exact debug name",
+    );
+    assert!(
+        !v2.status.success() && v2.stderr.contains("source-variable name") && !v2_path.exists(),
+        "V2 did not fail closed on the exact overbound name:\n{}",
+        v2.stderr,
+    );
+}
+
 struct ExtractionOutput {
     status: std::process::ExitStatus,
     stderr: String,
@@ -576,6 +898,25 @@ fn run_release_feature_extraction(target: &ScratchTarget, feature: &str) -> Extr
 }
 
 fn simulation_export_command(target: &str, output: &Path, target_dir: &Path) -> Command {
+    simulation_export_command_for_feature(target, output, target_dir, None, "barrier_before_access")
+}
+
+fn simulation_export_command_v2(
+    target: &str,
+    output: &Path,
+    target_dir: &Path,
+    feature: &str,
+) -> Command {
+    simulation_export_command_for_feature(target, output, target_dir, Some(2), feature)
+}
+
+fn simulation_export_command_for_feature(
+    target: &str,
+    output: &Path,
+    target_dir: &Path,
+    bundle_version: Option<u16>,
+    feature: &str,
+) -> Command {
     const POISONED_WRAPPER: &str = "/fe2o3-poisoned-caller-wrapper-must-not-run";
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_fe2o3-export-sim"));
@@ -590,6 +931,7 @@ fn simulation_export_command(target: &str, output: &Path, target_dir: &Path) -> 
         .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", POISONED_WRAPPER)
         .env_remove("FE2O3_EXTRACT_CRATE_V1")
         .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1")
+        .env_remove("FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2")
         .env_remove("FE2O3_EXTRACT_RANKED_MEMORY_V1")
         .env_remove("FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1")
         .env_remove("FE2O3_EXTRACT_GFX942_LLVM_PATH_V1")
@@ -600,17 +942,18 @@ fn simulation_export_command(target: &str, output: &Path, target_dir: &Path) -> 
         .arg("--output")
         .arg(output)
         .arg("--target")
-        .arg(target)
-        .arg("--target-dir")
-        .arg(target_dir)
-        .args([
-            "--",
-            "--package",
-            "fe2o3-production-ranked-bounds-fixture",
-            "--features",
-            "barrier_before_access",
-            "--lib",
-        ]);
+        .arg(target);
+    if let Some(version) = bundle_version {
+        command.arg("--bundle-version").arg(version.to_string());
+    }
+    command.arg("--target-dir").arg(target_dir).args([
+        "--",
+        "--package",
+        "fe2o3-production-ranked-bounds-fixture",
+        "--features",
+        feature,
+        "--lib",
+    ]);
     command
 }
 

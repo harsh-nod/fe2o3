@@ -55,9 +55,11 @@ inert evidence identity. Header identities and producer names remain untrusted
 claims.
 
 The current supported paths are simulator Trace V1, rocprofv3 dispatch JSON,
-the rocprofv3 ATT manifest, and normalized ROCgdb imports. Counter values, PC
-samples, decoded ATT wave timelines, register/source values, and output
-comparisons are explicitly capture-only or unsupported Trace V1 facts. ATT is
+Counter Capture V2, PC Sample Capture V3, the rocprofv3 ATT manifest, and
+normalized ROCgdb imports. Counter values and PC samples remain unsupported
+Trace V1 facts even though their separate capture formats have read-only query
+surfaces. Decoded ATT wave timelines, register/source values, and output
+comparisons remain unsupported. ATT is
 selected-wave evidence and never establishes full-grid coverage. Trace V1 has
 no compute-unit selector, so hardware steps report it as unspecified rather
 than inventing one.
@@ -71,3 +73,93 @@ successful diagnosis or performance prediction.
 Site ordinals and Kernel-IR content identities remain producer claims. The query
 surface does not resolve them to names or source locations without a future
 authenticated catalog adapter.
+
+## Profiler capture queries
+
+The same crate provides the read-only `CaptureQuerySessionV1` protocol and
+`fe2o3-capture-query` CLI for canonical Semantic Capture V1 documents:
+
+```text
+fe2o3-capture-query capabilities < run.fe2o3cap1
+fe2o3-capture-query open < run.fe2o3cap1
+fe2o3-capture-query list-runs < run.fe2o3cap1
+fe2o3-capture-query list-devices --limit 32 < run.fe2o3cap1
+fe2o3-capture-query list-dispatches --limit 128 < run.fe2o3cap1
+fe2o3-capture-query inspect-dispatch --dispatch DISPATCH_HEX < run.fe2o3cap1
+fe2o3-capture-query hotspots --limit 32 < run.fe2o3cap1
+```
+
+These operations expose exact capture/run/device/dispatch/source/KIR/artifact/
+source-map identities together with each fact's origin, sampling status, loss
+status, and completeness scope. Pagination cursors bind both the complete
+capture content address and operation; they cannot be replayed against another
+capture or list. Hotspots sort observed dispatch-envelope duration in ticks,
+with opaque dispatch identity as the deterministic tie-breaker. They do not
+normalize clocks, infer kernel causality, predict performance, or claim that
+unrecorded dispatches did not exist.
+
+Input, page item count, conservative page construction, encoded response bytes,
+CLI arguments, and cursor positions have independent hard bounds. Capability
+discovery reports counter records, PC samples, ATT wave events, semantic
+execution history, and execution control as typed unavailable capabilities.
+The query surface never invokes rocprofv3, opens a device, reads a path, or
+grants execution authority.
+
+`CounterQuerySessionV2` extends the same content-bound, read-only protocol to
+Semantic Counter Capture V2. It lists counter definitions, dispatch envelopes,
+and exact raw values; filters values by dispatch/counter identity; inspects a
+dispatch; and ranks sums by `(dispatch, counter)`. Raw values are `observed`.
+Sums are `inferred` and identify the aggregation rule and input count. Cursors
+bind the capture, operation, and both filters. Capabilities explicitly report
+hardware-instance, source, ISA, PC-sample, ATT, execution-history, and
+execution-control data as unavailable. `query_json` enforces the configured
+response ceiling and emits deterministic JSON for agent callers.
+
+`PcSampleQuerySessionV3` and the stdin-only `fe2o3-pc-sample-query` CLI extend
+the protocol to stochastic PC records:
+
+```text
+fe2o3-pc-sample-query capabilities < run.fe2o3pcap3
+fe2o3-pc-sample-query open < run.fe2o3pcap3
+fe2o3-pc-sample-query list-dispatches --limit 64 < run.fe2o3pcap3
+fe2o3-pc-sample-query list-samples --limit 128 < run.fe2o3pcap3
+fe2o3-pc-sample-query pc-hotspots --limit 32 < run.fe2o3pcap3
+```
+
+Raw sample pages retain `observed` origin, code-object-relative PC, opaque
+collector timestamp, logical execution mask, and sampled wave location.
+Hotspots count records by `(dispatch, code object, relative PC, instruction
+type)` and are labeled `inferred`; they are not instruction counts, time
+attribution, or complete execution coverage. Pages stream at most
+`page_limit + 1` ordinary records. Hotspot aggregation has an independent
+65,536-group ceiling, and encoded JSON has a 1 MiB hard ceiling.
+
+Capabilities explicitly mark clock conversion, source/ISA correlation,
+complete instruction history, cross-capture comparison, execution control, and
+decoded ATT wave timelines unavailable. ATT decoder availability is a
+collection-host/toolchain property; PC Capture V3 neither invokes nor replaces
+the SDK decoder.
+
+## Capture comparison
+
+`compare_dispatch_captures_v1` and `compare_counter_captures_v2` perform a
+strict compatibility audit without changing capture bytes. Current device and
+counter identities are deliberately bound to one complete profiler source, and
+captures contain no authenticated stable environment identity. Consequently,
+two distinct captures return `unavailable_source_bound_identity`, no deltas,
+the supporting or comparison-blocking capture content identities, and a minimal next
+capture requirement using the existing capture-plan tool/fact vocabulary.
+Identical canonical bytes report only exact byte equality; they do not establish
+a cross-run regression and still request stable authenticated identities for a
+future comparable capture. Equality of KIR, artifact, and source-map fields is
+reported as equality of `declared` claims, not as authenticated correlation. No
+raw clock ticks or counter names are compared.
+
+The stdin-only `fe2o3-capture-compare {dispatch-v1|counter-v2}` CLI accepts one
+bounded binary frame: an eight-byte little-endian baseline length, the baseline
+capture, then the candidate capture. It emits bounded deterministic JSON and
+never opens paths or invokes a runtime. A future useful cross-run comparison
+requires an authenticated stable environment/device/counter identity evidence
+contract; caller declarations are intentionally not accepted as a substitute.
+PC Capture V3 is intentionally absent from comparison because its run, device,
+code-object, and dispatch identities are bound to the complete source bytes.

@@ -206,7 +206,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
     "2a1c62604e290a3a45b923eac5ef8d0dfaf175a834d9931a9d19cd777adab819",
 )];
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "b0c66e0c88e7d29729200ebc7dfaf39ab8b7d785952f2f6c4a56489e8cf540fe";
+    "b0511a953c64b871ccb267316a48eb815dbf4983c757d8e2244f54b419daac5a";
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
     "b0c66e0c88e7d29729200ebc7dfaf39ab8b7d785952f2f6c4a56489e8cf540fe";
 const TRUSTED_FE2O3_HIP_SYS_TREE: &str =

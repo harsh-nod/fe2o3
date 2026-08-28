@@ -7,6 +7,15 @@
 //! cost; they neither execute tools nor claim a diagnosis or performance
 //! prediction.
 
+mod capture_query;
+pub use capture_query::*;
+mod capture_compare;
+pub use capture_compare::*;
+mod counter_query;
+pub use counter_query::*;
+mod pc_sample_query;
+pub use pc_sample_query::*;
+
 use std::error::Error;
 use std::fmt;
 use std::io::{self, Write};
