@@ -13,6 +13,10 @@ mod supervisor_handoff;
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
     "/run/fe2o3/compiler-execution-supervisor.sock";
 
+/// Sole production public client-profile pathname.
+pub const COMPILER_EXECUTION_CLIENT_PROFILE_PATH_V1: &str =
+    "/etc/fe2o3/compiler-execution/client-profile-v1";
+
 pub use attestation::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,

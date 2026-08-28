@@ -14,6 +14,11 @@ durable recovery. None of these records grants process or signing authority.
 The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
 socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
 part of the production protocol.
+The sole production profile source is
+`/etc/fe2o3/compiler-execution/client-profile-v1`. Admission walks that fixed
+tree without following symlinks, requires root-owned non-writable directories,
+and reads one root-owned single-link mode-0444 canonical record before sealing
+it for authenticated process transfer.
 The crate contains no process launcher, signer, durable ledger, compiler,
 artifact publisher, loader, or GPU execution authority.
 
