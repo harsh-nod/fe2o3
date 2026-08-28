@@ -37,7 +37,7 @@ pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErro
 pub use launch::{PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1};
 pub use process::{
     LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1, ProtectedIssuerLaunchErrorV1,
-    ReadyProtectedIssuerV1,
+    ReadyProtectedIssuerV1, ServingProtectedIssuerV1,
 };
 
 const MAX_PROVISIONED_EXECUTABLE_BYTES_V1: u64 = 128 * 1024 * 1024;

@@ -10,13 +10,13 @@ use ed25519_dalek::SigningKey;
 use fe2o3_compiler_closure_capability::CompilerExecutionSigningKeyCapabilityV1;
 use fe2o3_compiler_execution_client::PendingCompilerExecutionChildChannelV1;
 use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyV1,
-    CompilerExecutionSupervisorHandoffV1,
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionIssuerMeasurementV1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
+    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffV1,
 };
 use rustix::net::{
-    AddressFamily, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType,
-    sendmsg, socketpair,
+    AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
+    SocketType, recv, sendmsg, socketpair,
 };
 
 use super::*;
@@ -1047,6 +1047,20 @@ fn read_exact_nonblocking(descriptor: &OwnedFd, expected: &[u8]) {
     assert_eq!(observed, expected);
 }
 
+fn read_published_readiness(control: &OwnedFd, expected: &CompilerExecutionServiceReadyV1) {
+    let mut published = [0_u8; COMPILER_EXECUTION_SERVICE_READY_BYTES_V1];
+    assert_eq!(
+        recv(control, &mut published, RecvFlags::empty()).unwrap().0,
+        published.len()
+    );
+    assert_eq!(published.as_slice(), expected.canonical_bytes());
+    let mut trailing = [0_u8; 1];
+    assert_eq!(
+        recv(control, &mut trailing, RecvFlags::empty()).unwrap().0,
+        0
+    );
+}
+
 fn assert_reaped(pid: rustix::process::Pid) {
     assert!(matches!(
         rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
@@ -1060,7 +1074,7 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (mut rustc_child, control_sender, accepted) = accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
@@ -1086,9 +1100,53 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     let rendered = format!("{ready:?}");
     assert!(rendered.contains(&format!("pid: {}", pid.as_raw_pid())));
     assert!(!rendered.contains("fd:"));
-    ready.cancel().unwrap();
+    let serving = ready.publish_readiness(Duration::from_secs(2)).unwrap();
+    read_published_readiness(&control_sender, &readiness);
+    assert_eq!(serving.readiness(), &readiness);
+    serving.revalidate().unwrap();
+    let rendered = format!("{serving:?}");
+    assert!(rendered.contains("announced-live-issuer-custody-only"));
+    assert!(!rendered.contains("fd:"));
+    serving.cancel().unwrap();
     assert_reaped(pid);
 
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
+fn closed_cargo_control_fails_publication_and_reaps_the_issuer() {
+    let fixture = Fixture::with_code("closed-readiness-control", &launched_probe_code(true));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (mut rustc_child, control_sender, accepted) = accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+    let launch_manifest = prepared.service_manifest().clone();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+    let readiness =
+        CompilerExecutionServiceReadyV1::new(launched.pid(), &launch_manifest, supervisor.policy())
+            .unwrap();
+    assert_eq!(
+        rustix::io::write(&injected_readiness, readiness.canonical_bytes()).unwrap(),
+        readiness.canonical_bytes().len()
+    );
+    drop(injected_readiness);
+    let ready = launched.await_readiness(Duration::from_secs(2)).unwrap();
+    drop(control_sender);
+    assert!(matches!(
+        ready.publish_readiness(Duration::from_secs(1)),
+        Err(ProtectedIssuerLaunchErrorV1::Io {
+            operation: "publish protected issuer readiness to Cargo",
+            ..
+        })
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_reaped(pid);
     rustc_child.kill().unwrap();
     rustc_child.wait().unwrap();
 }
@@ -1218,7 +1276,7 @@ fn real_static_launcher_crosses_both_exec_boundaries() {
         key,
     )
     .unwrap();
-    let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (mut rustc_child, control_sender, accepted) = accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
@@ -1236,7 +1294,10 @@ fn real_static_launcher_crosses_both_exec_boundaries() {
     drop(injected_readiness);
     let ready = launched.await_readiness(Duration::from_secs(2)).unwrap();
     ready.revalidate().unwrap();
-    ready.cancel().unwrap();
+    let serving = ready.publish_readiness(Duration::from_secs(2)).unwrap();
+    read_published_readiness(&control_sender, &readiness);
+    serving.revalidate().unwrap();
+    serving.cancel().unwrap();
     rustc_child.kill().unwrap();
     rustc_child.wait().unwrap();
 }

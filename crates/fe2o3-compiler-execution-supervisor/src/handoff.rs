@@ -107,6 +107,10 @@ impl AcceptedCompilerExecutionHandoffV1 {
             .validate_liveness()
             .map_err(ProtectedIssuerHandoffErrorV1::Pidfd)
     }
+
+    pub(super) fn into_control(self) -> OwnedFd {
+        self.control
+    }
 }
 
 impl ProtectedIssuerSupervisorV1 {
