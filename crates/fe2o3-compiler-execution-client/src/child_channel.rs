@@ -11,6 +11,7 @@ use std::process::Command;
 use std::ptr;
 use std::time::{Duration, Instant};
 
+use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
 
 use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, validate_seqpacket_peer};
@@ -18,31 +19,6 @@ use crate::{COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, validate_seqpacket_peer};
 const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC1\0";
 const TRANSFER_VERSION: u32 = 1;
 const TRANSFER_BYTES: usize = 24;
-
-/// Exact kernel-observed identity of the rustc process that created the service channel.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CompilerExecutionClientProcessIdentityV1 {
-    pid: u32,
-    uid: u32,
-    gid: u32,
-}
-
-impl CompilerExecutionClientProcessIdentityV1 {
-    /// Returns the exact rustc PID.
-    pub const fn pid(self) -> u32 {
-        self.pid
-    }
-
-    /// Returns the exact rustc UID recorded by `SO_PEERCRED`.
-    pub const fn uid(self) -> u32 {
-        self.uid
-    }
-
-    /// Returns the exact rustc GID recorded by `SO_PEERCRED`.
-    pub const fn gid(self) -> u32 {
-        self.gid
-    }
-}
 
 /// Move-only service launch inputs bound to one still-live rustc child.
 ///
@@ -150,7 +126,7 @@ impl PendingCompilerExecutionChildChannelV1 {
             .map_err(|_| CompilerExecutionChildChannelErrorV1::InvalidServicePeer)?;
         require_close_on_exec(&service_peer)?;
         let client = peer_identity(&service_peer)?;
-        if client.pid != child_pid {
+        if client.pid() != child_pid {
             return Err(CompilerExecutionChildChannelErrorV1::PeerCredentialsMismatch);
         }
         require_service_peer_live(&service_peer)?;
@@ -441,11 +417,12 @@ fn peer_identity(
     })?;
     let pid = u32::try_from(credentials.pid.as_raw_nonzero().get())
         .map_err(|_| CompilerExecutionChildChannelErrorV1::PeerCredentialsMismatch)?;
-    Ok(CompilerExecutionClientProcessIdentityV1 {
+    CompilerExecutionClientProcessIdentityV1::new(
         pid,
-        uid: credentials.uid.as_raw(),
-        gid: credentials.gid.as_raw(),
-    })
+        credentials.uid.as_raw(),
+        credentials.gid.as_raw(),
+    )
+    .map_err(|_| CompilerExecutionChildChannelErrorV1::PeerCredentialsMismatch)
 }
 
 fn require_close_on_exec(descriptor: &OwnedFd) -> Result<(), CompilerExecutionChildChannelErrorV1> {

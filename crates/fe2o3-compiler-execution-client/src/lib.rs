@@ -23,9 +23,10 @@ use fe2o3_compiler_execution_protocol::{
 mod child_channel;
 
 pub use child_channel::{
-    CompilerExecutionChildChannelErrorV1, CompilerExecutionClientProcessIdentityV1,
-    CompilerExecutionServiceLaunchV1, PendingCompilerExecutionChildChannelV1,
+    CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
+    PendingCompilerExecutionChildChannelV1,
 };
+pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 
 /// Fixed rustc descriptor reserved for the compiler-execution service peer.
 pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
