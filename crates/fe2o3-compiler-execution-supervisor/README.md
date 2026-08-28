@@ -58,16 +58,20 @@ manifest at FD 198, issuer at FD 199, sources at FDs `200..209`, and executes
 the authenticated static launcher with one fixed argument and an empty
 environment.
 
-The move-only result has two states. `LaunchedProtectedIssuerV1` owns the
+The move-only result has three states. `LaunchedProtectedIssuerV1` owns the
 atomically returned close-on-exec pidfd but grants no issuer authority.
 `await_readiness` accepts exactly one canonical record followed by EOF, binds
 it to that PID, launch manifest, and policy, and returns
 `ReadyProtectedIssuerV1` only while the same pidfd child is live. Wrong,
-truncated, extended, stale, or timed-out readiness fails closed. Explicit
-cancellation uses `pidfd_send_signal`; every synchronous path reaps once with
-`waitid(P_PIDFD)`, and dropped live custody transfers to a fixed 64-slot
-reaper. Abrupt supervisor death is covered both by the bootstrap gate and the
-static launcher's parent identity check.
+truncated, extended, stale, or timed-out readiness fails closed. A consuming
+publication sends those exact bytes once over the authenticated Cargo control
+connection, closes that endpoint, and returns `ServingProtectedIssuerV1`
+while retaining the same pidfd. A closed or stalled Cargo peer fails closed
+before serving custody exists. Explicit cancellation uses `pidfd_send_signal`;
+every synchronous path reaps once with `waitid(P_PIDFD)`, and dropped live
+custody transfers to a fixed 64-slot reaper. Abrupt supervisor death is
+covered both by the bootstrap gate and the static launcher's parent identity
+check.
 
 The launcher deliberately inherits an already established profile instead of
 performing privileged credential transitions after `clone3`. Deployment must

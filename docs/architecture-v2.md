@@ -161,9 +161,11 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   credentials and a live pidfd. The protected supervisor authenticates that
   handoff and now materializes the exact sealed ten-source static-launcher input
   while retaining private output/readiness endpoints. It now consumes that
-  state through gated clone3/pidfd launch and exact readiness typestate.
-  Cargo-wrapper acquisition and production supervisor service wiring remain
-  pending.
+  state through gated clone3/pidfd launch, exact readiness typestate, and a
+  descriptor-free one-record readiness publication back over the authenticated
+  Cargo control connection. The supervisor retains the same pidfd in serving
+  custody after Cargo observes EOF. Cargo-wrapper listener acquisition and the
+  production supervisor service entrypoint remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load
