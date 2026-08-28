@@ -215,6 +215,8 @@ fn production_receipt_is_carried_by_one_v2_envelope_through_host_admission() {
     let application = include_str!("../src/application_handoff.rs");
     let host_handoff = include_str!("../../fe2o3-host/src/application_descriptor_handoff.rs");
     let host_admission = include_str!("../../fe2o3-host/src/recovered_worker_v3_admission.rs");
+    let host_verification =
+        include_str!("../../fe2o3-host/src/worker_v3_verification_admission.rs");
 
     assert!(intake.contains("recover_compiler_execution_receipt_transport_with_currentness_v1"));
     assert!(intake.contains("admit_receipt_transport(&subject, receipt_transport)"));
@@ -238,8 +240,23 @@ fn production_receipt_is_carried_by_one_v2_envelope_through_host_admission() {
     assert!(host_handoff.contains("recover_worker_v3_load_envelope_v2"));
     assert!(host_handoff.contains("WorkerV3LoadEnvelopeWireV2::decode_canonical"));
     assert!(host_admission.contains("RecoveredWorkerV3LoadEnvelopeV2"));
+    assert!(host_admission.contains("compiler_execution_subject"));
+    assert!(host_admission.contains("compiler_execution_receipt.canonical_bytes()"));
+    assert!(host_verification.contains("compiler_execution_subject:"));
+    assert!(host_verification.contains("compiler_execution_receipt:"));
+    assert!(host_verification.contains("compiler_execution_receipt_bytes"));
+    assert!(host_verification.contains("protected_policy_verification_sha256"));
+    assert!(host_verification.contains("protected_worker_ledger_verification_sha256"));
+    assert!(host_verification.contains("external_rollback_verification_sha256"));
+    assert!(host_verification.contains("validate_decision::<K>(&request, &verification)"));
 
-    for production_source in [binding, application, host_handoff, host_admission] {
+    for production_source in [
+        binding,
+        application,
+        host_handoff,
+        host_admission,
+        host_verification,
+    ] {
         for retired in [
             "WorkerV3LoadEnvelopeV1::from_published_hsaco_v1",
             "persist_durable_replay_custody_v1",

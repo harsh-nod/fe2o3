@@ -1,8 +1,10 @@
 use std::{error::Error, fmt};
 
 use fe2o3_amd_target::{AmdTargetId, ProductionAmdTargetProfileV1};
-use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
-use fe2o3_artifact_transaction::{DurableLinkPublicationError, PublishedLinkArtifactV1};
+use fe2o3_artifact_transaction::{
+    DurableCurrentLinkPublicationTokenV1, DurableLinkPublicationError,
+    InertCompilerExecutionSubjectV1, PublishedLinkArtifactV1,
+};
 use fe2o3_compiler_ffi::{
     CompilerDescriptorSourceErrorV1, CompilerDescriptorSourceV1, CompilerModuleSymbolRoleV1,
     InertSemanticCompilerModuleHandoffErrorV3, InertSemanticCompilerModuleHandoffV3,
@@ -16,7 +18,10 @@ use fe2o3_kernel_descriptor::{
     CANONICAL_CODE_OBJECT_DIGEST_OFFSET, DeviceDescriptorTableV1, KernelDescriptorV1, KernelId,
     encode_device_descriptor_table_v1,
 };
-use fe2o3_runtime_protocol::{RecoveredWorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeErrorV2};
+use fe2o3_runtime_protocol::{
+    CompilerExecutionReceiptCarriageV1, RecoveredWorkerV3LoadEnvelopeV2,
+    WorkerV3LoadEnvelopeErrorV2,
+};
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "linux")]
@@ -81,6 +86,7 @@ impl WorkerV3HostLineageEvidenceV1 {
 /// no HSACO bytes or load/launch transition.
 pub struct RecoveredWorkerV3PinnedDescriptorV1 {
     envelope: RecoveredWorkerV3LoadEnvelopeV2,
+    compiler_execution_subject: InertCompilerExecutionSubjectV1,
     outer_handoff: InertSemanticCompilerModuleHandoffV3,
     inspection: FinalizedDescriptorInspection,
     descriptor_index: usize,
@@ -150,6 +156,22 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         if outer_handoff != self.outer_handoff {
             return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerHandoffChanged);
         }
+        let compiler_execution_subject = self
+            .envelope
+            .wire()
+            .reconstructed_compiler_execution_subject_v1()
+            .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
+        if compiler_execution_subject != self.compiler_execution_subject
+            || self
+                .envelope
+                .wire()
+                .compiler_execution_receipt()
+                .request()
+                .subject()
+                != &compiler_execution_subject
+        {
+            return Err(RecoveredWorkerV3AdmissionErrorV1::CompilerExecutionSubjectChanged);
+        }
         #[cfg(target_os = "linux")]
         if let Some(descriptors) = &self.application_descriptors {
             descriptors
@@ -199,6 +221,14 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
 
     pub(crate) const fn outer_handoff(&self) -> &InertSemanticCompilerModuleHandoffV3 {
         &self.outer_handoff
+    }
+
+    pub(crate) const fn compiler_execution_subject(&self) -> &InertCompilerExecutionSubjectV1 {
+        &self.compiler_execution_subject
+    }
+
+    pub(crate) const fn compiler_execution_receipt(&self) -> &CompilerExecutionReceiptCarriageV1 {
+        self.envelope.wire().compiler_execution_receipt()
     }
 
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
@@ -256,6 +286,10 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
     let outer =
         InertSemanticCompilerModuleHandoffV3::decode(envelope.wire().replay().outer_handoff())
             .map_err(RecoveredWorkerV3AdmissionErrorV1::OuterHandoff)?;
+    let compiler_execution_subject = envelope
+        .wire()
+        .reconstructed_compiler_execution_subject_v1()
+        .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
     validate_compiler_source_and_exports(&outer, &inspection)?;
     validate_target_and_code_object(&outer, &inspection)?;
     let (descriptor_index, physical_kernel_index) =
@@ -265,11 +299,14 @@ pub fn admit_recovered_worker_v3_descriptor_v1(
         envelope.wire().replay().publication_intent_record(),
         &inspection,
         kernel_id,
+        &compiler_execution_subject,
+        envelope.wire().compiler_execution_receipt(),
     );
     drop(current);
 
     Ok(RecoveredWorkerV3PinnedDescriptorV1 {
         envelope,
+        compiler_execution_subject,
         outer_handoff: outer,
         inspection,
         descriptor_index,
@@ -285,6 +322,8 @@ fn derive_host_lineage_identity(
     record: fe2o3_artifact_transaction::WorkerV3PublicationIntentRecordV1,
     inspection: &FinalizedDescriptorInspection,
     kernel_id: KernelId,
+    compiler_execution_subject: &InertCompilerExecutionSubjectV1,
+    compiler_execution_receipt: &CompilerExecutionReceiptCarriageV1,
 ) -> WorkerV3HostLineageEvidenceV1 {
     let capsule = outer.capsule();
     let receipts = capsule.receipts();
@@ -297,6 +336,10 @@ fn derive_host_lineage_identity(
         .expect("durable publication output length is bounded below u64::MAX");
     let mut digest = Sha256::new();
     digest.update(WORKER_V3_HOST_LINEAGE_DOMAIN_V1);
+    digest.update(compiler_execution_subject.identity().sha256());
+    digest.update(compiler_execution_subject.canonical_bytes());
+    digest.update(compiler_execution_receipt.identity().as_bytes());
+    digest.update(compiler_execution_receipt.canonical_bytes());
     digest.update(record.identity().as_bytes());
     update_identity(
         &mut digest,
@@ -583,6 +626,7 @@ pub enum RecoveredWorkerV3AdmissionErrorV1 {
     SelectedExportMismatch,
     InspectionChanged,
     CompilerHandoffChanged,
+    CompilerExecutionSubjectChanged,
     ApplicationDescriptorsChanged,
 }
 
@@ -665,6 +709,9 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
             Self::CompilerHandoffChanged => {
                 formatter.write_str("revalidated Worker V3 compiler handoff changed")
             }
+            Self::CompilerExecutionSubjectChanged => formatter.write_str(
+                "revalidated Worker V3 compiler-execution subject or receipt binding changed",
+            ),
             Self::ApplicationDescriptorsChanged => {
                 formatter.write_str("retained Worker V3 application descriptors changed")
             }

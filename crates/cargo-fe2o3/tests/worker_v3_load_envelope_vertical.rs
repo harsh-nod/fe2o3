@@ -34,17 +34,18 @@ use fe2o3_host::{
         application_handoff_observed_context_fixture_v1,
         generated_shared_f32_argument_pair_fixture_v1,
     },
-    CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationV1,
-    CompilerGeneratedKernelProfileV1, CompilerGeneratedWorkerV3ArgumentsV1,
-    GeneratedArgumentLayoutError, GeneratedArgumentPackError, GeneratedArgumentPackingPlanV1,
-    GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1, GeneratedWorkerV3PrepareErrorV1,
-    HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1, HsaDispatchObservationV1,
-    HsaEnvironmentMismatch, HsaEnvironmentObservationV1, HsaExecutableObjectIdentityV1,
-    HsaImplicitKernargInitializationObservationV1, HsaKernelObjectIdentityV1,
-    HsaKernelResolutionObservationV1, HsaLaunchGeometryV1, HsaPhysicalDeviceIdentityV1,
-    HsaRuntimeIdentityV1, HsaUnloadObservationV1, ProductionWorkerV3ApplicationLoadErrorV1,
-    RecoveredWorkerV3AdmissionErrorV1, ReviewedHsaExecutableLifecycleAdapterV1,
-    ReviewedHsaImplicitKernargAdapterV1, WorkerV3AuditorV1, WorkerV3GeneratedDispatchErrorV1,
+    AuthenticatedWorkerV3ExecutableV1, CompilerGeneratedArgumentLayoutV1,
+    CompilerGeneratedKernelExpectationV1, CompilerGeneratedKernelProfileV1,
+    CompilerGeneratedWorkerV3ArgumentsV1, GeneratedArgumentLayoutError, GeneratedArgumentPackError,
+    GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedWorkerV3ArgumentBindingV1,
+    GeneratedWorkerV3PrepareErrorV1, HsaAgentIdentityV1, HsaCodeObjectLoadObservationV1,
+    HsaDispatchObservationV1, HsaEnvironmentMismatch, HsaEnvironmentObservationV1,
+    HsaExecutableObjectIdentityV1, HsaImplicitKernargInitializationObservationV1,
+    HsaKernelObjectIdentityV1, HsaKernelResolutionObservationV1, HsaLaunchGeometryV1,
+    HsaPhysicalDeviceIdentityV1, HsaRuntimeIdentityV1, HsaUnloadObservationV1,
+    ProductionWorkerV3ApplicationLoadErrorV1, RecoveredWorkerV3AdmissionErrorV1,
+    ReviewedHsaExecutableLifecycleAdapterV1, ReviewedHsaImplicitKernargAdapterV1,
+    WorkerV3AuditorV1, WorkerV3CompilerExecutionVerificationV1, WorkerV3GeneratedDispatchErrorV1,
     WorkerV3HsaLoadAuthorizationErrorV1, WorkerV3SafetyPropertiesV1,
     WorkerV3VerificationAuthenticationErrorV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1, WorkerV3VerifierV1,
@@ -264,8 +265,29 @@ unsafe impl<'allocation> CompilerGeneratedWorkerV3ArgumentsV1<'allocation, Worke
     }
 }
 
+#[derive(Clone, Copy)]
+enum ReviewedTestWorkerV3VerifierFault {
+    None,
+    FinalizedHsaco,
+    CompilerSubject,
+    CompilerCarriage,
+    CompilerPolicy,
+    IssuerJournal,
+    CompilerOccurrence,
+    Receipt,
+    Publication,
+    Acknowledgment,
+    WorkerLedger,
+    Sequence,
+    PriorRollbackAnchor,
+    CurrentRollbackAnchor,
+    ZeroProtectedPolicyVerification,
+    ZeroProtectedWorkerLedgerVerification,
+    ZeroExternalRollbackVerification,
+}
+
 struct ReviewedTestWorkerV3Verifier {
-    substitute_finalized: bool,
+    fault: ReviewedTestWorkerV3VerifierFault,
 }
 
 struct ReviewedTestWorkerV3Auditor;
@@ -328,10 +350,87 @@ where
             capsule.receipts().proof_binding().canonical_preimage(),
             request.proof_binding_receipt_bytes()
         );
+        assert_eq!(
+            request
+                .compiler_execution_receipt_carriage()
+                .request()
+                .subject(),
+            request.compiler_execution_subject()
+        );
+        assert!(
+            request
+                .compiler_execution_subject()
+                .identity()
+                .matches_canonical_bytes(request.compiler_execution_subject_bytes())
+        );
+        let decoded_carriage =
+            CompilerExecutionReceiptCarriageV1::decode(request.compiler_execution_receipt_bytes())
+                .unwrap();
+        assert!(decoded_carriage == *request.compiler_execution_receipt_carriage());
         let mut finalized = request.finalized_hsaco_sha256();
-        if self.substitute_finalized {
-            finalized[0] ^= 0xff;
+        let mut subject = request.compiler_execution_subject_sha256();
+        let mut carriage = request.compiler_execution_carriage_sha256();
+        let mut policy = request.compiler_execution_policy_sha256();
+        let mut issuer_journal = request.compiler_execution_issuer_journal_sha256();
+        let mut compiler_occurrence = request.compiler_occurrence_sha256();
+        let mut receipt = request.compiler_execution_receipt_sha256();
+        let mut publication = request.compiler_execution_publication_sha256();
+        let mut acknowledgment = request.compiler_execution_acknowledgment_sha256();
+        let mut worker_ledger = request.compiler_execution_worker_ledger_record_sha256();
+        let mut sequence = request.compiler_execution_sequence();
+        let mut prior_rollback = request.compiler_execution_prior_rollback_anchor();
+        let mut current_rollback = request.compiler_execution_current_rollback_anchor();
+        let mut protected_policy_verification = [0xd1; 32];
+        let mut protected_worker_ledger_verification = [0xd2; 32];
+        let mut external_rollback_verification = [0xd3; 32];
+        match self.fault {
+            ReviewedTestWorkerV3VerifierFault::None => {}
+            ReviewedTestWorkerV3VerifierFault::FinalizedHsaco => finalized[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerSubject => subject[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerCarriage => carriage[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerPolicy => policy[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::IssuerJournal => issuer_journal[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::CompilerOccurrence => {
+                compiler_occurrence[0] ^= 0xff;
+            }
+            ReviewedTestWorkerV3VerifierFault::Receipt => receipt[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::Publication => publication[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::Acknowledgment => acknowledgment[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::WorkerLedger => worker_ledger[0] ^= 0xff,
+            ReviewedTestWorkerV3VerifierFault::Sequence => sequence = sequence.wrapping_add(1),
+            ReviewedTestWorkerV3VerifierFault::PriorRollbackAnchor => {
+                prior_rollback[0] ^= 0xff;
+            }
+            ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor => {
+                current_rollback[0] ^= 0xff;
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedPolicyVerification => {
+                protected_policy_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedWorkerLedgerVerification => {
+                protected_worker_ledger_verification = [0; 32];
+            }
+            ReviewedTestWorkerV3VerifierFault::ZeroExternalRollbackVerification => {
+                external_rollback_verification = [0; 32];
+            }
         }
+        let compiler_execution = WorkerV3CompilerExecutionVerificationV1::new(
+            subject,
+            carriage,
+            policy,
+            issuer_journal,
+            compiler_occurrence,
+            receipt,
+            publication,
+            acknowledgment,
+            worker_ledger,
+            sequence,
+            prior_rollback,
+            current_rollback,
+            protected_policy_verification,
+            protected_worker_ledger_verification,
+            external_rollback_verification,
+        );
         Ok(WorkerV3VerificationDecisionV1::new(
             request.challenge_identity(),
             request.lineage_identity(),
@@ -345,6 +444,7 @@ where
             request.finalized_hsaco_length(),
             request.target(),
             request.code_object_version(),
+            compiler_execution,
             [0xc1; 32],
             [0xc2; 32],
             [0xc3; 32],
@@ -1245,7 +1345,7 @@ fn completed_v3_publication_becomes_restartable_inert_envelope_custody() {
         admitted,
         &observed,
         &mut ReviewedTestWorkerV3Verifier {
-            substitute_finalized: false,
+            fault: ReviewedTestWorkerV3VerifierFault::None,
         },
         adapter,
     )
@@ -1402,7 +1502,7 @@ fn v3_host_load_rejects_incompatible_observed_target_features() {
             admitted,
             &observed,
             &mut ReviewedTestWorkerV3Verifier {
-                substitute_finalized: false,
+                fault: ReviewedTestWorkerV3VerifierFault::None,
             },
             ReviewedTestHsaAdapter::new().0,
         ),
@@ -1445,7 +1545,7 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
             admitted,
             &observed,
             &mut ReviewedTestWorkerV3Verifier {
-                substitute_finalized: true,
+                fault: ReviewedTestWorkerV3VerifierFault::FinalizedHsaco,
             },
             ReviewedTestHsaAdapter::new().0,
         ),
@@ -1455,6 +1555,110 @@ fn v3_verification_rejects_a_substituted_finalized_hsaco_identity() {
             )
         ))
     ));
+}
+
+#[test]
+fn v3_verification_rejects_every_compiler_execution_substitution_and_missing_authority() {
+    for (fault, expected) in [
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerSubject,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution subject"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerCarriage,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution carriage"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerPolicy,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution policy"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::IssuerJournal,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution issuer journal",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CompilerOccurrence,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler occurrence"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Receipt,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch("compiler-execution receipt"),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Publication,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution receipt publication",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Acknowledgment,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution publication acknowledgment",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::WorkerLedger,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution Worker ledger record",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::Sequence,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution rollback sequence",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::PriorRollbackAnchor,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution prior rollback anchor",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::CurrentRollbackAnchor,
+            WorkerV3VerificationDecisionErrorV1::IdentityMismatch(
+                "compiler-execution current rollback anchor",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedPolicyVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "protected compiler policy verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroProtectedWorkerLedgerVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "protected Worker ledger verification",
+            ),
+        ),
+        (
+            ReviewedTestWorkerV3VerifierFault::ZeroExternalRollbackVerification,
+            WorkerV3VerificationDecisionErrorV1::ZeroAuthenticatedIdentity(
+                "external rollback verification",
+            ),
+        ),
+    ] {
+        let (_directory, recovered) = recovered_host_fixture();
+        let admitted = admit_recovered_worker_v3_descriptor_v1(
+            recovered,
+            KernelId::from_bytes(TEST_MARKER_BINDING),
+        )
+        .unwrap();
+        let error = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+            admitted,
+            &mut ReviewedTestWorkerV3Verifier { fault },
+        )
+        .unwrap_err();
+        match error {
+            WorkerV3VerificationAuthenticationErrorV1::Decision(actual) => {
+                assert_eq!(actual, expected);
+            }
+            other => panic!("unexpected verification failure: {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -1470,7 +1674,7 @@ fn v3_hsa_load_rejects_and_cleans_up_a_substituted_adapter_digest() {
             admitted,
             &observed,
             &mut ReviewedTestWorkerV3Verifier {
-                substitute_finalized: false,
+                fault: ReviewedTestWorkerV3VerifierFault::None,
             },
             adapter,
         ),
