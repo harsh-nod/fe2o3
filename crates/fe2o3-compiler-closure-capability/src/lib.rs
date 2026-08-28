@@ -1,7 +1,8 @@
-//! Sealed transport for canonical compiler closures, rustc invocations, and issuer policies.
+//! Sealed transport for canonical compiler-execution records and signing-key custody.
 //!
-//! These descriptors carry coordination evidence only. They do not grant compiler, publication,
-//! linking, loading, launch, or execution authority.
+//! Record descriptors carry coordination evidence only. The signing-key capability carries a
+//! service-owned secret but exposes no key bytes or signing operation. None of these capabilities
+//! grants compiler, publication, linking, receipt-issuance, loading, launch, or execution authority.
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
@@ -14,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 mod compiler_execution_policy;
 mod compiler_execution_service_launch;
+mod compiler_execution_signing_key;
 mod rustc_invocation;
 mod sealed_image;
 
@@ -23,6 +25,9 @@ pub use compiler_execution_policy::{
 pub use compiler_execution_service_launch::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_CHILD_FD_V1,
     CompilerExecutionServiceLaunchCapabilityV1,
+};
+pub use compiler_execution_signing_key::{
+    COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionSigningKeyCapabilityV1,
 };
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};

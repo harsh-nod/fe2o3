@@ -20,5 +20,6 @@ KFD, or GPU dependency.
 the secure shim symbol. It also rejects an interpreter, dynamic section,
 runtime dependency, executable stack, or undefined symbol. The repository
 toolchain pins the required Rust target. The pending protected supervisor must
-still authenticate this complete image before placing the signing key in the
-child descriptor table.
+bind the already authenticated launcher and issuer-program images to the exact
+credential profile, protected root, caller policy, canonical signing-key
+capability, descriptor manifest, and child lifecycle before launch.

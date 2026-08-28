@@ -24,12 +24,16 @@ machine exist, but protected-supervisor integration, backend acquisition,
 V2-only Cargo/host routing, external monotonic rollback anchoring, verifier
 authority, and the exact Cargo-to-KFD run remain open.
 
-The caller-pinned policy and service launch manifest have reusable immutable
-memfd capabilities in `fe2o3-compiler-closure-capability`. Each preserves exact
-canonical bytes under mode `0400`, complete seals, retained object identity,
-and private close-on-exec custody. Policy FD 202 is reserved for rustc; launch
-manifest FD 8 is reserved for the protected issuer. Cargo/backend and
-protected-supervisor wiring still need to consume them.
+The caller-pinned policy, service launch manifest, and service-owned Ed25519 key
+have reusable immutable memfd capabilities in
+`fe2o3-compiler-closure-capability`. Each preserves exact bytes under mode
+`0400`, complete seals, retained object identity, and private close-on-exec
+custody. The signing-key capability additionally requires anonymous
+service-owned read-only custody, zeroizes caller seed buffers, binds the public
+key to the policy, and exposes neither bytes nor a signing operation. Policy FD
+202 is reserved for rustc; launch-manifest FD 8 and signing-key FD 7 are
+reserved for the protected issuer. Cargo/backend and protected-supervisor
+wiring still need to consume them.
 
 ## Transport And Ownership
 

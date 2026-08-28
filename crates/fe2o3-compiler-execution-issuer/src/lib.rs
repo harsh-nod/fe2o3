@@ -5,6 +5,7 @@ compile_error!("fe2o3-compiler-execution-issuer requires Linux x86-64");
 
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
@@ -17,7 +18,8 @@ use fe2o3_broker_authority_service::{
     serve_compiler_execution_v1,
 };
 use fe2o3_compiler_closure_capability::{
-    CompilerExecutionPolicyCapabilityV1, CompilerExecutionServiceLaunchCapabilityV1,
+    COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionPolicyCapabilityV1,
+    CompilerExecutionServiceLaunchCapabilityV1, CompilerExecutionSigningKeyCapabilityV1,
 };
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionServiceReadyErrorV1,
@@ -33,7 +35,8 @@ pub const COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1: RawFd = 5;
 /// Immutable caller-pinned issuer policy capability.
 pub const COMPILER_EXECUTION_ISSUER_POLICY_FD_V1: RawFd = 6;
 /// Service-owned sealed Ed25519 signing-key image.
-pub const COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1: RawFd = 7;
+pub const COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1: RawFd =
+    COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1;
 /// Immutable expected-client and policy launch manifest capability.
 pub const COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1: RawFd = 8;
 /// Nonblocking pipe writer for exact post-recovery readiness publication.
@@ -87,6 +90,11 @@ pub fn run_inherited_compiler_execution_issuer_v1()
     let peer = take_inherited(COMPILER_EXECUTION_ISSUER_PEER_FD_V1)?;
     let client_pidfd = take_inherited(COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1)?;
     let signing_key = take_inherited(COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1)?;
+    let signing_key = CompilerExecutionSigningKeyCapabilityV1::from_file(
+        File::from(signing_key),
+        policy.policy(),
+    )
+    .map_err(CompilerExecutionIssuerEntrypointErrorV1::SigningKeyCapability)?;
     let readiness_writer = take_readiness_writer()?;
 
     let client = launch.manifest().client();
@@ -245,6 +253,7 @@ pub enum CompilerExecutionIssuerEntrypointErrorV1 {
     UnexpectedCloseOnExec(RawFd),
     PolicyCapability(String),
     LaunchCapability(String),
+    SigningKeyCapability(String),
     PolicyMismatch,
     InvalidIssuerPid,
     ReadinessDescriptor(io::Error),
@@ -272,6 +281,9 @@ impl fmt::Display for CompilerExecutionIssuerEntrypointErrorV1 {
             }
             Self::LaunchCapability(error) => {
                 write!(formatter, "issuer launch capability failed: {error}")
+            }
+            Self::SigningKeyCapability(error) => {
+                write!(formatter, "issuer signing-key capability failed: {error}")
             }
             Self::PolicyMismatch => {
                 formatter.write_str("issuer launch manifest names another policy")
@@ -314,6 +326,7 @@ impl Error for CompilerExecutionIssuerEntrypointErrorV1 {
             Self::UnexpectedCloseOnExec(_)
             | Self::PolicyCapability(_)
             | Self::LaunchCapability(_)
+            | Self::SigningKeyCapability(_)
             | Self::PolicyMismatch
             | Self::InvalidIssuerPid
             | Self::InvalidReadinessDescriptor
