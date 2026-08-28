@@ -3,6 +3,7 @@
 
 mod debug;
 mod execute;
+mod explore;
 mod model;
 mod preflight;
 mod resident;
@@ -21,13 +22,19 @@ pub use debug::{
     SimulationDebugSiteV1, SimulationDebugUnavailableReasonV1, SimulationDebugValueV1,
 };
 pub use execute::{
-    DivergentWorkgroupBarrierV1, MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1,
-    SimulationConflictAssessmentV1, SimulationErrorV1, SimulationEventKindV1,
-    SimulationEventSinkControlV1, SimulationEventSinkErrorV1, SimulationEventSinkV1,
-    SimulationEventSiteV1, SimulationEventV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionErrorV1, SimulationExecutionOutcomeV1, SimulationExecutionV1,
-    SimulationMemoryConflictV1, SimulationObservationFailureV1, WorkgroupBarrierMismatchV1,
-    WorkgroupParticipantV1,
+    DivergentWaveV1, DivergentWorkgroupBarrierV1, IncompleteWaveV1, MismatchedWaveV1,
+    MismatchedWorkgroupBarrierV1, NoopSimulationEventSinkV1, SimulationConflictAssessmentV1,
+    SimulationDataRaceV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
+    SimulationEventSinkErrorV1, SimulationEventSinkV1, SimulationEventSiteV1, SimulationEventV1,
+    SimulationExecutionErrorKindV1, SimulationExecutionErrorV1, SimulationExecutionOutcomeV1,
+    SimulationExecutionV1, SimulationHappensBeforeReasonV1, SimulationMemoryConflictV1,
+    SimulationObservationFailureV1, SimulationOrderedMemoryConflictV1, SimulationRaceAssessmentV1,
+    WorkgroupBarrierMismatchV1, WorkgroupParticipantV1,
+};
+pub use explore::{
+    MAX_EXPLORATION_RETAINED_DECISIONS_V1, MAX_EXPLORATION_SCHEDULES_V1,
+    SimulationExplorationFailureV1, SimulationExplorationRequestErrorV1,
+    SimulationExplorationRequestV1, SimulationExplorationV1, SimulationExplorationWitnessV1,
 };
 pub use model::{
     AdmittedSimulationModuleV1, BufferArgumentErrorV1, BufferArgumentV1, BufferBackingIdV1,

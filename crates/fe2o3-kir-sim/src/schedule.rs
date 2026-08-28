@@ -373,7 +373,7 @@ impl<'a> PreparedScheduleV1<'a> {
         &mut self,
         machine_count: usize,
         invocation_at: impl Fn(usize) -> SimulationInvocationV1,
-        completed_at: impl Fn(usize) -> bool,
+        runnable_at: impl Fn(usize) -> bool,
         workgroup: [u64; 3],
         phase: u64,
     ) -> Result<Vec<usize>, SimulationScheduleReplayErrorV1> {
@@ -385,7 +385,7 @@ impl<'a> PreparedScheduleV1<'a> {
         match state.mode {
             ScheduledModeV1::Replay(record) => {
                 let runnable = (0..machine_count)
-                    .filter(|index| !completed_at(*index))
+                    .filter(|index| runnable_at(*index))
                     .count();
                 for _ in 0..runnable {
                     let decision = *record
@@ -403,7 +403,7 @@ impl<'a> PreparedScheduleV1<'a> {
                     else {
                         return Err(SimulationScheduleReplayErrorV1::LocalNotRunnable);
                     };
-                    if completed_at(index) {
+                    if !runnable_at(index) {
                         return Err(SimulationScheduleReplayErrorV1::LocalNotRunnable);
                     }
                     if state.order.contains(&index) {
@@ -416,7 +416,7 @@ impl<'a> PreparedScheduleV1<'a> {
             ScheduledModeV1::Record if state.seed.is_some() => {
                 state
                     .order
-                    .extend((0..machine_count).filter(|index| !completed_at(*index)));
+                    .extend((0..machine_count).filter(|index| runnable_at(*index)));
                 for index in (1..state.order.len()).rev() {
                     let swap = next_random_index(&mut state.random_state, index + 1);
                     state.order.swap(index, swap);

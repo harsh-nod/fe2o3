@@ -1596,7 +1596,15 @@ fn scan_operation(
             }
         }
         OperationKind::Matrix(_) => reject!(UnsupportedFeatureV1::Matrix),
-        OperationKind::Wave(_) => reject!(UnsupportedFeatureV1::Wave),
+        OperationKind::Wave(wave) => {
+            if matches!(
+                wave.kind,
+                fe2o3_kernel_ir::WaveOperationKind::ReduceF32 { .. }
+                    | fe2o3_kernel_ir::WaveOperationKind::BroadcastF32 { .. }
+            ) {
+                reject!(UnsupportedFeatureV1::Wave);
+            }
+        }
         OperationKind::Gfx950LdsTranspose(_) => {
             reject!(UnsupportedFeatureV1::Gfx950LdsTranspose)
         }

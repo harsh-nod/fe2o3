@@ -2223,6 +2223,12 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { .. } => {
             ErrorKind::ExecutionWorkgroupSchedulerNoProgress
         }
+        SimulationExecutionErrorKindV1::IncompleteWave(_) => ErrorKind::ExecutionIncompleteWave,
+        SimulationExecutionErrorKindV1::DivergentWave(_) => ErrorKind::ExecutionDivergentWave,
+        SimulationExecutionErrorKindV1::MismatchedWave(_) => ErrorKind::ExecutionMismatchedWave,
+        SimulationExecutionErrorKindV1::WaveShuffleSourceOutOfRange { .. } => {
+            ErrorKind::ExecutionWaveShuffleSourceOutOfRange
+        }
         SimulationExecutionErrorKindV1::ScheduleDecisionLimit { .. } => {
             ErrorKind::ExecutionScheduleDecisionLimit
         }
@@ -3719,6 +3725,22 @@ mod tests {
             (
                 ErrorKind::ExecutionWorkgroupSchedulerNoProgress,
                 "execution_workgroup_scheduler_no_progress",
+            ),
+            (
+                ErrorKind::ExecutionIncompleteWave,
+                "execution_incomplete_wave",
+            ),
+            (
+                ErrorKind::ExecutionDivergentWave,
+                "execution_divergent_wave",
+            ),
+            (
+                ErrorKind::ExecutionMismatchedWave,
+                "execution_mismatched_wave",
+            ),
+            (
+                ErrorKind::ExecutionWaveShuffleSourceOutOfRange,
+                "execution_wave_shuffle_source_out_of_range",
             ),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), expected);

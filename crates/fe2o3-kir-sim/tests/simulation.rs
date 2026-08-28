@@ -19,9 +19,10 @@ use fe2o3_kir_sim::{
     SimulationDebugRecordKindV1, SimulationDebugRecordV1, SimulationDebugSinkControlV1,
     SimulationDebugSinkV1, SimulationErrorV1, SimulationEventKindV1, SimulationEventSinkControlV1,
     SimulationEventSinkV1, SimulationEventV1, SimulationExecutionErrorKindV1,
-    SimulationExecutionOutcomeV1, SimulationLimitsV1, SimulationPreflightErrorV1,
-    SimulationRequestV1, SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1,
-    SimulationScheduleRequestV1, SimulationTargetV1, UnsupportedFeatureV1,
+    SimulationExecutionOutcomeV1, SimulationExplorationRequestV1, SimulationLimitsV1,
+    SimulationPreflightErrorV1, SimulationRaceAssessmentV1, SimulationRequestV1,
+    SimulationScheduleIdentityV1, SimulationScheduleReplayErrorV1, SimulationScheduleRequestV1,
+    SimulationTargetV1, UnsupportedFeatureV1,
 };
 
 fn op(result: u32, ty: Type, kind: OperationKind) -> Operation {
@@ -97,6 +98,43 @@ fn byte_buffer(values: &[u8]) -> BufferArgumentV1 {
         SimulationTargetV1::amdgpu_64(),
     )
     .expect("u8 buffer")
+}
+
+fn u64_buffer(values: &[u64]) -> BufferArgumentV1 {
+    let scalars = values
+        .iter()
+        .copied()
+        .map(|value| {
+            ScalarBitsV1::new(
+                ScalarType::U64,
+                u128::from(value),
+                SimulationTargetV1::amdgpu_64(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    BufferArgumentV1::from_scalars(
+        AccessMode::ReadWrite,
+        8,
+        &scalars,
+        SimulationTargetV1::amdgpu_64(),
+    )
+    .expect("u64 buffer")
+}
+
+fn bool_buffer(values: &[bool]) -> BufferArgumentV1 {
+    let scalars = values
+        .iter()
+        .copied()
+        .map(ScalarBitsV1::boolean)
+        .collect::<Vec<_>>();
+    BufferArgumentV1::from_scalars(
+        AccessMode::ReadWrite,
+        1,
+        &scalars,
+        SimulationTargetV1::amdgpu_64(),
+    )
+    .expect("bool buffer")
 }
 
 fn words(bytes: &[u8]) -> Vec<u32> {
@@ -724,7 +762,7 @@ fn executes_checked_select_unary_and_private_memory_operations() {
 }
 
 #[test]
-fn rejects_every_reachable_unsupported_site_before_execution() {
+fn reports_partial_reachable_wave_at_execution() {
     let mut wave_block = BasicBlock::new(BlockId(0));
     wave_block.operations.push(op(
         0,
@@ -773,17 +811,442 @@ fn rejects_every_reachable_unsupported_site_before_execution() {
             SimulationTargetV1::amdgpu_64(),
             SimulationLimitsV1::default(),
         )
-        .expect_err("wave must fail in preflight");
-    let SimulationErrorV1::Preflight(SimulationPreflightErrorV1::Unsupported(findings)) = error
-    else {
-        panic!("expected typed unsupported preflight")
+        .expect_err("partial wave must fail at execution");
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::IncompleteWave(_),
+            ..
+        })
+    ));
+}
+
+fn wave_capabilities(width: WaveWidth) -> std::collections::BTreeSet<TargetCapability> {
+    std::collections::BTreeSet::from([
+        TargetCapability::Subgroups,
+        TargetCapability::SubgroupSize(width.lanes()),
+        TargetCapability::WaveWidth(width),
+    ])
+}
+
+fn wave_collective_module(width: WaveWidth) -> Module {
+    let ballot_ty = match width {
+        WaveWidth::Wave32 => ScalarType::U32,
+        WaveWidth::Wave64 => ScalarType::U64,
     };
-    assert_eq!(findings.total_findings(), 1);
-    assert!(!findings.is_truncated());
-    assert_eq!(findings.findings()[0].function.as_str(), "reachable_wave");
-    assert_eq!(findings.findings()[0].block, Some(BlockId(0)));
-    assert_eq!(findings.findings()[0].operation, Some(0));
-    assert_eq!(findings.findings()[0].feature, UnsupportedFeatureV1::Wave);
+    let pointer = |scalar| {
+        Type::pointer(
+            Type::Scalar(scalar),
+            AddressSpace::Global,
+            AccessMode::ReadWrite,
+        )
+    };
+    let mut block = BasicBlock::new(BlockId(0));
+    block.operations = vec![
+        op(
+            5,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::global_id_1d()),
+        ),
+        op(
+            6,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Local,
+                    axis: Axis::X,
+                },
+                Type::INDEX,
+            )),
+        ),
+        op(7, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            8,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::Equal,
+                lhs: ValueId(6),
+                rhs: ValueId(7),
+            },
+        ),
+        op(
+            9,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Wave(WaveOperation::full(WaveOperationKind::LaneId, width)),
+        ),
+        op(
+            10,
+            Type::Scalar(ballot_ty),
+            OperationKind::Wave(WaveOperation::full(
+                WaveOperationKind::Ballot {
+                    predicate: ValueId(8),
+                },
+                width,
+            )),
+        ),
+        op(
+            11,
+            Type::BOOL,
+            OperationKind::Wave(WaveOperation::full(
+                WaveOperationKind::Any {
+                    predicate: ValueId(8),
+                },
+                width,
+            )),
+        ),
+        op(
+            12,
+            Type::BOOL,
+            OperationKind::Wave(WaveOperation::full(
+                WaveOperationKind::All {
+                    predicate: ValueId(8),
+                },
+                width,
+            )),
+        ),
+        op(
+            13,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Constant(Constant::U32(0)),
+        ),
+        op(
+            14,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Wave(WaveOperation::full(
+                WaveOperationKind::ShuffleIndex {
+                    value: ValueId(9),
+                    source_lane: ValueId(13),
+                    tile_width: 8,
+                },
+                width,
+            )),
+        ),
+    ];
+    for (base, value) in [(0_u32, 9_u32), (1, 10), (2, 11), (3, 12), (4, 14)] {
+        let pointer_id = ValueId(15 + base);
+        block.operations.push(op(
+            pointer_id.0,
+            match base {
+                1 => pointer(ballot_ty),
+                2 | 3 => pointer(ScalarType::Bool),
+                _ => pointer(ScalarType::U32),
+            },
+            OperationKind::GetElementPointer {
+                base: ValueId(base),
+                offset: ValueId(5),
+            },
+        ));
+        block.operations.push(Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: pointer_id,
+                value: ValueId(value),
+                access: MemoryAccess::new(
+                    AddressSpace::Global,
+                    match base {
+                        1 if width == WaveWidth::Wave64 => 8,
+                        2 | 3 => 1,
+                        _ => 4,
+                    },
+                ),
+            },
+        ));
+    }
+    block.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::kernel_entry(
+        "wave_collectives_impl",
+        Signature::new(
+            vec![
+                pointer(ScalarType::U32),
+                pointer(ballot_ty),
+                pointer(ScalarType::Bool),
+                pointer(ScalarType::Bool),
+                pointer(ScalarType::U32),
+            ],
+            vec![],
+        ),
+        vec![ValueId(0), ValueId(1), ValueId(2), ValueId(3), ValueId(4)],
+        vec![block],
+    );
+    function.required_capabilities = wave_capabilities(width);
+    let mut kernel = Kernel::new(
+        "wave_collectives",
+        "wave_collectives_impl",
+        dynamic_domain_1d(),
+    );
+    kernel.required_capabilities = wave_capabilities(width);
+    let mut module = Module::new("sim-tests::wave-collectives");
+    module.required_capabilities = wave_capabilities(width);
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+fn wave_collective_request(lanes: usize, width: WaveWidth) -> SimulationRequestV1 {
+    SimulationRequestV1::new(
+        "wave_collectives",
+        [lanes as u64, 1, 1],
+        [lanes as u32, 1, 1],
+        vec![
+            SimulationArgumentV1::Buffer(u32_buffer(&vec![0; lanes])),
+            SimulationArgumentV1::Buffer(match width {
+                WaveWidth::Wave32 => u32_buffer(&vec![0; lanes]),
+                WaveWidth::Wave64 => u64_buffer(&vec![0; lanes]),
+            }),
+            SimulationArgumentV1::Buffer(bool_buffer(&vec![false; lanes])),
+            SimulationArgumentV1::Buffer(bool_buffer(&vec![false; lanes])),
+            SimulationArgumentV1::Buffer(u32_buffer(&vec![0; lanes])),
+        ],
+    )
+}
+
+#[test]
+fn wave32_and_wave64_collectives_are_exact_and_replayable() {
+    for width in [WaveWidth::Wave32, WaveWidth::Wave64] {
+        let lanes = width.lanes() as usize;
+        let module = admitted(wave_collective_module(width));
+        let request = wave_collective_request(lanes, width);
+        let execution = module
+            .simulate_scheduled(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+                SimulationScheduleRequestV1::RecordSeeded {
+                    seed: 0x5eed,
+                    max_decisions: 1024,
+                },
+            )
+            .expect("full logical wave");
+        assert_eq!(
+            words(execution.buffer(0).unwrap().bytes()),
+            (0..lanes as u32).collect::<Vec<_>>()
+        );
+        match width {
+            WaveWidth::Wave32 => assert!(
+                words(execution.buffer(1).unwrap().bytes())
+                    .iter()
+                    .all(|value| *value == 1)
+            ),
+            WaveWidth::Wave64 => assert!(
+                execution
+                    .buffer(1)
+                    .unwrap()
+                    .bytes()
+                    .chunks_exact(8)
+                    .all(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()) == 1)
+            ),
+        }
+        assert!(
+            execution
+                .buffer(2)
+                .unwrap()
+                .bytes()
+                .iter()
+                .all(|value| *value == 1)
+        );
+        assert!(
+            execution
+                .buffer(3)
+                .unwrap()
+                .bytes()
+                .iter()
+                .all(|value| *value == 0)
+        );
+        assert_eq!(
+            words(execution.buffer(4).unwrap().bytes()),
+            (0..lanes as u32)
+                .map(|lane| lane / 8 * 8)
+                .collect::<Vec<_>>()
+        );
+        let record = execution.schedule_record().unwrap().clone();
+        let replay = module
+            .simulate_scheduled(
+                &request,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+                SimulationScheduleRequestV1::Replay(&record),
+            )
+            .expect("wave replay");
+        assert_eq!(replay.arguments(), execution.arguments());
+        let substituted = wave_collective_request(lanes - 1, width);
+        assert!(matches!(
+            module.simulate_scheduled(
+                &substituted,
+                SimulationTargetV1::amdgpu_64(),
+                SimulationLimitsV1::default(),
+                SimulationScheduleRequestV1::Replay(&record)
+            ),
+            Err(SimulationErrorV1::Execution(
+                fe2o3_kir_sim::SimulationExecutionErrorV1 {
+                    kind: SimulationExecutionErrorKindV1::ScheduleReplay(
+                        SimulationScheduleReplayErrorV1::ContextMismatch
+                    ),
+                    ..
+                }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn partial_wave_collective_reports_exact_active_mask() {
+    let module = admitted(wave_collective_module(WaveWidth::Wave64));
+    let error = module
+        .simulate(
+            &wave_collective_request(33, WaveWidth::Wave64),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .expect_err("partial wave");
+    let SimulationErrorV1::Execution(error) = error else {
+        panic!("dynamic failure")
+    };
+    let SimulationExecutionErrorKindV1::IncompleteWave(detail) = error.kind else {
+        panic!("partial wave detail")
+    };
+    assert_eq!(detail.width, WaveWidth::Wave64);
+    assert_eq!(detail.wave_in_workgroup, 0);
+    assert_eq!(detail.active_mask, (1_u64 << 33) - 1);
+    assert_eq!(detail.required_mask, u64::MAX);
+}
+
+fn divergent_wave_module(mismatched: bool) -> Module {
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            0,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Local,
+                    axis: Axis::X,
+                },
+                Type::INDEX,
+            )),
+        ),
+        op(1, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            2,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::Equal,
+                lhs: ValueId(0),
+                rhs: ValueId(1),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(2),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let wave = |result| {
+        op(
+            result,
+            Type::Scalar(ScalarType::U32),
+            OperationKind::Wave(WaveOperation::full(
+                WaveOperationKind::LaneId,
+                WaveWidth::Wave32,
+            )),
+        )
+    };
+    let mut then_block = BasicBlock::new(BlockId(1));
+    then_block.operations.push(wave(3));
+    then_block.terminator = Some(if mismatched {
+        Terminator::Branch {
+            target: BlockId(3),
+            arguments: vec![],
+        }
+    } else {
+        Terminator::Return { values: vec![] }
+    });
+    let mut else_block = BasicBlock::new(BlockId(2));
+    if mismatched {
+        else_block.operations.push(wave(4));
+    }
+    else_block.terminator = Some(if mismatched {
+        Terminator::Branch {
+            target: BlockId(3),
+            arguments: vec![],
+        }
+    } else {
+        Terminator::Return { values: vec![] }
+    });
+    let mut merge = BasicBlock::new(BlockId(3));
+    merge.terminator = Some(Terminator::Return { values: vec![] });
+    let mut function = Function::kernel_entry(
+        "divergent_wave_impl",
+        Signature::new(vec![], vec![]),
+        vec![],
+        vec![entry, then_block, else_block, merge],
+    );
+    function.required_capabilities = wave_capabilities(WaveWidth::Wave32);
+    let mut kernel = Kernel::new("divergent_wave", "divergent_wave_impl", dynamic_domain_1d());
+    kernel.required_capabilities = wave_capabilities(WaveWidth::Wave32);
+    let mut module = Module::new("sim-tests::divergent-wave");
+    module.required_capabilities = wave_capabilities(WaveWidth::Wave32);
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+#[test]
+fn divergent_and_mismatched_wave_control_are_typed() {
+    let request = SimulationRequestV1::new("divergent_wave", [32, 1, 1], [32, 1, 1], vec![]);
+    let error = admitted(divergent_wave_module(false))
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::DivergentWave(_),
+            ..
+        })
+    ));
+    let error = admitted(divergent_wave_module(true))
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::MismatchedWave(_),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn shuffle_rejects_a_dynamic_tile_source_outside_the_exact_tile() {
+    let mut module = wave_collective_module(WaveWidth::Wave32);
+    let operation = &mut module.functions[0].body.as_mut().unwrap().blocks[0].operations[8];
+    operation.kind = OperationKind::Constant(Constant::U32(8));
+    let error = admitted(module)
+        .simulate(
+            &wave_collective_request(32, WaveWidth::Wave32),
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SimulationErrorV1::Execution(fe2o3_kir_sim::SimulationExecutionErrorV1 {
+            kind: SimulationExecutionErrorKindV1::WaveShuffleSourceOutOfRange {
+                source_lane: 8,
+                tile_width: 8
+            },
+            ..
+        })
+    ));
 }
 
 fn indexed_store_module() -> Module {
@@ -1239,6 +1702,138 @@ fn conflicting_store_module() -> Module {
     module
 }
 
+fn fenced_conflicting_store_module() -> Module {
+    let mut module = conflicting_store_module();
+    module.functions[0]
+        .body
+        .as_mut()
+        .expect("entry body")
+        .blocks[0]
+        .operations
+        .insert(
+            1,
+            Operation::new(
+                vec![],
+                OperationKind::Fence(Fence {
+                    memory_scope: SynchronizationScope::Workgroup,
+                    semantics: BarrierSemantics::new(
+                        MemoryOrdering::AcquireRelease,
+                        [AddressSpace::Global],
+                    ),
+                }),
+            ),
+        );
+    module
+}
+
+#[test]
+fn fence_happens_before_with_ordinary_conflicts_is_incomplete() {
+    let request = SimulationRequestV1::new(
+        "conflict",
+        [2, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let execution = admitted(fenced_conflicting_store_module())
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::Incomplete {
+            access_record_limit_reached: false,
+            atomic_or_fence_happens_before_unmodeled: true,
+            first: Some(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn bounded_seed_exploration_is_deterministic_replayable_and_explicitly_exhausted() {
+    let module = admitted(conflicting_store_module());
+    let request = SimulationRequestV1::new(
+        "conflict",
+        [2, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let exploration_request = SimulationExplorationRequestV1::new(41, 4, 16, 16).unwrap();
+    let first = module
+        .explore_seeded_schedules(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            exploration_request,
+        )
+        .unwrap();
+    let same = module
+        .explore_seeded_schedules(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            exploration_request,
+        )
+        .unwrap();
+    assert_eq!(first, same);
+    assert_eq!(first.attempted(), 4);
+    assert_eq!(first.completed(), 4);
+    assert_eq!(first.races_observed(), 4);
+    assert!(first.requested_seed_budget_consumed());
+    let witness = first.first_race().expect("first race witness");
+    let replay = module
+        .simulate_scheduled(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationScheduleRequestV1::Replay(witness.schedule()),
+        )
+        .unwrap();
+    assert_eq!(replay.race_assessment(), witness.assessment());
+
+    let retention_limited = module
+        .explore_seeded_schedules(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationExplorationRequestV1::new(41, 1, 16, 1).unwrap(),
+        )
+        .unwrap();
+    assert!(retention_limited.witness_retention_exhausted());
+    assert!(retention_limited.first_race().is_none());
+
+    let decision_limited = module
+        .explore_seeded_schedules(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+            SimulationExplorationRequestV1::new(41, 2, 1, 2).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(decision_limited.completed(), 0);
+    assert_eq!(decision_limited.failures(), 2);
+    assert!(matches!(
+        decision_limited
+            .first_failure()
+            .map(|failure| &failure.kind),
+        Some(SimulationExecutionErrorKindV1::ScheduleDecisionLimit {
+            actual: 2,
+            limit: 1
+        })
+    ));
+}
+
+#[test]
+fn exploration_request_bounds_fail_closed() {
+    assert!(SimulationExplorationRequestV1::new(0, 0, 1, 1).is_err());
+    assert!(SimulationExplorationRequestV1::new(0, 1, 0, 1).is_err());
+    assert!(SimulationExplorationRequestV1::new(0, 1, 1, 0).is_err());
+    assert!(SimulationExplorationRequestV1::new(0, 4097, 1, 1).is_err());
+}
+
 fn write_then_read_or_read_module() -> Module {
     let scalar = Type::Scalar(ScalarType::U32);
     let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
@@ -1318,6 +1913,226 @@ fn write_then_read_or_read_module() -> Module {
     module
 }
 
+fn global_barrier_order_module(include_barrier: bool) -> Module {
+    let scalar = Type::Scalar(ScalarType::U32);
+    let pointer = Type::pointer(scalar.clone(), AddressSpace::Global, AccessMode::ReadWrite);
+    let mut entry = BasicBlock::new(BlockId(0));
+    entry.operations = vec![
+        op(
+            1,
+            Type::INDEX,
+            OperationKind::Intrinsic(IntrinsicOperation::new(
+                IntrinsicKind::InvocationIndex {
+                    kind: IndexKind::Local,
+                    axis: Axis::X,
+                },
+                Type::INDEX,
+            )),
+        ),
+        op(2, Type::INDEX, OperationKind::Constant(Constant::Index(0))),
+        op(
+            3,
+            Type::BOOL,
+            OperationKind::Compare {
+                predicate: ComparePredicate::Equal,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            },
+        ),
+    ];
+    entry.terminator = Some(Terminator::ConditionalBranch {
+        condition: ValueId(3),
+        then_target: BlockId(1),
+        then_arguments: vec![],
+        else_target: BlockId(2),
+        else_arguments: vec![],
+    });
+    let mut writer = BasicBlock::new(BlockId(1));
+    writer.operations = vec![
+        op(
+            4,
+            scalar.clone(),
+            OperationKind::Constant(Constant::U32(42)),
+        ),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(0),
+                value: ValueId(4),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    writer.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut peer = BasicBlock::new(BlockId(2));
+    peer.terminator = Some(Terminator::Branch {
+        target: BlockId(3),
+        arguments: vec![],
+    });
+    let mut merge = BasicBlock::new(BlockId(3));
+    if include_barrier {
+        merge.operations.push(Operation::new(
+            vec![],
+            OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+                memory_scope: SynchronizationScope::Workgroup,
+                semantics: BarrierSemantics::new(
+                    MemoryOrdering::AcquireRelease,
+                    [AddressSpace::Global],
+                ),
+                convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+            }),
+        ));
+        merge.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(3),
+            then_target: BlockId(4),
+            then_arguments: vec![],
+            else_target: BlockId(5),
+            else_arguments: vec![],
+        });
+    } else {
+        merge.operations.push(op(
+            5,
+            scalar.clone(),
+            OperationKind::Load {
+                pointer: ValueId(0),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ));
+        merge.terminator = Some(Terminator::Return { values: vec![] });
+    }
+    let mut blocks = vec![entry, writer, peer, merge];
+    if include_barrier {
+        let mut writer_exit = BasicBlock::new(BlockId(4));
+        writer_exit.terminator = Some(Terminator::Return { values: vec![] });
+        let mut peer_read = BasicBlock::new(BlockId(5));
+        peer_read.operations.push(op(
+            5,
+            scalar,
+            OperationKind::Load {
+                pointer: ValueId(0),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ));
+        peer_read.terminator = Some(Terminator::Return { values: vec![] });
+        blocks.extend([writer_exit, peer_read]);
+    }
+    let mut function = Function::kernel_entry(
+        "global_order_impl",
+        Signature::new(vec![pointer], vec![]),
+        vec![ValueId(0)],
+        blocks,
+    );
+    if include_barrier {
+        function
+            .required_capabilities
+            .insert(TargetCapability::WorkgroupBarrier);
+    }
+    let mut kernel = Kernel::new("global_order", "global_order_impl", dynamic_domain_1d());
+    kernel.required_capabilities = function.required_capabilities.clone();
+    let mut module = Module::new("sim-tests::global-order");
+    module.required_capabilities = function.required_capabilities.clone();
+    module.functions.push(function);
+    module.kernels.push(kernel);
+    module
+}
+
+#[test]
+fn global_acquire_release_workgroup_barrier_produces_happens_before_evidence() {
+    let request = SimulationRequestV1::new(
+        "global_order",
+        [2, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let unordered = admitted(global_barrier_order_module(false))
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        unordered.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved { .. }
+    ));
+    let ordered = admitted(global_barrier_order_module(true))
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        ordered.race_assessment(),
+        SimulationRaceAssessmentV1::NoRacesObserved {
+            first_ordered_conflict: Some(fe2o3_kir_sim::SimulationOrderedMemoryConflictV1 {
+                reason: fe2o3_kir_sim::SimulationHappensBeforeReasonV1::GlobalWorkgroupBarrier,
+                ..
+            })
+        }
+    ));
+}
+
+fn global_barrier_epoch_transition_module() -> Module {
+    let mut module = global_barrier_order_module(true);
+    let function = &mut module.functions[0];
+    let body = function.body.as_mut().expect("entry body");
+    let scalar = Type::Scalar(ScalarType::U32);
+    let reader = &mut body.blocks[4];
+    reader.operations.push(op(
+        5,
+        scalar.clone(),
+        OperationKind::Load {
+            pointer: ValueId(0),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    reader.terminator = Some(Terminator::Return { values: vec![] });
+
+    let writer = &mut body.blocks[5];
+    writer.operations.clear();
+    writer.operations = vec![
+        op(6, scalar, OperationKind::Constant(Constant::U32(99))),
+        Operation::new(
+            vec![],
+            OperationKind::Store {
+                pointer: ValueId(0),
+                value: ValueId(6),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ),
+    ];
+    writer.terminator = Some(Terminator::Return { values: vec![] });
+    module
+}
+
+#[test]
+fn same_invocation_access_after_a_barrier_starts_a_new_happens_before_epoch() {
+    let request = SimulationRequestV1::new(
+        "global_order",
+        [2, 1, 1],
+        [2, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let execution = admitted(global_barrier_epoch_transition_module())
+        .simulate(
+            &request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved {
+            racing_bytes: 4,
+            ..
+        }
+    ));
+}
+
 #[test]
 fn cross_invocation_conflicts_are_machine_readable() {
     let request = SimulationRequestV1::new(
@@ -1337,6 +2152,13 @@ fn cross_invocation_conflicts_are_machine_readable() {
         execution.conflict_assessment(),
         SimulationConflictAssessmentV1::ConflictsObserved { .. }
     ));
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved {
+            racing_bytes: 4,
+            ..
+        }
+    ));
     assert!(!execution.grants_execution_authority());
 
     let incomplete = admitted(conflicting_store_module())
@@ -1353,6 +2175,43 @@ fn cross_invocation_conflicts_are_machine_readable() {
         incomplete.conflict_assessment(),
         SimulationConflictAssessmentV1::Incomplete {
             record_limit: 1,
+            ..
+        }
+    ));
+    assert!(matches!(
+        incomplete.race_assessment(),
+        SimulationRaceAssessmentV1::Incomplete {
+            record_limit: 1,
+            access_record_limit_reached: true,
+            atomic_or_fence_happens_before_unmodeled: false,
+            ..
+        }
+    ));
+
+    let one_invocation_request = SimulationRequestV1::new(
+        "conflict",
+        [1, 1, 1],
+        [1, 1, 1],
+        vec![SimulationArgumentV1::Buffer(u32_buffer(&[0]))],
+    );
+    let no_retained_conflict = admitted(conflicting_store_module())
+        .simulate(
+            &one_invocation_request,
+            SimulationTargetV1::amdgpu_64(),
+            SimulationLimitsV1 {
+                max_memory_access_records: 1,
+                ..SimulationLimitsV1::default()
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        no_retained_conflict.race_assessment(),
+        SimulationRaceAssessmentV1::Incomplete {
+            racing_bytes: 0,
+            first: None,
+            record_limit: 1,
+            access_record_limit_reached: true,
+            atomic_or_fence_happens_before_unmodeled: false,
             ..
         }
     ));
@@ -4682,6 +5541,102 @@ fn atomic_request(
     )
 }
 
+fn atomic_then_non_atomic_conflict_module(ordering: MemoryOrdering) -> Module {
+    let mut module = atomic_module(
+        AtomicKind::Add,
+        ScalarType::U32,
+        AddressSpace::Global,
+        SynchronizationScope::System,
+        ordering,
+        None,
+    );
+    let function = &mut module.functions[0];
+    let block = &mut function.body.as_mut().expect("entry body").blocks[0];
+    block.operations.push(Operation::new(
+        vec![],
+        OperationKind::WorkgroupBarrier(WorkgroupBarrier {
+            memory_scope: SynchronizationScope::Workgroup,
+            semantics: BarrierSemantics::new(
+                MemoryOrdering::AcquireRelease,
+                [AddressSpace::Workgroup],
+            ),
+            convergence: Convergence::uniform(SynchronizationScope::Workgroup),
+        }),
+    ));
+    block.operations.push(Operation::new(
+        vec![],
+        OperationKind::Store {
+            pointer: ValueId(0),
+            value: ValueId(1),
+            access: MemoryAccess::new(AddressSpace::Global, 4),
+        },
+    ));
+    function
+        .required_capabilities
+        .insert(TargetCapability::WorkgroupBarrier);
+    module.kernels[0].required_capabilities = function.required_capabilities.clone();
+    module.required_capabilities = function.required_capabilities.clone();
+    module
+}
+
+#[test]
+fn ordered_atomic_conflicts_do_not_consume_the_unique_racing_byte_marker() {
+    let execution = admitted(atomic_then_non_atomic_conflict_module(
+        MemoryOrdering::Relaxed,
+    ))
+    .simulate(
+        &atomic_request(
+            ScalarBitsV1::u32(0),
+            ScalarBitsV1::u32(1),
+            ScalarBitsV1::u32(0),
+            3,
+            3,
+        ),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::RacesObserved {
+            racing_bytes: 4,
+            first_ordered_conflict: Some(fe2o3_kir_sim::SimulationOrderedMemoryConflictV1 {
+                reason: fe2o3_kir_sim::SimulationHappensBeforeReasonV1::AtomicSerialization,
+                ..
+            }),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn release_acquire_atomic_happens_before_with_ordinary_conflicts_is_incomplete() {
+    let execution = admitted(atomic_then_non_atomic_conflict_module(
+        MemoryOrdering::AcquireRelease,
+    ))
+    .simulate(
+        &atomic_request(
+            ScalarBitsV1::u32(0),
+            ScalarBitsV1::u32(1),
+            ScalarBitsV1::u32(0),
+            3,
+            3,
+        ),
+        SimulationTargetV1::amdgpu_64(),
+        SimulationLimitsV1::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        execution.race_assessment(),
+        SimulationRaceAssessmentV1::Incomplete {
+            access_record_limit_reached: false,
+            atomic_or_fence_happens_before_unmodeled: true,
+            first: Some(_),
+            ..
+        }
+    ));
+}
+
 fn scalar_buffer_bits(execution: &fe2o3_kir_sim::SimulationExecutionV1) -> u128 {
     let bytes = execution.buffer(0).unwrap().bytes();
     let mut raw = [0_u8; 16];
@@ -5434,6 +6389,15 @@ fn scoped_atomic_add_is_deterministic_across_partial_multi_workgroup_schedules_a
     assert!(matches!(
         first.conflict_assessment(),
         SimulationConflictAssessmentV1::ConflictsObserved { .. }
+    ));
+    assert!(matches!(
+        first.race_assessment(),
+        SimulationRaceAssessmentV1::NoRacesObserved {
+            first_ordered_conflict: Some(fe2o3_kir_sim::SimulationOrderedMemoryConflictV1 {
+                reason: fe2o3_kir_sim::SimulationHappensBeforeReasonV1::AtomicSerialization,
+                ..
+            })
+        }
     ));
     let binding = PersistedSimulationScheduleBindingV1::new(
         PersistedSimulationScheduleArtifactV1::CanonicalKirV7,

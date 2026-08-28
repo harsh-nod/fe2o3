@@ -34,6 +34,14 @@ are included in admission and execution accounting but never become barrier
 participants. The target profile enforces its legal workgroup volume before
 scheduling begins.
 
+The V7 core wave profile executes `LaneId`, `Ballot`, `Any`, `All`, and
+integer `ShuffleIndex` with an explicit Wave32 or Wave64 contract. Logical lane
+identity uses X-fast local-linear invocation order. Every participating lane
+must reach the same wave operation and semantics; divergence, mismatch,
+out-of-tile shuffle sources, and a final partial logical wave are exact typed
+failures. These are logical collective semantics, not ISA emulation or a claim
+about a hardware `EXEC` mask.
+
 Each static `WorkgroupMemory` operation denotes one zeroed-but-uninitialized
 allocation site per workgroup. The allocation is shared by that workgroup and
 released before the next workgroup starts. Loads and stores reuse the ordinary
@@ -45,10 +53,17 @@ distinct typed failures. Workgroup allocations, bytes, publication ownership,
 all cooperative machines, and their frame storage are included in preflight
 resource accounting.
 
-Every result identifies this schedule and carries a bounded, byte-level
-cross-invocation global-memory conflict assessment. A conflict or an incomplete
-assessment is machine-readable. Even a clean observation is not a proof of race
-freedom or a model of GPU scheduling.
+Every result identifies this schedule and carries bounded, byte-level
+cross-invocation global-memory conflict and race assessments. The race
+assessment classifies observed conflicts as unordered races or as exactly
+ordered by integer atomic serialization or a compatible same-workgroup global
+acquire-release barrier. Record exhaustion is machine-readable and takes
+precedence over a clean result. Release/acquire atomic and fence metadata is
+preserved, but their reads-from and synchronizes-with edges into ordinary
+accesses are not resolved; an ordinary conflict in a run containing such an
+operation is therefore typed incomplete instead of being called a race. Even a
+complete clean observation covers only that deterministic CPU order; it is not
+a proof of race freedom or a model of GPU scheduling.
 
 The ordinary `simulate` paths retain the canonical cooperative order. Opt-in
 `simulate_scheduled` and `simulate_debugged_scheduled_with_sink` calls can
@@ -70,6 +85,15 @@ coverage drift, and transcript corruption. Decision retention has an explicit
 caller bound, a fixed hard cap, fallible reservation, and resident-byte
 admission. Unrecorded canonical execution retains no decision vector and never
 fails a legacy run because of the recording bound.
+
+`explore_seeded_schedules` sweeps a bounded contiguous, wrapping seed interval
+and retains at most one exact replayable schedule for each race, no-race, and
+incomplete class, plus the first typed dynamic failure. Requests have fixed
+hard caps on attempted schedules, decisions per schedule, and decisions
+retained across witnesses. Results state whether the requested seed budget was
+consumed and whether witness retention was exhausted. Consuming that caller
+budget does not exhaust or characterize the possible schedule space and cannot
+prove absence of another behavior.
 
 `PersistedSimulationScheduleDocumentV1` is the canonical, bounded JSON custody
 form for that same record. It adds exact raw-KIR versus simulation-bundle route,
@@ -120,8 +144,8 @@ are never implemented with host `f32`/`f64` arithmetic and are never implicitly
 contracted.
 
 Float atomics, generic-address-space atomics, external calls, generic barriers,
-dynamic or non-scalar workgroup memory, wave
-operations, matrix operations, gfx950 LDS transpose operations, memory
+dynamic or non-scalar workgroup memory, V9 F32 wave reductions and broadcasts,
+matrix operations, gfx950 LDS transpose operations, memory
 intrinsics, and inline assembly remain typed unsupported states. F32 square root
 and the canonical sin/cos/exp/exp2/log/log2/log10 functions each retain a
 distinct typed unsupported state because the pinned software evaluator does not

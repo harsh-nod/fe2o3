@@ -13,7 +13,8 @@ use fe2o3_kernel_ir::{
     CheckedBinaryOperator, ComparePredicate, Constant, Fence, Function, FunctionId, FunctionRole,
     IndexKind, IntrinsicKind, MemoryAccess, MemoryOrdering, Module, Operation, OperationKind,
     ScalarType, SynchronizationScope, Terminator, Type, UnaryOp, ValueDef, ValueId,
-    VerifiedCanonicalKernelIrIdentityV7, WorkgroupBarrier, WorkgroupMemoryExtent,
+    VerifiedCanonicalKernelIrIdentityV7, WaveOperation, WaveOperationKind, WaveWidth,
+    WorkgroupBarrier, WorkgroupMemoryExtent,
 };
 
 use crate::model::mask;
@@ -181,6 +182,53 @@ pub struct SimulationMemoryConflictV1 {
     pub later_site: SimulationSiteV1,
 }
 
+/// Bounded data-race assessment under one deterministic CPU schedule.
+///
+/// This is execution evidence, not a proof that another admitted interleaving is race-free.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SimulationRaceAssessmentV1 {
+    NoRacesObserved {
+        first_ordered_conflict: Option<SimulationOrderedMemoryConflictV1>,
+    },
+    RacesObserved {
+        racing_bytes: u64,
+        first: SimulationDataRaceV1,
+        first_ordered_conflict: Option<SimulationOrderedMemoryConflictV1>,
+    },
+    Incomplete {
+        racing_bytes: u64,
+        first: Option<SimulationDataRaceV1>,
+        first_ordered_conflict: Option<SimulationOrderedMemoryConflictV1>,
+        /// The byte-access table reached its caller-supplied record bound.
+        access_record_limit_reached: bool,
+        /// Release/acquire atomic or fence HB may order an observed ordinary conflict.
+        atomic_or_fence_happens_before_unmodeled: bool,
+        record_limit: usize,
+    },
+}
+
+/// First observed byte-level conflicting access not ordered by admitted synchronization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SimulationDataRaceV1 {
+    pub conflict: SimulationMemoryConflictV1,
+    pub earlier_atomic: bool,
+    pub later_atomic: bool,
+}
+
+/// Why one observed conflicting access pair is not a data race.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SimulationHappensBeforeReasonV1 {
+    AtomicSerialization,
+    GlobalWorkgroupBarrier,
+}
+
+/// First conflicting pair that has an exact ordering in the simulator contract.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SimulationOrderedMemoryConflictV1 {
+    pub conflict: SimulationMemoryConflictV1,
+    pub reason: SimulationHappensBeforeReasonV1,
+}
+
 /// Adapter for forwarding ephemeral simulator events to debugger or test infrastructure.
 pub trait SimulationEventSinkV1 {
     /// Records one event atomically. An error means the event was not retained.
@@ -238,8 +286,14 @@ pub struct SimulationExecutionV1 {
     schedule: SimulationScheduleIdentityV1,
     schedule_transcript_identity: [u8; 32],
     schedule_coverage: SimulationScheduleCoverageV1,
-    schedule_records: Vec<SimulationScheduleRecordV1>,
+    supplemental: Vec<SimulationSupplementalV1>,
     conflict_assessment: SimulationConflictAssessmentV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SimulationSupplementalV1 {
+    schedule_records: Vec<SimulationScheduleRecordV1>,
+    race_assessment: SimulationRaceAssessmentV1,
 }
 
 impl SimulationExecutionV1 {
@@ -320,11 +374,38 @@ impl SimulationExecutionV1 {
 
     /// Returns the bounded record when this run explicitly requested recording.
     pub fn schedule_record(&self) -> Option<&SimulationScheduleRecordV1> {
-        self.schedule_records.first()
+        self.supplemental
+            .first()
+            .and_then(|supplemental| supplemental.schedule_records.first())
     }
 
     pub const fn conflict_assessment(&self) -> &SimulationConflictAssessmentV1 {
         &self.conflict_assessment
+    }
+
+    /// Returns bounded race and happens-before evidence from this exact CPU schedule.
+    pub fn race_assessment(&self) -> &SimulationRaceAssessmentV1 {
+        &self
+            .supplemental
+            .first()
+            .expect("successful execution retains one race assessment")
+            .race_assessment
+    }
+
+    pub(crate) fn into_schedule_and_race(
+        mut self,
+    ) -> (
+        Option<SimulationScheduleRecordV1>,
+        SimulationRaceAssessmentV1,
+    ) {
+        let mut supplemental = self
+            .supplemental
+            .pop()
+            .expect("successful execution retains supplemental observations");
+        (
+            supplemental.schedule_records.pop(),
+            supplemental.race_assessment,
+        )
     }
 
     /// CPU execution is an observation, never a proof or execution authority.
@@ -493,6 +574,13 @@ pub enum SimulationExecutionErrorKindV1 {
     },
     DivergentWorkgroupBarrier(DivergentWorkgroupBarrierV1),
     MismatchedWorkgroupBarrier(MismatchedWorkgroupBarrierV1),
+    IncompleteWave(IncompleteWaveV1),
+    DivergentWave(DivergentWaveV1),
+    MismatchedWave(MismatchedWaveV1),
+    WaveShuffleSourceOutOfRange {
+        source_lane: u32,
+        tile_width: u32,
+    },
     WorkgroupSchedulerNoProgress {
         phase: u64,
     },
@@ -532,6 +620,30 @@ pub struct MismatchedWorkgroupBarrierV1 {
     pub phase: u64,
     pub expected: SimulationEventSiteV1,
     pub mismatch: WorkgroupBarrierMismatchV1,
+}
+
+/// Exact active-mask evidence for a final logical wave that cannot satisfy the full-wave KIR contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IncompleteWaveV1 {
+    pub width: WaveWidth,
+    pub wave_in_workgroup: u64,
+    pub active_mask: u64,
+    pub required_mask: u64,
+}
+
+/// Exact bounded detail for a lane reaching a collective while one active peer does not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DivergentWaveV1 {
+    pub width: WaveWidth,
+    pub wave_in_workgroup: u64,
+    pub nonparticipating: WorkgroupParticipantV1,
+}
+
+/// Exact bounded detail for active lanes reaching different collective operations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MismatchedWaveV1 {
+    pub width: WaveWidth,
+    pub expected: SimulationEventSiteV1,
 }
 
 /// Allocation-free workgroup-local participant coordinate retained by diagnostics.
@@ -1170,7 +1282,16 @@ struct Engine<'a, S> {
     conflicting_bytes: u64,
     first_conflict: Option<SimulationMemoryConflictV1>,
     conflict_incomplete: bool,
+    workgroup_happens_before_epoch: u64,
+    unmodeled_atomic_or_fence_happens_before: bool,
+    race_trackers: Vec<RaceTracker>,
     workgroup_allocations: Vec<WorkgroupAllocation>,
+}
+
+struct RaceTracker {
+    racing_bytes: u64,
+    first_race: Option<SimulationDataRaceV1>,
+    first_ordered_conflict: Option<SimulationOrderedMemoryConflictV1>,
 }
 
 #[derive(Clone, Copy)]
@@ -1178,7 +1299,10 @@ struct LastAccess {
     invocation: SimulationInvocationV1,
     site: CompactSite,
     write: bool,
+    atomic: bool,
+    happens_before_epoch: u64,
     conflicted: bool,
+    raced: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1398,9 +1522,11 @@ pub(crate) fn conservative_execution_resident_bytes(
     let shared = request.shared_buffers.len();
     let mut resident = ResidentLedger::new(admitted_resident_bytes);
     resident.add_bytes(size_of::<Engine<'static, NoopSimulationEventSinkV1>>())?;
+    resident.add_bytes(reserved_vec_bytes::<RaceTracker>(1)?)?;
     resident.add_bytes(size_of::<SimulationRequestV1>())?;
     resident.add_bytes(size_of::<SimulationPlanV1>())?;
     resident.add_bytes(size_of::<SimulationExecutionV1>())?;
+    resident.add_bytes(reserved_vec_bytes::<SimulationSupplementalV1>(1)?)?;
     resident.add_bytes(request.kernel.retained_capacity_bytes())?;
     resident.add_bytes(plan_identity_bytes)?;
     resident.add_vec::<usize>(reachable_indices_capacity)?;
@@ -1456,6 +1582,9 @@ pub(crate) fn conservative_execution_resident_bytes(
     // The scheduler retains parameters, frame storage, SSA tables and branch/call temporaries.
     resident.add_product(reserved_vec_bytes::<RuntimeValue>(arguments)?, 2)?;
     resident.add_bytes(reserved_vec_bytes::<InvocationMachine<'static>>(
+        workgroup_participants,
+    )?)?;
+    resident.add_bytes(reserved_vec_bytes::<(usize, ScalarBitsV1)>(
         workgroup_participants,
     )?)?;
     resident.add_product(
@@ -1979,6 +2108,21 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         self.memory.publish_workgroup();
     }
 
+    fn publish_global_happens_before(&mut self, barrier: &WorkgroupBarrier) {
+        if barrier
+            .semantics
+            .address_spaces
+            .contains(&AddressSpace::Global)
+            && matches!(
+                barrier.semantics.ordering,
+                MemoryOrdering::AcquireRelease | MemoryOrdering::SequentiallyConsistent
+            )
+        {
+            self.workgroup_happens_before_epoch =
+                self.workgroup_happens_before_epoch.saturating_add(1);
+        }
+    }
+
     fn release_workgroup_allocations(
         &mut self,
         primary: &mut Option<&mut SimulationExecutionErrorV1>,
@@ -2021,6 +2165,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         offset: usize,
         bytes: usize,
         write: bool,
+        atomic: bool,
     ) -> Result<(), SimulationExecutionErrorV1> {
         let invocation = self.invocation.ok_or_else(|| {
             self.at(
@@ -2038,44 +2183,116 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             let conflict = previous.and_then(|previous| {
                 (previous.invocation != invocation && (previous.write || write)).then_some(previous)
             });
+            let mut racing_conflict = false;
             if let Some(earlier_access) = conflict {
+                let conflict_evidence = SimulationMemoryConflictV1 {
+                    allocation,
+                    offset: byte,
+                    earlier: earlier_access.invocation,
+                    later: invocation,
+                    earlier_site: self.materialize_site(earlier_access.site),
+                    later_site: self.materialize_site(*site),
+                };
                 if !earlier_access.conflicted {
                     self.conflicting_bytes = self.conflicting_bytes.saturating_add(1);
                 }
                 if self.first_conflict.is_none() {
-                    self.first_conflict = Some(SimulationMemoryConflictV1 {
-                        allocation,
-                        offset: byte,
-                        earlier: earlier_access.invocation,
-                        later: invocation,
-                        earlier_site: self.materialize_site(earlier_access.site),
-                        later_site: self.materialize_site(*site),
+                    self.first_conflict = Some(conflict_evidence.clone());
+                }
+                let ordered = if earlier_access.atomic && atomic {
+                    Some(SimulationHappensBeforeReasonV1::AtomicSerialization)
+                } else if earlier_access.invocation.workgroup == invocation.workgroup
+                    && earlier_access.happens_before_epoch < self.workgroup_happens_before_epoch
+                {
+                    Some(SimulationHappensBeforeReasonV1::GlobalWorkgroupBarrier)
+                } else {
+                    None
+                };
+                if self.race_trackers.is_empty() {
+                    self.race_trackers.try_reserve_exact(1).map_err(|_| {
+                        self.at(*site, SimulationExecutionErrorKindV1::AllocationFailure)
+                    })?;
+                    self.race_trackers.push(RaceTracker {
+                        racing_bytes: 0,
+                        first_race: None,
+                        first_ordered_conflict: None,
                     });
+                }
+                let missing_tracker = self.at(
+                    *site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "recorded memory conflict race tracker",
+                    ),
+                );
+                let race = self.race_trackers.first_mut().ok_or(missing_tracker)?;
+                if let Some(reason) = ordered {
+                    if race.first_ordered_conflict.is_none() {
+                        race.first_ordered_conflict = Some(SimulationOrderedMemoryConflictV1 {
+                            conflict: conflict_evidence,
+                            reason,
+                        });
+                    }
+                } else {
+                    racing_conflict = true;
+                    if !earlier_access.raced {
+                        race.racing_bytes = race.racing_bytes.saturating_add(1);
+                    }
+                    if race.first_race.is_none() {
+                        race.first_race = Some(SimulationDataRaceV1 {
+                            conflict: conflict_evidence,
+                            earlier_atomic: earlier_access.atomic,
+                            later_atomic: atomic,
+                        });
+                    }
                 }
             }
             if previous.is_some() || self.accesses.len() < self.limits.max_memory_access_records {
                 let access = match previous {
+                    Some(previous)
+                        if previous.invocation == invocation
+                            && previous.happens_before_epoch
+                                == self.workgroup_happens_before_epoch =>
+                    {
+                        LastAccess {
+                            invocation,
+                            site: if write && !previous.write {
+                                compact_site
+                            } else {
+                                previous.site
+                            },
+                            write: previous.write || write,
+                            atomic: previous.atomic && atomic,
+                            happens_before_epoch: previous.happens_before_epoch,
+                            conflicted: previous.conflicted,
+                            raced: previous.raced,
+                        }
+                    }
                     Some(previous) if previous.invocation == invocation => LastAccess {
                         invocation,
-                        site: if write && !previous.write {
-                            compact_site
-                        } else {
-                            previous.site
-                        },
-                        write: previous.write || write,
+                        site: compact_site,
+                        write,
+                        atomic,
+                        happens_before_epoch: self.workgroup_happens_before_epoch,
                         conflicted: previous.conflicted,
+                        raced: previous.raced,
                     },
                     Some(previous) => LastAccess {
                         invocation,
                         site: compact_site,
                         write,
+                        atomic,
+                        happens_before_epoch: self.workgroup_happens_before_epoch,
                         conflicted: previous.conflicted || conflict.is_some(),
+                        raced: previous.raced || racing_conflict,
                     },
                     None => LastAccess {
                         invocation,
                         site: compact_site,
                         write,
+                        atomic,
+                        happens_before_epoch: self.workgroup_happens_before_epoch,
                         conflicted: false,
+                        raced: false,
                     },
                 };
                 self.accesses.insert(key, access);
@@ -2100,6 +2317,38 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             }
         } else {
             SimulationConflictAssessmentV1::NoConflictsObserved
+        }
+    }
+
+    fn race_assessment(&self) -> SimulationRaceAssessmentV1 {
+        let race = self.race_trackers.first();
+        let synchronization_incomplete = self.unmodeled_atomic_or_fence_happens_before
+            && race.is_some_and(|race| race.first_race.is_some());
+        if self.conflict_incomplete || synchronization_incomplete {
+            return SimulationRaceAssessmentV1::Incomplete {
+                racing_bytes: race.map_or(0, |race| race.racing_bytes),
+                first: race.and_then(|race| race.first_race.clone()),
+                first_ordered_conflict: race.and_then(|race| race.first_ordered_conflict.clone()),
+                access_record_limit_reached: self.conflict_incomplete,
+                atomic_or_fence_happens_before_unmodeled: synchronization_incomplete,
+                record_limit: self.limits.max_memory_access_records,
+            };
+        }
+        let Some(race) = race else {
+            return SimulationRaceAssessmentV1::NoRacesObserved {
+                first_ordered_conflict: None,
+            };
+        };
+        if let Some(first) = race.first_race.clone() {
+            SimulationRaceAssessmentV1::RacesObserved {
+                racing_bytes: race.racing_bytes,
+                first,
+                first_ordered_conflict: race.first_ordered_conflict.clone(),
+            }
+        } else {
+            SimulationRaceAssessmentV1::NoRacesObserved {
+                first_ordered_conflict: race.first_ordered_conflict.clone(),
+            }
         }
     }
 }
@@ -2500,6 +2749,9 @@ fn execute(
         conflicting_bytes: 0,
         first_conflict: None,
         conflict_incomplete: false,
+        workgroup_happens_before_epoch: 0,
+        unmodeled_atomic_or_fence_happens_before: false,
+        race_trackers: Vec::new(),
         workgroup_allocations,
     };
     initialize_shared_buffers(&mut engine, request)?;
@@ -2527,6 +2779,7 @@ fn execute(
             for group_x in 0..plan.workgroup_count[0] {
                 workgroups += 1;
                 schedule.begin_workgroup();
+                engine.workgroup_happens_before_epoch = 0;
                 machines.clear();
                 for local_z in 0..plan.workgroup[2] {
                     for local_y in 0..plan.workgroup[1] {
@@ -2572,20 +2825,22 @@ fn execute(
                 )?;
                 debug_assert_eq!(begun, machines.len());
                 let execution = if schedule.uses_canonical_order() {
-                    execute_workgroup_machines(
+                    execute_cooperative_workgroup(
                         &mut engine,
                         &mut machines,
                         &invocation_site,
                         &mut invocations,
                         &mut schedule,
+                        true,
                     )
                 } else {
-                    execute_scheduled_workgroup_machines(
+                    execute_cooperative_workgroup(
                         &mut engine,
                         &mut machines,
                         &invocation_site,
                         &mut invocations,
                         &mut schedule,
+                        false,
                     )
                 };
                 if let Err(mut error) = execution {
@@ -2630,6 +2885,7 @@ fn execute(
     let schedule = schedule
         .finish(plan.workgroups, admitted.identity, request, target, limits)
         .map_err(|error| engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error)))?;
+    let supplemental = collect_supplemental_observations(&engine, schedule.records)?;
     Ok(SimulationExecutionV1 {
         identity: admitted.identity,
         arguments,
@@ -2642,9 +2898,25 @@ fn execute(
         schedule: schedule.identity,
         schedule_transcript_identity: schedule.transcript_identity,
         schedule_coverage: schedule.coverage,
-        schedule_records: schedule.records,
+        supplemental,
         conflict_assessment,
     })
+}
+
+#[inline(never)]
+fn collect_supplemental_observations(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    schedule_records: Vec<SimulationScheduleRecordV1>,
+) -> Result<Vec<SimulationSupplementalV1>, SimulationExecutionErrorV1> {
+    let mut supplemental = Vec::new();
+    supplemental
+        .try_reserve_exact(1)
+        .map_err(|_| engine.fail(SimulationExecutionErrorKindV1::AllocationFailure))?;
+    supplemental.push(SimulationSupplementalV1 {
+        schedule_records,
+        race_assessment: engine.race_assessment(),
+    });
+    Ok(supplemental)
 }
 
 fn schedule_prepare_error(error: SchedulePrepareErrorV1) -> SimulationExecutionErrorKindV1 {
@@ -2697,277 +2969,110 @@ fn begin_workgroup_invocations<'a>(
 }
 
 #[inline(never)]
-fn execute_workgroup_machines<'a>(
+fn execute_cooperative_workgroup<'a>(
     engine: &mut Engine<'a, impl SimulationEventSinkV1>,
     machines: &mut [InvocationMachine<'a>],
     invocation_site: &CompactSite,
     invocations: &mut u64,
     schedule: &mut PreparedScheduleV1<'_>,
+    canonical_order: bool,
 ) -> Result<(), SimulationExecutionErrorV1> {
+    let workgroup = machines
+        .first()
+        .ok_or_else(|| {
+            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                "workgroup contained no live invocations",
+            ))
+        })?
+        .invocation
+        .workgroup;
+    let mut wave_results = Vec::new();
+    wave_results
+        .try_reserve_exact(machines.len())
+        .map_err(|_| engine.fail(SimulationExecutionErrorKindV1::AllocationFailure))?;
     let mut phase = 0_u64;
     loop {
-        let mut arrivals = 0_usize;
-        let mut completed = 0_usize;
-        let mut first_arrival: Option<(SimulationInvocationV1, CompactSite, &WorkgroupBarrier)> =
-            None;
-        let mut first_exit = None;
-
-        for machine in machines.iter_mut().filter(|machine| !machine.completed) {
-            schedule
-                .selected(machine.invocation, phase)
-                .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
-            engine.schedule_decision = schedule.current_decision() - 1;
-            engine.invocation = Some(machine.invocation);
-            match machine.advance_until_yield(engine, phase)? {
-                MachineYield::Complete => {
-                    engine.end_lifecycle(
-                        invocation_site,
-                        SimulationEventKindV1::InvocationEnd {
-                            outcome: SimulationExecutionOutcomeV1::Completed,
-                        },
-                    )?;
-                    *invocations = invocations.checked_add(1).ok_or_else(|| {
-                        engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                            "completed invocation count overflow",
-                        ))
-                    })?;
-                    completed += 1;
-                    first_exit.get_or_insert(machine.invocation);
+        if canonical_order {
+            for machine in machines.iter_mut() {
+                if machine.completed || machine.waiting.is_some() {
+                    continue;
                 }
-                MachineYield::Barrier(arrival) => {
-                    if let Some((_, expected_site, expected_barrier)) = &first_arrival {
-                        if *expected_site != arrival.site || *expected_barrier != arrival.barrier {
-                            let site_mismatch = *expected_site != arrival.site;
-                            let semantics_mismatch = *expected_barrier != arrival.barrier;
-                            let mismatch = match (site_mismatch, semantics_mismatch) {
-                                (true, true) => WorkgroupBarrierMismatchV1::SiteAndSemantics,
-                                (true, false) => WorkgroupBarrierMismatchV1::Site,
-                                (false, true) => WorkgroupBarrierMismatchV1::Semantics,
-                                (false, false) => unreachable!(),
-                            };
-                            return Err(engine.at(
-                                arrival.site,
-                                SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(
-                                    MismatchedWorkgroupBarrierV1 {
-                                        phase,
-                                        expected: engine.materialize_event_site(*expected_site),
-                                        mismatch,
-                                    },
-                                ),
-                            ));
-                        }
-                    } else {
-                        first_arrival = Some((machine.invocation, arrival.site, arrival.barrier));
+                schedule
+                    .selected(machine.invocation, phase)
+                    .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
+                engine.schedule_decision = schedule.current_decision() - 1;
+                engine.invocation = Some(machine.invocation);
+                match machine.advance_until_yield(engine, phase)? {
+                    MachineYield::Complete => {
+                        engine.end_lifecycle(
+                            invocation_site,
+                            SimulationEventKindV1::InvocationEnd {
+                                outcome: SimulationExecutionOutcomeV1::Completed,
+                            },
+                        )?;
+                        *invocations = invocations.checked_add(1).ok_or_else(|| {
+                            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                                "completed invocation count overflow",
+                            ))
+                        })?;
+                        machine.completed = true;
                     }
-                    arrivals += 1;
+                    MachineYield::Barrier(arrival) => {
+                        machine.waiting = Some(MachineWait::Barrier(arrival));
+                    }
+                    MachineYield::Wave(arrival) => {
+                        machine.waiting = Some(MachineWait::Wave(arrival));
+                    }
                 }
             }
+        } else {
+            let order = schedule
+                .take_order(
+                    machines.len(),
+                    |index| machines[index].invocation,
+                    |index| !machines[index].completed && machines[index].waiting.is_none(),
+                    workgroup,
+                    phase,
+                )
+                .map_err(|error| {
+                    engine.invocation = None;
+                    engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error))
+                })?;
+            for index in order.iter().copied() {
+                advance_runnable_machine(
+                    engine,
+                    &mut machines[index],
+                    invocation_site,
+                    invocations,
+                    schedule,
+                    phase,
+                )?;
+            }
+            schedule.restore_order(order);
         }
 
-        if completed == machines.len() {
+        if resolve_ready_waves(engine, machines, &mut wave_results)? != 0 {
+            continue;
+        }
+        if machines.iter().all(|machine| machine.completed) {
             return Ok(());
         }
-        if completed != 0 && arrivals != 0 {
-            let (waiting, _, _) = first_arrival.as_ref().ok_or_else(|| {
-                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                    "barrier arrival accounting",
-                ))
-            })?;
-            return Err(
-                engine.fail(SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
-                    DivergentWorkgroupBarrierV1 {
-                        phase,
-                        waiting: (*waiting).into(),
-                        exited: first_exit
-                            .ok_or_else(|| {
-                                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                                    "barrier exit accounting",
-                                ))
-                            })?
-                            .into(),
-                    },
-                )),
-            );
-        }
-        if arrivals != machines.len() {
-            return Err(
-                engine.fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase })
-            );
-        }
-        let (representative, site, _) = first_arrival.ok_or_else(|| {
-            engine.fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase })
-        })?;
-        let participants = u32::try_from(arrivals).map_err(|_| {
-            engine.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "preflighted workgroup participants fit u32",
-                ),
-            )
-        })?;
-        engine.invocation = Some(representative);
-        engine.event(
-            &site,
-            SimulationEventKindV1::WorkgroupBarrierRelease {
-                phase,
-                participants,
-            },
-        )?;
-        engine.debug_barrier(
-            site,
-            SimulationDebugBarrierActionV1::Release,
-            phase,
-            participants,
-        );
-        schedule.barrier_released();
-        engine.publish_workgroup();
-        phase = phase.checked_add(1).ok_or_else(|| {
-            engine.at(
-                site,
-                SimulationExecutionErrorKindV1::StepLimit {
-                    limit: engine.limits.max_steps,
-                },
-            )
-        })?;
+        release_workgroup_barrier(engine, machines, schedule, &mut phase)?;
     }
 }
 
-#[inline(never)]
-fn execute_scheduled_workgroup_machines<'a>(
-    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
-    machines: &mut [InvocationMachine<'a>],
-    invocation_site: &CompactSite,
-    invocations: &mut u64,
-    schedule: &mut PreparedScheduleV1<'_>,
-) -> Result<(), SimulationExecutionErrorV1> {
-    let mut phase = 0_u64;
-    loop {
-        let mut arrivals = 0_usize;
-        let mut completed = 0_usize;
-        let mut first_arrival: Option<(SimulationInvocationV1, CompactSite, &WorkgroupBarrier)> =
-            None;
-        let mut first_exit = None;
-        let workgroup = machines
-            .first()
-            .ok_or_else(|| {
-                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                    "workgroup contained no live invocations",
-                ))
-            })?
-            .invocation
-            .workgroup;
-        let order = schedule
-            .take_order(
-                machines.len(),
-                |index| machines[index].invocation,
-                |index| machines[index].completed,
-                workgroup,
-                phase,
-            )
-            .map_err(|error| {
-                engine.invocation = None;
-                engine.fail(SimulationExecutionErrorKindV1::ScheduleReplay(error))
-            })?;
-        for index in order.iter().copied() {
-            let machine = &mut machines[index];
-            schedule
-                .selected(machine.invocation, phase)
-                .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
-            engine.schedule_decision = schedule.current_decision() - 1;
-            advance_workgroup_machine(
-                engine,
-                machine,
-                invocation_site,
-                invocations,
-                phase,
-                &mut arrivals,
-                &mut completed,
-                &mut first_arrival,
-                &mut first_exit,
-            )?;
-        }
-        schedule.restore_order(order);
-
-        if completed == machines.len() {
-            return Ok(());
-        }
-        if completed != 0 && arrivals != 0 {
-            let (waiting, _, _) = first_arrival.as_ref().ok_or_else(|| {
-                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                    "barrier arrival accounting",
-                ))
-            })?;
-            return Err(
-                engine.fail(SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
-                    DivergentWorkgroupBarrierV1 {
-                        phase,
-                        waiting: (*waiting).into(),
-                        exited: first_exit
-                            .ok_or_else(|| {
-                                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
-                                    "barrier exit accounting",
-                                ))
-                            })?
-                            .into(),
-                    },
-                )),
-            );
-        }
-        if arrivals != machines.len() {
-            return Err(
-                engine.fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase })
-            );
-        }
-        let (representative, site, _) = first_arrival.ok_or_else(|| {
-            engine.fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase })
-        })?;
-        let participants = u32::try_from(arrivals).map_err(|_| {
-            engine.at(
-                site,
-                SimulationExecutionErrorKindV1::InternalInvariant(
-                    "preflighted workgroup participants fit u32",
-                ),
-            )
-        })?;
-        engine.invocation = Some(representative);
-        engine.event(
-            &site,
-            SimulationEventKindV1::WorkgroupBarrierRelease {
-                phase,
-                participants,
-            },
-        )?;
-        engine.debug_barrier(
-            site,
-            SimulationDebugBarrierActionV1::Release,
-            phase,
-            participants,
-        );
-        schedule.barrier_released();
-        engine.publish_workgroup();
-        phase = phase.checked_add(1).ok_or_else(|| {
-            engine.at(
-                site,
-                SimulationExecutionErrorKindV1::StepLimit {
-                    limit: engine.limits.max_steps,
-                },
-            )
-        })?;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn advance_workgroup_machine<'a>(
+fn advance_runnable_machine<'a>(
     engine: &mut Engine<'a, impl SimulationEventSinkV1>,
     machine: &mut InvocationMachine<'a>,
     invocation_site: &CompactSite,
     invocations: &mut u64,
+    schedule: &mut PreparedScheduleV1<'_>,
     phase: u64,
-    arrivals: &mut usize,
-    completed: &mut usize,
-    first_arrival: &mut Option<(SimulationInvocationV1, CompactSite, &'a WorkgroupBarrier)>,
-    first_exit: &mut Option<SimulationInvocationV1>,
 ) -> Result<(), SimulationExecutionErrorV1> {
+    schedule
+        .selected(machine.invocation, phase)
+        .map_err(|error| engine.fail(schedule_prepare_error(error)))?;
+    engine.schedule_decision = schedule.current_decision() - 1;
     engine.invocation = Some(machine.invocation);
     match machine.advance_until_yield(engine, phase)? {
         MachineYield::Complete => {
@@ -2982,37 +3087,338 @@ fn advance_workgroup_machine<'a>(
                     "completed invocation count overflow",
                 ))
             })?;
-            *completed += 1;
-            first_exit.get_or_insert(machine.invocation);
+            machine.completed = true;
         }
         MachineYield::Barrier(arrival) => {
-            if let Some((_, expected_site, expected_barrier)) = first_arrival.as_ref() {
-                if *expected_site != arrival.site || *expected_barrier != arrival.barrier {
-                    let site_mismatch = *expected_site != arrival.site;
-                    let semantics_mismatch = *expected_barrier != arrival.barrier;
-                    let mismatch = match (site_mismatch, semantics_mismatch) {
+            machine.waiting = Some(MachineWait::Barrier(arrival));
+        }
+        MachineYield::Wave(arrival) => machine.waiting = Some(MachineWait::Wave(arrival)),
+    }
+    Ok(())
+}
+
+fn local_linear(invocation: SimulationInvocationV1) -> u64 {
+    u64::from(invocation.local[0])
+        + u64::from(invocation.workgroup_size[0])
+            * (u64::from(invocation.local[1])
+                + u64::from(invocation.workgroup_size[1]) * u64::from(invocation.local[2]))
+}
+
+fn full_wave_mask(width: WaveWidth) -> u64 {
+    match width {
+        WaveWidth::Wave32 => u64::from(u32::MAX),
+        WaveWidth::Wave64 => u64::MAX,
+    }
+}
+
+fn wave_active_mask(machines: &[InvocationMachine<'_>], start: u64, width: u64) -> u64 {
+    machines.iter().fold(0_u64, |mask, machine| {
+        let linear = local_linear(machine.invocation);
+        if linear >= start && linear < start + width {
+            mask | (1_u64 << (linear - start))
+        } else {
+            mask
+        }
+    })
+}
+
+fn wave_member_index(machines: &[InvocationMachine<'_>], start: u64, lane: u64) -> Option<usize> {
+    machines
+        .iter()
+        .position(|machine| local_linear(machine.invocation) == start + lane)
+}
+
+fn resolve_ready_waves<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    machines: &mut [InvocationMachine<'a>],
+    results: &mut Vec<(usize, ScalarBitsV1)>,
+) -> Result<usize, SimulationExecutionErrorV1> {
+    let mut resolved = 0_usize;
+    for representative in 0..machines.len() {
+        let Some(MachineWait::Wave(arrival)) = machines[representative].waiting else {
+            continue;
+        };
+        let width = u64::from(arrival.wave.width.lanes());
+        let linear = local_linear(machines[representative].invocation);
+        let wave_in_workgroup = linear / width;
+        let start = wave_in_workgroup * width;
+        let active_mask = wave_active_mask(machines, start, width);
+        let required_mask = full_wave_mask(arrival.wave.width);
+        if active_mask != required_mask {
+            engine.invocation = Some(machines[representative].invocation);
+            return Err(engine.at(
+                arrival.site,
+                SimulationExecutionErrorKindV1::IncompleteWave(IncompleteWaveV1 {
+                    width: arrival.wave.width,
+                    wave_in_workgroup,
+                    active_mask,
+                    required_mask,
+                }),
+            ));
+        }
+
+        for lane in 0..width {
+            let index = wave_member_index(machines, start, lane).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant(
+                        "full wave active mask member",
+                    ),
+                )
+            })?;
+            match machines[index].waiting {
+                Some(MachineWait::Wave(peer))
+                    if peer.site == arrival.site && peer.wave == arrival.wave => {}
+                Some(MachineWait::Wave(peer)) => {
+                    engine.invocation = Some(machines[index].invocation);
+                    return Err(engine.at(
+                        peer.site,
+                        SimulationExecutionErrorKindV1::MismatchedWave(MismatchedWaveV1 {
+                            width: arrival.wave.width,
+                            expected: engine.materialize_event_site(arrival.site),
+                        }),
+                    ));
+                }
+                _ => {
+                    engine.invocation = Some(machines[representative].invocation);
+                    return Err(engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::DivergentWave(DivergentWaveV1 {
+                            width: arrival.wave.width,
+                            wave_in_workgroup,
+                            nonparticipating: machines[index].invocation.into(),
+                        }),
+                    ));
+                }
+            }
+        }
+
+        results.clear();
+        for lane in 0..width {
+            let index = wave_member_index(machines, start, lane).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("wave result member"),
+                )
+            })?;
+            let Some(MachineWait::Wave(peer)) = machines[index].waiting else {
+                return Err(engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("validated wave wait"),
+                ));
+            };
+            let value = match peer.wave.kind {
+                WaveOperationKind::LaneId => ScalarBitsV1::u32(lane as u32),
+                WaveOperationKind::Ballot { .. } => {
+                    let mut ballot = 0_u64;
+                    for source_lane in 0..width {
+                        let source =
+                            wave_member_index(machines, start, source_lane).ok_or_else(|| {
+                                engine.at(
+                                    arrival.site,
+                                    SimulationExecutionErrorKindV1::InternalInvariant(
+                                        "ballot member",
+                                    ),
+                                )
+                            })?;
+                        let Some(WaveInput::Predicate(predicate)) = machines[source].wave_input()
+                        else {
+                            return Err(engine.at(
+                                arrival.site,
+                                SimulationExecutionErrorKindV1::InternalInvariant(
+                                    "ballot predicate",
+                                ),
+                            ));
+                        };
+                        if predicate {
+                            ballot |= 1_u64 << source_lane;
+                        }
+                    }
+                    match peer.wave.width {
+                        WaveWidth::Wave32 => ScalarBitsV1::u32(ballot as u32),
+                        WaveWidth::Wave64 => {
+                            ScalarBitsV1::new(ScalarType::U64, u128::from(ballot), engine.target)
+                                .map_err(|_| {
+                                    engine.at(
+                                        arrival.site,
+                                        SimulationExecutionErrorKindV1::InternalInvariant(
+                                            "wave64 ballot scalar",
+                                        ),
+                                    )
+                                })?
+                        }
+                    }
+                }
+                WaveOperationKind::Any { .. } | WaveOperationKind::All { .. } => {
+                    let all = matches!(peer.wave.kind, WaveOperationKind::All { .. });
+                    let mut aggregate = all;
+                    for source_lane in 0..width {
+                        let source =
+                            wave_member_index(machines, start, source_lane).ok_or_else(|| {
+                                engine.at(
+                                    arrival.site,
+                                    SimulationExecutionErrorKindV1::InternalInvariant(
+                                        "vote member",
+                                    ),
+                                )
+                            })?;
+                        let Some(WaveInput::Predicate(predicate)) = machines[source].wave_input()
+                        else {
+                            return Err(engine.at(
+                                arrival.site,
+                                SimulationExecutionErrorKindV1::InternalInvariant("vote predicate"),
+                            ));
+                        };
+                        if all {
+                            aggregate &= predicate;
+                        } else {
+                            aggregate |= predicate;
+                        }
+                    }
+                    ScalarBitsV1::boolean(aggregate)
+                }
+                WaveOperationKind::ShuffleIndex { .. } => {
+                    let Some(WaveInput::Shuffle {
+                        source_lane,
+                        tile_width,
+                        ..
+                    }) = machines[index].wave_input()
+                    else {
+                        return Err(engine.at(
+                            arrival.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant("shuffle input"),
+                        ));
+                    };
+                    let tile_start = (lane / u64::from(tile_width)) * u64::from(tile_width);
+                    let source =
+                        wave_member_index(machines, start, tile_start + u64::from(source_lane))
+                            .ok_or_else(|| {
+                                engine.at(
+                                    arrival.site,
+                                    SimulationExecutionErrorKindV1::InternalInvariant(
+                                        "shuffle source member",
+                                    ),
+                                )
+                            })?;
+                    let Some(WaveInput::Shuffle { value, .. }) = machines[source].wave_input()
+                    else {
+                        return Err(engine.at(
+                            arrival.site,
+                            SimulationExecutionErrorKindV1::InternalInvariant(
+                                "shuffle source input",
+                            ),
+                        ));
+                    };
+                    value
+                }
+                WaveOperationKind::ReduceF32 { .. } | WaveOperationKind::BroadcastF32 { .. } => {
+                    return Err(engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::InternalInvariant(
+                            "unsupported wave operation passed preflight",
+                        ),
+                    ));
+                }
+            };
+            results.push((index, value));
+        }
+        for (index, value) in results.iter().copied() {
+            engine.invocation = Some(machines[index].invocation);
+            machines[index].complete_wave(engine, value)?;
+        }
+        resolved += 1;
+    }
+    Ok(resolved)
+}
+
+fn release_workgroup_barrier<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    machines: &mut [InvocationMachine<'a>],
+    schedule: &mut PreparedScheduleV1<'_>,
+    phase: &mut u64,
+) -> Result<(), SimulationExecutionErrorV1> {
+    let first_waiting = machines.iter().find_map(|machine| match machine.waiting {
+        Some(MachineWait::Barrier(arrival)) => Some((machine.invocation, arrival)),
+        _ => None,
+    });
+    let Some((representative, expected)) = first_waiting else {
+        return Err(engine
+            .fail(SimulationExecutionErrorKindV1::WorkgroupSchedulerNoProgress { phase: *phase }));
+    };
+    for machine in machines.iter() {
+        match machine.waiting {
+            Some(MachineWait::Barrier(arrival)) => {
+                if arrival.site != expected.site || arrival.barrier != expected.barrier {
+                    let mismatch = match (
+                        arrival.site != expected.site,
+                        arrival.barrier != expected.barrier,
+                    ) {
                         (true, true) => WorkgroupBarrierMismatchV1::SiteAndSemantics,
                         (true, false) => WorkgroupBarrierMismatchV1::Site,
                         (false, true) => WorkgroupBarrierMismatchV1::Semantics,
                         (false, false) => unreachable!(),
                     };
+                    engine.invocation = Some(machine.invocation);
                     return Err(engine.at(
                         arrival.site,
                         SimulationExecutionErrorKindV1::MismatchedWorkgroupBarrier(
                             MismatchedWorkgroupBarrierV1 {
-                                phase,
-                                expected: engine.materialize_event_site(*expected_site),
+                                phase: *phase,
+                                expected: engine.materialize_event_site(expected.site),
                                 mismatch,
                             },
                         ),
                     ));
                 }
-            } else {
-                *first_arrival = Some((machine.invocation, arrival.site, arrival.barrier));
             }
-            *arrivals += 1;
+            _ => {
+                engine.invocation = Some(representative);
+                return Err(engine.fail(
+                    SimulationExecutionErrorKindV1::DivergentWorkgroupBarrier(
+                        DivergentWorkgroupBarrierV1 {
+                            phase: *phase,
+                            waiting: representative.into(),
+                            exited: machine.invocation.into(),
+                        },
+                    ),
+                ));
+            }
         }
     }
+    let participants = u32::try_from(machines.len()).map_err(|_| {
+        engine.at(
+            expected.site,
+            SimulationExecutionErrorKindV1::InternalInvariant("workgroup participant count"),
+        )
+    })?;
+    engine.invocation = Some(representative);
+    engine.event(
+        &expected.site,
+        SimulationEventKindV1::WorkgroupBarrierRelease {
+            phase: *phase,
+            participants,
+        },
+    )?;
+    engine.debug_barrier(
+        expected.site,
+        SimulationDebugBarrierActionV1::Release,
+        *phase,
+        participants,
+    );
+    schedule.barrier_released();
+    engine.publish_workgroup();
+    engine.publish_global_happens_before(expected.barrier);
+    for machine in machines.iter_mut() {
+        machine.waiting = None;
+    }
+    *phase = phase.checked_add(1).ok_or_else(|| {
+        engine.at(
+            expected.site,
+            SimulationExecutionErrorKindV1::StepLimit {
+                limit: engine.limits.max_steps,
+            },
+        )
+    })?;
     Ok(())
 }
 
@@ -3384,15 +3790,42 @@ struct InvocationMachine<'a> {
     frames: Vec<RuntimeFrame<'a>>,
     active_depth: usize,
     completed: bool,
+    waiting: Option<MachineWait<'a>>,
+    pending_wave_input: Option<WaveInput>,
 }
 
+#[derive(Clone, Copy)]
 struct BarrierArrival<'a> {
     site: CompactSite,
     barrier: &'a WorkgroupBarrier,
 }
 
+#[derive(Clone, Copy)]
+enum WaveInput {
+    LaneId,
+    Predicate(bool),
+    Shuffle {
+        value: ScalarBitsV1,
+        source_lane: u32,
+        tile_width: u32,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct WaveArrival<'a> {
+    site: CompactSite,
+    wave: &'a WaveOperation,
+}
+
+#[derive(Clone, Copy)]
+enum MachineWait<'a> {
+    Barrier(BarrierArrival<'a>),
+    Wave(WaveArrival<'a>),
+}
+
 enum MachineYield<'a> {
     Barrier(BarrierArrival<'a>),
+    Wave(WaveArrival<'a>),
     Complete,
 }
 
@@ -3527,6 +3960,8 @@ impl<'a> InvocationMachine<'a> {
             frames,
             active_depth: 1,
             completed: false,
+            waiting: None,
+            pending_wave_input: None,
         })
     }
 
@@ -3535,7 +3970,7 @@ impl<'a> InvocationMachine<'a> {
         engine: &mut Engine<'a, S>,
         phase: u64,
     ) -> Result<MachineYield<'a>, SimulationExecutionErrorV1> {
-        if self.completed || self.active_depth == 0 {
+        if self.completed || self.active_depth == 0 || self.waiting.is_some() {
             return Err(
                 engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
                     "advanced completed invocation machine",
@@ -3566,13 +4001,45 @@ impl<'a> InvocationMachine<'a> {
                     SimulationDebugCheckpointPhaseV1::BeforeOperation,
                 );
             }
+            if self.frames[self.active_depth - 1].block_entered
+                && self.frames[self.active_depth - 1]
+                    .function
+                    .body
+                    .as_ref()
+                    .and_then(|body| {
+                        body.blocks
+                            .get(self.frames[self.active_depth - 1].current_index)
+                    })
+                    .and_then(|block| {
+                        block
+                            .operations
+                            .get(self.frames[self.active_depth - 1].operation)
+                    })
+                    .is_some_and(|operation| matches!(operation.kind, OperationKind::Wave(_)))
+            {
+                let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
+                    engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                        "wave runtime frame",
+                    ))
+                })?;
+                let arrival = advance_wave_frame(engine, frame, &mut self.pending_wave_input)?;
+                return Ok(MachineYield::Wave(arrival));
+            }
             let action = {
                 let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
                     engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
                         "runtime frame stack",
                     ))
                 })?;
-                advance_frame(engine, frame, phase)
+                if !frame.block_entered {
+                    advance_block_entry_frame(engine, frame)
+                } else if is_internal_call_frame(engine, frame) {
+                    advance_internal_call_frame(engine, frame)
+                } else if is_return_frame(frame) {
+                    advance_return_frame(engine, frame)
+                } else {
+                    advance_frame(engine, frame, phase)
+                }
             };
             let action = match action {
                 Ok(action) => action,
@@ -3727,6 +4194,213 @@ impl<'a> InvocationMachine<'a> {
             }
         }
     }
+
+    fn complete_wave<S: SimulationEventSinkV1>(
+        &mut self,
+        engine: &mut Engine<'a, S>,
+        value: ScalarBitsV1,
+    ) -> Result<(), SimulationExecutionErrorV1> {
+        let Some(MachineWait::Wave(arrival)) = self.waiting.take() else {
+            return Err(
+                engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                    "completed a machine not waiting at a wave operation",
+                )),
+            );
+        };
+        let frame = self.frames.get_mut(self.active_depth - 1).ok_or_else(|| {
+            engine.at(
+                arrival.site,
+                SimulationExecutionErrorKindV1::InternalInvariant("wave runtime frame"),
+            )
+        })?;
+        let operation = frame
+            .function
+            .body
+            .as_ref()
+            .and_then(|body| body.blocks.get(frame.current_index))
+            .and_then(|block| block.operations.get(frame.operation))
+            .ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::InternalInvariant("suspended wave operation"),
+                )
+            })?;
+        bind_small_results(
+            engine,
+            &mut frame.values,
+            &operation.results,
+            SmallResults::One(RuntimeValue::Scalar(value)),
+            &arrival.site,
+        )?;
+        self.pending_wave_input = None;
+        frame.active_operation = None;
+        engine.end_lifecycle(
+            &arrival.site,
+            SimulationEventKindV1::OperationEnd {
+                outcome: SimulationExecutionOutcomeV1::Completed,
+            },
+        )?;
+        frame.operation += 1;
+        engine.debug_checkpoint(
+            &self.frames[..self.active_depth],
+            arrival.site,
+            SimulationDebugCheckpointPhaseV1::AfterOperation,
+        );
+        Ok(())
+    }
+
+    fn wave_input(&self) -> Option<WaveInput> {
+        self.pending_wave_input
+    }
+}
+
+#[inline(never)]
+fn advance_block_entry_frame<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    frame: &mut RuntimeFrame<'a>,
+) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
+    let block = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+        .ok_or_else(|| engine.fail(SimulationExecutionErrorKindV1::UnknownBlock(frame.current)))?;
+    bind_block_arguments(
+        engine,
+        frame.function_index,
+        block,
+        &frame.incoming,
+        &mut frame.values,
+    )?;
+    frame.incoming.clear();
+    let site = terminator_site(frame.function_index, block);
+    engine.event(&site, SimulationEventKindV1::BlockEnter)?;
+    frame.block_entered = true;
+    Ok(FrameAction::Continue)
+}
+
+fn is_internal_call_frame(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    frame: &RuntimeFrame<'_>,
+) -> bool {
+    if !frame.block_entered {
+        return false;
+    }
+    let Some(block) = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+    else {
+        return false;
+    };
+    if !matches!(
+        block.operations.get(frame.operation),
+        Some(Operation {
+            kind: OperationKind::Call { .. },
+            ..
+        })
+    ) {
+        return false;
+    }
+    matches!(
+        engine
+            .call_targets
+            .get(frame.function_index)
+            .and_then(|function| function.get(frame.current_index))
+            .and_then(|block| block.get(frame.operation)),
+        Some(CallTarget::Internal(_))
+    )
+}
+
+fn is_return_frame(frame: &RuntimeFrame<'_>) -> bool {
+    let Some(block) = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+    else {
+        return false;
+    };
+    frame.operation == block.operations.len()
+        && matches!(block.terminator, Some(Terminator::Return { .. }))
+}
+
+#[inline(never)]
+fn advance_return_frame<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    frame: &mut RuntimeFrame<'a>,
+) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
+    let block = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+        .ok_or_else(|| engine.fail(SimulationExecutionErrorKindV1::UnknownBlock(frame.current)))?;
+    let site = terminator_site(frame.function_index, block);
+    let Some(Terminator::Return { values }) = &block.terminator else {
+        return Err(engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant("return frame dispatch"),
+        ));
+    };
+    engine.step(&site)?;
+    engine.event(&site, SimulationEventKindV1::Terminator)?;
+    resolve_values_into(engine, &frame.values, values, &site, &mut frame.incoming)?;
+    release_frame_allocations_observed(engine, &mut frame.allocations, &site)?;
+    engine.event(&site, SimulationEventKindV1::Return)?;
+    Ok(FrameAction::Return)
+}
+
+#[inline(never)]
+fn advance_internal_call_frame<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    frame: &mut RuntimeFrame<'a>,
+) -> Result<FrameAction<'a>, SimulationExecutionErrorV1> {
+    let block = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+        .ok_or_else(|| engine.fail(SimulationExecutionErrorKindV1::UnknownBlock(frame.current)))?;
+    let operation = block.operations.get(frame.operation).ok_or_else(|| {
+        engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+            "internal call operation position",
+        ))
+    })?;
+    let OperationKind::Call { arguments, .. } = &operation.kind else {
+        return Err(
+            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                "internal call operation dispatch",
+            )),
+        );
+    };
+    let site = operation_site(frame.function_index, block, frame.operation);
+    engine.step(&site)?;
+    engine.begin_lifecycle(&site, SimulationEventKindV1::OperationBegin)?;
+    frame.active_operation = Some(site);
+    let CallTarget::Internal(callee_index) =
+        engine.call_targets[frame.function_index][frame.current_index][frame.operation]
+    else {
+        return Err(engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant("preflighted internal call index"),
+        ));
+    };
+    let callee_function = &engine.module.functions[engine.function_module_indices[callee_index]];
+    if callee_function.role != FunctionRole::InternalHelper {
+        return Err(engine.at(
+            site,
+            SimulationExecutionErrorKindV1::InternalInvariant("preflighted internal call"),
+        ));
+    }
+    resolve_values_into(engine, &frame.values, arguments, &site, &mut frame.incoming)?;
+    engine.call_event(&site, callee_index)?;
+    Ok(FrameAction::Call {
+        function_index: callee_index,
+        function: callee_function,
+        site,
+    })
 }
 
 fn advance_frame<'a, S: SimulationEventSinkV1>(
@@ -3814,7 +4488,6 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
             frame.operation += 1;
             return Ok(FrameAction::Barrier { site, barrier });
         }
-
         return advance_non_control_operation(engine, frame, block, operation, site);
     }
 
@@ -3834,6 +4507,108 @@ fn advance_frame<'a, S: SimulationEventSinkV1>(
         return Ok(FrameAction::Return);
     }
     advance_non_return_terminator(engine, frame, terminator, site)
+}
+
+#[inline(never)]
+fn advance_wave_frame<'a>(
+    engine: &mut Engine<'a, impl SimulationEventSinkV1>,
+    frame: &mut RuntimeFrame<'a>,
+    pending: &mut Option<WaveInput>,
+) -> Result<WaveArrival<'a>, SimulationExecutionErrorV1> {
+    let block = frame
+        .function
+        .body
+        .as_ref()
+        .and_then(|body| body.blocks.get(frame.current_index))
+        .ok_or_else(|| engine.fail(SimulationExecutionErrorKindV1::UnknownBlock(frame.current)))?;
+    let operation = block.operations.get(frame.operation).ok_or_else(|| {
+        engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+            "wave operation position",
+        ))
+    })?;
+    let OperationKind::Wave(wave) = &operation.kind else {
+        return Err(
+            engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+                "wave operation dispatch",
+            )),
+        );
+    };
+    let site = operation_site(frame.function_index, block, frame.operation);
+    engine.step(&site)?;
+    engine.begin_lifecycle(&site, SimulationEventKindV1::OperationBegin)?;
+    frame.active_operation = Some(site);
+    prepare_wave_wait(engine, frame, wave, site, pending)?;
+    Ok(WaveArrival { site, wave })
+}
+
+#[inline(never)]
+fn prepare_wave_wait(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    frame: &RuntimeFrame<'_>,
+    wave: &WaveOperation,
+    site: CompactSite,
+    pending: &mut Option<WaveInput>,
+) -> Result<(), SimulationExecutionErrorV1> {
+    *pending = Some(match wave.kind {
+        WaveOperationKind::LaneId => WaveInput::LaneId,
+        WaveOperationKind::Ballot { predicate }
+        | WaveOperationKind::Any { predicate }
+        | WaveOperationKind::All { predicate } => {
+            let predicate = scalar_value(engine, &frame.values, predicate, &site)?
+                .as_bool()
+                .ok_or_else(|| {
+                    engine.at(
+                        site,
+                        SimulationExecutionErrorKindV1::RuntimeType {
+                            value: Some(predicate),
+                            expected: "boolean wave predicate",
+                        },
+                    )
+                })?;
+            WaveInput::Predicate(predicate)
+        }
+        WaveOperationKind::ShuffleIndex {
+            value,
+            source_lane,
+            tile_width,
+        } => {
+            let value = scalar_value(engine, &frame.values, value, &site)?;
+            let source = scalar_value(engine, &frame.values, source_lane, &site)?;
+            if source.ty() != ScalarType::U32 {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::RuntimeType {
+                        value: Some(source_lane),
+                        expected: "u32 wave shuffle source lane",
+                    },
+                ));
+            }
+            let source_lane = source.bits() as u32;
+            if source_lane >= tile_width {
+                return Err(engine.at(
+                    site,
+                    SimulationExecutionErrorKindV1::WaveShuffleSourceOutOfRange {
+                        source_lane,
+                        tile_width,
+                    },
+                ));
+            }
+            WaveInput::Shuffle {
+                value,
+                source_lane,
+                tile_width,
+            }
+        }
+        WaveOperationKind::ReduceF32 { .. } | WaveOperationKind::BroadcastF32 { .. } => {
+            return Err(engine.at(
+                site,
+                SimulationExecutionErrorKindV1::InternalInvariant(
+                    "unsupported wave operation passed preflight",
+                ),
+            ));
+        }
+    });
+    Ok(())
 }
 
 #[inline(never)]
@@ -4491,6 +5266,7 @@ fn execute_operation(
                     pointer_value.byte_offset,
                     bytes,
                     true,
+                    false,
                 )?;
             }
             engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
@@ -4501,6 +5277,9 @@ fn execute_operation(
         )),
         OperationKind::Atomic(atomic) => execute_atomic(engine, values, atomic, &site),
         OperationKind::Fence(fence) => {
+            if fence.semantics.ordering != MemoryOrdering::Relaxed {
+                engine.unmodeled_atomic_or_fence_happens_before = true;
+            }
             let address_space_mask = address_space_mask(&fence.semantics.address_spaces);
             engine.event(
                 &site,
@@ -4588,6 +5367,13 @@ fn execute_atomic(
             SimulationExecutionErrorKindV1::InternalInvariant("atomic invocation"),
         )
     })?;
+    if atomic.ordering != MemoryOrdering::Relaxed
+        || atomic
+            .failure_ordering
+            .is_some_and(|ordering| ordering != MemoryOrdering::Relaxed)
+    {
+        engine.unmodeled_atomic_or_fence_happens_before = true;
+    }
 
     let previous = if atomic.kind == AtomicKind::Store {
         None
@@ -4664,6 +5450,7 @@ fn execute_atomic(
             pointer.byte_offset,
             width,
             committed.is_some(),
+            true,
         )?;
     }
     engine.event(
@@ -4855,6 +5642,7 @@ fn execute_scalar_load(
             pointer_value.allocation,
             pointer_value.byte_offset,
             bytes,
+            false,
             false,
         )?;
     }
