@@ -137,7 +137,8 @@ canonical Worker record exists; a different or damaged current record fails
 closed. The issuer's direct transition methods are private. One shared bounded
 client now recovers first and resumes Ready, Prepared, or Issued under one
 absolute deadline, including exact issued-request reconstruction. Its inherited
-peer and pinned-policy capability integration, distinct-UID launch and
+peer integration still remains; the pinned policy now has an immutable sealed
+memfd capability reserved at rustc fd 202. Distinct-UID launch and
 inspection policy and the Worker V3 authority join remain absent. A fixed
 receipt sidecar and publication ACK now
 carry the exact journal, occurrence, receipt, Worker record, sequence, and

@@ -1,4 +1,4 @@
-//! Sealed transport for canonical protected compiler closures and rustc invocation descriptors.
+//! Sealed transport for canonical compiler closures, rustc invocations, and issuer policies.
 //!
 //! These descriptors carry coordination evidence only. They do not grant compiler, publication,
 //! linking, loading, launch, or execution authority.
@@ -12,9 +12,13 @@ use std::process::Command;
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
+mod compiler_execution_policy;
 mod rustc_invocation;
 mod sealed_image;
 
+pub use compiler_execution_policy::{
+    COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
+};
 pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabilityV1};
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
 

@@ -17,6 +17,12 @@ the static distinct-UID launcher, inherited peer and pinned-policy capability
 integration, V2-only Cargo/host routing, external monotonic rollback anchoring,
 verifier authority, and the exact Cargo-to-KFD run remain open.
 
+The caller-pinned policy now has a reusable immutable memfd capability in
+`fe2o3-compiler-closure-capability`. It preserves exact canonical policy bytes
+under mode `0400`, complete seals, retained object identity, private
+close-on-exec custody, and fixed child descriptor 202. Cargo/backend and static
+issuer wiring still need to consume that capability.
+
 ## Transport And Ownership
 
 The service consumes one admitted issuer and its retained unnamed Unix
