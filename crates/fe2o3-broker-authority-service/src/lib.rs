@@ -82,6 +82,15 @@
 //! require_serialize::<LiveClientPidfdIdentityV1>();
 //! ```
 //!
+//! The retained external-anchor transport is likewise move-only and exposes no raw descriptor:
+//!
+//! ```compile_fail
+//! use fe2o3_broker_authority_service::ProtectedCompilerExecutionExternalAnchorV1;
+//!
+//! fn require_clone<T: Clone>() {}
+//! require_clone::<ProtectedCompilerExecutionExternalAnchorV1>();
+//! ```
+//!
 //! Compiler occurrences are constructed only inside the issuer from its own retained service
 //! admission. No caller can import or substitute that type:
 //!
@@ -112,6 +121,8 @@ compile_error!(
 );
 
 #[cfg(target_os = "linux")]
+mod compiler_execution_external_anchor;
+#[cfg(target_os = "linux")]
 mod compiler_execution_issuer;
 #[cfg(target_os = "linux")]
 mod compiler_execution_issuer_durable;
@@ -130,6 +141,11 @@ mod linux;
 #[cfg(target_os = "linux")]
 mod session;
 
+#[cfg(target_os = "linux")]
+pub use compiler_execution_external_anchor::{
+    COMPILER_EXECUTION_EXTERNAL_ANCHOR_TIMEOUT_V1, ProtectedCompilerExecutionExternalAnchorErrorV1,
+    ProtectedCompilerExecutionExternalAnchorV1,
+};
 #[cfg(target_os = "linux")]
 pub use compiler_execution_issuer::{
     CurrentStaticIssuerMeasurementsV1, IssuerAdmissionErrorKindV1,
@@ -180,8 +196,8 @@ pub use durable_session_consume::{
 #[cfg(target_os = "linux")]
 pub use linux::{
     AdmissionErrorKindV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
-    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
-    current_process_start_time_ticks_v1,
+    ProtectedExternalAnchorServiceAdmissionV1, ProtectedServiceAdmissionErrorV1,
+    ProtectedServiceAdmissionV1, current_process_start_time_ticks_v1,
 };
 #[cfg(target_os = "linux")]
 pub use session::{

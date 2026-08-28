@@ -52,6 +52,8 @@ pub use fe2o3_compiler_execution_protocol::{
     CompilerExecutionCurrentRecordAttestationV1, CompilerExecutionCurrentRecordVerificationErrorV1,
     CompilerExecutionCurrentRecordVerificationIdentityV1,
     CompilerExecutionCurrentRecordVerificationV1,
+    CompilerExecutionExternalAnchorServiceIdentityErrorV1,
+    CompilerExecutionExternalAnchorServiceIdentityV1,
     CompilerExecutionExternalAnchorTransactionErrorV1,
     CompilerExecutionExternalAnchorTransactionIdentityV1,
     CompilerExecutionExternalAnchorTransactionV1, CompilerExecutionIssuerMeasurementV1,

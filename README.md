@@ -145,7 +145,13 @@ contains a 536-byte Ed25519 attestation over that challenge and the complete
 352-byte record. The client requires the signing key to equal the pinned policy
 key and every record coordinate to equal the expected carriage. That same
 policy now pins a distinct external-anchor Ed25519 key; weak or equal issuer and
-anchor keys fail closed. The result
+anchor keys fail closed. A staged protected boundary now also admits one
+supervisor-provisioned nonblocking unnamed seqpacket and exact live service
+pidfd under a separately pinned non-root UID/GID. Its fixed-deadline transport
+sends only the canonical anchor challenge and accepts only one exact,
+ancillary-free signed observation verified under the policy key. The production
+supervisor and issuer do not yet carry or invoke that endpoint, so this is not
+external rollback authority. The result
 remains authority-free until protected key custody, external rollback, and
 refinement evidence are joined. The issuer's direct transition
 methods are private. One shared bounded

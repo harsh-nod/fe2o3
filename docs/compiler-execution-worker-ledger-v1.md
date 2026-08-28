@@ -7,8 +7,10 @@ for protected compiler-execution receipts. It is one component of the existing
 Worker V3 pipeline, not an alternate compiler or runtime route. Bounded service
 transport and an exact-current carriage verification operation over an admitted
 connection are implemented. The ledger also implements the local crash-safe
-journal for one externally anchored publication, but no external-anchor endpoint
-is admitted or queried yet. Production distinct-UID deployment, independently
+external-anchor journal for one publication. The broker now also implements a retained
+external-anchor endpoint admission and bounded authenticated exchange, but that
+endpoint is not yet carried through the production supervisor launch or invoked
+by the issuer. Production distinct-UID deployment, independently
 operated monotonic service integration, externally anchored VerifyCurrent
 evidence, production verifier authority, and the Cargo-to-KFD run remain open.
 
@@ -97,9 +99,41 @@ writes. `Published` requires that exact record and identity. An ACK is formed
 only after the `Published` journal has itself been committed and reacquired.
 
 These operations remain internal and are not called by the application-facing
-service in this checkpoint. Until the supervisor provides an authenticated
-external-anchor endpoint and the protected issuer drives this state machine,
+service in this checkpoint. The transport described below is likewise not yet
+owned by the production issuer. Until the supervisor carries that admitted
+endpoint into the protected process and the issuer drives this state machine,
 the existing service route has no external rollback authority.
+
+## External-Anchor Endpoint And Exchange
+
+`ProtectedExternalAnchorServiceAdmissionV1` retains one supervisor-provisioned
+unnamed connected Unix `SOCK_SEQPACKET` endpoint and one pidfd for its exact
+peer. Admission requires `FD_CLOEXEC`, nonblocking read-write status, exact
+`SO_PEERCRED` UID/GID agreement with the separately pinned service identity,
+exact pidfd agreement with the peer PID, live process state, distinct endpoint
+and pidfd objects, and a service UID different from the protected issuer UID.
+Every operation repeats descriptor identity, socket shape, status flags,
+credentials, pidfd target, process start time, and liveness checks.
+
+`ProtectedCompilerExecutionExternalAnchorV1` binds that move-only admission to
+one exact `PinnedAnchorKeyV1`. It permits one mutable in-flight exchange, uses a
+fixed 30-second monotonic deadline, watches both endpoint and pidfd, sends only
+the canonical 184-byte challenge, accepts no ancillary data, requires one exact
+288-byte observation packet, and verifies its key identity, signature, nonce,
+phase, transaction, sequence, and prior/proposed hash-chain position before
+returning a canonical transition receipt. A valid exact response already queued
+after local process recovery is consumed before retransmission. A second queued
+response, timeout, process death, endpoint closure, partial send, truncation,
+wrong key, malformed packet, or substituted challenge fails closed and poisons
+the live transport. Retrying after any exchange failure requires process restart
+and fresh admission of the still-pinned endpoint and pidfd.
+
+This boundary proves retained endpoint continuity and signed response
+correlation. It does not prove that the service is independently operated, that
+its backend is monotonic or crash durable, that duplicate requests are
+coalesced by the backend, or that its signing key has protected custody. Those
+properties require the reference service/deployment profile and end-to-end
+restart qualification that remain open.
 
 ## Exact-Current Verification
 
@@ -206,3 +240,8 @@ boundaries for preparation, commit and abort observation persistence, the
 post-anchor Worker-record write, and final Published-journal write. Recovery is
 required to produce only the exact prior or exact legal successor at every one
 of those 98 injected failures, after which retry completes exactly once.
+Endpoint and transport tests additionally cover exact socket and pidfd binding,
+wrong pinned credentials, same-UID production rejection, blocking or mutated
+status flags, wrong pidfd target, process death, endpoint closure, timeout,
+short and oversized packets, forbidden ancillary data, duplicate responses,
+prequeued recovery, wrong signature/key, and nonce and phase substitution.
