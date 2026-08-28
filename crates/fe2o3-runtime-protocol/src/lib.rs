@@ -7,6 +7,7 @@ mod compiler_execution_receipt_publication;
 mod compiler_execution_service;
 mod static_application;
 mod worker_v3_load_envelope;
+mod worker_v3_load_envelope_v2;
 
 pub use application_handoff_v3::{
     MAX_WORKER_V3_APPLICATION_HANDOFF_ALLOCATION_BYTES_V1, MAX_WORKER_V3_APPLICATION_INPUTS_V1,
@@ -68,4 +69,12 @@ pub use worker_v3_load_envelope::{
     WORKER_V3_LOAD_ENVELOPE_VERSION_V1, WorkerV3LoadEnvelopeBindingFieldV1,
     WorkerV3LoadEnvelopeCodecBudgetV1, WorkerV3LoadEnvelopeErrorV1, WorkerV3LoadEnvelopeV1,
     WorkerV3LoadEnvelopeWireV1, recover_worker_v3_load_envelope_v1,
+};
+pub use worker_v3_load_envelope_v2::{
+    MAX_WORKER_V3_LOAD_ENVELOPE_ALLOCATION_BYTES_V2, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
+    MAX_WORKER_V3_LOAD_ENVELOPE_REPLAY_BYTES_V2, RecoveredWorkerV3LoadEnvelopeV2,
+    WORKER_V3_LOAD_ENVELOPE_MAGIC_V2, WORKER_V3_LOAD_ENVELOPE_VERSION_V2,
+    WorkerV3LoadEnvelopeBindingFieldV2, WorkerV3LoadEnvelopeCodecBudgetV2,
+    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeV2, WorkerV3LoadEnvelopeWireV2,
+    recover_worker_v3_load_envelope_v2,
 };

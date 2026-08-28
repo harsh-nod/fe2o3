@@ -10,9 +10,10 @@ crate-private, so an external caller must use this packet boundary.
 
 This checkpoint is not the complete production deployment. A static issuer
 executable and supervisor still need to establish the real distinct-UID launch
-and ptrace inspection policy before admission. Receipt carriage through Worker
-V3, external monotonic rollback anchoring, verifier authority, and the exact
-Cargo-to-KFD run also remain open.
+and ptrace inspection policy before admission. The complete receipt carriage and
+lossless Worker V3 V2 load-envelope codec now exist, but service-client recovery,
+V2-only Cargo/host routing, external monotonic rollback anchoring, verifier
+authority, and the exact Cargo-to-KFD run remain open.
 
 ## Transport And Ownership
 

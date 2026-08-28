@@ -63,3 +63,18 @@ The codec is allocation-free and authority-free. It does not inspect peer
 credentials, retain a pidfd, impose a deadline, mutate either journal, or turn
 wire bytes into a capability. Those operations belong only to the protected
 service implementation.
+
+## Receipt-bearing Worker V3 load envelope V2
+
+The receipt-bearing envelope nests the exact canonical V1 replay and the complete
+2,058-byte compiler-execution carriage under a distinct `F3LDENV2` header and
+checksum. It reconstructs the complete compiler subject from the replay's attempt,
+slot, transaction identity, and outer handoff, then requires exact equality with
+the signed request subject. Strict decode re-encodes and compares the nested V1
+bytes. The full 256 MiB V1 maximum remains representable; V2 adds exactly 2,114
+bytes and has explicit wire and transient-allocation budgets.
+
+Live construction, opaque durable persistence, and strict V2 restart recovery are
+implemented. They remain authority-free: protected policy comparison, rollback
+currentness, and Worker verifier authority are still required. Cargo and host have
+not yet switched their production decoder from top-level V1 to V2.

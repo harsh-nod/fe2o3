@@ -53,8 +53,14 @@ const RECEIPT_BODY_BYTES_V1: usize =
 /// Exact canonical size of one terminal Worker V3 load-readiness receipt.
 pub const MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1: usize = RECEIPT_BODY_BYTES_V1 + 32;
 
-/// Independent hard ceiling for opaque Worker V3 load-envelope bytes retained by this crate.
+/// Frozen maximum canonical bytes in one standalone Worker V3 V1 replay envelope.
 pub const MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1: usize = 256 * 1024 * 1024;
+// The V2 custody ceiling preserves that full replay plus fixed receipt-bearing framing. The
+// schema-neutral custody layer still does not interpret either format.
+const RECEIPT_BEARING_ENVELOPE_FRAMING_BYTES: usize = 2_114;
+/// Hard ceiling for opaque receipt-bearing Worker V3 V2 envelope custody.
+pub const MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2: usize =
+    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + RECEIPT_BEARING_ENVELOPE_FRAMING_BYTES;
 
 const FILE_PREFIX_V1: &str = ".fe2o3-worker-v3-load-readiness-v1-";
 const ENVELOPE_SUFFIX_V1: &str = ".envelope";
@@ -822,10 +828,10 @@ pub fn publish_worker_v3_load_readiness_v1_with_options(
     exact_envelope: Vec<u8>,
     options: WorkerV3LoadReadinessOptionsV1,
 ) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
-    if exact_envelope.capacity() > MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 {
+    if exact_envelope.capacity() > MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2 {
         return Err(WorkerV3LoadReadinessErrorV1::EnvelopeCapacityExceeded {
             actual: exact_envelope.capacity(),
-            maximum: MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
+            maximum: MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2,
         });
     }
     let envelope = WorkerV3LoadEnvelopeBindingV1::from_exact_bytes(&exact_envelope)?;
@@ -1821,7 +1827,7 @@ fn quarantine_and_unlink_private_entry(
 ) -> Result<(), WorkerV3LoadReadinessErrorV1> {
     let exact_length = usize::try_from(snapshot.st_size)
         .ok()
-        .filter(|length| *length <= MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1)
+        .filter(|length| *length <= MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2)
         .ok_or_else(|| WorkerV3LoadReadinessErrorV1::InvalidPrivateEntry {
             entry: entry.to_path_buf(),
         })?;
@@ -2076,10 +2082,10 @@ fn push_attempt(bytes: &mut Vec<u8>, attempt: BuildAttempt) {
 }
 
 fn validate_envelope_length(length: u64) -> Result<(), WorkerV3LoadReadinessCodecErrorV1> {
-    if length == 0 || length > MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 as u64 {
+    if length == 0 || length > MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2 as u64 {
         return Err(WorkerV3LoadReadinessCodecErrorV1::InvalidEnvelopeLength {
             actual: length,
-            maximum: MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1,
+            maximum: MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2,
         });
     }
     Ok(())
@@ -2308,6 +2314,10 @@ mod tests {
     #[test]
     fn codecs_reserve_fallibly_and_reject_unbounded_lengths() {
         assert_eq!(
+            MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2,
+            MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 + 2_114
+        );
+        assert_eq!(
             fallible_vec(usize::MAX),
             Err(WorkerV3LoadReadinessCodecErrorV1::AllocationFailed {
                 requested: usize::MAX,
@@ -2317,10 +2327,17 @@ mod tests {
             WorkerV3LoadEnvelopeBindingV1::new([0; 32], 0),
             Err(WorkerV3LoadReadinessCodecErrorV1::InvalidEnvelopeLength { .. })
         ));
+        assert!(
+            WorkerV3LoadEnvelopeBindingV1::new(
+                [0x41; 32],
+                MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2 as u64
+            )
+            .is_ok()
+        );
         assert!(matches!(
             WorkerV3LoadEnvelopeBindingV1::new(
                 [0; 32],
-                MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1 as u64 + 1
+                MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2 as u64 + 1
             ),
             Err(WorkerV3LoadReadinessCodecErrorV1::InvalidEnvelopeLength { .. })
         ));

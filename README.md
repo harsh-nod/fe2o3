@@ -11,6 +11,7 @@ artifact, runtime, and proof boundaries described below. See the
 [production compiler convergence design](docs/production-pipeline-convergence-v1.md),
 [compiler execution subject V1](docs/compiler-execution-subject-v1.md),
 [compiler execution attestation protocol V1](docs/compiler-execution-attestation-v1.md),
+[receipt-bearing Worker V3 load envelope V2](docs/worker-v3-receipt-bearing-load-envelope-v2.md),
 [gfx942 production LDS reduction](docs/gfx942-production-lds-reduction-v1.md),
 [workspace ownership policy](docs/workspace-layers-and-ownership.md),
 [Pliron Wave 0 architecture](docs/pliron-wave0-architecture.md),
@@ -667,7 +668,13 @@ is complete, and the recorded runs grant no current production authority.
   current-generation replay intent, while registry-rooted scavenging removes
   only superseded custody. The envelope still grants no descriptor
   authentication, semantic admission, HSA readiness, load, or launch
-  authority. Production now transfers only the canonical V3 envelope and
+  authority. A receipt-bearing `WorkerV3LoadEnvelopeV2` codec now losslessly
+  nests the full V1 replay limit and complete compiler receipt carriage, strictly
+  reconstructs and compares the signed compiler subject, and uses the same
+  schema-neutral durable custody and restart mechanism. Cargo and host still
+  route top-level V1; switching all production consumers to V2 and rejecting V1
+  remains a coordinated migration, so V2 does not yet establish compiler
+  origin. Production now transfers only the canonical V3 envelope and
   artifact-directory descriptors to an identity-pinned sealed application. A
   fresh occurrence binds those descriptors and the ACK channel; Cargo checks
   the challenge-bound ACK and retains the current-publication lease through

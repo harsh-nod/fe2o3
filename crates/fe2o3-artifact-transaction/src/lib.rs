@@ -214,14 +214,14 @@ use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 pub use worker_v3_load_readiness::{
-    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1, MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1,
-    VerifiedWorkerV3LoadEnvelopeAuthorityV1, WorkerV3LoadEnvelopeBindingV1,
-    WorkerV3LoadReadinessBoundaryV1, WorkerV3LoadReadinessCodecErrorV1,
-    WorkerV3LoadReadinessErrorV1, WorkerV3LoadReadinessFaultPointV1,
-    WorkerV3LoadReadinessFaultTimingV1, WorkerV3LoadReadinessOptionsV1,
-    WorkerV3LoadReadinessOutcomeV1, WorkerV3LoadReadinessReceiptV1, WorkerV3LoadReadinessResultV1,
-    discover_worker_v3_load_readiness_attempts_v1, publish_worker_v3_load_readiness_v1,
-    publish_worker_v3_load_readiness_v1_with_options,
+    MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_CUSTODY_BYTES_V2,
+    MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1, VerifiedWorkerV3LoadEnvelopeAuthorityV1,
+    WorkerV3LoadEnvelopeBindingV1, WorkerV3LoadReadinessBoundaryV1,
+    WorkerV3LoadReadinessCodecErrorV1, WorkerV3LoadReadinessErrorV1,
+    WorkerV3LoadReadinessFaultPointV1, WorkerV3LoadReadinessFaultTimingV1,
+    WorkerV3LoadReadinessOptionsV1, WorkerV3LoadReadinessOutcomeV1, WorkerV3LoadReadinessReceiptV1,
+    WorkerV3LoadReadinessResultV1, discover_worker_v3_load_readiness_attempts_v1,
+    publish_worker_v3_load_readiness_v1, publish_worker_v3_load_readiness_v1_with_options,
     recover_worker_v3_load_readiness_for_attempt_v1, recover_worker_v3_load_readiness_v1,
     scavenge_superseded_worker_v3_load_readiness_v1,
 };
