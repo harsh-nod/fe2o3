@@ -15,13 +15,13 @@ use sha2::{Digest, Sha256};
 use crate::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
-    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V2,
+    COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3,
     COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationRequestV1,
-    CompilerExecutionCurrentRecordAttestationV2, CompilerExecutionCurrentRecordVerificationErrorV2,
-    CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionIssuerPolicyIdentityV1,
+    CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionIssuerPolicyIdentityV1,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
     CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationErrorV1,
     CompilerExecutionReceiptPublicationV1,
@@ -85,7 +85,7 @@ pub const COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1: usize =
     RESPONSE_BASE_BYTES + COMPILER_EXECUTION_RECEIPT_CARRIAGE_BYTES_V1;
 /// Exact byte length of a protected current-record verification response.
 pub const COMPILER_EXECUTION_SERVICE_VERIFIED_CURRENT_RESPONSE_BYTES_V1: usize =
-    RESPONSE_BASE_BYTES + COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V2;
+    RESPONSE_BASE_BYTES + COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3;
 /// Maximum packet emitted by the protected compiler-execution service.
 pub const MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1: usize =
     if COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1
@@ -653,7 +653,7 @@ pub struct CompilerExecutionServiceResponseV1 {
     challenge: Option<CompilerExecutionAttestationChallengeV1>,
     publication: Option<CompilerExecutionReceiptPublicationV1>,
     carriage: Option<CompilerExecutionReceiptCarriageV1>,
-    current_record_attestation: Option<CompilerExecutionCurrentRecordAttestationV2>,
+    current_record_attestation: Option<CompilerExecutionCurrentRecordAttestationV3>,
     acknowledgment: Option<CompilerExecutionReceiptPublicationAckV1>,
     disposition: Option<CompilerExecutionServicePublishDispositionV1>,
     identity: CompilerExecutionServiceResponseIdentityV1,
@@ -775,7 +775,7 @@ impl CompilerExecutionServiceResponseV1 {
     /// Returns a challenge-bound signature over the protected service's exact-current record.
     pub fn verified_current(
         request_identity: CompilerExecutionServiceRequestIdentityV1,
-        attestation: CompilerExecutionCurrentRecordAttestationV2,
+        attestation: CompilerExecutionCurrentRecordAttestationV3,
     ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
         let verification = attestation.verification();
         Self::encode(
@@ -927,8 +927,8 @@ impl CompilerExecutionServiceResponseV1 {
                 None,
                 None,
                 None,
-                Some(CompilerExecutionCurrentRecordAttestationV2::decode(
-                    reader.take(COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V2)?,
+                Some(CompilerExecutionCurrentRecordAttestationV3::decode(
+                    reader.take(COMPILER_EXECUTION_CURRENT_RECORD_ATTESTATION_BYTES_V3)?,
                 )?),
                 None,
                 None,
@@ -967,7 +967,7 @@ impl CompilerExecutionServiceResponseV1 {
         challenge: Option<CompilerExecutionAttestationChallengeV1>,
         publication: Option<CompilerExecutionReceiptPublicationV1>,
         carriage: Option<CompilerExecutionReceiptCarriageV1>,
-        current_record_attestation: Option<CompilerExecutionCurrentRecordAttestationV2>,
+        current_record_attestation: Option<CompilerExecutionCurrentRecordAttestationV3>,
         acknowledgment: Option<CompilerExecutionReceiptPublicationAckV1>,
         disposition: Option<CompilerExecutionServicePublishDispositionV1>,
     ) -> Result<Self, CompilerExecutionServiceProtocolErrorV1> {
@@ -1100,13 +1100,13 @@ impl CompilerExecutionServiceResponseV1 {
 
     pub const fn current_record_attestation(
         &self,
-    ) -> Option<&CompilerExecutionCurrentRecordAttestationV2> {
+    ) -> Option<&CompilerExecutionCurrentRecordAttestationV3> {
         self.current_record_attestation.as_ref()
     }
 
     pub const fn current_record_verification(
         &self,
-    ) -> Option<&CompilerExecutionCurrentRecordVerificationV2> {
+    ) -> Option<&CompilerExecutionCurrentRecordVerificationV3> {
         match self.current_record_attestation.as_ref() {
             Some(attestation) => Some(attestation.verification()),
             None => None,
@@ -1267,7 +1267,7 @@ fn validate_response_fields(
     challenge: Option<&CompilerExecutionAttestationChallengeV1>,
     publication: Option<&CompilerExecutionReceiptPublicationV1>,
     carriage: Option<&CompilerExecutionReceiptCarriageV1>,
-    current_record_attestation: Option<&CompilerExecutionCurrentRecordAttestationV2>,
+    current_record_attestation: Option<&CompilerExecutionCurrentRecordAttestationV3>,
     acknowledgment: Option<&CompilerExecutionReceiptPublicationAckV1>,
     disposition: Option<CompilerExecutionServicePublishDispositionV1>,
 ) -> Result<(), CompilerExecutionServiceProtocolErrorV1> {
@@ -1496,7 +1496,7 @@ pub enum CompilerExecutionServiceProtocolErrorV1 {
     Subject(CompilerExecutionSubjectErrorV1),
     Attestation(CompilerExecutionAttestationErrorV1),
     Publication(CompilerExecutionReceiptPublicationErrorV1),
-    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV2),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV3),
 }
 
 impl fmt::Display for CompilerExecutionServiceProtocolErrorV1 {
@@ -1594,10 +1594,10 @@ impl From<CompilerExecutionReceiptPublicationErrorV1> for CompilerExecutionServi
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV2>
+impl From<CompilerExecutionCurrentRecordVerificationErrorV3>
     for CompilerExecutionServiceProtocolErrorV1
 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV3) -> Self {
         Self::CurrentRecord(error)
     }
 }
@@ -1703,6 +1703,32 @@ mod tests {
             )
             .unwrap()
         }
+
+        fn currentness_receipt(
+            &self,
+            carriage: &CompilerExecutionReceiptCarriageV1,
+            commit_receipt: &AnchorTransitionReceiptV1,
+            verification_challenge: [u8; 32],
+        ) -> AnchorTransitionReceiptV1 {
+            let challenge = CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                carriage,
+                commit_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+            let key =
+                PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+                    .unwrap();
+            let unsigned =
+                UnsignedAnchorObservationV1::from_challenge(&challenge, AnchorPositionV1::Proposed);
+            let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
+            AnchorTransitionReceiptV1::new(
+                challenge,
+                &unsigned.attach_signature(signature.to_bytes()),
+                &key,
+            )
+            .unwrap()
+        }
     }
 
     #[test]
@@ -1723,11 +1749,11 @@ mod tests {
         assert_eq!(COMPILER_EXECUTION_SERVICE_RECOVERED_RESPONSE_BYTES_V1, 2250);
         assert_eq!(
             COMPILER_EXECUTION_SERVICE_VERIFIED_CURRENT_RESPONSE_BYTES_V1,
-            1256
+            1784
         );
         assert_eq!(
-            crate::COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V2,
-            912
+            crate::COMPILER_EXECUTION_CURRENT_RECORD_VERIFICATION_BYTES_V3,
+            1440
         );
 
         let fixture = Fixture::new();
@@ -1813,23 +1839,29 @@ mod tests {
         let recovered =
             CompilerExecutionServiceResponseV1::recovered(recover.identity(), carriage.clone())
                 .unwrap();
-        let verification = CompilerExecutionCurrentRecordVerificationV2::new(
+        let verification_challenge = verify_current.verification_challenge().unwrap();
+        let commit_receipt = fixture.anchor_receipt(&carriage);
+        let currentness_receipt =
+            fixture.currentness_receipt(&carriage, &commit_receipt, verification_challenge);
+        let verification = CompilerExecutionCurrentRecordVerificationV3::new(
             &carriage,
-            fixture.anchor_receipt(&carriage),
+            commit_receipt,
+            currentness_receipt,
+            verification_challenge,
             [0x71; 32],
             [0x72; 32],
         )
         .unwrap();
         assert_every_mutation_rejects(verification.canonical_bytes(), |bytes| {
-            CompilerExecutionCurrentRecordVerificationV2::decode(bytes).is_err()
+            CompilerExecutionCurrentRecordVerificationV3::decode(bytes).is_err()
         });
         let verified_current = CompilerExecutionServiceResponseV1::verified_current(
             verify_current.identity(),
-            CompilerExecutionCurrentRecordAttestationV2::issue(
+            CompilerExecutionCurrentRecordAttestationV3::issue(
                 &fixture.policy,
                 &carriage,
                 verification,
-                verify_current.verification_challenge().unwrap(),
+                verification_challenge,
                 &fixture.signing_key,
             )
             .unwrap(),
@@ -1953,16 +1985,27 @@ mod tests {
             .unwrap(),
             CompilerExecutionServiceResponseV1::verified_current(
                 requests[4].identity(),
-                CompilerExecutionCurrentRecordAttestationV2::issue(
+                CompilerExecutionCurrentRecordAttestationV3::issue(
                     &fixture.policy,
                     &carriage,
-                    CompilerExecutionCurrentRecordVerificationV2::new(
-                        &carriage,
-                        fixture.anchor_receipt(&carriage),
-                        [0x71; 32],
-                        [0x72; 32],
-                    )
-                    .unwrap(),
+                    {
+                        let verification_challenge = requests[4].verification_challenge().unwrap();
+                        let commit_receipt = fixture.anchor_receipt(&carriage);
+                        let currentness_receipt = fixture.currentness_receipt(
+                            &carriage,
+                            &commit_receipt,
+                            verification_challenge,
+                        );
+                        CompilerExecutionCurrentRecordVerificationV3::new(
+                            &carriage,
+                            commit_receipt,
+                            currentness_receipt,
+                            verification_challenge,
+                            [0x71; 32],
+                            [0x72; 32],
+                        )
+                        .unwrap()
+                    },
                     requests[4].verification_challenge().unwrap(),
                     &fixture.signing_key,
                 )

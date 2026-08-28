@@ -7,9 +7,9 @@ use std::time::Duration;
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_compiler_execution_client::{CompilerExecutionClientErrorV1, CompilerExecutionClientV1};
 use fe2o3_runtime_protocol::{
-    CompilerExecutionCurrentRecordAttestationIdentityV2,
-    CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionReceiptCarriageV1,
-    VerifiedCompilerExecutionCurrentRecordV2,
+    CompilerExecutionCurrentRecordAttestationIdentityV3,
+    CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionReceiptCarriageV1,
+    VerifiedCompilerExecutionCurrentRecordV3,
 };
 
 use crate::{
@@ -21,9 +21,10 @@ pub const WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1: Duration = Duratio
 
 /// Move-only signed endpoint evidence for one exact Worker V3 compiler receipt.
 ///
-/// The evidence authenticates a fresh response under the receipt's pinned issuer key. It remains
-/// non-authoritative because protected key custody and external monotonic currentness are separate
-/// production joins.
+/// The evidence authenticates a fresh response under the receipt's pinned issuer key and a fresh
+/// signed recovery observation under the separately pinned external-anchor key. It remains
+/// non-authoritative because protected key custody and independently administered anchor deployment
+/// are separate production joins.
 ///
 /// ```compile_fail
 /// use fe2o3_host::WorkerV3CompilerCurrentRecordAuditV1;
@@ -32,17 +33,17 @@ pub const WORKER_V3_COMPILER_CURRENT_RECORD_AUDIT_TIMEOUT_V1: Duration = Duratio
 /// ```
 #[derive(Debug)]
 pub struct WorkerV3CompilerCurrentRecordAuditV1 {
-    verified: VerifiedCompilerExecutionCurrentRecordV2,
+    verified: VerifiedCompilerExecutionCurrentRecordV3,
 }
 
 impl WorkerV3CompilerCurrentRecordAuditV1 {
-    pub const fn verification(&self) -> &CompilerExecutionCurrentRecordVerificationV2 {
+    pub const fn verification(&self) -> &CompilerExecutionCurrentRecordVerificationV3 {
         self.verified.verification()
     }
 
     pub const fn attestation_identity(
         &self,
-    ) -> CompilerExecutionCurrentRecordAttestationIdentityV2 {
+    ) -> CompilerExecutionCurrentRecordAttestationIdentityV3 {
         self.verified.attestation().identity()
     }
 
@@ -71,7 +72,7 @@ impl WorkerV3CompilerCurrentRecordAuditV1 {
     }
 
     pub const fn authenticates_external_rollback_currentness(&self) -> bool {
-        false
+        self.verified.authenticates_external_rollback_currentness()
     }
 
     pub const fn grants_verification_authority(&self) -> bool {
@@ -216,8 +217,8 @@ mod tests {
     };
     use fe2o3_runtime_protocol::{
         CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-        CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV2,
-        CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionExternalAnchorTransactionV1,
+        CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV3,
+        CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionExternalAnchorTransactionV1,
         CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
         CompilerExecutionReceiptPublicationAckV1, CompilerExecutionReceiptPublicationV1,
         CompilerExecutionServiceRequestKindV1, CompilerExecutionServiceRequestV1,
@@ -319,6 +320,7 @@ mod tests {
         let service_policy = fixture.policy.clone();
         let service_key = fixture.signing_key.clone();
         let service_anchor_receipt = fixture.anchor_receipt();
+        let service_anchor_key = fixture.anchor_signing_key.clone();
         let service = thread::spawn(move || {
             let request = receive_request(&service);
             assert_eq!(
@@ -326,18 +328,41 @@ mod tests {
                 CompilerExecutionServiceRequestKindV1::VerifyCurrent
             );
             assert_eq!(request.carriage(), Some(&service_carriage));
-            let verification = CompilerExecutionCurrentRecordVerificationV2::new(
+            let verification_challenge = request.verification_challenge().unwrap();
+            let currentness_challenge = CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                &service_carriage,
+                &service_anchor_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+            let anchor_key =
+                PinnedAnchorKeyV1::from_bytes(service_anchor_key.verifying_key().to_bytes())
+                    .unwrap();
+            let unsigned = UnsignedAnchorObservationV1::from_challenge(
+                &currentness_challenge,
+                AnchorPositionV1::Proposed,
+            );
+            let signature = service_anchor_key.sign(&unsigned.signing_bytes());
+            let currentness_receipt = AnchorTransitionReceiptV1::new(
+                currentness_challenge,
+                &unsigned.attach_signature(signature.to_bytes()),
+                &anchor_key,
+            )
+            .unwrap();
+            let verification = CompilerExecutionCurrentRecordVerificationV3::new(
                 &service_carriage,
                 service_anchor_receipt,
+                currentness_receipt,
+                verification_challenge,
                 [0x91; 32],
                 [0x92; 32],
             )
             .unwrap();
-            let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
+            let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
                 &service_policy,
                 &service_carriage,
                 verification,
-                request.verification_challenge().unwrap(),
+                verification_challenge,
                 &service_key,
             )
             .unwrap();
@@ -372,7 +397,7 @@ mod tests {
         assert!(!evidence.authenticates_protected_current_record());
         assert!(evidence.authenticates_external_anchor_commit());
         assert_ne!(evidence.external_rollback_verification_identity(), [0; 32]);
-        assert!(!evidence.authenticates_external_rollback_currentness());
+        assert!(evidence.authenticates_external_rollback_currentness());
         assert!(!evidence.grants_verification_authority());
         assert!(!evidence.grants_authority());
         assert!(!evidence.grants_load_authority());

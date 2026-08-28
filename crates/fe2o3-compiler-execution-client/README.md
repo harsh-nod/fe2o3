@@ -11,14 +11,18 @@ carriage and a fresh internally generated challenge to the protected service.
 It accepts only a canonical issuer-signed `VerifiedCurrent` response under the
 caller-pinned issuer key, bound to that challenge and the exact request, policy,
 subject, carriage, issuer journal, Worker record, sequence, and rollback
-anchors. The same policy pins a distinct external-anchor key. The sole V2
-response carries the complete signed transition receipt; the client re-verifies
-that receipt under the pinned anchor key and requires a proposed-position
-advance for the exact compiler transaction reconstructed from its original
-carriage. The returned move-only evidence therefore authenticates the
-issuer-key response and external transition commit. It remains
-non-authoritative until protected key custody, a fresh external query proving
-that no newer head exists, and compiler-refinement evidence are joined.
+anchors. The same policy pins a distinct external-anchor key. The sole V3
+response carries both the retained signed transition receipt and a fresh signed
+recovery receipt. The client re-verifies both under the pinned anchor key,
+requires a proposed-position advance for the exact compiler transaction
+reconstructed from its original carriage, and requires a proposed-position
+recovery observation for the same sequence and heads. The recovery nonce is
+derived from the client's challenge, carriage identity, and retained receipt
+identity. The returned move-only evidence therefore authenticates the issuer
+response, external transition commit, and fresh signed current-head observation.
+It remains non-authoritative until protected key custody, independently
+administered monotonic-anchor deployment, and compiler-refinement evidence are
+joined.
 
 The client uses one absolute monotonic deadline, fixed stack packet storage,
 strict request/response identity correlation, pinned-policy validation, and no

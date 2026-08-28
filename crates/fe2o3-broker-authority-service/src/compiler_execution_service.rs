@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_runtime_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationRequestV1,
-    CompilerExecutionCurrentRecordAttestationV2, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationV1, CompilerExecutionServiceProtocolErrorV1,
     CompilerExecutionServicePublishDispositionV1, CompilerExecutionServiceRequestIdentityV1,
@@ -48,7 +48,7 @@ pub enum CompilerExecutionServiceExitV1 {
     },
     VerifiedCurrent {
         request_identity: CompilerExecutionServiceRequestIdentityV1,
-        attestation: CompilerExecutionCurrentRecordAttestationV2,
+        attestation: CompilerExecutionCurrentRecordAttestationV3,
     },
 }
 
@@ -101,10 +101,10 @@ trait CompilerExecutionServiceIssuerV1 {
         subject: &InertCompilerExecutionSubjectV1,
     ) -> Result<Option<CompilerExecutionReceiptCarriageV1>, CompilerExecutionServiceErrorV1>;
     fn verify_current(
-        &self,
+        &mut self,
         carriage: &CompilerExecutionReceiptCarriageV1,
         verification_challenge: [u8; 32],
-    ) -> Result<CompilerExecutionCurrentRecordAttestationV2, CompilerExecutionServiceErrorV1>;
+    ) -> Result<CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionServiceErrorV1>;
 }
 
 impl CompilerExecutionServiceIssuerV1 for ProtectedCompilerExecutionIssuerV1 {
@@ -173,10 +173,10 @@ impl CompilerExecutionServiceIssuerV1 for ProtectedCompilerExecutionIssuerV1 {
     }
 
     fn verify_current(
-        &self,
+        &mut self,
         carriage: &CompilerExecutionReceiptCarriageV1,
         verification_challenge: [u8; 32],
-    ) -> Result<CompilerExecutionCurrentRecordAttestationV2, CompilerExecutionServiceErrorV1> {
+    ) -> Result<CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionServiceErrorV1> {
         self.attest_current_carriage_for_service(carriage, verification_challenge)
             .map_err(Into::into)
     }
@@ -818,6 +818,32 @@ mod tests {
             )
             .unwrap()
         }
+
+        fn currentness_receipt(
+            &self,
+            carriage: &CompilerExecutionReceiptCarriageV1,
+            commit_receipt: &AnchorTransitionReceiptV1,
+            verification_challenge: [u8; 32],
+        ) -> AnchorTransitionReceiptV1 {
+            let challenge = fe2o3_runtime_protocol::CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                carriage,
+                commit_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+            let key =
+                PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+                    .unwrap();
+            let unsigned =
+                UnsignedAnchorObservationV1::from_challenge(&challenge, AnchorPositionV1::Proposed);
+            let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
+            AnchorTransitionReceiptV1::new(
+                challenge,
+                &unsigned.attach_signature(signature.to_bytes()),
+                &key,
+            )
+            .unwrap()
+        }
     }
 
     impl CompilerExecutionServiceIssuerV1 for FakeIssuer {
@@ -936,10 +962,10 @@ mod tests {
         }
 
         fn verify_current(
-            &self,
+            &mut self,
             carriage: &CompilerExecutionReceiptCarriageV1,
             verification_challenge: [u8; 32],
-        ) -> Result<CompilerExecutionCurrentRecordAttestationV2, CompilerExecutionServiceErrorV1>
+        ) -> Result<CompilerExecutionCurrentRecordAttestationV3, CompilerExecutionServiceErrorV1>
         {
             if !self.published {
                 return Err(CompilerExecutionServiceErrorV1::PayloadMismatch);
@@ -953,15 +979,20 @@ mod tests {
             if carriage != &expected {
                 return Err(CompilerExecutionServiceErrorV1::PayloadMismatch);
             }
+            let commit_receipt = self.anchor_receipt(carriage);
+            let currentness_receipt =
+                self.currentness_receipt(carriage, &commit_receipt, verification_challenge);
             let verification =
-                fe2o3_runtime_protocol::CompilerExecutionCurrentRecordVerificationV2::new(
+                fe2o3_runtime_protocol::CompilerExecutionCurrentRecordVerificationV3::new(
                     carriage,
-                    self.anchor_receipt(carriage),
+                    commit_receipt,
+                    currentness_receipt,
+                    verification_challenge,
                     [0x91; 32],
                     [0x92; 32],
                 )
                 .map_err(CompilerExecutionServiceProtocolErrorV1::from)?;
-            CompilerExecutionCurrentRecordAttestationV2::issue(
+            CompilerExecutionCurrentRecordAttestationV3::issue(
                 &self.policy,
                 carriage,
                 verification,

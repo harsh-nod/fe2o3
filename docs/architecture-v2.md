@@ -125,10 +125,15 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   application runner creates a separate child-bound fd 195, reaches the same
   fixed supervisor before ACK, exposes no policy fd 202, and retains readiness
   through exit. A one-use host auditor consumes that endpoint and verifies the
-  issuer signature over a fresh challenge and the exact receipt-bearing V2
-  current-record result. The client independently re-verifies the signed anchor
-  commit against its original carriage; present external currentness still
-  requires a fresh anchor query, and the result remains authority-free. Promotion
+  issuer signature over a fresh challenge and the exact receipt-bearing V3
+  current-record result. The protected service derives a client-verifiable
+  external recovery challenge, queries the admitted anchor, then reacquires the
+  Worker record before signing. The client independently verifies the retained
+  advance receipt, fresh proposed-position recovery receipt, and every
+  transition coordinate against its original carriage. The result authenticates
+  the signed current-head observation but remains authority-free until
+  independently administered monotonic deployment and protected-key custody are
+  established. Promotion
   compares every receipt, occurrence, Worker-ledger, sequence, and rollback
   coordinate and requires nonzero independent protected-policy, ledger, and
   external rollback verification identities. The concrete protected verifier,
@@ -194,9 +199,9 @@ architecture, centered on exact `gfx942:xnack-` profiles:
   application runner uses a fresh child-created fd 195 through the same
   supervisor without inheriting fd 202, and `fe2o3-host` can consume its signed
   challenge-bound receipt-bearing current-record response as move-only audit
-  evidence. Deployed production supervisor provisioning, a fresh independently
-  operated external-currentness query, and final verifier authority remain
-  pending.
+  evidence. Deployed production supervisor provisioning, an independently
+  operated monotonic anchor backend, protected key custody, and final verifier
+  authority remain pending.
 - Versioned artifact, descriptor, durable-publication, and HSA records exist.
   Host execution has one workload-neutral Worker V3 graph. An arbitrary
   manifest cannot manufacture a Rust signature, verifier decision, load

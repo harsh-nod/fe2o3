@@ -17,9 +17,9 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_ACK_BYTES_V1, CompilerExecutionAttestationChallengeV1,
     CompilerExecutionAttestationErrorV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV2,
-    CompilerExecutionCurrentRecordVerificationErrorV2,
-    CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionIssuerPolicyV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV3,
+    CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
 };
@@ -1307,17 +1307,29 @@ impl ProtectedCompilerExecutionIssuerV1 {
         Ok(Some(carriage))
     }
 
-    /// Reacquires and verifies one complete expected carriage under protected service custody.
+    /// Reacquires one exact commit, obtains a fresh external observation, and reacquires it again.
     pub(super) fn verify_current_carriage_for_service(
-        &self,
+        &mut self,
         expected_carriage: &CompilerExecutionReceiptCarriageV1,
-    ) -> Result<CompilerExecutionCurrentRecordVerificationV2, ProtectedCompilerExecutionIssuerErrorV1>
+        verification_challenge: [u8; 32],
+    ) -> Result<CompilerExecutionCurrentRecordVerificationV3, ProtectedCompilerExecutionIssuerErrorV1>
     {
         self.admission.validate_continuity()?;
         validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
-        let verification = self
+        let external_challenge = self
             .worker_ledger
-            .verify_current_carriage(expected_carriage)?;
+            .external_anchor_currentness_challenge(expected_carriage, verification_challenge)?;
+        let external_currentness_receipt = self
+            .admission
+            .external_anchor_mut()
+            .exchange(&external_challenge)?;
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)?;
+        let verification = self.worker_ledger.verify_current_carriage(
+            expected_carriage,
+            external_currentness_receipt,
+            verification_challenge,
+        )?;
         if verification.policy_identity() != *self.admission.policy().identity().as_bytes()
             || verification.subject_identity()
                 != *expected_carriage.request().subject().identity().sha256()
@@ -1334,13 +1346,14 @@ impl ProtectedCompilerExecutionIssuerV1 {
 
     /// Reacquires one exact current carriage and signs the caller's fresh endpoint challenge.
     pub(super) fn attest_current_carriage_for_service(
-        &self,
+        &mut self,
         expected_carriage: &CompilerExecutionReceiptCarriageV1,
         verification_challenge: [u8; 32],
-    ) -> Result<CompilerExecutionCurrentRecordAttestationV2, ProtectedCompilerExecutionIssuerErrorV1>
+    ) -> Result<CompilerExecutionCurrentRecordAttestationV3, ProtectedCompilerExecutionIssuerErrorV1>
     {
-        let verification = self.verify_current_carriage_for_service(expected_carriage)?;
-        let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
+        let verification =
+            self.verify_current_carriage_for_service(expected_carriage, verification_challenge)?;
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
             self.admission.policy(),
             expected_carriage,
             verification,
@@ -1629,7 +1642,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     Durable(RetainedDurableDirectoryErrorV1),
     Protocol(CompilerExecutionAttestationErrorV1),
     ReceiptPublication(CompilerExecutionReceiptPublicationErrorV1),
-    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV2),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV3),
     WorkerLedger(ProtectedCompilerExecutionWorkerLedgerErrorV1),
     ExternalAnchor(ProtectedCompilerExecutionExternalAnchorErrorV1),
     Occurrence(ProtectedCompilerExecutionOccurrenceErrorV1),
@@ -1762,10 +1775,10 @@ impl From<CompilerExecutionReceiptPublicationErrorV1> for ProtectedCompilerExecu
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV2>
+impl From<CompilerExecutionCurrentRecordVerificationErrorV3>
     for ProtectedCompilerExecutionIssuerErrorV1
 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV3) -> Self {
         Self::CurrentRecord(error)
     }
 }
@@ -1800,7 +1813,7 @@ mod tests {
     };
     use fe2o3_external_anchor_protocol::{
         ANCHOR_CHALLENGE_WIRE_LEN_V1, ANCHOR_OBSERVATION_WIRE_LEN_V1, AnchorChallengeV1,
-        AnchorPositionV1, UnsignedAnchorObservationV1,
+        AnchorPositionV1, ChallengeKindV1, UnsignedAnchorObservationV1,
     };
     use fe2o3_runtime_protocol::{
         CompilerExecutionExternalAnchorServiceIdentityV1,
@@ -2113,6 +2126,50 @@ mod tests {
         };
         assert_eq!(received, -1);
         assert_eq!(io::Error::last_os_error().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn client_bound_currentness_recovery_crosses_retained_anchor_transport() {
+        let fixture = Fixture::new();
+        let (request, publication) = issued_publication(&fixture, [0x9a; SHA256_BYTES]);
+        let mut worker = WorkerReceiptLedgerV1::recover(fixture.root(), &fixture.policy).unwrap();
+        commit_worker_publication(&mut worker, request, publication).unwrap();
+        let carriage = worker.recover_current_carriage(&fixture.subject).unwrap();
+        let verification_challenge = [0x9b; SHA256_BYTES];
+        let expected = worker
+            .external_anchor_currentness_challenge(&carriage, verification_challenge)
+            .unwrap();
+        assert_eq!(expected.kind(), ChallengeKindV1::Recover);
+
+        let (mut external_anchor, service) = external_anchor_transport(&fixture);
+        let responder = spawn_anchor_response(
+            service,
+            Some(expected.clone()),
+            AnchorPositionV1::Proposed,
+            SigningKey::from_bytes(&[0x52; 32]),
+        );
+        let currentness_receipt = external_anchor.exchange(&expected).unwrap();
+        let _service = responder.join().unwrap();
+        assert_eq!(currentness_receipt.challenge(), &expected);
+        assert_eq!(currentness_receipt.position(), AnchorPositionV1::Proposed);
+
+        let verification = worker
+            .verify_current_carriage(&carriage, currentness_receipt, verification_challenge)
+            .unwrap();
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
+            &fixture.policy,
+            &carriage,
+            verification,
+            verification_challenge,
+            &fixture.signing_key,
+        )
+        .unwrap();
+        let verified = attestation
+            .verify(&fixture.policy, &carriage, verification_challenge)
+            .unwrap();
+        assert!(verified.authenticates_external_anchor_commit());
+        assert!(verified.authenticates_external_rollback_currentness());
+        assert!(!verified.grants_authority());
     }
 
     #[test]

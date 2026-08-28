@@ -107,7 +107,7 @@ durably reacquired `AnchorCommitted` journal. Recovery requires exact receipt
 equality whenever the journal and current record describe the same committed
 transaction. This is stronger than comparing transaction coordinates: a second
 validly signed challenge for the same transaction cannot be substituted. Once a
-record is Published, its embedded receipt remains its currentness evidence while
+record is Published, its embedded receipt remains its exact commit evidence while
 the rolling journal advances to a successor `PreparedAnchor`, `Aborted`, or
 replacement preparation. Every such successor must use the embedded receipt's
 proposed head as its exact external prior head.
@@ -167,20 +167,25 @@ carriage, and compares both the typed value and every canonical byte with the
 expected carriage. A stale, substituted, or merely subject-equivalent carriage
 fails closed.
 
-On success, the ledger derives separate domain-separated policy-verification
-and Worker-ledger-verification identities. The former binds the protected policy
+Before contacting the external service, the ledger derives a recovery challenge
+from the client's fresh challenge, complete carriage identity, and exact retained
+commit-receipt identity. A stale or substituted carriage therefore fails before
+any external request. After an exact signed `Proposed` recovery observation is
+returned, the ledger reopens and byte-compares the same Worker record again.
+
+Only then does it derive separate domain-separated policy-verification and
+Worker-ledger-verification identities. The former binds the protected policy
 bytes, exact subject, complete carriage, and reacquired record identity. The
 latter binds the complete 2,218-byte reacquired record, complete carriage, and
-policy-verification identity. The sole canonical 912-byte V2 result carries
+policy-verification identity. The sole canonical 1,440-byte V3 result carries
 those identities together with every journal and rollback coordinate, the
-policy-pinned external-anchor key, and the exact 528-byte signed receipt cloned
-from the reacquired Worker record. Its 1,096-byte issuer-signed attestation binds
-the result to a fresh client challenge. The client reconstructs the compiler
-anchor transaction from its original expected carriage and independently
-re-verifies the receipt's key, signature, advance kind, proposed position,
-sequence, transaction digest, and genesis shape. This is move-only descriptive
-evidence of the committed transition, not authority or proof that the external
-head has not advanced since the receipt was issued.
+policy-pinned external-anchor key, exact 528-byte retained advance receipt, and
+exact 528-byte fresh recovery receipt. Its 1,624-byte issuer-signed attestation
+binds the result to the same client challenge. The client reconstructs both the
+compiler anchor transaction and recovery challenge from its original inputs and
+independently checks both signatures and every coordinate. This is move-only
+descriptive evidence of the signed commit and fresh current-head observation;
+it is not verifier, load, or launch authority.
 
 ## Recovery
 
@@ -245,14 +250,13 @@ production deployment must supply and qualify the reviewed external
 anti-rollback service or an equivalent monotonic facility.
 
 The current-record verification identities are deterministic hashes of the
-protected comparison inputs. The service now signs the complete record together
-with a fresh caller challenge, and the client verifies that signature under the
-pinned policy key. This prevents unsigned endpoint substitution and stale
-response replay, but the signature does not itself prove protected key custody
-or add present external rollback freshness. V2 also authenticates the exact
-signed transition receipt and exposes its identity. The final verifier must join
-that result to the deployed service measurement and a fresh current-head result
-from the external monotonic anchor.
+protected comparison inputs. The service signs the complete V3 record together
+with a fresh caller challenge, and the client verifies both the issuer signature
+and the challenge-derived external recovery receipt. This prevents unsigned
+endpoint substitution, stale response replay, and joining currentness to another
+valid commit. It does not itself prove protected key custody or independent,
+monotonic, crash-durable service operation. The final verifier must join this
+move-only result to reviewed service deployment and protected-key evidence.
 
 This ledger proves durable publication of an authenticated receipt. It does not
 by itself prove Worker V3 load-envelope custody, Verus correctness,
@@ -274,9 +278,11 @@ all three legal crash positions and reject gaps, substituted publications, and
 unrelated ACK records. Exact-current tests cover successful complete carriage
 reacquisition, canonical result round trip, distinct nonzero policy/ledger
 verification identities, and stale-carriage rejection after a successor commit.
-The current-record V2 suite additionally mutates every verification and
+The current-record V3 suite additionally mutates every verification and
 attestation byte and rejects wrong anchor keys, wrong compiler transactions,
-prior-position observations, and wrong lengths.
+prior-position commit or recovery observations, stale client challenges,
+advance-for-recovery phase substitution, cross-commit currentness substitution,
+and wrong lengths.
 Anchor-journal integration tests cover exact challenge re-emission, signed
 commit and abort, observation substitution, replacement after abort, policy
 substitution before a Worker record exists, restart replay, and ACK gating.

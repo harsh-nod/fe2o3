@@ -17,8 +17,8 @@ use fe2o3_runtime_protocol::{
     COMPILER_EXECUTION_ATTESTATION_REQUEST_BYTES_V1,
     COMPILER_EXECUTION_RECEIPT_PUBLICATION_BYTES_V1,
     COMPILER_EXECUTION_WORKER_ANCHOR_JOURNAL_BYTES_V1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV2,
-    CompilerExecutionCurrentRecordVerificationV2,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationV3,
     CompilerExecutionExternalAnchorTransactionErrorV1,
     CompilerExecutionExternalAnchorTransactionV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
@@ -752,20 +752,14 @@ impl WorkerReceiptLedgerV1 {
     pub(crate) fn verify_current_carriage(
         &self,
         expected_carriage: &CompilerExecutionReceiptCarriageV1,
+        external_anchor_currentness_receipt: AnchorTransitionReceiptV1,
+        verification_challenge: [u8; SHA256_BYTES],
     ) -> Result<
-        CompilerExecutionCurrentRecordVerificationV2,
+        CompilerExecutionCurrentRecordVerificationV3,
         ProtectedCompilerExecutionWorkerLedgerErrorV1,
     > {
-        if expected_carriage.policy() != &self.policy {
-            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::PolicyMismatch);
-        }
+        let (record, _) = self.reacquire_exact_current_carriage(expected_carriage)?;
         let expected_subject = expected_carriage.request().subject();
-        let (record, reacquired_carriage) = self.reacquire_current(expected_subject)?;
-        if &reacquired_carriage != expected_carriage
-            || reacquired_carriage.canonical_bytes() != expected_carriage.canonical_bytes()
-        {
-            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::CarriageMismatch);
-        }
         let protected_policy_verification_identity = verification_digest(
             PROTECTED_POLICY_VERIFICATION_DOMAIN,
             &[
@@ -783,13 +777,50 @@ impl WorkerReceiptLedgerV1 {
                 &protected_policy_verification_identity,
             ],
         );
-        CompilerExecutionCurrentRecordVerificationV2::new(
+        CompilerExecutionCurrentRecordVerificationV3::new(
             expected_carriage,
             record.external_anchor_receipt().clone(),
+            external_anchor_currentness_receipt,
+            verification_challenge,
             protected_policy_verification_identity,
             protected_worker_ledger_verification_identity,
         )
         .map_err(Into::into)
+    }
+
+    /// Reacquires the retained commit and derives one exact client-bound recovery challenge.
+    pub(crate) fn external_anchor_currentness_challenge(
+        &self,
+        expected_carriage: &CompilerExecutionReceiptCarriageV1,
+        verification_challenge: [u8; SHA256_BYTES],
+    ) -> Result<AnchorChallengeV1, ProtectedCompilerExecutionWorkerLedgerErrorV1> {
+        let (record, _) = self.reacquire_exact_current_carriage(expected_carriage)?;
+        CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+            expected_carriage,
+            record.external_anchor_receipt(),
+            verification_challenge,
+        )
+        .map_err(Into::into)
+    }
+
+    fn reacquire_exact_current_carriage(
+        &self,
+        expected_carriage: &CompilerExecutionReceiptCarriageV1,
+    ) -> Result<
+        (WorkerReceiptRecordV2, CompilerExecutionReceiptCarriageV1),
+        ProtectedCompilerExecutionWorkerLedgerErrorV1,
+    > {
+        if expected_carriage.policy() != &self.policy {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::PolicyMismatch);
+        }
+        let expected_subject = expected_carriage.request().subject();
+        let (record, reacquired_carriage) = self.reacquire_current(expected_subject)?;
+        if &reacquired_carriage != expected_carriage
+            || reacquired_carriage.canonical_bytes() != expected_carriage.canonical_bytes()
+        {
+            return Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::CarriageMismatch);
+        }
+        Ok((record, reacquired_carriage))
     }
 
     fn reacquire_current(
@@ -1232,7 +1263,7 @@ pub enum ProtectedCompilerExecutionWorkerLedgerErrorV1 {
     ExternalAnchorReceiptMismatch,
     ExternalAnchorNotCommitted,
     CarriageMismatch,
-    Verification(CompilerExecutionCurrentRecordVerificationErrorV2),
+    Verification(CompilerExecutionCurrentRecordVerificationErrorV3),
     Poisoned,
 }
 
@@ -1386,10 +1417,10 @@ impl From<CompilerExecutionWorkerAnchorJournalErrorV1>
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV2>
+impl From<CompilerExecutionCurrentRecordVerificationErrorV3>
     for ProtectedCompilerExecutionWorkerLedgerErrorV1
 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV3) -> Self {
         Self::Verification(error)
     }
 }
@@ -1544,6 +1575,26 @@ mod tests {
             AnchorTransitionReceiptV1::new(pending.challenge().clone(), &observation, &key).unwrap()
         }
 
+        fn external_anchor_currentness_receipt(
+            &self,
+            carriage: &CompilerExecutionReceiptCarriageV1,
+            commit_receipt: &AnchorTransitionReceiptV1,
+            verification_challenge: [u8; SHA256_BYTES],
+            position: AnchorPositionV1,
+        ) -> AnchorTransitionReceiptV1 {
+            let challenge = CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                carriage,
+                commit_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+            let key =
+                PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+                    .unwrap();
+            let observation = self.anchor_observation(&challenge, position);
+            AnchorTransitionReceiptV1::new(challenge, &observation, &key).unwrap()
+        }
+
         fn commit_publication(
             &self,
             ledger: &mut WorkerReceiptLedgerV1,
@@ -1655,7 +1706,43 @@ mod tests {
         assert_eq!(carriage.request(), &request);
         assert_eq!(carriage.publication(), &publication);
         assert_eq!(carriage.acknowledgment(), &ack);
-        let verification = ledger.verify_current_carriage(&carriage).unwrap();
+        let verification_challenge = [0xb1; SHA256_BYTES];
+        let external_currentness_challenge = ledger
+            .external_anchor_currentness_challenge(&carriage, verification_challenge)
+            .unwrap();
+        assert_eq!(
+            external_currentness_challenge.kind(),
+            ChallengeKindV1::Recover
+        );
+        let prior_currentness_receipt = fixture.external_anchor_currentness_receipt(
+            &carriage,
+            record.external_anchor_receipt(),
+            verification_challenge,
+            AnchorPositionV1::Prior,
+        );
+        assert!(matches!(
+            ledger.verify_current_carriage(
+                &carriage,
+                prior_currentness_receipt,
+                verification_challenge,
+            ),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::Verification(
+                CompilerExecutionCurrentRecordVerificationErrorV3::ExternalAnchorCurrentnessReceiptMismatch
+            ))
+        ));
+        let external_currentness_receipt = fixture.external_anchor_currentness_receipt(
+            &carriage,
+            record.external_anchor_receipt(),
+            verification_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        let verification = ledger
+            .verify_current_carriage(
+                &carriage,
+                external_currentness_receipt.clone(),
+                verification_challenge,
+            )
+            .unwrap();
         assert_eq!(
             verification.policy_identity(),
             *fixture.policy.identity().as_bytes()
@@ -1679,12 +1766,12 @@ mod tests {
             record.current_rollback_anchor
         );
         assert_eq!(
-            verification.external_anchor_receipt(),
+            verification.external_anchor_commit_receipt(),
             record.external_anchor_receipt()
         );
         assert_eq!(
             verification.external_rollback_verification_identity(),
-            *record.external_anchor_receipt().identity().as_bytes()
+            *external_currentness_receipt.identity().as_bytes()
         );
         assert_ne!(
             verification.protected_policy_verification_identity(),
@@ -1700,7 +1787,7 @@ mod tests {
         );
         assert!(!verification.grants_authority());
         assert_eq!(
-            CompilerExecutionCurrentRecordVerificationV2::decode(verification.canonical_bytes())
+            CompilerExecutionCurrentRecordVerificationV3::decode(verification.canonical_bytes())
                 .unwrap(),
             verification
         );
@@ -1791,8 +1878,24 @@ mod tests {
             ledger.last_record().unwrap().publication,
             second_publication
         );
+        let current_carriage = ledger.recover_current_carriage(&fixture.subject).unwrap();
+        let verification_challenge = [0xb2; SHA256_BYTES];
         assert!(matches!(
-            ledger.verify_current_carriage(&stale_carriage),
+            ledger.external_anchor_currentness_challenge(&stale_carriage, verification_challenge,),
+            Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::CarriageMismatch)
+        ));
+        let currentness_receipt = fixture.external_anchor_currentness_receipt(
+            &current_carriage,
+            ledger.last_record().unwrap().external_anchor_receipt(),
+            verification_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        assert!(matches!(
+            ledger.verify_current_carriage(
+                &stale_carriage,
+                currentness_receipt,
+                verification_challenge,
+            ),
             Err(ProtectedCompilerExecutionWorkerLedgerErrorV1::CarriageMismatch)
         ));
     }

@@ -208,6 +208,9 @@ fn send_challenge(
             if error.kind() == io::ErrorKind::WouldBlock {
                 return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::EndpointNotReady);
             }
+            if is_peer_closed_error(&error) {
+                return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::PeerClosed);
+            }
             return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::Send(error));
         }
         if usize::try_from(sent).ok() != Some(bytes.len()) {
@@ -251,6 +254,9 @@ fn receive_observation_nonblocking(
             if error.kind() == io::ErrorKind::WouldBlock {
                 return Ok(None);
             }
+            if is_peer_closed_error(&error) {
+                return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::PeerClosed);
+            }
             return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::Receive(
                 error,
             ));
@@ -276,6 +282,13 @@ fn receive_observation_nonblocking(
         }
         return Ok(Some(bytes));
     }
+}
+
+fn is_peer_closed_error(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EPIPE) | Some(libc::ECONNRESET) | Some(libc::ENOTCONN)
+    )
 }
 
 fn wait_for_service(
@@ -328,11 +341,11 @@ fn wait_for_service(
         if descriptors[1].revents & libc::POLLNVAL != 0 {
             return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::InvalidPeer);
         }
-        if descriptors[1].revents & libc::POLLERR != 0 {
-            return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::PeerFailed);
-        }
         if descriptors[1].revents & libc::POLLHUP != 0 {
             return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::PeerClosed);
+        }
+        if descriptors[1].revents & libc::POLLERR != 0 {
+            return Err(ProtectedCompilerExecutionExternalAnchorErrorV1::PeerFailed);
         }
         if descriptors[1].revents & wanted != 0 {
             return Ok(());
@@ -826,10 +839,14 @@ mod tests {
     fn peer_close_is_terminal() {
         let (mut transport, service, challenge, _signing_key) = fixture(Duration::from_secs(5));
         drop(service);
-        assert!(matches!(
-            transport.exchange(&challenge).unwrap_err(),
-            ProtectedCompilerExecutionExternalAnchorErrorV1::PeerClosed
-        ));
+        let error = transport.exchange(&challenge).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ProtectedCompilerExecutionExternalAnchorErrorV1::PeerClosed
+            ),
+            "unexpected closed-peer result: {error:?}"
+        );
     }
 
     #[test]

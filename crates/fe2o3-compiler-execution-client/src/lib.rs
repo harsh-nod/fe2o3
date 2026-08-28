@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationErrorV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV2,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordVerificationErrorV3,
     CompilerExecutionIssuerPolicyV1, CompilerExecutionReceiptCarriageV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionReceiptPublicationV1,
     CompilerExecutionServiceProtocolErrorV1, CompilerExecutionServiceRequestV1,
     CompilerExecutionServiceResponseKindV1, CompilerExecutionServiceResponseV1,
-    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV2,
+    MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV3,
 };
 
 mod child_channel;
@@ -167,13 +167,13 @@ impl CompilerExecutionClientV1 {
     ///
     /// This operation is terminal for the connection. It generates a fresh challenge internally
     /// and verifies the response under the caller-pinned issuer key. The returned result remains
-    /// authority-free until protected key custody, external rollback, and refinement evidence are
-    /// joined by a reviewed production verifier.
+    /// authority-free until protected key custody, independently administered monotonic-anchor
+    /// deployment, and refinement evidence are joined by a reviewed production verifier.
     pub fn verify_current_only(
         self,
         policy: &CompilerExecutionIssuerPolicyV1,
         expected_carriage: CompilerExecutionReceiptCarriageV1,
-    ) -> Result<VerifiedCompilerExecutionCurrentRecordV2, CompilerExecutionClientErrorV1> {
+    ) -> Result<VerifiedCompilerExecutionCurrentRecordV3, CompilerExecutionClientErrorV1> {
         if expected_carriage.policy() != policy {
             return Err(CompilerExecutionClientErrorV1::SubjectOrPolicyMismatch);
         }
@@ -735,7 +735,7 @@ pub enum CompilerExecutionClientErrorV1 {
     PartialSend,
     Protocol(CompilerExecutionServiceProtocolErrorV1),
     Attestation(CompilerExecutionAttestationErrorV1),
-    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV2),
+    CurrentRecord(CompilerExecutionCurrentRecordVerificationErrorV3),
     Publication(CompilerExecutionReceiptPublicationErrorV1),
     RequestIdentityMismatch,
     SubjectOrPolicyMismatch,
@@ -845,8 +845,8 @@ impl From<CompilerExecutionAttestationErrorV1> for CompilerExecutionClientErrorV
     }
 }
 
-impl From<CompilerExecutionCurrentRecordVerificationErrorV2> for CompilerExecutionClientErrorV1 {
-    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV2) -> Self {
+impl From<CompilerExecutionCurrentRecordVerificationErrorV3> for CompilerExecutionClientErrorV1 {
+    fn from(error: CompilerExecutionCurrentRecordVerificationErrorV3) -> Self {
         Self::CurrentRecord(error)
     }
 }

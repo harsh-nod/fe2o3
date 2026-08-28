@@ -13,9 +13,9 @@ use fe2o3_compiler_execution_client::{
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationChallengeV1, CompilerExecutionAttestationReceiptV1,
-    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV2,
-    CompilerExecutionCurrentRecordVerificationErrorV2,
-    CompilerExecutionCurrentRecordVerificationV2, CompilerExecutionExternalAnchorTransactionV1,
+    CompilerExecutionAttestationRequestV1, CompilerExecutionCurrentRecordAttestationV3,
+    CompilerExecutionCurrentRecordVerificationErrorV3,
+    CompilerExecutionCurrentRecordVerificationV3, CompilerExecutionExternalAnchorTransactionV1,
     CompilerExecutionIssuerMeasurementV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionReceiptCarriageV1, CompilerExecutionReceiptPublicationAckV1,
     CompilerExecutionReceiptPublicationV1, CompilerExecutionServicePublishDispositionV1,
@@ -114,6 +114,32 @@ impl Fixture {
         let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
         AnchorTransitionReceiptV1::new(
             pending.challenge().clone(),
+            &unsigned.attach_signature(signature.to_bytes()),
+            &key,
+        )
+        .unwrap()
+    }
+
+    fn currentness_receipt(
+        &self,
+        carriage: &CompilerExecutionReceiptCarriageV1,
+        commit_receipt: &AnchorTransitionReceiptV1,
+        verification_challenge: [u8; 32],
+        position: AnchorPositionV1,
+    ) -> AnchorTransitionReceiptV1 {
+        let challenge =
+            CompilerExecutionCurrentRecordVerificationV3::external_anchor_currentness_challenge(
+                carriage,
+                commit_receipt,
+                verification_challenge,
+            )
+            .unwrap();
+        let key = PinnedAnchorKeyV1::from_bytes(self.anchor_signing_key.verifying_key().to_bytes())
+            .unwrap();
+        let unsigned = UnsignedAnchorObservationV1::from_challenge(&challenge, position);
+        let signature = self.anchor_signing_key.sign(&unsigned.signing_bytes());
+        AnchorTransitionReceiptV1::new(
+            challenge,
             &unsigned.attach_signature(signature.to_bytes()),
             &key,
         )
@@ -240,7 +266,7 @@ fn exact_current_verification_is_one_terminal_packet() {
         verification.external_rollback_verification_identity(),
         [0; 32]
     );
-    assert!(!verification.authenticates_external_rollback_currentness());
+    assert!(verification.authenticates_external_rollback_currentness());
     assert!(!verification.grants_authority());
     assert_eq!(handle.join().unwrap(), 1);
 }
@@ -257,18 +283,28 @@ fn current_verification_carriage_substitution_fails_closed() {
             request.kind(),
             CompilerExecutionServiceRequestKindV1::VerifyCurrent
         );
-        let verification = CompilerExecutionCurrentRecordVerificationV2::new(
+        let verification_challenge = request.verification_challenge().unwrap();
+        let commit_receipt = substituted.anchor_receipt();
+        let currentness_receipt = substituted.currentness_receipt(
             &substituted.carriage,
-            substituted.anchor_receipt(),
+            &commit_receipt,
+            verification_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+            &substituted.carriage,
+            commit_receipt,
+            currentness_receipt,
+            verification_challenge,
             [0x91; 32],
             [0x92; 32],
         )
         .unwrap();
-        let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
             &substituted.policy,
             &substituted.carriage,
             verification,
-            request.verification_challenge().unwrap(),
+            verification_challenge,
             &substituted.signing_key,
         )
         .unwrap();
@@ -284,7 +320,7 @@ fn current_verification_carriage_substitution_fails_closed() {
     assert!(matches!(
         error,
         CompilerExecutionClientErrorV1::CurrentRecord(
-            CompilerExecutionCurrentRecordVerificationErrorV2::VerificationMismatch
+            CompilerExecutionCurrentRecordVerificationErrorV3::VerificationMismatch
         )
     ));
     handle.join().unwrap();
@@ -297,16 +333,25 @@ fn stale_current_verification_challenge_fails_closed() {
     let service_fixture = fixture.clone();
     let handle = thread::spawn(move || {
         let request = receive_request(&service);
-        let verification = CompilerExecutionCurrentRecordVerificationV2::new(
+        let mut stale_challenge = request.verification_challenge().unwrap();
+        stale_challenge[0] ^= 0x80;
+        let commit_receipt = service_fixture.anchor_receipt();
+        let currentness_receipt = service_fixture.currentness_receipt(
             &service_fixture.carriage,
-            service_fixture.anchor_receipt(),
+            &commit_receipt,
+            stale_challenge,
+            AnchorPositionV1::Proposed,
+        );
+        let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+            &service_fixture.carriage,
+            commit_receipt,
+            currentness_receipt,
+            stale_challenge,
             [0x91; 32],
             [0x92; 32],
         )
         .unwrap();
-        let mut stale_challenge = request.verification_challenge().unwrap();
-        stale_challenge[0] ^= 0x80;
-        let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
+        let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
             &service_fixture.policy,
             &service_fixture.carriage,
             verification,
@@ -326,7 +371,7 @@ fn stale_current_verification_challenge_fails_closed() {
     assert!(matches!(
         error,
         CompilerExecutionClientErrorV1::CurrentRecord(
-            CompilerExecutionCurrentRecordVerificationErrorV2::ChallengeMismatch
+            CompilerExecutionCurrentRecordVerificationErrorV3::ChallengeMismatch
         )
     ));
     handle.join().unwrap();
@@ -631,18 +676,28 @@ fn spawn_service(
                 CompilerExecutionServiceRequestKindV1::VerifyCurrent => {
                     assert!(matches!(stage, DurableStage::Published));
                     assert_eq!(request.carriage(), Some(&fixture.carriage));
-                    let verification = CompilerExecutionCurrentRecordVerificationV2::new(
+                    let verification_challenge = request.verification_challenge().unwrap();
+                    let commit_receipt = fixture.anchor_receipt();
+                    let currentness_receipt = fixture.currentness_receipt(
                         &fixture.carriage,
-                        fixture.anchor_receipt(),
+                        &commit_receipt,
+                        verification_challenge,
+                        AnchorPositionV1::Proposed,
+                    );
+                    let verification = CompilerExecutionCurrentRecordVerificationV3::new(
+                        &fixture.carriage,
+                        commit_receipt,
+                        currentness_receipt,
+                        verification_challenge,
                         [0x91; 32],
                         [0x92; 32],
                     )
                     .unwrap();
-                    let attestation = CompilerExecutionCurrentRecordAttestationV2::issue(
+                    let attestation = CompilerExecutionCurrentRecordAttestationV3::issue(
                         &fixture.policy,
                         &fixture.carriage,
                         verification,
-                        request.verification_challenge().unwrap(),
+                        verification_challenge,
                         &fixture.signing_key,
                     )
                     .unwrap();

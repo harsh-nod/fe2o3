@@ -139,17 +139,20 @@ its complete receipt carriage, or reports nonterminal absence only when no
 canonical Worker record exists; a different or damaged current record fails
 closed. VerifyCurrent independently reacquires that record under the protected
 policy, byte-compares the complete expected carriage, and returns canonical
-policy/Worker-ledger and external-anchor commit evidence in one terminal
-exchange. Its 2,250-byte request includes a fresh client challenge; its
-1,256-byte response contains a 1,096-byte Ed25519 V2 attestation over that
-challenge and the complete 912-byte V2 record. The record embeds the exact
-528-byte signed external-anchor receipt retained by the reacquired Worker V2
-record. The client requires the issuer and anchor keys to equal the pinned
-policy, every record coordinate to equal its original expected carriage, and
-the receipt to be a proposed-position advance for the exact reconstructed
-compiler transaction. A retained receipt proves that transition committed; a
-fresh independently operated anchor query is still required to prove that no
-newer external head exists. That same
+policy/Worker-ledger, external-anchor commit, and fresh signed current-head
+evidence in one terminal exchange. Its 2,250-byte request includes a fresh
+client challenge; its 1,784-byte response contains a 1,624-byte Ed25519 V3
+attestation over that challenge and the complete 1,440-byte V3 record. The
+record embeds the exact 528-byte signed advance receipt retained by the
+reacquired Worker V2 record and a fresh 528-byte signed recovery receipt. The
+external recovery nonce is derived from the client challenge, exact carriage
+identity, and retained commit-receipt identity. The client requires both keys to
+equal the pinned policy, every record coordinate to equal its original expected
+carriage, the retained receipt to be an exact proposed-position advance, and
+the fresh receipt to report the same proposed head under the exact recovery
+challenge. This cryptographically authenticates commit and current-head claims;
+independent administration, monotonic persistence, and protected anchor-key
+custody remain deployment requirements. That same
 policy now pins a distinct external-anchor Ed25519 key; weak or equal issuer and
 anchor keys fail closed. A staged protected boundary now also admits one
 supervisor-provisioned nonblocking unnamed seqpacket and exact live service
@@ -231,7 +234,7 @@ the seccomp boundary and contains the complete application process group on a
 handoff failure. `fe2o3-host` owns a one-use auditor that consumes fd 195,
 checks the fresh signed response, and returns move-only authority-free evidence.
 Backend receipt acquisition, lossless V2 carriage, exact protected
-Worker-record verification, receipt-bearing V2 VerifyCurrent response, and the
+Worker-record verification, receipt-bearing V3 VerifyCurrent response, and the
 receipt-complete Worker V3 promotion boundary are implemented.
 Deployed distinct-UID service provisioning, the concrete protected verifier,
 and external monotonic anchor remain absent. A fixed

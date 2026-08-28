@@ -3,20 +3,24 @@
 This crate owns the canonical, inert compiler-execution issuer policy, public
 client profile, expected-client launch manifest, attestation, receipt-carriage,
 current-record verification, and bounded service packet records. The sole
-912-byte V2 current-record verification binds one exact carriage to the policy,
-subject, issuer journal, Worker record, sequence, both internal rollback
-anchors, policy-pinned external-anchor key, complete 528-byte signed anchor
-receipt, and protected policy and Worker-ledger verification identities.
-Decoding proves canonical structure and re-verifies the embedded receipt under
-the embedded anchor key. A separate 1,096-byte V2 attestation binds that
-complete record to a nonzero caller challenge and an Ed25519 signature.
-Issuance and verification additionally require both keys to equal the caller's
-policy, the challenge to equal the caller's fresh challenge, every record
-coordinate to equal the original expected carriage, and the anchor receipt to
-be a proposed-position advance for the exact reconstructed compiler
-transaction. The result authenticates that external transition's commit, but
-grants no authority and does not by itself prove protected key custody or that
-no newer external head exists. The
+1,440-byte V3 current-record verification binds one exact carriage to the
+policy, subject, issuer journal, Worker record, sequence, both internal rollback
+anchors, policy-pinned external-anchor key, complete 528-byte signed commit
+receipt, complete 528-byte fresh currentness receipt, and protected policy and
+Worker-ledger verification identities. Decoding proves canonical structure and
+re-verifies both receipts under the embedded anchor key. A separate 1,624-byte
+V3 attestation binds that complete record to a nonzero caller challenge and an
+issuer Ed25519 signature. Issuance and verification additionally require both
+keys to equal the caller's policy, every record coordinate to equal the original
+expected carriage, the retained receipt to be a proposed-position advance for
+the exact reconstructed compiler transaction, and the currentness receipt to be
+a proposed-position recovery observation of that same transition. Its recovery
+nonce is derived from the caller's fresh challenge, exact carriage identity, and
+retained commit-receipt identity, so a stale response or cross-record receipt
+cannot be substituted. The result authenticates the signed external commit and
+fresh signed current-head observation, but grants no authority and does not by
+itself prove protected key custody or that the anchor service is independently
+administered, monotonic, and crash durable. The
 1,874-byte external-anchor transaction binds the complete issuer policy,
 attestation request, signed receipt publication, sequence, and prior/current
 internal rollback anchors without including a path, descriptor, or final
