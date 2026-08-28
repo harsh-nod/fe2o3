@@ -13,12 +13,14 @@ use std::process::Command;
 use fe2o3_build_authority::CompilerClosureV2;
 use sha2::{Digest, Sha256};
 
+mod compiler_execution_client_profile;
 mod compiler_execution_policy;
 mod compiler_execution_service_launch;
 mod compiler_execution_signing_key;
 mod rustc_invocation;
 mod sealed_image;
 
+pub use compiler_execution_client_profile::CompilerExecutionClientProfileCapabilityV1;
 pub use compiler_execution_policy::{
     COMPILER_EXECUTION_POLICY_CHILD_FD_V1, CompilerExecutionPolicyCapabilityV1,
 };

@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod attestation;
+mod client_profile;
 mod launch_manifest;
 mod receipt_publication;
 mod service;
@@ -22,6 +23,10 @@ pub use attestation::{
     CompilerExecutionAttestationRequestV1, CompilerExecutionIssuerMeasurementV1,
     CompilerExecutionIssuerPolicyIdentityV1, CompilerExecutionIssuerPolicyV1,
     CompilerExecutionSubjectBindingV1, VerifiedCompilerExecutionAttestationV1,
+};
+pub use client_profile::{
+    COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1, CompilerExecutionClientProfileErrorV1,
+    CompilerExecutionClientProfileIdentityV1, CompilerExecutionClientProfileV1,
 };
 pub use launch_manifest::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_BYTES_V1, CompilerExecutionClientProcessIdentityV1,
