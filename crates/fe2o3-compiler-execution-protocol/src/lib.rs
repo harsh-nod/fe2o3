@@ -8,6 +8,10 @@ mod service;
 mod service_ready;
 mod supervisor_handoff;
 
+/// Sole production Unix socket pathname for the protected compiler-execution supervisor.
+pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
+    "/run/fe2o3/compiler-execution-supervisor.sock";
+
 pub use attestation::{
     COMPILER_EXECUTION_ATTESTATION_CHALLENGE_BYTES_V1,
     COMPILER_EXECUTION_ATTESTATION_RECEIPT_BYTES_V1,

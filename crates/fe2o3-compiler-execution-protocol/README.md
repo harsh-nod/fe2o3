@@ -8,6 +8,9 @@ binds the direct Cargo parent PID/UID/GID to that complete manifest; parent and
 rustc must be distinct processes with equal credentials. A separate readiness
 record binds the admitted issuer PID to the exact manifest and policy after
 durable recovery. None of these records grants process or signing authority.
+The sole production supervisor endpoint is the named Unix `SOCK_SEQPACKET`
+socket `/run/fe2o3/compiler-execution-supervisor.sock`; alternate paths are not
+part of the production protocol.
 The crate contains no process launcher, signer, durable ledger, compiler,
 artifact publisher, loader, or GPU execution authority.
 

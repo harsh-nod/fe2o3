@@ -3,6 +3,7 @@ use std::io::{IoSlice, Write as _};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ use fe2o3_compiler_execution_protocol::{
 };
 use rustix::net::{
     AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
-    SocketType, recv, sendmsg, socketpair,
+    SocketType, bind, connect, listen, recv, sendmsg, socket_with, socketpair,
 };
 
 use super::*;
@@ -812,6 +813,32 @@ fn session_timeouts() -> ProtectedIssuerSessionTimeoutsV1 {
     .unwrap()
 }
 
+fn named_seqpacket_listener(path: &Path) -> OwnedFd {
+    let listener = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .unwrap();
+    let address = rustix::net::SocketAddrUnix::new(path).unwrap();
+    bind(&listener, &address).unwrap();
+    listen(&listener, 16).unwrap();
+    listener
+}
+
+fn connect_seqpacket(path: &Path) -> OwnedFd {
+    let control = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    connect(&control, &rustix::net::SocketAddrUnix::new(path).unwrap()).unwrap();
+    control
+}
+
 #[test]
 fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
     let fixture = Fixture::new("exact-prepared-launch");
@@ -1352,6 +1379,134 @@ fn session_policy_and_stage_errors_fail_before_later_authority() {
         Err(ProtectedIssuerSessionErrorV1::Handoff(
             ProtectedIssuerHandoffErrorV1::MalformedTransfer
         ))
+    ));
+}
+
+#[test]
+fn fixed_named_listener_dispatches_one_complete_session() {
+    let fixture = Fixture::with_code("named-listener", &naturally_exiting_probe_code(0));
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let cargo_control = connect_seqpacket(&listener_path);
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let policy = supervisor.policy().clone();
+    let (_reserved_fd_guard, mut rustc_child, launch) = live_launch();
+    let handoff = CompilerExecutionSupervisorHandoffV1::new(
+        launch.submitter(),
+        CompilerExecutionServiceLaunchManifestV1::new(launch.client(), &policy),
+    )
+    .unwrap();
+    let (service_peer, pidfd) = launch.into_descriptors();
+    send_handoff_fixture(
+        &cargo_control,
+        &handoff,
+        &[service_peer.as_fd(), pidfd.as_fd()],
+    );
+    let service = ProtectedIssuerServiceV1::bind_inner(
+        supervisor,
+        listener,
+        session_timeouts(),
+        &listener_path,
+    )
+    .unwrap();
+    assert!(!format!("{service:?}").contains("fd:"));
+    let exited = service
+        .serve_one_inner(
+            Duration::from_secs(2),
+            |prepared| {
+                (
+                    rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap(),
+                    prepared.service_manifest().clone(),
+                )
+            },
+            |(readiness_writer, manifest), launched| {
+                let readiness =
+                    CompilerExecutionServiceReadyV1::new(launched.pid(), &manifest, &policy)
+                        .unwrap();
+                assert_eq!(
+                    rustix::io::write(&readiness_writer, readiness.canonical_bytes()).unwrap(),
+                    readiness.canonical_bytes().len()
+                );
+                drop(readiness_writer);
+            },
+        )
+        .unwrap();
+    read_published_readiness(&cargo_control, exited.readiness());
+    assert!(exited.termination().succeeded());
+    assert_reaped(rustix::process::Pid::from_raw(exited.pid() as i32).unwrap());
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
+fn production_listener_rejects_alternate_and_blocking_endpoints() {
+    let alternate_fixture = Fixture::new("alternate-listener");
+    let alternate_path = alternate_fixture.root.join("alternate.sock");
+    let alternate = named_seqpacket_listener(&alternate_path);
+    let Some(supervisor) = bound_supervisor(&alternate_fixture) else {
+        return;
+    };
+    assert!(ProtectedIssuerServiceV1::bind(supervisor, alternate, session_timeouts()).is_err());
+
+    let blocking_fixture = Fixture::new("blocking-listener");
+    let blocking_path = blocking_fixture.root.join("blocking.sock");
+    let blocking = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    bind(
+        &blocking,
+        &rustix::net::SocketAddrUnix::new(&blocking_path).unwrap(),
+    )
+    .unwrap();
+    listen(&blocking, 1).unwrap();
+    let Some(supervisor) = bound_supervisor(&blocking_fixture) else {
+        return;
+    };
+    assert!(matches!(
+        ProtectedIssuerServiceV1::bind_inner(
+            supervisor,
+            blocking,
+            session_timeouts(),
+            &blocking_path,
+        ),
+        Err(ProtectedIssuerServiceErrorV1::InvalidListener(
+            "descriptor flags are not exact nonblocking close-on-exec custody"
+        ))
+    ));
+}
+
+#[test]
+fn admitted_listener_rejects_filesystem_identity_removal() {
+    let fixture = Fixture::new("listener-path-removal");
+    let listener_path = fixture.root.join("supervisor.sock");
+    let listener = named_seqpacket_listener(&listener_path);
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let service = ProtectedIssuerServiceV1::bind_inner(
+        supervisor,
+        listener,
+        session_timeouts(),
+        &listener_path,
+    )
+    .unwrap();
+    fs::remove_file(&listener_path).unwrap();
+    assert!(matches!(
+        service.serve_one_inner(
+            Duration::from_millis(20),
+            |_| (),
+            |(), _| panic!("session launched after listener pathname removal"),
+        ),
+        Err(ProtectedIssuerServiceErrorV1::Io {
+            operation: "inspect issuer listener pathname",
+            ..
+        })
     ));
 }
 
