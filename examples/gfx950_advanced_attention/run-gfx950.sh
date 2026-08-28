@@ -80,6 +80,7 @@ LD_LLD=${LD_LLD:-$ROCM_PATH/llvm/bin/ld.lld}
 OBJDUMP=${OBJDUMP:-$ROCM_PATH/llvm/bin/llvm-objdump}
 READOBJ=${READOBJ:-$ROCM_PATH/llvm/bin/llvm-readobj}
 SHA256SUM=${SHA256SUM:-sha256sum}
+GIT=${GIT:-git}
 
 if ! command -v -- "$RUSTUP" >/dev/null 2>&1 && [[ -x $HOME/.cargo/bin/rustup ]]; then
     RUSTUP=$HOME/.cargo/bin/rustup
@@ -87,7 +88,7 @@ fi
 if ! command -v -- "$CARGO_BIN" >/dev/null 2>&1 && [[ -x $HOME/.cargo/bin/cargo ]]; then
     CARGO_BIN=$HOME/.cargo/bin/cargo
 fi
-for executable in "$RUSTUP" "$CARGO_BIN" "$CLANG" "$LD_LLD" "$OBJDUMP" "$READOBJ" "$SHA256SUM"; do
+for executable in "$RUSTUP" "$CARGO_BIN" "$CLANG" "$LD_LLD" "$OBJDUMP" "$READOBJ" "$SHA256SUM" "$GIT"; do
     if [[ ! -x $executable ]] && ! command -v -- "$executable" >/dev/null 2>&1; then
         printf 'required executable is unavailable: %s\n' "$executable" >&2
         exit 1
@@ -285,11 +286,20 @@ done
 
 HSACO=$(cd -- "$(dirname -- "$HSACO")" && pwd -P)/$(basename -- "$HSACO")
 HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
+LLVM_SHA256=$("$SHA256SUM" -- "$LLVM_IR" | awk '{ print $1 }')
+ISA_SHA256=$("$SHA256SUM" -- "$DISASSEMBLY" | awk '{ print $1 }')
+SOURCE_COMMIT=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}')
+SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
 (
     cd -- "$REPO_ROOT"
     FE2O3_RUN_GFX950_ADVANCED_HARDWARE=1 \
     FE2O3_GFX950_ADVANCED_HSACO=$HSACO \
     FE2O3_GFX950_ADVANCED_SHA256=$HSACO_SHA256 \
+    FE2O3_GFX950_ADVANCED_LLVM_SHA256=$LLVM_SHA256 \
+    FE2O3_GFX950_ADVANCED_ISA_SHA256=$ISA_SHA256 \
+    FE2O3_GFX950_ADVANCED_CRATE_BINDING=$CRATE_BINDING \
+    FE2O3_GFX950_ADVANCED_SOURCE_COMMIT=$SOURCE_COMMIT \
+    FE2O3_GFX950_ADVANCED_SOURCE_TREE=$SOURCE_TREE \
     CARGO_TARGET_DIR=$ROOT_TARGET_DIR \
         "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" test --locked \
         -p fe2o3-hsa-runtime --features hardware-test-hooks \

@@ -23,6 +23,12 @@ use fe2o3_hsa_runtime::{
 };
 #[cfg(feature = "hardware-test-hooks")]
 use fe2o3_hsaco::{CodeObjectVersion, ExplicitValueKind};
+#[cfg(feature = "hardware-test-hooks")]
+use serde_json::json;
+#[cfg(feature = "hardware-test-hooks")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "hardware-test-hooks")]
+use std::io::Write;
 
 #[cfg(feature = "hardware-test-hooks")]
 const CHANNELS_V1: usize = 16;
@@ -98,6 +104,40 @@ const SHA256_ENV: &str = "FE2O3_GFX950_ADVANCED_SHA256";
 #[cfg(feature = "hardware-test-hooks")]
 const HSA_KERNARG_ALIGNMENT: u64 = 16;
 #[cfg(feature = "hardware-test-hooks")]
+const PERF_OUTPUT_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_OUTPUT";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_WARMUPS_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_WARMUPS";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_BLOCKS_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_BLOCKS";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_SAMPLES_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_SAMPLES_PER_BLOCK";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_REWARM_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_BLOCK_REWARM";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_CAMPAIGN_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_CAMPAIGN_ID";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_IMPLEMENTATION_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_IMPLEMENTATION_ID";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_VARIANT_ENV: &str = "FE2O3_GFX950_ADVANCED_PERF_VARIANT_ID";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_LLVM_SHA256_ENV: &str = "FE2O3_GFX950_ADVANCED_LLVM_SHA256";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_ISA_SHA256_ENV: &str = "FE2O3_GFX950_ADVANCED_ISA_SHA256";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_CRATE_BINDING_ENV: &str = "FE2O3_GFX950_ADVANCED_CRATE_BINDING";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_SOURCE_COMMIT_ENV: &str = "FE2O3_GFX950_ADVANCED_SOURCE_COMMIT";
+#[cfg(feature = "hardware-test-hooks")]
+const PERF_SOURCE_TREE_ENV: &str = "FE2O3_GFX950_ADVANCED_SOURCE_TREE";
+#[cfg(feature = "hardware-test-hooks")]
+const DEFAULT_PERF_WARMUPS: usize = 1_000;
+#[cfg(feature = "hardware-test-hooks")]
+const DEFAULT_PERF_BLOCKS: usize = 30;
+#[cfg(feature = "hardware-test-hooks")]
+const DEFAULT_PERF_SAMPLES_PER_BLOCK: usize = 100;
+#[cfg(feature = "hardware-test-hooks")]
+const DEFAULT_PERF_BLOCK_REWARM: usize = 20;
+#[cfg(feature = "hardware-test-hooks")]
 const METADATA_KERNARG_ALIGNMENT: u64 = 8;
 #[cfg(feature = "hardware-test-hooks")]
 const GUARD_BYTES: usize = 16;
@@ -110,6 +150,131 @@ const F32_POISON_BITS: u32 = 0x7fc0_00a5;
 
 #[cfg(feature = "hardware-test-hooks")]
 type BoxError = Box<dyn std::error::Error>;
+
+#[cfg(feature = "hardware-test-hooks")]
+#[derive(Clone, Debug)]
+struct PerformanceConfig {
+    output: std::path::PathBuf,
+    warmups: usize,
+    blocks: usize,
+    samples_per_block: usize,
+    block_rewarm: usize,
+    campaign_id: String,
+    implementation_id: String,
+    variant_id: String,
+    llvm_sha256: String,
+    isa_sha256: String,
+    crate_binding: String,
+    source_commit: String,
+    source_tree: String,
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+impl PerformanceConfig {
+    fn from_environment() -> Result<Option<Self>, BoxError> {
+        let Some(output) = std::env::var_os(PERF_OUTPUT_ENV) else {
+            return Ok(None);
+        };
+        let output = std::path::PathBuf::from(output);
+        require(
+            output.is_absolute(),
+            format!("{PERF_OUTPUT_ENV} must be absolute"),
+        )?;
+        let parent = output
+            .parent()
+            .ok_or_else(|| format!("{PERF_OUTPUT_ENV} has no parent"))?;
+        require(
+            parent.is_dir() && std::fs::canonicalize(parent)? == parent,
+            format!("{PERF_OUTPUT_ENV} parent must be an existing canonical directory"),
+        )?;
+        if output.exists() {
+            let metadata = std::fs::symlink_metadata(&output)?;
+            require(
+                metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+                format!("{PERF_OUTPUT_ENV} must be a regular non-symlink file"),
+            )?;
+        }
+        Ok(Some(Self {
+            output,
+            warmups: parse_performance_count(PERF_WARMUPS_ENV, DEFAULT_PERF_WARMUPS, true)?,
+            blocks: parse_performance_count(PERF_BLOCKS_ENV, DEFAULT_PERF_BLOCKS, false)?,
+            samples_per_block: parse_performance_count(
+                PERF_SAMPLES_ENV,
+                DEFAULT_PERF_SAMPLES_PER_BLOCK,
+                false,
+            )?,
+            block_rewarm: parse_performance_count(
+                PERF_REWARM_ENV,
+                DEFAULT_PERF_BLOCK_REWARM,
+                true,
+            )?,
+            campaign_id: performance_text(PERF_CAMPAIGN_ENV, None)?,
+            implementation_id: performance_text(
+                PERF_IMPLEMENTATION_ENV,
+                Some("fe2o3-production-rust"),
+            )?,
+            variant_id: performance_text(PERF_VARIANT_ENV, Some("candidate"))?,
+            llvm_sha256: performance_hex(PERF_LLVM_SHA256_ENV, 64)?,
+            isa_sha256: performance_hex(PERF_ISA_SHA256_ENV, 64)?,
+            crate_binding: performance_hex(PERF_CRATE_BINDING_ENV, 64)?,
+            source_commit: performance_hex(PERF_SOURCE_COMMIT_ENV, 40)?,
+            source_tree: performance_hex(PERF_SOURCE_TREE_ENV, 40)?,
+        }))
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn parse_performance_count(
+    name: &'static str,
+    default: usize,
+    allow_zero: bool,
+) -> Result<usize, BoxError> {
+    let value = match std::env::var(name) {
+        Ok(text) => text
+            .parse::<usize>()
+            .map_err(|_| format!("{name} must be an unsigned decimal integer"))?,
+        Err(std::env::VarError::NotPresent) => default,
+        Err(error) => return Err(format!("{name} is not valid text: {error}").into()),
+    };
+    require(
+        value <= 1_000_000 && (allow_zero || value != 0),
+        format!("{name} is outside the admitted range"),
+    )?;
+    Ok(value)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn performance_text(name: &'static str, default: Option<&str>) -> Result<String, BoxError> {
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => default
+            .ok_or_else(|| format!("{name} is required when {PERF_OUTPUT_ENV} is set"))?
+            .to_owned(),
+        Err(error) => return Err(format!("{name} is not valid text: {error}").into()),
+    };
+    require(
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\\'),
+        format!("{name} must be 1..=128 safe printable ASCII bytes"),
+    )?;
+    Ok(value)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn performance_hex(name: &'static str, length: usize) -> Result<String, BoxError> {
+    let value = performance_text(name, None)?;
+    require(
+        value.len() == length
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        format!("{name} must be exactly {length} lowercase hex digits"),
+    )?;
+    Ok(value)
+}
 
 #[cfg(feature = "hardware-test-hooks")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1486,6 +1651,259 @@ fn execute_plan(
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn lowercase_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn workload_identity(plan: &LaunchPlan) -> (String, serde_json::Value) {
+    let mut digest = Sha256::new();
+    let buffers = plan
+        .buffers
+        .iter()
+        .map(|buffer| {
+            digest.update(buffer.name.as_bytes());
+            digest.update((buffer.initial.len() as u64).to_le_bytes());
+            digest.update((buffer.body_offset as u64).to_le_bytes());
+            digest.update((buffer.elements as u64).to_le_bytes());
+            digest.update([u8::from(buffer.immutable)]);
+            digest.update(&buffer.initial);
+            let oracle = match buffer.expected.as_ref() {
+                None => json!({"kind": "immutable-input"}),
+                Some(ExpectedOutput::F32 {
+                    values,
+                    absolute_tolerance,
+                    relative_tolerance,
+                    exact_mask,
+                }) => json!({
+                    "kind": "cpu-reference-f32",
+                    "elements": values.len(),
+                    "absolute_tolerance": absolute_tolerance.to_string(),
+                    "relative_tolerance": relative_tolerance.to_string(),
+                    "bitwise_exact_elements": exact_mask
+                        .as_ref()
+                        .map(|mask| mask.iter().filter(|exact| **exact).count())
+                        .unwrap_or(0),
+                }),
+                Some(ExpectedOutput::U32(values)) => {
+                    json!({"kind": "cpu-reference-u32-exact", "elements": values.len()})
+                }
+                Some(ExpectedOutput::I32(values)) => {
+                    json!({"kind": "cpu-reference-i32-exact", "elements": values.len()})
+                }
+            };
+            json!({
+                "name": buffer.name,
+                "byte_len": buffer.initial.len(),
+                "body_offset": buffer.body_offset,
+                "elements": buffer.elements,
+                "immutable": buffer.immutable,
+                "initial_sha256": lowercase_hex(&Sha256::digest(&buffer.initial)),
+                "oracle": oracle,
+            })
+        })
+        .collect::<Vec<_>>();
+    (lowercase_hex(&digest.finalize()), json!(buffers))
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn profile_plan(
+    case: AdvancedCase,
+    adapter: &mut ReviewedHsaRuntimeAdapterV1,
+    bytes: &[u8],
+    digest: PayloadDigest,
+    plan: LaunchPlan,
+    config: &PerformanceConfig,
+) -> Result<(), BoxError> {
+    let buffers = plan
+        .buffers
+        .iter()
+        .map(|buffer| adapter.allocate_hardware_test_buffer(&buffer.initial))
+        .collect::<Result<Vec<_>, _>>()?;
+    let explicit = explicit_kernarg(case, &plan, &buffers)?;
+    let (workload_sha256, buffer_identity) = workload_identity(&plan);
+    let environment = {
+        let observed = adapter.environment();
+        json!({
+            "hostname": std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
+            "process_id": std::process::id(),
+            "rocr_visible_devices": std::env::var("ROCR_VISIBLE_DEVICES").ok(),
+            "hip_visible_devices": std::env::var("HIP_VISIBLE_DEVICES").ok(),
+            "hsa_runtime": {
+                "implementation": observed.runtime().implementation(),
+                "version": observed.runtime().version(),
+                "image_sha256": lowercase_hex(
+                    observed.runtime().image_digest().bytes().as_bytes()
+                ),
+            },
+            "physical_device": {
+                "uuid": lowercase_hex(&observed.physical_device().uuid()),
+                "node_id": observed.physical_device().node_id(),
+                "hip_ordinal": observed.physical_device().hip_ordinal(),
+                "target": "gfx950:xnack-",
+                "hsa_agent_handle": observed.agent().agent_handle().to_string(),
+            },
+        })
+    };
+    let mut output = std::io::BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&config.output)?,
+    );
+    // SAFETY: immutable digest-pinned bytes and allocations are retained until
+    // the profiled session and the sole consuming unload complete.
+    let (executable, load) = unsafe { adapter.load_executable(bytes, digest) }?;
+    let executable_identity = load.executable_object();
+    let execution = (|| -> Result<(), BoxError> {
+        require(
+            load.finalized_digest() == digest && load.byte_len() == bytes.len() as u64,
+            format!("{} profiled load observation changed", plan.label),
+        )?;
+        // SAFETY: profile inspection admitted exactly this export/descriptor.
+        let (kernels, resolutions) =
+            unsafe { adapter.resolve_kernel_set(&executable, [case.export]) }?;
+        let kernel = kernels
+            .get(0)
+            .ok_or_else(|| format!("profiled runtime omitted {}", plan.label))?;
+        let resolution = &resolutions[0];
+        let size = kernarg_size(case.args);
+        require(
+            kernels.len() == 1
+                && resolutions.len() == 1
+                && resolution.executable_object() == executable_identity
+                && resolution.export_symbol() == case.export
+                && resolution.kernarg_segment_size() == size as u64
+                && resolution.kernarg_segment_alignment() == HSA_KERNARG_ALIGNMENT
+                && resolution.group_segment_size() == case.static_lds_bytes,
+            format!(
+                "runtime resolved a substituted profiled {} kernel",
+                plan.label
+            ),
+        )?;
+        let geometry = HsaLaunchGeometryV1::new([1, 1, 1], [case.workgroup_x, 1, 1], 0);
+        let mut storage = RuntimeKernarg::new(size)?;
+        let kernarg = storage.bytes_mut();
+        kernarg.copy_from_slice(&explicit);
+        let original = explicit.clone();
+        // SAFETY: the same admitted ABI and live buffers used by the existing
+        // correctness dispatch remain live for the complete session.
+        let mut session = unsafe {
+            let initialization = adapter.initialize_implicit_kernarg(
+                &executable,
+                kernel,
+                geometry,
+                size,
+                size,
+                0,
+                kernarg,
+            )?;
+            require(
+                initialization.initialized()
+                    && initialization.explicit_byte_len() == size as u64
+                    && initialization.implicit_byte_offset() == size as u64
+                    && initialization.implicit_byte_len() == 0
+                    && kernarg == original,
+                format!("{} profiled initialization changed the ABI", case.label),
+            )?;
+            adapter.prepare_profiled_dispatch_session(&executable, kernel, geometry, kernarg)?
+        };
+
+        session.dispatch()?;
+        for (planned, actual) in plan.buffers.iter().zip(&buffers) {
+            verify_buffer(planned, &actual.read_after_synchronous_dispatch())?;
+        }
+        for _ in 0..config.warmups {
+            session.dispatch()?;
+        }
+
+        for block in 0..config.blocks {
+            for _ in 0..config.block_rewarm {
+                session.dispatch()?;
+            }
+            let observations = (0..config.samples_per_block)
+                .map(|_| session.dispatch())
+                .collect::<Result<Vec<_>, _>>()?;
+            for (planned, actual) in plan.buffers.iter().zip(&buffers) {
+                verify_buffer(planned, &actual.read_after_synchronous_dispatch())?;
+            }
+            for (sample, observation) in observations.iter().enumerate() {
+                let record = json!({
+                    "schema": "fe2o3.gfx950.advanced-dispatch-sample.v1",
+                    "campaign_id": config.campaign_id,
+                    "record_id": format!(
+                        "{}:{}:{}:{}:{}",
+                        config.campaign_id, case.export, plan.label, block, sample
+                    ),
+                    "implementation": {
+                        "id": config.implementation_id,
+                        "variant": config.variant_id,
+                    },
+                    "artifact": {
+                        "source_commit": config.source_commit,
+                        "source_tree": config.source_tree,
+                        "crate_binding_sha256": config.crate_binding,
+                        "llvm_sha256": config.llvm_sha256,
+                        "hsaco_sha256": std::env::var(SHA256_ENV)?,
+                        "isa_sha256": config.isa_sha256,
+                        "kernel_export": case.export,
+                        "descriptor": case.descriptor,
+                    },
+                    "workload": {
+                        "id": plan.label,
+                        "input_sha256": workload_sha256,
+                        "buffers": buffer_identity,
+                        "cache_regime": "persistent-allocation-repeated-single-workgroup",
+                    },
+                    "launch": {
+                        "grid": [1, 1, 1],
+                        "workgroup": [case.workgroup_x, 1, 1],
+                        "dynamic_lds_bytes": 0,
+                        "static_lds_bytes": case.static_lds_bytes,
+                        "kernarg_bytes": size,
+                    },
+                    "trial": {
+                        "process": 0,
+                        "block": block,
+                        "sample": sample,
+                        "initial_warmups": config.warmups,
+                        "block_rewarm": config.block_rewarm,
+                        "samples_per_block": config.samples_per_block,
+                    },
+                    "timer": {
+                        "source": "rocr-hsa-dispatch-timestamps",
+                        "start_tick": observation.start_tick().to_string(),
+                        "end_tick": observation.end_tick().to_string(),
+                        "duration_ticks": (observation.end_tick() - observation.start_tick()).to_string(),
+                        "frequency_hz": observation.timestamp_frequency_hz().to_string(),
+                        "duration_ns": observation.duration_ns().to_string(),
+                        "aql_packet_id": observation.packet_id().to_string(),
+                    },
+                    "correctness": {
+                        "passed": true,
+                        "preflight_dispatch_checked": true,
+                        "post_block_checked": true,
+                        "guard_canaries_checked": true,
+                        "oracle": "current-repository-cpu-reference",
+                    },
+                    "environment": environment,
+                });
+                serde_json::to_writer(&mut output, &record)?;
+                output.write_all(b"\n")?;
+            }
+        }
+        output.flush()?;
+        Ok(())
+    })();
+    let unload = unsafe { adapter.unload_executable(executable) }?;
+    require(
+        unload.released() && unload.executable_object() == executable_identity,
+        format!("{} profiled executable was not released", plan.label),
+    )?;
+    execution
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn run_case(case: AdvancedCase) -> Result<(), BoxError> {
     let (bytes, digest) = read_pinned_hsaco()?;
     inspect_profile(case, &bytes)?;
@@ -1499,6 +1917,11 @@ fn run_case(case: AdvancedCase) -> Result<(), BoxError> {
     )?;
     for plan in plans_for(case)? {
         execute_plan(case, &mut adapter, &bytes, digest, plan)?;
+    }
+    if let Some(config) = PerformanceConfig::from_environment()? {
+        for plan in plans_for(case)? {
+            profile_plan(case, &mut adapter, &bytes, digest, plan, &config)?;
+        }
     }
     println!("PASS {} production HSA verification", case.label);
     Ok(())
