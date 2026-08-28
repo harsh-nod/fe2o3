@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -14,6 +16,30 @@ SPEC = importlib.util.spec_from_file_location("workspace_dependency_policy", CHE
 assert SPEC is not None and SPEC.loader is not None
 CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)
+POLICY_PATH = Path(__file__).resolve().parents[1] / "workspace-dependency-policy.json"
+COMPILER_CLOSURE_CAPABILITY = "fe2o3-compiler-closure-capability"
+CANONICAL_CONTRACTS_LAYER = "canonical-contracts"
+
+
+def checked_in_policy() -> dict:
+    return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+
+
+def package_owners(candidate: dict, package_name: str) -> list[str]:
+    return [
+        layer["name"]
+        for layer in candidate["layers"]
+        if package_name in layer["packages"]
+    ]
+
+
+def require_compiler_closure_capability_class(candidate: dict) -> None:
+    owners = package_owners(candidate, COMPILER_CLOSURE_CAPABILITY)
+    if owners != [CANONICAL_CONTRACTS_LAYER]:
+        raise AssertionError(
+            f"{COMPILER_CLOSURE_CAPABILITY} must be owned exactly by "
+            f"{CANONICAL_CONTRACTS_LAYER}, found {owners!r}"
+        )
 
 
 def policy() -> dict:
@@ -60,6 +86,71 @@ def metadata(packages: list[dict]) -> dict:
 
 
 class WorkspaceDependencyPolicyTests(unittest.TestCase):
+    def test_checked_in_compiler_closure_capability_is_canonical_contract(self) -> None:
+        require_compiler_closure_capability_class(checked_in_policy())
+
+    def test_rejects_removed_compiler_closure_capability_classification(self) -> None:
+        hostile = copy.deepcopy(checked_in_policy())
+        canonical = next(
+            layer
+            for layer in hostile["layers"]
+            if layer["name"] == CANONICAL_CONTRACTS_LAYER
+        )
+        canonical["packages"].remove(COMPILER_CLOSURE_CAPABILITY)
+
+        with self.assertRaisesRegex(AssertionError, "must be owned exactly"):
+            require_compiler_closure_capability_class(hostile)
+        violations, _ = CHECKER.check_policy(
+            metadata(
+                [
+                    package(
+                        COMPILER_CLOSURE_CAPABILITY,
+                        "crates/fe2o3-compiler-closure-capability",
+                    )
+                ]
+            ),
+            hostile,
+        )
+        self.assertEqual(
+            [
+                "unclassified workspace member: "
+                "fe2o3-compiler-closure-capability "
+                "(crates/fe2o3-compiler-closure-capability/Cargo.toml)"
+            ],
+            violations,
+        )
+
+    def test_rejects_every_noncanonical_compiler_closure_capability_class(self) -> None:
+        baseline = checked_in_policy()
+        noncanonical_layers = [
+            layer["name"]
+            for layer in baseline["layers"]
+            if layer["name"] != CANONICAL_CONTRACTS_LAYER
+        ]
+        self.assertEqual(7, len(noncanonical_layers))
+
+        for hostile_layer in noncanonical_layers:
+            with self.subTest(layer=hostile_layer):
+                hostile = copy.deepcopy(baseline)
+                for layer in hostile["layers"]:
+                    if layer["name"] == CANONICAL_CONTRACTS_LAYER:
+                        layer["packages"].remove(COMPILER_CLOSURE_CAPABILITY)
+                    elif layer["name"] == hostile_layer:
+                        layer["packages"].append(COMPILER_CLOSURE_CAPABILITY)
+                with self.assertRaisesRegex(AssertionError, "must be owned exactly"):
+                    require_compiler_closure_capability_class(hostile)
+
+    def test_rejects_duplicate_compiler_closure_capability_ownership(self) -> None:
+        hostile = copy.deepcopy(checked_in_policy())
+        next(
+            layer for layer in hostile["layers"] if layer["name"] == "host-runtime"
+        )["packages"].append(COMPILER_CLOSURE_CAPABILITY)
+
+        with self.assertRaisesRegex(
+            CHECKER.PolicyConfigurationError, "assigned to both"
+        ):
+            CHECKER.check_policy(metadata([]), hostile)
+
     def test_allows_dependencies_toward_contracts(self) -> None:
         packages = [
             package("contract", "crates/contract"),
