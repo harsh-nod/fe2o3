@@ -22,7 +22,7 @@ sha2.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
-fe2o3-compiler-execution-client.workspace = true
+fe2o3-compiler-execution-client = { workspace = true, features = ["test-support"] }
 
 [lints.rust]
 unsafe_code = "deny"

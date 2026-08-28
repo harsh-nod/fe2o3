@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
+#[cfg(test)]
 use std::os::fd::OwnedFd;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -16,7 +17,8 @@ use fe2o3_compiler_execution_protocol::{
 };
 
 use crate::child_channel::require_reserved_descriptor_unused;
-use crate::supervisor_handoff::transfer_to_supervisor_inner;
+#[cfg(test)]
+use crate::supervisor_handoff::transfer_to_supervisor_control_inner;
 use crate::{
     COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
     CompilerExecutionChildChannelErrorV1, CompilerExecutionClientProcessIdentityV1,
@@ -174,15 +176,28 @@ impl CompilerExecutionChildSessionV1 {
     /// Transfers the service endpoint to one authenticated distinct-UID supervisor.
     pub fn transfer_to_supervisor(
         self,
-        control: OwnedFd,
         expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
         timeout: Duration,
     ) -> Result<PendingCompilerExecutionChildSupervisorV1, CompilerExecutionChildSessionErrorV1>
     {
-        self.transfer_to_supervisor_inner::<true>(control, expected_supervisor, timeout)
+        self.policy
+            .revalidate()
+            .map_err(CompilerExecutionChildSessionErrorV1::PolicyCapability)?;
+        let client = self.client();
+        let pending = self
+            .service
+            .transfer_to_supervisor(expected_supervisor, self.policy.policy(), timeout)
+            .map_err(CompilerExecutionChildSessionErrorV1::SupervisorHandoff)?;
+        Ok(PendingCompilerExecutionChildSupervisorV1 {
+            policy: self.policy,
+            pending,
+            receipt: self.receipt,
+            client,
+        })
     }
 
-    fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
+    #[cfg(test)]
+    fn transfer_to_supervisor_control_inner<const REQUIRE_DISTINCT_UID: bool>(
         self,
         control: OwnedFd,
         expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
@@ -193,7 +208,7 @@ impl CompilerExecutionChildSessionV1 {
             .revalidate()
             .map_err(CompilerExecutionChildSessionErrorV1::PolicyCapability)?;
         let client = self.client();
-        let pending = transfer_to_supervisor_inner::<REQUIRE_DISTINCT_UID>(
+        let pending = transfer_to_supervisor_control_inner::<REQUIRE_DISTINCT_UID>(
             self.service,
             control,
             expected_supervisor,
@@ -600,17 +615,10 @@ mod tests {
         let mut child = command.spawn().unwrap();
         let session = pending.finish(child.id(), Duration::from_secs(2)).unwrap();
         assert_eq!(session.client().pid(), child.id());
-        let (cargo, _supervisor) = socketpair(
-            AddressFamily::UNIX,
-            SocketType::SEQPACKET,
-            SocketFlags::CLOEXEC,
-            None,
-        )
-        .unwrap();
         let credentials =
             CompilerExecutionSupervisorCredentialsV1::new(current_uid, current_gid).unwrap();
         assert!(matches!(
-            session.transfer_to_supervisor(cargo, credentials, Duration::from_secs(1)),
+            session.transfer_to_supervisor(credentials, Duration::from_secs(1)),
             Err(CompilerExecutionChildSessionErrorV1::SupervisorHandoff(
                 CompilerExecutionHandoffErrorV1::ClientAndSupervisorUidMatch
             ))
@@ -648,7 +656,11 @@ mod tests {
         let credentials =
             CompilerExecutionSupervisorCredentialsV1::new(current_uid, current_gid).unwrap();
         let pending = session
-            .transfer_to_supervisor_inner::<false>(cargo, credentials, Duration::from_secs(1))
+            .transfer_to_supervisor_control_inner::<false>(
+                cargo,
+                credentials,
+                Duration::from_secs(1),
+            )
             .unwrap();
         receive_supervisor_handoff(&supervisor);
         let substituted = policy(8);
@@ -738,7 +750,11 @@ mod tests {
         )
         .unwrap();
         let pending = session
-            .transfer_to_supervisor_inner::<false>(cargo, credentials, Duration::from_secs(2))
+            .transfer_to_supervisor_control_inner::<false>(
+                cargo,
+                credentials,
+                Duration::from_secs(2),
+            )
             .unwrap();
         receive_supervisor_handoff(&supervisor);
         let readiness =

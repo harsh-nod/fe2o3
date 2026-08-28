@@ -5,22 +5,28 @@ use std::fmt;
 use std::io::{self, IoSlice, IoSliceMut};
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, CompilerExecutionIssuerPolicyV1,
-    CompilerExecutionServiceLaunchManifestV1, CompilerExecutionServiceReadyErrorV1,
-    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffErrorV1,
-    CompilerExecutionSupervisorHandoffV1,
+    COMPILER_EXECUTION_SERVICE_READY_BYTES_V1, COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+    CompilerExecutionIssuerPolicyV1, CompilerExecutionServiceLaunchManifestV1,
+    CompilerExecutionServiceReadyErrorV1, CompilerExecutionServiceReadyV1,
+    CompilerExecutionSupervisorHandoffErrorV1, CompilerExecutionSupervisorHandoffV1,
 };
+use rustix::fs::OFlags;
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags,
-    SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketType, recv, recvmsg, sendmsg,
+    SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketAddrAny, SocketAddrUnix,
+    SocketFlags, SocketType, connect, recv, recvmsg, sendmsg, socket_with,
 };
 
 use crate::{CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1};
 
 const INVALID_ID: u32 = u32::MAX;
+
+/// Maximum connect-and-transfer bound accepted by the production supervisor client.
+pub const MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1: Duration = Duration::from_secs(120);
 
 /// Exact expected credential identity of the dedicated protected-supervisor peer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,9 +103,7 @@ impl PendingCompilerExecutionSupervisorV1 {
         policy: &CompilerExecutionIssuerPolicyV1,
         timeout: Duration,
     ) -> Result<CompilerExecutionServiceReadyV1, CompilerExecutionHandoffErrorV1> {
-        if timeout.is_zero() {
-            return Err(CompilerExecutionHandoffErrorV1::InvalidTimeout);
-        }
+        validate_boundary_timeout(timeout)?;
         if !self.handoff.launch_manifest().matches_policy(policy) {
             return Err(CompilerExecutionHandoffErrorV1::ReadinessMismatch);
         }
@@ -122,40 +126,84 @@ impl PendingCompilerExecutionSupervisorV1 {
 }
 
 impl CompilerExecutionServiceLaunchV1 {
-    /// Transfers this exact live rustc session to one authenticated protected supervisor.
+    /// Connects to and transfers this exact live rustc session to the production supervisor.
     ///
-    /// `control` must be a connected Unix `SOCK_SEQPACKET` endpoint whose kernel-reported peer
-    /// UID and GID match `expected_supervisor`. The single canonical packet binds the exact direct
-    /// parent to the launch manifest and carries exactly two ordered descriptors: service peer,
-    /// then rustc pidfd.
+    /// The control endpoint is created internally as nonblocking Unix `SOCK_SEQPACKET`, connects
+    /// only to [`COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1`], and must report the configured
+    /// dedicated UID and GID through `SO_PEERCRED`. One absolute monotonic deadline covers both
+    /// connect and transfer. The canonical packet binds the exact direct parent to the launch
+    /// manifest and carries exactly two ordered descriptors: service peer, then rustc pidfd.
+    ///
+    /// Supplying an alternate path or preconnected descriptor is deliberately not part of the
+    /// production API.
+    ///
+    /// ```compile_fail
+    /// use std::os::fd::OwnedFd;
+    /// use std::time::Duration;
+    /// use fe2o3_compiler_execution_client::{
+    ///     CompilerExecutionServiceLaunchV1, CompilerExecutionSupervisorCredentialsV1,
+    /// };
+    /// use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV1;
+    /// fn inject(
+    ///     launch: CompilerExecutionServiceLaunchV1,
+    ///     control: OwnedFd,
+    ///     credentials: CompilerExecutionSupervisorCredentialsV1,
+    ///     policy: &CompilerExecutionIssuerPolicyV1,
+    /// ) {
+    ///     let _ = launch.transfer_to_supervisor(
+    ///         control, credentials, policy, Duration::from_secs(1),
+    ///     );
+    /// }
+    /// ```
     pub fn transfer_to_supervisor(
         self,
-        control: OwnedFd,
         expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
         policy: &CompilerExecutionIssuerPolicyV1,
         timeout: Duration,
     ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
-        transfer_to_supervisor_inner::<true>(self, control, expected_supervisor, policy, timeout)
+        transfer_to_supervisor_at_inner::<true>(
+            self,
+            Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
+            expected_supervisor,
+            policy,
+            timeout,
+        )
     }
 }
 
-pub(crate) fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
+fn transfer_to_supervisor_at_inner<const REQUIRE_DISTINCT_UID: bool>(
     launch: CompilerExecutionServiceLaunchV1,
-    control: OwnedFd,
+    path: &Path,
     expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
     policy: &CompilerExecutionIssuerPolicyV1,
     timeout: Duration,
 ) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
-    if timeout.is_zero() {
-        return Err(CompilerExecutionHandoffErrorV1::InvalidTimeout);
-    }
+    validate_boundary_timeout(timeout)?;
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
     if REQUIRE_DISTINCT_UID && launch.client().uid() == expected_supervisor.uid {
         return Err(CompilerExecutionHandoffErrorV1::ClientAndSupervisorUidMatch);
     }
+    let control = connect_to_supervisor(path, expected_supervisor, deadline)?;
+    transfer_to_supervisor_inner::<REQUIRE_DISTINCT_UID>(
+        launch,
+        control,
+        expected_supervisor,
+        policy,
+        deadline,
+    )
+}
+
+fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
+    launch: CompilerExecutionServiceLaunchV1,
+    control: OwnedFd,
+    expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
+    policy: &CompilerExecutionIssuerPolicyV1,
+    deadline: Instant,
+) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
     validate_control(&control, expected_supervisor)?;
+    require_deadline(deadline)?;
     launch
         .revalidate_for_supervisor_handoff()
         .map_err(CompilerExecutionHandoffErrorV1::RustcLaunch)?;
@@ -166,6 +214,174 @@ pub(crate) fn transfer_to_supervisor_inner<const REQUIRE_DISTINCT_UID: bool>(
     let descriptors = [service_peer.as_fd(), client_pidfd.as_fd()];
     send_handoff(&control, handoff.canonical_bytes(), &descriptors, deadline)?;
     Ok(PendingCompilerExecutionSupervisorV1 { control, handoff })
+}
+
+#[cfg(test)]
+pub(crate) fn transfer_to_supervisor_control_inner<const REQUIRE_DISTINCT_UID: bool>(
+    launch: CompilerExecutionServiceLaunchV1,
+    control: OwnedFd,
+    expected_supervisor: CompilerExecutionSupervisorCredentialsV1,
+    policy: &CompilerExecutionIssuerPolicyV1,
+    timeout: Duration,
+) -> Result<PendingCompilerExecutionSupervisorV1, CompilerExecutionHandoffErrorV1> {
+    validate_boundary_timeout(timeout)?;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or(CompilerExecutionHandoffErrorV1::DeadlineOverflow)?;
+    if REQUIRE_DISTINCT_UID && launch.client().uid() == expected_supervisor.uid {
+        return Err(CompilerExecutionHandoffErrorV1::ClientAndSupervisorUidMatch);
+    }
+    transfer_to_supervisor_inner::<REQUIRE_DISTINCT_UID>(
+        launch,
+        control,
+        expected_supervisor,
+        policy,
+        deadline,
+    )
+}
+
+fn validate_boundary_timeout(timeout: Duration) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    if timeout.is_zero() || timeout > MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1 {
+        return Err(CompilerExecutionHandoffErrorV1::InvalidTimeout);
+    }
+    Ok(())
+}
+
+fn connect_to_supervisor(
+    path: &Path,
+    expected: CompilerExecutionSupervisorCredentialsV1,
+    deadline: Instant,
+) -> Result<OwnedFd, CompilerExecutionHandoffErrorV1> {
+    require_deadline(deadline)?;
+    let address = SocketAddrUnix::new(path).map_err(io::Error::from)?;
+    let expected_address = SocketAddrAny::from(address.clone());
+    let control = socket_with(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        None,
+    )
+    .map_err(io::Error::from)?;
+    connect_with_deadline(&control, &address, deadline)?;
+    validate_production_control(&control, expected, &expected_address)?;
+    require_deadline(deadline)?;
+    Ok(control)
+}
+
+fn connect_with_deadline(
+    control: &OwnedFd,
+    address: &SocketAddrUnix,
+    deadline: Instant,
+) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    loop {
+        require_deadline(deadline)?;
+        match connect(control, address) {
+            Ok(()) | Err(rustix::io::Errno::ISCONN) => return Ok(()),
+            Err(rustix::io::Errno::INTR) => {}
+            Err(
+                rustix::io::Errno::INPROGRESS
+                | rustix::io::Errno::ALREADY
+                | rustix::io::Errno::AGAIN,
+            ) => {
+                wait_for_connect_event(control, deadline)?;
+                match rustix::net::sockopt::socket_error(control).map_err(io::Error::from)? {
+                    Ok(()) => {}
+                    Err(source) => {
+                        return Err(CompilerExecutionHandoffErrorV1::Io(source.into()));
+                    }
+                }
+                match rustix::net::getpeername(control) {
+                    Ok(Some(_)) => return Ok(()),
+                    Ok(None) | Err(rustix::io::Errno::NOTCONN) => {}
+                    Err(source) => {
+                        return Err(CompilerExecutionHandoffErrorV1::Io(source.into()));
+                    }
+                }
+            }
+            Err(source) => return Err(CompilerExecutionHandoffErrorV1::Io(source.into())),
+        }
+    }
+}
+
+fn wait_for_connect_event(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(CompilerExecutionHandoffErrorV1::Timeout);
+        }
+        let mut descriptor = libc::pollfd {
+            fd: control.as_fd().as_raw_fd(),
+            events: libc::POLLOUT | libc::POLLERR | libc::POLLHUP,
+            revents: 0,
+        };
+        // SAFETY: descriptor is a live one-element pollfd array for the complete call.
+        let result = unsafe { libc::poll(&mut descriptor, 1, duration_to_poll_millis(remaining)) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(CompilerExecutionHandoffErrorV1::Io(error));
+        }
+        if result == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
+            return Err(CompilerExecutionHandoffErrorV1::Timeout);
+        }
+        if descriptor.revents & libc::POLLNVAL != 0 {
+            return Err(CompilerExecutionHandoffErrorV1::InvalidControl(
+                "descriptor became invalid while connecting",
+            ));
+        }
+        if descriptor.revents & (libc::POLLOUT | libc::POLLERR | libc::POLLHUP) != 0 {
+            return Ok(());
+        }
+    }
+}
+
+fn validate_production_control(
+    control: &OwnedFd,
+    expected_credentials: CompilerExecutionSupervisorCredentialsV1,
+    expected_address: &SocketAddrAny,
+) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    let descriptor_flags = rustix::io::fcntl_getfd(control).map_err(io::Error::from)?;
+    let status = rustix::fs::fcntl_getfl(control).map_err(io::Error::from)?;
+    let forbidden = OFlags::APPEND | OFlags::ASYNC | OFlags::DIRECT;
+    if descriptor_flags != rustix::io::FdFlags::CLOEXEC
+        || status & OFlags::ACCMODE != OFlags::RDWR
+        || !status.contains(OFlags::NONBLOCK)
+        || status.intersects(forbidden)
+    {
+        return Err(CompilerExecutionHandoffErrorV1::InvalidControl(
+            "descriptor flags are not exact nonblocking close-on-exec custody",
+        ));
+    }
+    validate_control(control, expected_credentials)?;
+    if rustix::net::sockopt::socket_acceptconn(control).map_err(io::Error::from)? {
+        return Err(CompilerExecutionHandoffErrorV1::InvalidControl(
+            "control endpoint is a listener",
+        ));
+    }
+    let unnamed = SocketAddrAny::from(SocketAddrUnix::new_unnamed());
+    let local = rustix::net::getsockname(control).map_err(io::Error::from)?;
+    let remote = rustix::net::getpeername(control).map_err(io::Error::from)?;
+    if local != unnamed || remote.as_ref() != Some(expected_address) {
+        return Err(CompilerExecutionHandoffErrorV1::InvalidControl(
+            "control endpoint is not connected from unnamed local custody to the fixed pathname",
+        ));
+    }
+    match rustix::net::sockopt::socket_error(control).map_err(io::Error::from)? {
+        Ok(()) => Ok(()),
+        Err(source) => Err(CompilerExecutionHandoffErrorV1::Io(source.into())),
+    }
+}
+
+fn require_deadline(deadline: Instant) -> Result<(), CompilerExecutionHandoffErrorV1> {
+    if deadline.saturating_duration_since(Instant::now()).is_zero() {
+        return Err(CompilerExecutionHandoffErrorV1::Timeout);
+    }
+    Ok(())
 }
 
 fn validate_control(
@@ -198,6 +414,9 @@ fn validate_control(
         ));
     }
     let credentials = rustix::net::sockopt::socket_peercred(control).map_err(io::Error::from)?;
+    if credentials.pid.as_raw_pid() <= 0 {
+        return Err(CompilerExecutionHandoffErrorV1::InvalidSupervisorPid);
+    }
     if credentials.uid.as_raw() != expected.uid || credentials.gid.as_raw() != expected.gid {
         return Err(CompilerExecutionHandoffErrorV1::SupervisorCredentialsMismatch);
     }
@@ -395,9 +614,11 @@ pub enum CompilerExecutionHandoffErrorV1 {
     InvalidSupervisorUid,
     /// The configured protected-supervisor GID is privileged or invalid.
     InvalidSupervisorGid,
+    /// `SO_PEERCRED` did not report a positive protected-supervisor PID.
+    InvalidSupervisorPid,
     /// A production handoff attempted to use the rustc client's UID as the service UID.
     ClientAndSupervisorUidMatch,
-    /// The complete handoff timeout is zero.
+    /// A connect, handoff, or readiness timeout is zero or exceeds two minutes.
     InvalidTimeout,
     /// The monotonic deadline cannot be represented.
     DeadlineOverflow,
@@ -432,6 +653,7 @@ impl fmt::Display for CompilerExecutionHandoffErrorV1 {
         match self {
             Self::InvalidSupervisorUid => formatter.write_str("invalid protected-supervisor UID"),
             Self::InvalidSupervisorGid => formatter.write_str("invalid protected-supervisor GID"),
+            Self::InvalidSupervisorPid => formatter.write_str("invalid protected-supervisor PID"),
             Self::ClientAndSupervisorUidMatch => {
                 formatter.write_str("rustc client and protected supervisor use the same UID")
             }
@@ -489,18 +711,65 @@ impl From<io::Error> for CompilerExecutionHandoffErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::io::IoSliceMut;
     use std::mem::MaybeUninit;
     use std::os::fd::{AsFd, AsRawFd};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use rustix::net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SocketFlags,
-        socketpair,
+        accept_with, bind, listen, socketpair,
     };
 
     use super::*;
     use crate::PendingCompilerExecutionChildChannelV1;
+
+    static LISTENER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
+
+    struct NamedListener {
+        root: PathBuf,
+        path: PathBuf,
+        descriptor: OwnedFd,
+    }
+
+    impl NamedListener {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "fe2o3-client-supervisor-{name}-{}-{}",
+                std::process::id(),
+                LISTENER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let path = root.join("supervisor.sock");
+            let descriptor = socket_with(
+                AddressFamily::UNIX,
+                SocketType::SEQPACKET,
+                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                None,
+            )
+            .unwrap();
+            bind(&descriptor, &SocketAddrUnix::new(&path).unwrap()).unwrap();
+            listen(&descriptor, 8).unwrap();
+            Self {
+                root,
+                path,
+                descriptor,
+            }
+        }
+    }
+
+    impl Drop for NamedListener {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 
     fn policy() -> CompilerExecutionIssuerPolicyV1 {
         use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerMeasurementV1;
@@ -664,6 +933,15 @@ mod tests {
 
     #[test]
     fn exact_manifest_and_two_ordered_descriptors_transfer_once() {
+        let _reserved_child_fd = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current_uid = rustix::process::geteuid().as_raw();
+        let current_gid = rustix::process::getegid().as_raw();
+        if current_uid == 0 || current_gid == 0 {
+            return;
+        }
+        let listener = NamedListener::new("exact-transfer");
         let mut command = Command::new("/bin/sleep");
         command.arg("30");
         let pending_child = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
@@ -673,19 +951,39 @@ mod tests {
             .unwrap();
         let client = launch.client();
         let submitter = launch.submitter();
-        let (sender, receiver) = control_pair();
-        let credentials = CompilerExecutionSupervisorCredentialsV1::new(
-            rustix::process::geteuid().as_raw(),
-            rustix::process::getegid().as_raw(),
-        )
-        .unwrap();
+        let credentials =
+            CompilerExecutionSupervisorCredentialsV1::new(current_uid, current_gid).unwrap();
         let expected_policy = policy();
-        let transferred = transfer_to_supervisor_inner::<false>(
+        let transferred = transfer_to_supervisor_at_inner::<false>(
             launch,
-            sender,
+            &listener.path,
             credentials,
             &expected_policy,
             Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(
+            rustix::io::fcntl_getfd(&transferred.control).unwrap(),
+            rustix::io::FdFlags::CLOEXEC
+        );
+        assert!(
+            rustix::fs::fcntl_getfl(&transferred.control)
+                .unwrap()
+                .contains(OFlags::NONBLOCK)
+        );
+        assert_eq!(
+            rustix::net::getsockname(&transferred.control).unwrap(),
+            SocketAddrAny::from(SocketAddrUnix::new_unnamed())
+        );
+        assert_eq!(
+            rustix::net::getpeername(&transferred.control).unwrap(),
+            Some(SocketAddrAny::from(
+                SocketAddrUnix::new(&listener.path).unwrap()
+            ))
+        );
+        let receiver = accept_with(
+            &listener.descriptor,
+            SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
         )
         .unwrap();
 
@@ -735,6 +1033,9 @@ mod tests {
 
     #[test]
     fn production_transfer_rejects_same_uid_and_wrong_control_shapes() {
+        let _reserved_child_fd = RESERVED_CHILD_FD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current_uid = rustix::process::geteuid().as_raw();
         let current_gid = rustix::process::getegid().as_raw();
         if current_uid == 0 || current_gid == 0 {
@@ -749,9 +1050,8 @@ mod tests {
         let launch = pending_child
             .finish(child.id(), Duration::from_secs(2))
             .unwrap();
-        let (sender, _receiver) = control_pair();
         assert!(matches!(
-            launch.transfer_to_supervisor(sender, credentials, &policy(), Duration::from_secs(2)),
+            launch.transfer_to_supervisor(credentials, &policy(), Duration::from_secs(2)),
             Err(CompilerExecutionHandoffErrorV1::ClientAndSupervisorUidMatch)
         ));
         child.kill().unwrap();
@@ -784,5 +1084,51 @@ mod tests {
             Err(CompilerExecutionHandoffErrorV1::SupervisorCredentialsMismatch)
         ));
         let _ = stream.0.as_raw_fd();
+    }
+
+    #[test]
+    fn fixed_connector_rejects_missing_service_wrong_credentials_and_unbounded_timeouts() {
+        let current_uid = rustix::process::geteuid().as_raw();
+        let current_gid = rustix::process::getegid().as_raw();
+        if current_uid == 0 || current_gid == 0 {
+            return;
+        }
+        let credentials =
+            CompilerExecutionSupervisorCredentialsV1::new(current_uid, current_gid).unwrap();
+        assert!(matches!(
+            validate_boundary_timeout(Duration::ZERO),
+            Err(CompilerExecutionHandoffErrorV1::InvalidTimeout)
+        ));
+        assert!(matches!(
+            validate_boundary_timeout(
+                MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1 + Duration::from_nanos(1)
+            ),
+            Err(CompilerExecutionHandoffErrorV1::InvalidTimeout)
+        ));
+
+        let missing = std::env::temp_dir().join(format!(
+            "fe2o3-client-missing-supervisor-{}",
+            std::process::id()
+        ));
+        assert!(matches!(
+            connect_to_supervisor(
+                &missing,
+                credentials,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Err(CompilerExecutionHandoffErrorV1::Io(_))
+        ));
+
+        let listener = NamedListener::new("wrong-credentials");
+        let wrong_uid = if current_uid == 1 { 2 } else { 1 };
+        let wrong = CompilerExecutionSupervisorCredentialsV1::new(wrong_uid, current_gid).unwrap();
+        assert!(matches!(
+            connect_to_supervisor(
+                &listener.path,
+                wrong,
+                Instant::now() + Duration::from_secs(1)
+            ),
+            Err(CompilerExecutionHandoffErrorV1::SupervisorCredentialsMismatch)
+        ));
     }
 }

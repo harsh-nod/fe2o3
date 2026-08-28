@@ -42,7 +42,7 @@ pub use receipt_return::{
 };
 pub use supervisor_handoff::{
     CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
-    PendingCompilerExecutionSupervisorV1,
+    MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1, PendingCompilerExecutionSupervisorV1,
 };
 
 /// Fixed rustc descriptor reserved for the compiler-execution service peer.

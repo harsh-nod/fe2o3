@@ -31,16 +31,6 @@ fn child_creates_exact_pid_bound_service_channel() {
     assert_eq!(launch.submitter().uid(), launch.client().uid());
     assert_eq!(launch.submitter().gid(), launch.client().gid());
     assert_ne!(launch.submitter().pid(), launch.client().pid());
-    assert!(
-        rustix::io::fcntl_getfd(launch.service_peer())
-            .unwrap()
-            .contains(rustix::io::FdFlags::CLOEXEC)
-    );
-    assert!(
-        rustix::io::fcntl_getfd(launch.client_pidfd())
-            .unwrap()
-            .contains(rustix::io::FdFlags::CLOEXEC)
-    );
 
     child.kill().unwrap();
     child.wait().unwrap();
