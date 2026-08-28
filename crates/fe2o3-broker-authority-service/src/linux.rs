@@ -445,6 +445,10 @@ impl ProtectedServiceAdmissionV1 {
         self.live_client.pidfd.as_fd()
     }
 
+    pub(crate) fn service_peer(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.peer.as_fd()
+    }
+
     pub(crate) fn retain_session(
         &self,
     ) -> Result<ProtectedServiceAdmissionV1, ProtectedServiceAdmissionErrorV1> {

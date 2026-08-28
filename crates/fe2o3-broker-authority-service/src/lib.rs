@@ -118,6 +118,8 @@ mod compiler_execution_issuer_durable;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
 #[cfg(target_os = "linux")]
+mod compiler_execution_service;
+#[cfg(target_os = "linux")]
 mod compiler_execution_supervision;
 #[cfg(target_os = "linux")]
 mod compiler_execution_worker_ledger;
@@ -149,6 +151,12 @@ pub use compiler_execution_occurrence::ProtectedCompilerExecutionOccurrenceError
 #[cfg(target_os = "linux")]
 pub(crate) use compiler_execution_occurrence::{
     ProtectedCompilerExecutionOccurrenceGuardV1, ProtectedCompilerExecutionOccurrenceV1,
+};
+#[cfg(target_os = "linux")]
+pub use compiler_execution_service::{
+    COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1, CompilerExecutionServiceErrorV1,
+    CompilerExecutionServiceExitV1, MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1,
+    serve_compiler_execution_v1,
 };
 #[cfg(target_os = "linux")]
 pub use compiler_execution_supervision::{

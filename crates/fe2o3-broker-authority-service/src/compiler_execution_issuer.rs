@@ -618,6 +618,14 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
         &self.service
     }
 
+    pub(crate) fn service_peer(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.service.service_peer()
+    }
+
+    pub(crate) fn client_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.service.client_pidfd()
+    }
+
     pub(crate) const fn signing_key(&self) -> &SigningKey {
         &self.signing_key.key
     }

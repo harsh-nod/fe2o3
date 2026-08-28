@@ -1019,6 +1019,41 @@ pub enum CompilerExecutionIssuerAckV1 {
 ///     let _ = issuer.acknowledge_published_receipt(committed);
 /// }
 /// ```
+///
+/// The durable transition methods are service-private; an external caller cannot prepare, issue,
+/// publish, or inspect recovery state without using the canonical packet service:
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerV1;
+/// fn bypass(issuer: &mut ProtectedCompilerExecutionIssuerV1) {
+///     let _ = issuer.prepare_challenge();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerV1;
+/// fn bypass(issuer: &mut ProtectedCompilerExecutionIssuerV1, request: &[u8]) {
+///     let _ = issuer.issue_receipt(request);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerV1;
+/// fn bypass(
+///     issuer: &mut ProtectedCompilerExecutionIssuerV1,
+///     request: &[u8],
+///     publication: &[u8],
+/// ) {
+///     let _ = issuer.publish_receipt_to_worker(request, publication);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_broker_authority_service::ProtectedCompilerExecutionIssuerV1;
+/// fn bypass(issuer: &ProtectedCompilerExecutionIssuerV1) {
+///     let _ = issuer.recovery();
+/// }
+/// ```
 pub struct ProtectedCompilerExecutionIssuerV1 {
     admission: ProtectedCompilerExecutionIssuerAdmissionV1,
     ledger: IssuerLedgerV2,
@@ -1051,7 +1086,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
     }
 
     /// Generates and durably commits a fresh subject-bound challenge before returning it.
-    pub fn prepare_challenge(
+    pub(super) fn prepare_challenge(
         &mut self,
     ) -> Result<ProtectedCompilerExecutionChallengeV1, ProtectedCompilerExecutionIssuerErrorV1>
     {
@@ -1081,7 +1116,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
 
     /// Compares one exact request with a fresh supervised occurrence, signs it, and durably
     /// commits the complete receipt before release.
-    pub fn issue_receipt(
+    pub(super) fn issue_receipt(
         &mut self,
         request_bytes: &[u8],
     ) -> Result<ProtectedCompilerExecutionReceiptV1, ProtectedCompilerExecutionIssuerErrorV1> {
@@ -1125,7 +1160,7 @@ impl ProtectedCompilerExecutionIssuerV1 {
     /// Verifies and durably publishes one exact issued receipt in the protected Worker ledger,
     /// reacquires the canonical Worker record, and only then advances the issuer journal.
     /// Repeating the same request and sidecar after a lost response is idempotent.
-    pub fn publish_receipt_to_worker(
+    pub(super) fn publish_receipt_to_worker(
         &mut self,
         request_bytes: &[u8],
         publication_bytes: &[u8],
@@ -1154,8 +1189,103 @@ impl ProtectedCompilerExecutionIssuerV1 {
         Ok(outcome)
     }
 
+    pub(super) fn prepare_challenge_for_service(
+        &mut self,
+        expected_sequence: u64,
+        expected_rollback_anchor: [u8; SHA256_BYTES],
+    ) -> Result<ProtectedCompilerExecutionChallengeV1, ProtectedCompilerExecutionIssuerErrorV1>
+    {
+        self.admission.validate_continuity()?;
+        if self.ledger.record.sequence != expected_sequence
+            || self.ledger.record.prior_anchor != expected_rollback_anchor
+        {
+            return Err(ProtectedCompilerExecutionIssuerErrorV1::ServicePositionMismatch);
+        }
+        match self.ledger.record.stage {
+            IssuerStageV2::Ready => self.prepare_challenge(),
+            IssuerStageV2::Prepared => {
+                let challenge = self.ledger.record.challenge.clone().ok_or(
+                    ProtectedCompilerExecutionIssuerErrorV1::InvalidRecord(
+                        "prepared issuer state has no challenge",
+                    ),
+                )?;
+                self.admission.validate_continuity()?;
+                Ok(ProtectedCompilerExecutionChallengeV1 { challenge })
+            }
+            stage => Err(ProtectedCompilerExecutionIssuerErrorV1::WrongStage {
+                expected: "ready or matching prepared challenge",
+                actual: stage.name(),
+            }),
+        }
+    }
+
+    pub(super) fn issue_receipt_for_service(
+        &mut self,
+        request_bytes: &[u8],
+    ) -> Result<ProtectedCompilerExecutionReceiptV1, ProtectedCompilerExecutionIssuerErrorV1> {
+        self.admission.validate_continuity()?;
+        match self.ledger.record.stage {
+            IssuerStageV2::Prepared => self.issue_receipt(request_bytes),
+            IssuerStageV2::Issued => {
+                let request = CompilerExecutionAttestationRequestV1::decode(request_bytes)?;
+                if self.ledger.record.request.as_ref() != Some(&request) {
+                    return Err(ProtectedCompilerExecutionIssuerErrorV1::RequestMismatch);
+                }
+                let publication = self.ledger.record.receipt_publication()?;
+                self.admission.validate_continuity()?;
+                Ok(ProtectedCompilerExecutionReceiptV1 { publication })
+            }
+            stage => Err(ProtectedCompilerExecutionIssuerErrorV1::WrongStage {
+                expected: "prepared or matching issued request",
+                actual: stage.name(),
+            }),
+        }
+    }
+
+    pub(super) fn publish_receipt_for_service(
+        &mut self,
+        request_bytes: &[u8],
+        publication_bytes: &[u8],
+    ) -> Result<
+        (
+            CompilerExecutionIssuerAckV1,
+            CompilerExecutionReceiptPublicationAckV1,
+        ),
+        ProtectedCompilerExecutionIssuerErrorV1,
+    > {
+        let outcome = self.publish_receipt_to_worker(request_bytes, publication_bytes)?;
+        let acknowledgment = self
+            .worker_ledger
+            .last_record()
+            .ok_or(ProtectedCompilerExecutionIssuerErrorV1::WorkerLedgerJoin(
+                "published issuer state has no Worker record",
+            ))?
+            .acknowledgment()?;
+        self.admission.validate_continuity()?;
+        Ok((outcome, acknowledgment))
+    }
+
+    pub(super) fn validate_service_continuity(
+        &self,
+    ) -> Result<(), ProtectedCompilerExecutionIssuerErrorV1> {
+        self.admission.validate_continuity()?;
+        validate_worker_ledger_join(&self.ledger.record, &self.worker_ledger)
+    }
+
+    pub(super) const fn service_policy(&self) -> &CompilerExecutionIssuerPolicyV1 {
+        self.admission.policy()
+    }
+
+    pub(super) fn service_peer(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.admission.service_peer()
+    }
+
+    pub(super) fn client_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.admission.client_pidfd()
+    }
+
     /// Returns the current inert restart output without changing durable state.
-    pub fn recovery(&self) -> CompilerExecutionIssuerRecoveryV1 {
+    pub(super) fn recovery(&self) -> CompilerExecutionIssuerRecoveryV1 {
         self.ledger.recovery()
     }
 }
@@ -1409,6 +1539,7 @@ pub enum ProtectedCompilerExecutionIssuerErrorV1 {
     ChallengeMismatch,
     RequestMismatch,
     OccurrenceMismatch,
+    ServicePositionMismatch,
     WorkerLedgerJoin(&'static str),
     IllegalSuccessor,
     SequenceExhausted,
@@ -1446,6 +1577,9 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerErrorV1 {
             Self::RequestMismatch => formatter.write_str("issuer request mismatch"),
             Self::OccurrenceMismatch => {
                 formatter.write_str("issuer occurrence identity or subject mismatch")
+            }
+            Self::ServicePositionMismatch => {
+                formatter.write_str("issuer service request names the wrong durable position")
             }
             Self::WorkerLedgerJoin(reason) => {
                 write!(formatter, "issuer and Worker ledger disagree: {reason}")
