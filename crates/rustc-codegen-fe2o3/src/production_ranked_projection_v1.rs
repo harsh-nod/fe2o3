@@ -5224,6 +5224,7 @@ fn project_intrinsic_contracts(
         }
     }
     let mut uniform_inductions = project_uniform_inductions_v1(
+        callables,
         types,
         function,
         constants,
@@ -5977,18 +5978,18 @@ impl<'a> DeterministicScalarProjectorV1<'a> {
         let Some(kind) = deterministic_index_binary_kind_v1(operation) else {
             return self.derive([left, right]);
         };
+        let (Some(left), Some(right)) = (left, right) else {
+            return Ok(None);
+        };
         if matches!(
             kind,
             IndexBinaryKindAttr::Divide | IndexBinaryKindAttr::Remainder
-        ) && !matches!(right, Some(DeterministicScalarSummaryV1::Constant(value)) if value != 0)
+        ) && !matches!(right, DeterministicScalarSummaryV1::Constant(value) if value != 0)
         {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a division or remainder used for deterministic control lacks a statically nonzero divisor",
             ));
         }
-        let (Some(left), Some(right)) = (left, right) else {
-            return Ok(None);
-        };
         let lhs = self.materialize(left)?;
         let rhs = self.materialize(right)?;
         reserve_operation(self.operations)?;
@@ -6269,6 +6270,7 @@ fn project_deterministic_scalar_switches_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn project_uniform_inductions_v1(
+    callables: &[SemanticCallableDeclV1],
     types: &[fe2o3_mir_model::semantic_mir_v1::SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     constants: &[Option<u64>],
@@ -6341,8 +6343,15 @@ fn project_uniform_inductions_v1(
                 "a uniform induction successor outside the semantic CFG",
             ));
         }
-        let Some(topology) =
-            project_natural_loop_topology_v1(&graph, header, body_entry, exit, &mut graph_work)?
+        let Some(topology) = project_natural_loop_topology_v1(
+            callables,
+            function,
+            &graph,
+            header,
+            body_entry,
+            exit,
+            &mut graph_work,
+        )?
         else {
             continue;
         };
@@ -7878,6 +7887,8 @@ fn insert_assertion_proof_cache_with_limit(
 
 #[allow(clippy::too_many_arguments)]
 fn project_natural_loop_topology_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
     graph: &ProjectedLoopCfgV1,
     header: usize,
     body_entry: usize,
@@ -7997,7 +8008,21 @@ fn project_natural_loop_topology_v1(
             }
         }
     }
-    if exits.as_slice() != [(header, exit)] {
+    let mut header_exit_count = 0_usize;
+    for (source, target) in exits {
+        if (source, target) == (header, exit) {
+            header_exit_count += 1;
+            continue;
+        }
+        if !transparent_path_terminates_in_reviewed_trap_v1(
+            callables, function, &in_loop, target, work,
+        )? {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a uniform induction region does not have one unique header exit",
+            ));
+        }
+    }
+    if header_exit_count != 1 {
         return Err(ProductionRankedProjectionErrorV1::Incomplete(
             "a uniform induction region does not have one unique header exit",
         ));
@@ -8012,6 +8037,60 @@ fn project_natural_loop_topology_v1(
         latch,
         loop_blocks,
     }))
+}
+
+fn transparent_path_terminates_in_reviewed_trap_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    in_loop: &[bool],
+    start: usize,
+    work: &mut usize,
+) -> Result<bool, ProductionRankedProjectionErrorV1> {
+    let mut visited = vec![false; function.blocks().len()];
+    let mut current = start;
+    loop {
+        project_loop_graph_charge_v1(work, 1)?;
+        let Some(block) = function.blocks().get(current) else {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a uniform induction terminal side exit is outside the semantic CFG",
+            ));
+        };
+        if in_loop.get(current).copied().unwrap_or(false) || visited[current] {
+            return Ok(false);
+        }
+        visited[current] = true;
+        project_loop_graph_charge_v1(work, block.statements().len())?;
+        if block.statements().iter().any(|statement| {
+            !matches!(
+                statement.kind(),
+                SemanticStatementKindV1::StorageLive(_)
+                    | SemanticStatementKindV1::StorageDead(_)
+                    | SemanticStatementKindV1::Nop
+            )
+        }) {
+            return Ok(false);
+        }
+        match block.terminator().kind() {
+            SemanticTerminatorKindV1::Goto(edge) => {
+                current = edge.target().index() as usize;
+            }
+            SemanticTerminatorKindV1::Call(call)
+                if call.destination().is_none()
+                    && call.arguments().is_empty()
+                    && !matches!(call.unwind(), SemanticUnwindActionV1::Cleanup(_))
+                    && matches!(
+                        callables.get(call.callee().index() as usize),
+                        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                            operation: SemanticCompilerIntrinsicOperationV1::Trap,
+                            ..
+                        })
+                    ) =>
+            {
+                return Ok(true);
+            }
+            _ => return Ok(false),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -19414,6 +19493,38 @@ mod tests {
     }
 
     #[test]
+    fn lane_varying_division_control_remains_an_analysis_split() {
+        let function = deterministic_expression_switch(
+            vec![scalar_assignment(
+                3,
+                scalar_binary(
+                    SemanticBinaryOpV1::Divide,
+                    tensor_operand(1),
+                    tensor_operand(2),
+                ),
+            )],
+            deterministic_expression_locals(false),
+            3,
+        );
+        let (switches, operations, _) = deterministic_scalar_switch_projection(
+            &[],
+            &function,
+            &vec![None; function.locals().len()],
+            vec![],
+            0,
+        )
+        .unwrap();
+        assert!(switches[0].is_none());
+        assert!(!operations.iter().any(|operation| matches!(
+            operation,
+            ProductionRankedOperationV1::IndexBinary {
+                kind: IndexBinaryKindAttr::Divide,
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn deterministic_scalar_projection_rejects_one_missing_dependency() {
         let function = deterministic_expression_switch(
             vec![scalar_assignment(
@@ -20233,6 +20344,7 @@ mod tests {
         Branched,
         TwoLatches,
         ExtraExit,
+        TrapSideExit,
         AnalysisSplit,
         IrreducibleEntry,
         MultiplePreheaders,
@@ -20304,6 +20416,17 @@ mod tests {
                 )
                 .unwrap(),
             }
+        };
+        let terminal_call = || {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(0),
+                    vec![],
+                    None,
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
         };
         let blocks = match shape {
             InductionCfgShape::Chain => vec![
@@ -20431,6 +20554,29 @@ mod tests {
                 ),
                 block(144, vec![], SemanticTerminatorKindV1::Return),
                 block(145, vec![], SemanticTerminatorKindV1::Return),
+            ],
+            InductionCfgShape::TrapSideExit => vec![
+                block(
+                    195,
+                    vec![initialize()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(196, vec![compare()], switch(operand(predicate), 4, 2)),
+                block(197, vec![], switch(operand(body_predicate), 5, 3)),
+                block(
+                    198,
+                    vec![increment()],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
+                block(199, vec![], SemanticTerminatorKindV1::Return),
+                block(
+                    200,
+                    vec![statement(SemanticStatementKindV1::StorageDead(
+                        body_predicate,
+                    ))],
+                    SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 6)),
+                ),
+                block(201, vec![], terminal_call()),
             ],
             InductionCfgShape::AnalysisSplit => vec![
                 block(
@@ -20690,6 +20836,21 @@ mod tests {
         ),
         ProductionRankedProjectionErrorV1,
     > {
+        project_test_inductions_with_types_and_callables(types, &[], function)
+    }
+
+    fn project_test_inductions_with_types_and_callables(
+        types: &[SemanticTypeDeclV1],
+        callables: &[SemanticCallableDeclV1],
+        function: &SemanticFunctionDeclV1,
+    ) -> Result<
+        (
+            Vec<ProjectedUniformInductionV1>,
+            Vec<ProductionRankedOperationV1>,
+            usize,
+        ),
+        ProductionRankedProjectionErrorV1,
+    > {
         let constants = constant_locals(function);
         let origins = local_stable_argument_origins(types, function).unwrap();
         let definitions = local_definition_counts(function);
@@ -20698,6 +20859,7 @@ mod tests {
         let mut operations = Vec::new();
         let mut next_value = 0;
         let mut inductions = project_uniform_inductions_v1(
+            callables,
             types,
             function,
             &constants,
@@ -20759,6 +20921,7 @@ mod tests {
         let mut entry_operations = Vec::new();
         let mut next_value = 0;
         let inductions = project_uniform_inductions_v1(
+            &[],
             &projection_types(),
             &function,
             &constants,
@@ -20887,6 +21050,7 @@ mod tests {
         let mut operations = Vec::new();
         let mut next_value = 0;
         let inductions = project_uniform_inductions_v1(
+            &[],
             &types,
             &function,
             &constants,
@@ -21259,6 +21423,153 @@ mod tests {
     }
 
     #[test]
+    fn exact_trap_side_exit_through_transparent_shim_preserves_uniform_induction() {
+        let function = multi_block_induction_function(
+            InductionCfgShape::TrapSideExit,
+            SemanticLocalRoleV1::Argument(0),
+            1,
+        );
+        let callables = [compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::Trap,
+        )];
+        let (inductions, entry_operations, next_argument) =
+            project_test_inductions_with_types_and_callables(
+                &projection_types(),
+                &callables,
+                &function,
+            )
+            .unwrap();
+        assert_eq!(inductions.len(), 1);
+        assert_eq!(inductions[0].loop_blocks, vec![1, 2, 3]);
+
+        let (blocks, _) = build_ranked_cfg(
+            &projection_types(),
+            &function,
+            &vec![None; function.locals().len()],
+            &vec![None; function.blocks().len()],
+            &inductions,
+            entry_operations,
+            (0..function.blocks().len())
+                .map(|_| ProjectedSemanticBlockV1 { items: vec![] })
+                .collect(),
+        )
+        .unwrap();
+        assert!(blocks.iter().any(|block| matches!(
+            block.terminator(),
+            ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                first_arguments,
+                second_arguments,
+                ..
+            } if first_arguments.is_empty() && second_arguments.len() == 1
+        )));
+        ProductionRankedKernelV1::new("trap_side_exit", next_argument, blocks).unwrap();
+    }
+
+    #[test]
+    fn non_trap_or_non_transparent_induction_side_exits_still_fail_closed() {
+        let cold = multi_block_induction_function(
+            InductionCfgShape::TrapSideExit,
+            SemanticLocalRoleV1::Argument(0),
+            1,
+        );
+        let cold_callables = [compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::ColdPath,
+        )];
+        assert_incomplete(
+            project_test_inductions_with_types_and_callables(
+                &projection_types(),
+                &cold_callables,
+                &cold,
+            ),
+            "a uniform induction region does not have one unique header exit",
+        );
+
+        let trap_callables = [compiler_intrinsic_callable(
+            SemanticCompilerIntrinsicOperationV1::Trap,
+        )];
+        let terminal_call = || {
+            SemanticTerminatorKindV1::Call(
+                SemanticDirectCallV1::new_callable(
+                    SemanticCallableIdV1::from_index(0),
+                    vec![],
+                    None,
+                    SemanticUnwindActionV1::Unreachable,
+                )
+                .unwrap(),
+            )
+        };
+        let effectful = projection_function(vec![block(
+            222,
+            vec![statement(SemanticStatementKindV1::Assign(
+                SemanticAssignmentV1::new(
+                    scalar_place(),
+                    SemanticRvalueV1::new(SCALAR_TYPE, SemanticRvalueKindV1::Use(constant(0))),
+                ),
+            ))],
+            terminal_call(),
+        )]);
+        let mut work = 0;
+        assert!(
+            !transparent_path_terminates_in_reviewed_trap_v1(
+                &trap_callables,
+                &effectful,
+                &[false],
+                0,
+                &mut work,
+            )
+            .unwrap()
+        );
+
+        let cycle = projection_function(vec![
+            block(
+                223,
+                vec![statement(SemanticStatementKindV1::StorageLive(
+                    SemanticLocalIdV1::from_index(2),
+                ))],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            ),
+            block(
+                224,
+                vec![statement(SemanticStatementKindV1::Nop)],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 0)),
+            ),
+        ]);
+        let mut work = 0;
+        assert!(
+            !transparent_path_terminates_in_reviewed_trap_v1(
+                &trap_callables,
+                &cycle,
+                &[false, false],
+                0,
+                &mut work,
+            )
+            .unwrap()
+        );
+
+        let reentry = projection_function(vec![
+            block(
+                225,
+                vec![statement(SemanticStatementKindV1::StorageDead(
+                    SemanticLocalIdV1::from_index(2),
+                ))],
+                SemanticTerminatorKindV1::Goto(cfg_edge(SemanticEdgeRoleV1::Goto, 1)),
+            ),
+            block(226, vec![], terminal_call()),
+        ]);
+        let mut work = 0;
+        assert!(
+            !transparent_path_terminates_in_reviewed_trap_v1(
+                &trap_callables,
+                &reentry,
+                &[false, true],
+                0,
+                &mut work,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn non_positive_induction_step_fails_closed() {
         let function = multi_block_induction_function(
             InductionCfgShape::Chain,
@@ -21474,6 +21785,7 @@ mod tests {
         let mut next_value = 0;
         assert_incomplete(
             project_uniform_inductions_v1(
+                &[],
                 &projection_types(),
                 &function,
                 &constants,
