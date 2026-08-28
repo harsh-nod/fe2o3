@@ -3,9 +3,9 @@
 `fe2o3-semantic-import` converts bounded profiler evidence into
 canonical Semantic Trace V1 without loading a GPU runtime or opening a device.
 It is an inert adapter library plus the stdin-only `fe2o3-trace-import` CLI.
-It also owns Semantic Capture V1 and Semantic Counter Capture V2, strict canonical JSON containers for a
-bounded set of profiler dispatch envelopes. The container complements rather
-than replaces per-dispatch Trace V1.
+It also owns Semantic Capture V1, Semantic Counter Capture V2, and Semantic PC
+Sample Capture V3: strict canonical JSON containers for bounded profiler
+evidence. The containers complement rather than replace per-dispatch Trace V1.
 
 ## Accepted evidence
 
@@ -28,6 +28,15 @@ than replaces per-dispatch Trace V1.
   output. It joins process-local `counters` definitions to
   `callback_records.counter_collection` records by exact agent/counter handles,
   then redacts those handles into source-bound identities.
+- `rocprofv3-pc-sample-capture` accepts rocprofiler-sdk 1.1
+  `buffer_records.pc_sample_stochastic` JSON. The admitted wire fields were
+  checked against the ROCm 7.2.4 `pc_sampling.h` contract and live rocprofv3
+  1.1 output from two different kernel launch shapes. It correlates samples to
+  process-local dispatch records, redacts agent/dispatch/code-object handles,
+  and retains observed code-object-relative PCs, opaque collector timestamps,
+  logical execution masks, workgroup/wave position, SDK-defined hardware slot,
+  instruction class, and active-wave count. Native PCs with code-object ID zero
+  are discarded and become typed unavailable facts.
 - `rocprofv3-att-manifest` accepts the `filenames.json` file emitted for the
   rocprofv3 compute-viewer UI format. It recognizes the installed
   rocprofiler-sdk 1.1 shape (`wave_filenames`, `se_filenames`,
@@ -73,8 +82,8 @@ timestamp envelope. KIR, artifact, and source-map identities are caller
 declarations, not authenticated correlations. Missing artifact or source-map
 identities are explicit `unavailable` facts.
 
-Kernel-dispatch buffer records are not sampled, but the format does not prove
-that the collector lost no records. Capture V1 records `not_sampled` and,
+Kernel-dispatch buffer records in Capture V1 are not sampled, but the format
+does not prove that the collector lost no records. Capture V1 records `not_sampled` and,
 separately, loss as `unknown`/`unavailable`. Completeness is
 `partial_semantic_execution_history` even when every structured dispatch record
 in the input was imported. Counter records, PC samples, ATT wave events, KIR
@@ -96,13 +105,39 @@ execution control also remain typed unavailable. Query-side sums group raw
 records by dispatch and counter identity and are labeled `inferred`; raw values
 remain `observed`.
 
+## Semantic PC Sample Capture V3
+
+PC Sample Capture V3 preserves every admitted stochastic record with
+`observed` origin and a source-global ordinal. Source-bound run, device,
+code-object, dispatch, and sample identities are recomputable during strict
+canonical admission; raw process-local handles never leave the importer.
+KIR/artifact/source-map fields remain caller declarations and no PC-to-ISA,
+source, or KIR correlation is authenticated.
+
+The stochastic method is observed from the structured record family. The cycle
+unit and interval are explicit caller-declared collector configuration because
+rocprofv3 JSON does not record them. Loss remains unknown. Timestamps remain
+opaque collector ticks and cannot be compared across captures. `exec_mask` is
+the observed logical mask field; it does not prove that every set lane executed
+the sampled instruction. Counts grouped by relative PC are sample
+distributions, not instruction counts, time attribution, or complete wave
+timelines. Memory-counter payloads and host-trap records are not admitted by
+this slice.
+
+The audited MI300X ROCm 7.2.4 installation advertised ATT collection but did
+not include `librocprofiler-trace-decoder`, so a live decoded ATT export could
+not be produced there. Decoder availability is a collection-host/toolchain
+property, not a universal ATT limitation. The existing adapter continues to
+admit only `filenames.json`; it does not guess decoder event semantics.
+
 ## CLI
 
 The CLI accepts evidence only on stdin and writes canonical binary Trace V1 or
-canonical JSON Capture V1 on stdout. It does not accept paths, directories, devices, FIFOs, raw ATT
-files, or handles. Input is capped at 8 MiB before parsing. Trace V1 output is
-capped at 64 KiB; Capture V1 and Counter Capture V2 output is independently
-capped at 8 MiB by the canonical encoder.
+canonical JSON profiler captures on stdout. It does not accept paths,
+directories, devices, FIFOs, raw ATT files, or handles. Input is capped at 8
+MiB before parsing. Trace V1 output is capped at 64 KiB; Capture V1, Counter
+Capture V2, and PC Sample Capture V3 output is independently capped at 8 MiB by
+the canonical encoder.
 arguments, JSON recursion, process/record counts, trace events, evidence sets,
 and all integer conversions are independently checked.
 
@@ -124,6 +159,11 @@ fe2o3-trace-import rocprofv3-counter-capture \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   < counters_results.json > run.fe2o3ccap2
 
+fe2o3-trace-import rocprofv3-pc-sample-capture \
+  --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
+  --sampling-interval-cycles 1048576 \
+  < pc_sampling_results.json > run.fe2o3pcap3
+
 fe2o3-trace-import rocprofv3-att-manifest \
   --kir-sha256 KIR_SHA256 --kir-len KIR_BYTES --wave-width 64 \
   --grid 1024,1,1 --grid-workgroups 4,1,1 --workgroup 256,1,1 \
@@ -132,12 +172,13 @@ fe2o3-trace-import rocprofv3-att-manifest \
 
 `--artifact-sha256`, `--artifact-len`, and `--artifact-format` must appear
 together. They are optional metadata for profiler inputs. Duplicate flags are
-rejected. The three `--source-map-*` flags are likewise atomic and apply only
-to `rocprofv3-capture`. Use `fe2o3-trace-query` for Trace V1 and
-`fe2o3-capture-query` for Capture V1, and `CounterQuerySessionV2` for bounded
-Counter Capture V2 operations.
+rejected. The three `--source-map-*` flags are likewise atomic and apply to
+the three canonical capture commands. Use `fe2o3-trace-query` for Trace V1 and
+`fe2o3-capture-query` for Capture V1, `CounterQuerySessionV2` for bounded
+Counter Capture V2 operations, and `fe2o3-pc-sample-query` for PC Sample
+Capture V3.
 
-Raw `.att`/`.out`, compute-viewer wave JSON, PCs, register values, source-line
-text, and inferred performance are outside this adapter. They need a future
+Raw `.att`/`.out`, compute-viewer wave JSON, native PCs, register values,
+source-line text, and inferred performance are outside this adapter. They need a future
 authenticated artifact-to-KIR correlation format before they can establish
 semantic site events without inventing facts.

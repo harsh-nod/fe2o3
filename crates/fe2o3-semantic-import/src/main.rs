@@ -33,7 +33,7 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
     let input = read_bounded_stdin(limits.max_source_bytes())?;
     if matches!(
         request.command,
-        CommandV1::Capture | CommandV1::CounterCapture
+        CommandV1::Capture | CommandV1::CounterCapture | CommandV1::PcSampleCapture
     ) {
         let binding = RocprofCaptureBindingV1 {
             kernel_ir_claim: request.kernel_ir_claim()?,
@@ -54,6 +54,31 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
                 CliErrorV1::new(
                     "encode",
                     "could not encode canonical Semantic Counter Capture V2",
+                )
+            });
+        }
+        if request.command == CommandV1::PcSampleCapture {
+            let capture = import_rocprofv3_pc_sample_capture_v3(
+                &input,
+                RocprofPcSampleCaptureBindingV3 {
+                    capture: binding,
+                    sampling_interval_cycles: request.sampling_interval_cycles.ok_or_else(
+                        || CliErrorV1::new("arguments", "missing --sampling-interval-cycles"),
+                    )?,
+                },
+                limits,
+            )
+            .map_err(|_| {
+                CliErrorV1::new(
+                    "import",
+                    "source evidence failed bounded PC sample capture validation",
+                )
+            })?;
+            drop(input);
+            return encode_pc_sample_capture_v3(&capture).map_err(|_| {
+                CliErrorV1::new(
+                    "encode",
+                    "could not encode canonical Semantic PC Sample Capture V3",
                 )
             });
         }
@@ -95,6 +120,9 @@ fn run() -> Result<Vec<u8>, CliErrorV1> {
         ),
         CommandV1::Capture => unreachable!("capture returned before trace import"),
         CommandV1::CounterCapture => unreachable!("counter capture returned before trace import"),
+        CommandV1::PcSampleCapture => {
+            unreachable!("PC sample capture returned before trace import")
+        }
     }
     .map_err(|_| CliErrorV1::new("import", "source evidence failed bounded import validation"))?;
     drop(input);
@@ -115,6 +143,7 @@ enum CommandV1 {
     AttManifest,
     Capture,
     CounterCapture,
+    PcSampleCapture,
 }
 
 #[derive(Debug)]
@@ -134,6 +163,7 @@ struct ParsedRequestV1 {
     logical_grid: Option<[u64; 3]>,
     grid_workgroups: Option<[u32; 3]>,
     workgroup_size: Option<[u32; 3]>,
+    sampling_interval_cycles: Option<u64>,
 }
 
 impl ParsedRequestV1 {
@@ -241,6 +271,7 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
         Some("rocprofv3-att-manifest") => CommandV1::AttManifest,
         Some("rocprofv3-capture") => CommandV1::Capture,
         Some("rocprofv3-counter-capture") => CommandV1::CounterCapture,
+        Some("rocprofv3-pc-sample-capture") => CommandV1::PcSampleCapture,
         _ => return Err(CliErrorV1::new("arguments", usage())),
     };
     let mut request = ParsedRequestV1 {
@@ -259,6 +290,7 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
         logical_grid: None,
         grid_workgroups: None,
         workgroup_size: None,
+        sampling_interval_cycles: None,
     };
     let mut seen = 0_u16;
     let mut position = 1;
@@ -301,6 +333,9 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
             "--grid" => request.logical_grid = Some(parse_u64x3(value)?),
             "--grid-workgroups" => request.grid_workgroups = Some(parse_u32x3(value)?),
             "--workgroup" => request.workgroup_size = Some(parse_u32x3(value)?),
+            "--sampling-interval-cycles" => {
+                request.sampling_interval_cycles = Some(parse_u64(value)?)
+            }
             _ => return Err(CliErrorV1::new("arguments", "unknown import flag")),
         }
     }
@@ -311,12 +346,20 @@ fn parse_arguments() -> Result<ParsedRequestV1, CliErrorV1> {
     let capture_only = request.source_map_sha256.is_some()
         || request.source_map_len.is_some()
         || request.source_map_format.is_some();
+    let pc_only = request.sampling_interval_cycles.is_some();
     if matches!(
         command,
-        CommandV1::Json | CommandV1::Capture | CommandV1::CounterCapture
+        CommandV1::Json
+            | CommandV1::Capture
+            | CommandV1::CounterCapture
+            | CommandV1::PcSampleCapture
     ) && sparse_only
         || command != CommandV1::Json && rocprof_only
-        || !matches!(command, CommandV1::Capture | CommandV1::CounterCapture) && capture_only
+        || !matches!(
+            command,
+            CommandV1::Capture | CommandV1::CounterCapture | CommandV1::PcSampleCapture
+        ) && capture_only
+        || command != CommandV1::PcSampleCapture && pc_only
     {
         return Err(CliErrorV1::new(
             "arguments",
@@ -418,6 +461,7 @@ fn flag_bit(flag: &str) -> Result<u16, CliErrorV1> {
         "--source-map-sha256" => 11,
         "--source-map-len" => 12,
         "--source-map-format" => 13,
+        "--sampling-interval-cycles" => 14,
         _ => return Err(CliErrorV1::new("arguments", "unknown import flag")),
     };
     Ok(1_u16 << bit)
@@ -504,7 +548,7 @@ fn parse_triplet(value: &str) -> Result<[u64; 3], CliErrorV1> {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-trace-import {rocprofv3-json|rocprofv3-att-manifest|rocprofv3-capture|rocprofv3-counter-capture} --kir-sha256 HEX --kir-len N --wave-width {32|64} [command-specific flags]"
+    "usage: fe2o3-trace-import {rocprofv3-json|rocprofv3-att-manifest|rocprofv3-capture|rocprofv3-counter-capture|rocprofv3-pc-sample-capture} --kir-sha256 HEX --kir-len N --wave-width {32|64} [command-specific flags]"
 }
 
 #[derive(Debug)]

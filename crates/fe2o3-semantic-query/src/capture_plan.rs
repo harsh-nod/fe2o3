@@ -51,6 +51,7 @@ pub enum CaptureToolFamilyV1 {
 pub enum CaptureToolStatusV1 {
     SupportedTraceProducer,
     SupportedImporter,
+    SupportedCaptureImporter,
     SupportedManifestOnly,
     CaptureOnlyNoTraceV1Facts,
     FutureUnavailable,
@@ -686,7 +687,7 @@ pub(crate) fn plan_next_capture(
                 &mut planned,
                 CaptureStepSpecV1 {
                     tool: CaptureToolFamilyV1::Rocprofv3PcSampling,
-                    tool_status: CaptureToolStatusV1::CaptureOnlyNoTraceV1Facts,
+                    tool_status: CaptureToolStatusV1::SupportedCaptureImporter,
                     target: reproduction_target(observed_site),
                     facts: &[CaptureFactV1::PcSampleDistribution],
                     overhead: CaptureOverheadTierV1::Moderate,
@@ -696,7 +697,7 @@ pub(crate) fn plan_next_capture(
                     privilege: CapturePrivilegeRequirementV1::ProfilerAccess,
                     attach: CaptureAttachRequirementV1::LaunchUnderTool,
                     exclusions: &[CaptureToolFamilyV1::Rocprofv3Att],
-                    why: "sampled execution attribution can identify where measured hardware time accumulates without asserting complete instruction coverage",
+                    why: "stochastic PC samples can identify where sampled program-counter observations accumulate without asserting time attribution or complete instruction coverage",
                 },
             )?;
             add_step(
@@ -704,7 +705,7 @@ pub(crate) fn plan_next_capture(
                 &mut planned,
                 CaptureStepSpecV1 {
                     tool: CaptureToolFamilyV1::Rocprofv3Counters,
-                    tool_status: CaptureToolStatusV1::CaptureOnlyNoTraceV1Facts,
+                    tool_status: CaptureToolStatusV1::SupportedCaptureImporter,
                     target: reproduction_target(observed_site),
                     facts: &[CaptureFactV1::HardwareCounterMeasurements],
                     overhead: CaptureOverheadTierV1::Moderate,
@@ -735,14 +736,14 @@ pub(crate) fn plan_next_capture(
                         CaptureToolFamilyV1::Rocprofv3PcSampling,
                         CaptureToolFamilyV1::Rocprofv3Counters,
                     ],
-                    why: "confirms that selected-wave ATT artifacts were emitted for a separate capture; the current importer does not decode their timeline or establish full-grid coverage",
+                    why: "confirms that selected-wave ATT artifacts were emitted for a separate capture; decoded timelines additionally require a compatible decoder on the collection host and are not imported here",
                 },
             )?;
             for (tool, fact, detail) in [
                 (
                     CaptureToolFamilyV1::Rocprofv3PcSampling,
                     CaptureFactV1::PcSampleDistribution,
-                    "Trace V1 has no PC-sample record or authenticated PC-to-KIR correlation",
+                    "PC Capture V3 admits stochastic records, but Trace V1 has no PC-sample record or authenticated PC-to-KIR correlation",
                 ),
                 (
                     CaptureToolFamilyV1::Rocprofv3Counters,
@@ -752,7 +753,7 @@ pub(crate) fn plan_next_capture(
                 (
                     CaptureToolFamilyV1::Rocprofv3Att,
                     CaptureFactV1::SelectedWaveAttTimeline,
-                    "the current ATT importer retains only the manifest, not decoded selected-wave timelines",
+                    "the current ATT importer retains only the manifest; decoder availability is host/tool dependent and decoded selected-wave timelines are not admitted",
                 ),
             ] {
                 push_unsupported(

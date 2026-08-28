@@ -55,9 +55,11 @@ inert evidence identity. Header identities and producer names remain untrusted
 claims.
 
 The current supported paths are simulator Trace V1, rocprofv3 dispatch JSON,
-the rocprofv3 ATT manifest, and normalized ROCgdb imports. Counter values, PC
-samples, decoded ATT wave timelines, register/source values, and output
-comparisons are explicitly capture-only or unsupported Trace V1 facts. ATT is
+Counter Capture V2, PC Sample Capture V3, the rocprofv3 ATT manifest, and
+normalized ROCgdb imports. Counter values and PC samples remain unsupported
+Trace V1 facts even though their separate capture formats have read-only query
+surfaces. Decoded ATT wave timelines, register/source values, and output
+comparisons remain unsupported. ATT is
 selected-wave evidence and never establishes full-grid coverage. Trace V1 has
 no compute-unit selector, so hardware steps report it as unspecified rather
 than inventing one.
@@ -113,6 +115,31 @@ hardware-instance, source, ISA, PC-sample, ATT, execution-history, and
 execution-control data as unavailable. `query_json` enforces the configured
 response ceiling and emits deterministic JSON for agent callers.
 
+`PcSampleQuerySessionV3` and the stdin-only `fe2o3-pc-sample-query` CLI extend
+the protocol to stochastic PC records:
+
+```text
+fe2o3-pc-sample-query capabilities < run.fe2o3pcap3
+fe2o3-pc-sample-query open < run.fe2o3pcap3
+fe2o3-pc-sample-query list-dispatches --limit 64 < run.fe2o3pcap3
+fe2o3-pc-sample-query list-samples --limit 128 < run.fe2o3pcap3
+fe2o3-pc-sample-query pc-hotspots --limit 32 < run.fe2o3pcap3
+```
+
+Raw sample pages retain `observed` origin, code-object-relative PC, opaque
+collector timestamp, logical execution mask, and sampled wave location.
+Hotspots count records by `(dispatch, code object, relative PC, instruction
+type)` and are labeled `inferred`; they are not instruction counts, time
+attribution, or complete execution coverage. Pages stream at most
+`page_limit + 1` ordinary records. Hotspot aggregation has an independent
+65,536-group ceiling, and encoded JSON has a 1 MiB hard ceiling.
+
+Capabilities explicitly mark clock conversion, source/ISA correlation,
+complete instruction history, cross-capture comparison, execution control, and
+decoded ATT wave timelines unavailable. ATT decoder availability is a
+collection-host/toolchain property; PC Capture V3 neither invokes nor replaces
+the SDK decoder.
+
 ## Capture comparison
 
 `compare_dispatch_captures_v1` and `compare_counter_captures_v2` perform a
@@ -134,3 +161,5 @@ capture, then the candidate capture. It emits bounded deterministic JSON and
 never opens paths or invokes a runtime. A future useful cross-run comparison
 requires an authenticated stable environment/device/counter identity evidence
 contract; caller declarations are intentionally not accepted as a substitute.
+PC Capture V3 is intentionally absent from comparison because its run, device,
+code-object, and dispatch identities are bound to the complete source bytes.

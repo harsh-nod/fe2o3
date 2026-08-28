@@ -13,6 +13,8 @@ mod capture_compare;
 pub use capture_compare::*;
 mod counter_query;
 pub use counter_query::*;
+mod pc_sample_query;
+pub use pc_sample_query::*;
 
 use std::error::Error;
 use std::fmt;
