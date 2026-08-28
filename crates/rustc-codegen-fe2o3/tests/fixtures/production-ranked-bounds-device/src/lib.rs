@@ -34,6 +34,9 @@ use fe2o3_device::{DisjointSlice, kernel, thread};
 )]
 #[cfg(not(any(
     feature = "oob",
+    feature = "debug_scalar",
+    feature = "debug_long_name",
+    feature = "debug_mutated_argument",
     feature = "shifted",
     feature = "grid_exclusive",
     feature = "blocked",
@@ -49,6 +52,43 @@ pub fn copy_static(value: f32, mut output: DisjointSlice<f32>) {
     let selected = input[63];
     if let Some(element) = output.get_mut(thread::index_1d()) {
         *element = selected;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "debug_scalar")]
+pub fn debug_scalar(value: f32, input: &[f32], mut output: DisjointSlice<f32>) {
+    let _input_extent = input.len();
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = value;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "debug_long_name")]
+pub fn debug_long_name(mut output: DisjointSlice<f32>) {
+    let source_variable_name_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =
+        1.0;
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = source_variable_name_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;
+    }
+}
+
+#[kernel(
+    typed,
+    launch(required = [64, 1, 1], max = [64, 1, 1]),
+)]
+#[cfg(feature = "debug_mutated_argument")]
+pub fn debug_mutated_argument(mut value: f32, mut output: DisjointSlice<f32>) {
+    value = 2.0;
+    if let Some(element) = output.get_mut(thread::index_1d()) {
+        *element = value;
     }
 }
 

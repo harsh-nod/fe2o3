@@ -25,9 +25,17 @@ contains one exact authority-free V1 execution bundle with no nested V1 map,
 plus one canonical `fe2o3-debug-source-map-v2` payload. V1 decoders continue
 to reject these bytes. V2 map records can name bounded lexical scopes, stable
 variable identities, storage generations, and exact KIR SSA values at exact
-block checkpoints. The current production compiler exporter still emits V1;
-the checked-in V2 tests use explicitly test-authored, compiler-shaped maps and
-do not claim compiler emission or protected compiler execution.
+block checkpoints. The production compiler exporter emits V1 by default and
+can opt into this route with `--bundle-version 2`.
+That route captures rustc lexical scopes in the same extraction session and
+binds only exact one-to-one admitted kernel parameters whose entry value is
+never moved, dropped, storage-reset, mutated, or mutably aliased in MIR to KIR
+function values.
+Other locals, projected/constant debug values, and non-one-to-one composite ABI
+cases remain typed `Unrepresented`; no SSA lifetime is inferred. V1 remains
+the byte-compatible default. Neither route authenticates compiler execution,
+source refinement, or hardware behavior. The production regression is
+`ordinary_kernel_sources_export_and_query_exact_v2_source_variables`.
 
 Source-variable inspection uses the separate
 `fe2o3-debug-source-variable-request-v2` schema. Callers select all variables,

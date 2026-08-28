@@ -1029,6 +1029,18 @@ run_rocm_compile() {
         --test production_ranked_bounds_driver_v1 \
         ordinary_kernel_source_exports_the_exact_gfx950_simulation_target -- \
         --ignored --exact
+  run_step rocm-production-simulation-bundle-v2-source-variables \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        ordinary_kernel_sources_export_and_query_exact_v2_source_variables -- \
+        --ignored --exact
+  run_step rocm-production-simulation-bundle-v2-invalid-name \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_ranked_bounds_driver_v1 \
+        v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1 -- \
+        --ignored --exact
   run_step rocm-g1-code-object \
     cargo test --locked -p dialect-amdgcn --test lowering \
       rocm_compiles_the_golden_to_an_amdgpu_code_object -- \

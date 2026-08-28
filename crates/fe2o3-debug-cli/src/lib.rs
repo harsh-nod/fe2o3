@@ -108,6 +108,7 @@ struct AdmittedSourceVariableV2 {
     scope_identity: OpaqueIdentityV1,
     scope_depth: u32,
     fallback: DebugSourceVariableFallbackV2,
+    function_binding: Option<(u64, ValueId)>,
     locations: Vec<AdmittedSourceVariableLocationV2>,
 }
 
@@ -421,6 +422,25 @@ fn admit_source_map_v2(
         let index = function_indices
             .get(&function_ordinal)
             .ok_or_else(|| "source variable function index is missing".to_owned())?;
+        let function_binding = variable
+            .function_binding()
+            .map(|binding| {
+                let value = ValueId(
+                    u32::try_from(binding.value_ordinal())
+                        .map_err(|_| "source variable value does not fit KIR V7".to_owned())?,
+                );
+                if !matches!(
+                    index.definitions.get(&value),
+                    Some(AdmittedKirValueDefinitionV2::FunctionParameter)
+                ) {
+                    return Err(
+                        "source variable function binding is not a KIR function parameter"
+                            .to_owned(),
+                    );
+                }
+                Ok((binding.generation(), value))
+            })
+            .transpose()?;
         let scope = document
             .scopes()
             .binary_search_by_key(&variable.scope_identity(), |scope| scope.identity())
@@ -485,6 +505,7 @@ fn admit_source_map_v2(
             scope_identity: nonzero_identity(variable.scope_identity()),
             scope_depth: scope.depth(),
             fallback: variable.fallback(),
+            function_binding,
             locations,
         });
     }
@@ -1455,19 +1476,34 @@ fn source_variable_effective_binding_at_v2(
     block: fe2o3_kernel_ir::BlockId,
     next_operation: u32,
 ) -> (u64, DebugSourceVariableBindingV2) {
-    source_variable_binding_at_v2(variable, block, next_operation).unwrap_or((
-        0,
-        match variable.fallback {
-            DebugSourceVariableFallbackV2::NotInScope => DebugSourceVariableBindingV2::NotInScope,
-            DebugSourceVariableFallbackV2::OptimizedOut => {
-                DebugSourceVariableBindingV2::OptimizedOut
-            }
-            DebugSourceVariableFallbackV2::Unrepresented => {
-                DebugSourceVariableBindingV2::Unrepresented
-            }
-            DebugSourceVariableFallbackV2::NotCaptured => DebugSourceVariableBindingV2::NotCaptured,
-        },
-    ))
+    source_variable_binding_at_v2(variable, block, next_operation)
+        .or_else(|| {
+            variable.function_binding.map(|(generation, value)| {
+                (
+                    generation,
+                    DebugSourceVariableBindingV2::Captured {
+                        value_ordinal: u64::from(value.0),
+                    },
+                )
+            })
+        })
+        .unwrap_or((
+            0,
+            match variable.fallback {
+                DebugSourceVariableFallbackV2::NotInScope => {
+                    DebugSourceVariableBindingV2::NotInScope
+                }
+                DebugSourceVariableFallbackV2::OptimizedOut => {
+                    DebugSourceVariableBindingV2::OptimizedOut
+                }
+                DebugSourceVariableFallbackV2::Unrepresented => {
+                    DebugSourceVariableBindingV2::Unrepresented
+                }
+                DebugSourceVariableFallbackV2::NotCaptured => {
+                    DebugSourceVariableBindingV2::NotCaptured
+                }
+            },
+        ))
 }
 
 fn source_variable_scopes_form_chain_v2(
@@ -5429,12 +5465,12 @@ mod tests {
                 "buffer",
                 root,
                 DebugSourceVariableFallbackV2::NotInScope,
-                vec![test_source_location_v2(
-                    0,
-                    1,
-                    DebugSourceVariableBindingV2::Captured { value_ordinal: 0 },
-                )],
-            ),
+                Vec::new(),
+            )
+            .with_function_binding(
+                fe2o3_kernel_ir::DebugSourceVariableFunctionBindingV2::new(1, 0).unwrap(),
+            )
+            .unwrap(),
             test_source_variable_v2(
                 outer_item,
                 "item",
@@ -5948,6 +5984,44 @@ mod tests {
             )
             .unwrap_err()
             .contains("unavailable at its checkpoint")
+        );
+
+        let unknown_parameter = test_source_variable_v2(
+            [0x73; 32],
+            "unknown_parameter",
+            root,
+            DebugSourceVariableFallbackV2::NotInScope,
+            Vec::new(),
+        )
+        .with_function_binding(
+            fe2o3_kernel_ir::DebugSourceVariableFunctionBindingV2::new(1, u32::MAX as u64).unwrap(),
+        )
+        .unwrap();
+        let hostile = DebugSourceMapDocumentV2::new(
+            v1.binding(),
+            v1.files().to_vec(),
+            v1.sites().to_vec(),
+            v1.eliminated().to_vec(),
+            vec![test_source_scope_v2(root, None, 0)],
+            vec![unknown_parameter],
+        )
+        .unwrap()
+        .to_canonical_json_bytes()
+        .unwrap();
+        assert!(
+            admit_source_map_v2(
+                &hostile,
+                &input,
+                configuration_identity(
+                    input.kir_sha256,
+                    input.request_sha256,
+                    DebugWaveWidthV1::Wave64,
+                ),
+                fixture_subject(),
+                nonzero_identity(simulation_debug_map_identity_v2(&hostile)),
+            )
+            .unwrap_err()
+            .contains("not a KIR function parameter")
         );
 
         let indexed = &backend.source_variables_v2.as_ref().unwrap().variables[0];

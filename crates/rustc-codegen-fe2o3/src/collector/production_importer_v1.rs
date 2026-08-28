@@ -47,8 +47,9 @@ use crate::rustc_semantic_adapter_v1::{
     SemanticIdentityDigestV1, canonical_function_identities_v1, canonical_target_layout_v1,
 };
 use crate::rustc_semantic_plan_v1::{
-    ProductionSemanticPreflightErrorV1, ProductionSemanticPreflightPlanV1,
-    RetainedSemanticFunctionProducerV1, build_production_semantic_preflight_plan_v1,
+    DebugSourceCaptureRequestV2, ProductionSemanticPreflightErrorV1,
+    ProductionSemanticPreflightPlanV1, RetainedSemanticFunctionProducerV1,
+    build_production_semantic_preflight_plan_v1,
 };
 use crate::trusted_device_items::{self, TrustedDeviceItem};
 
@@ -221,11 +222,16 @@ pub(crate) struct ConstructedProductionSemanticMirV1 {
     pub(crate) reference_effect_bindings:
         crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     pub(crate) debug_source_files: Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
+    pub(crate) debug_source_scopes:
+        Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceScopeV2]>,
+    pub(crate) debug_source_variables:
+        Box<[crate::rustc_semantic_plan_v1::RetainedDebugSourceVariableV2]>,
 }
 
 pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
 ) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
@@ -285,6 +291,7 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         functions,
         roots,
         rustc_identity_inventory_sha256,
+        debug_source_capture,
     ) {
         Ok(plan) => plan,
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
@@ -335,8 +342,15 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         semantic_function_abis,
         semantic_terminal_abis,
     )?;
-    let (rustc_preflight_plan_sha256, rustc_preflight_plan_transcript, debug_source_files) =
-        plan.into_identity_transcript_and_debug_files();
+    let (
+        rustc_preflight_plan_sha256,
+        rustc_preflight_plan_transcript,
+        debug_source_files,
+        debug_source_scopes,
+        debug_source_variables,
+    ) = plan
+        .into_identity_transcript_and_debug_files()
+        .map_err(|error| ProductionSemanticImportErrorV1::Preflight(Box::new(error)))?;
     drop(collection);
     Ok(ConstructedProductionSemanticMirV1 {
         semantic_mir,
@@ -352,6 +366,8 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
         rustc_target: target,
         reference_effect_bindings,
         debug_source_files,
+        debug_source_scopes,
+        debug_source_variables,
     })
 }
 

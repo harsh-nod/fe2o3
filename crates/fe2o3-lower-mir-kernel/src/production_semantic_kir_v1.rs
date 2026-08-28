@@ -122,6 +122,8 @@ pub enum ProductionSemanticKirResourceV1 {
     Statements,
     /// Kernel IR operations emitted across all blocks.
     Operations,
+    /// Sparse exact source-debug bindings retained by lowering.
+    DebugBindings,
 }
 
 /// Pointer-independent evidence relating one source block to one Kernel IR block.
@@ -131,6 +133,32 @@ pub struct SemanticKirBlockCorrespondenceV1 {
     semantic_block: SemanticBlockIdV1,
     kernel_ir_block: BlockId,
     source_statement_count: u32,
+}
+
+/// Exact one-to-one mapping from one selected semantic argument local to a
+/// canonical KIR function parameter.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct SemanticKirParameterBindingV1 {
+    semantic_function: SemanticFunctionIdV1,
+    semantic_local: SemanticLocalIdV1,
+    kernel_ir_value: ValueId,
+}
+
+impl SemanticKirParameterBindingV1 {
+    /// Returns the semantic function that owns the parameter local.
+    pub const fn semantic_function(self) -> SemanticFunctionIdV1 {
+        self.semantic_function
+    }
+
+    /// Returns the semantic MIR local represented by this binding.
+    pub const fn semantic_local(self) -> SemanticLocalIdV1 {
+        self.semantic_local
+    }
+
+    /// Returns the exact Kernel IR function-parameter value.
+    pub const fn kernel_ir_value(self) -> ValueId {
+        self.kernel_ir_value
+    }
 }
 
 impl SemanticKirBlockCorrespondenceV1 {
@@ -290,6 +318,7 @@ pub struct SemanticKirCorrespondenceV1 {
     statement_operation_spans: Box<[SemanticKirStatementOperationSpanV1]>,
     terminator_operation_spans: Box<[SemanticKirTerminatorOperationSpanV1]>,
     synthetic_operation_spans: Box<[SemanticKirSyntheticOperationSpanV1]>,
+    parameter_bindings: Box<[SemanticKirParameterBindingV1]>,
 }
 
 impl SemanticKirCorrespondenceV1 {
@@ -328,6 +357,11 @@ impl SemanticKirCorrespondenceV1 {
     /// Returns operation spans introduced by closed synthetic lowering rules.
     pub fn synthetic_operation_spans(&self) -> &[SemanticKirSyntheticOperationSpanV1] {
         &self.synthetic_operation_spans
+    }
+
+    /// Returns sparse exact argument-local to KIR-parameter correspondence.
+    pub fn parameter_bindings(&self) -> &[SemanticKirParameterBindingV1] {
+        &self.parameter_bindings
     }
 
     fn validate_layout_against(
@@ -4298,10 +4332,10 @@ fn validate_semantic_kir_correspondence(
         .functions
         .iter()
         .filter_map(|function| function.body.as_ref());
-    let target_blocks = function_bodies
+    let target_body = function_bodies
         .next()
-        .map(|body| body.blocks.as_slice())
         .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+    let target_blocks = target_body.blocks.as_slice();
     if function_bodies.next().is_some() {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
@@ -4313,11 +4347,44 @@ fn validate_semantic_kir_correspondence(
         &correspondence.terminator_operation_spans,
         &correspondence.synthetic_operation_spans,
         runtime_assert_rule,
+    ) && validate_parameter_correspondence_v1(
+        selection.body(),
+        function,
+        target_body,
+        &correspondence.parameter_bindings,
     ) {
         Ok(())
     } else {
         Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
     }
+}
+
+fn validate_parameter_correspondence_v1(
+    semantic_function: SemanticFunctionIdV1,
+    function: &SemanticFunctionDeclV1,
+    target: &FunctionBody,
+    bindings: &[SemanticKirParameterBindingV1],
+) -> bool {
+    let semantic_argument_count = function
+        .locals()
+        .iter()
+        .filter(|declaration| matches!(declaration.role(), SemanticLocalRoleV1::Argument(_)))
+        .count();
+    bindings.len() == semantic_argument_count
+        && bindings.len() == target.parameters.len()
+        && bindings.iter().zip(&target.parameters).enumerate().all(
+            |(argument, (binding, parameter))| {
+                let Ok(local) = usize::try_from(binding.semantic_local.index()) else {
+                    return false;
+                };
+                matches!(
+                    function.locals().get(local).map(|declaration| declaration.role()),
+                    Some(SemanticLocalRoleV1::Argument(actual))
+                        if usize::try_from(actual) == Ok(argument)
+                ) && binding.semantic_function == semantic_function
+                    && binding.kernel_ir_value == *parameter
+            },
+        )
 }
 
 fn validate_operation_correspondence_layout(
@@ -5543,6 +5610,19 @@ fn lower_module(
                 .map_err(|_| unsupported(0, None, None, "local identity does not fit Kernel IR"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut parameter_bindings = Vec::new();
+    parameter_bindings
+        .try_reserve_exact(parameters.len())
+        .map_err(|_| ProductionSemanticKirErrorV1::AllocationFailure {
+            resource: ProductionSemanticKirResourceV1::DebugBindings,
+        })?;
+    parameter_bindings.extend(parameters.iter().zip(&parameter_values).map(
+        |((_, _, _), value)| SemanticKirParameterBindingV1 {
+            semantic_function: selection.body(),
+            semantic_local: SemanticLocalIdV1::from_index(value.0),
+            kernel_ir_value: *value,
+        },
+    ));
     let mut lowering = SemanticFunctionLoweringV1::new(
         semantic.types(),
         semantic.callables(),
@@ -5776,6 +5856,7 @@ fn lower_module(
         statement_operation_spans: statement_operation_spans.into_boxed_slice(),
         terminator_operation_spans: terminator_operation_spans.into_boxed_slice(),
         synthetic_operation_spans: synthetic_operation_spans.into_boxed_slice(),
+        parameter_bindings: parameter_bindings.into_boxed_slice(),
     };
     correspondence.validate_layout_against(owner, &module, has_runtime_assert)?;
     Ok((module, correspondence))
@@ -19218,6 +19299,7 @@ mod resource_tests {
             }]
             .into_boxed_slice(),
             synthetic_operation_spans: Box::new([]),
+            parameter_bindings: Box::new([]),
         };
         UnsupportedIndexCorrelationFixtureV1 {
             module,
@@ -20083,6 +20165,7 @@ mod resource_tests {
             }]
             .into_boxed_slice(),
             synthetic_operation_spans: Box::new([]),
+            parameter_bindings: Box::new([]),
         };
         let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 64 };
         let kir = build_kir_correlation_index(body, 4, &mut budget).unwrap();
@@ -20351,6 +20434,7 @@ mod resource_tests {
             }]
             .into_boxed_slice(),
             synthetic_operation_spans: Box::new([]),
+            parameter_bindings: Box::new([]),
         };
 
         let view = ProductionRankedValueIdV1::new(0);

@@ -18,7 +18,7 @@ use rustc_abi::ExternAbi;
 use rustc_middle::mir::{
     AggregateKind, AssertKind, BinOp, Body, BorrowKind, Local, MutBorrowKind,
     NonDivergingIntrinsic, Operand, Place, PlaceTy, ProjectionElem, RawPtrKind, Rvalue,
-    START_BLOCK, StatementKind, TerminatorKind, UnwindAction,
+    START_BLOCK, StatementKind, TerminatorKind, UnwindAction, VarDebugInfoContents,
 };
 use rustc_middle::ty::layout::{LayoutCx, LayoutOf, TyAndLayout};
 use rustc_middle::ty::util::IntTypeExt;
@@ -118,6 +118,57 @@ struct RetainedRawBodySourceProducerV1 {
     source: RetainedSemanticSourceProducerV1,
     locals: Box<[RetainedSemanticSourceProducerV1]>,
     blocks: Box<[RetainedRawBlockSourceProducerV1]>,
+    debug_scopes: Box<[RetainedRawDebugSourceScopeV2]>,
+    debug_variables: Box<[RetainedRawDebugSourceVariableV2]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RetainedRawDebugSourceScopeV2 {
+    raw_scope: u32,
+    parent_raw_scope: Option<u32>,
+    depth: u32,
+    source: RetainedSemanticSourceProducerV1,
+}
+
+#[derive(Clone, Debug)]
+struct RetainedRawDebugSourceVariableV2 {
+    ordinal: u32,
+    exact_name: Option<String>,
+    name_sha256: [u8; 32],
+    raw_scope: u32,
+    class: RetainedRawDebugSourceVariableClassV2,
+    entry_value_preserved: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RetainedRawDebugSourceVariableClassV2 {
+    Local(u32),
+    Unrepresented,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetainedDebugSourceScopeV2 {
+    pub(crate) identity: [u8; 32],
+    pub(crate) function: SemanticFunctionIdV1,
+    pub(crate) parent_identity: Option<[u8; 32]>,
+    pub(crate) depth: u32,
+    pub(crate) source: SemanticSourceProvenanceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RetainedDebugSourceVariableClassV2 {
+    Local(SemanticLocalIdV1),
+    Unrepresented,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RetainedDebugSourceVariableV2 {
+    pub(crate) identity: [u8; 32],
+    pub(crate) function: SemanticFunctionIdV1,
+    pub(crate) name: Option<String>,
+    pub(crate) scope_identity: [u8; 32],
+    pub(crate) class: RetainedDebugSourceVariableClassV2,
+    pub(crate) entry_value_preserved: bool,
 }
 
 #[derive(Debug)]
@@ -129,6 +180,8 @@ pub(crate) struct RetainedSemanticBodyProducerV1 {
     pub(crate) entry: SemanticBlockIdV1,
     pub(crate) blocks: Box<[RetainedSemanticBlockProducerV1]>,
     pub(crate) raw_to_semantic_blocks: Box<[SemanticBlockIdV1]>,
+    pub(crate) debug_scopes: Box<[RetainedDebugSourceScopeV2]>,
+    pub(crate) debug_variables: Box<[RetainedDebugSourceVariableV2]>,
 }
 
 struct CanonicalProducerTablesV1<'tcx> {
@@ -331,16 +384,44 @@ impl<'tcx> ProductionSemanticPreflightPlanV1<'tcx> {
 
     pub(crate) fn into_identity_transcript_and_debug_files(
         self,
-    ) -> (
-        [u8; 32],
-        Box<[u8]>,
-        Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
-    ) {
+    ) -> Result<
         (
+            [u8; 32],
+            Box<[u8]>,
+            Box<[fe2o3_kernel_ir::DebugSourceMapFileV1]>,
+            Box<[RetainedDebugSourceScopeV2]>,
+            Box<[RetainedDebugSourceVariableV2]>,
+        ),
+        ProductionSemanticPreflightErrorV1,
+    > {
+        let scope_count = self.bodies.iter().try_fold(0_usize, |count, body| {
+            count.checked_add(body.debug_scopes.len())
+        });
+        let variable_count = self.bodies.iter().try_fold(0_usize, |count, body| {
+            count.checked_add(body.debug_variables.len())
+        });
+        let (Some(scope_count), Some(variable_count)) = (scope_count, variable_count) else {
+            return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+        };
+        let mut debug_source_scopes = Vec::new();
+        let mut debug_source_variables = Vec::new();
+        debug_source_scopes
+            .try_reserve_exact(scope_count)
+            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        debug_source_variables
+            .try_reserve_exact(variable_count)
+            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        for body in self.bodies.into_vec() {
+            debug_source_scopes.extend(body.debug_scopes.into_vec());
+            debug_source_variables.extend(body.debug_variables.into_vec());
+        }
+        Ok((
             self.sha256,
             self.canonical_transcript,
             self.debug_source_files,
-        )
+            debug_source_scopes.into_boxed_slice(),
+            debug_source_variables.into_boxed_slice(),
+        ))
     }
 }
 
@@ -448,12 +529,19 @@ struct BodyPreflightV1<'a, 'tcx> {
     types: &'a mut BTreeMap<SemanticTypeIdentityV1, Ty<'tcx>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DebugSourceCaptureRequestV2 {
+    Disabled,
+    SourceVariables,
+}
+
 pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     target: SemanticTargetDataLayoutV1,
     functions: Box<[RetainedSemanticFunctionProducerV1<'tcx>]>,
     roots: Box<[SemanticFunctionIdV1]>,
     identity_inventory_sha256: [u8; 32],
+    debug_source_capture: DebugSourceCaptureRequestV2,
 ) -> Result<ProductionSemanticPreflightPlanV1<'tcx>, ProductionSemanticPreflightErrorV1> {
     let limits = SemanticMirLimitsV1::default();
     let mut counts = RawMirPreflightCountsV1::default();
@@ -674,6 +762,7 @@ pub(crate) fn build_production_semantic_preflight_plan_v1<'tcx>(
             &mut debug_source_files,
             &mut counts,
             limits,
+            debug_source_capture,
         )
         .map_err(|rejection| {
             materialize_rejection_v1(tcx, &functions, &roots, &edges, rejection)
@@ -1332,6 +1421,7 @@ fn capture_body_sources_v1<'tcx>(
     debug_source_files: &mut BTreeMap<[u8; 32], fe2o3_kernel_ir::DebugSourceMapFileV1>,
     counts: &mut RawMirPreflightCountsV1,
     limits: SemanticMirLimitsV1,
+    debug_source_capture: DebugSourceCaptureRequestV2,
 ) -> Result<RetainedRawBodySourceProducerV1, PendingRejectionV1> {
     let function_site = RejectionSiteV1 {
         function,
@@ -1429,11 +1519,421 @@ fn capture_body_sources_v1<'tcx>(
             terminator,
         });
     }
+    let (debug_scopes, debug_variables) =
+        with_debug_source_capture_v2(debug_source_capture, || {
+            capture_debug_sources_v2(
+                tcx,
+                body,
+                function_site,
+                cache,
+                debug_source_files,
+                counts,
+                limits,
+            )
+        })?
+        .unwrap_or_else(|| (Box::new([]), Box::new([])));
     Ok(RetainedRawBodySourceProducerV1 {
         source,
         locals: locals.into_boxed_slice(),
         blocks: blocks.into_boxed_slice(),
+        debug_scopes,
+        debug_variables,
     })
+}
+
+fn with_debug_source_capture_v2<T, E>(
+    request: DebugSourceCaptureRequestV2,
+    capture: impl FnOnce() -> Result<T, E>,
+) -> Result<Option<T>, E> {
+    match request {
+        DebugSourceCaptureRequestV2::Disabled => Ok(None),
+        DebugSourceCaptureRequestV2::SourceVariables => capture().map(Some),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_debug_sources_v2<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+    function_site: RejectionSiteV1,
+    cache: &mut HashMap<Span, RetainedSemanticSourceProducerV1>,
+    debug_source_files: &mut BTreeMap<[u8; 32], fe2o3_kernel_ir::DebugSourceMapFileV1>,
+    counts: &mut RawMirPreflightCountsV1,
+    limits: SemanticMirLimitsV1,
+) -> Result<
+    (
+        Box<[RetainedRawDebugSourceScopeV2]>,
+        Box<[RetainedRawDebugSourceVariableV2]>,
+    ),
+    PendingRejectionV1,
+> {
+    if body.var_debug_info.len() > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 {
+        return Err(PendingRejectionV1::Fatal(
+            ProductionSemanticPreflightErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::Locals,
+                actual: u64::try_from(body.var_debug_info.len()).unwrap_or(u64::MAX),
+                maximum: fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLES_V2 as u64,
+            },
+        ));
+    }
+    counts
+        .charge(
+            SemanticMirResourceV1::ValidationWork,
+            body.var_debug_info.len(),
+            limits,
+        )
+        .map_err(PendingRejectionV1::Fatal)?;
+    let invalidated_entry_parameters = entry_parameter_invalidations_v2(body, counts, limits)?;
+
+    let mut referenced_scopes = BTreeSet::new();
+    let mut variables = Vec::new();
+    variables
+        .try_reserve_exact(body.var_debug_info.len())
+        .map_err(|_| {
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+        })?;
+    for (ordinal, variable) in body.var_debug_info.iter().enumerate() {
+        let ordinal = u32::try_from(ordinal)
+            .map_err(|_| reject("source debug variable ordinal exceeds u32", function_site))?;
+        let raw_scope = u32::try_from(variable.source_info.scope.index())
+            .map_err(|_| reject("source debug scope exceeds u32", function_site))?;
+        let mut current = Some(variable.source_info.scope);
+        let mut ancestry = 0_usize;
+        while let Some(scope) = current {
+            ancestry = ancestry
+                .checked_add(1)
+                .ok_or_else(|| reject("source debug scope ancestry overflowed", function_site))?;
+            if ancestry > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2 {
+                return Err(reject(
+                    "source debug scope ancestry exceeds the V2 bound",
+                    function_site,
+                ));
+            }
+            let raw = u32::try_from(scope.index())
+                .map_err(|_| reject("source debug scope exceeds u32", function_site))?;
+            if !referenced_scopes.insert(raw) {
+                break;
+            }
+            let data = body
+                .source_scopes
+                .get(scope)
+                .ok_or_else(|| reject("source debug scope is missing", function_site))?;
+            current = data.parent_scope;
+        }
+        let name = variable.name.as_str();
+        let mut name_digest = SemanticIdentityDigestV1::new(b"fe2o3/debug/source-variable/name/v2");
+        name_digest.field(name.as_bytes());
+        let (class, entry_value_preserved) = match &variable.value {
+            VarDebugInfoContents::Place(place) if place.projection.is_empty() => {
+                let raw = u32::try_from(place.local.index()).map_err(|_| {
+                    reject("source debug local identity exceeds u32", function_site)
+                })?;
+                let is_parameter = place.local.index() > 0 && place.local.index() <= body.arg_count;
+                (
+                    RetainedRawDebugSourceVariableClassV2::Local(raw),
+                    is_parameter && !invalidated_entry_parameters[place.local.index()],
+                )
+            }
+            VarDebugInfoContents::Place(_) | VarDebugInfoContents::Const(_) => {
+                (RetainedRawDebugSourceVariableClassV2::Unrepresented, false)
+            }
+        };
+        variables.push(RetainedRawDebugSourceVariableV2 {
+            ordinal,
+            exact_name: exact_debug_variable_name_v2(name),
+            name_sha256: name_digest.finish(),
+            raw_scope,
+            class,
+            entry_value_preserved,
+        });
+    }
+    if referenced_scopes.len() > fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2 {
+        return Err(PendingRejectionV1::Fatal(
+            ProductionSemanticPreflightErrorV1::LimitExceeded {
+                resource: SemanticMirResourceV1::Locals,
+                actual: u64::try_from(referenced_scopes.len()).unwrap_or(u64::MAX),
+                maximum: fe2o3_kernel_ir::MAX_DEBUG_SOURCE_SCOPES_V2 as u64,
+            },
+        ));
+    }
+    counts
+        .charge(
+            SemanticMirResourceV1::ValidationWork,
+            referenced_scopes.len(),
+            limits,
+        )
+        .map_err(PendingRejectionV1::Fatal)?;
+
+    let mut parent_by_scope = BTreeMap::new();
+    let mut source_by_scope = BTreeMap::new();
+    let mut children = BTreeMap::<u32, Vec<u32>>::new();
+    for raw_scope in &referenced_scopes {
+        let scope = rustc_middle::mir::SourceScope::from_usize(*raw_scope as usize);
+        let data = body
+            .source_scopes
+            .get(scope)
+            .ok_or_else(|| reject("source debug scope is missing", function_site))?;
+        let parent = data
+            .parent_scope
+            .map(|parent| u32::try_from(parent.index()))
+            .transpose()
+            .map_err(|_| reject("source debug parent scope exceeds u32", function_site))?;
+        if parent.is_some_and(|parent| !referenced_scopes.contains(&parent)) {
+            return Err(reject(
+                "source debug scope ancestor was not retained",
+                function_site,
+            ));
+        }
+        if let Some(parent) = parent {
+            children.entry(parent).or_default().push(*raw_scope);
+        }
+        parent_by_scope.insert(*raw_scope, parent);
+        source_by_scope.insert(
+            *raw_scope,
+            capture_source_v1(
+                tcx,
+                source_span_or_body_v1(data.span, body.span),
+                function_site,
+                cache,
+                debug_source_files,
+                counts,
+                limits,
+            )?,
+        );
+    }
+    let mut depths = BTreeMap::new();
+    let mut pending = VecDeque::new();
+    for (scope, parent) in &parent_by_scope {
+        if parent.is_none() {
+            depths.insert(*scope, 0_u32);
+            pending.push_back(*scope);
+        }
+    }
+    while let Some(scope) = pending.pop_front() {
+        let depth = depths[&scope];
+        for child in children.get(&scope).into_iter().flatten() {
+            let child_depth = depth
+                .checked_add(1)
+                .ok_or_else(|| reject("source debug scope depth overflowed", function_site))?;
+            if depths.insert(*child, child_depth).is_some() {
+                return Err(reject(
+                    "source debug scope graph is not a tree",
+                    function_site,
+                ));
+            }
+            pending.push_back(*child);
+        }
+    }
+    if depths.len() != referenced_scopes.len() {
+        return Err(reject(
+            "source debug scope graph is cyclic or rootless",
+            function_site,
+        ));
+    }
+    let mut scopes = Vec::new();
+    scopes
+        .try_reserve_exact(referenced_scopes.len())
+        .map_err(|_| {
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+        })?;
+    for raw_scope in referenced_scopes {
+        scopes.push(RetainedRawDebugSourceScopeV2 {
+            raw_scope,
+            parent_raw_scope: parent_by_scope[&raw_scope],
+            depth: depths[&raw_scope],
+            source: source_by_scope[&raw_scope],
+        });
+    }
+    Ok((scopes.into_boxed_slice(), variables.into_boxed_slice()))
+}
+
+fn entry_parameter_invalidations_v2(
+    body: &Body<'_>,
+    counts: &mut RawMirPreflightCountsV1,
+    limits: SemanticMirLimitsV1,
+) -> Result<Vec<bool>, PendingRejectionV1> {
+    let work = body.basic_blocks.iter().try_fold(0_usize, |work, block| {
+        work.checked_add(block.statements.len())
+            .and_then(|work| work.checked_add(1))
+    });
+    let Some(work) = work else {
+        return Err(PendingRejectionV1::Fatal(
+            ProductionSemanticPreflightErrorV1::IdentityTableMismatch,
+        ));
+    };
+    counts
+        .charge(SemanticMirResourceV1::ValidationWork, work, limits)
+        .map_err(PendingRejectionV1::Fatal)?;
+    let mut invalidated = Vec::new();
+    invalidated
+        .try_reserve_exact(body.local_decls.len())
+        .map_err(|_| {
+            PendingRejectionV1::Fatal(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+        })?;
+    invalidated.resize(body.local_decls.len(), false);
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            invalidate_entry_parameters_in_statement_v2(&statement.kind, &mut invalidated);
+        }
+        let Some(terminator) = &block.terminator else {
+            invalidated.fill(true);
+            continue;
+        };
+        invalidate_entry_parameters_in_terminator_v2(&terminator.kind, &mut invalidated);
+    }
+    Ok(invalidated)
+}
+
+fn invalidate_entry_parameters_in_statement_v2(
+    statement: &StatementKind<'_>,
+    invalidated: &mut [bool],
+) {
+    match statement {
+        StatementKind::Assign(assignment) => {
+            let (destination, value) = &**assignment;
+            invalidate_place_v2(*destination, invalidated);
+            invalidate_moves_in_rvalue_v2(value, invalidated);
+        }
+        StatementKind::StorageLive(local) | StatementKind::StorageDead(local) => {
+            invalidate_local_v2(*local, invalidated);
+        }
+        StatementKind::SetDiscriminant { place, .. } => {
+            invalidate_place_v2(**place, invalidated);
+        }
+        StatementKind::Intrinsic(intrinsic) => match intrinsic.as_ref() {
+            NonDivergingIntrinsic::Assume(condition) => {
+                invalidate_move_operand_v2(condition, invalidated);
+            }
+            NonDivergingIntrinsic::CopyNonOverlapping(_) => invalidated.fill(true),
+        },
+        StatementKind::Nop => {}
+        StatementKind::FakeRead(..)
+        | StatementKind::Retag(..)
+        | StatementKind::PlaceMention(..)
+        | StatementKind::AscribeUserType(..)
+        | StatementKind::Coverage(..)
+        | StatementKind::ConstEvalCounter
+        | StatementKind::BackwardIncompatibleDropHint { .. } => invalidated.fill(true),
+    }
+}
+
+fn invalidate_entry_parameters_in_terminator_v2(
+    terminator: &TerminatorKind<'_>,
+    invalidated: &mut [bool],
+) {
+    match terminator {
+        TerminatorKind::Return | TerminatorKind::Unreachable | TerminatorKind::Goto { .. } => {}
+        TerminatorKind::SwitchInt { discr, .. } => {
+            invalidate_move_operand_v2(discr, invalidated);
+        }
+        TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } => {
+            invalidate_move_operand_v2(func, invalidated);
+            for argument in args {
+                invalidate_move_operand_v2(&argument.node, invalidated);
+            }
+            invalidate_place_v2(*destination, invalidated);
+        }
+        TerminatorKind::Drop { place, .. } => invalidate_place_v2(*place, invalidated),
+        TerminatorKind::Assert { cond, msg, .. } => {
+            invalidate_move_operand_v2(cond, invalidated);
+            match msg.as_ref() {
+                AssertKind::BoundsCheck { len, index }
+                | AssertKind::Overflow(_, len, index)
+                | AssertKind::MisalignedPointerDereference {
+                    required: len,
+                    found: index,
+                } => {
+                    invalidate_move_operand_v2(len, invalidated);
+                    invalidate_move_operand_v2(index, invalidated);
+                }
+                AssertKind::DivisionByZero(operand)
+                | AssertKind::RemainderByZero(operand)
+                | AssertKind::OverflowNeg(operand) => {
+                    invalidate_move_operand_v2(operand, invalidated);
+                }
+                AssertKind::NullPointerDereference
+                | AssertKind::ResumedAfterReturn(_)
+                | AssertKind::ResumedAfterPanic(_)
+                | AssertKind::InvalidEnumConstruction(_)
+                | AssertKind::ResumedAfterDrop(_) => {}
+            }
+        }
+        TerminatorKind::TailCall { .. }
+        | TerminatorKind::UnwindResume
+        | TerminatorKind::UnwindTerminate(..)
+        | TerminatorKind::Yield { .. }
+        | TerminatorKind::CoroutineDrop
+        | TerminatorKind::FalseEdge { .. }
+        | TerminatorKind::FalseUnwind { .. }
+        | TerminatorKind::InlineAsm { .. } => invalidated.fill(true),
+    }
+}
+
+fn invalidate_moves_in_rvalue_v2(value: &Rvalue<'_>, invalidated: &mut [bool]) {
+    match value {
+        Rvalue::Use(operand)
+        | Rvalue::Repeat(operand, _)
+        | Rvalue::Cast(_, operand, _)
+        | Rvalue::UnaryOp(_, operand) => invalidate_move_operand_v2(operand, invalidated),
+        Rvalue::Aggregate(_, operands) => {
+            for operand in operands {
+                invalidate_move_operand_v2(operand, invalidated);
+            }
+        }
+        Rvalue::BinaryOp(_, operands) => {
+            invalidate_move_operand_v2(&operands.0, invalidated);
+            invalidate_move_operand_v2(&operands.1, invalidated);
+        }
+        Rvalue::Ref(
+            _,
+            BorrowKind::Mut {
+                kind:
+                    MutBorrowKind::Default
+                    | MutBorrowKind::TwoPhaseBorrow
+                    | MutBorrowKind::ClosureCapture,
+            },
+            place,
+        )
+        | Rvalue::RawPtr(RawPtrKind::Mut, place) => invalidate_place_v2(*place, invalidated),
+        Rvalue::Ref(_, BorrowKind::Shared | BorrowKind::Fake(_), _)
+        | Rvalue::RawPtr(RawPtrKind::Const | RawPtrKind::FakeForPtrMetadata, _)
+        | Rvalue::Discriminant(..)
+        | Rvalue::CopyForDeref(..)
+        | Rvalue::ThreadLocalRef(..) => {}
+        Rvalue::WrapUnsafeBinder(..) => invalidated.fill(true),
+    }
+}
+
+fn invalidate_move_operand_v2(operand: &Operand<'_>, invalidated: &mut [bool]) {
+    if let Operand::Move(place) = operand {
+        invalidate_place_v2(*place, invalidated);
+    } else if matches!(operand, Operand::RuntimeChecks(..)) {
+        invalidated.fill(true);
+    }
+}
+
+fn invalidate_place_v2(place: Place<'_>, invalidated: &mut [bool]) {
+    invalidate_local_v2(place.local, invalidated);
+}
+
+fn invalidate_local_v2(local: Local, invalidated: &mut [bool]) {
+    if let Some(invalidated) = invalidated.get_mut(local.index()) {
+        *invalidated = true;
+    } else {
+        invalidated.fill(true);
+    }
+}
+
+fn exact_debug_variable_name_v2(name: &str) -> Option<String> {
+    (!name.is_empty()
+        && name.len() <= fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2
+        && !name.chars().any(char::is_control))
+    .then(|| name.to_owned())
 }
 
 fn source_span_or_body_v1(span: Span, body: Span) -> Span {
@@ -1813,6 +2313,92 @@ fn build_canonical_producer_tables_v1<'tcx>(
             .copied()
             .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
 
+        let mut scope_identity_by_raw = BTreeMap::new();
+        for scope in &raw_sources.debug_scopes {
+            let mut digest =
+                SemanticIdentityDigestV1::new(b"fe2o3/debug/source-scope/logical-identity/v2");
+            digest.field(function_identity.as_bytes());
+            digest.field(&scope.raw_scope.to_le_bytes());
+            digest.field(&scope.source.expansion_chain_sha256);
+            if scope_identity_by_raw
+                .insert(scope.raw_scope, digest.finish())
+                .is_some()
+            {
+                return Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch);
+            }
+        }
+        let mut debug_scopes = Vec::new();
+        debug_scopes
+            .try_reserve_exact(raw_sources.debug_scopes.len())
+            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        for scope in &raw_sources.debug_scopes {
+            debug_scopes.push(RetainedDebugSourceScopeV2 {
+                identity: *scope_identity_by_raw
+                    .get(&scope.raw_scope)
+                    .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?,
+                function: function_id,
+                parent_identity: scope
+                    .parent_raw_scope
+                    .map(|parent| {
+                        scope_identity_by_raw
+                            .get(&parent)
+                            .copied()
+                            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+                    })
+                    .transpose()?,
+                depth: scope.depth,
+                source: scope.source.provenance,
+            });
+        }
+        let mut debug_variables = Vec::new();
+        debug_variables
+            .try_reserve_exact(raw_sources.debug_variables.len())
+            .map_err(|_| ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+        for variable in &raw_sources.debug_variables {
+            let class = match variable.class {
+                RetainedRawDebugSourceVariableClassV2::Local(raw) => {
+                    let semantic = raw_to_semantic_locals
+                        .get(raw as usize)
+                        .copied()
+                        .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+                    RetainedDebugSourceVariableClassV2::Local(semantic)
+                }
+                RetainedRawDebugSourceVariableClassV2::Unrepresented => {
+                    RetainedDebugSourceVariableClassV2::Unrepresented
+                }
+            };
+            let scope_identity = *scope_identity_by_raw
+                .get(&variable.raw_scope)
+                .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?;
+            let mut digest =
+                SemanticIdentityDigestV1::new(b"fe2o3/debug/source-variable/logical-identity/v2");
+            digest.field(function_identity.as_bytes());
+            digest.field(&variable.ordinal.to_le_bytes());
+            digest.field(&scope_identity);
+            digest.field(&variable.name_sha256);
+            match class {
+                RetainedDebugSourceVariableClassV2::Local(local) => {
+                    digest.field(&[0]);
+                    digest.field(
+                        locals
+                            .get(local.index() as usize)
+                            .ok_or(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)?
+                            .identity
+                            .as_bytes(),
+                    );
+                }
+                RetainedDebugSourceVariableClassV2::Unrepresented => digest.field(&[1]),
+            }
+            debug_variables.push(RetainedDebugSourceVariableV2 {
+                identity: digest.finish(),
+                function: function_id,
+                name: variable.exact_name.clone(),
+                scope_identity,
+                class,
+                entry_value_preserved: variable.entry_value_preserved,
+            });
+        }
+
         bodies.push(RetainedSemanticBodyProducerV1 {
             function: function_id,
             source: raw_sources.source,
@@ -1821,6 +2407,8 @@ fn build_canonical_producer_tables_v1<'tcx>(
             entry,
             blocks: blocks.into_boxed_slice(),
             raw_to_semantic_blocks: raw_to_semantic_blocks.into_boxed_slice(),
+            debug_scopes: debug_scopes.into_boxed_slice(),
+            debug_variables: debug_variables.into_boxed_slice(),
         });
     }
     let mut source_files = BTreeSet::new();
@@ -1835,6 +2423,9 @@ fn build_canonical_producer_tables_v1<'tcx>(
                 remember_source_files_v1(&mut source_files, statement.provenance);
             }
             remember_source_files_v1(&mut source_files, block.terminator.provenance);
+        }
+        for scope in &body.debug_scopes {
+            remember_source_files_v1(&mut source_files, scope.source);
         }
     }
     Ok(CanonicalProducerTablesV1 {
@@ -2388,6 +2979,37 @@ const fn f32_math_tag_v1(function: fe2o3_kernel_ir::F32MathFunction) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn disabled_debug_capture_never_inspects_v2_metadata() {
+        let called = Cell::new(false);
+        let result: Result<Option<()>, ()> =
+            with_debug_source_capture_v2(DebugSourceCaptureRequestV2::Disabled, || {
+                called.set(true);
+                Err(())
+            });
+        assert_eq!(result, Ok(None));
+        assert!(!called.get());
+
+        let result =
+            with_debug_source_capture_v2(DebugSourceCaptureRequestV2::SourceVariables, || {
+                called.set(true);
+                Ok::<_, ()>(())
+            });
+        assert_eq!(result, Ok(Some(())));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn v2_debug_names_are_exact_or_rejected() {
+        let maximum = fe2o3_kernel_ir::MAX_DEBUG_SOURCE_VARIABLE_NAME_BYTES_V2;
+        let exact = "x".repeat(maximum);
+        assert_eq!(exact_debug_variable_name_v2(&exact), Some(exact.clone()));
+        assert_eq!(exact_debug_variable_name_v2(""), None);
+        assert_eq!(exact_debug_variable_name_v2("line\nbreak"), None);
+        assert_eq!(exact_debug_variable_name_v2(&"x".repeat(maximum + 1)), None);
+    }
 
     #[test]
     fn raw_count_budget_rejects_overflow_before_record_construction() {

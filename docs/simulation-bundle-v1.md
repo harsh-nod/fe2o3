@@ -13,6 +13,21 @@ fe2o3-export-sim \
   -- --package my-kernel-package --lib
 ```
 
+V1 is the default and retains its existing wire bytes. `--bundle-version 2`
+selects a distinct envelope and Source Map V2 route. For the broadly admitted
+kernel fragment, this opt-in route captures bounded rustc lexical scopes from
+the same extraction session and maps exact one-to-one kernel parameters to
+their exact KIR function values with a nonzero function-wide generation only
+when MIR never moves, drops, storage-resets, mutates, or mutably aliases the
+entry value.
+Non-parameter locals, projected or constant debug values, and composite ABI
+cases without a one-to-one KIR parameter remain typed `Unrepresented`; the
+compiler does not infer temporary SSA lifetimes. Invalid, control-containing,
+or over-bound debug names reject V2 rather than being changed. V1 does not
+inspect this V2 metadata. See the production tests
+`ordinary_kernel_sources_export_and_query_exact_v2_source_variables` and
+`v2_rejects_an_overbound_debug_name_without_inspecting_it_on_v1`.
+
 The command requires the repository's pinned nightly toolchain, its `rust-src`
 component, and the AMDGPU Rust target. `--crate` is rustc's crate name, which
 normally replaces package-name hyphens with underscores. Arguments after `--`
@@ -47,6 +62,10 @@ memory admission, target LLVM lowering, protected compiler-module publication,
 linking, loading, or launch. It is not a protected publication occurrence. The
 output is created new with mode `0600`; an existing path, including a symlink,
 is rejected.
+
+Both bundle versions are content-bound, authority-free simulation inputs.
+Source Map V2 does not authenticate compiler execution or establish source
+refinement, proof, artifact, hardware, load, launch, or performance authority.
 
 ## Simulate and debug the bundle
 

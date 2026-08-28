@@ -7,6 +7,7 @@ use std::process::{Command, ExitCode, Stdio};
 use fe2o3_amd_target::ProductionAmdTargetProfileV1;
 
 const OUTPUT_ENV: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V1";
+const OUTPUT_ENV_V2: &str = "FE2O3_EXTRACT_SIMULATION_BUNDLE_PATH_V2";
 const CRATE_ENV: &str = "FE2O3_EXTRACT_CRATE_V1";
 const MAX_SYSROOT_OUTPUT_BYTES: u64 = 4096;
 
@@ -31,6 +32,7 @@ struct Options {
     output: PathBuf,
     target_dir: PathBuf,
     target_profile: ProductionAmdTargetProfileV1,
+    bundle_version: u16,
     cargo_args: Vec<OsString>,
 }
 
@@ -39,6 +41,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
     let mut output = None;
     let mut target_dir = None;
     let mut target_profile = ProductionAmdTargetProfileV1::Gfx942;
+    let mut bundle_version = None;
     let mut cargo_args = Vec::new();
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -50,7 +53,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             return Err("options before `--` must be valid UTF-8".to_owned());
         };
         let value = match argument {
-            "--crate" | "--output" | "--target" | "--target-dir" => args
+            "--crate" | "--output" | "--target" | "--target-dir" | "--bundle-version" => args
                 .next()
                 .ok_or_else(|| format!("{argument} requires a value"))?,
             "--help" | "-h" => return Err(usage().to_owned()),
@@ -80,6 +83,19 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
             "--target-dir" => {
                 if target_dir.replace(PathBuf::from(value)).is_some() {
                     return Err("--target-dir may be specified only once".to_owned());
+                }
+            }
+            "--bundle-version" => {
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| "--bundle-version must be valid UTF-8".to_owned())?;
+                let value = match value {
+                    "1" => 1,
+                    "2" => 2,
+                    _ => return Err("--bundle-version must be exactly 1 or 2".to_owned()),
+                };
+                if bundle_version.replace(value).is_some() {
+                    return Err("--bundle-version may be specified only once".to_owned());
                 }
             }
             _ => unreachable!("closed option table"),
@@ -119,6 +135,7 @@ fn parse(args: Vec<OsString>, current_dir: &Path) -> Result<Options, String> {
         output,
         target_dir,
         target_profile,
+        bundle_version: bundle_version.unwrap_or(1),
         cargo_args,
     })
 }
@@ -190,6 +207,11 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
     let loader_path = env::join_paths([wrapper_dir, rustc_lib.as_path()])
         .map_err(|error| format!("cannot construct extraction loader path: {error}"))?;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let output_env = if options.bundle_version == 2 {
+        OUTPUT_ENV_V2
+    } else {
+        OUTPUT_ENV
+    };
     let mut command = Command::new(cargo);
     command
         .arg("check")
@@ -206,19 +228,20 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
         .env("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", &wrapper)
         .env("LD_LIBRARY_PATH", loader_path)
         .env(CRATE_ENV, &options.crate_name)
-        .env(OUTPUT_ENV, &options.output)
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env(
             options.target_profile.cargo_rustflags_env(),
-            fixed_target_rustflags(options.target_profile),
+            fixed_target_rustflags(options.target_profile, options.bundle_version),
         );
     for name in conflicting_extraction_environment() {
         command.env_remove(name);
     }
     command
+        .env_remove(OUTPUT_ENV)
+        .env_remove(OUTPUT_ENV_V2)
         .env(CRATE_ENV, &options.crate_name)
-        .env(OUTPUT_ENV, &options.output);
+        .env(output_env, &options.output);
     let status = command
         .status()
         .map_err(|error| format!("failed to execute Cargo extraction: {error}"))?;
@@ -287,8 +310,10 @@ fn reject_conflicting_environment() -> Result<(), String> {
     Ok(())
 }
 
-const fn conflicting_extraction_environment() -> [&'static str; 5] {
+const fn conflicting_extraction_environment() -> [&'static str; 7] {
     [
+        OUTPUT_ENV,
+        OUTPUT_ENV_V2,
         "FE2O3_EXTRACT_RANKED_MEMORY_V1",
         "FE2O3_EXTRACT_AMDGPU_LLVM_PATH_V1",
         "FE2O3_EXTRACT_GFX942_LLVM_PATH_V1",
@@ -297,12 +322,17 @@ const fn conflicting_extraction_environment() -> [&'static str; 5] {
     ]
 }
 
-fn fixed_target_rustflags(target: ProductionAmdTargetProfileV1) -> String {
+fn fixed_target_rustflags(target: ProductionAmdTargetProfileV1, bundle_version: u16) -> String {
+    let debug_info = if bundle_version == 2 {
+        " -Cdebuginfo=2"
+    } else {
+        ""
+    };
     format!(
         "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu={} -Ctarget-feature={}",
         target.cpu(),
         target.rustc_features(),
-    )
+    ) + debug_info
 }
 
 fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
@@ -314,7 +344,7 @@ fn absolute_path(current_dir: &Path, path: PathBuf) -> PathBuf {
 }
 
 const fn usage() -> &'static str {
-    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
+    "usage: fe2o3-export-sim --crate <rustc-crate-name> --output <bundle.fe2sim> [--bundle-version 1|2] [--target gfx942|gfx950] [--target-dir <dir>] [-- <Cargo package/feature args>]"
 }
 
 #[cfg(test)]
@@ -332,6 +362,8 @@ mod tests {
                 OsString::from("kernel_crate"),
                 OsString::from("--output"),
                 OsString::from(&output_name),
+                OsString::from("--bundle-version"),
+                OsString::from("2"),
                 OsString::from("--target"),
                 OsString::from("gfx950"),
                 OsString::from("--target-dir"),
@@ -348,6 +380,7 @@ mod tests {
         assert_eq!(options.output, root.join(output_name));
         assert_eq!(options.target_dir, root.join("scratch"));
         assert_eq!(options.target_profile, ProductionAmdTargetProfileV1::Gfx950);
+        assert_eq!(options.bundle_version, 2);
         assert_eq!(options.cargo_args.len(), 4);
     }
 
@@ -372,12 +405,46 @@ mod tests {
             assert!(reject_cargo_override_args(&arguments).is_err());
         }
         assert_eq!(
-            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx942),
+            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx942, 1),
             "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx942 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack"
         );
         assert_eq!(
-            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx950),
+            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx950, 1),
             "-Zalways-encode-mir -Zinline-mir=no -Zmir-enable-passes=-JumpThreading -Copt-level=0 -Ctarget-cpu=gfx950 -Ctarget-feature=-wavefrontsize32,+wavefrontsize64,-xnack"
+        );
+        assert!(
+            fixed_target_rustflags(ProductionAmdTargetProfileV1::Gfx942, 2)
+                .ends_with(" -Cdebuginfo=2")
+        );
+        assert!(
+            parse(
+                vec![
+                    OsString::from("--crate"),
+                    OsString::from("kernel_crate"),
+                    OsString::from("--output"),
+                    OsString::from("kernel.fe2sim"),
+                    OsString::from("--bundle-version"),
+                    OsString::from("3"),
+                ],
+                &env::temp_dir(),
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                vec![
+                    OsString::from("--crate"),
+                    OsString::from("kernel_crate"),
+                    OsString::from("--output"),
+                    OsString::from("kernel.fe2sim"),
+                    OsString::from("--bundle-version"),
+                    OsString::from("1"),
+                    OsString::from("--bundle-version"),
+                    OsString::from("2"),
+                ],
+                &env::temp_dir(),
+            )
+            .is_err()
         );
     }
 }

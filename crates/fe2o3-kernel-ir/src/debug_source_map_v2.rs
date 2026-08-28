@@ -68,7 +68,21 @@ pub struct DebugSourceVariableV2 {
     #[serde(with = "hex_identity_v2")]
     scope_identity: [u8; 32],
     fallback: DebugSourceVariableFallbackV2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    function_binding: Option<DebugSourceVariableFunctionBindingV2>,
     locations: Vec<DebugSourceVariableLocationV2>,
+}
+
+/// One exact value that is live for every checkpoint in a KIR function frame.
+///
+/// Admission accepts this compact form only for a real KIR function parameter.
+/// It exists so compiler-emitted argument variables do not require a dense
+/// block-by-argument location expansion.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DebugSourceVariableFunctionBindingV2 {
+    generation: u64,
+    value_ordinal: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -219,6 +233,33 @@ impl DebugSourceVariableLocationV2 {
     }
 }
 
+impl DebugSourceVariableFunctionBindingV2 {
+    pub fn new(generation: u64, value_ordinal: u64) -> Result<Self, DebugSourceMapErrorV2> {
+        let binding = Self {
+            generation,
+            value_ordinal,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub const fn value_ordinal(self) -> u64 {
+        self.value_ordinal
+    }
+
+    fn validate(self) -> Result<(), DebugSourceMapErrorV2> {
+        if self.generation == 0 || self.value_ordinal > u64::from(u32::MAX) {
+            Err(DebugSourceMapErrorV2::InvalidVariable)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl DebugSourceVariableV2 {
     pub fn new(
         identity: [u8; 32],
@@ -234,6 +275,7 @@ impl DebugSourceVariableV2 {
             function_ordinal,
             scope_identity,
             fallback,
+            function_binding: None,
             locations,
         };
         variable.normalize_and_validate()?;
@@ -260,6 +302,19 @@ impl DebugSourceVariableV2 {
         self.fallback
     }
 
+    pub const fn function_binding(&self) -> Option<DebugSourceVariableFunctionBindingV2> {
+        self.function_binding
+    }
+
+    pub fn with_function_binding(
+        mut self,
+        binding: DebugSourceVariableFunctionBindingV2,
+    ) -> Result<Self, DebugSourceMapErrorV2> {
+        self.function_binding = Some(binding);
+        self.normalize_and_validate()?;
+        Ok(self)
+    }
+
     pub fn locations(&self) -> &[DebugSourceVariableLocationV2] {
         &self.locations
     }
@@ -273,6 +328,12 @@ impl DebugSourceVariableV2 {
             || self.name.chars().any(char::is_control)
         {
             return Err(DebugSourceMapErrorV2::InvalidVariable);
+        }
+        if let Some(binding) = self.function_binding {
+            binding.validate()?;
+            if !self.locations.is_empty() {
+                return Err(DebugSourceMapErrorV2::InvalidVariable);
+            }
         }
         for location in &self.locations {
             location.validate()?;
@@ -628,5 +689,65 @@ mod tests {
             DebugSourceMapDocumentV2::from_json_bytes(unknown_scope_file.as_bytes()),
             Err(DebugSourceMapErrorV2::InvalidScope)
         );
+    }
+
+    #[test]
+    fn function_parameter_bindings_are_canonical_and_nonzero() {
+        let span = DebugSourceMapSpanV1::new([3; 32], 4, 12, 2, 3).unwrap();
+        let scope = DebugSourceScopeV2::new([4; 32], 0, None, 0, span).unwrap();
+        let variable = DebugSourceVariableV2::new(
+            [6; 32],
+            "parameter".into(),
+            0,
+            scope.identity(),
+            DebugSourceVariableFallbackV2::NotInScope,
+            Vec::new(),
+        )
+        .unwrap()
+        .with_function_binding(DebugSourceVariableFunctionBindingV2::new(1, 7).unwrap())
+        .unwrap();
+        let document = DebugSourceMapDocumentV2::new(
+            DebugSourceMapBindingV1::new([1; 32], [2; 32], 17).unwrap(),
+            vec![DebugSourceMapFileV1::new([3; 32], 64, "/src/kernel.rs".into()).unwrap()],
+            Vec::new(),
+            Vec::new(),
+            vec![scope],
+            vec![variable.clone()],
+        )
+        .unwrap();
+        let bytes = document.to_canonical_json_bytes().unwrap();
+        let decoded = DebugSourceMapDocumentV2::from_canonical_json_bytes(&bytes).unwrap();
+        assert_eq!(decoded.variables(), [variable]);
+        assert_eq!(
+            DebugSourceVariableFunctionBindingV2::new(0, 7),
+            Err(DebugSourceMapErrorV2::InvalidVariable)
+        );
+        let generation_zero = String::from_utf8(bytes)
+            .unwrap()
+            .replace("\"generation\":1", "\"generation\":0");
+        assert_eq!(
+            DebugSourceMapDocumentV2::from_json_bytes(generation_zero.as_bytes()),
+            Err(DebugSourceMapErrorV2::InvalidVariable)
+        );
+
+        let with_location = DebugSourceVariableV2::new(
+            [7; 32],
+            "invalid".into(),
+            0,
+            scope.identity(),
+            DebugSourceVariableFallbackV2::NotInScope,
+            vec![
+                DebugSourceVariableLocationV2::new(
+                    0,
+                    0,
+                    1,
+                    DebugSourceVariableBindingV2::Captured { value_ordinal: 7 },
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+        .with_function_binding(DebugSourceVariableFunctionBindingV2::new(1, 7).unwrap());
+        assert_eq!(with_location, Err(DebugSourceMapErrorV2::InvalidVariable));
     }
 }
