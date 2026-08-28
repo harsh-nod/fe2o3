@@ -681,9 +681,11 @@ impl WorkerV3VerificationDecisionV1 {
 /// Authenticated compiler/Verus state for one exact V3 executable.
 ///
 /// This value is linear and still grants no load or launch authority. A later runtime-specific
-/// transition must bind it to a checked live device and a retained current-publication token.
+/// transition must bind it to a checked live device. The exact current-publication token acquired
+/// before verifier entry remains owned here until the complete runtime authority is consumed.
 pub struct AuthenticatedWorkerV3ExecutableV1<K> {
     admission: RecoveredWorkerV3PinnedDescriptorV1,
+    current: DurableCurrentLinkPublicationTokenV1,
     verification: WorkerV3VerificationDecisionV1,
     _marker: PhantomData<fn() -> K>,
 }
@@ -724,9 +726,9 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
             verification.map_err(WorkerV3VerificationAuthenticationErrorV1::Verifier)?;
         validate_decision::<K>(&request, &verification)
             .map_err(WorkerV3VerificationAuthenticationErrorV1::Decision)?;
-        drop(current);
         Ok(Self {
             admission,
+            current,
             verification,
             _marker: PhantomData,
         })
@@ -745,7 +747,8 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
     }
 
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        self.admission.revalidate_currentness()
+        self.admission
+            .revalidate_retained_currentness_token(&self.current)
     }
 
     pub fn authorize_hsa_load<A: crate::ReviewedHsaExecutableLifecycleAdapterV1>(
@@ -773,6 +776,10 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
 
     pub(crate) const fn admission(&self) -> &RecoveredWorkerV3PinnedDescriptorV1 {
         &self.admission
+    }
+
+    pub(crate) const fn current_publication_token(&self) -> &DurableCurrentLinkPublicationTokenV1 {
+        &self.current
     }
 }
 

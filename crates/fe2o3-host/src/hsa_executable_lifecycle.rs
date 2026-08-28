@@ -5,7 +5,6 @@ use crate::{
     GeneratedArgumentPackingPlanV1, ObservedContext, RecoveredWorkerV3AdmissionErrorV1,
 };
 use fe2o3_amd_target::{AmdTargetId, ProductionAmdTargetProfileV1};
-use fe2o3_artifact_transaction::DurableCurrentLinkPublicationTokenV1;
 use fe2o3_artifacts::{DigestAlgorithm, DigestBytes, PayloadDigest};
 use fe2o3_hsaco::InspectedKernel;
 use fe2o3_kernel_descriptor::{BlockSizeV1, KernelDescriptorV1, KernelId};
@@ -691,8 +690,9 @@ impl HsaImplicitKernargInitializationObservationV1 {
 
 /// Environment-authenticated permission to load one exact verified Worker V3 executable.
 ///
-/// The value is linear. Loading acquires and retains the durable publication lock through native
-/// executable unload; no stale generation can be loaded or turned over while native state lives.
+/// The value is linear. The verifier-entry durable publication lock remains retained through native
+/// executable unload; no stale generation can be loaded or turned over between verification and
+/// native state retirement.
 pub struct AuthorizedWorkerV3HsaLoadV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
     observed: ObservedContext,
@@ -747,11 +747,10 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
         mut self,
     ) -> Result<LoadedWorkerV3HsaExecutableV1<K, A>, WorkerV3HsaExecutableLoadErrorV1<A::Error>>
     {
-        let current = self
-            .authenticated
-            .admission()
-            .acquire_retained_currentness_token()
+        self.authenticated
+            .revalidate_currentness()
             .map_err(WorkerV3HsaExecutableLoadErrorV1::CurrentPublication)?;
+        let current = self.authenticated.current_publication_token();
         let bytes = current.exact_artifact_bytes();
         let verification = self.authenticated.verification();
         if u64::try_from(bytes.len()).ok() != Some(verification.finalized_hsaco_length()) {
@@ -809,7 +808,6 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
 
         Ok(LoadedWorkerV3HsaExecutableV1 {
             authenticated: self.authenticated,
-            current,
             observed: self.observed,
             adapter: self.adapter,
             environment: self.environment,
@@ -934,7 +932,6 @@ pub enum WorkerV3GeneratedDispatchErrorV1<E> {
 /// only through a compiler-generated typed argument implementation and a linear prepared value.
 pub struct LoadedWorkerV3HsaExecutableV1<K, A: ReviewedHsaExecutableLifecycleAdapterV1> {
     authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
-    current: DurableCurrentLinkPublicationTokenV1,
     observed: ObservedContext,
     adapter: A,
     environment: HsaEnvironmentObservationV1,
@@ -981,9 +978,7 @@ impl<K: CompilerGeneratedKernelExpectationV1, A: ReviewedHsaExecutableLifecycleA
     }
 
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        self.authenticated
-            .admission()
-            .revalidate_retained_currentness_token(&self.current)
+        self.authenticated.revalidate_currentness()
     }
 
     pub(crate) fn descriptor(&self) -> &KernelDescriptorV1 {

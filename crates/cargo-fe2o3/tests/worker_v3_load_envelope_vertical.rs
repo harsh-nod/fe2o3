@@ -20,7 +20,8 @@ use std::{
 use ed25519_dalek::SigningKey;
 use fe2o3_amd_target::AmdTargetId;
 use fe2o3_artifact_transaction::{
-    BuildAttempt, InertCompilerExecutionSubjectV1, WorkerV3LoadReadinessReceiptV1,
+    BuildAttempt, DurablePublishedClaimReacquisitionErrorV3, InertCompilerExecutionSubjectV1,
+    WorkerV3LoadReadinessReceiptV1, reacquire_current_hsaco_publication_lease_v3,
     retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_artifacts::{
@@ -1534,6 +1535,31 @@ fn borrowed_v3_audit_preserves_exact_admission_custody_without_authority() {
     assert!(!admitted.authenticates_verification_authority());
     assert!(!admitted.grants_load_authority());
     assert!(!admitted.grants_launch_authority());
+}
+
+#[test]
+fn authenticated_v3_executable_retains_verifier_entry_currentness_until_drop() {
+    let (directory, recovered) = recovered_host_fixture();
+    let claim = recovered.wire().published_claim().clone();
+    let admitted =
+        admit_recovered_worker_v3_descriptor_v1(recovered, KernelId::from_bytes([0xa1; 32]))
+            .unwrap();
+    let authenticated = AuthenticatedWorkerV3ExecutableV1::<WorkerV3VecAddMarker>::authenticate(
+        admitted,
+        &mut ReviewedTestWorkerV3Verifier {
+            fault: ReviewedTestWorkerV3VerifierFault::None,
+        },
+    )
+    .unwrap();
+    authenticated.revalidate_currentness().unwrap();
+
+    assert!(matches!(
+        reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim),
+        Err(DurablePublishedClaimReacquisitionErrorV3::Busy)
+    ));
+
+    drop(authenticated);
+    reacquire_current_hsaco_publication_lease_v3(&directory.0, &claim).unwrap();
 }
 
 #[test]
