@@ -2654,6 +2654,7 @@ dependencies = [
  "fe2o3-build-authority",
  "fe2o3-compiler-api",
  "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-client",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-core",

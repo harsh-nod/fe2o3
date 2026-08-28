@@ -276,6 +276,46 @@ fn absolute_deadline_applies_to_the_complete_session() {
 }
 
 #[test]
+fn cumulative_issuer_delays_cannot_reanchor_the_session_deadline() {
+    let fixture = Fixture::new();
+    let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
+    let policy = fixture.policy.clone();
+    let challenge = fixture.challenge.clone();
+    let handle = thread::spawn(move || {
+        let recover = receive_request(&service);
+        thread::sleep(Duration::from_millis(15));
+        let absent = CompilerExecutionServiceResponseV1::receipt_absent(
+            recover.identity(),
+            &policy,
+            1,
+            [0; 32],
+        )
+        .unwrap();
+        send_raw(&service, absent.canonical_bytes());
+
+        let inspect = receive_request(&service);
+        thread::sleep(Duration::from_millis(15));
+        let ready =
+            CompilerExecutionServiceResponseV1::ready(inspect.identity(), &policy, 1, [0; 32])
+                .unwrap();
+        send_raw(&service, ready.canonical_bytes());
+
+        let prepare = receive_request(&service);
+        thread::sleep(Duration::from_millis(25));
+        let prepared =
+            CompilerExecutionServiceResponseV1::prepared(prepare.identity(), &policy, challenge)
+                .unwrap();
+        send_raw_allow_closed(&service, prepared.canonical_bytes());
+    });
+    let error = CompilerExecutionClientV1::admit(client, Duration::from_millis(40))
+        .unwrap()
+        .acquire(&fixture.policy, fixture.subject.clone())
+        .unwrap_err();
+    assert!(matches!(error, CompilerExecutionClientErrorV1::Timeout));
+    handle.join().unwrap();
+}
+
+#[test]
 fn oversized_and_ancillary_responses_fail_closed() {
     let fixture = Fixture::new();
     let (client, service) = socket_pair(libc::SOCK_SEQPACKET);
@@ -382,10 +422,14 @@ fn inherited_child_admission_consumes_only_exact_fixed_peer() {
         CompilerExecutionClientV1::admit_inherited_child(Duration::from_secs(1)),
         Err(CompilerExecutionClientErrorV1::InheritedPeerCloseOnExec)
     ));
-    // SAFETY: this test owns the hostile fixed alias after admission rejects it.
+    // SAFETY: rejection must already have consumed the hostile fixed alias.
     assert_eq!(
-        unsafe { libc::close(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1) },
-        0
+        unsafe { libc::fcntl(COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, libc::F_GETFD) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EBADF)
     );
 }
 
@@ -599,6 +643,26 @@ fn send_raw(service: &OwnedFd, bytes: &[u8]) {
         )
     };
     assert_eq!(sent, bytes.len() as isize);
+}
+
+fn send_raw_allow_closed(service: &OwnedFd, bytes: &[u8]) {
+    // SAFETY: bytes remains readable and service owned throughout this single packet attempt.
+    let sent = unsafe {
+        libc::send(
+            service.as_raw_fd(),
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            libc::MSG_NOSIGNAL,
+        )
+    };
+    if sent < 0 {
+        assert!(matches!(
+            std::io::Error::last_os_error().kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        ));
+    } else {
+        assert_eq!(sent, bytes.len() as isize);
+    }
 }
 
 fn send_with_descriptor(service: &OwnedFd, bytes: &[u8]) {

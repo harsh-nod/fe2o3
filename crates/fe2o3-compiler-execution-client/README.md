@@ -45,6 +45,15 @@ truncated, ancillary, trailing, wrong-policy, and wrong-subject packets. The
 compiler-service client can consume fixed child FD 195 into private
 close-on-exec custody before performing the bounded acquisition.
 
+The protected `rustc-codegen-fe2o3` `DeviceTransaction` path now invokes the
+composed child round trip only after strict V3 publication derives the exact
+`InertCompilerExecutionSubjectV1`. That one-use operation consumes and
+revalidates sealed policy FD 202, consumes and admits service FD 195, acquires
+the exact receipt carriage under one absolute deadline, and consumes FD 196 to
+return that same policy/subject/carriage join. Every present canonical slot is
+closed on admission failure, and any custody, deadline, acquisition, or return
+failure terminates the protected compilation without fallback.
+
 `PendingCompilerExecutionChildSessionV1` is the move-only join over those two
 channels and an explicitly supplied sealed policy capability. It preflights FD
 195, FD 196, and policy FD 202, installs all three on one unspawned rustc
@@ -60,13 +69,13 @@ synthesizes a carriage. On the other endpoint,
 authenticated handoff, static launch, readiness publication, natural service
 exit, and exact reaping.
 
-Production still needs externally provisioned custody for the admitted static
-launcher and issuer images, distinct supervisor UID/GID, service-owned root,
-sealed signing key, and a deployed service process receiving the fixed listener
-descriptor. Those authorities cannot be derived from the production build
-config or environment. The active Cargo binding wrapper therefore cannot yet
-construct this session or invoke the available fixed connector, and the
-rustc/backend path does not yet consume FD 195 and return its acquired carriage
-on FD 196. Fresh Cargo completion continues to fail closed before the V2 load
-envelope until those deployment inputs and backend transitions exist. HSACO
-publication and runtime admission remain outside this crate.
+Production still needs Cargo-side provisioning of the complete FD 195/196/202
+session, the corresponding parent receipt join, externally provisioned custody
+for the admitted static launcher and issuer images, a distinct supervisor
+UID/GID, a service-owned root, a sealed signing key, and a deployed service
+process receiving the fixed listener descriptor. Those authorities cannot be
+derived from the production build config or environment. Until that complete
+parent path is joined to the active binding wrapper, protected device
+compilation reaches the strict post-publication child call and fails closed on
+missing descriptors. HSACO publication and runtime admission remain outside
+this crate.

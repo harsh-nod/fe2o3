@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, IoSliceMut};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -23,7 +23,7 @@ use crate::child_channel::{
 };
 use crate::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionClientProcessIdentityV1,
-    validate_seqpacket_peer,
+    TakeInheritedDescriptorErrorV1, take_inherited_descriptor_v1, validate_seqpacket_peer,
 };
 
 const RECEIPT_TRANSFER_MAGIC: [u8; 8] = *b"FE2CER1\0";
@@ -207,10 +207,23 @@ impl fmt::Debug for CompilerExecutionReceiptSenderV1 {
 impl CompilerExecutionReceiptSenderV1 {
     /// Admits and removes the inherited fixed child descriptor.
     pub fn from_inherited_child() -> Result<Self, CompilerExecutionReceiptReturnErrorV1> {
-        let peer = take_inherited(COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1)?;
+        let peer = take_inherited_receipt_peer()?;
         validate_seqpacket_peer(&peer)
             .map_err(|_| CompilerExecutionReceiptReturnErrorV1::InvalidPeer)?;
         require_close_on_exec(&peer)?;
+        Ok(Self { peer })
+    }
+
+    pub(crate) fn from_inherited_child_until(
+        deadline: Instant,
+    ) -> Result<Self, CompilerExecutionReceiptReturnErrorV1> {
+        let peer = take_inherited_receipt_peer()?;
+        require_receipt_deadline(deadline)?;
+        validate_seqpacket_peer(&peer)
+            .map_err(|_| CompilerExecutionReceiptReturnErrorV1::InvalidPeer)?;
+        require_receipt_deadline(deadline)?;
+        require_close_on_exec(&peer)?;
+        require_receipt_deadline(deadline)?;
         Ok(Self { peer })
     }
 
@@ -222,13 +235,23 @@ impl CompilerExecutionReceiptSenderV1 {
         carriage: CompilerExecutionReceiptCarriageV1,
         timeout: Duration,
     ) -> Result<(), CompilerExecutionReceiptReturnErrorV1> {
-        if timeout.is_zero() {
-            return Err(CompilerExecutionReceiptReturnErrorV1::InvalidTimeout);
-        }
+        let deadline = receipt_deadline(timeout)?;
+        self.send_exact_until(expected_policy, expected_subject, carriage, deadline)
+    }
+
+    pub(crate) fn send_exact_until(
+        self,
+        expected_policy: &CompilerExecutionIssuerPolicyV1,
+        expected_subject: &InertCompilerExecutionSubjectV1,
+        carriage: CompilerExecutionReceiptCarriageV1,
+        deadline: Instant,
+    ) -> Result<(), CompilerExecutionReceiptReturnErrorV1> {
+        require_receipt_deadline(deadline)?;
         let decoded = CompilerExecutionReceiptCarriageV1::decode(carriage.canonical_bytes())
             .map_err(|error| {
                 CompilerExecutionReceiptReturnErrorV1::InvalidCarriage(error.to_string())
             })?;
+        require_receipt_deadline(deadline)?;
         if decoded != carriage {
             return Err(CompilerExecutionReceiptReturnErrorV1::InvalidCarriage(
                 "canonical carriage changed during local revalidation".to_owned(),
@@ -240,9 +263,7 @@ impl CompilerExecutionReceiptSenderV1 {
         if carriage.request().subject() != expected_subject {
             return Err(CompilerExecutionReceiptReturnErrorV1::SubjectMismatch);
         }
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(CompilerExecutionReceiptReturnErrorV1::DeadlineOverflow)?;
+        require_receipt_deadline(deadline)?;
         send_carriage(&self.peer, carriage.canonical_bytes(), deadline)?;
         // SAFETY: shutdown consumes only the live socket descriptor and a scalar direction.
         if unsafe { libc::shutdown(self.peer.as_raw_fd(), libc::SHUT_WR) } != 0 {
@@ -250,36 +271,44 @@ impl CompilerExecutionReceiptSenderV1 {
                 io::Error::last_os_error(),
             ));
         }
+        require_receipt_deadline(deadline)?;
         Ok(())
     }
 }
 
-fn take_inherited(descriptor: RawFd) -> Result<OwnedFd, CompilerExecutionReceiptReturnErrorV1> {
-    // SAFETY: F_GETFD consumes only the scalar descriptor.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(CompilerExecutionReceiptReturnErrorV1::MissingInheritedDescriptor);
+fn take_inherited_receipt_peer() -> Result<OwnedFd, CompilerExecutionReceiptReturnErrorV1> {
+    take_inherited_descriptor_v1(COMPILER_EXECUTION_RECEIPT_RETURN_CHILD_FD_V1).map_err(|error| {
+        match error {
+            TakeInheritedDescriptorErrorV1::Missing => {
+                CompilerExecutionReceiptReturnErrorV1::MissingInheritedDescriptor
+            }
+            TakeInheritedDescriptorErrorV1::UnexpectedCloseOnExec => {
+                CompilerExecutionReceiptReturnErrorV1::UnexpectedCloseOnExec
+            }
+            TakeInheritedDescriptorErrorV1::Descriptor(error) => {
+                CompilerExecutionReceiptReturnErrorV1::Io(error)
+            }
+        }
+    })
+}
+
+fn receipt_deadline(timeout: Duration) -> Result<Instant, CompilerExecutionReceiptReturnErrorV1> {
+    if timeout.is_zero() {
+        return Err(CompilerExecutionReceiptReturnErrorV1::InvalidTimeout);
     }
-    if flags & libc::FD_CLOEXEC != 0 {
-        return Err(CompilerExecutionReceiptReturnErrorV1::UnexpectedCloseOnExec);
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(CompilerExecutionReceiptReturnErrorV1::DeadlineOverflow)
+}
+
+fn require_receipt_deadline(
+    deadline: Instant,
+) -> Result<(), CompilerExecutionReceiptReturnErrorV1> {
+    if deadline.saturating_duration_since(Instant::now()).is_zero() {
+        Err(CompilerExecutionReceiptReturnErrorV1::Timeout)
+    } else {
+        Ok(())
     }
-    // SAFETY: F_DUPFD_CLOEXEC returns one independently owned descriptor.
-    let retained = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 3) };
-    if retained < 0 {
-        return Err(CompilerExecutionReceiptReturnErrorV1::Io(
-            io::Error::last_os_error(),
-        ));
-    }
-    // SAFETY: the inherited fixed descriptor is consumed exactly once by this operation.
-    if unsafe { libc::close(descriptor) } != 0 {
-        // SAFETY: successful duplication returned one owned descriptor not yet wrapped.
-        unsafe { libc::close(retained) };
-        return Err(CompilerExecutionReceiptReturnErrorV1::Io(
-            io::Error::last_os_error(),
-        ));
-    }
-    // SAFETY: successful F_DUPFD_CLOEXEC returned one newly owned descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(retained) })
 }
 
 fn wait_for_receipt(
