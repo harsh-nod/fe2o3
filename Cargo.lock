@@ -1516,6 +1516,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-static-preexec-manifest"
+version = "0.1.0"
+
+[[package]]
 name = "fe2o3-stencil"
 version = "0.1.0"
 dependencies = [

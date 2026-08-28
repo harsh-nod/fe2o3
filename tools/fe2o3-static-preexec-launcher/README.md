@@ -22,6 +22,12 @@ descriptors.
 - The parent PID and Linux process start time must match before containment is
   armed and again after `PR_SET_NO_NEW_PRIVS` and `PR_SET_PDEATHSIG(SIGKILL)`.
 
+`fe2o3-static-preexec-manifest` is the canonical safe Rust encoder and
+structural validator for this exact 704-byte V1 ABI. Its tests compile this C
+header as an independent layout oracle and require byte-for-byte agreement.
+The launcher remains responsible for live descriptor snapshots, seals, access
+modes, closure, process controls, and target execution.
+
 Alias decisions use only the immutable live-object key `(st_dev, st_ino)`.
 File type, size, mode, seals, access mode, and close-on-exec policy are separate
 state checks and cannot make two handles for one live object appear distinct.
@@ -90,4 +96,6 @@ tracer already attached before that operation, defend against
 `execveat` resets target dumpability. A protected deployment therefore needs a
 trusted supervisor, a distinct service identity or equivalent kernel policy,
 and target-side pre-libc hardening before target secrets or authority are
-reachable. None of those properties is claimed here.
+reachable. The protected compiler issuer now supplies that target-side secure
+entry; the still-pending supervisor must supply the other properties. None of
+them is claimed by this generic launcher.

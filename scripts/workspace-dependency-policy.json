@@ -36,6 +36,7 @@
         "fe2o3-runtime-model",
         "fe2o3-semantic-trace",
         "fe2o3-service-model",
+        "fe2o3-static-preexec-manifest",
         "reserved-fe2o3-symbols"
       ]
     },
