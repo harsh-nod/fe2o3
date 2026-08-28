@@ -4,6 +4,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
@@ -20,6 +21,8 @@ use rustix::net::{
 };
 
 use super::*;
+
+static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 
 struct Fixture {
     root: PathBuf,
@@ -142,8 +145,8 @@ fn static_elf_with_code(code: &[u8]) -> Vec<u8> {
     bytes
 }
 
-fn launched_probe_code(close_readiness: bool) -> Vec<u8> {
-    // write(1, "LAUNCHED\n", 9), optionally close(209), then pause forever.
+fn launched_probe_with_tail(close_readiness: bool, tail: &[u8]) -> Vec<u8> {
+    // write(1, "LAUNCHED\n", 9), optionally close readiness, then run the supplied tail.
     let mut code = vec![
         0xb8, 1, 0, 0, 0, // mov eax, SYS_write
         0xbf, 1, 0, 0, 0, // mov edi, 1
@@ -161,18 +164,40 @@ fn launched_probe_code(close_readiness: bool) -> Vec<u8> {
             code.extend_from_slice(&[0x0f, 0x05]); // syscall
         }
     }
-    let pause_offset = code.len();
-    code.extend_from_slice(&[
-        0xb8, 34, 0, 0, 0, // mov eax, SYS_pause
-        0x0f, 0x05, // syscall
-        0xeb, 0xf7, // jump back to mov eax
-    ]);
+    code.extend_from_slice(tail);
     let marker_offset = code.len();
     code.extend_from_slice(b"LAUNCHED\n");
     let displacement = i32::try_from(marker_offset).unwrap() - 17;
     code[13..17].copy_from_slice(&displacement.to_le_bytes());
-    assert_eq!(pause_offset + 9, marker_offset);
     code
+}
+
+fn launched_probe_code(close_readiness: bool) -> Vec<u8> {
+    launched_probe_with_tail(
+        close_readiness,
+        &[
+            0xb8, 34, 0, 0, 0, // mov eax, SYS_pause
+            0x0f, 0x05, // syscall
+            0xeb, 0xf7, // jump back to mov eax
+        ],
+    )
+}
+
+fn naturally_exiting_probe_code(status: u8) -> Vec<u8> {
+    let mut tail = vec![
+        0x48, 0x83, 0xec, 16, // sub rsp, 16
+        0x48, 0xc7, 0x04, 0x24, 1, 0, 0, 0, // timespec.tv_sec = 1
+        0x48, 0xc7, 0x44, 0x24, 8, 0, 0, 0, 0, // timespec.tv_nsec = 0
+        0xb8, 35, 0, 0, 0, // mov eax, SYS_nanosleep
+        0x48, 0x89, 0xe7, // mov rdi, rsp
+        0x31, 0xf6, // xor esi, esi
+        0x0f, 0x05, // syscall
+        0xb8, 60, 0, 0, 0, // mov eax, SYS_exit
+        0xbf,
+    ];
+    tail.extend_from_slice(&u32::from(status).to_le_bytes());
+    tail.extend_from_slice(&[0x0f, 0x05]);
+    launched_probe_with_tail(true, &tail)
 }
 
 struct ProgramFixture {
@@ -289,9 +314,13 @@ fn send_handoff_fixture(
 }
 
 fn live_launch() -> (
+    MutexGuard<'static, ()>,
     std::process::Child,
     fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1,
 ) {
+    let guard = RESERVED_CHILD_FD_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut command = Command::new("/bin/sleep");
     command
         .arg("30")
@@ -301,7 +330,7 @@ fn live_launch() -> (
     let pending = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
     let child = command.spawn().unwrap();
     let launch = pending.finish(child.id(), Duration::from_secs(2)).unwrap();
-    (child, launch)
+    (guard, child, launch)
 }
 
 #[test]
@@ -715,7 +744,7 @@ fn exact_cross_process_handoff_is_admitted_and_revalidated() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut child, launch) = live_launch();
+    let (_reserved_fd_guard, mut child, launch) = live_launch();
     let client = launch.client();
     let submitter = launch.submitter();
     let manifest = CompilerExecutionServiceLaunchManifestV1::new(client, supervisor.policy());
@@ -742,11 +771,12 @@ fn exact_cross_process_handoff_is_admitted_and_revalidated() {
 fn accepted_handoff(
     supervisor: &ProtectedIssuerSupervisorV1,
 ) -> (
+    MutexGuard<'static, ()>,
     std::process::Child,
     OwnedFd,
     AcceptedCompilerExecutionHandoffV1,
 ) {
-    let (child, launch) = live_launch();
+    let (guard, child, launch) = live_launch();
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
@@ -756,7 +786,7 @@ fn accepted_handoff(
     let accepted = supervisor
         .accept_handoff_inner::<false>(receiver, Duration::from_secs(2))
         .unwrap();
-    (child, sender, accepted)
+    (guard, child, sender, accepted)
 }
 
 #[test]
@@ -765,7 +795,7 @@ fn admitted_handoff_materializes_exact_sealed_ten_source_launch() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
 
     assert_eq!(prepared.static_manifest().descriptors().len(), 10);
@@ -849,21 +879,26 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
         return;
     };
 
-    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (first_reserved_fd_guard, mut child, _control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let mut prepared = supervisor.prepare_launch(accepted).unwrap();
     prepared.sources.swap(1, 2);
     assert!(prepared.revalidate(&supervisor).is_err());
     child.kill().unwrap();
     child.wait().unwrap();
+    drop(first_reserved_fd_guard);
 
-    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (second_reserved_fd_guard, mut child, _control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let mut prepared = supervisor.prepare_launch(accepted).unwrap();
     prepared.static_manifest_file = File::open("/dev/null").unwrap();
     assert!(prepared.revalidate(&supervisor).is_err());
     child.kill().unwrap();
     child.wait().unwrap();
+    drop(second_reserved_fd_guard);
 
-    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_third_reserved_fd_guard, mut child, _control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let mut prepared = supervisor.prepare_launch(accepted).unwrap();
     let wrong_parent = prepared
         .static_manifest()
@@ -891,7 +926,7 @@ fn prepared_launch_revalidation_detects_rustc_exit() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
@@ -931,7 +966,7 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
         Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
     ));
 
-    let (mut child, launch) = live_launch();
+    let (first_reserved_fd_guard, mut child, launch) = live_launch();
     let actual_submitter = launch.submitter();
     let substituted_pid = if actual_submitter.pid() == 1 {
         2
@@ -962,8 +997,9 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     ));
     child.kill().unwrap();
     child.wait().unwrap();
+    drop(first_reserved_fd_guard);
 
-    let (mut child, launch) = live_launch();
+    let (second_reserved_fd_guard, mut child, launch) = live_launch();
     let wrong_key = SigningKey::from_bytes(&[8; 32]);
     let wrong_policy = CompilerExecutionIssuerPolicyV1::new(
         1,
@@ -989,8 +1025,9 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     ));
     child.kill().unwrap();
     child.wait().unwrap();
+    drop(second_reserved_fd_guard);
 
-    let (mut child, launch) = live_launch();
+    let (third_reserved_fd_guard, mut child, launch) = live_launch();
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
@@ -1008,8 +1045,9 @@ fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
     ));
     child.kill().unwrap();
     child.wait().unwrap();
+    drop(third_reserved_fd_guard);
 
-    let (mut child, launch) = live_launch();
+    let (_fourth_reserved_fd_guard, mut child, launch) = live_launch();
     let manifest =
         CompilerExecutionServiceLaunchManifestV1::new(launch.client(), supervisor.policy());
     let handoff = CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest).unwrap();
@@ -1074,7 +1112,8 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut rustc_child, control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
@@ -1115,12 +1154,96 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
 }
 
 #[test]
+fn serving_issuer_natural_exit_is_observed_and_reaped_once() {
+    let fixture = Fixture::with_code("natural-serving-exit", &naturally_exiting_probe_code(37));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
+        accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+    let launch_manifest = prepared.service_manifest().clone();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+    let readiness =
+        CompilerExecutionServiceReadyV1::new(launched.pid(), &launch_manifest, supervisor.policy())
+            .unwrap();
+    assert_eq!(
+        rustix::io::write(&injected_readiness, readiness.canonical_bytes()).unwrap(),
+        readiness.canonical_bytes().len()
+    );
+    drop(injected_readiness);
+    let serving = launched
+        .await_readiness(Duration::from_secs(2))
+        .unwrap()
+        .publish_readiness(Duration::from_secs(2))
+        .unwrap();
+    read_published_readiness(&control_sender, &readiness);
+
+    let exited = serving.wait_for_exit(Duration::from_secs(2)).unwrap();
+    assert_eq!(exited.pid(), pid.as_raw_pid() as u32);
+    assert_eq!(exited.readiness(), &readiness);
+    assert_eq!(
+        exited.termination(),
+        ProtectedIssuerTerminationV1::Exited { status: 37 }
+    );
+    assert!(!exited.termination().succeeded());
+    assert!(!format!("{exited:?}").contains("fd:"));
+    assert_reaped(pid);
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
+fn serving_exit_timeout_kills_and_eventually_reaps_exact_child() {
+    let fixture = Fixture::with_code("serving-exit-timeout", &launched_probe_code(true));
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
+        accepted_handoff(&supervisor);
+    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
+    let launch_manifest = prepared.service_manifest().clone();
+    let launched = supervisor
+        .launch_inner::<false>(prepared, Duration::from_secs(2))
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(launched.pid() as i32).unwrap();
+    let readiness =
+        CompilerExecutionServiceReadyV1::new(launched.pid(), &launch_manifest, supervisor.policy())
+            .unwrap();
+    assert_eq!(
+        rustix::io::write(&injected_readiness, readiness.canonical_bytes()).unwrap(),
+        readiness.canonical_bytes().len()
+    );
+    drop(injected_readiness);
+    let serving = launched
+        .await_readiness(Duration::from_secs(2))
+        .unwrap()
+        .publish_readiness(Duration::from_secs(2))
+        .unwrap();
+    read_published_readiness(&control_sender, &readiness);
+    assert!(matches!(
+        serving.wait_for_exit(Duration::from_millis(20)),
+        Err(ProtectedIssuerLaunchErrorV1::Timeout("natural issuer exit"))
+    ));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_reaped(pid);
+    rustc_child.kill().unwrap();
+    rustc_child.wait().unwrap();
+}
+
+#[test]
 fn closed_cargo_control_fails_publication_and_reaps_the_issuer() {
     let fixture = Fixture::with_code("closed-readiness-control", &launched_probe_code(true));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut rustc_child, control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
@@ -1163,7 +1286,8 @@ fn readiness_pid_substitution_and_trailing_bytes_fail_closed() {
         let Some(supervisor) = bound_supervisor(&fixture) else {
             return;
         };
-        let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+        let (_reserved_fd_guard, mut rustc_child, _control_sender, accepted) =
+            accepted_handoff(&supervisor);
         let prepared = supervisor.prepare_launch(accepted).unwrap();
         let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
         let launch_manifest = prepared.service_manifest().clone();
@@ -1217,7 +1341,8 @@ fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut first_rustc, _first_control, accepted) = accepted_handoff(&supervisor);
+    let (first_reserved_fd_guard, mut first_rustc, _first_control, accepted) =
+        accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
@@ -1233,8 +1358,10 @@ fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
     assert_reaped(first_pid);
     first_rustc.kill().unwrap();
     first_rustc.wait().unwrap();
+    drop(first_reserved_fd_guard);
 
-    let (mut second_rustc, _second_control, accepted) = accepted_handoff(&supervisor);
+    let (_second_reserved_fd_guard, mut second_rustc, _second_control, accepted) =
+        accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
@@ -1276,7 +1403,8 @@ fn real_static_launcher_crosses_both_exec_boundaries() {
         key,
     )
     .unwrap();
-    let (mut rustc_child, control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
@@ -1309,7 +1437,8 @@ fn clone3_parent_death_helper() {
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
-    let (mut rustc_child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    let (_reserved_fd_guard, mut rustc_child, _control_sender, accepted) =
+        accepted_handoff(&supervisor);
     let prepared = supervisor.prepare_launch(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
