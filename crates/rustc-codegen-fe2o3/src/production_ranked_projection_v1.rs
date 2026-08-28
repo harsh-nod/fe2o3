@@ -13,7 +13,7 @@ use dialect_gpu::{AddressSpaceAttr, HierarchyAttr, MemoryOrderAttr, MemoryScopeA
 use dialect_kernel::{
     AccessKindAttr, AtomicOrderingAttr, AtomicScopeAttr, DYNAMIC_EXTENT, IndexBinaryKindAttr,
     MAX_DETERMINISTIC_JOIN_INPUTS_V1, MAX_RANKED_MEMORY_RANK, MemorySpaceAttr,
-    SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
+    PipelineEventKindAttr, SUPPORTED_ELEMENT_WIDTHS, TensorConvergenceAttr,
 };
 use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_kernel_analysis::{
@@ -39,7 +39,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
     SemanticStatementKindV1, SemanticTargetArchitectureV1, SemanticTerminatorKindV1,
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1,
-    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
+    SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1, SemanticWorkgroupPipelineEventV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -235,7 +235,48 @@ struct IntrinsicProjectionV1 {
     tensor_layouts: Vec<Option<ProductionRankedOperationV1>>,
     capability_read_effects: Vec<Option<ProjectedCapabilityReadEffectV1>>,
     read_view_effects: Vec<Option<GuardedRankedAccessV1>>,
+    pipeline_effects: Vec<Option<ProjectedPipelineEffectV1>>,
     extent_argument_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ProjectedPipelineScalarV1 {
+    Value(ProductionRankedValueV1),
+    Induction {
+        induction: usize,
+    },
+    Binary {
+        result: Option<ProductionRankedValueIdV1>,
+        kind: IndexBinaryKindAttr,
+        left: Box<ProjectedPipelineScalarV1>,
+        right: Box<ProjectedPipelineScalarV1>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ProjectedPipelineEffectV1 {
+    Create {
+        owner: usize,
+        result: Option<ProductionRankedValueIdV1>,
+        view: ProductionRankedValueV1,
+        buffers: u32,
+        prefetch_distance: u32,
+    },
+    Event {
+        owner: usize,
+        epoch: ProjectedPipelineScalarV1,
+        slot_result: Option<ProductionRankedValueIdV1>,
+        modulus: ProductionRankedValueV1,
+        kind: PipelineEventKindAttr,
+    },
+    Access {
+        view: ProductionRankedValueV1,
+        epoch: ProjectedPipelineScalarV1,
+        index: ProjectedPipelineScalarV1,
+        slot_result: Option<ProductionRankedValueIdV1>,
+        modulus: ProductionRankedValueV1,
+        kind: AccessKindAttr,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -487,6 +528,7 @@ enum ProjectedBlockItemV1 {
         source: Option<ProjectedEffectSourceV1>,
     },
     Guarded(GuardedRankedAccessV1),
+    Pipeline(ProjectedPipelineEffectV1),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -505,6 +547,8 @@ impl ProjectedSemanticBlockV1 {
                 ..
             }
             | ProjectedBlockItemV1::Guarded(_) => true,
+            ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
+            ProjectedBlockItemV1::Pipeline(_) => false,
             ProjectedBlockItemV1::Effect { .. } => false,
         })
     }
@@ -522,6 +566,8 @@ impl ProjectedSemanticBlockV1 {
                 ..
             } => source.memory_space != MemorySpaceAttr::Private,
             ProjectedBlockItemV1::Guarded(_) => true,
+            ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Access { .. }) => true,
+            ProjectedBlockItemV1::Pipeline(_) => false,
             ProjectedBlockItemV1::Effect { source: None, .. } => false,
         })
     }
@@ -1049,12 +1095,20 @@ pub(crate) fn project_and_verify_ranked_semantic_mir_v1(
                 statement: None,
             },
         )?;
-        let projected = order_projected_block_effects(
+        let mut projected = order_projected_block_effects(
             operations,
             guarded_sites,
             local_sources,
             &mut entry_operations,
         )?;
+        if let Some(effect) = intrinsic
+            .pipeline_effects
+            .get(block_index)
+            .cloned()
+            .flatten()
+        {
+            projected.items.push(ProjectedBlockItemV1::Pipeline(effect));
+        }
         projected_effect_count = projected_effect_count
             .checked_add(projected.items.len())
             .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
@@ -2195,11 +2249,181 @@ fn project_authenticated_capabilities_v1(
             "a capability projection entry outside the semantic CFG",
         ));
     }
-    let mut entries: Vec<Option<ProjectedCapabilityStateV1>> = vec![None; block_count];
+    let mut work = 0_usize;
+    let pipeline_owners = workgroup_pipeline_local_owners_v1(callables, function)?;
+    let initial_entries = propagate_capability_dataflow_v1(
+        callables,
+        function,
+        enum_payload_dominance,
+        local_allocations,
+        constants,
+        &pipeline_owners,
+        &HashMap::new(),
+        entry,
+        &mut work,
+    )?;
+    let pipeline_payloads = collect_workgroup_pipeline_payloads_v1(
+        callables,
+        function,
+        enum_payload_dominance,
+        &pipeline_owners,
+        &initial_entries,
+        &mut work,
+    )?;
+    let entries = propagate_capability_dataflow_v1(
+        callables,
+        function,
+        enum_payload_dominance,
+        local_allocations,
+        constants,
+        &pipeline_owners,
+        &pipeline_payloads,
+        entry,
+        &mut work,
+    )?;
+
+    let mut layouts = vec![None; block_count];
+    let mut global_reads = vec![None; block_count];
+    let mut read_views = vec![None; block_count];
+    for (block_index, entry_state) in entries.into_iter().enumerate() {
+        let Some(mut state) = entry_state else {
+            continue;
+        };
+        charge_capability_dataflow_work_v1(
+            &mut work,
+            state
+                .len()
+                .checked_add(function.blocks()[block_index].statements().len())
+                .and_then(|work| work.checked_add(1))
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "capability replay work overflow",
+                ))?,
+        )?;
+        transfer_capability_statements_v1(
+            function,
+            block_index,
+            &mut state,
+            enum_payload_dominance,
+        )?;
+        let effects = transfer_capability_terminator_v1(
+            callables,
+            function,
+            block_index,
+            &mut state,
+            local_allocations,
+            constants,
+            &pipeline_owners,
+            &pipeline_payloads,
+            true,
+        )?;
+        layouts[block_index] = effects.layout;
+        global_reads[block_index] = effects.global_read;
+        read_views[block_index] = effects.read_view;
+    }
+    Ok(ProjectedCapabilityEffectsV1 {
+        layouts,
+        global_reads,
+        read_views,
+    })
+}
+
+fn workgroup_pipeline_local_owners_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+) -> Result<Vec<Option<usize>>, ProductionRankedProjectionErrorV1> {
+    let mut owners = vec![None; function.locals().len()];
+    for block in function.blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        if !matches!(
+            callables.get(call.callee().index() as usize),
+            Some(SemanticCallableDeclV1::CompilerIntrinsic {
+                operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. },
+                ..
+            })
+        ) {
+            continue;
+        }
+        let destination = simple_call_destination(call)?.index() as usize;
+        let slot =
+            owners
+                .get_mut(destination)
+                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                    "a workgroup pipeline destination is outside the semantic local table",
+                ))?;
+        if slot.replace(destination).is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one Rust local receives multiple workgroup pipeline origins",
+            ));
+        }
+    }
+    for _ in 0..function.locals().len() {
+        let mut changed = false;
+        for block in function.blocks() {
+            for statement in block.statements() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty() {
+                    continue;
+                }
+                let source = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => raw_operand_place(operand),
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
+                    _ => None,
+                };
+                let Some(source) = source else {
+                    continue;
+                };
+                let source = source.local().index() as usize;
+                let destination = assignment.destination().local().index() as usize;
+                let Some(owner) = owners.get(source).copied().flatten() else {
+                    continue;
+                };
+                let slot = owners.get_mut(destination).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a pipeline alias is outside the semantic local table",
+                    ),
+                )?;
+                match *slot {
+                    None => {
+                        *slot = Some(owner);
+                        changed = true;
+                    }
+                    Some(existing) if existing == owner => {}
+                    Some(_) => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "one Rust local may alias two workgroup pipelines",
+                        ));
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(owners)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn propagate_capability_dataflow_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    local_allocations: &[Option<AllocationContractV1>],
+    constants: &[Option<u64>],
+    pipeline_owners: &[Option<usize>],
+    pipeline_payloads: &HashMap<usize, ProjectedMfmaOperandV1>,
+    entry: usize,
+    work: &mut usize,
+) -> Result<Vec<Option<ProjectedCapabilityStateV1>>, ProductionRankedProjectionErrorV1> {
+    let mut entries: Vec<Option<ProjectedCapabilityStateV1>> = vec![None; function.blocks().len()];
     entries[entry] = Some(HashMap::new());
     let mut worklist = VecDeque::from([entry]);
     let mut stored_entries = 0_usize;
-    let mut work = 0_usize;
     while let Some(block_index) = worklist.pop_front() {
         let entry_state = entries.get(block_index).and_then(Option::as_ref).ok_or(
             ProductionRankedProjectionErrorV1::Unsupported(
@@ -2207,7 +2431,7 @@ fn project_authenticated_capabilities_v1(
             ),
         )?;
         charge_capability_dataflow_work_v1(
-            &mut work,
+            work,
             entry_state.len().checked_add(1).ok_or(
                 ProductionRankedProjectionErrorV1::Unsupported("capability clone work overflow"),
             )?,
@@ -2226,10 +2450,12 @@ fn project_authenticated_capabilities_v1(
             &mut state,
             local_allocations,
             constants,
+            pipeline_owners,
+            pipeline_payloads,
             false,
         )?;
         charge_capability_dataflow_work_v1(
-            &mut work,
+            work,
             function.blocks()[block_index]
                 .statements()
                 .len()
@@ -2246,7 +2472,7 @@ fn project_authenticated_capabilities_v1(
         let successors = charged_unique_capability_successors_v1(
             function.blocks()[block_index].terminator().kind(),
             state.len(),
-            &mut work,
+            work,
         )?;
         for target in successors {
             let target_entry =
@@ -2281,48 +2507,76 @@ fn project_authenticated_capabilities_v1(
             }
         }
     }
+    Ok(entries)
+}
 
-    let mut layouts = vec![None; block_count];
-    let mut global_reads = vec![None; block_count];
-    let mut read_views = vec![None; block_count];
-    for (block_index, entry_state) in entries.into_iter().enumerate() {
-        let Some(mut state) = entry_state else {
+fn collect_workgroup_pipeline_payloads_v1(
+    callables: &[SemanticCallableDeclV1],
+    function: &SemanticFunctionDeclV1,
+    enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
+    pipeline_owners: &[Option<usize>],
+    entries: &[Option<ProjectedCapabilityStateV1>],
+    work: &mut usize,
+) -> Result<HashMap<usize, ProjectedMfmaOperandV1>, ProductionRankedProjectionErrorV1> {
+    let mut payloads = HashMap::new();
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        charge_capability_dataflow_work_v1(
-            &mut work,
-            state
-                .len()
-                .checked_add(function.blocks()[block_index].statements().len())
-                .and_then(|work| work.checked_add(1))
-                .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
-                    "capability replay work overflow",
-                ))?,
-        )?;
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { element, .. },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let Some(entry) = entries.get(block_index).and_then(Option::as_ref) else {
+            continue;
+        };
+        charge_capability_dataflow_work_v1(work, entry.len().saturating_add(1))?;
+        let mut state = try_clone_capability_state_v1(entry)?;
         transfer_capability_statements_v1(
             function,
             block_index,
             &mut state,
             enum_payload_dominance,
         )?;
-        let effects = transfer_capability_terminator_v1(
-            callables,
-            function,
-            block_index,
-            &mut state,
-            local_allocations,
-            constants,
-            true,
-        )?;
-        layouts[block_index] = effects.layout;
-        global_reads[block_index] = effects.global_read;
-        read_views[block_index] = effects.read_view;
+        let [receiver, _, _, value] = call.arguments() else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write lacks its exact receiver, epoch, index, and payload",
+            ));
+        };
+        if value.ty() != *element {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write payload changed semantic type",
+            ));
+        }
+        let owner = raw_operand_place(receiver)
+            .and_then(|place| pipeline_owners.get(place.local().index() as usize))
+            .copied()
+            .flatten()
+            .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write lacks one compiler-owned origin",
+            ))?;
+        let Some(ProjectedCapabilityOriginV1::Operand(payload)) =
+            capability_known_origin_v1(&state, value)
+        else {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a workgroup pipeline write lacks one authenticated typed payload",
+            ));
+        };
+        match payloads.insert(owner, payload) {
+            None => {}
+            Some(existing) if existing == payload => {}
+            Some(existing) => {
+                payloads.insert(owner, existing);
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one workgroup pipeline receives incompatible typed payload layouts",
+                ));
+            }
+        }
     }
-    Ok(ProjectedCapabilityEffectsV1 {
-        layouts,
-        global_reads,
-        read_views,
-    })
+    Ok(payloads)
 }
 
 fn bind_capability_read_effects_to_call_blocks_v1(
@@ -3070,6 +3324,8 @@ fn transfer_capability_terminator_v1(
     state: &mut ProjectedCapabilityStateV1,
     local_allocations: &[Option<AllocationContractV1>],
     constants: &[Option<u64>],
+    pipeline_owners: &[Option<usize>],
+    pipeline_payloads: &HashMap<usize, ProjectedMfmaOperandV1>,
     require_authenticated_site: bool,
 ) -> Result<ProjectedCapabilityTerminatorEffectsV1, ProductionRankedProjectionErrorV1> {
     let terminator = function.blocks()[block_index].terminator().kind();
@@ -3470,6 +3726,21 @@ fn transfer_capability_terminator_v1(
                 }
                 _ => ProjectedCapabilityValueV1::Invalid,
             };
+            (origin, None)
+        }
+        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { element, .. } => {
+            let origin = call
+                .arguments()
+                .first()
+                .and_then(raw_operand_place)
+                .and_then(|place| pipeline_owners.get(place.local().index() as usize))
+                .copied()
+                .flatten()
+                .and_then(|owner| pipeline_payloads.get(&owner).copied())
+                .filter(|_| call.arguments().len() == 3 && destination.place().ty() == *element)
+                .map(ProjectedCapabilityOriginV1::Operand)
+                .map(ProjectedCapabilityValueV1::Known)
+                .unwrap_or(ProjectedCapabilityValueV1::Invalid);
             (origin, None)
         }
         SemanticCompilerIntrinsicOperationV1::MatrixMultiplyAccumulate {
@@ -5260,6 +5531,17 @@ fn project_intrinsic_contracts(
         operations,
         next_value,
     )?;
+    let pipeline_effects = project_workgroup_pipeline_effects_v1(
+        callables,
+        types,
+        function,
+        constants,
+        &index_values,
+        &runtime_index_arguments,
+        &uniform_inductions,
+        operations,
+        next_value,
+    )?;
 
     let checked_reference_origins = checked_reference_origins(
         function,
@@ -5293,7 +5575,498 @@ fn project_intrinsic_contracts(
         tensor_layouts,
         capability_read_effects,
         read_view_effects,
+        pipeline_effects,
     })
+}
+
+#[derive(Clone, Debug)]
+struct PendingWorkgroupPipelineV1 {
+    create_block: usize,
+    destination: usize,
+    buffers: u32,
+    elements: u64,
+    prefetch_distance: u32,
+    element_width: Option<u32>,
+    view: Option<ProductionRankedValueIdV1>,
+    pipeline: Option<ProductionRankedValueIdV1>,
+    modulus: Option<ProductionRankedValueV1>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_workgroup_pipeline_effects_v1(
+    callables: &[SemanticCallableDeclV1],
+    types: &[SemanticTypeDeclV1],
+    function: &SemanticFunctionDeclV1,
+    constants: &[Option<u64>],
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    runtime_index_arguments: &[Option<u32>],
+    uniform_inductions: &[ProjectedUniformInductionV1],
+    entry_operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+) -> Result<Vec<Option<ProjectedPipelineEffectV1>>, ProductionRankedProjectionErrorV1> {
+    let mut pending = Vec::<PendingWorkgroupPipelineV1>::new();
+    let mut owners = vec![None; function.locals().len()];
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation:
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+                    pipeline: _,
+                    buffers,
+                    elements,
+                    prefetch_distance,
+                    ..
+                },
+            ..
+        }) = callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let destination = simple_call_destination(call)?.index() as usize;
+        if pending.len() == dialect_kernel::MAX_PIPELINE_BUFFERS_V1 as usize * 64
+            || owners.get(destination).is_none_or(Option::is_some)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "workgroup pipeline creation count or destination is not uniquely bounded",
+            ));
+        }
+        owners[destination] = Some(pending.len());
+        pending.push(PendingWorkgroupPipelineV1 {
+            create_block: block_index,
+            destination,
+            buffers: *buffers,
+            elements: *elements,
+            prefetch_distance: *prefetch_distance,
+            element_width: None,
+            view: None,
+            pipeline: None,
+            modulus: None,
+        });
+    }
+    if pending.is_empty() {
+        return Ok(vec![None; function.blocks().len()]);
+    }
+    for _ in 0..function.locals().len() {
+        let mut changed = false;
+        for block in function.blocks() {
+            for statement in block.statements() {
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
+                if !assignment.destination().projections().is_empty() {
+                    continue;
+                }
+                let source = match assignment.value().kind() {
+                    SemanticRvalueKindV1::Use(operand) => raw_operand_place(operand),
+                    SemanticRvalueKindV1::Borrow { place, .. }
+                    | SemanticRvalueKindV1::AddressOf { place, .. } => Some(place),
+                    _ => None,
+                };
+                let Some(source) = source else {
+                    continue;
+                };
+                let source = source.local().index() as usize;
+                let destination = assignment.destination().local().index() as usize;
+                let Some(owner) = owners.get(source).copied().flatten() else {
+                    continue;
+                };
+                let slot = owners.get_mut(destination).ok_or(
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "a pipeline borrow alias is outside the semantic local table",
+                    ),
+                )?;
+                match *slot {
+                    None => {
+                        *slot = Some(owner);
+                        changed = true;
+                    }
+                    Some(existing) if existing == owner => {}
+                    Some(_) => {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "one Rust local may alias two workgroup pipelines",
+                        ));
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for block in function.blocks() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let element = match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { element, .. }
+            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { element, .. } => {
+                Some(*element)
+            }
+            _ => None,
+        };
+        let Some(element) = element else {
+            continue;
+        };
+        let owner = pipeline_call_owner_v1(call, &owners)?;
+        let declaration = types.get(element.index() as usize).ok_or(
+            ProductionRankedProjectionErrorV1::Unsupported(
+                "a workgroup pipeline element type is missing",
+            ),
+        )?;
+        let bits = declaration
+            .layout()
+            .size_bytes()
+            .and_then(|bytes| bytes.checked_mul(8))
+            .and_then(|bits| u32::try_from(bits).ok())
+            .filter(|bits| SUPPORTED_ELEMENT_WIDTHS.contains(bits))
+            .ok_or(ProductionRankedProjectionErrorV1::Unsupported(
+                "a workgroup pipeline payload has an unsupported device width",
+            ))?;
+        match pending[owner].element_width {
+            None => pending[owner].element_width = Some(bits),
+            Some(existing) if existing == bits => {}
+            Some(_) => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "one workgroup pipeline is used with inconsistent payload widths",
+                ));
+            }
+        }
+    }
+
+    for (index, pipeline) in pending.iter_mut().enumerate() {
+        let element_width =
+            pipeline
+                .element_width
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a workgroup pipeline has no statically typed write or read",
+                ))?;
+        let view = next_value_id(next_value)?;
+        let modulus_id = next_value_id(next_value)?;
+        let pipeline_result = next_value_id(next_value)?;
+        reserve_operation(entry_operations)?;
+        entry_operations.push(ProductionRankedOperationV1::ViewInSpace {
+            result: view,
+            element_width,
+            writable: true,
+            shape: vec![u64::from(pipeline.buffers), pipeline.elements],
+            dynamic_extents: Vec::new(),
+            memory_space: MemorySpaceAttr::Workgroup,
+            allocation_origin: 0x5049_5045_0000_0000_u64 | (index as u64 + 1),
+            noalias_class: 0x5049_5045_8000_0000_u64 | (index as u64 + 1),
+        });
+        reserve_operation(entry_operations)?;
+        entry_operations.push(ProductionRankedOperationV1::IndexConstant {
+            result: modulus_id,
+            value: u64::from(pipeline.buffers),
+        });
+        reserve_operation(entry_operations)?;
+        entry_operations.push(ProductionRankedOperationV1::PipelineCreate {
+            result: pipeline_result,
+            view: ProductionRankedValueV1::Local(view),
+            buffers: pipeline.buffers,
+            prefetch_distance: pipeline.prefetch_distance,
+        });
+        pipeline.view = Some(view);
+        pipeline.pipeline = Some(pipeline_result);
+        pipeline.modulus = Some(ProductionRankedValueV1::Local(modulus_id));
+    }
+
+    let mut effects = vec![None; function.blocks().len()];
+    for (block_index, block) in function.blocks().iter().enumerate() {
+        let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+            continue;
+        };
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
+        else {
+            continue;
+        };
+        let effect = match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. } => {
+                let owner = owners[simple_call_destination(call)?.index() as usize].ok_or(
+                    ProductionRankedProjectionErrorV1::Incomplete(
+                        "a pipeline creation lost its destination ownership",
+                    ),
+                )?;
+                let contract = &pending[owner];
+                debug_assert_eq!(contract.create_block, block_index);
+                debug_assert_eq!(
+                    contract.destination,
+                    simple_call_destination(call)?.index() as usize
+                );
+                ProjectedPipelineEffectV1::Create {
+                    owner,
+                    result: Some(contract.pipeline.expect("assigned pipeline result")),
+                    view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
+                    buffers: contract.buffers,
+                    prefetch_distance: contract.prefetch_distance,
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { event, .. } => {
+                let owner = pipeline_call_owner_v1(call, &owners)?;
+                let contract = &pending[owner];
+                let epoch = project_pipeline_scalar_v1(
+                    function,
+                    block_index,
+                    &call.arguments()[1],
+                    constants,
+                    index_values,
+                    runtime_index_arguments,
+                    uniform_inductions,
+                    entry_operations,
+                    next_value,
+                    &mut HashSet::new(),
+                )?;
+                ProjectedPipelineEffectV1::Event {
+                    owner,
+                    epoch,
+                    slot_result: None,
+                    modulus: contract.modulus.expect("assigned pipeline modulus"),
+                    kind: pipeline_event_kind_v1(*event),
+                }
+            }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
+            | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { .. } => {
+                let owner = pipeline_call_owner_v1(call, &owners)?;
+                let contract = &pending[owner];
+                let epoch = project_pipeline_scalar_v1(
+                    function,
+                    block_index,
+                    &call.arguments()[1],
+                    constants,
+                    index_values,
+                    runtime_index_arguments,
+                    uniform_inductions,
+                    entry_operations,
+                    next_value,
+                    &mut HashSet::new(),
+                )?;
+                let index = project_pipeline_scalar_v1(
+                    function,
+                    block_index,
+                    &call.arguments()[2],
+                    constants,
+                    index_values,
+                    runtime_index_arguments,
+                    uniform_inductions,
+                    entry_operations,
+                    next_value,
+                    &mut HashSet::new(),
+                )?;
+                ProjectedPipelineEffectV1::Access {
+                    view: ProductionRankedValueV1::Local(contract.view.expect("assigned view")),
+                    epoch,
+                    index,
+                    slot_result: None,
+                    modulus: contract.modulus.expect("assigned pipeline modulus"),
+                    kind: if matches!(
+                        operation,
+                        SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
+                    ) {
+                        AccessKindAttr::Write
+                    } else {
+                        AccessKindAttr::Read
+                    },
+                }
+            }
+            _ => continue,
+        };
+        if effects[block_index].replace(effect).is_some() {
+            return Err(ProductionRankedProjectionErrorV1::Unsupported(
+                "a semantic block contains multiple pipeline terminals",
+            ));
+        }
+    }
+    Ok(effects)
+}
+
+fn pipeline_call_owner_v1(
+    call: &SemanticDirectCallV1,
+    owners: &[Option<usize>],
+) -> Result<usize, ProductionRankedProjectionErrorV1> {
+    let local = call
+        .arguments()
+        .first()
+        .and_then(raw_operand_place)
+        .map(|place| place.local().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a workgroup pipeline method has no exact receiver local",
+        ))?;
+    owners
+        .get(local)
+        .copied()
+        .flatten()
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a workgroup pipeline method receiver lacks one compiler-owned origin",
+        ))
+}
+
+const fn pipeline_event_kind_v1(event: SemanticWorkgroupPipelineEventV1) -> PipelineEventKindAttr {
+    match event {
+        SemanticWorkgroupPipelineEventV1::Stage => PipelineEventKindAttr::Stage,
+        SemanticWorkgroupPipelineEventV1::Commit => PipelineEventKindAttr::Commit,
+        SemanticWorkgroupPipelineEventV1::Wait => PipelineEventKindAttr::Wait,
+        SemanticWorkgroupPipelineEventV1::Consume => PipelineEventKindAttr::Consume,
+        SemanticWorkgroupPipelineEventV1::Discard => PipelineEventKindAttr::Discard,
+        SemanticWorkgroupPipelineEventV1::Release => PipelineEventKindAttr::Release,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_pipeline_scalar_v1(
+    function: &SemanticFunctionDeclV1,
+    block_index: usize,
+    operand: &SemanticOperandV1,
+    constants: &[Option<u64>],
+    index_values: &[Option<ProjectedDisjointIndexV1>],
+    runtime_index_arguments: &[Option<u32>],
+    uniform_inductions: &[ProjectedUniformInductionV1],
+    entry_operations: &mut Vec<ProductionRankedOperationV1>,
+    next_value: &mut u32,
+    visiting: &mut HashSet<usize>,
+) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+    if let Some(value) = constant_operand_value(operand, constants) {
+        let result = next_value_id(next_value)?;
+        reserve_operation(entry_operations)?;
+        entry_operations.push(ProductionRankedOperationV1::IndexConstant { result, value });
+        return Ok(ProjectedPipelineScalarV1::Value(
+            ProductionRankedValueV1::Local(result),
+        ));
+    }
+    for (induction_index, induction) in uniform_inductions.iter().enumerate() {
+        if operand == &induction.source_progress.bound_operand {
+            return Ok(ProjectedPipelineScalarV1::Value(induction.bound));
+        }
+        if simple_operand_local(operand) == Some(induction.source_progress.induction)
+            && (induction.loop_blocks.contains(&block_index)
+                || induction.header == block_index
+                || induction.exit == block_index)
+        {
+            return Ok(ProjectedPipelineScalarV1::Induction {
+                induction: induction_index,
+            });
+        }
+    }
+    let local = raw_operand_place(operand)
+        .map(|place| place.local().index() as usize)
+        .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+            "a pipeline epoch or element index is not a retained scalar place",
+        ))?;
+    if let Some(index) = index_values.get(local).copied().flatten() {
+        return Ok(ProjectedPipelineScalarV1::Value(index.value));
+    }
+    if let Some(argument) = runtime_index_arguments.get(local).copied().flatten() {
+        return Ok(ProjectedPipelineScalarV1::Value(
+            ProductionRankedValueV1::Argument(argument),
+        ));
+    }
+    if !visiting.insert(local) {
+        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+            "a pipeline scalar expression is cyclic",
+        ));
+    }
+    let mut definition = None;
+    for block in function.blocks() {
+        for statement in block.statements() {
+            let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                continue;
+            };
+            if assignment.destination().projections().is_empty()
+                && assignment.destination().local().index() as usize == local
+            {
+                if definition.replace(assignment.value()).is_some() {
+                    visiting.remove(&local);
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a pipeline scalar temporary has multiple definitions",
+                    ));
+                }
+            }
+        }
+    }
+    let value = definition.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+        "a pipeline scalar temporary has no retained definition",
+    ))?;
+    let projected = match value.kind() {
+        SemanticRvalueKindV1::Use(source)
+        | SemanticRvalueKindV1::Cast {
+            operand: source, ..
+        } => project_pipeline_scalar_v1(
+            function,
+            block_index,
+            source,
+            constants,
+            index_values,
+            runtime_index_arguments,
+            uniform_inductions,
+            entry_operations,
+            next_value,
+            visiting,
+        )?,
+        SemanticRvalueKindV1::Binary {
+            operation,
+            left,
+            right,
+        } => {
+            let kind = match operation {
+                SemanticBinaryOpV1::Add => IndexBinaryKindAttr::Add,
+                SemanticBinaryOpV1::Multiply => IndexBinaryKindAttr::Multiply,
+                SemanticBinaryOpV1::Divide => IndexBinaryKindAttr::Divide,
+                SemanticBinaryOpV1::Remainder => IndexBinaryKindAttr::Remainder,
+                _ => {
+                    visiting.remove(&local);
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a pipeline scalar uses an unsupported integer operation",
+                    ));
+                }
+            };
+            let left = project_pipeline_scalar_v1(
+                function,
+                block_index,
+                left,
+                constants,
+                index_values,
+                runtime_index_arguments,
+                uniform_inductions,
+                entry_operations,
+                next_value,
+                visiting,
+            )?;
+            let right = project_pipeline_scalar_v1(
+                function,
+                block_index,
+                right,
+                constants,
+                index_values,
+                runtime_index_arguments,
+                uniform_inductions,
+                entry_operations,
+                next_value,
+                visiting,
+            )?;
+            ProjectedPipelineScalarV1::Binary {
+                result: None,
+                kind,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        }
+        _ => {
+            visiting.remove(&local);
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline scalar is not an exact unsigned index expression",
+            ));
+        }
+    };
+    visiting.remove(&local);
+    Ok(projected)
 }
 
 fn reject_retired_production_intrinsics_v1(
@@ -9626,7 +10399,7 @@ fn build_ranked_cfg(
     deterministic_switches: &[Option<ProjectedDeterministicSwitchV1>],
     uniform_inductions: &[ProjectedUniformInductionV1],
     entry_operations: Vec<ProductionRankedOperationV1>,
-    projected_blocks: Vec<ProjectedSemanticBlockV1>,
+    mut projected_blocks: Vec<ProjectedSemanticBlockV1>,
 ) -> Result<
     (Vec<ProductionRankedBlockV1>, Vec<ProjectedAccessSourceV1>),
     ProductionRankedProjectionErrorV1,
@@ -9693,6 +10466,13 @@ fn build_ranked_cfg(
     let entry_target = base_blocks.get(entry).copied().flatten().ok_or(
         ProductionRankedProjectionErrorV1::Unsupported("semantic entry block outside the function"),
     )?;
+    let mut next_value = entry_operations
+        .iter()
+        .filter_map(ranked_operation_last_result_v1)
+        .map(ProductionRankedValueIdV1::get)
+        .max()
+        .map_or(0, |value| value.saturating_add(1));
+    let pipeline_values = prepare_pipeline_values_v1(&mut projected_blocks, &mut next_value)?;
     let mut blocks = Vec::with_capacity(block_count);
     blocks.push(ProductionRankedBlockV1::new(
         entry_operations,
@@ -9796,6 +10576,15 @@ fn build_ranked_cfg(
                     )?;
                     current = continuation;
                     operations = Vec::new();
+                }
+                ProjectedBlockItemV1::Pipeline(effect) => {
+                    materialize_pipeline_effect_v1(
+                        effect,
+                        ranked_block_id(current)?,
+                        live,
+                        &mut operations,
+                        &pipeline_values,
+                    )?;
                 }
             }
         }
@@ -10089,6 +10878,216 @@ fn build_ranked_cfg(
         ));
     }
     Ok((blocks, sources))
+}
+
+fn ranked_operation_last_result_v1(
+    operation: &ProductionRankedOperationV1,
+) -> Option<ProductionRankedValueIdV1> {
+    match operation {
+        ProductionRankedOperationV1::View { result, .. }
+        | ProductionRankedOperationV1::ViewInSpace { result, .. }
+        | ProductionRankedOperationV1::PipelineCreate { result, .. }
+        | ProductionRankedOperationV1::IndexConstant { result, .. }
+        | ProductionRankedOperationV1::IndexUnsignedCast { result, .. }
+        | ProductionRankedOperationV1::IndexUnknown { result }
+        | ProductionRankedOperationV1::InvocationIndex { result, .. }
+        | ProductionRankedOperationV1::IndexBinary { result, .. }
+        | ProductionRankedOperationV1::DeterministicJoin { result, .. }
+        | ProductionRankedOperationV1::CheckedTiledIndex2D { result, .. }
+        | ProductionRankedOperationV1::CheckedRowStripedIndex2D { result, .. }
+        | ProductionRankedOperationV1::Dimension { result, .. }
+        | ProductionRankedOperationV1::TensorResultComponent { result, .. }
+        | ProductionRankedOperationV1::SemanticSymbol { result, .. }
+        | ProductionRankedOperationV1::SemanticConstant { result, .. }
+        | ProductionRankedOperationV1::SemanticBinary { result, .. }
+        | ProductionRankedOperationV1::SemanticExpression { result, .. } => Some(*result),
+        ProductionRankedOperationV1::PredicatedCheckedTiledIndex2D {
+            result, success, ..
+        }
+        | ProductionRankedOperationV1::PredicatedCheckedRowStripedIndex2D {
+            result, success, ..
+        } => Some(if result.get() > success.get() {
+            *result
+        } else {
+            *success
+        }),
+        _ => None,
+    }
+}
+
+fn prepare_pipeline_values_v1(
+    projected_blocks: &mut [ProjectedSemanticBlockV1],
+    next_value: &mut u32,
+) -> Result<HashMap<usize, ProductionRankedValueV1>, ProductionRankedProjectionErrorV1> {
+    let mut pipeline_values = HashMap::new();
+    for block in projected_blocks {
+        for item in &mut block.items {
+            let ProjectedBlockItemV1::Pipeline(effect) = item else {
+                continue;
+            };
+            match effect {
+                ProjectedPipelineEffectV1::Create { owner, result, .. } => {
+                    let value = result.expect("entry-declared pipeline result");
+                    if pipeline_values
+                        .insert(*owner, ProductionRankedValueV1::Local(value))
+                        .is_some()
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "one workgroup pipeline is created more than once in the ranked CFG",
+                        ));
+                    }
+                }
+                ProjectedPipelineEffectV1::Event {
+                    epoch, slot_result, ..
+                } => {
+                    prepare_pipeline_scalar_v1(epoch, next_value)?;
+                    *slot_result = Some(next_value_id(next_value)?);
+                }
+                ProjectedPipelineEffectV1::Access {
+                    epoch,
+                    index,
+                    slot_result,
+                    ..
+                } => {
+                    prepare_pipeline_scalar_v1(epoch, next_value)?;
+                    prepare_pipeline_scalar_v1(index, next_value)?;
+                    *slot_result = Some(next_value_id(next_value)?);
+                }
+            }
+        }
+    }
+    Ok(pipeline_values)
+}
+
+fn prepare_pipeline_scalar_v1(
+    scalar: &mut ProjectedPipelineScalarV1,
+    next_value: &mut u32,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    if let ProjectedPipelineScalarV1::Binary {
+        result,
+        left,
+        right,
+        ..
+    } = scalar
+    {
+        prepare_pipeline_scalar_v1(left, next_value)?;
+        prepare_pipeline_scalar_v1(right, next_value)?;
+        *result = Some(next_value_id(next_value)?);
+    }
+    Ok(())
+}
+
+fn materialize_pipeline_effect_v1(
+    effect: ProjectedPipelineEffectV1,
+    block: u32,
+    live: &[usize],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+    pipeline_values: &HashMap<usize, ProductionRankedValueV1>,
+) -> Result<(), ProductionRankedProjectionErrorV1> {
+    match effect {
+        ProjectedPipelineEffectV1::Create { owner, result, .. } => {
+            let result = result.expect("prepared pipeline result");
+            debug_assert_eq!(
+                pipeline_values.get(&owner),
+                Some(&ProductionRankedValueV1::Local(result))
+            );
+        }
+        ProjectedPipelineEffectV1::Event {
+            owner,
+            epoch,
+            slot_result,
+            modulus,
+            kind,
+        } => {
+            let pipeline = pipeline_values.get(&owner).copied().ok_or(
+                ProductionRankedProjectionErrorV1::Incomplete(
+                    "a workgroup pipeline event is not dominated by its creation",
+                ),
+            )?;
+            let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
+            let slot_result = slot_result.expect("prepared pipeline slot result");
+            operations.push(ProductionRankedOperationV1::IndexBinary {
+                result: slot_result,
+                kind: IndexBinaryKindAttr::Remainder,
+                lhs: epoch,
+                rhs: modulus,
+            });
+            operations.push(ProductionRankedOperationV1::PipelineEvent {
+                pipeline,
+                epoch,
+                slot: ProductionRankedValueV1::Local(slot_result),
+                kind,
+            });
+        }
+        ProjectedPipelineEffectV1::Access {
+            view,
+            epoch,
+            index,
+            slot_result,
+            modulus,
+            kind,
+        } => {
+            let epoch = materialize_pipeline_scalar_v1(epoch, block, live, operations)?;
+            let index = materialize_pipeline_scalar_v1(index, block, live, operations)?;
+            let slot_result = slot_result.expect("prepared pipeline slot result");
+            operations.push(ProductionRankedOperationV1::IndexBinary {
+                result: slot_result,
+                kind: IndexBinaryKindAttr::Remainder,
+                lhs: epoch,
+                rhs: modulus,
+            });
+            operations.push(ProductionRankedOperationV1::Access {
+                kind,
+                view,
+                indices: vec![ProductionRankedValueV1::Local(slot_result), index],
+            });
+        }
+    }
+    Ok(())
+}
+
+fn materialize_pipeline_scalar_v1(
+    scalar: ProjectedPipelineScalarV1,
+    block: u32,
+    live: &[usize],
+    operations: &mut Vec<ProductionRankedOperationV1>,
+) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
+    match scalar {
+        ProjectedPipelineScalarV1::Value(value) => Ok(value),
+        ProjectedPipelineScalarV1::Induction { induction } => {
+            let argument = live
+                .iter()
+                .position(|candidate| *candidate == induction)
+                .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a pipeline epoch uses an induction outside its live loop region",
+                ))?;
+            Ok(ProductionRankedValueV1::BlockArgument {
+                block,
+                argument: u32::try_from(argument).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "live induction argument count does not fit u32",
+                    )
+                })?,
+            })
+        }
+        ProjectedPipelineScalarV1::Binary {
+            result,
+            kind,
+            left,
+            right,
+        } => {
+            let lhs = materialize_pipeline_scalar_v1(*left, block, live, operations)?;
+            let rhs = materialize_pipeline_scalar_v1(*right, block, live, operations)?;
+            let result = result.expect("prepared pipeline scalar result");
+            operations.push(ProductionRankedOperationV1::IndexBinary {
+                result,
+                kind,
+                lhs,
+                rhs,
+            });
+            Ok(ProductionRankedValueV1::Local(result))
+        }
+    }
 }
 
 fn reachable_projected_blocks(
@@ -11478,6 +12477,7 @@ fn projected_block_uses_bounds_check(
             access.indices.contains(&check.index)
                 && access.comparisons.contains(&(check.index, check.extent))
         }
+        ProjectedBlockItemV1::Pipeline(_) => false,
         ProjectedBlockItemV1::Effect { .. } => false,
     })
 }
@@ -11987,6 +12987,18 @@ fn project_direct_call_accesses(
                 | SemanticCompilerIntrinsicOperationV1::GridLeaderCurrent { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetMutExclusive { .. }
                 | SemanticCompilerIntrinsicOperationV1::DisjointSliceGetBlockMut { .. },
+            ..
+        })
+    ) {
+        return Ok(());
+    }
+    if matches!(
+        callables.get(call.callee().index() as usize),
+        Some(SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. }
+                | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent { .. }
+                | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { .. }
+                | SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { .. },
             ..
         })
     ) {
@@ -16358,6 +17370,8 @@ mod tests {
             &mut state,
             &[None; 5],
             &[None; 5],
+            &[],
+            &HashMap::new(),
             true,
         )
         .unwrap();
@@ -16385,6 +17399,8 @@ mod tests {
                 &mut invalid,
                 &[None; 5],
                 &[None; 5],
+                &[],
+                &HashMap::new(),
                 true,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -16450,6 +17466,8 @@ mod tests {
             &mut state,
             &[None; 5],
             &[],
+            &[],
+            &HashMap::new(),
             true,
         )
         .unwrap();
@@ -16511,6 +17529,8 @@ mod tests {
             &mut merged_state,
             &[None; 5],
             &[],
+            &[],
+            &HashMap::new(),
             true,
         )
         .unwrap_err();
@@ -16531,6 +17551,8 @@ mod tests {
                 &mut invalid_lane,
                 &[None; 5],
                 &[],
+                &[],
+                &HashMap::new(),
                 false,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -16550,6 +17572,8 @@ mod tests {
                 &mut authenticated_tensor_load_state(),
                 &[None; 5],
                 &[],
+                &[],
+                &HashMap::new(),
                 true,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -16574,6 +17598,8 @@ mod tests {
                 &mut authenticated_tensor_load_state(),
                 &[None; 5],
                 &[],
+                &[],
+                &HashMap::new(),
                 true,
             ),
             Err(ProductionRankedProjectionErrorV1::Incomplete(
@@ -16663,6 +17689,8 @@ mod tests {
                 &mut authenticated_tensor_load_state(),
                 &[None; 5],
                 &[],
+                &[],
+                &HashMap::new(),
                 false,
             ),
             Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -17467,6 +18495,8 @@ mod tests {
                 &mut state,
                 &[None; 4],
                 &[],
+                &[],
+                &HashMap::new(),
                 false
             )
             .unwrap(),

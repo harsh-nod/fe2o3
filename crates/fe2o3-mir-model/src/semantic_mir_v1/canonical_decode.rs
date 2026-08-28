@@ -1439,7 +1439,7 @@ impl<'a> CanonicalDecoderV1<'a> {
         &mut self,
     ) -> Result<SemanticCompilerIntrinsicOperationV1, SemanticMirDecodeErrorV1> {
         let maximum_tag = if self.wire_version >= SemanticMirWireVersionV1::V6 {
-            54
+            58
         } else if self.wire_version >= SemanticMirWireVersionV1::V5 {
             44
         } else {
@@ -1755,6 +1755,33 @@ impl<'a> CanonicalDecoderV1<'a> {
                 dynamic_lds: SemanticTypeIdV1(self.u32()?),
                 raw_parts: SemanticTypeIdV1(self.u32()?),
                 element_storage: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
+            55 => SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+                scope: SemanticTypeIdV1(self.u32()?),
+                pipeline: SemanticTypeIdV1(self.u32()?),
+                buffers: self.u32()?,
+                elements: self.u64()?,
+                prefetch_distance: self.u32()?,
+            },
+            56 => SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent {
+                pipeline: SemanticTypeIdV1(self.u32()?),
+                event: match self.tagged("workgroup pipeline event", 5)? {
+                    0 => SemanticWorkgroupPipelineEventV1::Stage,
+                    1 => SemanticWorkgroupPipelineEventV1::Commit,
+                    2 => SemanticWorkgroupPipelineEventV1::Wait,
+                    3 => SemanticWorkgroupPipelineEventV1::Consume,
+                    4 => SemanticWorkgroupPipelineEventV1::Discard,
+                    5 => SemanticWorkgroupPipelineEventV1::Release,
+                    _ => unreachable!(),
+                },
+            },
+            57 => SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite {
+                pipeline: SemanticTypeIdV1(self.u32()?),
+                element: SemanticTypeIdV1(self.u32()?),
+            },
+            58 => SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead {
+                pipeline: SemanticTypeIdV1(self.u32()?),
                 element: SemanticTypeIdV1(self.u32()?),
             },
             _ => unreachable!(),
@@ -3076,6 +3103,21 @@ mod tests {
                 element_storage: t(2),
                 element: t(3),
             },
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+                scope: t(0),
+                pipeline: t(1),
+                buffers: 3,
+                elements: 64,
+                prefetch_distance: 2,
+            },
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite {
+                pipeline: t(1),
+                element: t(2),
+            },
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead {
+                pipeline: t(1),
+                element: t(2),
+            },
             SemanticCompilerIntrinsicOperationV1::WorkgroupBarrier,
             SemanticCompilerIntrinsicOperationV1::WaveBarrier,
             SemanticCompilerIntrinsicOperationV1::FabsF32,
@@ -3293,6 +3335,21 @@ mod tests {
                 width: 64,
                 kind,
             });
+        }
+        for event in [
+            SemanticWorkgroupPipelineEventV1::Stage,
+            SemanticWorkgroupPipelineEventV1::Commit,
+            SemanticWorkgroupPipelineEventV1::Wait,
+            SemanticWorkgroupPipelineEventV1::Consume,
+            SemanticWorkgroupPipelineEventV1::Discard,
+            SemanticWorkgroupPipelineEventV1::Release,
+        ] {
+            operations.push(
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent {
+                    pipeline: t(1),
+                    event,
+                },
+            );
         }
         for function in [
             SemanticF32MathFunctionV1::Sqrt,

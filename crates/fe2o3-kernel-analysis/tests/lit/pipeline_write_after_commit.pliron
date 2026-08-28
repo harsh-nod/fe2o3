@@ -1,25 +1,19 @@
 // RUN: fe2o3-pliron-lit --passes=general %s
 // EXPECT: REJECT
 // CHECK: error[FE2O3-PIPELINE-001]
-// CHECK: lifecycle is not in its creation block
+// CHECK: Write access to slot 0 occurs while that slot is Committed(0)
 // CHECK: help[FE2O3-FIX-PIPELINE]
-builtin.func @pipeline_conditional_nonentry: builtin.function <() -> ()>
+builtin.func @pipeline_write_after_commit: builtin.function <() -> ()>
 {
   ^entry_block1v1():
     v0 = kernel.ranked_view () [] [kernel_memory_space: kernel.memory_space Workgroup]: <() -> (kernel.ranked_view <16,true,[2,64]>)>;
     p1 = kernel.pipeline_create (v0) [] []: <(kernel.ranked_view <16,true,[2,64]>) -> (kernel.pipeline <2,1>)>;
     zero_v2 = kernel.index_constant () [] [kernel_index_value: kernel.index_value 0]: <() -> (kernel.index )>;
-    condition_v3 = kernel.index_unknown () [] []: <() -> (kernel.index )>;
-    kernel.index_lt_br (condition_v3, zero_v2) [^pipeline_block2v1, ^bypass_block3v1] []: <(kernel.index , kernel.index ) -> ()>
-
-  ^pipeline_block2v1():
     kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Stage]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Commit]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.access (v0, zero_v2, zero_v2) [] [kernel_access_kind: kernel.access_kind Write]: <(kernel.ranked_view <16,true,[2,64]>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Wait]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
-    kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Consume]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
+    kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Discard]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
     kernel.pipeline_event (p1, zero_v2, zero_v2) [] [kernel_pipeline_event_kind: kernel.pipeline_event_kind Release]: <(kernel.pipeline <2,1>, kernel.index , kernel.index ) -> ()>;
-    kernel.return () [] []: <() -> ()>
-
-  ^bypass_block3v1():
     kernel.return () [] []: <() -> ()>
 }

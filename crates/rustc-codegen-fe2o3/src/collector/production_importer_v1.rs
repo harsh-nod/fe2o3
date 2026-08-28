@@ -18,6 +18,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticReachableAssemblyV1, SemanticSubgroupReductionKindV1, SemanticTargetDataLayoutV1,
     SemanticTypeDeclV1, SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnsafeAssemblyDeclarationV1,
     SemanticUnsafeAssemblyTargetV1, SemanticWorkgroupDimensionsV1,
+    SemanticWorkgroupPipelineEventV1,
 };
 use rustc_middle::ty::{FloatTy, GenericArgKind, Instance, IntTy, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::{Symbol, sym};
@@ -926,6 +927,102 @@ fn terminal_operation_v1<'tcx>(
                     raw_parts: output,
                     element_storage,
                     element,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
+            if inputs.len() == 1
+                && rust_inputs.len() == 1
+                && rust_reference_pointee_v1(rust_inputs[0]).is_some_and(|ty| {
+                    rust_is_trusted_adt_v1(tcx, ty, TrustedDeviceItem::WorkgroupLdsScope)
+                })
+                && rust_workgroup_pipeline_contract_v1(tcx, rust_output).is_some() =>
+        {
+            let (_, buffers, elements, prefetch_distance) =
+                rust_workgroup_pipeline_contract_v1(tcx, rust_output)
+                    .ok_or_else(|| body_owner_table_mismatch_v1("workgroup pipeline contract"))?;
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate {
+                    scope: pointer_pointee_v1(types, inputs[0])?,
+                    pipeline: output,
+                    buffers,
+                    elements,
+                    prefetch_distance,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::WorkgroupPipelineStage
+        | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
+        | ProductionTerminalExpansionV1::WorkgroupPipelineWait
+        | ProductionTerminalExpansionV1::WorkgroupPipelineConsume
+        | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
+        | ProductionTerminalExpansionV1::WorkgroupPipelineRelease
+            if inputs.len() == 2
+                && rust_inputs.len() == 2
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .and_then(|ty| rust_workgroup_pipeline_contract_v1(tcx, ty))
+                    .is_some()
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_output.kind(), TyKind::Tuple(fields) if fields.is_empty()) =>
+        {
+            let event = match expansion {
+                ProductionTerminalExpansionV1::WorkgroupPipelineStage => {
+                    SemanticWorkgroupPipelineEventV1::Stage
+                }
+                ProductionTerminalExpansionV1::WorkgroupPipelineCommit => {
+                    SemanticWorkgroupPipelineEventV1::Commit
+                }
+                ProductionTerminalExpansionV1::WorkgroupPipelineWait => {
+                    SemanticWorkgroupPipelineEventV1::Wait
+                }
+                ProductionTerminalExpansionV1::WorkgroupPipelineConsume => {
+                    SemanticWorkgroupPipelineEventV1::Consume
+                }
+                ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => {
+                    SemanticWorkgroupPipelineEventV1::Discard
+                }
+                ProductionTerminalExpansionV1::WorkgroupPipelineRelease => {
+                    SemanticWorkgroupPipelineEventV1::Release
+                }
+                _ => unreachable!("guarded pipeline event expansion"),
+            };
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineEvent {
+                    pipeline: pointer_pointee_v1(types, inputs[0])?,
+                    event,
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::WorkgroupPipelineWrite
+            if inputs.len() == 4
+                && rust_inputs.len() == 4
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .and_then(|ty| rust_workgroup_pipeline_contract_v1(tcx, ty))
+                    .is_some_and(|(element, ..)| element == rust_inputs[3])
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_output.kind(), TyKind::Tuple(fields) if fields.is_empty()) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite {
+                    pipeline: pointer_pointee_v1(types, inputs[0])?,
+                    element: inputs[3],
+                },
+            )
+        }
+        ProductionTerminalExpansionV1::WorkgroupPipelineRead
+            if inputs.len() == 3
+                && rust_inputs.len() == 3
+                && rust_reference_pointee_v1(rust_inputs[0])
+                    .and_then(|ty| rust_workgroup_pipeline_contract_v1(tcx, ty))
+                    .is_some_and(|(element, ..)| element == rust_output)
+                && matches!(rust_inputs[1].kind(), TyKind::Uint(UintTy::Usize))
+                && matches!(rust_inputs[2].kind(), TyKind::Uint(UintTy::Usize)) =>
+        {
+            Ok(
+                SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead {
+                    pipeline: pointer_pointee_v1(types, inputs[0])?,
+                    element: output,
                 },
             )
         }
@@ -2266,6 +2363,15 @@ fn terminal_operation_v1<'tcx>(
         | ProductionTerminalExpansionV1::StridedReadView2DLoadOr
         | ProductionTerminalExpansionV1::DynamicLdsExactCurrent
         | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
+        | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
+        | ProductionTerminalExpansionV1::WorkgroupPipelineStage
+        | ProductionTerminalExpansionV1::WorkgroupPipelineWrite
+        | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
+        | ProductionTerminalExpansionV1::WorkgroupPipelineWait
+        | ProductionTerminalExpansionV1::WorkgroupPipelineConsume
+        | ProductionTerminalExpansionV1::WorkgroupPipelineRead
+        | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
+        | ProductionTerminalExpansionV1::WorkgroupPipelineRelease
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorZero
         | ProductionTerminalExpansionV1::F32MatrixAccumulatorIntoValues
         | ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
@@ -2340,6 +2446,39 @@ fn single_const_u64_v1(instance: Instance<'_>) -> Option<u64> {
         .map(|value| value.to_bits(value.size()));
     let value = u64::try_from(values.next()?).ok()?;
     values.next().is_none().then_some(value)
+}
+
+fn rust_workgroup_pipeline_contract_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(Ty<'tcx>, u32, u64, u32)> {
+    let TyKind::Adt(definition, arguments) = *ty.kind() else {
+        return None;
+    };
+    if !tcx.is_diagnostic_item(
+        Symbol::intern("fe2o3_device_workgroup_pipeline_v1"),
+        definition.did(),
+    ) {
+        return None;
+    }
+    let type_arguments = arguments.types().collect::<Vec<_>>();
+    let [element] = type_arguments.as_slice() else {
+        return None;
+    };
+    let constants = arguments
+        .iter()
+        .filter_map(|argument| argument.as_const())
+        .map(|constant| constant.try_to_target_usize(tcx))
+        .collect::<Option<Vec<_>>>()?;
+    let [buffers, elements, prefetch_distance] = constants.as_slice() else {
+        return None;
+    };
+    Some((
+        *element,
+        u32::try_from(*buffers).ok()?,
+        u64::try_from(*elements).ok()?,
+        u32::try_from(*prefetch_distance).ok()?,
+    ))
 }
 
 fn rust_dynamic_lds_scalar_element_v1<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
@@ -3227,6 +3366,15 @@ const fn terminal_operation_tag_v1(
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
         ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
+        ProductionTerminalExpansionV1::WorkgroupPipelineCurrent => 91,
+        ProductionTerminalExpansionV1::WorkgroupPipelineStage => 92,
+        ProductionTerminalExpansionV1::WorkgroupPipelineWrite => 93,
+        ProductionTerminalExpansionV1::WorkgroupPipelineCommit => 94,
+        ProductionTerminalExpansionV1::WorkgroupPipelineWait => 95,
+        ProductionTerminalExpansionV1::WorkgroupPipelineConsume => 96,
+        ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
+        ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
+        ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
     }
 }
 

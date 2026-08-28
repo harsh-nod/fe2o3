@@ -2091,18 +2091,27 @@ const fn terminal_argument_count_v1(expansion: ProductionTerminalExpansionV1) ->
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeReadB8
         | ProductionTerminalExpansionV1::DynamicLdsExactCurrent
         | ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts
+        | ProductionTerminalExpansionV1::WorkgroupPipelineCurrent
         | ProductionTerminalExpansionV1::DisjointSliceLen => Some(1),
         ProductionTerminalExpansionV1::SubgroupReduceSumF32
         | ProductionTerminalExpansionV1::SubgroupReduceMaxF32
         | ProductionTerminalExpansionV1::Gfx950SubgroupReduceMaxF32
-        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32 => Some(2),
-        ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32 => Some(3),
+        | ProductionTerminalExpansionV1::Gfx950SubgroupReduceSumF32
+        | ProductionTerminalExpansionV1::WorkgroupPipelineStage
+        | ProductionTerminalExpansionV1::WorkgroupPipelineCommit
+        | ProductionTerminalExpansionV1::WorkgroupPipelineWait
+        | ProductionTerminalExpansionV1::WorkgroupPipelineConsume
+        | ProductionTerminalExpansionV1::WorkgroupPipelineDiscard
+        | ProductionTerminalExpansionV1::WorkgroupPipelineRelease => Some(2),
+        ProductionTerminalExpansionV1::Gfx950SubgroupBroadcastF32
+        | ProductionTerminalExpansionV1::WorkgroupPipelineRead => Some(3),
         ProductionTerminalExpansionV1::MathF32(function) => Some(function.arity() + 1),
         ProductionTerminalExpansionV1::MatrixMultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp4Fp8MultiplyAccumulate
         | ProductionTerminalExpansionV1::Gfx950Fp8MultiplyAccumulate
-        | ProductionTerminalExpansionV1::WorkgroupReduceSum => Some(4),
+        | ProductionTerminalExpansionV1::WorkgroupReduceSum
+        | ProductionTerminalExpansionV1::WorkgroupPipelineWrite => Some(4),
         ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB4
         | ProductionTerminalExpansionV1::Gfx950LdsTransposeStageB8 => Some(4),
         ProductionTerminalExpansionV1::Bf16MatrixALoadZeroFilledV2

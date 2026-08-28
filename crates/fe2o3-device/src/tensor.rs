@@ -541,6 +541,22 @@ impl From<Bf16MatrixViewError> for crate::KernelError {
     }
 }
 
+impl<'wave, Role> crate::lds::sealed::WorkgroupPipelineSealed
+    for Bf16MfmaFragment<'wave, Role, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>
+where
+    Role: sealed::OperandRole,
+{
+}
+
+// SAFETY: this exact fragment representation contains four BF16 values and
+// zero-sized lifetime/type brands. It has no runtime reference or destructor.
+unsafe impl<'wave, Role> crate::WorkgroupPipelineElement
+    for Bf16MfmaFragment<'wave, Role, Bf16F32M16N16K16, MfmaRegisterTile16x16, Wave64>
+where
+    Role: sealed::OperandRole,
+{
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

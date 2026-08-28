@@ -2954,6 +2954,15 @@ const fn terminal_expansion_tag_v1(expansion: ProductionTerminalExpansionV1) -> 
         ProductionTerminalExpansionV1::DynamicLdsExactCurrent => 88,
         ProductionTerminalExpansionV1::WorkgroupReduceSum => 89,
         ProductionTerminalExpansionV1::DynamicLdsIntoCollectiveRawParts => 90,
+        ProductionTerminalExpansionV1::WorkgroupPipelineCurrent => 91,
+        ProductionTerminalExpansionV1::WorkgroupPipelineStage => 92,
+        ProductionTerminalExpansionV1::WorkgroupPipelineWrite => 93,
+        ProductionTerminalExpansionV1::WorkgroupPipelineCommit => 94,
+        ProductionTerminalExpansionV1::WorkgroupPipelineWait => 95,
+        ProductionTerminalExpansionV1::WorkgroupPipelineConsume => 96,
+        ProductionTerminalExpansionV1::WorkgroupPipelineRead => 97,
+        ProductionTerminalExpansionV1::WorkgroupPipelineDiscard => 98,
+        ProductionTerminalExpansionV1::WorkgroupPipelineRelease => 99,
     }
 }
 

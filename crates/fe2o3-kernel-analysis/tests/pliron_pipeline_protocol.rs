@@ -46,6 +46,7 @@ fn proves_symbolic_double_and_triple_buffer_windows_without_unrolling() {
             2,
         ),
         (include_str!("lit/pipeline_dynamic_multiblock.pliron"), 2, 1),
+        (include_str!("lit/pipeline_dynamic_regions.pliron"), 2, 1),
     ] {
         let (context, function) = parse_fixture(source);
         let report = run_pliron_pipeline_protocol_check_v1(&context, &function);
@@ -63,7 +64,34 @@ fn proves_symbolic_double_and_triple_buffer_windows_without_unrolling() {
         assert_eq!(summary.drained_epochs(), distance);
         assert!(summary.live_epoch_window() <= buffers);
         assert!(!summary.body().is_empty());
+        assert!(!summary.prologue_blocks().is_empty());
+        assert!(!summary.drain_blocks().is_empty());
     }
+}
+
+#[test]
+fn proves_symbolic_pipeline_access_windows_and_slots() {
+    let (context, function) =
+        parse_fixture(include_str!("lit/pipeline_dynamic_double_buffer.pliron"));
+    let report = run_pliron_pipeline_protocol_check_v1(&context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Clean);
+    let [certificate] = report.certificates() else {
+        panic!("expected one pipeline certificate");
+    };
+    assert_eq!(certificate.staged_writes(), 2);
+    assert_eq!(certificate.consuming_reads(), 1);
+    assert!(certificate.access_refinement_proven());
+}
+
+#[test]
+fn rejects_mismatched_symbolic_stage_and_consume_coordinates() {
+    let source = include_str!("lit/pipeline_dynamic_double_buffer.pliron").replace(
+        "kernel.access (v0, current_slot_v10, zero_v2)",
+        "kernel.access (v0, current_slot_v10, one_v3)",
+    );
+    let (context, function) = parse_fixture(&source);
+    let report = run_pliron_pipeline_protocol_check_v1(&context, &function);
+    assert_eq!(report.status(), KernelCheckStatusV1::Rejected);
 }
 
 #[test]
@@ -94,6 +122,9 @@ fn rejects_order_reuse_slot_epoch_and_drain_failures() {
         include_str!("lit/pipeline_consume_before_wait.pliron"),
         include_str!("lit/pipeline_release_before_consume.pliron"),
         include_str!("lit/pipeline_conditional_nonentry.pliron"),
+        include_str!("lit/pipeline_write_after_commit.pliron"),
+        include_str!("lit/pipeline_read_before_consume.pliron"),
+        include_str!("lit/pipeline_dynamic_wrong_access_slot.pliron"),
     ] {
         let (context, function) = parse_fixture(source);
         let report = run_pliron_pipeline_protocol_check_v1(&context, &function);

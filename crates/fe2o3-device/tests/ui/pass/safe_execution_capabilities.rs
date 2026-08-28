@@ -1,7 +1,8 @@
 use fe2o3_device::{
     Bf16MfmaAMatrix, Bf16MfmaBMatrix, DeviceMatrix, DynamicLds,
-    F32AccumulatorFragment, Gfx942Collectives, Invocation3D, SubgroupTile, Wave64,
-    WaveLane, Workgroup, WorkgroupCollectiveScratch, WorkgroupLdsScope, sync,
+    Bf16MfmaAFragment, Bf16MfmaBFragment, F32AccumulatorFragment, Gfx942Collectives,
+    Invocation3D, SubgroupTile, Wave64, WaveLane, Workgroup, WorkgroupCollectiveScratch,
+    WorkgroupLdsScope, WorkgroupPipeline, sync,
 };
 
 fn safe_execution_surface(lhs_bits: &[u16], rhs_bits: &[u16]) {
@@ -24,6 +25,26 @@ fn safe_execution_surface(lhs_bits: &[u16], rhs_bits: &[u16]) {
     let rhs_view = Bf16MfmaBMatrix::row_major(rhs_bits, 0, 16, 16, 16).unwrap();
     let lhs_fragment = lhs_view.load_m16k16(&lane, 0, 0);
     let rhs_fragment = rhs_view.load_k16n16(&lane, 0, 0);
+    let mut pipeline_scope = WorkgroupLdsScope::current();
+    let mut lhs_pipeline =
+        WorkgroupPipeline::<Bf16MfmaAFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+    let mut rhs_pipeline =
+        WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
+    let lane_index = lane.get() as usize;
+    lhs_pipeline.stage(0);
+    lhs_pipeline.write(0, lane_index, lhs_fragment);
+    lhs_pipeline.commit(0);
+    rhs_pipeline.stage(0);
+    rhs_pipeline.write(0, lane_index, rhs_fragment);
+    rhs_pipeline.commit(0);
+    lhs_pipeline.wait(0);
+    lhs_pipeline.consume(0);
+    let lhs_fragment = lhs_pipeline.read(0, lane_index);
+    lhs_pipeline.release(0);
+    rhs_pipeline.wait(0);
+    rhs_pipeline.consume(0);
+    let rhs_fragment = rhs_pipeline.read(0, lane_index);
+    rhs_pipeline.release(0);
     let matrix = DeviceMatrix::current();
     let accumulator = F32AccumulatorFragment::zero(&lane);
     let _ = matrix.multiply_accumulate(lhs_fragment, rhs_fragment, accumulator);
